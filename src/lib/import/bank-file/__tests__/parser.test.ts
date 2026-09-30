@@ -2801,3 +2801,143 @@ describe('Wise balance statement format', () => {
     expect(result.issues.some((issue) => /Invalid total fees on GOOD/.test(issue.message))).toBe(true)
   })
 })
+
+const AVANZA_HEADER =
+  'Datum;Konto;Typ av transaktion;Värdepapper/beskrivning;Antal;Kurs;Belopp;Transaktionsvaluta;Courtage;Valutakurs;Instrumentvaluta;ISIN;Resultat'
+
+const AVANZA_SPARKONTO_CSV = '﻿' + [
+  AVANZA_HEADER,
+  '2026-07-31;1234567;Inlåningsränta;;;;548,7;SEK;;;;;',
+  '2026-05-04;1234567;Insättning;Exempelbolaget AB;;;200000;SEK;;;;;',
+  '2026-04-15;1234567;Uttag;Uttag till 90001234567;;;-322400;SEK;;;;;',
+  '2025-11-11;1234567;Insättning;EXEMPELBOLAG;;;100000;SEK;;;;;',
+  '2025-11-11;1234567;Insättning;EXEMPELBOLAG;;;100000;SEK;;;;;',
+  '2025-02-14;1234567;Intern överföring;Överföring till Avanzakonto 7654321;;;-228855;SEK;;;;;',
+  '2024-08-30;1234567;Ränta;;;;199,98;SEK;;;;;',
+].join('\n')
+
+describe('Avanza format', () => {
+  it('auto-detects an Avanza transaction export behind its UTF-8 BOM', () => {
+    expect(detectFileFormat(AVANZA_SPARKONTO_CSV, 'transaktioner_2024-08-01_2026-08-01.csv')!.id).toBe('avanza')
+  })
+
+  it('auto-detects the export when a Windows-1252 decode leaves a mojibake BOM', () => {
+    const content = 'ï»¿' + AVANZA_SPARKONTO_CSV.slice(1)
+    expect(detectFileFormat(content, 'transaktioner.csv')!.id).toBe('avanza')
+  })
+
+  it('auto-detects the older export without Transaktionsvaluta', () => {
+    const content = [
+      'Datum;Konto;Typ av transaktion;Värdepapper/beskrivning;Antal;Kurs;Belopp;Courtage;Valuta;ISIN;Resultat',
+      '2024-03-28;1234567;Insättning;EXEMPELBOLAG;;;5000;;SEK;;',
+    ].join('\n')
+
+    expect(detectFileFormat(content, 'transaktioner.csv')!.id).toBe('avanza')
+    const result = parseBankFile(content, 'transaktioner.csv')
+    expect(result.transactions).toEqual([
+      expect.objectContaining({ date: '2024-03-28', amount: 5000, currency: 'SEK', description: 'Insättning, EXEMPELBOLAG' }),
+    ])
+  })
+
+  it('parses every row with signed comma-decimal amounts', () => {
+    const result = parseBankFile(AVANZA_SPARKONTO_CSV, 'transaktioner.csv')
+
+    expect(result.format).toBe('avanza')
+    expect(result.format_name).toBe('Avanza')
+    expect(result.issues).toEqual([])
+    expect(result.transactions.map((t) => [t.date, t.amount])).toEqual([
+      ['2026-07-31', 548.7],
+      ['2026-05-04', 200000],
+      ['2026-04-15', -322400],
+      ['2025-11-11', 100000],
+      ['2025-11-11', 100000],
+      ['2025-02-14', -228855],
+      ['2024-08-30', 199.98],
+    ])
+    expect(result.transactions.every((t) => t.currency === 'SEK' && t.balance === null)).toBe(true)
+  })
+
+  it('names interest rows by their type and joins type and text otherwise', () => {
+    const result = parseBankFile(AVANZA_SPARKONTO_CSV, 'transaktioner.csv')
+
+    expect(result.transactions.map((t) => t.description)).toEqual([
+      'Inlåningsränta',
+      'Insättning, Exempelbolaget AB',
+      'Uttag till 90001234567',
+      'Insättning, EXEMPELBOLAG',
+      'Insättning, EXEMPELBOLAG',
+      'Intern överföring, Överföring till Avanzakonto 7654321',
+      'Ränta',
+    ])
+  })
+
+  it('keeps two identical deposits on the same day as two transactions with distinct ids', () => {
+    const result = parseBankFile(AVANZA_SPARKONTO_CSV, 'transaktioner.csv')
+    const [a, b] = [result.transactions[3], result.transactions[4]]
+
+    expect(generateExternalId(a, 'avanza', 3)).not.toBe(generateExternalId(b, 'avanza', 4))
+  })
+
+  it('reports stats and the date range', () => {
+    const result = parseBankFile(AVANZA_SPARKONTO_CSV, 'transaktioner.csv')
+
+    expect(result.date_from).toBe('2024-08-30')
+    expect(result.date_to).toBe('2026-07-31')
+    expect(result.stats).toEqual({
+      total_rows: 7,
+      parsed_rows: 7,
+      skipped_rows: 0,
+      total_income: 400748.68,
+      total_expenses: -551255,
+    })
+  })
+
+  it('skips a row with a malformed amount instead of truncating it', () => {
+    const content = [
+      AVANZA_HEADER,
+      '2026-07-31;1234567;Inlåningsränta;;;;12abc;SEK;;;;;',
+      '2026-06-30;1234567;Inlåningsränta;;;;1 548,10;SEK;;;;;',
+    ].join('\n')
+
+    const result = parseBankFile(content, 'transaktioner.csv')
+    expect(result.transactions.map((t) => t.amount)).toEqual([1548.1])
+    expect(result.stats.skipped_rows).toBe(1)
+    expect(result.issues).toEqual([expect.objectContaining({ row: 2, severity: 'warning' })])
+  })
+
+  it('refuses an export that spans several Avanza accounts', () => {
+    const content = [
+      AVANZA_HEADER,
+      '2026-07-31;1234567;Inlåningsränta;;;;548,7;SEK;;;;;',
+      '2026-07-31;7654321;Inlåningsränta;;;;12,5;SEK;;;;;',
+    ].join('\n')
+
+    const result = parseBankFile(content, 'transaktioner.csv')
+    expect(result.transactions).toHaveLength(2)
+    expect(result.issues).toEqual([
+      expect.objectContaining({ severity: 'error', message: expect.stringContaining('1234567, 7654321') }),
+    ])
+  })
+
+  it('keeps a quoted description with a semicolon in one column', () => {
+    const content = [
+      AVANZA_HEADER,
+      '2026-05-04;1234567;Insättning;"Faktura 12; maj";;;1500,5;SEK;;;;;',
+      '2026-05-05;1234567;Insättning;"Säger ""hej""";;;10;SEK;;;;;',
+    ].join('\n')
+
+    const result = parseBankFile(content, 'transaktioner.csv')
+    expect(result.issues).toEqual([])
+    expect(result.transactions.map((t) => [t.description, t.amount, t.currency])).toEqual([
+      ['Insättning, Faktura 12; maj', 1500.5, 'SEK'],
+      ['Insättning, Säger "hej"', 10, 'SEK'],
+    ])
+  })
+
+  it('is selectable explicitly and does not claim other banks\' files', () => {
+    expect(getFormat('avanza')!.name).toBe('Avanza')
+    expect(parseBankFile(AVANZA_SPARKONTO_CSV, 'x.csv', 'avanza').transactions).toHaveLength(7)
+    expect(detectFileFormat(NORTHMILL_CSV, 'Northmill.csv')!.id).toBe('northmill')
+    expect(getFormat('avanza')!.detect('Datum;Text;Belopp;Saldo\n2026-01-15;SPOTIFY AB;-99,00;1000,00', 'x.csv')).toBe(false)
+  })
+})
