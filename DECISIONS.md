@@ -1142,3 +1142,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-10-02] No PR for crm#264: SEB Corporate Card has never connected (0 of 31 attempts across 22 companies, 19 with working SEB), so the cause is upstream; not raised with Enable Banking since the PSD2 provider is being replaced, recheck it on the new one.
 [2026-10-02] Upload allowlist and declared-type reading live in one dependency-free module (lib/documents/upload-types) used by the drop zone and the server; a .csv declared as Excel, plain text, octet-stream or blank is read as text/csv (crm#268).
 [2026-10-02] Peppol access texts name Inställningar > Kopplingar > E-faktura via Peppol and agents link /settings/peppol: Peppol moved out of Fakturering on 2026-09-24 and the strings never followed (crm#258).
+[2026-09-30] Multi-country is a goal: jurisdiction becomes a per-company pack with Sweden as pack one; the 08-25 deferral is lifted.
+[2026-09-30] BAS, SEK and kernel-import ratchets with a named SE-pack territory exemption: stop the weld growing while the seam is built.
