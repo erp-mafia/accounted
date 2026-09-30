@@ -98,15 +98,6 @@ export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
 ]
 
 /**
- * Scopes advertised in the RFC 8414 authorization-server metadata document
- * (/.well-known/oauth-authorization-server). Restricted to the same set that
- * /authorize will grant by default: destructive scopes still work when
- * requested explicitly, they just aren't enumerated for unauthenticated
- * callers (defense-in-depth against scope-escalation reconnaissance).
- */
-export const PUBLIC_OAUTH_METADATA_SCOPES: ApiKeyScope[] = [...DEFAULT_OAUTH_SCOPES]
-
-/**
  * Scopes that allow staging a pending_operation. Used to detect a
  * segregation-of-duties conflict when paired with `pending_operations:approve`
  * on the same API key (ISO 27001:2022 A.5.3, SOC 2 CC6.1).

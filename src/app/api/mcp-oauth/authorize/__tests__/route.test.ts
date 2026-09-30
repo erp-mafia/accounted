@@ -68,6 +68,7 @@ const CHATGPT: RedirectUriResolution = { allowed: true, kind: 'built_in', provid
 const GROK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'grok' }
 const CURSOR: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor' }
 const CURSOR_DEEPLINK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor_deeplink' }
+const GEMINI: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'gemini' }
 const REGISTERED: RedirectUriResolution = {
   allowed: true,
   kind: 'registered',
@@ -689,6 +690,72 @@ describe('role cap on consent', () => {
     expect(location.searchParams.get('error')).toBe('server_error')
     expect(location.searchParams.get('code')).toBeNull()
     expect(mocks.createAuthCode).not.toHaveBeenCalled()
+  })
+})
+
+describe('Gemini custom apps', () => {
+  const params = {
+    response_type: 'code',
+    redirect_uri: 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1234567890-app_accounted_se',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    scope: 'mcp offline_access',
+    state: 'xyz',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
+    mocks.resolveRedirectUri.mockResolvedValue(GEMINI)
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
+    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+  })
+
+  it('names Gemini as a verified client and shows Google\'s relay as the redirect host', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+
+    expect(html).toContain('Gemini (Google)')
+    expect(html).toContain('Verifierad')
+    expect(html).toContain('oauth-redirect.googleusercontent.com')
+  })
+
+  it.each(['mcp offline_access', 'offline_access'])(
+    'treats offline_access as a marker like mcp, so scope=%s offers the full set',
+    async (scope) => {
+      // Gemini adds offline_access to ask for a refresh token, which every
+      // grant gets anyway. Refusing it as an unknown scope would end the
+      // sign-in; reading it as a granular request would cap the consent.
+      const response = await GET(new Request(buildAuthorizeUrl({ ...params, scope })))
+      expect(response.status).toBe(200)
+      const html = await response.text()
+
+      expect(checkboxFor(html, 'transactions:write')).toContain('checked')
+      expect(checkboxFor(html, 'pending_operations:approve')).toContain('checked')
+      expect(checkboxFor(html, 'transactions:read')).toContain('checked')
+    },
+  )
+
+  it('still refuses a request whose only non-marker scopes are unknown', async () => {
+    const response = await GET(
+      new Request(buildAuthorizeUrl({ ...params, scope: 'offline_access not:a-scope' })),
+    )
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe('invalid_scope')
+  })
+
+  it('POST keeps the write scopes the user left ticked', async () => {
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentForm('mcp offline_access', ['transactions:read', 'transactions:write']),
+      }),
+    )
+    expect(response.status).toBe(303)
+    const location = new URL(response.headers.get('location')!)
+    expect(location.origin).toBe('https://oauth-redirect.googleusercontent.com')
+    expect(location.searchParams.get('code')).toBe('test-auth-code')
+    expect(lastMintedPayload().scopes).toEqual(['transactions:read', 'transactions:write'])
   })
 })
 

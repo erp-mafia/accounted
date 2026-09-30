@@ -59,18 +59,17 @@ type ScopeParseResult =
  *     unknown: refusing the request is safer than silently dropping it back
  *     to defaults the caller didn't ask for (V10.2.6).
  *
- * The bare `mcp` marker is treated as "no granular scopes" and accepted for
- * backwards compatibility with Claude's connector: it falls through to
- * `undefined` so the read-only defaults apply.
+ * Marker scopes carry no granular request and are dropped before parsing:
+ * `mcp`, the one scope discovery advertises (Claude sends it bare), and
+ * `offline_access`, which Gemini adds to ask for a refresh token (every
+ * grant gets one anyway). A request of markers only is the same as no scope.
  */
+const MARKER_SCOPES: ReadonlySet<string> = new Set(['mcp', 'offline_access'])
+
 function parseRequestedScopes(scopeParam: string | null): ScopeParseResult {
   if (!scopeParam) return { kind: 'ok', scopes: undefined }
-  const requested = scopeParam.split(/\s+/).filter(Boolean)
+  const requested = scopeParam.split(/\s+/).filter((s) => s && !MARKER_SCOPES.has(s))
   if (requested.length === 0) return { kind: 'ok', scopes: undefined }
-  // The coarse-grained `mcp` marker is treated as "no granular request" so
-  // we can keep Claude's existing flow working unchanged.
-  const onlyMcp = requested.length === 1 && requested[0] === 'mcp'
-  if (onlyMcp) return { kind: 'ok', scopes: undefined }
   const valid = requested.filter((s): s is ApiKeyScope => s in API_KEY_SCOPES)
   if (valid.length === 0) {
     return {
@@ -1143,7 +1142,7 @@ export async function POST(request: Request) {
   //          (RFC 6749 §3.3 strict). A client that asked for only read scopes
   //          can never end up with write grants, even if the user tampered
   //          with the form (least-privilege, SOC 2 CC6.3, NIST AC-6).
-  //        • If the client passed no scope (or only the `mcp` marker), the
+  //        • If the client passed no scope (or only marker scopes), the
   //          ceiling = ALL_SCOPES. The resource owner has full discretion at
   //          consent time, which RFC 6749 §3.3 permits ("based on … the
   //          resource owner's instructions"). The silent fallback when the
@@ -1326,6 +1325,8 @@ function describeClient(
         return { name: 'ChatGPT (OpenAI)', tag: 'Verifierad', verified: true }
       case 'grok':
         return { name: 'Grok (xAI)', tag: 'Verifierad', verified: true }
+      case 'gemini':
+        return { name: 'Gemini (Google)', tag: 'Verifierad', verified: true }
       case 'cursor':
         return { name: 'Cursor (Anysphere)', tag: 'Verifierad', verified: true }
       case 'cursor_deeplink':

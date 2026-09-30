@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { PUBLIC_OAUTH_METADATA_SCOPES } from '@/lib/auth/api-keys'
 import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
 
 /**
@@ -36,11 +35,14 @@ export async function GET(request: Request) {
     // RFC 9207: the authorize endpoint includes `iss` in every authorization
     // response (success and error) so clients can detect mix-up attacks.
     authorization_response_iss_parameter_supported: true,
-    // Advertise only the safe read-only default scopes plus the coarse
-    // `mcp` marker. Destructive scopes (*:write, pending_operations:approve,
-    // bookkeeping:write) are still accepted by /authorize when requested
-    // explicitly, but enumerating them in public discovery aids
-    // scope-escalation reconnaissance (CC6.1, defense-in-depth).
-    scopes_supported: ['mcp', ...PUBLIC_OAUTH_METADATA_SCOPES],
+    // Only the coarse `mcp` marker, as in the protected-resource document
+    // (lib/auth/protected-resource-metadata.ts): the user picks the grant on
+    // the consent page. Clients that request whatever this list holds (Grok,
+    // Gemini) used to echo the read scopes listed here, and /authorize takes
+    // an explicit request as the consent ceiling, so every such connection
+    // was read-only. Granular scopes are still accepted when requested
+    // explicitly; write and approve scopes stay unlisted because enumerating
+    // them in public discovery aids scope-escalation reconnaissance (CC6.1).
+    scopes_supported: ['mcp'],
   })
 }
