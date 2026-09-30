@@ -5,10 +5,15 @@ import type {
   JournalEntry,
   JournalEntryLine,
 } from '@/types'
-import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
-import { normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
+import { validateBalance, getNextVoucherNumber, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
+import {
+  dimensionsBagKey,
+  normalizeLineDimensions,
+  type DimensionAliasInput,
+} from '@/lib/bookkeeping/dimension-resolver'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import {
   correctionChainDepth,
   CORRECTION_CHAIN_GUARD_DEPTH,
@@ -53,20 +58,30 @@ function netsToZeroPerAccount(lines: CreateJournalEntryLineInput[]): boolean {
 
 /**
  * True when proposed lines are the same multiset as the original lines
- * (account_number + debit + credit). A rättelse must actually change something.
+ * (account_number + debit + credit + dimensions bag). A rättelse must actually
+ * change something, and a changed tag is a change: in a locked period storno
+ * plus correction is the only way to fix a wrong project or cost center (the
+ * retag path is open-period only). The bag is compared normalized, so key
+ * order, '01' vs '1', the cost_center/project aliases and '' vs a missing key
+ * are not differences.
  */
 function isIdenticalToOriginal(
   proposed: CreateJournalEntryLineInput[],
   original: JournalEntryLine[]
 ): boolean {
   if (proposed.length !== original.length) return false
-  const key = (acc: string, d: number, c: number) =>
-    `${acc}|${round2(d).toFixed(2)}|${round2(c).toFixed(2)}`
+  const key = (line: DimensionAliasInput & { account_number: string }, d: number, c: number) =>
+    JSON.stringify([
+      line.account_number,
+      round2(d),
+      round2(c),
+      dimensionsBagKey(normalizeLineDimensions(line)),
+    ])
   const proposedKeys = proposed
-    .map((l) => key(l.account_number, l.debit_amount || 0, l.credit_amount || 0))
+    .map((l) => key(l, l.debit_amount || 0, l.credit_amount || 0))
     .sort()
   const originalKeys = original
-    .map((l) => key(l.account_number, Number(l.debit_amount) || 0, Number(l.credit_amount) || 0))
+    .map((l) => key(l, Number(l.debit_amount) || 0, Number(l.credit_amount) || 0))
     .sort()
   return proposedKeys.every((k, i) => k === originalKeys[i])
 }
@@ -82,25 +97,27 @@ function isIdenticalToOriginal(
  */
 
 /**
- * Cancel a journal entry and delete its lines.
- * Uses status='cancelled' instead of DELETE (DB trigger blocks all DELETEs).
- * Works for both draft→cancelled and posted→cancelled transitions.
+ * Roll back an entry this correction created before a later step failed.
+ * Goes through the engine's gated cleanup door (cancel_orphaned_entry), which
+ * cancels the entry whether it is still a draft or already posted, and keeps
+ * its lines as the record of the used voucher number. Never throws, so the
+ * error that triggered the rollback is the one the caller sees.
+ *
+ * @returns true when the entry is now cancelled, false when the cleanup was
+ * refused or failed (the entry is left as it was).
  */
-async function cancelEntry(supabase: SupabaseClient, entryId: string): Promise<void> {
-  const { error: statusErr } = await supabase
-    .from('journal_entries')
-    .update({ status: 'cancelled' })
-    .eq('id', entryId)
-  if (statusErr) {
-    console.error(`[storno] cancelEntry: failed to cancel ${entryId}:`, statusErr.message)
+async function cancelEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  entryId: string,
+): Promise<boolean> {
+  const { error } = await cancelOrphanedEntry(supabase, companyId, userId, entryId)
+  if (error) {
+    console.error(`[storno] cancelEntry: failed to cancel ${entryId}:`, error.message)
+    return false
   }
-  const { error: linesErr } = await supabase
-    .from('journal_entry_lines')
-    .delete()
-    .eq('journal_entry_id', entryId)
-  if (linesErr) {
-    console.error(`[storno] cancelEntry: failed to delete lines for ${entryId}:`, linesErr.message)
-  }
+  return true
 }
 
 /** Journal entry row fetched together with its lines (the embedded select). */
@@ -332,7 +349,7 @@ export async function correctEntry(
     .insert(reversalLineInserts)
 
   if (reversalLinesError) {
-    await cancelEntry(supabase, reversalEntry.id)
+    await cancelEntry(supabase, companyId, userId, reversalEntry.id)
     throw new BookkeepingDatabaseError('create_reversal_lines', reversalLinesError.message)
   }
 
@@ -343,7 +360,7 @@ export async function correctEntry(
     .eq('id', reversalEntry.id)
 
   if (postReversalError) {
-    await cancelEntry(supabase, reversalEntry.id)
+    await cancelEntry(supabase, companyId, userId, reversalEntry.id)
     throw new BookkeepingDatabaseError('post_reversal_entry', postReversalError.message)
   }
 
@@ -418,7 +435,7 @@ export async function correctEntry(
       .insert(correctedLineInserts)
 
     if (correctedLinesError) {
-      await cancelEntry(supabase, correctedEntry.id)
+      await cancelEntry(supabase, companyId, userId, correctedEntry.id)
       throw new BookkeepingDatabaseError('create_corrected_lines', correctedLinesError.message)
     }
 
@@ -429,13 +446,13 @@ export async function correctEntry(
       .eq('id', correctedEntry.id)
 
     if (postCorrectedError) {
-      await cancelEntry(supabase, correctedEntry.id)
+      await cancelEntry(supabase, companyId, userId, correctedEntry.id)
       throw new BookkeepingDatabaseError('post_corrected_entry', postCorrectedError.message)
     }
   } catch (err) {
     // Cancel the reversal entry (posted → cancelled). Original was never
     // modified so no rollback needed: it's still 'posted'.
-    await cancelEntry(supabase, reversalEntry.id)
+    await cancelEntry(supabase, companyId, userId, reversalEntry.id)
     throw err
   }
 
@@ -451,10 +468,34 @@ export async function correctEntry(
     .select('id')
 
   if (casError || !updatedOriginal || updatedOriginal.length === 0) {
-    // Concurrent reversal beat us: cancel both our entries
-    await cancelEntry(supabase, reversalEntry.id)
-    await cancelEntry(supabase, correctedEntry!.id)
-    throw new EntryAlreadyReversedError()
+    // Concurrent reversal beat us: cancel both our entries, the reversal
+    // first. The replacement is only cancelled once the reversal is gone:
+    // cancelling it while the reversal stays posted would leave the original
+    // netted to zero with no replacement, erasing the affärshändelse.
+    const reversalCancelled = await cancelEntry(supabase, companyId, userId, reversalEntry.id)
+    if (reversalCancelled) {
+      await cancelEntry(supabase, companyId, userId, correctedEntry!.id)
+      throw new EntryAlreadyReversedError()
+    }
+
+    // The cleanup door refuses a reversal the original points at, which is
+    // what an ambiguous CAS error that did land looks like. Then the chain is
+    // complete (original reversed, reversal and replacement posted) and this
+    // is a successful correction.
+    const { data: originalNow } = await supabase
+      .from('journal_entries')
+      .select('status, reversed_by_id')
+      .eq('id', originalEntryId)
+      .eq('company_id', companyId)
+      .single()
+    if (originalNow?.status !== 'reversed' || originalNow.reversed_by_id !== reversalEntry.id) {
+      // Anything else keeps the replacement posted beside the surviving
+      // reversal, so the amounts stay right; the links need a manual look.
+      console.error(
+        `[storno] correctEntry: reversal ${reversalEntry.id} could not be cancelled after a failed CAS on ${originalEntryId}; replacement ${correctedEntry!.id} kept posted`,
+      )
+      throw new EntryAlreadyReversedError()
+    }
   }
 
   // Re-point bank transactions and underlag from the original to the corrected
@@ -581,20 +622,7 @@ export async function recordateEntry(
   const copiedLines: CreateJournalEntryLineInput[] = originalLines
     .slice()
     .sort((a, b) => a.sort_order - b.sort_order)
-    .map((line) => ({
-      account_number: line.account_number,
-      debit_amount: Number(line.debit_amount) || 0,
-      credit_amount: Number(line.credit_amount) || 0,
-      line_description: line.line_description || undefined,
-      currency: line.currency || undefined,
-      amount_in_currency:
-        line.amount_in_currency != null ? Number(line.amount_in_currency) : undefined,
-      exchange_rate: line.exchange_rate != null ? Number(line.exchange_rate) : undefined,
-      tax_code: line.tax_code || undefined,
-      dimensions: line.dimensions || undefined,
-      cost_center: line.cost_center || undefined,
-      project: line.project || undefined,
-    }))
+    .map(postedLineAsInput)
 
   const result = await correctEntry(
     supabase,

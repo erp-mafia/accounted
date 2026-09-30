@@ -1,8 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   generateInputVatLine,
-  generateReverseChargeLines,
-  generateReverseChargeBasisLines,
+  generateReverseChargePurchaseLines,
+  costAccountReportsRcBasis,
+  DEFAULT_REVERSE_CHARGE_KIND,
 } from './vat-entries'
 // Aliased: this file already has a local resolveSekAmountOrNull(transaction)
 // for account-selection decisions, which refuses when unconvertible.
@@ -12,6 +13,7 @@ import {
   findCounterpartyTemplate,
   buildMappingResultFromCounterpartyTemplate,
 } from './counterparty-templates'
+import { coerceDimensionsBag, dimensionsBagKey } from './dimension-resolver'
 import { detectOwnAccountTransfer } from './own-account-detector'
 import type {
   MappingRule,
@@ -33,6 +35,15 @@ const PRISBASBELOPP_HALVES: Record<number, number> = {
   2026: 29600,  // PBB 59,200
 }
 const LATEST_KNOWN_YEAR = 2026
+
+/**
+ * The years with a known threshold. A year missing here silently uses
+ * LATEST_KNOWN_YEAR, so lib/salary/__tests__/rates-calendar.test.ts fails CI
+ * once next year is due (PAYROLL_RATES_DUE) and still absent.
+ */
+export const CAPITALIZATION_THRESHOLD_YEARS: ReadonlySet<number> = new Set(
+  Object.keys(PRISBASBELOPP_HALVES).map(Number),
+)
 
 function getCapitalizationThreshold(year: number): number {
   const threshold = PRISBASBELOPP_HALVES[year]
@@ -79,6 +90,10 @@ function resolveSekAmountOrNull(transaction: Transaction): number | null {
  * 5. Counterparty templates (learned from history, fuzzy matching)
  * 6. Static booking templates (keyword/MCC matching)
  * 7. Default fallback (uncategorized)
+ *
+ * A matched rule (1-4) still takes the learned dimensions of the counterparty
+ * template the transaction matches, when that template books the same
+ * business account (withLearnedDimensions).
  */
 export async function evaluateMappingRules(
   supabase: SupabaseClient,
@@ -146,7 +161,11 @@ export async function evaluateMappingRules(
   // Evaluate each rule in priority order
   for (const rule of rules as MappingRule[]) {
     if (matchesRule(rule, transaction)) {
-      return applySettlementAccount(buildResult(rule, transaction, entityType, vatRegistered), bankAccount)
+      const ruleResult = buildResult(rule, transaction, entityType, vatRegistered)
+      return applySettlementAccount(
+        await withLearnedDimensions(supabase, companyId, transaction, entityType, ruleResult, vatRegistered),
+        bankAccount,
+      )
     }
   }
 
@@ -216,6 +235,41 @@ async function evaluateCounterpartyTemplates(
     // Non-critical: fall through to next fallback
     return null
   }
+}
+
+/**
+ * A matched mapping rule decides the accounts, but it carries no dimensions.
+ * Every business categorize also writes a 'Learned: <merchant>' rule, so for
+ * a known merchant the rule always wins and the counterparty template, where
+ * the company's kostnadsställe/projekt habit is learned, was never read. When
+ * that template (same match and confidence bar as when it proposes on its
+ * own, same direction) books the rule's business account, its learned bag
+ * rides along on the rule's business line. A multi-line pattern lends the bag
+ * of its business line on that account, and only when that bag is unambiguous.
+ */
+async function withLearnedDimensions(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaction: Transaction,
+  entityType: EntityType,
+  result: MappingResult,
+  vatRegistered?: VatRegistration,
+): Promise<MappingResult> {
+  if (result.default_private || result.dimensions) return result
+  const learned = await evaluateCounterpartyTemplates(supabase, companyId, transaction, entityType, vatRegistered)
+  if (!learned || learned.direction_mismatch) return result
+
+  const isExpense = transaction.amount < 0
+  const businessAccount = isExpense ? result.debit_account : result.credit_account
+  let bag: Record<string, string> | undefined
+  if (learned.all_lines_complete) {
+    const onAccount = learned.vat_lines.filter((l) => l.business_line && l.account_number === businessAccount)
+    const keys = new Set(onAccount.map((l) => dimensionsBagKey(coerceDimensionsBag(l.dimensions))))
+    bag = keys.size === 1 ? coerceDimensionsBag(onAccount[0]?.dimensions) : undefined
+  } else if ((isExpense ? learned.debit_account : learned.credit_account) === businessAccount) {
+    bag = coerceDimensionsBag(learned.dimensions)
+  }
+  return bag ? { ...result, dimensions: bag } : result
 }
 
 /**
@@ -379,13 +433,17 @@ function buildResult(
   const vatLines: VatJournalLine[] = []
   if (isExpense && !rule.default_private && vatTreatment) {
     if (vatTreatment === 'reverse_charge') {
-      // Reverse charge: emit BOTH the fiktiv-moms pair (2645/2614) AND the
-      // basbelopp pair (44xx|45xx / 4598). The basbelopp pair populates
-      // momsdeklaration rutor 20-24; without it Skatteverket rejects with
-      // FK004. Mapping rules don't carry supplier-country today, so we
-      // default to EU services: the most common reverse-charge scenario.
-      const rcRate = 0.25
-      const rcLines = generateReverseChargeLines(absSekAmount, rcRate, false)
+      // Reverse charge: the complete set, fiktiv moms (2645/2614) AND the
+      // basbelopp pair (44xx|45xx / 4598) for rutor 20-24 (FK004 without it).
+      // Mapping rules don't carry supplier-country today, so we default to EU
+      // services: the most common reverse-charge scenario. A rule that already
+      // books to a basis account gets no pair (it would double-count).
+      const rcLines = generateReverseChargePurchaseLines({
+        base: absSekAmount,
+        rate: 0.25,
+        kind: DEFAULT_REVERSE_CHARGE_KIND,
+        basisBase: costAccountReportsRcBasis(debitAccount) ? 0 : absSekAmount,
+      })
       for (const rcl of rcLines) {
         vatLines.push({
           account_number: rcl.account_number,
@@ -393,19 +451,6 @@ function buildResult(
           credit_amount: rcl.credit_amount,
           description: rcl.line_description || '',
         })
-      }
-
-      // Skip basbelopp emission if the rule already books to a basis account.
-      if (!/^4[45]\d{2}$/.test(debitAccount)) {
-        const basisLines = generateReverseChargeBasisLines(absSekAmount, rcRate, 'eu_business')
-        for (const bl of basisLines) {
-          vatLines.push({
-            account_number: bl.account_number,
-            debit_amount: bl.debit_amount,
-            credit_amount: bl.credit_amount,
-            description: bl.line_description || '',
-          })
-        }
       }
     } else if (vatTreatment === 'standard_25' || vatTreatment === 'reduced_12' || vatTreatment === 'reduced_6') {
       const vatRate =

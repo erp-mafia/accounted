@@ -182,6 +182,108 @@ describe('registry guard triggers', () => {
   })
 })
 
+// 20260928200100: tagged lines reference a value by its (sie_dim_no, code)
+// text, so a value's code, dimension and company are immutable.
+describe('dimension_values identity guard', () => {
+  it('blocks changing a value code, dimension or company; other columns stay editable', async () => {
+    const a = await seedWithDimensions()
+    const b = await seedWithDimensions()
+    const aDim6 = await getDimensionId(a.companyId, 6)
+    const aDim1 = await getDimensionId(a.companyId, 1)
+    const bDim6 = await getDimensionId(b.companyId, 6)
+    const valueId = await insertValue({ companyId: a.companyId, dimensionId: aDim6, code: 'P001' })
+
+    const renamed = (await getPool()
+      .query(`UPDATE public.dimension_values SET code = 'P999' WHERE id = $1`, [valueId])
+      .then(
+        () => null,
+        (err: { code?: string; message: string }) => err,
+      )) as { code?: string; message: string } | null
+    expect(renamed?.code).toBe('P0001')
+    expect(renamed?.message).toMatch(/kan inte ändras/)
+
+    await expect(
+      getPool().query(`UPDATE public.dimension_values SET dimension_id = $2 WHERE id = $1`, [
+        valueId,
+        aDim1,
+      ]),
+    ).rejects.toThrow(/kan inte flyttas/)
+    await expect(
+      getPool().query(
+        `UPDATE public.dimension_values SET company_id = $2, dimension_id = $3 WHERE id = $1`,
+        [valueId, b.companyId, bDim6],
+      ),
+    ).rejects.toThrow(/kan inte flyttas/)
+
+    // What the value routes do write stays writable, and naming an identity
+    // column without changing it is a no-op.
+    await getPool().query(
+      `UPDATE public.dimension_values
+          SET name = 'Projekt Alfa', is_active = false, start_date = '2026-01-01',
+              end_date = '2026-12-31', attributes = '{"ansvarig":"Eva"}', code = code
+        WHERE id = $1`,
+      [valueId],
+    )
+    const { rows } = await getPool().query(
+      `SELECT code, name, is_active, company_id, dimension_id FROM public.dimension_values WHERE id = $1`,
+      [valueId],
+    )
+    expect(rows[0]).toMatchObject({
+      code: 'P001',
+      name: 'Projekt Alfa',
+      is_active: false,
+      company_id: a.companyId,
+      dimension_id: aDim6,
+    })
+  })
+
+  it('refuses the rename from a writer session, so a tagged value can never slip past the retention guard', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedWithDimensions()
+    const dimId = await getDimensionId(companyId, 6)
+    await insertValue({ companyId, dimensionId: dimId, code: 'P001' })
+    const entryId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
+    await insertDimensionedLines(entryId, { '6': 'P001' })
+    await commitEntry(companyId, entryId)
+
+    // The PostgREST shape of the old hole: a writer PATCHes the code, which
+    // would orphan the posted tag and leave the renamed row deletable.
+    await withUserContext(userId, async (client) => {
+      await expect(
+        client.query(
+          `UPDATE public.dimension_values SET code = 'P002' WHERE company_id = $1 AND code = 'P001'`,
+          [companyId],
+        ),
+      ).rejects.toThrow(/kan inte ändras/)
+    })
+
+    await expect(
+      getPool().query(
+        `DELETE FROM public.dimension_values WHERE company_id = $1 AND code = 'P001'`,
+        [companyId],
+      ),
+    ).rejects.toThrow(/arkivera/)
+  })
+
+  it('lets the parent_value_id ON DELETE SET NULL cascade through', async () => {
+    const { companyId } = await seedWithDimensions()
+    const dimId = await getDimensionId(companyId, 6)
+    const parentId = await insertValue({ companyId, dimensionId: dimId, code: 'P100' })
+    const childId = await insertValue({ companyId, dimensionId: dimId, code: 'P101' })
+    await getPool().query(`UPDATE public.dimension_values SET parent_value_id = $2 WHERE id = $1`, [
+      childId,
+      parentId,
+    ])
+
+    await getPool().query(`DELETE FROM public.dimension_values WHERE id = $1`, [parentId])
+
+    const { rows } = await getPool().query(
+      `SELECT code, parent_value_id FROM public.dimension_values WHERE id = $1`,
+      [childId],
+    )
+    expect(rows).toEqual([{ code: 'P101', parent_value_id: null }])
+  })
+})
+
 describe('dimension_values retention', () => {
   it('blocks deleting a value referenced by a posted line, allows unreferenced', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedWithDimensions()
@@ -241,6 +343,68 @@ describe('journal_entry_lines.dimensions', () => {
     ).rejects.toThrow(/jel_dimensions_is_object/)
   })
 
+  // 20260928200200: the bag contract of DimensionsBagSchema and the
+  // dimension_values.code CHECK, now enforced for every writer.
+  it('rejects malformed bags on INSERT and UPDATE via jel_dimensions_well_formed', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
+    const malformed = [
+      '{"1":null}', // JSON null
+      '{"x":"KS01"}', // not a dimension number
+      '{"01":"KS01"}', // non-canonical number
+      '{"0":"KS01"}', // there is no dimension 0
+      '{"1":5}', // a number, not a code
+      '{"1":{"a":"b"}}', // nested object
+      '{"1":["KS01"]}', // array
+      '{"1":""}', // empty code
+      '{"1":"K\\"S"}', // characters that break SIE field framing
+      '{"1":"K{S"}',
+      '{"1":"K}S"}',
+      JSON.stringify({ '1': 'K'.repeat(41) }), // longer than a registry code
+      '{"1":"KS01","6":7}', // one bad pair spoils the bag
+    ]
+    for (const bag of malformed) {
+      await expect(
+        getPool().query(
+          `INSERT INTO public.journal_entry_lines
+             (journal_entry_id, account_number, debit_amount, credit_amount, dimensions)
+           VALUES ($1, '1930', 100, 0, $2::jsonb)`,
+          [entryId, bag],
+        ),
+        bag,
+      ).rejects.toThrow(/jel_dimensions_well_formed/)
+    }
+
+    // A NOT VALID constraint still guards every new row version.
+    const lineId = await insertDimensionedLines(entryId, { '6': 'P001' })
+    await expect(
+      getPool().query(
+        `UPDATE public.journal_entry_lines SET dimensions = '{"6":5}'::jsonb WHERE id = $1`,
+        [lineId],
+      ),
+    ).rejects.toThrow(/jel_dimensions_well_formed/)
+  })
+
+  it('accepts {} and every bag the registry code CHECK accepts', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
+    const wellFormed: Record<string, string>[] = [
+      {},
+      { '1': 'KS01' },
+      { '1': 'KS01', '6': 'P001', '20': 'SYD' },
+      { '6': 'Å'.repeat(40) }, // 40 characters, 80 bytes: counted in characters
+      { '6': 'P 001 (gammal)' },
+    ]
+    for (const bag of wellFormed) {
+      const lineId = await insertDimensionedLines(entryId, bag)
+      const { rows } = await getPool().query(
+        `SELECT dimensions FROM public.journal_entry_lines WHERE id = $1`,
+        [lineId],
+      )
+      expect(rows[0].dimensions).toEqual(bag)
+    }
+  })
+
   it('defaults to {} so dimension-less writers stay valid', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
@@ -289,5 +453,20 @@ describe('journal_entry_lines.dimensions', () => {
     expect(rows[0].dimensions).toEqual({ '6': 'P002' })
     expect(rows[0].project).toBe('P002')
     expect(rows[0].cost_center).toBeNull()
+  })
+})
+
+describe('company_settings.dimensions_enabled', () => {
+  // 20260928200200: the old comment claimed the flag is never load-bearing;
+  // validateEntryDimensions skips registry validation while it is off.
+  it('documents that the flag gates registry validation', async () => {
+    const { rows } = await getPool().query<{ comment: string }>(
+      `SELECT col_description('public.company_settings'::regclass, a.attnum) AS comment
+         FROM pg_attribute a
+        WHERE a.attrelid = 'public.company_settings'::regclass
+          AND a.attname = 'dimensions_enabled'`,
+    )
+    expect(rows[0].comment).toMatch(/validateEntryDimensions/)
+    expect(rows[0].comment).not.toMatch(/never load-bearing/i)
   })
 })

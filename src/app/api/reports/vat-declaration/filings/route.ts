@@ -10,9 +10,10 @@ import {
 } from '@/lib/vat/filing-record-store'
 
 /**
- * /api/reports/vat-declaration/filings (issue #2746)
+ * /api/reports/vat-declaration/filings (issues #2746, #2786)
  *
- * The momsdeklaration page's record of which calendar VAT periods are filed.
+ * The momsdeklaration page's record of which VAT periods are filed, for every
+ * cadence (a yearly period is the räkenskapsår, named by the year it ends in).
  * The record is the period's completed moms deadline (lib/vat/filing-record.ts):
  * the Skatteverket kvittens cron completes it for declarations signed through
  * the connection, and POST here completes it for a declaration filed by hand

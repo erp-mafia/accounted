@@ -94,6 +94,7 @@ Creates a new employee for the company. Requires Idempotency-Key (UUID). Support
 - For A-skatt employees who are not sidoinkomst, tax_table_number is required (29-42).
 - salary_type drives which salary field is required: monthly_salary for monthly, hourly_rate for hourly.
 - The response masks personnummer; never echo back the supplied value. Detail endpoint (deliberate drill-in) returns the full value.
+- vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -333,7 +334,7 @@ Example response `200`:
 **Update an employee.**
 `scope:payroll:write · risk:low · idempotent · dry-run`
 
-Partial update of an employee. Only the fields supplied in the body are changed. Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.
+Partial update of an employee. Only the fields supplied in the body are changed: an omitted key is left unchanged, and an explicit null clears a nullable field (employment_end, salary amounts, tax table and municipality, bank details, contact details, Växa-stöd and jämkning dates). Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.
 
 **Use when:** You need to change tax configuration, bank details, salary amount, or contact info on an existing employee.
 **Do not use for:** Changing personnummer (not supported: create a new employee if the natural-person identity changes, which is a rare edge case). Soft-deleting (use DELETE).
@@ -341,7 +342,9 @@ Partial update of an employee. Only the fields supplied in the body are changed.
 **Pitfalls:**
 - personnummer in the body is ignored by this endpoint. To change it you must DELETE and recreate.
 - salary_type changes require the matching salary field in the same request: switching to monthly without monthly_salary returns 400.
+- A cleared field is checked against the stored row: nulling monthly_salary on a monthly employee, tax_table_number on an A-skatt employee without sidoinkomst, vaxa_stod_start while Växa-stöd is on, or only one of clearing_number/bank_account_number returns 400. To end an ongoing employment set employment_end; to reopen it send employment_end: null.
 - tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.
+- vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -357,32 +360,32 @@ Request body:
   personnummer?: string,
   employment_type?: "employee" | "company_owner" | "board_member",
   employment_start?: string,
-  employment_end?: string,
+  employment_end?: string | null,
   employment_degree?: number,
   hours_per_week?: number,
   workdays_per_week?: number,
   salary_type?: "monthly" | "hourly",
-  monthly_salary?: number,
-  hourly_rate?: number,
-  tax_table_number?: number,
+  monthly_salary?: number | null,
+  hourly_rate?: number | null,
+  tax_table_number?: number | null,
   tax_column?: number,
-  tax_municipality?: string,
+  tax_municipality?: string | null,
   is_sidoinkomst?: boolean,
   f_skatt_status?: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified",
-  clearing_number?: string,
-  bank_account_number?: string,
+  clearing_number?: string | null,
+  bank_account_number?: string | null,
   vacation_rule?: "procentregeln" | "sammaloneregeln" | "none" | "semesterersattning",
   vacation_days_per_year?: number,
   semestertillagg_rate?: number,
   vacation_pay_rate?: number | null,
-  email?: string,
-  phone?: string,
-  address_line1?: string,
-  postal_code?: string,
-  city?: string,
+  email?: string | null,
+  phone?: string | null,
+  address_line1?: string | null,
+  postal_code?: string | null,
+  city?: string | null,
   vaxa_stod_eligible?: boolean,
-  vaxa_stod_start?: string,
-  vaxa_stod_end?: string,
+  vaxa_stod_start?: string | null,
+  vaxa_stod_end?: string | null,
   jamkning_percentage?: number | null,
   jamkning_valid_from?: string | null,
   jamkning_valid_to?: string | null,

@@ -17,14 +17,17 @@ import {
 } from '@/lib/invariants/zod'
 import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
 import { orgNumberKey } from '@/lib/invariants/org-number'
+import { DIMENSION_RULE_POLICY } from '@/lib/bookkeeping/dimension-rule-policy'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
 import { SalaryCalculationPolicySchema } from '@/lib/salary/calculation-policy'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { INVOICE_VAT_TREATMENT_OVERRIDES } from '@/lib/invoices/invoice-vat-override'
 import {
   DEDUCTION_LINE_ERRORS,
   HOUSEWORK_TYPE_VALUES,
@@ -38,6 +41,7 @@ import {
   COUNTRY_CONSISTENCY_MESSAGES,
   checkCountryConsistency,
   defaultCountryForParty,
+  isAssignedCountryCode,
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
 import {
@@ -46,7 +50,13 @@ import {
   orgNumberHoldsPersonalNumber,
   personalNumberDigits,
 } from '@/lib/customers/personal-number-shape'
-import { CURRENCIES, type AuditAction, type Currency, type InvoiceDocumentType } from '@/types'
+import {
+  CURRENCIES,
+  type AuditAction,
+  type Currency,
+  type InvoiceDocumentType,
+  type JournalEntrySourceType,
+} from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import {
   mentionsPeriodPlaceholder,
@@ -623,6 +633,34 @@ function refineRotRutLineCompleteness(
   })
 }
 
+/**
+ * Per-invoice VAT treatment (#2906). Omitted = the customer decides (create)
+ * or the draft keeps what it has (edit); null clears. The two travel as a
+ * pair: sending either replaces both. The rules live in
+ * resolveInvoiceVatRules (lib/invoices/vat-rules.ts), applied by the shared
+ * invoice builder; this is only the wire shape.
+ */
+export const InvoiceVatOverrideShape = {
+  vat_treatment: z
+    .enum(INVOICE_VAT_TREATMENT_OVERRIDES)
+    .nullable()
+    .optional()
+    .describe(
+      "This invoice's own VAT treatment instead of the customer's. standard = Swedish VAT at the line rates (ruta 05). export with delivery_country = export of goods (0 %, 3105, ruta 36); reverse_charge with delivery_country = intra-EU supply of goods (0 %, 3108, ruta 35). Without delivery_country, export / reverse_charge are the services treatments and only accepted where the customer already gets them. Omit to let the customer decide; null clears.",
+    ),
+  delivery_country: z
+    .string()
+    .regex(/^[A-Za-z]{2}$/, 'delivery_country must be an ISO 3166-1 alpha-2 code')
+    .transform((v) => normalizeCountryCode(v) as string)
+    // An unassigned code would read as "outside the EU" and unlock export.
+    .refine(isAssignedCountryCode, 'delivery_country must be an assigned ISO 3166-1 alpha-2 country code')
+    .nullable()
+    .optional()
+    .describe(
+      'ISO 3166-1 alpha-2 country the GOODS are transported to. Setting it declares the invoice a supply of goods; alone it implies the treatment (SE = standard, another EU member state = reverse_charge, elsewhere = export). XI = Northern Ireland (inside the EU for goods). Omit for services.',
+    ),
+}
+
 const CreateInvoiceBaseSchema = z.object({
   customer_id: uuid,
   invoice_date: isoDate,
@@ -730,6 +768,7 @@ const CreateInvoiceBaseSchema = z.object({
     .transform((v) => v || null)
     .nullable()
     .optional(),
+  ...InvoiceVatOverrideShape,
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
@@ -1616,6 +1655,16 @@ export const MarkSupplierInvoicePaidSchema = z.object({
   amount: z.number().positive().optional(),
   payment_date: isoDate.optional(),
   exchange_rate_difference: z.number().optional(),
+  // #2955: the SEK that actually left the payment account, for a
+  // foreign-currency invoice. The amount cleared off 2440 is read from the
+  // ledger; a difference to it books as kursvinst (3960) or kursförlust (7960).
+  amount_sek: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      'Foreign-currency invoices only: the SEK that left the payment account for this payment. Defaults to the SEK the invoice carries on 2440 for the paid share (no kursdifferens); a different figure books the difference on 3960 (gain) or 7960 (loss). Under kontantmetoden (no registration verifikat) it instead translates the whole payment verifikat at the rate it implies. Not combinable with exchange_rate_difference or lines.',
+    ),
   notes: z.string().optional(),
   force: z.boolean().optional(),
   // Which BAS account to credit for the payment. Defaults to 1930 to preserve
@@ -1717,9 +1766,21 @@ export const CreateJournalEntryLineSchema = z.object({
   // over the cost_center/project aliases.
   dimensions: DimensionsBagSchema.optional(),
   // Deprecated aliases for dimensions['1'] / dimensions['6'], kept forever
-  // for API/MCP compatibility.
-  cost_center: z.string().optional(),
-  project: z.string().optional(),
+  // for API/MCP compatibility. They land in the same bag, so they carry the
+  // bag's value rule (and the jel_dimensions_well_formed CHECK): a bad alias
+  // is a 400 here, not a database error at insert. Blank still means untagged.
+  cost_center: z
+    .string()
+    .trim()
+    .max(40, 'Kostnadsställe får vara högst 40 tecken')
+    .regex(/^[^"{}]*$/, 'Kostnadsställe får inte innehålla ", { eller }')
+    .optional(),
+  project: z
+    .string()
+    .trim()
+    .max(40, 'Projekt får vara högst 40 tecken')
+    .regex(/^[^"{}]*$/, 'Projekt får inte innehålla ", { eller }')
+    .optional(),
 }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)
 
 export const CreateJournalEntrySchema = z.object({
@@ -1740,6 +1801,60 @@ export const CreateJournalEntrySchema = z.object({
   voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
   notes: z.string().max(2000).optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),
+})
+
+/**
+ * source_type values a caller may put on a voucher it authors through a
+ * generic create door. The label is load-bearing, not decoration: it decides
+ * the dimension-rule and registry-validation exemptions
+ * (lib/bookkeeping/dimension-rules.ts), keeps 'vat_settlement' out of the VAT
+ * return, scopes SIE replacement to 'import' and gates storno/correction
+ * handling. A caller-chosen engine-owned label let a business voucher claim
+ * a policy exemption and show a false source in the ledger.
+ *
+ *   API (v1 POST /journal-entries and /journal-entries/batch-create): every
+ *     source type the dimension-rule policy ENFORCES, plus 'import' for
+ *     history replayed from another system (the documented batch-create use;
+ *     imported history is rule-exempt by design, and the label says so in
+ *     the ledger). Integrations label their own business vouchers with the
+ *     enforced types (a webshop integration posts 'webshop_order' vouchers
+ *     through this door), and those labels claim nothing. The rule-exempt,
+ *     engine-owned types (opening balances, bokslut, storno, corrections,
+ *     credit notes, accruals, settlements, 'system') are refused. Derived
+ *     from DIMENSION_RULE_POLICY, so a new source type is classified once
+ *     there and this door follows.
+ *   Dashboard (POST /api/bookkeeping/journal-entries): 'manual', plus
+ *     'vat_settlement' for the reviewed momsredovisning proposal and VAT
+ *     booking templates (lib/bookkeeping/template-source-type.ts).
+ */
+export const API_VOUCHER_SOURCE_TYPES: readonly JournalEntrySourceType[] = [
+  ...(Object.keys(DIMENSION_RULE_POLICY) as JournalEntrySourceType[]).filter(
+    (sourceType) => DIMENSION_RULE_POLICY[sourceType] === 'enforced'
+  ),
+  'import',
+]
+export const DASHBOARD_VOUCHER_SOURCE_TYPES = ['manual', 'vat_settlement'] as const
+
+/** POST /api/v1/companies/{companyId}/journal-entries (+ batch-create items). */
+export const CreateApiJournalEntrySchema = CreateJournalEntrySchema.extend({
+  source_type: z
+    .enum(API_VOUCHER_SOURCE_TYPES, {
+      error:
+        'source_type kan inte vara en motorägd källtyp här: ingående balans, bokslut, storno, rättelser, ' +
+        'kreditnotor, periodiseringar, avräkningar och systemverifikat sätts av sina egna flöden och undantas ' +
+        `från dimensionsreglerna. Tillåtna värden: ${API_VOUCHER_SOURCE_TYPES.join(', ')}.`,
+    })
+    .default('manual'),
+})
+
+/** POST /api/bookkeeping/journal-entries: what the dashboard's own forms send. */
+export const CreateDashboardJournalEntrySchema = CreateJournalEntrySchema.extend({
+  source_type: z
+    .enum(DASHBOARD_VOUCHER_SOURCE_TYPES, {
+      error:
+        'source_type kan bara vara "manual" eller "vat_settlement" här. Övriga källtyper sätts av sina egna flöden.',
+    })
+    .default('manual'),
 })
 
 export const CorrectJournalEntrySchema = z.object({
@@ -1862,48 +1977,44 @@ export const CreateDimensionSchema = z.object({
   parent_sie_dim_no: z.coerce.number().int().min(1).max(9999).nullable().optional(),
 })
 
-const AccountDimensionRuleTypeSchema = z.enum(['required', 'default', 'fixed'])
+const AccountDimensionRuleTypeSchema = z
+  .enum(DIMENSION_RULE_TYPES)
+  .describe('required: no posting on the account without a value; default: pre-filled when a line has none; fixed: always applied.')
 
 /** GET /api/dimensions/rules query — optional exact-account filter. */
 export const ListDimensionRulesQuerySchema = z.object({
-  account_number: accountNumber.optional(),
+  account_number: accountNumber.optional().describe('Only the rules of this account.'),
 })
 
 /**
  * POST /api/dimensions/rules — per-account dimension policy (dimensions
  * PR10). 'required' carries no value; 'default'/'fixed' must carry the value
- * to apply. One rule per (account, dimension) — enforced by the DB UNIQUE.
+ * to apply (ruleValueProblem, lib/dimensions/rule-value.ts). One rule per
+ * (account, dimension): enforced by the DB UNIQUE. Also the input of the
+ * v1 and MCP doors (operation dimension-rules.create).
  */
 export const CreateAccountDimensionRuleSchema = z
   .object({
     account_number: accountNumber,
-    dimension_id: uuid,
+    dimension_id: uuid.describe('The dimension row id (dimension_id from the dimension list), not its sie_dim_no.'),
     rule_type: AccountDimensionRuleTypeSchema,
-    value_id: uuid.optional(),
-    is_active: z.boolean().optional(),
+    value_id: uuid.optional().describe('default/fixed: the dimension value to apply (dimension_value_id). Omit for required.'),
+    is_active: z.boolean().optional().describe('false saves the rule paused. Default true.'),
   })
   .superRefine((rule, ctx) => {
-    if (rule.rule_type === 'required' && rule.value_id) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['value_id'],
-        message: 'En obligatorisk regel har inget värde — värden hör till Förval/Låst.',
-      })
-    }
-    if (rule.rule_type !== 'required' && !rule.value_id) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['value_id'],
-        message: 'Välj vilket värde regeln ska använda.',
-      })
-    }
+    const problem = ruleValueProblem(rule.rule_type, Boolean(rule.value_id))
+    if (problem) ctx.addIssue({ code: 'custom', path: ['value_id'], message: problem })
   })
 
-/** PATCH /api/dimensions/rules/[id] — the value-presence rule re-checks in the route (partial update). */
+/**
+ * PATCH /api/dimensions/rules/[id]: a partial update, so the value rule is
+ * checked in lib/dimensions/rules-service.ts against the rule's effective
+ * type (the stored one when rule_type is not sent).
+ */
 export const UpdateAccountDimensionRuleSchema = z.object({
   rule_type: AccountDimensionRuleTypeSchema.optional(),
-  value_id: uuid.nullable().optional(),
-  is_active: z.boolean().optional(),
+  value_id: uuid.nullable().optional().describe('The value to apply; null clears it (required rules carry none).'),
+  is_active: z.boolean().optional().describe('false pauses the rule without losing it.'),
 })
 
 export const RetagLineDimensionsSchema = z.object({
@@ -2221,6 +2332,9 @@ export const MatchInvoiceSchema = z
       debit_amount: nonNegativeAmount.default(0),
       credit_amount: nonNegativeAmount.default(0),
       line_description: z.string().optional(),
+      // User-edited payment lines keep their tags, as on mark-paid (without
+      // this key Zod stripped a caller's bag before the route saw it).
+      dimensions: DimensionsBagSchema.optional(),
     }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)).min(2).optional(),
     // Optional caller-supplied SEK-per-invoice-currency rate for cross-currency
     // settlement. Used when the Riksbanken lookup returns nothing (rate not
@@ -2465,6 +2579,8 @@ export const MatchSupplierInvoiceSchema = z.object({
     debit_amount: nonNegativeAmount.default(0),
     credit_amount: nonNegativeAmount.default(0),
     line_description: z.string().optional(),
+    // User-edited payment lines keep their tags, as on mark-paid.
+    dimensions: DimensionsBagSchema.optional(),
   })).min(2).optional(),
 })
 
@@ -2551,7 +2667,7 @@ const InvoicePaymentAccountSchema = z.object({
  * of InvoicePaymentAccountSchema so the settings form, the legacy settings
  * writers and this route agree on what a valid bankgiro is.
  */
-export const UpdateCashAccountSchema = InvoicePaymentAccountSchema.extend({
+export const UpdateCashAccountFieldsSchema = InvoicePaymentAccountSchema.extend({
   voucher_series: UpdateCashAccountVoucherSeriesSchema.shape.voucher_series.optional(),
   name: z.string().trim().min(1).max(100).nullable().optional(),
   invoice_payee: z.boolean().optional(),
@@ -2559,7 +2675,14 @@ export const UpdateCashAccountSchema = InvoicePaymentAccountSchema.extend({
   // enabled state is owned by the AccountPickerDialog (enabled_uids), and
   // setEnabled() refuses it (409), so the shape alone cannot say which.
   enabled: z.boolean().optional(),
-}).strict().refine((body) => Object.keys(body).length > 0, {
+}).strict()
+
+/**
+ * The same fields with the "something to update" rule. Split from
+ * UpdateCashAccountFieldsSchema because a refined object cannot be
+ * extended: the v1 operation adds cash_account_id to the unrefined fields.
+ */
+export const UpdateCashAccountSchema = UpdateCashAccountFieldsSchema.refine((body) => Object.keys(body).length > 0, {
   message: 'Inget att uppdatera',
 })
 
@@ -2570,6 +2693,14 @@ export const CreateCashAccountSchema = z.object({
   ledger_account: z.string().regex(/^19[2-9]\d$/, 'Bankkonton bokförs på 1920-1999').optional(),
   invoice_payee: z.boolean().optional(),
   payee: InvoicePaymentAccountSchema.optional(),
+}).strict()
+
+/**
+ * DELETE /api/cash-accounts/[id]: dry_run=true answers the same checks and
+ * what would go, without writing (the confirmation dialog's preview).
+ */
+export const RemoveCashAccountQuerySchema = z.object({
+  dry_run: z.enum(['true', 'false']).optional(),
 }).strict()
 
 /** PUT /api/cash-accounts/payee-defaults: which account invoices in a currency pay to. */
@@ -2873,23 +3004,30 @@ export const CreateDeadlineSchema = z.object({
 })
 
 // ============================================================
-// VAT filing record (issue #2746)
+// VAT filing record (issues #2746, #2786)
 // ============================================================
 
 /**
- * A calendar VAT period: the two cadences whose deadline rows carry the
- * filing record (lib/vat/filing-record.ts). Helårsmoms is deliberately not
- * accepted: its deadline is labelled per räkenskapsår and is completed from
- * the calendar instead.
+ * A VAT period of any cadence, the key of the filing record
+ * (lib/vat/filing-record.ts). Yearly (helårsmoms) is the räkenskapsår, named
+ * like every yearly VAT period: the year it ends in, period 1. Shared by the
+ * dashboard routes and the vat-filings operations (v1 and MCP).
  */
 const vatFilingPeriodShape = {
-  period_type: z.enum(['monthly', 'quarterly']),
-  year: z.coerce.number().int().min(2000).max(2100),
-  period: z.coerce.number().int().min(1).max(12),
+  period_type: z
+    .enum(['monthly', 'quarterly', 'yearly'])
+    .describe('The momsperiod length; yearly is helårsmoms, one period per räkenskapsår.'),
+  year: z.coerce
+    .number()
+    .int()
+    .min(2000)
+    .max(2100)
+    .describe('Calendar year of the period; for yearly, the year the räkenskapsår ends.'),
+  period: z.coerce.number().int().min(1).max(12).describe('1-12 monthly, 1-4 quarterly, 1 yearly.'),
 }
 
 function refineVatFilingPeriod(
-  data: { period_type: 'monthly' | 'quarterly'; period: number },
+  data: { period_type: 'monthly' | 'quarterly' | 'yearly'; period: number },
   ctx: z.RefinementCtx,
 ) {
   if (data.period_type === 'quarterly' && data.period > 4) {
@@ -2897,6 +3035,13 @@ function refineVatFilingPeriod(
       code: 'custom',
       path: ['period'],
       message: 'For quarterly period_type, period must be 1-4.',
+    })
+  }
+  if (data.period_type === 'yearly' && data.period !== 1) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['period'],
+      message: 'For yearly period_type, period must be 1.',
     })
   }
 }
@@ -2907,9 +3052,17 @@ export const MarkVatFilingSchema = z
   .object({
     ...vatFilingPeriodShape,
     /** Swedish calendar date the declaration was filed. */
-    filed_on: saneIsoDate,
+    filed_on: saneIsoDate.describe(
+      'Swedish calendar date the declaration was filed (YYYY-MM-DD): after the period ended, not in the future.',
+    ),
     /** Skatteverket's reference (kvittensnummer); null clears a stored one. */
-    reference: z.string().trim().max(200).nullable().optional(),
+    reference: z
+      .string()
+      .trim()
+      .max(200)
+      .nullable()
+      .optional()
+      .describe("Skatteverket's reference (kvittensnummer). Omit to keep a stored one, null to clear it."),
   })
   .superRefine(refineVatFilingPeriod)
 
@@ -3173,6 +3326,13 @@ export const BehandlingshistorikQuerySchema = z.object({
     .enum(['verifikation', 'kontoplan', 'installningar', 'period', 'import', 'atkomst', 'ovrigt'])
     .optional(),
   format: z.enum(['json', 'csv', 'xlsx', 'pdf']).default('json'),
+})
+
+/** Semesterskuld: as of a fiscal period's end (period_id) or Dec 31 of `year`. */
+export const VacationLiabilityQuerySchema = z.object({
+  period_id: uuid.optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  format: z.enum(['json', 'xlsx', 'pdf']).default('json'),
 })
 
 // ============================================================
@@ -3515,7 +3675,30 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
 // (salary_type materializes as 'monthly' without monthly_salary present) and
 // (b) leak default values into routes that spread the parsed body into the
 // UPDATE (silently resetting e.g. is_sidoinkomst on unrelated edits).
+//
+// The update contract (#3008): an absent key leaves the column unchanged and
+// an explicit null clears it. Every column that is nullable in the database
+// accepts null here; before, only vacation_pay_rate and jämkning did, so an
+// emptied slutdatum (or email, bank account, ...) had no way to reach the
+// UPDATE and the stored value came back after save. NOT NULL columns keep
+// rejecting null. Cross-field rules on the merged row (a monthly employee
+// needs a salary, A-skatt needs a table, Växa-stöd needs a start date) are
+// checked by every door through lib/salary/employee-update-rules.ts.
 const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
+  employment_end: EmployeeSchemaBase.shape.employment_end.nullable(),
+  monthly_salary: EmployeeSchemaBase.shape.monthly_salary.nullable(),
+  hourly_rate: EmployeeSchemaBase.shape.hourly_rate.nullable(),
+  tax_table_number: EmployeeSchemaBase.shape.tax_table_number.nullable(),
+  tax_municipality: EmployeeSchemaBase.shape.tax_municipality.nullable(),
+  clearing_number: EmployeeSchemaBase.shape.clearing_number.nullable(),
+  bank_account_number: EmployeeSchemaBase.shape.bank_account_number.nullable(),
+  email: EmployeeSchemaBase.shape.email.nullable(),
+  phone: EmployeeSchemaBase.shape.phone.nullable(),
+  address_line1: EmployeeSchemaBase.shape.address_line1.nullable(),
+  postal_code: EmployeeSchemaBase.shape.postal_code.nullable(),
+  city: EmployeeSchemaBase.shape.city.nullable(),
+  vaxa_stod_start: EmployeeSchemaBase.shape.vaxa_stod_start.nullable(),
+  vaxa_stod_end: EmployeeSchemaBase.shape.vaxa_stod_end.nullable(),
   employment_type: EmploymentTypeSchema,
   employment_degree: z.number().min(1).max(100),
   hours_per_week: z.number().positive().max(80),
@@ -3532,15 +3715,16 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
 })
 
 export const UpdateEmployeeSchema = EmployeeSchemaPatchBase.partial().superRefine((data, ctx) => {
-  // Only validate salary when salary_type is being changed in this update
-  if (data.salary_type === 'monthly' && data.monthly_salary !== undefined && data.monthly_salary <= 0) {
+  // Only validate salary when salary_type is being changed in this update.
+  // A null amount (clear) counts as missing: the new salary type needs one.
+  if (data.salary_type === 'monthly' && data.monthly_salary !== undefined && (data.monthly_salary ?? 0) <= 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Månadslön måste vara större än 0 för månadslöneform',
       path: ['monthly_salary'],
     })
   }
-  if (data.salary_type === 'hourly' && data.hourly_rate !== undefined && data.hourly_rate <= 0) {
+  if (data.salary_type === 'hourly' && data.hourly_rate !== undefined && (data.hourly_rate ?? 0) <= 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Timlön måste vara större än 0 för timlöneform',
@@ -3565,17 +3749,15 @@ export const UpdateEmployeeSchema = EmployeeSchemaPatchBase.partial().superRefin
   }
 
   // Växa-stöd schema-level consistency check. The schema can only see what
-  // the PATCH body carries; the route layer is responsible for merged-
-  // state validation (i.e. an existing employee with vaxa_stod_start
-  // already set can have vaxa_stod_eligible flipped on without also
-  // sending start in the body). What the schema CAN enforce:
+  // the PATCH body carries; merged-state validation (an existing employee
+  // with vaxa_stod_start already set can have vaxa_stod_eligible flipped on
+  // without also sending start in the body, or have start cleared while the
+  // stored flag stays on) is lib/salary/employee-update-rules.ts, run by
+  // every door. What the schema CAN enforce:
   //   - If the body enables vaxa_stod AND clears vaxa_stod_start explicitly
   //     (sending null), reject: that would orphan the eligibility flag.
-  //   - If the body sets vaxa_stod_eligible=true AND vaxa_stod_start is
-  //     present in the body but invalid relative to vaxa_stod_end, reject.
-  // The first case isn't currently expressible via .partial() (null != absent),
-  // so the practical schema-level check is the second one. The route
-  // layer will add a merged-state check when needed.
+  //   - If both dates are in the body, the end may not precede the start
+  //     (a null date skips the ordering check).
   if (
     data.vaxa_stod_eligible === true &&
     'vaxa_stod_start' in data &&
@@ -4219,6 +4401,11 @@ export const CreateExpenseClaimSchema = z
     claimant_name: z.string().trim().max(200).optional(),
     document_id: uuid.optional().nullable(),
     inbox_item_id: uuid.optional().nullable(),
+    /** Kostnadsställe/projekt for the claim's cost lines: the generated cost
+     *  line, or each class 3-8 line of `lines` (a line's own bag wins per key). */
+    dimensions: DimensionsBagSchema.optional().describe(
+      'Dimensions bag {sie_dim_no: code}, e.g. {"6":"P001"}, for the cost line(s). With lines, it is the default for every class 3-8 line; per-line dimensions win per key.',
+    ),
     /** Advanced booking: full verifikat lines in claim currency. Deep
      *  validation (balance, liability line) happens in the service. */
     lines: z
@@ -4228,6 +4415,9 @@ export const CreateExpenseClaimSchema = z
           debit_amount: z.number().nonnegative().default(0),
           credit_amount: z.number().nonnegative().default(0),
           line_description: z.string().trim().max(300).optional().nullable(),
+          // Carried onto the posted line (the service always accepted it;
+          // without it here the bag was silently stripped at the door).
+          dimensions: DimensionsBagSchema.optional(),
         }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE),
       )
       .min(2)

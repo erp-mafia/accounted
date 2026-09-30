@@ -217,26 +217,8 @@ export async function hasCapability(
   if (isBypassedFor(key)) return true
   if (!isUuid(companyId)) return false // fail-closed: never interpolate a non-UUID
 
-  // Resolve the company's firm/team (firm-scoped grants cascade to clients).
-  const { data: company } = await supabase
-    .from('companies')
-    .select('team_id')
-    .eq('id', companyId)
-    .maybeSingle()
-  const rawTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
-  const teamId = rawTeamId && isUuid(rawTeamId) ? rawTeamId : null
-
   // ENTITLEMENT axis: any unexpired grant on the company or its team.
-  const scopeFilter = teamId
-    ? `company_id.eq.${companyId},team_id.eq.${teamId}`
-    : `company_id.eq.${companyId}`
-  let grantsQuery = supabase
-    .from('capability_grants')
-    .select('expires_at')
-    .eq('capability_key', key)
-    .or(scopeFilter)
-  if (connectorGrantsOnly()) grantsQuery = grantsQuery.eq('source', 'connector')
-  const { data: grants, error: grantsError } = await grantsQuery
+  const { data: grants, error: grantsError } = await readGrants(supabase, companyId, [key])
 
   if (grantsError) return false // fail-closed on any read error
   const now = Date.now()
@@ -409,37 +391,71 @@ function normalizeTeamId(raw: string | null | undefined): string | null {
   return raw && isUuid(raw) ? raw : null
 }
 
+type GrantRow = {
+  capability_key: string
+  expires_at: string | null
+  source: string | null
+  team_id: string | null
+}
+
 /**
- * The grants read behind getCompanyEntitlements. `keys` is the paid-key list
- * the caller wants resolved from grants (every paid key on hosted; only the
- * connector keys on a self-host, where the local ones are held outright).
- * On a self-host only the connector sync's own rows count; see
- * connectorGrantsOnly().
+ * Every grant row that applies to a company (its own and its firm/team's),
+ * narrowed to `keys` and, on a self-host, to the connector sync's own rows
+ * (see connectorGrantsOnly()). Shared by hasCapability and
+ * getCompanyEntitlements.
+ *
+ * Read through company_capability_grant_rows (SECURITY DEFINER, the same
+ * tenant guard as company_has_capability): the capability_grants SELECT
+ * policy shows team rows only to TEAM members, so a byrå client company read
+ * through its own user's client never saw the team grant that covers it.
+ * The direct read below runs only when the function does not exist yet
+ * (PGRST202: deploy race, self-host mid-migration) and behaves as before.
+ * `teamId` feeds that fallback; undefined means look it up.
  */
-function readGrants(
+async function readGrants(
   supabase: SupabaseClient,
   companyId: string,
-  teamId: string | null,
   keys: readonly CapabilityKey[],
-) {
-  const scopeFilter = teamId
-    ? `company_id.eq.${companyId},team_id.eq.${teamId}`
+  teamId?: string | null,
+): Promise<{ data: GrantRow[] | null; error: unknown }> {
+  const onlyConnectorGrants = connectorGrantsOnly()
+  const { data, error } = await supabase.rpc('company_capability_grant_rows', {
+    p_company_id: companyId,
+    p_capability_keys: keys,
+    p_connector_only: onlyConnectorGrants,
+  })
+  if ((error as { code?: string } | null)?.code !== 'PGRST202') {
+    return { data: (data as GrantRow[] | null) ?? null, error }
+  }
+
+  let resolvedTeamId = teamId
+  if (resolvedTeamId === undefined) {
+    const { data: company } = await supabase
+      .from('companies')
+      .select('team_id')
+      .eq('id', companyId)
+      .maybeSingle()
+    resolvedTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
+  }
+  const validTeamId = normalizeTeamId(resolvedTeamId)
+  const scopeFilter = validTeamId
+    ? `company_id.eq.${companyId},team_id.eq.${validTeamId}`
     : `company_id.eq.${companyId}`
   let grantsQuery = supabase
     .from('capability_grants')
     .select('capability_key, expires_at, source, team_id')
     .in('capability_key', keys as unknown as string[])
     .or(scopeFilter)
-  if (connectorGrantsOnly()) grantsQuery = grantsQuery.eq('source', 'connector')
-  return grantsQuery
+  if (onlyConnectorGrants) grantsQuery = grantsQuery.eq('source', 'connector')
+  const fallback = await grantsQuery
+  return { data: (fallback.data as GrantRow[] | null) ?? null, error: fallback.error }
 }
 
 export interface GetCompanyEntitlementsOptions {
   /**
    * The company's team_id when the caller already has it (the dashboard
-   * layout reads it off the membership join): skips the companies lookup and
-   * lets the grants read run in the same wave as the other two, one round
-   * trip instead of two on the layout's critical path. Pass null for a
+   * layout reads it off the membership join). Only the direct-read fallback
+   * in readGrants uses it, to skip its companies lookup. Pass null for a
    * company without a team.
    */
   teamId?: string | null
@@ -491,18 +507,13 @@ export async function getCompanyEntitlements(
   const localPaid = selfHosted ? PAID_CAPABILITIES.filter(selfHostLocal) : []
   const queriedKeys = selfHosted ? PAID_CAPABILITIES.filter((k) => !selfHostLocal(k)) : PAID_CAPABILITIES
 
-  // The disabled-config subtraction and the subscription-status read only
-  // need companyId, so they run in parallel with the team lookup: this
+  // All three reads need only companyId, so they run in one wave: this
   // function sits on the dashboard layout's critical path, where each
   // serialized round-trip is latency. The subscription row (members-readable
   // per RLS) distinguishes a churned payer from an expired trial: cancelled
   // subscriptions have their stripe grants deleted, so the grants alone
   // cannot tell the two apart.
-  const knownTeam = options.teamId !== undefined
-  const [{ data: company }, { data: configs }, { data: subscription }, earlyGrants] = await Promise.all([
-    knownTeam
-      ? Promise.resolve({ data: { team_id: options.teamId } })
-      : supabase.from('companies').select('team_id').eq('id', companyId).maybeSingle(),
+  const [{ data: configs }, { data: subscription }, { data: grants }] = await Promise.all([
     supabase
       .from('company_capability_config')
       .select('capability_key, enabled')
@@ -513,21 +524,12 @@ export async function getCompanyEntitlements(
       .select('status')
       .eq('company_id', companyId)
       .maybeSingle(),
-    // With the team known up front the grants read joins this wave. A
-    // self-host serving every connector upstream from its own credentials has
-    // nothing to read from grants: skip the query (`in.()` on an empty list
-    // is not a valid PostgREST filter).
-    knownTeam && queriedKeys.length > 0
-      ? readGrants(supabase, companyId, normalizeTeamId(options.teamId), queriedKeys)
-      : Promise.resolve(null),
+    // A self-host serving every connector upstream from its own credentials
+    // has nothing to read from grants: skip the read.
+    queriedKeys.length > 0
+      ? readGrants(supabase, companyId, queriedKeys, options.teamId)
+      : Promise.resolve({ data: [] as GrantRow[] }),
   ])
-  const teamId = normalizeTeamId((company as { team_id: string | null } | null)?.team_id ?? null)
-
-  const { data: grants } =
-    earlyGrants ??
-    (queriedKeys.length > 0
-      ? await readGrants(supabase, companyId, teamId, queriedKeys)
-      : { data: [] })
 
   const now = Date.now()
   const entitled = new Set<string>(localPaid)

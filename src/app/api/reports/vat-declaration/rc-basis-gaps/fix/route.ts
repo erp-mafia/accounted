@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
+import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import type { CreateJournalEntryLineInput, JournalEntryLine } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -131,23 +132,11 @@ export const POST = withRouteContext(
     const basisAmount = Math.round((outputAmount / rate) * 100) / 100
     const rateLabel = `${Math.round(rate * 100)}%`
 
-    // Build corrected lines = original lines + basis pair (44xx debit + 4598 credit)
+    // Build corrected lines = original lines + basis pair (44xx debit + 4598
+    // credit). The original lines are copied whole, dimensions bag included,
+    // so the corrected entry keeps every tag the storno reverses.
     const correctedLines: CreateJournalEntryLineInput[] = [
-      ...originalLines.map((l) => {
-        const line: CreateJournalEntryLineInput = {
-          account_number: l.account_number,
-          debit_amount: Number(l.debit_amount) || 0,
-          credit_amount: Number(l.credit_amount) || 0,
-        }
-        if (l.currency) line.currency = l.currency
-        if (l.amount_in_currency != null) line.amount_in_currency = Number(l.amount_in_currency)
-        if (l.exchange_rate != null) line.exchange_rate = Number(l.exchange_rate)
-        if (l.line_description) line.line_description = l.line_description
-        if (l.tax_code) line.tax_code = l.tax_code
-        if (l.cost_center) line.cost_center = l.cost_center
-        if (l.project) line.project = l.project
-        return line
-      }),
+      ...originalLines.map(postedLineAsInput),
       {
         account_number: basisAccount,
         debit_amount: basisAmount,

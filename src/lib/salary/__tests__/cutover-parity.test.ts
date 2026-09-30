@@ -105,7 +105,7 @@ const LEGACY_BOOKED_ROWS = [
     vacation_accrual: 4200,
     vacation_accrual_avgifter: 1319.64,
     avgifter_rate: 0.3142,
-    salary_run: { period_year: 2026, period_month: 7, status: 'booked' },
+    salary_run: { period_year: 2026, period_month: 7, payment_date: '2026-07-25', status: 'booked' },
   },
   {
     employee_id: EMPLOYEE_ID,
@@ -113,7 +113,7 @@ const LEGACY_BOOKED_ROWS = [
     vacation_accrual: 4200,
     vacation_accrual_avgifter: 1319.64,
     avgifter_rate: 0.3142,
-    salary_run: { period_year: 2026, period_month: 8, status: 'booked' },
+    salary_run: { period_year: 2026, period_month: 8, payment_date: '2026-08-25', status: 'booked' },
   },
 ]
 
@@ -218,7 +218,7 @@ describe('cutover parity: vacation liability without categorized fields', () => 
       employee_opening_balances: { data: [LEGACY_OPENING_ROW] },
     })
 
-    const report = await generateVacationLiability(mock.supabase, COMPANY_ID, 2026)
+    const report = await generateVacationLiability(mock.supabase, COMPANY_ID, '2026-12-31')
     expect(report.totals).toMatchObject(NEW_LIABILITY_TOTALS_DEFAULTS)
     for (const row of report.rows) expect(row).toMatchObject(NEW_LIABILITY_ROW_DEFAULTS)
     const legacyShape = {
@@ -229,6 +229,7 @@ describe('cutover parity: vacation liability without categorized fields', () => 
     expect(legacyShape).toMatchInlineSnapshot(`
       {
         "asOfDate": "2026-12-31",
+        "closedYear": null,
         "rows": [
           {
             "accruedAmount": 50400,
@@ -250,6 +251,7 @@ describe('cutover parity: vacation liability without categorized fields', () => 
           "accruedAvgifter": 15835.68,
           "totalLiability": 66235.68,
         },
+        "vacationYearStart": "2026-01-01",
       }
     `)
   })

@@ -32,6 +32,8 @@ export type DimensionValidationReason =
   | 'unknown_value'
   /** The value exists but is archived (is_active = false). */
   | 'archived_value'
+  /** The dimension itself is archived (is_active = false): no code under it is usable. */
+  | 'archived_dimension'
 
 export interface DimensionValidationIssue {
   /** SIE dimension number as keyed in the line bag, e.g. '1' or '6'. */
@@ -39,6 +41,22 @@ export interface DimensionValidationIssue {
   /** Offending object code; null when the dimension number itself is unknown. */
   code: string | null
   reason: DimensionValidationReason
+  /**
+   * Registry display name of the dimension, e.g. 'Projekt' or a custom
+   * dimension's own name. Absent when the dimension has no registry row.
+   */
+  dimension_name?: string
+}
+
+/**
+ * How a message names the dimension: the registry name when known, else
+ * its SIE number. Never "kostnadsställe/projekt": a custom dimension (20 and
+ * up) is neither.
+ */
+function dimensionLabel(issue: Pick<DimensionValidationIssue, 'sie_dim_no' | 'dimension_name'>): string {
+  return issue.dimension_name
+    ? `${issue.dimension_name} (dimension ${issue.sie_dim_no})`
+    : `dimension ${issue.sie_dim_no}`
 }
 
 /** Swedish user-facing sentence for a single validation issue. */
@@ -47,9 +65,11 @@ export function formatDimensionValidationIssue(issue: DimensionValidationIssue):
     case 'unknown_dimension':
       return `Okänd dimension ${issue.sie_dim_no}. Skapa dimensionen i registret först.`
     case 'archived_value':
-      return `"${issue.code}" är arkiverat: återaktivera värdet för att använda det.`
+      return `"${issue.code}" i ${dimensionLabel(issue)} är arkiverat: återaktivera värdet för att använda det.`
     case 'unknown_value':
-      return `Okänt kostnadsställe/projekt: "${issue.code}" (dimension ${issue.sie_dim_no}). Skapa värdet i registret först.`
+      return `Okänt värde "${issue.code}" i ${dimensionLabel(issue)}. Skapa värdet i registret först.`
+    case 'archived_dimension':
+      return `"${issue.code}" i ${dimensionLabel(issue)}: dimensionen är arkiverad. Återaktivera dimensionen för att använda värdet.`
   }
 }
 
@@ -57,9 +77,13 @@ function isDimensionValidationIssue(value: unknown): value is DimensionValidatio
   if (typeof value !== 'object' || value === null) return false
   const v = value as Record<string, unknown>
   if (typeof v.sie_dim_no !== 'string') return false
+  if (v.dimension_name !== undefined && typeof v.dimension_name !== 'string') return false
   if (v.reason === 'unknown_dimension') return true
   return (
-    (v.reason === 'unknown_value' || v.reason === 'archived_value') && typeof v.code === 'string'
+    (v.reason === 'unknown_value' ||
+      v.reason === 'archived_value' ||
+      v.reason === 'archived_dimension') &&
+    typeof v.code === 'string'
   )
 }
 
@@ -80,10 +104,10 @@ export function formatDimensionValidationIssues(raw: unknown): string | null {
 /**
  * Raised by validateEntryDimensions() when a company with
  * company_settings.dimensions_enabled = true tags a line with a dimension
- * number that has no registry row, a code with no dimension_values row, or an
- * archived value. Companies without the toggle keep free-text passthrough
- * (backward compatible with every existing API/MCP writer), and untagged
- * entries never reach this validation at all.
+ * number that has no registry row, a code with no dimension_values row, an
+ * archived value, or any code of an archived dimension. Companies without the
+ * toggle keep free-text passthrough (backward compatible with every existing
+ * API/MCP writer), and untagged entries never reach this validation at all.
  */
 export class DimensionValidationError extends Error {
   readonly code = DIMENSION_VALIDATION_FAILED
@@ -110,7 +134,7 @@ export interface MandatoryDimensionViolation {
 
 /** Swedish user-facing sentence for a single missing-dimension violation. */
 export function formatMandatoryDimensionViolation(v: MandatoryDimensionViolation): string {
-  return `Konto ${v.account_number} kräver ${v.dimension_name} — välj ett värde innan bokföring.`
+  return `Konto ${v.account_number} kräver ${v.dimension_name}: välj ett värde innan bokföring.`
 }
 
 /**

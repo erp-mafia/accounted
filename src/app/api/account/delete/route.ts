@@ -6,6 +6,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
+import { getMailSearchService, type PreparedGrantRevocation } from '@/lib/mail-search/service'
 
 const log = createLogger('api/account/delete')
 
@@ -52,6 +53,17 @@ export async function POST(request: Request) {
     )
   }
 
+  // Mailbox grants the person connected, read while their tokens still
+  // exist: the RPC below shreds them, which ends our copy but not the grant
+  // at Google. Revoked only once the erasure has succeeded; a refusal drops
+  // them untouched. A failed read never blocks the erasure itself.
+  let mailGrants: PreparedGrantRevocation | null = null
+  try {
+    mailGrants = (await getMailSearchService().prepareGrantRevocation?.(user.id)) ?? null
+  } catch (err) {
+    log.error('could not read mailbox grants before erasure', { userId: user.id, err })
+  }
+
   // Anonymize in the DB. Runs as SECURITY DEFINER and checks auth.uid()
   // internally, so we don't need service role here.
   const { error: rpcError } = await supabase.rpc('anonymize_user_account', {
@@ -90,6 +102,14 @@ export async function POST(request: Request) {
       { error: 'Kunde inte radera kontot. Försök igen.' },
       { status: 500 }
     )
+  }
+
+  if (mailGrants) {
+    try {
+      await mailGrants.revoke()
+    } catch (err) {
+      log.error('mailbox grants not revoked after erasure', { userId: user.id, err })
+    }
   }
 
   // Ban the tombstone row ~100 years. The RPC has already removed every way

@@ -236,9 +236,15 @@ IMAGE_TAG=3e4b5dd@sha256:abcdef...
 
 Semver tags (`1.2.3`, `1.2`, `1`) are published only when a `v*.*.*` git tag is cut. No such tag exists yet, so until the first tagged release the commit SHA is the only immutable pin.
 
-Apply updates:
+Apply updates, refreshing the compose file as well: `docker compose pull`
+updates only the image, and `docker-compose.yml` sometimes has to change with it
+(a compose file from before [#3164](https://github.com/erp-mafia/accounted/issues/3164)
+mounts `/app/.next` as a 400 MB tmpfs that newer images no longer fit in; the
+container then stops at start with an error saying so). Keep local changes in a
+`docker-compose.override.yml` so the download never overwrites them.
 
 ```bash
+curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.yml
 docker compose pull
 docker compose up -d
 ```
@@ -277,7 +283,7 @@ The cron container waits for the app's healthcheck to pass before starting. It c
 
 ### How NEXT_PUBLIC_* injection works
 
-The image is built with placeholder values (e.g. `__NEXT_PUBLIC_SUPABASE_URL__`) baked into the JavaScript bundles. At container start, `docker-entrypoint.sh` runs as `root`, `sed`-substitutes the placeholders with your runtime env vars, then runs `chmod -R a-w /app/.next/static` and drops privileges with `su-exec nextjs:nodejs` before exec'ing Node. The served JS bundle is owned by `root` and read-only by the time the application starts: a runtime RCE in the Node process cannot rewrite what other users will receive.
+The image is built with placeholder values (e.g. `__NEXT_PUBLIC_SUPABASE_URL__`) baked into the JavaScript bundles. The container's root filesystem is read-only, so at every start `docker-entrypoint.sh`, running unprivileged as `nextjs`, empties the writable mounts, copies the bundle from the image into them (`/app/.next` is the `next_runtime` named volume, `/app/public` a small tmpfs), `sed`-substitutes the placeholders with your runtime env vars, and removes the write bits from the served files before exec'ing Node. The volume holds nothing but that copy, so it needs no backup. It is a volume rather than a tmpfs because the bundle outgrew any fixed tmpfs size, and tmpfs pages count against the container's memory limit ([#3164](https://github.com/erp-mafia/accounted/issues/3164)).
 
 ---
 

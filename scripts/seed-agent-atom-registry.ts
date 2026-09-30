@@ -39,7 +39,8 @@ const dryRun = process.argv.includes('--dry')
 
 async function main() {
   console.log(`Scanning ${relative(process.cwd(), join(ROOT, '.claude', 'skills'))}`)
-  const atoms = await discoverAtoms(ROOT)
+  // Developer-audience references stay out of the registry, like the generator.
+  const atoms = (await discoverAtoms(ROOT)).filter((a) => a.audience === 'agent')
 
   if (atoms.length === 0) {
     console.log('No atoms discovered.')

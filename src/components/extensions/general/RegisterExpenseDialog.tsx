@@ -15,9 +15,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
-import { useAccounts } from '@/lib/reference-data/hooks'
+import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
@@ -85,6 +86,11 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
   const [employeeId, setEmployeeId] = useState('')
   const [employeeName, setEmployeeName] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Kostnadsställe/projekt for the cost line (the claim-level bag); the
+  // pickers render only when company_settings.dimensions_enabled.
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
+  const [dimensions, setDimensions] = useState<Record<string, string>>({})
   const currency = (data?.invoice?.currency ?? 'SEK').toUpperCase()
   // A foreign receipt carries VAT the company cannot deduct on 2641: the whole
   // amount is cost. The wizard asked for the seller's country; here the
@@ -108,7 +114,18 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
     setExpenseAccount('')
     setEmployeeId('')
     setEmployeeName('')
+    setDimensions({})
   }, [open, item.id, data, isForeign])
+
+  function setDimension(dimNo: string, code: string | null) {
+    setDimensions((prev) => {
+      const next = { ...prev }
+      const trimmed = code?.trim()
+      if (trimmed) next[dimNo] = trimmed
+      else delete next[dimNo]
+      return next
+    })
+  }
 
   const amount = parseAmount(amountInput)
   // Foreign VAT is never deductible here: the field is locked and 0 is what
@@ -149,6 +166,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
       }
       if (payer === 'owner') body.claimant_name = claimantName
       else body.employee_id = employeeId
+      if (dimensionsEnabled && Object.keys(dimensions).length > 0) body.dimensions = dimensions
       const res = await fetch('/api/expense-claims', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -188,6 +206,8 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
     payer,
     claimantName,
     employeeId,
+    dimensionsEnabled,
+    dimensions,
     toast,
     t,
     onSuccess,
@@ -277,6 +297,12 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
               selectedName={accountName}
             />
           </div>
+
+          {/* Kostnadsställe/projekt on the cost line (VAT and the liability
+              leg stay untagged). */}
+          {dimensionsEnabled && (
+            <LineDimensionFields dimensions={dimensions} onChange={setDimension} disabled={isSubmitting} />
+          )}
 
           {amount > 0 && vatAmount < amount && (
             <div className="rounded-lg border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">

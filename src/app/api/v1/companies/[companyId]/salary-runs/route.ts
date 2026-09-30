@@ -2,7 +2,8 @@
  * /api/v1/companies/{companyId}/salary-runs: list + create salary runs.
  *
  * GET   : list with filters (period_year, status). Cursor pagination on
- *         (created_at ASC, id ASC).
+ *         (created_at ASC, id ASC). The query is lib/salary/list-runs.ts,
+ *         shared with the MCP tool gnubok_list_salary_runs.
  * POST  : create a new monthly salary run. New runs start in `draft` status.
  *         The line items and per-employee calculations are populated by
  *         POST /salary-runs/{id}/calculate. Idempotent (mandatory Idempotency-Key).
@@ -15,25 +16,24 @@
 import { z } from 'zod'
 import { created, paginated } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
-import {
-  decodeDefaultCursor,
-  encodeDefaultCursor,
-  parsePaginationParams,
-  PaginationQueryShape,
-} from '@/lib/api/v1/pagination'
+import { parsePaginationParams, PaginationQueryShape } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateSalaryRunSchema } from '@/lib/api/schemas'
+import { v1OutcomeResponse } from '@/lib/operations/v1'
 import {
   assertNoDeviationOverlap,
   resolveDeviationWindowForNewRun,
   SalaryDeviationPeriodError,
 } from '@/lib/salary/deviation-period'
+import {
+  listSalaryRuns,
+  SalaryRunListFiltersSchema,
+  SalaryRunStatusSchema as SalaryRunStatus,
+} from '@/lib/salary/list-runs'
 import { eventBus } from '@/lib/events'
-
-const SalaryRunStatus = z.enum(['draft', 'review', 'approved', 'paid', 'booked', 'corrected'])
 
 const SalaryRunSummary = z.object({
   id: z.string().uuid(),
@@ -59,21 +59,7 @@ const SalaryRunSummary = z.object({
 
 const SalaryRunsListResponse = listEnvelope(SalaryRunSummary)
 
-const SALARY_RUN_SUMMARY_COLUMNS =
-  'id, period_year, period_month, payment_date, deviation_period_start, deviation_period_end, status, voucher_series, total_gross, total_tax, total_net, total_avgifter, total_employer_cost, agi_generated_at, agi_submitted_at, approved_at, paid_at, booked_at, created_at'
-
-const ListFilters = z.object({
-  period_year: z.coerce
-    .number()
-    .int()
-    .min(2020)
-    .max(2100)
-    .optional()
-    .describe('Only runs for this payroll year (2020-2100).'),
-  status: SalaryRunStatus.optional().describe('Only runs in this status.'),
-})
-
-const ListQuery = ListFilters.extend(PaginationQueryShape)
+const ListQuery = SalaryRunListFiltersSchema.extend(PaginationQueryShape)
 
 registerEndpoint({
   operation: 'salary-runs.list',
@@ -125,59 +111,23 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   async (request, ctx) => {
     const url = new URL(request.url)
     const { limit, cursor } = parsePaginationParams(url)
-    const decoded = decodeDefaultCursor(cursor)
 
-    const filtersResult = ListFilters.safeParse({
+    const filtersResult = SalaryRunListFiltersSchema.safeParse({
       period_year: url.searchParams.get('period_year') ?? undefined,
       status: url.searchParams.get('status') ?? undefined,
     })
     if (!filtersResult.success) return v1ValidationError(ctx, filtersResult.error)
     const filters = filtersResult.data
 
-    let query = ctx.supabase
-      .from('salary_runs')
-      .select(SALARY_RUN_SUMMARY_COLUMNS)
-      .eq('company_id', ctx.companyId!)
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-      .limit(limit + 1)
+    const outcome = await listSalaryRuns(
+      { supabase: ctx.supabase, companyId: ctx.companyId! },
+      { periodYear: filters.period_year, status: filters.status, cursor, limit },
+    )
+    if (!outcome.ok) return v1OutcomeResponse(outcome, ctx)
 
-    if (filters.period_year !== undefined) {
-      query = query.eq('period_year', filters.period_year)
-    }
-    if (filters.status) {
-      query = query.eq('status', filters.status)
-    }
-
-    if (decoded) {
-      query = query.or(
-        `created_at.gt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
-      )
-    }
-
-    const { data, error } = await query
-
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
-    type Row = {
-      id: string
-      created_at: string
-    } & Record<string, unknown>
-
-    const rows = ((data ?? []) as unknown) as Row[]
-    const trimmed = rows.slice(0, limit)
-    const hasMore = rows.length > limit
-
-    const last = trimmed[trimmed.length - 1]
-    const nextCursor = hasMore && last
-      ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
-      : null
-
-    return paginated(trimmed, {
+    return paginated(outcome.data.runs, {
       requestId: ctx.requestId,
-      nextCursor: nextCursor ?? undefined,
+      nextCursor: outcome.data.next_cursor ?? undefined,
     })
   },
 )
@@ -205,7 +155,7 @@ registerEndpoint({
   useWhen:
     'You are starting a new month\'s payroll. Use dry-run first to validate the period + voucher_series choice without committing.',
   doNotUseFor:
-    'Adding employees to an existing run (that is a separate surface: see internal /salary/runs/{id}/employees for Phase 5 PR-1; promoting it to v1 is deferred to a follow-up).',
+    'Adding employees to an existing run (POST /salary-runs/{id}/employees).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Duplicate (period_year, period_month) for the same company returns 409 SALARY_RUN_DUPLICATE_PERIOD.',

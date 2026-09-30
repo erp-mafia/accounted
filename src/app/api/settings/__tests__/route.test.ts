@@ -28,6 +28,9 @@ vi.mock('@/lib/auth/require-write', async (importOriginal) => {
   return {
     requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
     isCompanyAdmin: (...args: unknown[]) => isAdminMock(...args),
+    // The operations' owner/admin gate (lib/operations/access.ts) reads the
+    // caller's company_members row: real, against the queued mock.
+    getCompanyRole: actual.getCompanyRole,
     companyAdminRequiredResponse: actual.companyAdminRequiredResponse,
   }
 })
@@ -185,6 +188,58 @@ describe('PUT /api/settings', () => {
     expect(status).toBe(200)
     expect(body.data.mileage_enabled).toBe(true)
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
+  it('turning dimensions on registers the codes already on journal lines, in the save itself', async () => {
+    // The scan used to run only when the settings page's toggle called
+    // /api/dimensions/import-existing after the save, so a v1 or MCP save
+    // turned dimensions on without it. It is now part of the transition.
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true, dimensions_enabled: false } }, // oldSettings
+      { data: { id: 's1', dimensions_enabled: true } }, // update ... returning
+      { data: null, count: 5 }, // deadlines count (has some -> no regen)
+      { data: null }, // ensure_company_dimensions rpc
+      { data: [{ id: 'entry-1' }] }, // entries of the company
+      { data: [{ id: 'line-1', journal_entry_id: 'entry-1', dimensions: { '6': 'P001' } }] }, // tagged lines
+      { data: [{ id: 'dim-6', sie_dim_no: 6 }] }, // registry dimensions
+      { data: [] }, // registered values: none yet
+      { data: [{ id: 'value-1' }] }, // value upsert
+    ])
+
+    const response = await PUT(
+      createMockRequest('/api/settings', { method: 'PUT', body: { dimensions_enabled: true } }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(200)
+    expect((supabase.rpc as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('ensure_company_dimensions')
+    expect(findCall('dimension_values', 'upsert')?.[0]).toEqual([
+      { company_id: 'company-1', dimension_id: 'dim-6', code: 'P001', name: 'P001', is_active: false },
+    ])
+    // The settings page's toggle confirms the registration from this count
+    // instead of scanning a second time.
+    const body = await response.json()
+    expect(body.dimension_codes_imported).toBe(1)
+    expect(body.data).toEqual({ id: 's1', dimensions_enabled: true })
+  })
+
+  it('does not scan again when the save leaves dimensions on', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true, dimensions_enabled: true } }, // oldSettings
+      { data: { id: 's1', dimensions_enabled: true } }, // update ... returning
+      { data: null, count: 5 }, // deadlines count
+    ])
+
+    const response = await PUT(
+      createMockRequest('/api/settings', { method: 'PUT', body: { dimensions_enabled: true } }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(200)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    // No transition, no registration: null tells the toggle to run the scan
+    // itself if it still wants to.
+    expect((await response.json()).dimension_codes_imported).toBeNull()
   })
 
   it('accepts the invoice type visibility toggles', async () => {
@@ -483,7 +538,8 @@ describe('PUT /api/settings', () => {
     }), { params: Promise.resolve({}) })
 
     expect(response.status).toBe(400)
-    expect(supabase.from).toHaveBeenCalledTimes(1)
+    // Validation runs before the settings service reads anything.
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('rejects a foreign payment account without IBAN with valid recipients', async () => {
@@ -498,7 +554,8 @@ describe('PUT /api/settings', () => {
     }), { params: Promise.resolve({}) })
 
     expect(response.status).toBe(400)
-    expect(supabase.from).toHaveBeenCalledTimes(1)
+    // Validation runs before the settings service reads anything.
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('regenerates deadlines when unchanged tax settings are saved', async () => {

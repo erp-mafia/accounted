@@ -1,6 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { usesForbiddenWhiteLabelBackend } from '@/lib/domains/production-white-label-backend'
 import { createLogger } from '@/lib/logger'
+import {
+  CSP_NONCE_HEADER,
+  buildContentSecurityPolicy,
+  cspOriginsFromEnv,
+  generateCspNonce,
+  proxyOwnsContentSecurityPolicy,
+} from '@/lib/security/csp'
 import { updateSession } from '@/lib/supabase/middleware'
 
 const log = createLogger('proxy')
@@ -62,7 +69,46 @@ function missingSupabaseEnv(): string[] {
   return missing
 }
 
+/**
+ * This request's Content-Security-Policy, or null for the document routes
+ * whose policy stays with the headers() rules (lib/security/csp.ts).
+ *
+ * The nonce goes upstream twice: inside the forwarded
+ * `content-security-policy` request header, where Next.js looks for it and
+ * stamps it on every script it renders, and as `x-nonce` for the root layout
+ * and the route handlers that render their own HTML page. Setting both on
+ * `request.headers` (instead of a copy) is deliberate: updateSession forwards
+ * the request with `NextResponse.next({ request })`, including after it
+ * rewrites the auth cookies, so every response it builds carries them. Any
+ * client-sent value of either header is overwritten here.
+ */
+function prepareContentSecurityPolicy(request: NextRequest): string | null {
+  if (!proxyOwnsContentSecurityPolicy(request.nextUrl.pathname)) return null
+
+  const nonce = generateCspNonce()
+  const policy = buildContentSecurityPolicy({
+    origins: cspOriginsFromEnv(),
+    nonce,
+    isDev: process.env.NODE_ENV === 'development',
+  })
+  request.headers.set(CSP_NONCE_HEADER, nonce)
+  request.headers.set('content-security-policy', policy)
+  return policy
+}
+
 export async function proxy(request: NextRequest) {
+  const contentSecurityPolicy = prepareContentSecurityPolicy(request)
+  const response = await handle(request)
+  // On every response the proxy returns, redirects and 503s included: the
+  // headers() rules deliberately carry no CSP for the paths the proxy owns,
+  // so this is the only one the browser receives.
+  if (contentSecurityPolicy) {
+    response.headers.set('Content-Security-Policy', contentSecurityPolicy)
+  }
+  return response
+}
+
+async function handle(request: NextRequest): Promise<NextResponse> {
   // Ahead of everything, because everything below needs a Supabase client.
   // updateSession builds one with non-null assertions and @supabase/ssr throws
   // synchronously when either value is falsy: that throw escapes the Web
@@ -132,6 +178,11 @@ export const config = {
      * every logged-out page and, because flags and asset loads still succeed
      * through the rewrite, the integration looks healthy while no events
      * arrive. Keep in sync with `api_host` in instrumentation-client.ts.
+     *
+     * The excluded alternatives must stay identical to
+     * PROXY_MATCHER_EXCLUSIONS in lib/security/csp.ts (a test asserts it):
+     * next.config.ts derives from it the paths that get the static CSP, so
+     * a path added here without it would leave that path with no CSP at all.
      */
     '/((?!_next/static|_next/image|favicon.ico|\\.well-known|rl/|sw\\.js|sw-register\\.js|manifest\\.json|manifest\\.webmanifest|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$).*)',
   ],

@@ -105,8 +105,12 @@ export async function listArchiveHistory(supabase: SupabaseClient, companyId: st
     const ev = auditEvent(row)
     if (!ev) continue
     if (row.record_id) documentIds.add(row.record_id)
-    const after = row.new_state ?? {}
-    events.push({ id: `audit:${row.id}`, at: row.created_at, kind: ev.kind, actor: ev.actor, document: row.record_id ? { id: row.record_id, file_name: typeof after.file_name === 'string' ? after.file_name : '' } : null, detail: null })
+    // A deleted row has no new state: its name is in the old one.
+    const state = row.action === 'DELETE' ? (row.old_state ?? {}) : (row.new_state ?? {})
+    const fileName = typeof state.file_name === 'string' ? state.file_name : ''
+    // The trigger writes one DELETE row per stored version of the file; a person removed one document.
+    if (ev.kind === 'deleted' && events.some((e) => e.kind === 'deleted' && e.document?.id === row.record_id && e.at.slice(0, 16) === row.created_at.slice(0, 16))) continue
+    events.push({ id: `audit:${row.id}`, at: row.created_at, kind: ev.kind, actor: ev.actor, document: row.record_id ? { id: row.record_id, file_name: fileName } : null, detail: null })
   }
   // Oldest first per document: the first type is "typed", every later one "retyped".
   const typedBefore = new Set<string>()
@@ -143,18 +147,21 @@ export async function listArchiveHistory(supabase: SupabaseClient, companyId: st
   }
 
   // File names, and the mime type that says whether the row is a document at all.
+  // A removed document is gone from the table: its name comes from the audit rows, and its
+  // earlier events borrow it, so the list never shows a bare id.
   const ids = [...documentIds]
   const structuredDocs = new Set<string>()
+  const names = new Map<string, string>()
+  for (const e of events) if (e.document?.file_name && !names.has(e.document.id)) names.set(e.document.id, e.document.file_name)
   if (ids.length) {
     const { data, error } = await supabase.from('document_attachments').select('id, file_name, mime_type').in('id', ids.slice(0, 1000))
     if (error) throw new Error(`history read failed: ${error.message}`)
-    const names = new Map<string, string>()
     for (const d of (data ?? []) as Array<{ id: string; file_name: string; mime_type: string | null }>) {
       names.set(d.id, d.file_name)
       if (d.mime_type && STRUCTURED.has(d.mime_type)) structuredDocs.add(d.id)
     }
-    for (const e of events) if (e.document && !e.document.file_name) e.document.file_name = names.get(e.document.id) ?? e.document.file_name
   }
+  for (const e of events) if (e.document && !e.document.file_name) e.document.file_name = names.get(e.document.id) ?? e.document.file_name
 
   return events
     .filter((e) => !e.document || !structuredDocs.has(e.document.id))

@@ -116,8 +116,11 @@ export function SplitButton({
 
   return (
     <div className={cn('inline-flex items-stretch', className)}>
+      {/* A split button is always the top bar's primary action (convention
+          9), so it takes the toolbar height like everything else there. */}
       <Button
         variant={variant}
+        size="sm"
         className="rounded-r-none"
         disabled={active.disabled}
         loading={active.busy}
@@ -130,6 +133,7 @@ export function SplitButton({
       <Button
         ref={caretRef}
         variant={variant}
+        size="sm"
         aria-label={tCommon('more_options')}
         aria-expanded={open}
         aria-haspopup="menu"

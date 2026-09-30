@@ -14,6 +14,12 @@ export interface PdfReadResult {
   pages: ReadPage[]
   /** 1-based pages that need the model. */
   pagesNeedingVision: number[]
+  /**
+   * 1-based pages kept from their text layer that also paint an image and
+   * carry little text: a table or a figure pasted in as a picture. The model
+   * reads them whole when it may; the text layer stands until then.
+   */
+  pagesWithImages: number[]
   pageCount: number
 }
 
@@ -24,6 +30,16 @@ export interface PdfReadResult {
  * the model is a full-page image, and no text page falls under it.
  */
 export const SCANNED_PAGE_MAX_CHARS = 16
+
+/**
+ * A page that paints an image and has fewer text characters than this is read
+ * by the model too: its text layer is only a heading or a stamp around the
+ * picture (prod 2026-09-24: a shareholders' agreement's cap table was an image
+ * under "Schedule 1.2 - Cap Table" and a signing stamp, 166 characters, so the
+ * table itself never reached an agent). A page of running text with a logo
+ * or a signature seal is well above it.
+ */
+export const IMAGE_PAGE_MAX_CHARS = 400
 
 type Unpdf = typeof import('unpdf')
 let unpdf: Promise<Unpdf> | null = null
@@ -46,21 +62,30 @@ interface TextItem {
 const round = (n: number) => Math.round(n * 10) / 10
 
 export async function readPdfTextLayer(bytes: Buffer): Promise<PdfReadResult> {
-  const { getDocumentProxy } = await loadUnpdf()
+  const { getDocumentProxy, getResolvedPDFJS } = await loadUnpdf()
+  const { OPS } = await getResolvedPDFJS()
+  const imageOps = new Set([OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageXObjectRepeat, OPS.paintImageMaskXObject].filter((op) => typeof op === 'number'))
   // pdf.js takes ownership of the array it is given: hand it a copy, the caller still needs the bytes for the model.
   const doc = await getDocumentProxy(new Uint8Array(bytes))
   try {
     const pages: ReadPage[] = []
     const pagesNeedingVision: number[] = []
+    const pagesWithImages: number[] = []
     for (let pageNo = 1; pageNo <= doc.numPages; pageNo++) {
       const page = await doc.getPage(pageNo)
       const viewport = page.getViewport({ scale: 1 })
       const content = await page.getTextContent()
       const items = (content.items as unknown[]).filter((it): it is TextItem => typeof (it as TextItem).str === 'string')
       const text = pageText(items)
-      if (text.replace(/\s/g, '').length < SCANNED_PAGE_MAX_CHARS) {
+      const chars = text.replace(/\s/g, '').length
+      if (chars < SCANNED_PAGE_MAX_CHARS) {
         pagesNeedingVision.push(pageNo)
         continue
+      }
+      if (chars < IMAGE_PAGE_MAX_CHARS) {
+        // Needs Node 21+ (production runs 24): on older runtimes pdf.js skips the walk and the page keeps its text, as before.
+        const ops = await page.getOperatorList()
+        if (ops.fnArray.some((fn: number) => imageOps.has(fn))) pagesWithImages.push(pageNo)
       }
       const words: WordBox[] = items
         .filter((it) => it.str.trim().length > 0)
@@ -81,7 +106,7 @@ export async function readPdfTextLayer(bytes: Buffer): Promise<PdfReadResult> {
         pageHeight: round(viewport.height),
       })
     }
-    return { pages, pagesNeedingVision, pageCount: doc.numPages }
+    return { pages, pagesNeedingVision, pagesWithImages, pageCount: doc.numPages }
   } finally {
     // Frees the parsed document; the worker-less serverless build keeps everything in this process.
     await doc.loadingTask.destroy().catch(() => {})

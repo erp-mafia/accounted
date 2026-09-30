@@ -1,4 +1,9 @@
 /**
+ * GET /api/v1/companies/{companyId}/documents
+ *
+ * List document metadata (operation documents.list; contract, docs and rules
+ * in src/lib/operations/documents.ts).
+ *
  * POST /api/v1/companies/{companyId}/documents
  *
  * Multipart upload of a document into the WORM archive. Wraps
@@ -42,6 +47,8 @@ import {
 } from '@/lib/core/documents/document-service'
 import type { DocumentUploadSource } from '@/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { documentsList } from '@/lib/operations/documents'
 
 const DocumentUploaded = z.object({
   id: z.string().uuid(),
@@ -271,6 +278,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           // observe depends on the subscribers having finished. Awaiting
           // them held the 201 for the length of a model call.
           deferUploadedEvent: true,
+          // Linked to a verifikat on arrival: the booking is already known,
+          // so no model pass, the same rule as the provider underlag import
+          // and /api/import/documents/attach. An agent moving a company's
+          // underlag over links thousands of files in a row and paid one
+          // extraction call per file. An unlinked upload is still read.
+          ...(journalEntryId ? { extractionOwner: 'none' as const } : {}),
         },
       )
       // `storage_path` is deliberately omitted from the public response:
@@ -315,3 +328,5 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   },
   { requireIdempotencyKey: true },
 )
+
+export const GET = v1OperationHandler(documentsList)

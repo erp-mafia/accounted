@@ -6,6 +6,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { getStripe, priceIdForPlan } from '@/lib/stripe/client'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
+import { localeFromCookieHeader } from '@/i18n/config'
 
 const CheckoutSchema = z.object({
   plan: z.enum(['monthly', 'yearly']).default('monthly'),
@@ -146,6 +147,9 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
       ...(trialEnd ? { trial_end: trialEnd } : {}),
     },
     allow_promotion_codes: true,
+    // Checkout in the language the app is shown in (sv and en are both Stripe
+    // locales); left out, Stripe picks the browser's language.
+    locale: localeFromCookieHeader(request.headers.get('cookie')),
     success_url: `${appOrigin}/settings/billing?success=1`,
     cancel_url: `${appOrigin}/settings/billing?canceled=1`,
   })

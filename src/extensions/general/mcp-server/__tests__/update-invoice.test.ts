@@ -758,7 +758,10 @@ describe('gnubok_update_invoice: ROT/RUT round trip (issue #1642)', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/housing_designation|fastighetsbeteckning/i)
+    ).rejects.toMatchObject({
+      code: 'INVOICE_CREATE_ROT_RUT_VALIDATION',
+      message: expect.stringMatching(/housing_designation|fastighetsbeteckning/i),
+    })
     expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
   })
 
@@ -774,7 +777,7 @@ describe('gnubok_update_invoice: ROT/RUT round trip (issue #1642)', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/Arbetstyp/)
+    ).rejects.toMatchObject({ code: 'INVOICE_CREATE_ROT_RUT_VALIDATION', message: expect.stringMatching(/Arbetstyp/) })
     expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
   })
 
@@ -790,7 +793,7 @@ describe('gnubok_update_invoice: ROT/RUT round trip (issue #1642)', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/personnummer/i)
+    ).rejects.toMatchObject({ code: 'INVOICE_CREATE_ROT_RUT_VALIDATION', message: expect.stringMatching(/personnummer/i) })
     expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
   })
 

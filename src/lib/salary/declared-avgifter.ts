@@ -111,8 +111,9 @@ export function resolveDeclaredAvgifterParams(
 /**
  * AGI reporting category for a roster row. Legacy rows (category null)
  * resolve by rate: at/below the 10,21/10,22 band → 65+-reduced, at/below
- * the 20,81/20,82 band → youth, else standard. Växa-stöd reports under
- * standard (its FK062/FK063 flags live on the IU, not the category map).
+ * the 20,81/20,82 band → youth, else standard. A legacy 'vaxa_stod' row
+ * (the engine stopped writing them when växa-stöd became a refund, Lag
+ * 2025:1334) reports under standard.
  */
 export function reportingCategory(row: Pick<DeclaredAvgifterRow, 'rate' | 'category'>): DeclaredAvgifterCategory {
   switch (row.category) {
@@ -167,9 +168,11 @@ export function computeDeclaredAvgifter(
     if (rateHundredths <= 0) continue
 
     // Salary caps: the reduced sats applies up to the monthly cap, the
-    // remainder is charged at the full sats: mirrors the engine's
-    // youth/växa-stöd blend (calculation-engine.ts step 8), applied on the
-    // declared whole-krona underlag the way Skatteverket applies it.
+    // remainder is charged at the full sats: mirrors the engine's youth cap
+    // (calculation-engine.ts step 8), applied on the declared whole-krona
+    // underlag the way Skatteverket applies it. The växa cap only serves
+    // legacy 'vaxa_stod' rows stored before växa-stöd became a refund (Lag
+    // 2025:1334); the engine no longer writes them.
     // The youth cap keys on the RESOLVED category so a legacy null-category
     // row classified as youth by the rate heuristic still gets capped; växa
     // keys on the raw category (it resolves to 'standard' for reporting).

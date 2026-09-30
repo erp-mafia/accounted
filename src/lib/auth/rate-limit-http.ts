@@ -40,7 +40,8 @@ export function isRateLimiterConfigured(): boolean {
   return restCredentials() !== null
 }
 
-function getRedis(): Redis | null {
+/** The shared Upstash client, or null without credentials. Also used for short-lived MCP session marks (mcp-server/unattended.ts). */
+export function getRedis(): Redis | null {
   if (redis) return redis
   const credentials = restCredentials()
   if (!credentials) return null

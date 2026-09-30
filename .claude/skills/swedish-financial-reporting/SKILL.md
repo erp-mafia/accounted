@@ -14,7 +14,7 @@ This skill has three reference files. Read the one(s) relevant to the query:
 
 | Query about | Read |
 |---|---|
-| Årsredovisning structure, K2/K3 document format, noter, förvaltningsberättelse, underskrifter, kassaflödesanalys, flerårsöversikt | `references/arsredovisning-structure.md` |
+| Årsredovisning structure, K2/K3 document format, noter, förvaltningsberättelse, underskrifter, kassaflödesanalys, flerårsöversikt, who may use K2, K2 changes 2026 (BFNAR 2025:2), hållbarhetsrapport (CSRD) | `references/arsredovisning-structure.md` |
 | Bolagsverket filing, deadlines, förseningsavgifter, digital filing, iXBRL, revisionsplikt, tvångslikvidation | `references/bolagsverket-filing.md` |
 | INK2 form, INK2R/INK2S fields, skattemässiga justeringar, BAS-to-INK2 mapping, periodiseringsfond/överavskrivningar/koncernbidrag in declaration, common errors | `references/ink2-form-logic.md` |
 
@@ -31,6 +31,8 @@ For questions spanning multiple areas (e.g. "what's the full timeline from boksl
 - Anställda > 3
 - Balansomslutning > 1.5 MSEK
 - Nettoomsättning > 3 MSEK
+
+Both sets of thresholds are unchanged in 2026 (ÅRL company-categories inquiry Ju 2025:11 reports by 2026-09-29).
 
 ### Key deadlines (calendar year AB, FY ending Dec 31)
 - Årsredovisning to Bolagsverket: **7 months** (July 31)

@@ -50,9 +50,6 @@ export interface AccountDimensionRuleDto {
   is_active: boolean
 }
 
-/** SIE dimension number whose values carry start/end dates (Projekt). */
-export const PROJECT_DIM_NO = 6
-
 /**
  * Strict Fortnox-compatible code format enforced by the API for user-created
  * codes (the DB CHECK is deliberately looser so legacy free-text survives the

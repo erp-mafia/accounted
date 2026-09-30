@@ -12,6 +12,7 @@ import {
   deductionToSek,
   deductionTypeForWorkType,
   parseArticleHouseworkType,
+  articleDeductionPrefill,
   normalizeHouseworkType,
   workTypeLabel,
   HOUSEWORK_TYPE_VALUES,
@@ -412,6 +413,45 @@ describe('parseArticleHouseworkType (articles.housework_type vocabularies)', () 
     for (const v of ['0', '1', 'Ja', 'SNICKERI', '', null, undefined]) {
       expect(parseArticleHouseworkType(v)).toEqual({ deductionType: null, workType: null })
     }
+  })
+})
+
+describe('articleDeductionPrefill (what picking an article puts on the line)', () => {
+  it('a service article pre-fills its housework flag', () => {
+    expect(articleDeductionPrefill({ type: 'tjanst', housework_type: 'BYGG' })).toEqual({
+      deductionType: 'rot',
+      workType: 'BYGG',
+    })
+    expect(articleDeductionPrefill({ type: 'tjanst', housework_type: 'RUT' })).toEqual({
+      deductionType: 'rut',
+      workType: null,
+    })
+  })
+
+  it('a goods article never pre-fills ROT/RUT: the deduction is on labor only', () => {
+    // Tiles or a mixer tap imported with a ROT flag: the article form cannot
+    // show the flag for goods, so honouring it would put 30% ROT on material.
+    for (const flag of ['ROT', 'RUT', 'EL', 'BYGG', 'STAD']) {
+      expect(articleDeductionPrefill({ type: 'vara', housework_type: flag })).toEqual({
+        deductionType: null,
+        workType: null,
+      })
+    }
+  })
+
+  it('no flag means no deduction, whatever the type', () => {
+    expect(articleDeductionPrefill({ type: 'tjanst', housework_type: null })).toEqual({
+      deductionType: null,
+      workType: null,
+    })
+    expect(articleDeductionPrefill({ type: 'vara', housework_type: null })).toEqual({
+      deductionType: null,
+      workType: null,
+    })
+  })
+
+  it('an article without a known type falls back to its flag (the DB default is tjanst)', () => {
+    expect(articleDeductionPrefill({ housework_type: 'STAD' })).toEqual({ deductionType: 'rut', workType: 'STAD' })
   })
 })
 

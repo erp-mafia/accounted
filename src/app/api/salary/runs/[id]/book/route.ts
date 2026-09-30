@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { bookPaidSalaryRun } from '@/lib/salary/book-run'
+import { SalaryRunPartiallyBookedError } from '@/lib/salary/salary-entries'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -37,6 +38,16 @@ export const POST = withRouteContext(
     } catch (err) {
       if (isBookkeepingError(err)) {
         return errorResponse(err, opLog, { requestId })
+      }
+      // Posted vouchers of the run that this booking would not post: the
+      // message names them, so the user knows which ones to reverse.
+      if (err instanceof SalaryRunPartiallyBookedError) {
+        return errorResponseFromCode(err.code, opLog, {
+          requestId,
+          details: err.details,
+          messageSv: err.message,
+          messageEn: err.messageEn,
+        })
       }
       opLog.error('salary booking failed', err as Error)
       return errorResponseFromCode('SALARY_RUN_BOOK_FAILED', opLog, {

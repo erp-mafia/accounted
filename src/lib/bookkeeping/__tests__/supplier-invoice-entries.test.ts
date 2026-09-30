@@ -38,30 +38,14 @@ vi.mock('../currency-utils', () => ({
   ),
 }))
 
-// Mock vat-entries: keep the real pure helpers (resolveReverseChargeRate,
-// isReverseChargeBasisAccount, RC_BASIS_ACCOUNTS) and stub only the two
-// line-builders with simplified logic the assertions below rely on.
+// Mock vat-entries: keep the real helpers, including the complete
+// reverse-charge set (generateReverseChargePurchaseLines) the registration and
+// cash entries book, and stub only the basis-pair builder the credit note
+// mirrors, with simplified logic the assertions below rely on.
 vi.mock('../vat-entries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../vat-entries')>()
   return {
     ...actual,
-    generateReverseChargeLines: vi.fn().mockImplementation(
-    (baseAmount: number, vatRate: number = 0.25, isDomestic: boolean = false) => {
-      const vatAmount = Math.round(baseAmount * vatRate * 100) / 100
-      const inputAccount = isDomestic ? '2647' : '2645'
-      let outputAccount: string
-      switch (vatRate) {
-        case 0.12: outputAccount = '2624'; break
-        case 0.06: outputAccount = '2634'; break
-        default: outputAccount = '2614'; break
-      }
-      const context = isDomestic ? 'omvänd skattskyldighet i Sverige' : 'omvänd skattskyldighet'
-      return [
-        { account_number: inputAccount, debit_amount: vatAmount, credit_amount: 0, line_description: `Fiktiv ingående moms ${vatRate * 100}% (${context})` },
-        { account_number: outputAccount, debit_amount: 0, credit_amount: vatAmount, line_description: `Fiktiv utgående moms ${vatRate * 100}% (${context})` },
-      ]
-    }
-  ),
   generateReverseChargeBasisLines: vi.fn().mockImplementation(
     (baseAmount: number, vatRate: number = 0.25, supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business') => {
       if (baseAmount <= 0) return []
@@ -95,6 +79,7 @@ const {
   largestExpenseAccount,
   SupplierInvoiceFxRateMissingError,
 } = await import('../supplier-invoice-entries')
+const { buildSupplierPaymentClearingLines } = await import('../supplier-payment-lines')
 
 function makeItem(overrides: Partial<SupplierInvoiceItem> = {}): SupplierInvoiceItem {
   // Mirror the API: vat_amount derives from line_total × vat_rate unless the
@@ -1193,6 +1178,76 @@ describe('createSupplierInvoicePaymentEntry', () => {
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.entry_date).toBe('2024-08-15')
   })
+
+  describe('SEK clearing of a matched bank row (sekClearingDebt)', () => {
+    const BAG = { '6': 'P1', '1': 'KS1' }
+
+    it('books the match preview builder lines: 2440 cleared in full, the öre on 3740, every leg tagged', async () => {
+      const invoice = makeSupplierInvoice({ total: 11231.25, default_dimensions: BAG })
+
+      await createSupplierInvoicePaymentEntry(
+        null as never, 'company-1', 'user-1', invoice, 11231, '2024-07-01',
+        undefined, undefined, '1930', undefined, undefined, 11231.25,
+      )
+
+      const input = mockedCreateEntry.mock.calls[0][3]
+      const preview = buildSupplierPaymentClearingLines({
+        apSek: 11231.25, bankSek: 11231, paymentAccount: '1930',
+      }).lines
+      expect(input.lines).toEqual(preview.map((line) => ({ ...line, dimensions: BAG })))
+      expect(findByAccount(input.lines, '3740')[0].credit_amount).toBe(0.25)
+      assertBalanced(input)
+      // One bag object per line: a shared object would let one line's edit
+      // leak into every other line.
+      expect(new Set(input.lines.map((line) => line.dimensions)).size).toBe(input.lines.length)
+    })
+
+    it('books a bank fee exactly once, tagged like the rest', async () => {
+      const invoice = makeSupplierInvoice({ total: 1000, default_dimensions: BAG })
+
+      await createSupplierInvoicePaymentEntry(
+        null as never, 'company-1', 'user-1', invoice, 1000, '2024-07-01',
+        undefined, undefined, '1930', undefined, 50, 1000,
+      )
+
+      const input = mockedCreateEntry.mock.calls[0][3]
+      expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount, l.dimensions])).toEqual([
+        ['2440', 1000, 0, BAG],
+        ['1930', 0, 1050, BAG],
+        ['6570', 50, 0, BAG],
+      ])
+      assertBalanced(input)
+    })
+
+    it('leaves the lines untagged for an untagged invoice', async () => {
+      const invoice = makeSupplierInvoice({ total: 1000 })
+
+      await createSupplierInvoicePaymentEntry(
+        null as never, 'company-1', 'user-1', invoice, 400, '2024-07-01',
+        undefined, undefined, '1930', undefined, undefined, 1000,
+      )
+
+      const input = mockedCreateEntry.mock.calls[0][3]
+      // A 600 kr short partial is not öresavrundning: it clears what moved.
+      expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['2440', 400, 0],
+        ['1930', 0, 400],
+      ])
+      for (const line of input.lines) expect(line.dimensions).toBeUndefined()
+    })
+
+    it('refuses an exchange rate difference: a SEK clearing has none', async () => {
+      const invoice = makeSupplierInvoice()
+
+      await expect(
+        createSupplierInvoicePaymentEntry(
+          null as never, 'company-1', 'user-1', invoice, 1000, '2024-07-01',
+          20, undefined, '1930', undefined, undefined, 1000,
+        ),
+      ).rejects.toThrow('a SEK clearing has no exchange rate difference')
+      expect(mockedCreateEntry).not.toHaveBeenCalled()
+    })
+  })
 })
 
 // ============================================================
@@ -1392,6 +1447,31 @@ describe('createSupplierInvoiceCashEntry', () => {
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.description).toBe('Kontantbetalning leverantörsfaktura LF-300')
+  })
+
+  it('carries the invoice dimensions onto every leg, the bank fee and the öre included', async () => {
+    // A matched bank row paying 10 012 kr for a 10 012,40 kr invoice plus a
+    // 25 kr fee on top: expense + moms, the bank credit, 3740 and 6570 all
+    // belong to this one invoice's payment.
+    const BAG = { '6': 'P1', '1': 'KS1' }
+    const invoice = makeSupplierInvoice({
+      subtotal: 8009.92,
+      vat_amount: 2002.48,
+      total: 10012.4,
+      default_dimensions: BAG,
+    })
+    const items = [makeItem({ line_total: 8009.92, account_number: '6200', vat_rate: 0.25 })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'swedish_business',
+      undefined, '1930', 10012, undefined, 25,
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.map((l) => l.account_number)).toEqual(['6200', '2641', '1930', '3740', '6570'])
+    for (const line of input.lines) expect(line.dimensions).toEqual(BAG)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(10037)
+    assertBalanced(input)
   })
 })
 

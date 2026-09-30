@@ -308,6 +308,87 @@ describe('withApiV1: company membership', () => {
     expect(body.data.companyId).toBe('company-1')
   })
 
+  it('returns 404 (same shape as a non-member) for a member company outside the key allowlist', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['companies:read'],
+      mode: 'live',
+      allowedCompanyIds: ['company-1'],
+    })
+    // The user IS a member of company-2; the key was not issued for it.
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-2', role: 'owner' }))
+
+    const handlerBody = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
+      ok({ ok: true }, { requestId: ctx.requestId }),
+    )
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'companies.get',
+      handlerBody,
+      { requireScope: 'companies:read' },
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-2', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-2'),
+    )
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+    expect(body.error.details).toEqual({ companyId: 'company-2' })
+    expect(handlerBody).not.toHaveBeenCalled()
+    expect(getMultiUserStateMock).not.toHaveBeenCalled()
+  })
+
+  it('passes an allowlisted company through and exposes the allowlist on the context', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['companies:read'],
+      mode: 'live',
+      allowedCompanyIds: ['COMPANY-1'],
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'companies.get',
+      async (_req, ctx) => ok({ allowed: ctx.allowedCompanyIds }, { requestId: ctx.requestId }),
+      { requireScope: 'companies:read' },
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.allowed).toEqual(['COMPANY-1'])
+  })
+
+  it('exposes allowedCompanyIds null on the context for an unrestricted key', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['companies:read'],
+      mode: 'live',
+      allowedCompanyIds: null,
+    })
+    const handler = withApiV1('companies.list', async (_req, ctx) =>
+      ok({ allowed: ctx.allowedCompanyIds }, { requestId: ctx.requestId }),
+    )
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies', { headers: { Authorization: 'Bearer gnubok_sk_x' } }),
+      staticRouteContext(),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.allowed).toBeNull()
+  })
+
   it('refuses a NON-OWNER membership in a frozen company with 403 (multi-user seat gate)', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
@@ -969,5 +1050,129 @@ describe('withApiV1: read-only role gate (viewer)', () => {
     const body = await res.json()
     expect(body.error.code).toBe('NOT_FOUND')
     expect(body.error.details.role).toBeUndefined()
+  })
+})
+
+describe('withApiV1: read-only company access (per-company access level)', () => {
+  // A key can reach a company yet be limited to reading there
+  // (api_key_companies.access = 'read'). Same write test as the viewer gate,
+  // independent of the role: an owner's key is refused too.
+  function ownerKeyReadOnlyIn(readOnlyCompanyIds: string[], scopes: string[]) {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes,
+      mode: 'live',
+      allowedCompanyIds: ['company-1', 'company-2'],
+      readOnlyCompanyIds,
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+  }
+
+  it('refuses a write in a read-only company with 403 CONNECTION_READ_ONLY before the handler runs', async () => {
+    ownerKeyReadOnlyIn(['company-1'], ['bookkeeping:write'])
+    const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
+      ok({ id: 'je-1' }, { requestId: ctx.requestId }),
+    )
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>('journal-entries.create', handlerSpy)
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer gnubok_sk_x', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: 'x', lines: [] }),
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.code).toBe('CONNECTION_READ_ONLY')
+    expect(body.error.details.required_scope).toBe('bookkeeping:write')
+    expect(handlerSpy).not.toHaveBeenCalled()
+  })
+
+  it('refuses an elevated GET (webhooks:manage) in a read-only company, compared case-insensitively', async () => {
+    ownerKeyReadOnlyIn(['COMPANY-1'], ['webhooks:manage'])
+    const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
+      ok({ webhooks: [] }, { requestId: ctx.requestId }),
+    )
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>('webhooks.list', handlerSpy, {
+      requireScope: 'webhooks:manage',
+    })
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/webhooks', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(403)
+    expect((await res.json()).error.details.code).toBe('CONNECTION_READ_ONLY')
+    expect(handlerSpy).not.toHaveBeenCalled()
+  })
+
+  it('lets reads through in a read-only company', async () => {
+    ownerKeyReadOnlyIn(['company-1'], ['reports:read'])
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>('journal-entries.list', async (_req, ctx) =>
+      ok({ entries: [], companyId: ctx.companyId }, { requestId: ctx.requestId }),
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(200)
+  })
+
+  it('lets writes through in a company the key is not read-only in', async () => {
+    ownerKeyReadOnlyIn(['company-2'], ['bookkeeping:write'])
+    const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
+      NextResponse.json({ data: { id: 'je-1', requestId: ctx.requestId } }, { status: 201 }),
+    )
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>('journal-entries.create', handlerSpy)
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer gnubok_sk_x', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: 'x', lines: [] }),
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(201)
+    expect(handlerSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers a viewer in a read-only company with the role refusal, which names the real fix', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-viewer',
+      companyId: 'company-1',
+      scopes: ['bookkeeping:write'],
+      mode: 'live',
+      allowedCompanyIds: ['company-1'],
+      readOnlyCompanyIds: ['company-1'],
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'viewer' }))
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>('journal-entries.create', async (_req, ctx) =>
+      ok({ ok: true }, { requestId: ctx.requestId }),
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(403)
+    expect((await res.json()).error.details.code).toBe('ROLE_READ_ONLY')
   })
 })

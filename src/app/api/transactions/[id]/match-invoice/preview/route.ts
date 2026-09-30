@@ -25,12 +25,13 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { roundOre, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
-import { getRevenueAccount, getOutputVatAccount } from '@/lib/bookkeeping/invoice-entries'
-import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
+import { buildInvoiceCashLines } from '@/lib/bookkeeping/invoice-entries'
+import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import type { Currency, EntityType, Invoice, InvoiceItem } from '@/types'
+import type { CreateJournalEntryLineInput, Currency, EntityType, Invoice } from '@/types'
 import { z } from 'zod'
 
 type PreviewLine = {
@@ -38,6 +39,8 @@ type PreviewLine = {
   debit_amount: number
   credit_amount: number
   description: string
+  /** The line's dimension bag, as the POST books it; absent when untagged. */
+  dimensions?: Record<string, string>
 }
 
 const QuerySchema = z.object({
@@ -78,7 +81,8 @@ export const GET = withRouteContext(
 
     const { data: invoice, error: invErr } = await supabase
       .from('invoices')
-      .select('*, items:invoice_items(*)')
+      // The customer's name is part of the booked row texts.
+      .select('*, customer:customers(name), items:invoice_items(*)')
       .eq('id', invoice_id)
       .eq('company_id', companyId)
       .single()
@@ -251,85 +255,21 @@ export const GET = withRouteContext(
       }
     }
 
-    const lines: PreviewLine[] = []
+    // The rows come from the builders the POST books with, fed the POST's
+    // arguments, so what the dialog shows (and what an edited row starts
+    // from) is what gets booked: texts, amounts and the invoice's dimensions.
+    // A foreign invoice with no booking rate makes either builder refuse
+    // (MATCH_INVOICE_BOOKING_RATE_MISSING / INVOICE_FX_RATE_MISSING), exactly
+    // where the POST refuses.
+    const inv = invoice as Invoice & { customer?: { name?: string | null } | null }
     let entryType: 'clearing' | 'cash' = 'clearing'
+    let booked: CreateJournalEntryLineInput[]
 
     if (useCashEntry) {
       entryType = 'cash'
-      // Mirror createInvoiceCashEntry: per-rate revenue + VAT credits, 1930 debit.
-      const inv = invoice as Invoice & { items?: InvoiceItem[] }
-      const items = inv.items ?? []
-      const isForeign = inv.currency !== 'SEK'
-
-      // Per-item rate aggregation (matches generatePerRateLines semantics).
-      // InvoiceItem.line_total is the NET line amount (EXCLUDES VAT): it sums
-      // to invoice.subtotal, and each line's vat_amount = line_total * rate. The
-      // commit path (generatePerRateLines) credits revenue with line_total
-      // directly; subtracting vat here double-subtracts VAT and unbalances the
-      // previewed verifikat against the 1930 debit (inv.total).
-      const byRate = new Map<number, { subtotal: number; vat: number }>()
-      if (items.length > 0) {
-        for (const it of items) {
-          const rate = it.vat_rate ?? 25
-          const itemVat = resolveSekAmount(it.vat_amount, null, inv.currency, inv.exchange_rate)
-          const itemTotal = resolveSekAmount(it.line_total, null, inv.currency, inv.exchange_rate)
-          const sub = roundOre(itemTotal)
-          const bucket = byRate.get(rate) ?? { subtotal: 0, vat: 0 }
-          bucket.subtotal += sub
-          bucket.vat += itemVat
-          byRate.set(rate, bucket)
-        }
-      } else {
-        // Fallback to invoice-level totals
-        const sub = resolveSekAmount(inv.subtotal, inv.subtotal_sek, inv.currency, inv.exchange_rate)
-        const vat = resolveSekAmount(inv.vat_amount, inv.vat_amount_sek, inv.currency, inv.exchange_rate)
-        byRate.set(inv.vat_rate ?? 25, { subtotal: sub, vat })
-      }
-
-      const creditLines: PreviewLine[] = []
-      for (const [rate, totals] of byRate) {
-        const vatTreatment = totals.vat > 0
-          ? (rate === 25 ? 'standard_25' : rate === 12 ? 'reduced_12' : rate === 6 ? 'reduced_6' : inv.vat_treatment)
-          : inv.vat_treatment
-        const revenueAcct = getRevenueAccount(vatTreatment, entityType)
-        creditLines.push({
-          account_number: revenueAcct,
-          debit_amount: 0,
-          credit_amount: Math.round(totals.subtotal * 100) / 100,
-          description: `Försäljning ${rate}%`,
-        })
-        if (totals.vat > 0) {
-          creditLines.push({
-            account_number: getOutputVatAccount(vatTreatment),
-            debit_amount: 0,
-            credit_amount: Math.round(totals.vat * 100) / 100,
-            description: `Utgående moms ${rate}%`,
-          })
-        }
-      }
-
-      const totalCredits = creditLines.reduce((s, l) => s + l.credit_amount, 0)
-      const cashDebit = isForeign
-        ? Math.round(totalCredits * 100) / 100
-        : resolveSekAmount(inv.total, inv.total_sek, inv.currency, inv.exchange_rate)
-
-      lines.push({
-        account_number: paymentAccount,
-        debit_amount: Math.round(cashDebit * 100) / 100,
-        credit_amount: 0,
-        description: 'Inbetalning från bank',
-      })
-      lines.push(...creditLines)
+      booked = buildInvoiceCashLines(inv, entityType, inv.customer?.name ?? undefined, paymentAccount).lines
     } else {
-      // Clearing entry. Delegates to the shared helper so the preview and
-      // the committed verifikat are byte-identical: fixing the prior
-      // bug where the preview ran `resolveSekAmount(tx.amount, null,
-      // INV.currency, INV.rate)`, treating the SEK tx number as if it
-      // were in the invoice's currency and multiplying by the invoice's
-      // rate. That produced a fictitious bank-leg and silently dropped
-      // the FX gain/loss for cross-currency invoices.
-      const inv = invoice as Invoice
-      const { lines: clearingLines } = buildInvoicePaymentClearingLines(
+      booked = buildInvoiceMatchClearingLines(
         {
           amount: transaction.amount,
           amount_sek: transaction.amount_sek ?? null,
@@ -342,22 +282,27 @@ export const GET = withRouteContext(
           remaining_amount: inv.remaining_amount ?? null,
           total: inv.total,
           paid_amount: inv.paid_amount ?? null,
+          invoice_number: inv.invoice_number,
+          customer: inv.customer,
+          default_dimensions: inv.default_dimensions,
         },
-        'Inbetalning kundfaktura',
         fxConversion.required && !('error' in fxConversion)
           ? fxConversion.paid_in_invoice_currency
           : undefined,
         paymentAccount,
-      )
-      for (const line of clearingLines) {
-        lines.push({
-          account_number: line.account_number,
-          debit_amount: line.debit_amount,
-          credit_amount: line.credit_amount,
-          description: line.line_description ?? '',
-        })
-      }
+      ).lines
     }
+
+    const lines: PreviewLine[] = booked.map((line) => ({
+      account_number: line.account_number,
+      debit_amount: line.debit_amount,
+      credit_amount: line.credit_amount,
+      description: line.line_description ?? '',
+      // A row the user edits keeps the bag it came with.
+      ...(line.dimensions && Object.keys(line.dimensions).length > 0
+        ? { dimensions: line.dimensions }
+        : {}),
+    }))
 
     return NextResponse.json({
       entry_type: entryType,
@@ -366,6 +311,8 @@ export const GET = withRouteContext(
       accounting_method: accountingMethod,
       is_fully_paid: isFullyPaid,
       fx_conversion: fxConversion,
+      // The settled invoice's bag, for a row the user adds while editing.
+      document_dimensions: coerceDimensionsBag(inv.default_dimensions),
     })
   },
 )

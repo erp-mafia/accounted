@@ -35,7 +35,15 @@ interface TableResult {
  * to the configured result for that table. insert payloads are captured per
  * table so tests can assert what would have been written.
  */
-function buildSupabase(tables: Record<string, TableResult>) {
+function buildSupabase(
+  tables: Record<string, TableResult>,
+  /**
+   * projectSelect: a `.select('a, b')` of plain columns narrows the row that
+   * `.single()` / `.maybeSingle()` resolve to, like PostgREST does. Off by
+   * default; on where a test must prove the code SELECTS what it reads.
+   */
+  options: { projectSelect?: boolean } = {}
+) {
   const inserts: Record<string, unknown[]> = {}
   const updates: Record<string, unknown[]> = {}
 
@@ -77,8 +85,33 @@ function buildSupabase(tables: Record<string, TableResult>) {
       ;(updates[table] ??= []).push(payload)
       return chain
     })
-    chain.single = vi.fn().mockResolvedValue(resolved)
-    chain.maybeSingle = vi.fn().mockResolvedValue(resolved)
+    let selected: string | undefined
+    chain.select = vi.fn().mockImplementation((columns?: string) => {
+      selected = columns
+      return chain
+    })
+    const singleRow = () => {
+      const row = resolved.data
+      if (
+        !options.projectSelect ||
+        !selected ||
+        /[*(]/.test(selected) ||
+        row === null ||
+        typeof row !== 'object' ||
+        Array.isArray(row)
+      ) {
+        return resolved
+      }
+      const picked: Record<string, unknown> = {}
+      for (const column of selected.split(',').map((c) => c.trim())) {
+        if (column in (row as Record<string, unknown>)) {
+          picked[column] = (row as Record<string, unknown>)[column]
+        }
+      }
+      return { data: picked, error: resolved.error }
+    }
+    chain.single = vi.fn().mockImplementation(() => Promise.resolve(singleRow()))
+    chain.maybeSingle = vi.fn().mockImplementation(() => Promise.resolve(singleRow()))
     chain.then = (resolve: (v: unknown) => void) => resolve(resolved)
     return chain
   })
@@ -113,8 +146,8 @@ const DIMENSION_TABLES: Record<string, TableResult> = {
   company_settings: { data: { dimensions_enabled: true } },
   dimensions: {
     data: [
-      { id: 'dim-ks', sie_dim_no: 1 },
-      { id: 'dim-proj', sie_dim_no: 6 },
+      { id: 'dim-ks', sie_dim_no: 1, name: 'Kostnadsställe' },
+      { id: 'dim-proj', sie_dim_no: 6, name: 'Projekt' },
     ],
   },
   dimension_values: {
@@ -212,7 +245,9 @@ describe('createDraftEntry: dimension validation wiring', () => {
 
     await expect(
       createDraftEntry(supabase as never, 'company-1', 'user-1', makeInput({ '6': 'P001' }))
-    ).rejects.toThrow('"P001" är arkiverat: återaktivera värdet för att använda det.')
+    ).rejects.toThrow(
+      '"P001" i Projekt (dimension 6) är arkiverat: återaktivera värdet för att använda det.'
+    )
   })
 
   it('creates the draft when every tagged code is registered and active', async () => {
@@ -445,7 +480,7 @@ describe('commitEntry — mandatory dimension enforcement (PR10)', () => {
     ).rejects.toBeInstanceOf(MandatoryDimensionMissingError)
     await expect(
       commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
-    ).rejects.toThrow('Konto 4010 kräver Projekt — välj ett värde innan bokföring.')
+    ).rejects.toThrow('Konto 4010 kräver Projekt: välj ett värde innan bokföring.')
 
     // The verifikat must never have been posted.
     expect(supabase.rpc).not.toHaveBeenCalled()
@@ -557,5 +592,182 @@ describe('createDraftEntry — system-source exemption (PR10)', () => {
     // …and the inserted bags stay exactly as the import provided them.
     const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
     expect(lineRows[0].dimensions).toEqual({})
+  })
+})
+
+/**
+ * Accrual dissolutions replay a schedule that may pre-date a rule on its P&L
+ * or interim account. A required rule must not strand the remaining
+ * installments (the daily cron would retry the same impossible entry while
+ * the interim account stays overstated), and a default/fixed rule must not
+ * re-tag one side of a dissolution whose two lines carry the schedule's bag.
+ */
+describe('accrual dissolutions: exempt from account dimension rules', () => {
+  const requiredRule = makeRuleRow({ rule_type: 'required', dimension_values: null })
+
+  it('commits an untagged dissolution despite a required rule added after the schedule', async () => {
+    const { supabase } = buildSupabase({
+      ...BASE_TABLES,
+      account_dimension_rules: { data: [requiredRule] },
+      journal_entry_lines: {
+        data: [
+          { account_number: '4010', dimensions: {}, journal_entries: { source_type: 'accrual' } },
+          { account_number: '1790', dimensions: {}, journal_entries: { source_type: 'accrual' } },
+        ],
+      },
+    })
+
+    const entry = await commitEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(entry.id).toBe('entry-1')
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'commit_journal_entry',
+      expect.objectContaining({ p_entry_id: 'entry-1' })
+    )
+  })
+
+  it('never re-tags one side of a dissolution with a fixed rule', async () => {
+    const { supabase, inserts, queriedTables } = buildSupabase({
+      ...BASE_TABLES,
+      account_dimension_rules: {
+        data: [makeRuleRow({ rule_type: 'fixed', dimension_values: { code: 'PLOCK' } })],
+      },
+    })
+
+    await createDraftEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      makeInput(undefined, { source_type: 'accrual', source_id: 'sched-1' })
+    )
+
+    expect(queriedTables()).not.toContain('account_dimension_rules')
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    expect(lineRows[0].dimensions).toEqual({})
+    expect(lineRows[1].dimensions).toEqual({})
+  })
+})
+
+/**
+ * updateDraftEntry gates both exemptions on the STORED source_type (the v1
+ * update operation passes a 'manual' placeholder). The mock projects the
+ * selected columns, so these tests prove the engine selects source_type and
+ * does not read a field its query never asked for.
+ */
+describe('updateDraftEntry: dimension policy follows the stored source type', () => {
+  const storedDraft = (sourceType: string) => ({
+    journal_entries: {
+      data: { id: 'entry-1', status: 'draft', voucher_series: 'A', source_type: sourceType, lines: [] },
+    },
+  })
+
+  it('updates a stored accrual draft tagged with an archived value (validation exemption)', async () => {
+    const { supabase, inserts, queriedTables } = buildSupabase(
+      {
+        ...BASE_TABLES,
+        ...DIMENSION_TABLES,
+        ...storedDraft('accrual'),
+        dimension_values: {
+          data: [{ dimension_id: 'dim-proj', code: 'P001', is_active: false }],
+        },
+      },
+      { projectSelect: true }
+    )
+
+    const entry = await updateDraftEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      'entry-1',
+      makeInput({ '6': 'P001' })
+    )
+
+    expect(entry.id).toBe('entry-1')
+    expect(queriedTables()).not.toContain('dimensions')
+    expect(queriedTables()).not.toContain('dimension_values')
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    expect(lineRows[0].dimensions).toEqual({ '6': 'P001' })
+  })
+
+  it('never applies rules to a stored rule-exempt draft', async () => {
+    const { supabase, inserts, queriedTables } = buildSupabase(
+      {
+        ...BASE_TABLES,
+        ...storedDraft('system'),
+        account_dimension_rules: {
+          data: [makeRuleRow({ rule_type: 'fixed', dimension_values: { code: 'PLOCK' } })],
+        },
+      },
+      { projectSelect: true }
+    )
+
+    await updateDraftEntry(supabase as never, 'company-1', 'user-1', 'entry-1', makeInput())
+
+    expect(queriedTables()).not.toContain('account_dimension_rules')
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    expect(lineRows[0].dimensions).toEqual({})
+  })
+
+  it('still applies rules and validation to a stored manual draft', async () => {
+    const { supabase, inserts } = buildSupabase(
+      {
+        ...BASE_TABLES,
+        ...DIMENSION_TABLES,
+        ...storedDraft('manual'),
+        account_dimension_rules: { data: [makeRuleRow()] },
+      },
+      { projectSelect: true }
+    )
+
+    await updateDraftEntry(supabase as never, 'company-1', 'user-1', 'entry-1', makeInput())
+
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    expect(lineRows[0].dimensions).toEqual({ '6': 'P001' })
+    expect(lineRows[1].dimensions).toEqual({})
+  })
+})
+
+/**
+ * An archived dimension is judged like an archived value: a new entry may not
+ * use any of its codes, while the validation-exempt accrual replay still posts
+ * the tag its origin carried.
+ */
+describe('createDraftEntry: archived dimension', () => {
+  const ARCHIVED_PROJECT_DIMENSION: Record<string, TableResult> = {
+    ...DIMENSION_TABLES,
+    dimensions: {
+      data: [
+        { id: 'dim-ks', sie_dim_no: 1, name: 'Kostnadsställe', is_active: true },
+        { id: 'dim-proj', sie_dim_no: 6, name: 'Projekt', is_active: false },
+      ],
+    },
+  }
+
+  it('rejects an active code of an archived dimension before any row is inserted', async () => {
+    const { supabase, inserts } = buildSupabase({ ...BASE_TABLES, ...ARCHIVED_PROJECT_DIMENSION })
+
+    const promise = createDraftEntry(supabase as never, 'company-1', 'user-1', makeInput({ '6': 'P001' }))
+
+    await expect(promise).rejects.toBeInstanceOf(DimensionValidationError)
+    await expect(promise).rejects.toThrow(
+      '"P001" i Projekt (dimension 6): dimensionen är arkiverad. Återaktivera dimensionen för att använda värdet.'
+    )
+    expect(inserts.journal_entries).toBeUndefined()
+    expect(inserts.journal_entry_lines).toBeUndefined()
+  })
+
+  it('still posts an accrual dissolution that replays a tag of the archived dimension', async () => {
+    const { supabase, inserts } = buildSupabase({ ...BASE_TABLES, ...ARCHIVED_PROJECT_DIMENSION })
+
+    const entry = await createDraftEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      makeInput({ '6': 'P001' }, { source_type: 'accrual', source_id: 'sched-1' })
+    )
+
+    expect(entry.id).toBe('entry-1')
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    expect(lineRows[0].dimensions).toEqual({ '6': 'P001' })
   })
 })

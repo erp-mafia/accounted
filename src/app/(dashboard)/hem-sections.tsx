@@ -17,6 +17,9 @@ import { listMissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { getCompanyNotices } from '@/lib/notices'
 import { expiringBankConnectionsFrom } from '@/lib/notices/categories'
 import { vatDeadlineLine } from '@/lib/onboarding/checklist'
+import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { createServiceClient } from '@/lib/supabase/server'
 import type { InitialSetupState, MomsPeriod, OnboardingProgress } from '@/types'
 import { getDashboardAuthContext } from './request-context'
 
@@ -98,6 +101,7 @@ export async function HemChecklistSection({
     { count: inboxItemCount },
     { data: nextVatDeadline },
     { data: latestFileSweep },
+    unfinishedConnect,
   ] = await Promise.all([
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -137,6 +141,12 @@ export async function HemChecklistSection({
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // A provider connect that stalled before the token: the books step
+    // offers to retry it or upload a SIE file instead. Service client:
+    // provider_consent_tokens has no user policy.
+    ENABLED_EXTENSION_IDS.has('arcim-migration')
+      ? findUnfinishedConnect(createServiceClient(), companyId, now)
+      : Promise.resolve(null),
   ])
 
   const connections = (bankConnections ?? []) as BankConnectionRow[]
@@ -175,6 +185,7 @@ export async function HemChecklistSection({
       hasInboxItems={onboardingProgress.hasInboxItems}
       hasMcpKey={hasMcpKey}
       vatLine={vatLine}
+      unfinishedConnect={unfinishedConnect ? { provider: unfinishedConnect.provider } : null}
       sieSweep={
         sieSweep
           ? {

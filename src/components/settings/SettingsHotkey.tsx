@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 
 /**
  * Global ⌘, / Ctrl+, shortcut to open settings (mirrors CommandPalette's ⌘K).
- * Navigates to /settings, which the intercepting route turns into the modal.
+ * Navigates to /settings, the full settings page.
  */
 export function SettingsHotkey() {
   const router = useRouter()

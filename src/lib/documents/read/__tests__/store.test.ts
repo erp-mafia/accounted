@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+vi.mock('@/lib/documents/preview', () => ({ keptPreview: vi.fn(async () => null) }))
 vi.mock('../router', () => ({ readDocumentBytes: vi.fn() }))
 vi.mock('@/lib/core/documents/document-service', () => ({ downloadDocumentObject: vi.fn() }))
 vi.mock('@/lib/ai', () => ({ getAiStatus: vi.fn(() => ({ configured: true })) }))
@@ -8,6 +9,7 @@ import { readAndStoreDocument, readUnreadDocuments, storableText } from '../stor
 import { readDocumentBytes } from '../router'
 import { ReaderUnavailableError } from '../types'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
+import { keptPreview } from '@/lib/documents/preview'
 
 type Call = { table: string; op: string; payload?: unknown; filters: Record<string, unknown> }
 
@@ -43,7 +45,17 @@ function makeSupabase(unread: Array<Record<string, unknown>> = [], retry: Array<
     }
     return api
   }
-  return { supabase: { from: (t: string) => chain(t) } as never, calls }
+  // The unread batch; other rpcs (the usage meter) answer empty and are not recorded.
+  const rpc = (fn: string, args: { p_limit?: number }) => {
+    if (fn === 'document_retry_candidates') {
+      calls.push({ table: `rpc:${fn}`, op: 'select-retry', filters: { ...args } })
+      return Promise.resolve({ data: retry.slice(0, args.p_limit), error: null })
+    }
+    if (fn !== 'document_backfill_candidates') return Promise.resolve({ data: null, error: null })
+    calls.push({ table: `rpc:${fn}`, op: 'rpc', filters: { ...args } })
+    return Promise.resolve({ data: unread.slice(0, args.p_limit), error: null })
+  }
+  return { supabase: { from: (t: string) => chain(t), rpc } as never, calls }
 }
 
 const doc = { id: 'doc-1', company_id: 'co-1', storage_path: 'documents/co-1/u/1_a.pdf', mime_type: 'application/pdf' }
@@ -147,6 +159,19 @@ describe('storableText', () => {
   })
 })
 
+describe('readAndStoreDocument reads a photo from its kept preview', () => {
+  it('sends the viewer\'s JPEG to the model and never downloads the original', async () => {
+    asMock(downloadDocumentObject).mockClear()
+    asMock(keptPreview).mockResolvedValueOnce(Buffer.from('jpeg-preview'))
+    asMock(readDocumentBytes).mockResolvedValue({ ok: true, reader: 'claude_vision', pageCount: 1, pages: [{ pageNo: 1, text: 'Kvitto', reader: 'claude_vision', hasTextLayer: false }] })
+    const { supabase } = makeSupabase()
+    const out = await readAndStoreDocument(supabase, { ...doc, mime_type: 'image/heic' })
+    expect(out).toMatchObject({ status: 'read', pages: 1 })
+    expect(downloadDocumentObject).not.toHaveBeenCalled()
+    expect(readDocumentBytes).toHaveBeenCalledWith(Buffer.from('jpeg-preview'), 'image/jpeg', expect.anything())
+  })
+})
+
 describe('readUnreadDocuments', () => {
   beforeEach(() => { vi.clearAllMocks(); process.env.ARKIV_COMPANY_IDS = 'co-1' })
 
@@ -158,15 +183,17 @@ describe('readUnreadDocuments', () => {
     expect(readDocumentBytes).toHaveBeenCalledTimes(1)
     expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'image/jpeg', { allowModel: true, maxModelPages: null })
     expect(calls.find((c) => c.op === 'select-retry')?.filters.company_id).toBeUndefined()
+    // Through the function that leaves out rows the stamp cannot land on (a locked period).
+    expect(calls.find((c) => c.op === 'select-retry')).toMatchObject({ table: 'rpc:document_retry_candidates', filters: { p_reasons: expect.arrayContaining(['ai_gated']), p_limit: 40 } })
   })
 
 
   it('never asks for rollout rows: nobody goes first now that the shelf is on for everyone', async () => {
     const { supabase, calls } = makeSupabase([{ ...doc, mime_type: 'application/xml' }])
     expect(await readUnreadDocuments(supabase, 10)).toEqual({ processed: 1, read: 0, skipped: 1, errors: 0 })
-    const ops = calls.filter((c) => c.op.startsWith('select')).map((c) => c.op)
+    const ops = calls.filter((c) => c.op.startsWith('select') || c.op === 'rpc').map((c) => c.op)
     expect(ops).not.toContain('select-rollout')
-    expect(ops.at(-1)).toBe('select')
+    expect(ops.at(-1)).toBe('rpc')
   })
 
   it('stops between documents once the time budget is spent', async () => {
@@ -179,8 +206,10 @@ describe('readUnreadDocuments', () => {
   it('walks the unread batch and counts outcomes', async () => {
     asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('x')]), error: null, resolvedPath: 'p' })
     asMock(readDocumentBytes).mockResolvedValue({ ok: true, reader: 'office', pageCount: 1, pages: [{ pageNo: 1, text: 't', reader: 'office', hasTextLayer: true }] })
-    const { supabase } = makeSupabase([doc, { ...doc, id: 'doc-2', mime_type: 'application/xml' }])
+    const { supabase, calls } = makeSupabase([doc, { ...doc, id: 'doc-2', mime_type: 'application/xml' }])
     expect(await readUnreadDocuments(supabase, 10)).toEqual({ processed: 2, read: 1, skipped: 1, errors: 0 })
+    // The unread batch comes from the one function that knows which rows the stamp can land on.
+    expect(calls.find((c) => c.op === 'rpc')).toMatchObject({ table: 'rpc:document_backfill_candidates', filters: { p_limit: 10 } })
   })
 
   it('stops the batch at the first document the missing reader fails, leaving the rest unread', async () => {

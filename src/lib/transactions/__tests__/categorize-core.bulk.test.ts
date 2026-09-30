@@ -259,6 +259,8 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       undefined,
       // company_settings.vat_registered as loaded: this settings row has none.
       null,
+      // No reverse-charge kind in bulk: the EU-services basis default applies.
+      undefined,
     )
   })
 
@@ -276,7 +278,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
         },
       },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
-      { data: { ledger_account: '1931' } }, // resolveSettlementAccount: explicit cash_account_id lookup
+      { data: { ledger_account: '1931', currency: 'SEK' } }, // resolveSettlementAccount: explicit cash_account_id lookup
       { data: [{ id: 'fp-1' }] },
       { data: [{ id: 'tx-1' }], error: null },
       { data: [] },

@@ -28,7 +28,7 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   })),
 }))
 
-import { computeVatCloseCheck } from '../server'
+import { computeVatCloseCheck, RC_BASIS_MISSING_HINT } from '../server'
 
 interface MockLine {
   entry?: string
@@ -334,9 +334,16 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     const blocker = result.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')!
     expect(blocker.kind).toBe('reverse_charge_input_missing')
     expect(blocker.severity).toBe('high')
+    // #2919: the blocker names the repair, not only the rutor to look at.
+    expect(blocker.hint).toBe(RC_BASIS_MISSING_HINT)
+    expect(blocker.hint).toMatch(/gnubok_correct_entry/)
+    expect(blocker.hint).toMatch(/4598/)
 
     // The old mirror could not see this at all: ruta 48 carries the 2645 leg.
     expect(result.rutor.ruta48).toBe(1250)
+    // And the agent now sees the empty basis boxes itself (#2919).
+    expect((result.rutor as Record<string, number>).ruta21).toBe(0)
+    expect((result.rutor as Record<string, number>).ruta22).toBe(0)
   })
 
   it('one ordinary domestic receipt no longer suppresses the reverse-charge check', async () => {
@@ -459,5 +466,31 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     expect(result.ready_to_close).toBe(true)
     expect(result.summary).toMatch(/Klart för stängning/)
     expect(result.rutor.ruta49).toBe(2500)
+  })
+
+  it('does not tell the agent to add basis pairs when the period basis already matches per rate', async () => {
+    // e1 carries fiktiv moms without its own basis; e2 (a later correction)
+    // books that basis. The per-voucher scan still sees e1, but the period is
+    // consistent per rate, so the finding is the advisory WARNING: adding
+    // another pair would double ruta 21, so the repair hint must not appear.
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase([
+        { entry: 'e1', account_number: '6540', debit_amount: 5000 },
+        { entry: 'e1', account_number: '2440', credit_amount: 5000 },
+        { entry: 'e1', account_number: '2614', credit_amount: 1250 },
+        { entry: 'e1', account_number: '2645', debit_amount: 1250 },
+        { entry: 'e2', account_number: '4535', debit_amount: 5000 },
+        { entry: 'e2', account_number: '4598', credit_amount: 5000 },
+      ]),
+    )
+
+    const finding = result.declaration_checks.find((c) => c.code === 'RC_BASIS_MISSING')
+    expect(finding?.status).toBe('WARNING')
+    const blocker = result.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')!
+    expect(blocker.severity).toBe('medium')
+    expect(blocker.hint).not.toBe(RC_BASIS_MISSING_HINT)
+    expect((result.rutor as Record<string, number>).ruta21).toBe(5000)
   })
 })

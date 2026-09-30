@@ -8,6 +8,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useAccounts, useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
+import { classifyInitialSyncError } from '@/lib/bank-sync/initial-sync-error'
+import { bankMatchesQuery, searchAliasHint } from '@/lib/bank-sync/bank-search'
 import type { CashAccount } from '@/types'
 import { allocateLedgers, ledgerClaims, ledgerName, ledgerOptions } from '@/lib/onboarding-books/ledger'
 import { LOOKBACK_SAFE_DAYS, resolveLookback, type LookbackMode } from '@/lib/onboarding-books/lookback'
@@ -125,9 +127,10 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   }, [banks])
   const shownBanks = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (q) return orderedBanks.filter((b) => b.name.toLowerCase().includes(q))
+    if (q) return orderedBanks.filter((b) => bankMatchesQuery(b, q))
     return more ? orderedBanks : orderedBanks.slice(0, PICK_COUNT)
   }, [orderedBanks, more, query])
+  const aliasHint = searchAliasHint(shownBanks, query)
 
   // The bank's login runs in a popup, like the provider logins: the callback
   // page posts its outcome back and closes itself, so this page never
@@ -244,14 +247,19 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       const row = data as { id: string; bank_name: string | null; status: string; accounts_data: StoredPickerAccount[] | null } | null
       // Nothing to choose from is the bank's answer, not a state to sit in:
       // back to the bank list with the reason. An account another company
-      // books is NOT that case: it is listed, named and left to the user.
-      if (!row || !row.accounts_data || row.accounts_data.length === 0) {
+      // books is NOT that case: it is listed, named and left to the user. A
+      // consent holding only a card account that mirrors the main account is:
+      // that account is never a choice.
+      const pickable = row?.accounts_data
+        ? toPickerAccounts(row.accounts_data, { account: t('bank_account'), otherCompany: t('bank_claimed_other_company') })
+        : []
+      if (!row || pickable.length === 0) {
         setAttn(t('bank_no_accounts'))
         dispatch({ type: 'BANK_PICK_FAILED' })
         return
       }
       if (row.bank_name && row.bank_name !== state.bankName) dispatch({ type: 'BANK_AUTHED', name: row.bank_name, connectionId: row.id })
-      setAccts(toPickerAccounts(row.accounts_data, { account: t('bank_account'), otherCompany: t('bank_claimed_other_company') }))
+      setAccts(pickable)
     })()
     return () => { cancelled = true }
   }, [phase, accts, state.bankConnectionId, state.bankName, supabase, dispatch, t])
@@ -265,11 +273,12 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
     [cashAccounts, state.bankConnectionId],
   )
   const usedLedgers = claims.used
+  const chartNumbers = useMemo(() => chart.map((a) => a.account_number), [chart])
   const ledgerOf = useMemo(() => {
     const preset: Record<string, string> = {}
     for (const a of tickedList) if (a.ledger) preset[a.uid] = a.ledger
-    return allocateLedgers(tickedList, claims.used, { ...preset, ...picks }, claims.connected)
-  }, [tickedList, claims, picks])
+    return allocateLedgers(tickedList, claims.used, { ...preset, ...picks }, claims.connected, chartNumbers, claims.holders)
+  }, [tickedList, claims, picks, chartNumbers])
   const chartNames = useMemo(() => Object.fromEntries(chart.map((a) => [a.account_number, a.account_name])), [chart])
 
   const today = isoToday()
@@ -337,7 +346,10 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       void loadFindings()
       const sum = json.initial_sync ?? { imported: 0, duplicates: 0, auto_matched: 0, requested_from: lookback.fromDate, returned_min_date: null, returned_max_date: null }
       setSummary(sum)
-      if (json.initial_sync_error) setAttn(json.initial_sync_error)
+      // The field is a status code or the raw message of the failure, never
+      // text for the screen: say what it means for the person instead.
+      const backfill = classifyInitialSyncError(json.initial_sync_error)
+      if (backfill) setAttn(t(`bank_backfill_${backfill}`))
 
       // Today's balance from the mirrored cash accounts, then the rows of the window.
       const [refreshedCashAccounts, txRes] = await Promise.all([
@@ -432,6 +444,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
               ))}
             </div>
             {shownBanks.length === 0 ? <p className="jny-qsub">{t('bank_no_matches')}</p> : null}
+            {aliasHint ? <p className="jny-qsub">{t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}</p> : null}
             {/* The way out sits under the banks, quiet: connecting is the point of the step (founder direction 2026-09-14). */}
             <div className="bank-exit">
               <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
@@ -514,7 +527,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
               {tickedList.map((a) => {
                 const cur = ledgerOf[a.uid]
                 const others = Object.values(ledgerOf).filter((l) => l !== cur)
-                const opts = ledgerOptions(a.currency, [...usedLedgers, ...others], cur, [...claims.connected, ...others])
+                const opts = ledgerOptions(a.currency, [...usedLedgers, ...others], cur, [...claims.connected, ...others], chartNumbers, claims.holders, a.iban)
                 return (
                   <OptRow
                     key={a.uid}

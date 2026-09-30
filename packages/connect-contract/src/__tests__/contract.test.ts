@@ -33,6 +33,11 @@ describe('contract constants', () => {
     }
     expect(new Set(CONNECTOR_ERROR_CODES).size).toBe(CONNECTOR_ERROR_CODES.length)
   })
+
+  it('names the unreadable upstream answer and the duplicate invoice number', () => {
+    expect(CONNECTOR_ERROR_CODES).toContain('CONNECTOR_UPSTREAM_SHAPE')
+    expect(CONNECTOR_ERROR_CODES).toContain('PEPPOL_DUPLICATE_INVOICE_NUMBER')
+  })
 })
 
 describe('entitlements and errors', () => {
@@ -89,6 +94,28 @@ describe('peppol schemas', () => {
     expect(peppolSubmissionSchema.safeParse(base).success).toBe(true)
     expect(peppolSubmissionSchema.safeParse({ ...base, contentType: 'application/json' }).success).toBe(false)
     expect(peppolSubmissionSchema.safeParse({ ...base, documentSha256: 'zz' }).success).toBe(false)
+  })
+
+  it('accepts an optional replacesSubmissionId for a resend, bounded like a submission id', () => {
+    const base = {
+      idempotencyKey: 'k',
+      tenantReference: 'c',
+      sender: participant,
+      recipient: participant,
+      documentTypeId: 'd',
+      processId: 'p',
+      filename: 'f.xml',
+      contentType: 'application/xml',
+      document: '<Invoice/>',
+      documentSha256: 'a'.repeat(64),
+    }
+    const resend = peppolSubmissionSchema.safeParse({ ...base, replacesSubmissionId: 'int-1' })
+    expect(resend.success).toBe(true)
+    expect(resend.data?.replacesSubmissionId).toBe('int-1')
+    expect(peppolSubmissionSchema.safeParse(base).data).not.toHaveProperty('replacesSubmissionId')
+    expect(peppolSubmissionSchema.safeParse({ ...base, replacesSubmissionId: '' }).success).toBe(false)
+    expect(peppolSubmissionSchema.safeParse({ ...base, replacesSubmissionId: 'x'.repeat(129) }).success).toBe(false)
+    expect(peppolSubmissionSchema.safeParse({ ...base, replacesSubmissionId: null }).success).toBe(false)
   })
 
   it('validates registrations and inbound messages', () => {

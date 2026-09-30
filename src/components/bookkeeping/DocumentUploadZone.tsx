@@ -6,6 +6,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Upload, FileText, ImageIcon, X, Loader2 } from 'lucide-react'
+import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
 
 export interface UploadedFile {
   id?: string
@@ -128,8 +129,12 @@ export default function DocumentUploadZone({
   const [surfaceRect, setSurfaceRect] = useState<DOMRect | null>(null)
 
   const uploadFile = useCallback(async (file: UploadedFile): Promise<UploadedFile> => {
+    const prepared = await prepareForMultipartUpload(file.file)
+    if (!prepared.ok) {
+      return { ...file, status: 'error', error: prepared.message }
+    }
     const formData = new FormData()
-    formData.append('file', file.file)
+    formData.append('file', prepared.file)
     formData.append('upload_source', 'file_upload')
     if (journalEntryId) {
       formData.append('journal_entry_id', journalEntryId)

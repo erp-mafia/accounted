@@ -388,7 +388,7 @@ export function VatChecksCard({
                     ariaLabel="Typ av inköp"
                     disabled={busy}
                   />
-                  <Button onClick={handleFixAll} disabled={!canWrite || busy} loading={bulkProgress !== null}>
+                  <Button size="sm" onClick={handleFixAll} disabled={!canWrite || busy} loading={bulkProgress !== null}>
                     {bulkProgress === null && <CheckCircle2 className="h-4 w-4 mr-2" />}
                     Korrigera alla ({gaps.length})
                   </Button>

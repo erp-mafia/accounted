@@ -51,7 +51,6 @@ export default async function SelectCompanyPage({
     // Existing memberships: only to keep already-added companies out of the
     // engagement list and to know where "nothing to choose" leads.
     { data: memberships },
-    { data: teamMembership },
     // Greeting name.
     { data: profile },
     // BankID enrichment (CompanyRoles from Bolagsverket via TIC). Stored
@@ -72,12 +71,6 @@ export default async function SelectCompanyPage({
         )
       `)
       .eq('user_id', user.id),
-    supabase
-      .from('team_members')
-      .select('team_id')
-      .eq('user_id', user.id)
-      .limit(1)
-      .maybeSingle(),
     supabase.from('profiles').select('full_name').eq('id', user.id).single(),
     supabase
       .from('bankid_enrichment')
@@ -109,16 +102,6 @@ export default async function SelectCompanyPage({
       .map((c) => orgNumberKey(c.org_number))
       .filter((n): n is string => !!n),
   )
-
-  // Ensure the user has a team (same pattern as /onboarding).
-  let teamId = teamMembership?.team_id
-  if (!teamId) {
-    const { data: ensured } = await supabase.rpc('ensure_user_team')
-    teamId = ensured ?? null
-  }
-  if (!teamId) {
-    redirect('/login')
-  }
 
   const firstName = profile?.full_name?.split(' ')[0] ?? null
 
@@ -173,7 +156,6 @@ export default async function SelectCompanyPage({
   return (
     <BankIdCompanyPicker
       firstName={firstName}
-      teamId={teamId}
       roles={candidates}
       enrichmentStale={enrichmentStale}
       hasPendingInvite={hasPendingInvite}

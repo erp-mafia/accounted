@@ -18,10 +18,11 @@ describe('tenant-scoped skill resolution', () => {
     enqueue({ data: null }); enqueue({ data: [own] })
     expect(await resolveOwnSkill(supabase as never, 'company-a', 'own/other-tenant')).toBeNull()
   })
-  it('does not expose withdrawn private content', () => {
-    expect(ownSkill({ ...own, share_status: 'withdrawn' })).toBeNull()
+  it('keeps AI-saved drafts from AIs, and a shared item usable to its own author', () => {
     expect(ownSkill({ ...own, draft: true })).toBeNull()
     expect(ownSkill(own)?.slug).toBe('own/own-id')
+    expect(ownSkill({ ...own, share_status: 'submitted' })?.slug).toBe('own/own-id')
+    expect(ownSkill({ ...own, share_status: 'published' })?.slug).toBe('own/own-id')
   })
 })
 

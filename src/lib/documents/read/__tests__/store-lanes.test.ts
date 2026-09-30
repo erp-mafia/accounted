@@ -59,15 +59,30 @@ describe('readAndStoreDocument, the meter', () => {
 })
 
 describe('readUnreadDocuments, the lanes and the budget', () => {
-  it('reads the unread batch by lane: text only for tied history, one model page for loose history', async () => {
+  const unreadBatch = [{ ...base, id: 'tied', created_at: daysAgo(60), journal_entry_id: 'je' }, { ...base, id: 'loose', created_at: daysAgo(60) }, { ...base, id: 'new', created_at: daysAgo(1) }]
+
+  it('reads the unread batch by lane without a budget: history from text layers only, a recent document in full', async () => {
     asMock(readDocumentBytes).mockResolvedValue(readOk([[1, 'pdf_text']]))
     enqueue({ data: [] }) // retry batch, asked for first
-    enqueue({ data: [{ ...base, id: 'tied', created_at: daysAgo(60), journal_entry_id: 'je' }, { ...base, id: 'loose', created_at: daysAgo(60) }, { ...base, id: 'new', created_at: daysAgo(1) }] })
+    enqueue({ data: unreadBatch })
     for (let i = 0; i < 9; i++) enqueue({}) // three reads, three writes each
     const onRead = vi.fn(async () => undefined)
     const counts = await readUnreadDocuments(supabase, 10, { now, onRead })
     expect(counts).toEqual({ processed: 3, read: 3, skipped: 0, errors: 0 })
     expect(onRead.mock.calls.map((c) => (c as unknown as [{ id: string }, { pages: number }])[0].id)).toEqual(['tied', 'loose', 'new'])
+    expect(asMock(readDocumentBytes).mock.calls.map((c) => c[2])).toEqual([
+      { allowModel: false, maxModelPages: null, tier: 'extraction' },
+      { allowModel: false, maxModelPages: 1, tier: 'extraction' },
+      { allowModel: true, maxModelPages: null },
+    ])
+  })
+
+  it('gives loose history its one model page only under a budget', async () => {
+    asMock(readDocumentBytes).mockResolvedValue(readOk([[1, 'pdf_text']]))
+    enqueue({ data: [] }) // retry batch
+    enqueue({ data: unreadBatch })
+    for (let i = 0; i < 9; i++) enqueue({})
+    await readUnreadDocuments(supabase, 10, { now, budgetPagesPerDay: 4 })
     expect(asMock(readDocumentBytes).mock.calls.map((c) => c[2])).toEqual([
       { allowModel: false, maxModelPages: null, tier: 'extraction' },
       { allowModel: true, maxModelPages: 1, tier: 'extraction' },
@@ -98,18 +113,25 @@ describe('readUnreadDocuments, the lanes and the budget', () => {
     ])
   })
 
-  it('finishes a loose history document that turned out to be an acting type, and skips one that did not', async () => {
+  it('finishes a loose history document that turned out to be an acting type under a budget, and skips one that did not', async () => {
     asMock(readDocumentBytes).mockResolvedValue(readOk([[1, 'claude_vision']]))
-    enqueue({
-      data: [
-        { ...base, id: 'loan', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'partial:ai_gated', doc_type: 'agreement.loan' },
-        { ...base, id: 'receipt', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'partial:ai_gated', doc_type: 'receipt' },
-        { ...base, id: 'untyped', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'ai_gated' },
-      ],
-    })
+    const retryRows = [
+      { ...base, id: 'loan', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'partial:ai_gated', doc_type: 'agreement.loan' },
+      { ...base, id: 'receipt', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'partial:ai_gated', doc_type: 'receipt' },
+      { ...base, id: 'untyped', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'ai_gated' },
+    ]
+    enqueue({ data: retryRows })
+    enqueue({ data: [] }) // unread batch
+    // Without a budget the background never spends a model page on history: a question reads it.
+    expect(await readUnreadDocuments(supabase, 10, { now })).toMatchObject({ processed: 0, read: 0 })
+    expect(readDocumentBytes).not.toHaveBeenCalled()
+
+    reset()
+    enqueue({ data: retryRows })
+    enqueue({ data: { units: 0 } }) // vision pages spent today
     for (let i = 0; i < 6; i++) enqueue({})
     enqueue({ data: [] }) // unread batch, asked for last
-    expect(await readUnreadDocuments(supabase, 10, { now })).toMatchObject({ processed: 2, read: 2 })
+    expect(await readUnreadDocuments(supabase, 10, { now, budgetPagesPerDay: 10 })).toMatchObject({ processed: 2, read: 2 })
     expect(asMock(readDocumentBytes).mock.calls.map((c) => c[2])).toEqual([
       { allowModel: true, maxModelPages: null, tier: 'extraction' },
       { allowModel: true, maxModelPages: 1, tier: 'extraction' },

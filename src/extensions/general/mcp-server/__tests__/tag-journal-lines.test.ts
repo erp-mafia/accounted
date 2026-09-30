@@ -272,12 +272,86 @@ describe('gnubok_tag_journal_lines: staging', () => {
     expect(result.preview.filter_summary).toMatch(/datum 2024-01-01-2024-12-31/)
     expect(result.preview.filter_summary).toMatch(/text "Bygg AB"/)
     expect(result.preview.sample).toEqual([
-      { account: '4010', date: '2024-03-01', debit: 250, credit: 0 },
-      { account: '4010', date: '2024-03-01', debit: 250, credit: 0 },
+      { account: '4010', date: '2024-03-01', debit: 250, credit: 0, dimensions_before: {}, dimensions_after: { '6': 'P01' } },
+      { account: '4010', date: '2024-03-01', debit: 250, credit: 0, dimensions_before: {}, dimensions_after: { '6': 'P01' } },
     ])
 
     const insertCalls = (supabase.from as ReturnType<typeof vi.fn>).mock.calls
     expect(insertCalls.some((args) => args[0] === 'pending_operations')).toBe(true)
+  })
+
+  it('merges by default: keeps each line\'s other dimensions, stages mode merge and previews every resulting bag', async () => {
+    // Regression: the tool replaced the whole bag, so tagging projekt on a
+    // line that carried a kostnadsställe silently wiped the kostnadsställe,
+    // while the dashboard workbench merges.
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: false }, error: null })
+    enqueueMatchedLines(enqueue, [
+      makeLineRow(1, { dimensions: { '1': 'KS01' } }),
+      makeLineRow(2, { dimensions: {} }),
+      makeLineRow(3, { dimensions: { '6': 'P01' } }),
+    ])
+    enqueue({ data: { id: 'op-retag-merge' }, error: null }) // pending_operations insert
+
+    const result = (await tagJournalLines.execute(
+      { dimensions: { '6': 'P01' }, reason: 'Projektet saknas', filters: { accounts: ['4010'] } },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      preview: {
+        mode: string
+        resulting_dimensions: Record<string, number>
+        unchanged_lines: number
+        sample: Array<{ dimensions_before: Record<string, string>; dimensions_after: Record<string, string> }>
+      }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.mode).toBe('merge')
+    expect(result.preview.resulting_dimensions).toEqual({ '1=KS01, 6=P01': 1, '6=P01': 2 })
+    expect(result.preview.unchanged_lines).toBe(1)
+    const line1 = result.preview.sample.find((s) => s.dimensions_before['1'] === 'KS01')!
+    expect(line1.dimensions_after).toEqual({ '1': 'KS01', '6': 'P01' })
+
+    const insert = findCall('pending_operations', 'insert')?.[0] as { title: string; params: Record<string, unknown> }
+    expect(insert.params).toMatchObject({ mode: 'merge', dimensions: { '6': 'P01' } })
+    expect(insert.title).toBe('Tagga om 3 verifikationsrader: 6=P01')
+  })
+
+  it('replace is explicit: stages mode replace and previews the bag as exactly the pairs', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: false }, error: null })
+    enqueueMatchedLines(enqueue, [makeLineRow(1, { dimensions: { '1': 'KS01', '6': 'P99' } })])
+    enqueue({ data: { id: 'op-retag-replace' }, error: null }) // pending_operations insert
+
+    const result = (await tagJournalLines.execute(
+      { dimensions: { '6': 'P01' }, mode: 'replace', reason: 'Städa fantomkoder', filters: { accounts: ['4010'] } },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { preview: { mode: string; resulting_dimensions: Record<string, number>; will: string } }
+
+    expect(result.preview.mode).toBe('replace')
+    expect(result.preview.resulting_dimensions).toEqual({ '6=P01': 1 })
+    expect(result.preview.will).toMatch(/^replace the dimensions bag/)
+    const insert = findCall('pending_operations', 'insert')?.[0] as { title: string; params: Record<string, unknown> }
+    expect(insert.params).toMatchObject({ mode: 'replace' })
+    expect(insert.title).toBe('Ersätt dimensionerna på 1 verifikationsrader: 6=P01')
+  })
+
+  it('rejects a mode that is neither merge nor replace before any DB work', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      tagJournalLines.execute(
+        { dimensions: { '6': 'P01' }, mode: 'append', reason: 'Retro-taggning', filters: { accounts: ['4010'] } },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/mode must be 'merge'/)
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('resolves dimension names to registry codes and echoes the resolution', async () => {

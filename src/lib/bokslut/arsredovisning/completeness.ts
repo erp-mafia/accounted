@@ -157,6 +157,42 @@ export function validateStatementIntegrity(
   return issues
 }
 
+/**
+ * ABL 25 kap. 13 §: eget kapital below half the registered aktiekapital obliges
+ * the board to draw up a kontrollbalansräkning, and the årsredovisning must say
+ * that one has been or should be drawn up (swedish-financial-reporting: in
+ * förvaltningsberättelsen; under K2 in the note on väsentliga händelser efter
+ * räkenskapsårets slut when drawn up after balansdagen, punkt 18.22; K3 punkt
+ * 3.11).
+ *
+ * A warning, never the kontrollbalans_required flag: whether and when the board
+ * drew one up is not in the books, and the flag prints "upprättats under
+ * räkenskapsåret", which is false for one drawn up after balansdagen (feedback
+ * seq 740922). Keyed on the balance sheet's own Aktiekapital post (2080-2081,
+ * the registered capital): without one there is no aktiekapital to test.
+ */
+function kontrollbalansIssues(report: ArsredovisningData): AnnualReportComplianceIssue[] {
+  const rows = report.balansrakning.equity_liabilities
+  const shareCapital = rows.find((row) => row.semantic_key === 'balance_sheet_share_capital')?.current ?? null
+  const equity = rows.find((row) => row.semantic_key === 'balance_sheet_equity_total')?.current ?? null
+  if (shareCapital === null || equity === null || shareCapital <= 0) return []
+  // Below half, compared in öre: exactly half is not below.
+  if (Math.round(equity * 100) * 2 >= Math.round(shareCapital * 100)) return []
+  const kr = (amount: number) => `${amount.toLocaleString('sv-SE', { maximumFractionDigits: 0 })} kr`
+  const issues: AnnualReportComplianceIssue[] = []
+  push(
+    issues,
+    'AR-EQUITY-BELOW-HALF-SHARE-CAPITAL',
+    'warning',
+    'management_report',
+    `Eget kapital enligt balansräkningen (${kr(equity)}) understiger hälften av det registrerade aktiekapitalet (${kr(shareCapital)}). Styrelsen ska då upprätta en kontrollbalansräkning (ABL 25 kap. 13 §).`,
+    report.accounting_framework === 'k3'
+      ? 'Upplys i förvaltningsberättelsen om att en kontrollbalansräkning har upprättats eller ska upprättas (K3 punkt 3.11).'
+      : 'Upplys i förvaltningsberättelsen om att en kontrollbalansräkning har upprättats eller ska upprättas. Har den upprättats efter balansdagen lämnas upplysningen i not om väsentliga händelser efter räkenskapsårets slut (K2 punkt 18.22).',
+  )
+  return issues
+}
+
 export interface ValidateAnnualReportInput {
   report: ArsredovisningData
   profile: AnnualReportProfile
@@ -271,6 +307,7 @@ export function validateAnnualReportCompleteness(
       'Granska texterna och markera dem som bekräftade.',
     )
   }
+  issues.push(...kontrollbalansIssues(report))
 
   issues.push(...validateStatementIntegrity(report))
   if (

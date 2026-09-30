@@ -55,6 +55,9 @@ export async function resolveRedovisare(
   return formatRedovisare(settings.org_number, settings.entity_type)
 }
 
+/** YYYYMM, the only shape Skatteverket accepts as a redovisningsperiod. */
+const REDOVISNINGSPERIOD = /^(19|20)\d{2}(0[1-9]|1[0-2])$/
+
 /**
  * The Skatteverket redovisningsperiod (YYYYMM) a VAT period files under.
  *
@@ -80,7 +83,18 @@ export async function resolveRedovisningsperiod(
     )
     fiscalYearEnd = { year: Number(end.slice(0, 4)), month: Number(end.slice(5, 7)) }
   }
-  return formatRedovisningsperiod(periodType, year, period, fiscalYearEnd)
+  const redovisningsperiod = formatRedovisningsperiod(periodType, year, period, fiscalYearEnd)
+  // Last line of defence before the value becomes a Skatteverket URL segment:
+  // an unchecked caller once sent "undefinedundefined" (7 requests, all 400).
+  if (!REDOVISNINGSPERIOD.test(redovisningsperiod)) {
+    throw Object.assign(
+      new Error(
+        `Ogiltig redovisningsperiod "${redovisningsperiod}" för period_type=${String(periodType)}, year=${String(year)}, period=${String(period)}`,
+      ),
+      { code: 'VALIDATION_ERROR' },
+    )
+  }
+  return redovisningsperiod
 }
 
 /**

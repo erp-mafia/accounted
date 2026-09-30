@@ -409,7 +409,7 @@ export default function RotRutOverviewPage() {
                 if (file) void importBeslut(file)
               }}
             />
-            <Button
+            <Button size="sm"
               type="button"
               variant="outline"
               disabled={!canWrite}
@@ -420,7 +420,7 @@ export default function RotRutOverviewPage() {
               {!importing && <FileUp className="mr-2 h-4 w-4" />}
               {t('import_beslut')}
             </Button>
-            <Button type="button" onClick={openNewRequest} disabled={!canWrite}>
+            <Button size="sm" type="button" onClick={openNewRequest} disabled={!canWrite}>
               <FileDown className="mr-2 h-4 w-4" />
               {t('new_request')}
             </Button>

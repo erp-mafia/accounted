@@ -97,7 +97,7 @@ Example response `200`:
 **Create a draft invoice, proforma, or delivery note.**
 `scope:invoices:write · risk:medium · idempotent · dry-run · reversible`
 
-Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer's allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. Supports ROT/RUT deduction lines (items[].deduction_type = "rot"|"rut" with invoice-level deduction_personnummer + deduction_housing_designation, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt), article linkage (items[].article_id + optional revenue_account override from the artikelregister), and project/cost-centre tagging (default_dimensions / items[].dimensions). Idempotent (mandatory Idempotency-Key). Dry-runnable: the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send). Set is_self_billed=true (with external_invoice_number + received_date) to instead register a received self-billing invoice (mottagen självfaktura, ML 17 kap 15§): a sale booked immediately with the counterparty's number, not a draft.
+Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer's allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. An invoice can state its own VAT treatment (vat_treatment, delivery_country for goods shipped abroad: export ruta 36, intra-EU supply ruta 35) instead of the customer's, validated against the legal preconditions. Supports ROT/RUT deduction lines (items[].deduction_type = "rot"|"rut" with invoice-level deduction_personnummer + deduction_housing_designation, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt), article linkage (items[].article_id + optional revenue_account override from the artikelregister), and project/cost-centre tagging (default_dimensions / items[].dimensions). Idempotent (mandatory Idempotency-Key). Dry-runnable: the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send). Set is_self_billed=true (with external_invoice_number + received_date) to instead register a received self-billing invoice (mottagen självfaktura, ML 17 kap 15§): a sale booked immediately with the counterparty's number, not a draft.
 
 **Use when:** You need to issue a new invoice, proforma, or delivery note. Use dry-run first to confirm VAT calculations and currency conversion before committing.
 **Do not use for:** Updating an existing invoice (PATCH instead, drafts only). Issuing a credit note (use POST /:id:credit in PR-B-2b). Posting a previously-created draft to the journal (use POST /:id:send in PR-B-2b).
@@ -113,6 +113,7 @@ Creates an invoice in draft status. The F-series invoice_number is allocated ato
 - Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.
 - ROT/RUT: set items[].deduction_type ("rot"|"rut") on labor lines plus labor_hours and work_type (Skatteverket arbetstypskod). The invoice must carry deduction_personnummer AND housing info: deduction_housing_designation (fastighetsbeteckning) for småhus, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt. deduction_amount is computed server-side and cannot be set by the caller; the response exposes deduction_total and remaining_amount = total - deduction_total (Skatteverket pays the rest via 1513). Validation failures return 400 INVOICE_CREATE_ROT_RUT_VALIDATION.
 - Articles: pass items[].article_id (from the artikelregister, GET /articles) to link a line to a catalog article; price/description are still taken from the request body (the API never auto-fills from the article: send the values you want on the invoice). items[].revenue_account is the legacy wire name for an optional BAS class 1-3 posting-account override and is validated against the chart of accounts.
+- Per-invoice VAT treatment (vat_treatment + delivery_country): the customer decides by default; an invoice can state its own supply instead. delivery_country is the ISO code of the country the GOODS are transported to, and setting it makes the invoice a supply of goods. vat_treatment export + delivery_country outside the EU (e.g. a Swedish buyer, goods shipped to NO) = export of goods: 0 %, revenue 3105, moms_ruta 36, notice "Omsättning utanför EU, ML 10 kap.". vat_treatment reverse_charge + delivery_country in another EU member state = intra-EU supply of goods: 0 %, revenue 3108, moms_ruta 35, periodisk sammanställning, notice citing Article 138 / ML 10 kap. 42 §; it needs the customer's vat_number to be its VIES-validated number from a member state other than Sweden (a Swedish buyer qualifies when its card carries its number from that state; its SE number does not, and a per-invoice buyer VAT number is not supported yet). vat_treatment standard = Swedish VAT at the line rates, always allowed (e.g. no export evidence, or a consumer in another member state under the distance-sales threshold). Without delivery_country, export / reverse_charge are the services treatments (3305 ruta 40 / 3308 ruta 39) and only accepted where the customer already gets them. delivery_country alone implies the treatment (SE = standard, EU = reverse_charge, elsewhere = export). Use XI for Northern Ireland. A goods treatment allows only 0 % on its priced lines (omit vat_rate); invoice a Swedish-VAT supply separately. Refusals are 400 INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_REQUIRED, _DELIVERY_COUNTRY_MISMATCH, _BUYER_VAT_NUMBER_REQUIRED (details.reason) and _NOT_VAT_REGISTERED: the invoice never gets 0 % without the facts. The dry run returns vat_treatment, moms_ruta, reverse_charge_text, vat_treatment_override and delivery_country: check them before sending. Domestic reverse charge (construction) is not available per invoice. Not accepted by POST /invoices/bulk-create.
 - EU customers: reverse charge (0 %, ruta 39) needs customer_type eu_business, a VIES-validated vat_number and a country other than SE. When any of those is missing the invoice is created WITH Swedish VAT and the 201 carries meta.warnings (codes EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, EU_BUSINESS_VAT_NUMBER_MISSING, EU_BUSINESS_COUNTRY_IS_SE, each with a remediation). A Swedish rate set explicitly on a line to a validated EU or non-EU business is accepted (taxed-where-performed supplies) but flagged as SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER / SWEDISH_VAT_TO_EXPORT_CUSTOMER. Warnings never fail the request; read them before sending. Dry-run returns the same list.
 
 | Parameter | In | Type | Required | Notes |
@@ -148,6 +149,8 @@ Request body:
   self_billing_agreement_ref?: string,
   received_date?: string | "",
   payment_cash_account_id?: string | "" | null,
+  vat_treatment?: "standard" | "export" | "reverse_charge" | null,
+  delivery_country?: string | null,
   items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number | null, vat_rate?: number, article_id?: string | null, revenue_account?: string | null, sales_order_item_id?: string | null, deduction_type?: "rot" | "rut" | null, labor_hours?: number | null, work_type?: string | null, housing_designation?: string | null, apartment_number?: string | null, brf_org_number?: string | "" | null, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[]
 }
 ```
@@ -312,7 +315,7 @@ Example response `200`:
 **Update a draft invoice (metadata fields, optionally replacing line items).**
 `scope:invoices:write · risk:low · idempotent · dry-run · reversible`
 
-Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag), and an optional items array. When items is present, it fully REPLACES the draft's line items and subtotal / VAT / total are recomputed against the invoice's existing customer (same validation as POST /invoices); when omitted, items and totals are unchanged. customer_id, currency, and document_type are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.
+Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag), vat_treatment + delivery_country (the per-invoice VAT treatment, same rules as POST /invoices), and an optional items array. When items is present, it fully REPLACES the draft's line items and subtotal / VAT / total are recomputed against the invoice's existing customer (same validation as POST /invoices); when omitted, items and totals are unchanged. customer_id, currency, and document_type are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.
 
 **Use when:** You need to correct a typo, push the due date, update a customer reference, or rewrite the line items on a draft you have not sent yet. The invoice number stays null until the first :send action.
 **Do not use for:** Updating a sent / paid / credited invoice (those are immutable per ML 17 kap; issue a credit note via POST /:id:credit in PR-B-2b). Changing currency or customer: drafts are cheap to delete and recreate.
@@ -322,6 +325,7 @@ Partial update for invoices in draft status. Allowed fields: invoice_date, due_d
 - A 409 INVOICE_UPDATE_NOT_DRAFT means the invoice has been sent / paid / credited / cancelled. The DELETE handler on this path uses its own code, INVOICE_DELETE_NOT_DRAFT.
 - items is a FULL REPLACE (no per-line merge): send the complete new line set, minimum one item. Omitting items keeps the current lines untouched. VAT rates are re-validated against the customer type and totals are recomputed server-side.
 - items are always built against the invoice's EXISTING customer: customer_id cannot change on PATCH.
+- vat_treatment and delivery_country are a pair: sending either replaces both (null clears), omitting both keeps the draft's. Changing them re-decides the VAT of the lines even without items: the current lines are rebuilt, so a draft whose lines carry 25 % cannot become an export of goods until its lines are 0 % (send items with vat_rate 0 or omitted). A draft that states its own treatment keeps it across edits that do not mention it, and falls back to the customer's treatment (the statement cleared) if a later customer change no longer supports it.
 - default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.
 - When items are replaced, the VAT treatment is decided again from the customer's current row (customer_type, vat_number validation, country), so it can differ from the draft's stored one: an eu_business whose country is SE gets Swedish VAT, never reverse charge. The 200 may carry meta.warnings about the treatment (same codes as POST /invoices: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, EU_BUSINESS_VAT_NUMBER_MISSING, EU_BUSINESS_COUNTRY_IS_SE, SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER, SWEDISH_VAT_TO_EXPORT_CUSTOMER). The update succeeded; the warning says why the rates are what they are.
 
@@ -342,6 +346,8 @@ Request body:
   notes?: string | unknown,
   default_dimensions?: Record<string, string>,
   payment_cash_account_id?: string | unknown,
+  vat_treatment?: "standard" | "export" | "reverse_charge" | null,
+  delivery_country?: string | null,
   items?: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number | null, vat_rate?: number, article_id?: string | null, revenue_account?: string | null, sales_order_item_id?: string | null, deduction_type?: "rot" | "rut" | null, labor_hours?: number | null, work_type?: string | null, housing_designation?: string | null, apartment_number?: string | null, brf_org_number?: string | "" | null, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[]
 }
 ```
@@ -448,6 +454,74 @@ Example response `200`:
   "data": {
     "cancelled": true,
     "invoice_number": "2026-0042"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/invoices/{id}/book`
+
+**Book a sent customer invoice that was issued without a verifikat (the deferred Bokför step).**
+`scope:invoices:write · risk:high · idempotent · dry-run`
+
+For companies with defer_invoice_booking=true (Registrera men bokför inte): :send and :mark-sent issue the invoice without posting anything, and this step posts the revenue verifikat afterwards (Debit 1510 Kundfordringar / Credit revenue per VAT rate + utgående moms; ROT/RUT share on 1513; periodiserade lines on 29xx with their schedules). Dated on the invoice date. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The delivered PDF, if archived at send, is linked to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.
+
+**Use when:** A customer invoice is sent or overdue, has no journal_entry_id, and the company books invoices in a separate step (defer_invoice_booking), typically after someone has checked the kontering.
+**Do not use for:** Drafts (issue them with :send or :mark-sent first), paid invoices (their payment already booked the sale in full), credit notes, quotes, proformas or delivery notes, or any invoice under kontantmetoden (booked at payment).
+
+**Pitfalls:**
+- An invoice that already has a journal_entry_id answers 400 INVOICE_BOOK_ALREADY_BOOKED.
+- Status other than sent or overdue answers 400 INVOICE_BOOK_INVALID_STATUS with details.currentStatus.
+- Under kontantmetoden answers 400 INVOICE_BOOK_CASH_METHOD: nothing books before payment.
+- A locked or closed period, or an invoice date on or before the company lock date (bookkeeping_locked_through), answers 400 PERIOD_LOCKED with details.reason, details.fiscal_period_id and details.invoice_date. Nothing is generated, so no voucher number is spent: unlock the period (only if the user asked for that correction) and retry.
+- No open fiscal year covering the invoice date answers 400 INVOICE_BOOK_NO_FISCAL_PERIOD: create the räkenskapsår first.
+- A posted verifikat is permanent: undo a wrong booking with storno (POST /journal-entries/{id}/reverse), never by editing.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice: { id: string, invoice_number: string | null, status: string, invoice_date: string, due_date: string | null, currency: string, total: number, journal_entry_id: string | null },
+    journal_entry_id: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice": {
+      "id": "7d1e…",
+      "invoice_number": "F-1042",
+      "status": "sent",
+      "invoice_date": "2026-09-10",
+      "due_date": "2026-10-10",
+      "currency": "SEK",
+      "total": 12500,
+      "journal_entry_id": "9a0b…"
+    },
+    "journal_entry_id": "9a0b…"
   },
   "meta": {
     "request_id": "req_…",
@@ -631,9 +705,9 @@ Example response `200`:
 **Transition a draft invoice to sent (without emailing).**
 `scope:invoices:write · risk:medium · idempotent · dry-run`
 
-Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful dashboard Peppol send: that flow issues the invoice itself. If the dashboard reports that the invoice was sent via Peppol but could not be marked as sent (the send response carried issuance.ok=false and the invoice is still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending lives in the dashboard invoice page behind a per-company access grant (requested under Inställningar > Fakturering (Settings > Invoicing); aktiebolag senders, standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions); a v1 or MCP Peppol send action is not yet available. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
+Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful Peppol send (POST /invoices/{id}/send-peppol, gnubok_send_invoice_peppol or the dashboard): that flow issues the invoice itself. If a Peppol send reports that the invoice was sent but could not be marked as sent (issuance.ok=false with warning PEPPOL_SENT_NOT_ISSUED, invoice still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending needs a per-company access grant (POST /peppol/access-request, or Inställningar > Fakturering (Settings > Invoicing) in the dashboard; check an invoice with GET /invoices/{id}/peppol): senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT); under defer_invoice_booking the invoice is marked sent without a verifikat and is booked afterwards with POST /invoices/{id}/book. Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
 
-**Use when:** You delivered the invoice through a channel other than Accounted's email or a successful dashboard Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted; or a dashboard Peppol send was accepted by the network but reported that the invoice could not be marked as sent.
+**Use when:** You delivered the invoice through a channel other than Accounted's email or Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted; or a Peppol send was accepted by the network but reported that the invoice could not be marked as sent.
 **Do not use for:** Sending the invoice via Accounted email: use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid: use :mark-paid (PR-B-2b-2).
 
 **Pitfalls:**
@@ -711,6 +785,185 @@ Returns the invoice as application/pdf. The descriptive filename contains compan
 | `id` | path | `string` | yes |  |
 
 Response `200` (`application/pdf`).
+
+---
+
+### `GET /api/v1/companies/{companyId}/invoices/{id}/peppol`
+
+**Check whether a customer invoice can be sent over Peppol, to which participant, and what is missing.**
+`scope:invoices:read · risk:low · idempotent`
+
+Runs every gate the Peppol send applies, as reads, and lists each failing one: the access point is configured, the company is not the demo company, the operators granted Peppol access and sends remain, the invoice is a plain invoice in draft/sent/overdue, a draft can be issued (payee account), and the BIS Billing 3 document builds (EN 16931 + Sweden CIUS preflight). Answers the sender and recipient participant ids (0007 + org number). The recipient's registration in the Peppol network is not looked up here: the send does that on commit.
+
+**Use when:** Before POST /invoices/{id}/send-peppol, to fix what is missing (a buyer reference, a Bankgiro, the org number) instead of learning it from a refused send.
+**Do not use for:** Downloading the UBL XML (the dashboard export) or reading past transmissions (GET /invoices/{id}/peppol/deliveries).
+
+**Pitfalls:**
+- ready=true means nothing on Accounted's side stops the send; the buyer can still be unregistered in Peppol, which the send answers as 422 PEPPOL_RECIPIENT_NOT_REACHABLE.
+- A draft without a number is validated with a placeholder number: the real F-series number is allocated only when the send commits.
+- PEPPOL_ACCESS_REQUIRED means the company has not been granted Peppol: request it with POST /peppol/access-request.
+- Peppol here is BIS Billing 3: senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only (no credit notes, quotes, proformas or self-billing), Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 %, no ROT/RUT deductions. Anything else is listed as a blocker.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice_id: string,
+    invoice_number: string | null,
+    invoice_status: string,
+    ready: boolean,
+    will_issue_invoice: boolean,
+    sender: { scheme: string, identifier: string } | null,
+    recipient: { scheme: string, identifier: string } | null,
+    transport: { available: boolean, provider: string | null, reason: string | null },
+    access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null },
+    blockers: { code: string, field: string | null, message_sv: string, message_en: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice_id": "7d1e…",
+    "invoice_number": "F-1042",
+    "invoice_status": "sent",
+    "ready": false,
+    "will_issue_invoice": false,
+    "sender": {
+      "scheme": "0007",
+      "identifier": "5560160680"
+    },
+    "recipient": {
+      "scheme": "0007",
+      "identifier": "5566778899"
+    },
+    "transport": {
+      "available": true,
+      "provider": "qvalia",
+      "reason": null
+    },
+    "access": {
+      "status": "enabled",
+      "send_enabled": true,
+      "max_sends": 50,
+      "sent_count": 3,
+      "remaining_sends": 47
+    },
+    "blockers": [
+      {
+        "code": "BUYER_REFERENCE_REQUIRED",
+        "field": "invoice.your_reference",
+        "message_sv": "Märkning eller Er referens krävs för Peppol när inköpsordernummer saknas.",
+        "message_en": "A marking or buyer reference is required for Peppol when no purchase order reference is available."
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/invoices/{id}/peppol/deliveries`
+
+**List an invoice's Peppol deliveries and their network status.**
+`scope:invoices:read · risk:low · idempotent`
+
+Every document staged for the Peppol network for this invoice, newest first, with its lifecycle status (staged through submission_accepted, transport_succeeded and the buyer's business response), the access point's submission id and the SHA-256 of the exact XML. Also answers whether sending is available in this environment and the company's access grant. Status updates arrive asynchronously from the access point.
+
+**Use when:** After a send, to follow the delivery, or before resending, to see whether the invoice already went out.
+**Do not use for:** Checking whether an invoice can be sent (GET /invoices/{id}/peppol) or email deliveries.
+
+**Pitfalls:**
+- submission_accepted means the access point took the document, not that the buyer received it; transport_succeeded and business_accepted come later.
+- A delivery in retryable_failure, failed or no_route can be resent with POST /invoices/{id}/send-peppol (a failed one as a new delivery that replaces its submission); a business_rejected one cannot: the buyer refused the invoice.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice_id: string,
+    deliveries: { delivery_id: string, idempotency_key: string, recipient_scheme: string, recipient_identifier: string, xml_sha256: string, provider: string | null, provider_submission_id: string | null, status: string, status_at: string, status_detail: string | null, submitted_at: string | null, terminal_at: string | null }[],
+    transport: { available: boolean, provider: string | null, reason: string | null },
+    access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice_id": "7d1e…",
+    "deliveries": [
+      {
+        "delivery_id": "2b9c…",
+        "idempotency_key": "5e3f…",
+        "recipient_scheme": "0007",
+        "recipient_identifier": "5566778899",
+        "xml_sha256": "a3f1…",
+        "provider": "qvalia",
+        "provider_submission_id": "int-1",
+        "status": "transport_succeeded",
+        "status_at": "2026-09-26T10:01:00Z",
+        "status_detail": null,
+        "submitted_at": "2026-09-26T10:00:02Z",
+        "terminal_at": null
+      }
+    ],
+    "transport": {
+      "available": true,
+      "provider": "qvalia",
+      "reason": null
+    },
+    "access": {
+      "status": "enabled",
+      "send_enabled": true,
+      "receive_enabled": false,
+      "max_sends": 50,
+      "sent_count": 3,
+      "remaining_sends": 47
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
 
 ---
 
@@ -801,9 +1054,9 @@ Example response `200`:
 **Send a draft invoice to the customer by email.**
 `scope:invoices:write · risk:high · idempotent · dry-run`
 
-The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via the email extension (Resend or SMTP; PDF attachment, copy to company) → flip status to sent → post journal entry (real invoice, unless kontantmetoden or defer_invoice_booking) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.
+The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → issue: flip status to sent and post the journal entry (real invoice, unless kontantmetoden or defer_invoice_booking; a deferred invoice is booked afterwards with POST /invoices/{id}/book) BEFORE the email, fail closed → email via the email extension (Resend or SMTP; PDF attachment, copy to company) → archive PDF as underlag → emit invoice.sent. A refused journal entry returns the engine's error and nothing is sent; post-email failures surface as warnings.
 
-**Use when:** You want Accounted to deliver the invoice to the customer via email. Peppol e-invoices are sent from the invoice page in the dashboard (per-company access grant requested under Inställningar > Fakturering (Settings > Invoicing); aktiebolag senders, standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions); a v1 or MCP Peppol send action is not yet available. A successful dashboard Peppol send issues the invoice itself, so do not call :mark-sent after it; only if the dashboard reports that the invoice was sent via Peppol but could not be marked as sent does :mark-sent complete the issuance. For invoices delivered through another channel (an external e-invoice provider, postal, own SMTP) use :mark-sent instead.
+**Use when:** You want Accounted to deliver the invoice to the customer via email. Peppol e-invoices go through POST /invoices/{id}/send-peppol (check readiness first with GET /invoices/{id}/peppol; per-company access grant requested with POST /peppol/access-request or under Inställningar > Fakturering (Settings > Invoicing); senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions). A successful Peppol send issues the invoice itself, so do not call :mark-sent after it; only if it reports that the invoice was sent via Peppol but could not be marked as sent (issuance.ok=false) does :mark-sent complete the issuance. For invoices delivered through another channel (an external e-invoice provider, postal, own SMTP) use :mark-sent instead.
 **Do not use for:** Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (no F-series lifecycle). Sending a credit note (use the :credit endpoint to issue the kreditfaktura; subsequent re-send of the credit note via :mark-sent is the supported path).
 
 **Pitfalls:**
@@ -811,8 +1064,9 @@ The full send pipeline: preflight PDF render → allocate F-series number atomic
 - Email service must be configured: without RESEND_API_KEY + RESEND_FROM_EMAIL (or an SMTP relay via EMAIL_PROVIDER=smtp) the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.
 - Customer must have an email address. 400 INVOICE_SEND_NO_CUSTOMER_EMAIL otherwise.
 - A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED): its F-series number is preserved for compliance but the document is not a valid faktura.
-- Email failure before the status flip leaves the F-series number consumed but the invoice in `draft` status. Same orphan window as :mark-sent (architecturally tracked, matches internal route).
-- After the email succeeds, journal-entry/archive/event failures become warnings on the response; the invoice IS marked sent regardless.
+- The journal entry is posted before the email leaves: a refusal (400 MANDATORY_DIMENSION_MISSING or DIMENSION_VALIDATION_FAILED, a locked period, ...) returns the engine's error, the invoice stays in `draft` and no email is sent. Fix the tag or the period and send again.
+- Email failure with nothing booked (kontantmetoden, deferred booking, proforma) returns 502 INVOICE_SEND_PROVIDER_FAILED with the invoice back in `draft`; the F-series number stays consumed (same orphan window as :mark-sent). Email failure after the journal entry posted returns 502 INVOICE_SEND_ISSUED_NOT_DELIVERED: the invoice stays issued (`sent`, booked, PDF archived) and must be delivered another way; do not call :send again.
+- After the email succeeds, archive-link/event failures become warnings on the response.
 - additional_cc and additional_bcc require the API key user to be an owner or admin of the company.
 - The deprecated cc response field contains only the first address. Use cc_addresses for the complete CC list.
 - BCC recipients are retained only in the restricted delivery archive and are omitted from normal and dry-run responses.
@@ -892,6 +1146,189 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/invoices/{id}/send-peppol`
+
+**Send a customer invoice as a Peppol e-invoice (BIS Billing 3) through the access point.**
+`scope:invoices:write · risk:high · idempotent · dry-run`
+
+Builds the BIS Billing 3 UBL document, stages it as a delivery (retained with the invoice's fiscal year), looks the buyer up in the Peppol network and submits it. A draft is numbered first (the number is in the document) and issued before the network gets it (status sent, verifikat under faktureringsmetoden); once the network accepted it the PDF is archived as underlag, as :mark-sent does. Resending the exact same document while its delivery is live replays the first submission instead of transmitting twice; after a failed delivery it is sent again as a new delivery that replaces the failed submission at the access point, and counts as a send. The dry run validates everything as reads and contacts no network.
+
+**Use when:** The buyer receives e-invoices over Peppol (typically public sector, where Lag 2018:1277 requires it, or a company that asks for it) and GET /invoices/{id}/peppol shows no blockers.
+**Do not use for:** Emailing the invoice (POST /invoices/{id}/send), recording one delivered another way (:mark-sent), credit notes, quotes or proformas.
+
+**Pitfalls:**
+- Needs the company's Peppol access grant: 403 PEPPOL_ACCESS_REQUIRED until the operators enable it (POST /peppol/access-request), 409 PEPPOL_SEND_LIMIT_REACHED once the sending cap is used.
+- A buyer not registered in Peppol answers 422 PEPPOL_RECIPIENT_NOT_REACHABLE and nothing is transmitted; a failed lookup answers 502 PEPPOL_LOOKUP_FAILED and is safe to retry.
+- 422 PEPPOL_SUBMISSION_REJECTED is the access point's verdict on the document and ends the delivery (failed): fix what the reason names and send again, which stages a new delivery; once issued, a correction of the invoice itself is a credit note plus a new invoice.
+- 502 PEPPOL_SUBMISSION_FAILED and 409 PEPPOL_SEND_PRECONDITION_FAILED leave the delivery resendable: retry later or fix the Peppol settings.
+- When the invoice stays issued after the failure (issued before this send, or a draft booked on issue) the codes are 422 PEPPOL_SUBMISSION_REJECTED_AFTER_ISSUE and 502 PEPPOL_SUBMISSION_FAILED_AFTER_ISSUE, with details.invoice_status and details.journal_entry_id: the invoice is issued, so resend it or deliver the PDF another way.
+- 409 PEPPOL_DUPLICATE_INVOICE_NUMBER: the access point already holds an invoice with this number for this recipient (ends the delivery). 409 PEPPOL_BUSINESS_REJECTED: the buyer refused the invoice via Peppol; it is not sent again, credit it and create a new invoice. 409 CONNECTOR_PEPPOL_RESEND_NOT_FAILED: a resend was refused because the access point has not reported the earlier delivery as failed (nothing is sent).
+- A draft whose verifikat the engine refuses (400 MANDATORY_DIMENSION_MISSING or DIMENSION_VALIDATION_FAILED, a locked period, ...) is not transmitted: the engine's error comes back and the invoice stays in draft. If the network then fails to take a draft that was booked on issue, the invoice stays issued (details.invoice_status sent) and can be resent.
+- An invoice date outside every fiscal year answers 422 PEPPOL_FISCAL_PERIOD_MISSING (the delivery needs its retention basis).
+- Peppol here is BIS Billing 3: senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only (no credit notes, quotes, proformas or self-billing), Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 %, no ROT/RUT deductions. Anything else is listed as a blocker.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice_id: string,
+    invoice_number: string | null,
+    invoice_status: string,
+    network_submitted: true,
+    already_submitted: boolean,
+    delivery: { delivery_id: string, idempotency_key: string, recipient_scheme: string, recipient_identifier: string, xml_sha256: string, provider: string | null, provider_submission_id: string | null, status: string, status_at: string, status_detail: string | null, submitted_at: string | null, terminal_at: string | null },
+    recipient: { scheme: string, identifier: string } | null,
+    journal_entry_id: string | null,
+    issuance: { ok: true, partial_failures: unknown[] } | { ok: false, error_code: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice_id": "7d1e…",
+    "invoice_number": "F-1042",
+    "invoice_status": "sent",
+    "network_submitted": true,
+    "already_submitted": false,
+    "delivery": {
+      "delivery_id": "2b9c…",
+      "idempotency_key": "5e3f…",
+      "recipient_scheme": "0007",
+      "recipient_identifier": "5566778899",
+      "xml_sha256": "a3f1…",
+      "provider": "qvalia",
+      "provider_submission_id": "int-1",
+      "status": "submission_accepted",
+      "status_at": "2026-09-26T10:00:02Z",
+      "status_detail": null,
+      "submitted_at": "2026-09-26T10:00:02Z",
+      "terminal_at": null
+    },
+    "recipient": {
+      "scheme": "0007",
+      "identifier": "5566778899"
+    },
+    "journal_entry_id": "9a0b…",
+    "issuance": {
+      "ok": true,
+      "partial_failures": []
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/invoices/bulk-book`
+
+**Book many customer invoices in one call, each with its own outcome.**
+`scope:invoices:write · risk:high · idempotent · dry-run`
+
+The bulk Bokför of the invoice list. Per invoice id (at most 200, duplicates processed once): a sent or overdue invoice without a verifikat gets the same revenue verifikat as POST /invoices/{id}/book; a draft is issued and booked like :mark-sent (F-series number allocated, marked sent WITHOUT email, verifikat posted, PDF archived, invoice.sent emitted), but only when the company books at issue: under defer_invoice_booking a draft fails with INVOICE_BOOK_DEFERRED_DRAFT and is not touched. Partial success: items are booked one by one in order, a failed item never stops the others and never undoes the ones before it, and the answer is 200 with one result per unique id plus a summary. Only whole-batch preconditions fail the request (kontantmetoden, unreadable settings). Idempotent. Dry-runnable: the dry run answers per item what would happen, with the lines, and writes nothing.
+
+**Use when:** Several invoices are waiting to be booked (the unbooked list, or MCP-created drafts in a company that books at issue) and the user wants them booked together.
+**Do not use for:** Sending invoices to customers (no email is sent here: use :send), paid invoices, credit notes, or kontantmetoden companies.
+
+**Pitfalls:**
+- Check data.summary.failed and each data.results[].error_code: a 200 does not mean every invoice was booked.
+- Under kontantmetoden the whole request answers 400 INVOICE_BOOK_CASH_METHOD.
+- Per-item codes mirror POST /invoices/{id}/book (INVOICE_NOT_FOUND, INVOICE_BOOK_ALREADY_BOOKED, INVOICE_BOOK_INVALID_STATUS, INVOICE_BOOK_NOT_BOOKABLE, INVOICE_BOOK_DEFERRED_DRAFT, PERIOD_LOCKED, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_CONFLICT) plus the issuance codes for drafts (INVOICE_SEND_PAYMENT_ACCOUNT_MISSING, INVOICE_SEND_VAT_NUMBER_MISSING, INVOICE_MARK_SENT_*).
+- A draft that is issued consumes its F-number even if a later step fails; a locked period is checked first, so a lock never costs a number.
+- A retried call with a new Idempotency-Key is safe: booked invoices answer INVOICE_BOOK_ALREADY_BOOKED per item.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ invoice_ids: string[] }
+```
+
+Example request:
+```json
+{
+  "invoice_ids": [
+    "7d1e…",
+    "8e2f…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    results: { id: string, status: "booked" | "failed", journal_entry_id?: string | null, error_code?: string, error?: string }[],
+    summary: { total: number, booked: number, failed: number }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "results": [
+      {
+        "id": "7d1e…",
+        "status": "booked",
+        "journal_entry_id": "9a0b…"
+      },
+      {
+        "id": "8e2f…",
+        "status": "failed",
+        "error_code": "INVOICE_BOOK_INVALID_STATUS",
+        "error": "Endast skickade eller förfallna fakturor kan bokföras i efterhand."
+      }
+    ],
+    "summary": {
+      "total": 2,
+      "booked": 1,
+      "failed": 1
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/invoices/bulk-create`
 
 **Create up to 50 draft invoices in one call (partial-success).**
@@ -908,6 +1345,7 @@ Bulk-creation endpoint. Each invoice in the request array is validated and inser
 - Each per-item invoice still goes through the same VAT-rule validation as POST /invoices. A mismatched per-item vat_rate produces a per-item failure, not a whole-batch failure.
 - Currency conversion is best-effort PER ITEM. A failed Riksbanken fetch leaves that item's SEK columns null but does NOT fail the item.
 - Quotes (document_type: quote) are refused per item as VALIDATION_ERROR: a quote carries its own OF-number, valid_until and quote_status. Create quotes one at a time with POST /invoices.
+- A per-invoice VAT treatment (vat_treatment, delivery_country) is refused per item as VALIDATION_ERROR: create those invoices one at a time with POST /invoices.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -917,7 +1355,7 @@ Bulk-creation endpoint. Each invoice in the request array is validated and inser
 Request body:
 ```ts
 {
-  invoices: { customer_id: string, invoice_date: string, due_date: string, delivery_date?: string | "", currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF", document_type?: "invoice" | "proforma" | "delivery_note" | "quote", valid_until?: string | "", your_reference?: string, our_reference?: string, invoice_marking?: string, notes?: string, payment_link_url?: string | "", payment_link_auto?: boolean, deduction_personnummer?: string, deduction_housing_designation?: string, deduction_apartment_number?: string, deduction_brf_org_number?: string | "", save_as_draft?: boolean, ore_rounding?: boolean, default_dimensions?: Record<string, string>, is_self_billed?: boolean, external_invoice_number?: string | "", self_billing_agreement_ref?: string, received_date?: string | "", payment_cash_account_id?: string | "" | null, items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number | null, vat_rate?: number, article_id?: string | null, revenue_account?: string | null, sales_order_item_id?: string | null, deduction_type?: "rot" | "rut" | null, labor_hours?: number | null, work_type?: string | null, housing_designation?: string | null, apartment_number?: string | null, brf_org_number?: string | "" | null, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[] }[],
+  invoices: { customer_id: string, invoice_date: string, due_date: string, delivery_date?: string | "", currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF", document_type?: "invoice" | "proforma" | "delivery_note" | "quote", valid_until?: string | "", your_reference?: string, our_reference?: string, invoice_marking?: string, notes?: string, payment_link_url?: string | "", payment_link_auto?: boolean, deduction_personnummer?: string, deduction_housing_designation?: string, deduction_apartment_number?: string, deduction_brf_org_number?: string | "", save_as_draft?: boolean, ore_rounding?: boolean, default_dimensions?: Record<string, string>, is_self_billed?: boolean, external_invoice_number?: string | "", self_billing_agreement_ref?: string, received_date?: string | "", payment_cash_account_id?: string | "" | null, vat_treatment?: "standard" | "export" | "reverse_charge" | null, delivery_country?: string | null, items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number | null, vat_rate?: number, article_id?: string | null, revenue_account?: string | null, sales_order_item_id?: string | null, deduction_type?: "rot" | "rut" | null, labor_hours?: number | null, work_type?: string | null, housing_designation?: string | null, apartment_number?: string | null, brf_org_number?: string | "" | null, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[] }[],
   all_or_nothing?: boolean
 }
 ```

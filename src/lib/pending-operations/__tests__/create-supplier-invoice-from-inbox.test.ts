@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase, makeJournalEntry, makeSupplierInvoice } from '@/tests/helpers'
-import type { PendingOperation } from '@/types'
+import type { PendingOperation, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async () => {
   const actual = await vi.importActual<typeof import('@/lib/bookkeeping/supplier-invoice-entries')>(
@@ -33,7 +33,10 @@ vi.mock('@/lib/core/documents/document-service', async () => {
 })
 
 import { commitPendingOperation } from '../commit'
-import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import {
+  buildSupplierInvoiceRegistrationEntryInput,
+  createSupplierInvoiceRegistrationEntry,
+} from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 
 function makePendingOp(overrides: Partial<PendingOperation> = {}): PendingOperation {
@@ -91,6 +94,35 @@ beforeEach(() => {
 })
 
 describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
+  // Issue #2980: a credit note is never a payable of its own, whichever way
+  // the operation was staged (before the item read as one, or by hand).
+  it.each([
+    ['the item reads as a credit note', { documentKind: 'credit_note', totals: { total: 1250 } }, {}],
+    ['the item has a negative net and VAT', { documentKind: 'supplier_invoice', totals: { subtotal: -1000, vatAmount: -250, total: 1250 } }, {}],
+    ['the staged amounts are negative', { documentKind: 'supplier_invoice', totals: { total: 1250 } }, { subtotal: -1000, vat_amount: -250, total: -1250 }],
+  ])('refuses the commit when %s, and registers nothing', async (_label, extracted, paramOverrides) => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // dispatcher CAS claim
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready', kind_hint: null, extracted_data: extracted },
+      error: null,
+    }) // inbox fetch
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const base = makePendingOp()
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { ...base.params, ...paramOverrides } }),
+    )
+
+    expect(result.status).not.toBe('committed')
+    expect(result.code).toBe('INBOX_ITEM_IS_CREDIT_NOTE')
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+    expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
   it('happy path (accrual): inserts invoice + items + JE, links document, marks inbox confirmed', async () => {
     vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(
       makeJournalEntry({ id: 'je-100', voucher_number: 7, voucher_series: 'L' })
@@ -110,13 +142,13 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
       error: null,
     }) // supplier fetch
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 42, error: null }) // get_next_arrival_number RPC
     enqueue({
       data: makeSupplierInvoice({ id: 'inv-1', supplier_invoice_number: 'INV-100' }),
       error: null,
     }) // supplier_invoices insert
     enqueue({ data: null, error: null }) // supplier_invoice_items insert
-    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: null, error: null }) // supplier_invoices update with JE id
     enqueue({ data: null, error: null }) // invoice_inbox_items update
     enqueue({ data: null, error: null }) // dispatcher's commit update
@@ -221,6 +253,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 42, error: null }) // arrival number
     enqueue({
       data: null,
@@ -251,13 +284,13 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'cash' }, error: null }) // company_settings → cash
     enqueue({ data: 42, error: null }) // arrival number
     enqueue({
       data: makeSupplierInvoice({ id: 'inv-cash', supplier_invoice_number: 'INV-100' }),
       error: null,
     }) // invoice insert
     enqueue({ data: null, error: null }) // items insert
-    enqueue({ data: { accounting_method: 'cash' }, error: null }) // company_settings → cash
     enqueue({ data: null, error: null }) // invoice_inbox_items update
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
@@ -310,10 +343,10 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
       error: null,
     }) // supplier fetch
+    enqueue({ data: { accounting_method: 'cash' }, error: null }) // company_settings → cash
     enqueue({ data: 42, error: null }) // arrival number
     // supplier_invoices insert handled by the override above
     enqueue({ data: null, error: null }) // items insert
-    enqueue({ data: { accounting_method: 'cash' }, error: null }) // company_settings → cash
     enqueue({ data: null, error: null }) // invoice_inbox_items update
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
@@ -341,6 +374,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 42, error: null })
     enqueue({
       data: makeSupplierInvoice({ id: 'inv-doomed', supplier_invoice_number: 'INV-100' }),
@@ -427,6 +461,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'supplier-1', name: 'EU Vendor SA', supplier_type: 'eu_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 50, error: null }) // arrival number
     enqueue({
       data: makeSupplierInvoice({
@@ -438,7 +473,6 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       error: null,
     })
     // supplier_invoice_items.insert handled by the override above
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: null, error: null }) // supplier_invoices update with JE id
     enqueue({ data: null, error: null }) // invoice_inbox_items update
     enqueue({ data: null, error: null }) // dispatcher's commit update
@@ -509,6 +543,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'supplier-1', name: 'Anthropic, PBC', supplier_type: 'non_eu_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 51, error: null }) // arrival number
     enqueue({
       data: makeSupplierInvoice({
@@ -523,7 +558,6 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       error: null,
     })
     enqueue({ data: null, error: null }) // supplier_invoice_items insert
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: null, error: null }) // supplier_invoices update with JE id
     enqueue({ data: null, error: null }) // invoice_inbox_items update
     enqueue({ data: null, error: null }) // dispatcher's commit update
@@ -598,6 +632,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
         data: { id: 'supplier-1', name: 'Handelsbanken', supplier_type: 'swedish_business' },
         error: null,
       })
+      enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
       enqueue({ data: 53, error: null }) // arrival number
       enqueue({
         data: makeSupplierInvoice({
@@ -611,7 +646,6 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
         error: null,
       })
       enqueue({ data: null, error: null }) // supplier_invoice_items insert
-      enqueue({ data: { accounting_method: 'accrual' }, error: null })
       enqueue({ data: null, error: null }) // supplier_invoices update with JE id
       enqueue({ data: null, error: null }) // invoice_inbox_items update
       enqueue({ data: null, error: null }) // dispatcher's commit update
@@ -681,13 +715,13 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 52, error: null }) // arrival number
     enqueue({
       data: makeSupplierInvoice({ id: 'inv-dom', supplier_invoice_number: 'INV-100' }),
       error: null,
     })
     enqueue({ data: null, error: null }) // supplier_invoice_items insert
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: null, error: null }) // supplier_invoices update with JE id
     enqueue({ data: null, error: null }) // invoice_inbox_items update
     enqueue({ data: null, error: null }) // dispatcher's commit update
@@ -728,13 +762,13 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'cash' }, error: null }) // cash: skips the JE
     enqueue({ data: 42, error: null }) // arrival number
     enqueue({
       data: makeSupplierInvoice({ id: 'inv-pct', supplier_invoice_number: 'INV-100' }),
       error: null,
     })
     // supplier_invoice_items.insert handled by the override above
-    enqueue({ data: { accounting_method: 'cash' }, error: null }) // cash: skips the JE
     enqueue({ data: null, error: null }) // invoice_inbox_items update
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
@@ -820,13 +854,13 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 42, error: null })
     enqueue({
       data: makeSupplierInvoice({ id: 'inv-rollback', supplier_invoice_number: 'INV-X' }),
       error: null,
     })
     enqueue({ data: null, error: null }) // items insert succeeds
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     // JE throws: rollback path runs
     enqueue({ data: null, error: null }) // items delete
     enqueue({ data: null, error: null }) // parent delete
@@ -924,8 +958,8 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox: dimensions
       data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
       error: null,
     }) // supplier fetch
-    enqueue({ data: 42, error: null }) // arrival number RPC
     enqueue({ data: { accounting_method: 'cash' }, error: null }) // company_settings
+    enqueue({ data: 42, error: null }) // arrival number RPC
     enqueue({ data: null, error: null }) // invoice_inbox_items update
     enqueue({ data: null, error: null }) // dispatcher's commit update
   }
@@ -1026,13 +1060,13 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox honours def
       data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null }) // company_settings
     enqueue({ data: 42, error: null }) // arrival number
     enqueue({
       data: makeSupplierInvoice({ id: 'inv-deferred', supplier_invoice_number: 'INV-100' }),
       error: null,
     }) // invoice insert
     enqueue({ data: null, error: null }) // items insert
-    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null }) // company_settings
     enqueue({ data: null, error: null }) // invoice_inbox_items update
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
@@ -1096,6 +1130,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox: input viol
       data: { id: 'supplier-1', name: 'SEB', supplier_type: 'swedish_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 42, error: null }) // arrival number
     enqueue({
       data: null,
@@ -1135,6 +1170,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox: input viol
       data: { id: 'supplier-1', name: 'SEB', supplier_type: 'swedish_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 42, error: null }) // arrival number
     enqueue({
       data: null,
@@ -1169,6 +1205,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox: input viol
       data: { id: 'supplier-1', name: 'SEB', supplier_type: 'swedish_business' },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 42, error: null }) // arrival number
     enqueue({
       data: null,
@@ -1187,5 +1224,170 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox: input viol
     expect(result.http_status).toBe(500)
     expect(result.code).toBeUndefined()
     expect(result.error).toBe('Failed to create supplier invoice')
+  })
+})
+
+/**
+ * The registration verifikat the real generator builds from what the executor
+ * handed createSupplierInvoiceRegistrationEntry (only the fiscal-period lookup
+ * is stubbed), with the header the executor inserted.
+ */
+async function postedLines(insertedHeader: Record<string, unknown>) {
+  const [, , , invoice, items, supplierType, supplierName] =
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mock.calls[0]
+  const periodChain: unknown = new Proxy(
+    {},
+    {
+      get: (_t, prop) =>
+        prop === 'then'
+          ? (resolve: (v: unknown) => void) => resolve({ data: [{ id: 'period-1' }], error: null })
+          : () => periodChain,
+    },
+  )
+  const input = await buildSupplierInvoiceRegistrationEntryInput(
+    { from: () => periodChain } as never,
+    'company-1',
+    { ...invoice, ...insertedHeader } as SupplierInvoice,
+    items as SupplierInvoiceItem[],
+    supplierType,
+    supplierName,
+  )
+  return input!.lines
+}
+
+describe('commitPendingOperation: create_supplier_invoice_from_inbox for a non-VAT-registered company (feedback 708521)', () => {
+  // An op staged before the staging fix, or a tampered one: the seller's
+  // 2000 + 25 % as net plus VAT, for an ideell förening that can never
+  // reclaim the 500.
+  const netPlusVat = {
+    ...(makePendingOp().params as Record<string, unknown>),
+    supplier_invoice_number: '5571',
+    subtotal: 2000,
+    vat_amount: 500,
+    total: 2500,
+    items: [
+      {
+        line_number: 1,
+        description: 'Båtplats',
+        quantity: 1,
+        unit: 'st',
+        unit_price: 2000,
+        line_total: 2000,
+        account_number: '5010',
+        vat_rate: 0.25,
+        vat_amount: 500,
+      },
+    ],
+  }
+
+  function enqueueCommit(enqueue: ReturnType<typeof createQueuedMockSupabase>['enqueue'], vatRegistered: boolean) {
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null })
+    enqueue({ data: { id: 'supplier-1', name: 'Bryggleverantören AB', supplier_type: 'swedish_business' }, error: null })
+    enqueue({ data: { accounting_method: 'accrual', vat_registered: vatRegistered }, error: null }) // company_settings
+    enqueue({ data: 60, error: null }) // arrival number
+    enqueue({ data: makeSupplierInvoice({ id: 'inv-nr', supplier_invoice_number: '5571' }), error: null })
+    enqueue({ data: null, error: null }) // supplier_invoice_items insert
+    enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+  }
+
+  it('writes one cost row of 2500 at 0 %, a 2500 payable and no 2641', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(makeJournalEntry({ id: 'je-nr' }))
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueueCommit(enqueue, false)
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp({ params: netPlusVat }))
+
+    expect(result.status).toBe('committed')
+    const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(row).toMatchObject({
+      vat_treatment: 'standard_25',
+      subtotal: 2500,
+      vat_amount: 0,
+      total: 2500,
+      remaining_amount: 2500,
+      subtotal_sek: 2500,
+      vat_amount_sek: 0,
+      total_sek: 2500,
+    })
+    const [itemRows] = findCall('supplier_invoice_items', 'insert') as [Array<Record<string, unknown>>]
+    expect(itemRows).toHaveLength(1)
+    expect(itemRows[0]).toMatchObject({ account_number: '5010', unit_price: 2500, line_total: 2500, vat_rate: 0, vat_amount: 0 })
+
+    const lines = await postedLines(row)
+    expect(lines.find((l) => l.account_number === '2641')).toBeUndefined()
+    expect(lines.find((l) => l.account_number === '5010')?.debit_amount).toBe(2500)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(2500)
+  })
+
+  it('leaves a VAT-registered company unchanged: 2000 cost, 500 on 2641, 2500 payable', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(makeJournalEntry({ id: 'je-reg' }))
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueueCommit(enqueue, true)
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp({ params: netPlusVat }))
+
+    expect(result.status).toBe('committed')
+    const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(row).toMatchObject({ subtotal: 2000, vat_amount: 500, total: 2500, remaining_amount: 2500 })
+    const [itemRows] = findCall('supplier_invoice_items', 'insert') as [Array<Record<string, unknown>>]
+    expect(itemRows[0]).toMatchObject({ unit_price: 2000, line_total: 2000, vat_rate: 0.25, vat_amount: 500 })
+
+    const lines = await postedLines(row)
+    expect(lines.find((l) => l.account_number === '2641')?.debit_amount).toBe(500)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(2500)
+  })
+})
+
+describe('commitPendingOperation: create_supplier_invoice_from_inbox carries a staged öresavrundning (feedback 753539)', () => {
+  it('writes the 3740 row as staged, so 2440 is credited with the billed 444 192.00', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(makeJournalEntry({ id: 'je-ore' }))
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null })
+    enqueue({ data: { id: 'supplier-1', name: 'Grossisten AB', supplier_type: 'swedish_business' }, error: null })
+    enqueue({ data: { accounting_method: 'accrual', vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: 61, error: null }) // arrival number
+    enqueue({ data: makeSupplierInvoice({ id: 'inv-ore', supplier_invoice_number: '2026006' }), error: null })
+    enqueue({ data: null, error: null }) // supplier_invoice_items insert
+    enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const line = { quantity: 1, unit: 'st', account_number: '4010' }
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        params: {
+          ...(makePendingOp().params as Record<string, unknown>),
+          supplier_invoice_number: '2026006',
+          // As the tool stages it now: 353 191.16 + 25 % and 2 702.96 at 0 %
+          // come to 444 191.91; the 0.09 öresavrundning makes the billed total.
+          subtotal: 355894.21,
+          vat_amount: 88297.79,
+          total: 444192,
+          items: [
+            { ...line, line_number: 1, description: 'Rad 1', unit_price: 353191.16, line_total: 353191.16, vat_rate: 0.25, vat_amount: 88297.79 },
+            { ...line, line_number: 2, description: 'Rad 2', unit_price: 2702.96, line_total: 2702.96, vat_rate: 0, vat_amount: 0 },
+            { ...line, line_number: 3, description: 'Öresavrundning', unit_price: 0.09, line_total: 0.09, account_number: '3740', vat_rate: 0, vat_amount: 0 },
+          ],
+        },
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(row).toMatchObject({ subtotal: 355894.21, vat_amount: 88297.79, total: 444192, remaining_amount: 444192 })
+    const [itemRows] = findCall('supplier_invoice_items', 'insert') as [Array<Record<string, unknown>>]
+    expect(itemRows[2]).toMatchObject({ account_number: '3740', line_total: 0.09, vat_rate: 0, vat_amount: 0 })
+
+    const lines = await postedLines(row)
+    expect(lines.find((l) => l.account_number === '3740')?.debit_amount).toBe(0.09)
+    expect(lines.find((l) => l.account_number === '2641')?.debit_amount).toBe(88297.79)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(444192)
   })
 })

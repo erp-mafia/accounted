@@ -147,6 +147,17 @@ describe('one callback transaction', () => {
     expect(mocks.balance).not.toHaveBeenCalled()
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_granted' }))
   })
+  it("stamps the proxy's nonce so the finalize page runs under the proxy's CSP header too", async () => {
+    // A self-hosted `next start` delivers only the proxy's header (src/proxy.ts),
+    // so both inline scripts must carry the nonce that header trusts.
+    mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [account] })
+    const proxyNonce = 'cHJveHktbm9uY2UtMTIzNDU2Nzg='
+    const response = await GET(new Request(request().url, { headers: { 'x-nonce': proxyNonce } }))
+    const body = await response.text()
+    expect(response.headers.get('content-security-policy')).toContain(`script-src 'nonce-${proxyNonce}'`)
+    expect(body.split(`<script nonce="${proxyNonce}">`).length - 1).toBe(2)
+    expect(body).not.toMatch(/<script(?![^>]*nonce=)/)
+  })
   it('accepts an empty bank response and leaves the picker to report it', async () => {
     mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [] })
     expect((await complete()).body).toContain('select_accounts='); expect(plan().mirrors).toEqual([])
@@ -261,7 +272,9 @@ describe('account identity and standing choices', () => {
     cashRows = [{ id: 'cash', external_uid: 'old-card', ledger_account: '1935', currency: 'SEK', iban: null }]
     mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ uid: 'new-card', name: 'BOKIO_Debit_Business', currency: 'SEK' }] })
     await complete()
-    expect(plan()).toMatchObject({ noIbanPairs: { 'new-card': 'old-card' }, accounts: [{ enabled: false, dedup_scope: 'legacy-card', mirror_card_account: true }], mirrors: [{ uid: 'new-card', reuse_cash_account_id: 'cash' }] })
+    expect(plan()).toMatchObject({ noIbanPairs: { 'new-card': 'old-card' }, accounts: [{ enabled: false, dedup_scope: 'legacy-card' }], mirrors: [{ uid: 'new-card', reuse_cash_account_id: 'cash' }] })
+    // "Is a card account" is derived from name + no IBAN + no BBAN, never stored.
+    expect(plan().accounts[0]).not.toHaveProperty('mirror_card_account')
   })
   it.each(['two-prior', 'two-new', 'prior-iban'])('does not guess a no-IBAN pair with %s', async kind => {
     reconnect([{ uid: 'old', currency: 'SEK', ...(kind === 'prior-iban' ? { iban } : {}) }, ...(kind === 'two-prior' ? [{ uid: 'old-2', currency: 'SEK' }] : [])])
@@ -274,6 +287,38 @@ describe('account identity and standing choices', () => {
   })
 })
 
+// Feedback seq 753539: the bank reported the account currency as 'XXX' (ISO
+// 4217 "no currency"), it was stored verbatim, and no SEK transaction on the
+// account could be booked: the bank-booking guards look the account up by the
+// transaction's currency.
+describe('unknown provider currency', () => {
+  it.each(['XXX', 'xxx', '', undefined])('stores and mirrors a new account reported as %j under SEK', async currency => {
+    mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ ...account, currency }] })
+    await complete()
+    expect(plan().accounts[0].currency).toBe('SEK')
+    expect(plan().mirrors).toEqual([{ uid: 'a', ledger_account: '1930', reuse_cash_account_id: null }])
+    expect(mocks.resolve).toHaveBeenCalledWith(expect.anything(), row.company_id, row.user_id, expect.objectContaining({ currency: 'SEK' }))
+  })
+  it.each(['uid', 'iban'])('keeps the currency the account is already stored under, matched by %s', async matching => {
+    reconnect([{ uid: matching === 'uid' ? 'a' : 'old', currency: 'EUR', iban, enabled: false, dedup_scope: 'eur-scope' }])
+    mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ ...account, currency: 'XXX' }] })
+    await complete(); expect(plan().accounts[0]).toMatchObject({ currency: 'EUR', enabled: false, dedup_scope: 'eur-scope' })
+  })
+  it('meets a no-IBAN account stored as XXX before the fix instead of re-keying its history', async () => {
+    // finalize_bank_callback compares stored currencies strictly, so it refuses
+    // this pair until the repair rewrites the stored 'XXX'. The silent
+    // alternative, a fresh dedup scope that re-imports the history, must not
+    // be what this code sends.
+    reconnect([{ uid: 'old-card', name: 'PayPal', currency: 'XXX', enabled: true, dedup_scope: 'legacy-card' }])
+    cashRows = [{ id: 'cash', external_uid: 'old-card', ledger_account: '1940', currency: 'XXX', iban: null }]
+    mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ uid: 'new-card', name: 'PayPal', currency: 'XXX' }] })
+    await complete()
+    expect(plan()).toMatchObject({ noIbanPairs: { 'new-card': 'old-card' }, accounts: [{ currency: 'SEK', dedup_scope: 'legacy-card' }],
+      mirrors: [{ uid: 'new-card', ledger_account: '1940', reuse_cash_account_id: 'cash' }] })
+    expect(mocks.resolve).not.toHaveBeenCalled()
+  })
+})
+
 describe('cross-company and mirror-card defaults', () => {
   it.each(['claimed', 'deselected', 'lookup-failed', 'mirror-card'])('disables new %s accounts without allocating or mirroring', async reason => {
     if (reason === 'lookup-failed') mocks.crossCompany.mockResolvedValue(null)
@@ -283,7 +328,7 @@ describe('cross-company and mirror-card defaults', () => {
     await complete(); expect(plan().accounts[0].enabled).toBe(false); expect(plan().mirrors).toEqual([]); expect(mocks.resolve).not.toHaveBeenCalled()
     if (reason === 'claimed') expect(plan().accounts[0]).toMatchObject({ claimed_by_company_id: 'other', claimed_by_company_name: 'Other company' })
     if (reason === 'deselected') expect(plan().accounts[0].deselected_elsewhere).toBe(true)
-    if (reason === 'mirror-card') expect(plan().accounts[0].mirror_card_account).toBe(true)
+    if (reason === 'mirror-card') expect(plan().accounts[0]).not.toHaveProperty('mirror_card_account')
   })
   it.each([true, false])('preserves the standing enabled=%s choice when another company claims the IBAN', async enabled => {
     reconnect([{ uid: 'old', iban, currency: 'SEK', enabled }])
@@ -296,7 +341,10 @@ describe('cross-company and mirror-card defaults', () => {
     reconnect([{ uid: 'a', iban, currency: 'SEK', enabled: false, claimed_by_company_id: 'old-claim' }])
     await complete(); expect(plan().accounts[0]).not.toHaveProperty('claimed_by_company_id'); expect(plan().accounts[0].enabled).toBe(false)
   })
-  it.each([true, false])('preserves the user mirror-card choice enabled=%s', async enabled => {
+  // A card account switched on before the selection save refused it keeps its
+  // state through a renewal (finalize_bank_callback carries the prior row's
+  // flag); the next selection save is what turns it off.
+  it.each([true, false])('carries a card account\'s standing enabled=%s state through a renewal', async enabled => {
     reconnect([{ uid: 'a', currency: 'SEK', enabled }])
     mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ uid: 'a', currency: 'SEK', name: 'BOKIO_Debit_Business' }] })
     await complete(); expect(plan().accounts[0].enabled).toBe(enabled)

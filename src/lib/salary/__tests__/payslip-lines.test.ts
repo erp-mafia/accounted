@@ -478,3 +478,125 @@ describe('vacation_category on payslip lines', () => {
     expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
   })
 })
+
+describe('lines the calculation owns (#3185)', () => {
+  const draftRun = () => mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+
+  it.each(['overtime_50', 'overtime_100', 'ob_weekend', 'ob_night', 'sick_karens', 'vab', 'unpaid_leave'])(
+    'refuses a hand-added %s line before reading or writing anything',
+    async (itemType) => {
+      const result = await createPayslipLine(supabase, {
+        companyId: COMPANY_ID,
+        salaryRunId: RUN_ID,
+        target: { employeeId: EMPLOYEE_ID },
+        input: { ...BASE_INPUT, item_type: itemType as never },
+      })
+
+      expect(result).toEqual({ ok: false, code: 'SALARY_LINE_CALCULATED', details: { item_type: itemType } })
+      expect(mock.supabase.from).not.toHaveBeenCalled()
+    },
+  )
+
+  it('still adds a one-off övertid amount on item_type overtime', async () => {
+    draftRun()
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'overtime', description: 'Övertid 50 %' } })
+
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { employeeId: EMPLOYEE_ID },
+      input: { ...BASE_INPUT, item_type: 'overtime', description: 'Övertid 50 %', amount: 1800 },
+    })
+
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'insert')).toBeDefined()
+  })
+
+  it.each([
+    ['a derived OB row', { item_type: 'ob_night' }],
+    ['a derived sick row', { item_type: 'sick_day2_14' }],
+    ['a förmån row', { item_type: 'benefit_car', source_benefit_id: '11111111-1111-4111-8111-111111111111' }],
+    ['a recurring-line row', { item_type: 'net_deduction_union', source_recurring_line_id: '22222222-2222-4222-8222-222222222222' }],
+    ['the engine semesterersättning row', { item_type: 'semesterersattning', calculation_source: 'vacation_compensation' }],
+    ['the öresavrundning row', { item_type: 'oresavrundning' }],
+  ])('refuses editing %s, which the next calculation would overwrite', async (_label, fields) => {
+    draftRun()
+    mock.enqueue({ data: { ...EXISTING_LINE, ...fields } })
+
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { amount: 1234 },
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SALARY_LINE_CALCULATED',
+      details: { salary_line_item_id: LINE_ID, item_type: fields.item_type },
+    })
+    expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+  })
+
+  it('refuses a patch that turns a manual line into a calculated type, before reading anything', async () => {
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { item_type: 'overtime_100' },
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SALARY_LINE_CALCULATED',
+      details: { salary_line_item_id: LINE_ID, item_type: 'overtime_100' },
+    })
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('refuses deleting a derived row, which the next calculation would bring back', async () => {
+    draftRun()
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'sick_karens' } })
+
+    const result = await deletePayslipLine(supabase, { companyId: COMPANY_ID, salaryRunId: RUN_ID, lineId: LINE_ID })
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SALARY_LINE_CALCULATED',
+      details: { salary_line_item_id: LINE_ID, item_type: 'sick_karens' },
+    })
+    expect(mock.findCall('salary_line_items', 'delete')).toBeUndefined()
+  })
+
+  it('still deletes a hand-entered semesterersättning line (no calculation_source)', async () => {
+    draftRun()
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'semesterersattning', calculation_source: null } })
+    mock.enqueue({ data: null })
+
+    const result = await deletePayslipLine(supabase, { companyId: COMPANY_ID, salaryRunId: RUN_ID, lineId: LINE_ID })
+
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'delete')).toBeDefined()
+  })
+
+  it('reads the provenance columns but never returns them in the row', async () => {
+    draftRun()
+    mock.enqueue({ data: { ...EXISTING_LINE, calculation_source: null, source_benefit_id: null, source_recurring_line_id: null } })
+
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { amount: 5500 },
+      dryRun: true,
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data).not.toHaveProperty('calculation_source')
+      expect(result.data).not.toHaveProperty('source_benefit_id')
+      expect(result.data).not.toHaveProperty('source_recurring_line_id')
+    }
+  })
+})

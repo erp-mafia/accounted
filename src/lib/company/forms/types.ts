@@ -53,6 +53,12 @@ export interface LegalFormProfile {
     closingName: string
     /** Account the prior year's result is moved to at the next year start; null when the form closes straight into equity. */
     priorYearCarry: string | null
+    /**
+     * Account earlier years' results are balanced to once the annual meeting
+     * has decided (balanserat resultat): AB 2091, förening 2067. An enskild
+     * firma keeps them on its equity account.
+     */
+    retained: string
     /** Whether someone owns the company (egna uttag, aktieägare). A förening has members, not owners. */
     hasOwners: boolean
     /** Money settled with the owner or member: EF 2013/2018, AB 2893, förening 2890. */

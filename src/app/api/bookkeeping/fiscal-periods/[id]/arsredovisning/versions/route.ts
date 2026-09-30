@@ -1,36 +1,12 @@
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { createServiceClient } from '@/lib/supabase/server'
-import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
-import { buildCanonicalAnnualReport } from '@/lib/bokslut/arsredovisning/model'
-import {
-  createAnnualReportVersion,
-  hasStatementIntegrityErrors,
-  listAnnualReportVersions,
-} from '@/lib/bokslut/arsredovisning/version-service'
-
-const PostSchema = z
-  .object({
-    action: z.enum(['snapshot', 'finalize']),
-    certificate_signer: z
-      .object({
-        first_name: z.string().min(1).max(100),
-        last_name: z.string().min(1).max(100),
-        role: z.enum([
-          'Styrelseledamot',
-          'Styrelseordförande',
-          'VD',
-          'Verkställande direktör',
-        ]),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict()
+import { listAnnualReportVersions } from '@/lib/bokslut/arsredovisning/version-service'
+import { VersionCreateSchema } from '@/lib/bokslut/arsredovisning/workflow-schemas'
+import { createArsredovisningVersion } from '@/lib/bokslut/arsredovisning/workflow-service'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 async function ownsPeriod(
   supabase: SupabaseClient,
@@ -63,55 +39,27 @@ export const GET = withRouteContext(
   },
 )
 
+/**
+ * Freeze a version. The rules (a complete import-free read, statements that
+ * tie, signing-stage checks for finalize, the service-role finalize RPC) live
+ * in workflow-service.ts, shared with operation arsredovisning.create-version.
+ */
 export const POST = withRouteContext(
   'period.arsredovisning_versions_create',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
     const { user, supabase, companyId, log, requestId } = ctx
-    const validation = await validateBody(request, PostSchema)
+    const validation = await validateBody(request, VersionCreateSchema)
     if (!validation.success) return validation.response
-    try {
-      if (!(await ownsPeriod(supabase, companyId, id))) {
-        return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
-      }
-      const signer = validation.data.certificate_signer
-      // Verify the complete live read before persisting anything immutable.
-      // A later import cannot change this captured model: version creation
-      // and signature preparation never re-read its financial balances.
-      const model = await withSIEPeriodRead(supabase, companyId, 'report_export', () =>
-        buildCanonicalAnnualReport(supabase, companyId, id, {
-          stage: validation.data.action === 'finalize' ? 'signing' : 'draft',
-          undertecknare: signer
-            ? {
-                firstName: signer.first_name,
-                lastName: signer.last_name,
-                role: signer.role,
-              }
-            : undefined,
-        }),
-      )
-      if (hasStatementIntegrityErrors(model)) {
-        return errorResponseFromCode('ARSREDOVISNING_INCOMPLETE', log, {
-          requestId,
-          details: model.validation,
-        })
-      }
-      if (validation.data.action === 'finalize' && !model.validation.ok) {
-        return errorResponseFromCode('ARSREDOVISNING_INCOMPLETE', log, {
-          requestId,
-          details: model.validation,
-        })
-      }
-      const data = await createAnnualReportVersion(
-        validation.data.action === 'finalize' ? createServiceClient() : supabase,
-        user.id,
-        model,
-        validation.data.action === 'finalize',
-      )
-      return NextResponse.json({ data }, { status: 201 })
-    } catch (err) {
-      return errorResponse(err, log, { requestId })
-    }
+    const outcome = await createArsredovisningVersion(
+      { supabase, companyId, userId: user.id, log },
+      id,
+      validation.data,
+      { dryRun: false },
+    )
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data }, { status: 201 })
   },
   { requireWrite: true },
 )

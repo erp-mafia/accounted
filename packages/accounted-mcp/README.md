@@ -37,9 +37,15 @@ compatibility. Only the MCP integration is being renamed in this release.
 | `ACCOUNTED_API_KEY` | yes | none | Your existing Accounted API key. |
 | `ACCOUNTED_URL` | no | Accounted hosted MCP endpoint | Override for self-hosted Accounted. The bridge adds `tool_namespace=accounted` when omitted. |
 | `ACCOUNTED_CLIENT` | no | none | Telemetry-only distribution marker such as `claude-desktop`. |
+| `ACCOUNTED_COMPANY` | no | none | Company id (UUID) that pins the connection to one company: the company switch is hidden and every call runs for that company. A value that is not a UUID stops the bridge instead of falling back to the key default. |
 
 The API key scopes determine which tools are visible and callable. Write tools
 stage pending operations for explicit approval before anything is booked.
+
+A key reaches every company its user belongs to, or only the companies it was
+limited to when it was created; `ACCOUNTED_COMPANY` (the `?company=<id>` query
+parameter on the endpoint URL for OAuth connectors) narrows one connection
+further, to a single company.
 
 ## OAuth connector (no API key, no account needed up front)
 

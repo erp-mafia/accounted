@@ -55,7 +55,6 @@
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.0",
     "@vercel/speed-insights": "^2.0.0",
-    "3d-force-graph": "1.80.0",
     "ai": "6.0.259",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

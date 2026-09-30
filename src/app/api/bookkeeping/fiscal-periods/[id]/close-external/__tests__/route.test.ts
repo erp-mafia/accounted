@@ -58,14 +58,28 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/close-external', () => {
     expect(mockMark).not.toHaveBeenCalled()
   })
 
-  it('maps a service refusal to 400 with a safe message', async () => {
+  // The refusal answers a registry code in the canonical envelope (it used
+  // to be a bare { error: string } 400 for every refusal).
+  it('maps a service refusal to its registry code', async () => {
     mockMark.mockRejectedValue(new Error('Period is already closed'))
-    const { status, body } = await parseJsonResponse<{ error: string }>(
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await POST(createMockRequest('/x', { method: 'POST', body: {} }), idParams)
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('FISCAL_PERIOD_CLOSE_EXTERNAL_ALREADY_CLOSED')
+    expect(body.error.message.length).toBeGreaterThan(0)
+  })
+
+  it('passes the Swedish unbooked-transactions sentence through', async () => {
+    mockMark.mockRejectedValue(
+      new Error('Kan inte klarmarkera period: 2 banktransaktion(er) i perioden saknar bokföring (2 ej hanterade).')
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
       await POST(createMockRequest('/x', { method: 'POST', body: {} }), idParams)
     )
     expect(status).toBe(400)
-    expect(typeof body.error).toBe('string')
-    expect(body.error.length).toBeGreaterThan(0)
+    expect(body.error.code).toBe('PERIOD_HAS_UNBOOKED_TRANSACTIONS')
+    expect(body.error.message).toMatch(/2 banktransaktion\(er\)/)
   })
 
   it('marks the period on the happy path', async () => {

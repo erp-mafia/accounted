@@ -8,6 +8,7 @@ import {
 } from '@/tests/helpers'
 import {
   normalizeCounterpartyName,
+  namesCounterparty,
   calculateConfidence,
   findCounterpartyTemplate,
   buildMappingResultFromCounterpartyTemplate,
@@ -17,6 +18,7 @@ import {
   populateTemplatesFromSieVouchers,
 } from '../counterparty-templates'
 import { buildTransactionEntryLines } from '../transaction-entries'
+import { buildMappingResultFromCategory } from '../category-mapping'
 import { roundOre } from '@/lib/money'
 import type { TemplateUpsertParams } from '../counterparty-templates'
 import type { LinePatternEntry } from '@/types'
@@ -396,6 +398,91 @@ describe('counterparty-templates', () => {
       expect(result!.matchMethod).toBe('exact_normalized')
       expect(result!.template.id).toBe('tmpl-exact')
     })
+
+    describe('lines that name no counterparty (PostHog PH 118)', () => {
+      // Handelsbanken writes "INTERNET BET <n>" on every internet-bank
+      // payment. A template learned from one of them was proposed for the
+      // next one through the fuzzy tier ("internet bet 4" is one edit from
+      // "internet bet 1"), whoever was actually paid.
+      const internetBet1 = (overrides: Parameters<typeof makeCategorizationTemplate>[0] = {}) =>
+        makeCategorizationTemplate({
+          id: 'tmpl-internet-bet',
+          counterparty_name: normalizeCounterpartyName('INTERNET BET 1'),
+          counterparty_aliases: ['internet bet 1'],
+          debit_account: '6530',
+          occurrence_count: 1,
+          confidence: calculateConfidence(1),
+          ...overrides,
+        })
+      const bankLine = (text: string) => makeTransaction({ merchant_name: null, description: text, original_description: text })
+
+      it('"INTERNET BET 4" does not match a template learned from "Internet Bet 1"', async () => {
+        const { supabase, enqueue } = createQueuedMockSupabase()
+        enqueue({ data: [internetBet1()] })
+
+        const result = await findCounterpartyTemplate(supabase as never, 'company-1', bankLine('INTERNET BET 4'))
+
+        expect(result).toBeNull()
+      })
+
+      it.each([
+        ['the same number (exact tier)', 'INTERNET BET 1', 1],
+        ['booking history behind the template (token tier)', 'INTERNET BET 7', 5],
+      ])('does not match on %s either', async (_label, text, occurrences) => {
+        const { supabase, enqueue } = createQueuedMockSupabase()
+        enqueue({ data: [internetBet1({ occurrence_count: occurrences, confidence: calculateConfidence(occurrences) })] })
+
+        const result = await findCounterpartyTemplate(supabase as never, 'company-1', bankLine(text))
+
+        expect(result).toBeNull()
+      })
+
+      it('a real merchant behind the same bank wording still matches, and the wording-only template cannot win it', async () => {
+        const insurer = makeCategorizationTemplate({
+          id: 'tmpl-if',
+          counterparty_name: 'if skadeförsäkring',
+          counterparty_aliases: [],
+          debit_account: '6310',
+          occurrence_count: 3,
+          confidence: calculateConfidence(3),
+        })
+        const { supabase, enqueue } = createQueuedMockSupabase()
+        // Listed after the insurer with more history: without the guard it
+        // would win the token tie on "internet".
+        enqueue({ data: [insurer, internetBet1({ occurrence_count: 5 })] })
+
+        const result = await findCounterpartyTemplate(
+          supabase as never,
+          'company-1',
+          bankLine('INTERNET BET 1 IF SKADEFÖRSÄKRING'),
+        )
+
+        expect(result?.template.id).toBe('tmpl-if')
+        expect(result?.matchMethod).toBe('token_subset')
+      })
+
+      it('a card purchase with the bank wording in front still matches its merchant', async () => {
+        const ica = makeCategorizationTemplate({ id: 'tmpl-ica', counterparty_name: 'ica maxi', counterparty_aliases: [] })
+        const { supabase, enqueue } = createQueuedMockSupabase()
+        enqueue({ data: [ica] })
+
+        const result = await findCounterpartyTemplate(supabase as never, 'company-1', bankLine('Kortköp 260612 ICA MAXI'))
+
+        expect(result?.template.id).toBe('tmpl-ica')
+        expect(result?.matchMethod).toBe('exact_normalized')
+      })
+
+      it.each([
+        ['INTERNET BET 4', false],
+        ['Överföring via internet 5541', false],
+        ['Autogiro', false],
+        ['INTERNET BET 1 IF SKADEFÖRSÄKRING', true],
+        ['Kortköp 260612 ICA MAXI', true],
+        ['Telia Sverige AB', true],
+      ])('namesCounterparty(%j) is %s', (text, expected) => {
+        expect(namesCounterparty(text)).toBe(expected)
+      })
+    })
   })
 
   // ── Build MappingResult ────────────────────────────────────
@@ -450,8 +537,103 @@ describe('counterparty-templates', () => {
 
       const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'aktiebolag')
 
-      expect(result.vat_lines.length).toBe(2)
-      expect(result.vat_lines.some(l => l.account_number === '2645')).toBe(true)
+      // #2919: the replay books the complete set, basis pair included, so a
+      // learned reverse-charge counterparty no longer repeats the ruta 20-24
+      // gap on every purchase.
+      expect(result.vat_lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['2645', 1250, 0],
+        ['2614', 0, 1250],
+        ['4535', 5000, 0],
+        ['4598', 0, 5000],
+      ])
+      const lines = buildTransactionEntryLines(tx, result)
+      const debits = roundOre(lines.reduce((s, l) => s + l.debit_amount, 0))
+      const credits = roundOre(lines.reduce((s, l) => s + l.credit_amount, 0))
+      expect(debits).toBe(credits)
+      expect(lines.find((l) => l.account_number === '6540')?.debit_amount).toBe(5000)
+    })
+
+    it('replays a reverse-charge template learned on a basis account without a second basis pair', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '4531',
+        credit_account: '1930',
+        vat_treatment: 'reverse_charge',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.8 }
+      const result = buildMappingResultFromCounterpartyTemplate(match, makeTransaction({ amount: -5000 }), 'aktiebolag')
+      expect(result.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+    })
+
+    it('learns the categorize shape and replays it with the basis pair (round trip)', async () => {
+      // What gnubok_categorize_transaction books for reverse_charge ...
+      const tx = makeTransaction({ merchant_name: 'Google Play', amount: -250, date: '2026-09-01' })
+      const booked = buildMappingResultFromCategory(
+        'expense_software', tx, true, 'aktiebolag', 'reverse_charge', null, null, 'non_eu_services',
+      )
+      booked.debit_account = '6540' // account_override
+      const inserted: Record<string, unknown>[] = []
+      const chain = {
+        select: () => chain,
+        eq: () => chain,
+        contains: () => chain,
+        order: () => chain,
+        limit: () => chain,
+        maybeSingle: async () => ({ data: null, error: null }),
+        insert: async (payload: Record<string, unknown>) => {
+          inserted.push(payload)
+          return { error: null }
+        },
+      }
+      await upsertCounterpartyTemplate({ from: () => chain } as never, 'company-1', tx, booked, 'user_approved')
+
+      // ... is learned as a reverse-charge pair on the cost account ...
+      expect(inserted).toHaveLength(1)
+      expect(inserted[0]).toMatchObject({
+        debit_account: '6540',
+        credit_account: '1930',
+        vat_treatment: 'reverse_charge',
+        vat_account: '2645',
+      })
+
+      // ... and the next purchase replays fiktiv moms AND the basis pair. The
+      // template stores no seller country, so the basis is EU services.
+      const template = makeCategorizationTemplate({
+        debit_account: inserted[0].debit_account as string,
+        credit_account: inserted[0].credit_account as string,
+        vat_treatment: 'reverse_charge',
+        vat_account: '2645',
+      })
+      const next = buildMappingResultFromCounterpartyTemplate(
+        { template, matchMethod: 'exact_alias', confidence: 0.8 },
+        makeTransaction({ merchant_name: 'Google Play', amount: -250 }),
+        'aktiebolag',
+      )
+      expect(next.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4535', '4598'])
+    })
+
+    it('mirrors the basis pair too for a refund against a reverse-charge template on a cost account', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '6540',
+        credit_account: '1930',
+        vat_treatment: 'reverse_charge',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.8 }
+      const tx = makeTransaction({ amount: 1000 })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'aktiebolag')
+
+      expect(result.direction_mismatch).toBe(true)
+      expect(result.vat_lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['2645', 0, 250],
+        ['2614', 250, 0],
+        ['4535', 0, 1000],
+        ['4598', 1000, 0],
+      ])
+      const lines = buildTransactionEntryLines(tx, result)
+      const debits = roundOre(lines.reduce((s, l) => s + l.debit_amount, 0))
+      const credits = roundOre(lines.reduce((s, l) => s + l.credit_amount, 0))
+      expect(debits).toBe(credits)
+      expect(lines.find((l) => l.account_number === '6540')?.credit_amount).toBe(1000)
     })
 
     it('a non-registered company books a learned 25 % template gross with no ingående moms', () => {
@@ -661,6 +843,17 @@ describe('counterparty-templates', () => {
     it('skips upsert for transactions without merchant name', async () => {
       const { supabase } = createQueuedMockSupabase()
       const tx = makeTransaction({ merchant_name: null, description: '', original_description: null })
+
+      await upsertCounterpartyTemplate(
+        supabase as never, 'user-1', tx, mappingResult, 'user_approved'
+      )
+
+      expect(supabase.from).not.toHaveBeenCalled()
+    })
+
+    it('learns nothing from a line that names no counterparty ("INTERNET BET 4")', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      const tx = makeTransaction({ merchant_name: null, description: 'INTERNET BET 4', original_description: 'INTERNET BET 4' })
 
       await upsertCounterpartyTemplate(
         supabase as never, 'user-1', tx, mappingResult, 'user_approved'
@@ -1173,6 +1366,49 @@ describe('dimensions propagation (PR7)', () => {
       const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
 
       expect(result.vat_lines.find((l) => l.account_number === '5410')?.dimensions).toBeUndefined()
+    })
+
+    it('marks the business lines, and only them, so an explicit bag knows where it belongs', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '5410',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+          { account: '5410', type: 'business', side: 'debit', ratio: 0.3334 },
+          { account: '6110', type: 'business', side: 'debit', ratio: 0.3334 },
+          { account: '2710', type: 'tax', side: 'debit', ratio: 0.3334 },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      // Three 0.3334 ratios over-allocate, so a 3740 rounding line appears.
+      const tx = makeTransaction({ amount: -125 })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      const marked = result.vat_lines.filter((l) => l.business_line).map((l) => l.account_number)
+      expect(marked.sort()).toEqual(['5410', '6110'])
+      expect(result.vat_lines.some((l) => l.account_number === '3740')).toBe(true)
+    })
+
+    it('an explicit categorize bag reaches the booked business lines per key, never the VAT line (the categorize route sets it after the build)', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '5410',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+          { account: '5410', type: 'business', side: 'debit', ratio: 1, dimensions: { '1': 'KS01', '6': 'P001' } },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      const tx = makeTransaction({ amount: -1250 })
+
+      const mapping = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+      mapping.dimensions = { '6': 'P002' }
+      const lines = buildTransactionEntryLines(tx, mapping)
+
+      expect(lines.find((l) => l.account_number === '5410')?.dimensions).toEqual({ '1': 'KS01', '6': 'P002' })
+      expect(lines.find((l) => l.account_number === '2641')?.dimensions).toBeUndefined()
+      expect(lines.find((l) => l.account_number === '1930')?.dimensions).toBeUndefined()
     })
   })
 

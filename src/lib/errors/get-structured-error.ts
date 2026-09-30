@@ -17,7 +17,10 @@
 import { NextResponse } from 'next/server'
 import { ZodError } from 'zod'
 import { getErrorMessage } from './get-error-message'
+import { foreignKeyRefusal } from './foreign-key-refusal'
+import { fieldValidationError, zodErrorFieldIssues } from './refusal'
 import {
+  conflictCode,
   getErrorEntry,
   type StructuredErrorEntry,
   type StructuredErrorRemediation,
@@ -26,6 +29,7 @@ import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotCancelNonDraftError,
+  CannotEditNonDraftError,
   CannotCorrectNonPostedError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
@@ -40,6 +44,7 @@ import {
   JournalLineBothSidesNonZeroError,
   JournalLineNegativeAmountError,
   CurrencyRevaluationAlreadyExistsError,
+  MandatoryDimensionMissingError,
   MeaninglessCorrectionError,
   NoOpenPeriodForDateError,
   TargetPeriodClosedError,
@@ -132,7 +137,7 @@ function extractCode(error: unknown): string | null {
 
   // Application conflicts use PT409 so PostgREST does not retry them as
   // serialization failures. Callers must refresh stale inputs first.
-  if (obj.code === 'PT409') return 'CONFLICT'
+  if (obj.code === 'PT409') return conflictCode(obj.message)
 
   // Typed bookkeeping error: { code: 'JOURNAL_ENTRY_NOT_BALANCED', ... }
   if (typeof obj.code === 'string' && /^[A-Z_]+$/.test(obj.code)) {
@@ -142,7 +147,7 @@ function extractCode(error: unknown): string | null {
   // Wrapped error: { error: { code: '...' } }
   if (typeof obj.error === 'object' && obj.error !== null) {
     const inner = obj.error as Record<string, unknown>
-    if (inner.code === 'PT409') return 'CONFLICT'
+    if (inner.code === 'PT409') return conflictCode(inner.message)
     if (typeof inner.code === 'string' && /^[A-Z_]+$/.test(inner.code)) {
       return inner.code
     }
@@ -250,6 +255,29 @@ export function getStructuredError(
         'Not found: no record with that id exists in this company. Check the id, and company_id if the record belongs to another company.',
       retryable: false,
     }
+  }
+
+  // A delete the database refused because other rows still point at the row.
+  // Before #2831 an agent got UNKNOWN_ERROR and the raw Postgres sentence;
+  // now it gets a code to branch on, English it can act on and the way back.
+  const refusal = foreignKeyRefusal(error)
+  if (refusal) {
+    return {
+      code: refusal.code,
+      message_sv: refusal.message_sv ?? getErrorMessage(error),
+      message_en: refusal.message_en,
+      remediation: refusal.remediation,
+      retryable: false,
+    }
+  }
+
+  // A Zod `.parse()` that threw past its call site. errorResponse below has
+  // always answered VALIDATION_ERROR for it; this door answered UNKNOWN_ERROR
+  // with the issue list as raw JSON (create_skill, set_inbox_extracted_data).
+  // A parse of data the server built itself is a server bug, not a caller
+  // mistake: such a site must catch its own failure and throw INTERNAL_ERROR.
+  if (isZodError(error) && Array.isArray(error.issues) && error.issues.length > 0) {
+    return getStructuredError(fieldValidationError('Invalid arguments', zodErrorFieldIssues(error)), options)
   }
 
   const message_en = extractEnglishMessage(error)
@@ -436,9 +464,39 @@ export function errorResponse(
 
   // 3. Postgres errors
   if (isPostgresError(err)) {
+    // A refused delete gets its own code, sentence and remediation instead of
+    // the generic VALIDATION_ERROR (#2831). details names the referencing
+    // table so an API client knows what still holds the row.
+    const refusal = foreignKeyRefusal(err)
+    if (refusal) {
+      const entry = entryFor(refusal.code)
+      logAtLevel(log, entry.httpStatus, 'refused delete', err as unknown as Error, {
+        requestId: ctx.requestId,
+        pgCode: err.code,
+      })
+      const details = mergeDetails(
+        {
+          pgCode: err.code,
+          ...(refusal.referencedBy ? { referenced_by: refusal.referencedBy } : {}),
+          ...(refusal.register ? { register: refusal.register } : {}),
+        },
+        ctx.details,
+      )
+      return buildResponse(
+        refusal.code,
+        {
+          ...entry,
+          message_sv: refusal.message_sv ?? entry.message_sv,
+          message_en: refusal.message_en,
+          remediation: refusal.remediation,
+        },
+        ctx.requestId,
+        details,
+      )
+    }
     const mapped = isIgnoredTransactionJournalConstraint(err)
       ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
-      : postgresCodeToStructured(err.code)
+      : err.code === 'PT409' ? conflictCode(err.message) : postgresCodeToStructured(err.code)
     if (mapped) {
       const entry = entryFor(mapped)
       logAtLevel(log, entry.httpStatus, 'database error', err as unknown as Error, {
@@ -532,6 +590,11 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   if (err instanceof CannotCancelNonDraftError) {
     return { code: err.code, details: { currentStatus: err.currentStatus } }
   }
+  // Without this arm a draft edit of a posted entry fell through to the
+  // INTERNAL_ERROR default (500) instead of the registry's 409.
+  if (err instanceof CannotEditNonDraftError) {
+    return { code: err.code, details: { currentStatus: err.currentStatus } }
+  }
   if (err instanceof EntryAlreadyReversedError) return { code: err.code }
   if (err instanceof CurrencyRevaluationAlreadyExistsError) return { code: err.code }
   if (err instanceof InvalidMappingResultError) {
@@ -551,6 +614,12 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   }
   if (err instanceof DimensionValidationError) {
     return { code: err.code, details: { issues: err.issues } }
+  }
+  // Without this arm a required-dimension refusal (account_dimension_rules)
+  // fell through to the INTERNAL_ERROR default: a 500 that never said which
+  // account needs which dimension, so the user could not fix the tag.
+  if (err instanceof MandatoryDimensionMissingError) {
+    return { code: err.code, details: { violations: err.violations } }
   }
   if (err instanceof NoOpenPeriodForDateError) {
     return { code: err.code, details: { date: err.date } }

@@ -3,7 +3,8 @@
  *
  * Per-account journal-line ledger (huvudbok). Returns every posted line in
  * the period grouped by account, with running balances. Accepts
- * `account_from`/`account_to` to drill into a range.
+ * `account_from`/`account_to` to drill into a range, and the P&L-safe
+ * `dim_no`/`dim_code` filter (lib/reports/dimension-filter.ts).
  */
 
 import { z } from 'zod'
@@ -14,13 +15,17 @@ import {
   loadPeriodFromQuery,
   safeGenerate,
   ReportPeriodQueryShape,
+  ReportDimensionFilterQueryShape,
 } from '@/lib/api/v1/report-period'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
+import { dimensionFilterPartialView, parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 
 const GeneralLedgerResponse = z.unknown()
 
-// Documents what the handler reads: it validates the account bounds itself.
+// Documents what the handler reads: it validates the account bounds and the
+// dimension pair itself. withApiV1 names any other parameter in
+// X-Ignored-Query-Params (report query gate).
 const LedgerQuery = z.object({
   ...ReportPeriodQueryShape,
   account_from: z
@@ -33,6 +38,7 @@ const LedgerQuery = z.object({
     .regex(/^\d{3,8}$/)
     .optional()
     .describe('Highest account number to include (inclusive), 3-8 digits, e.g. 3999.'),
+  ...ReportDimensionFilterQueryShape,
 })
 
 registerEndpoint({
@@ -41,7 +47,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reports/general-ledger',
   summary: 'General ledger (huvudbok) for a fiscal period.',
   description:
-    'Returns every posted journal line in the period grouped by account, with opening / running / closing balances. Supports optional `account_from` and `account_to` query parameters to limit the report to an account range (e.g. ?account_from=3000&account_to=3999 for revenue-only).',
+    'Returns every posted journal line in the period grouped by account, with opening / running / closing balances. Supports optional `account_from` and `account_to` query parameters to limit the report to an account range (e.g. ?account_from=3000&account_to=3999 for revenue-only), and `dim_no` + `dim_code` to keep only the lines tagged with one dimension value (the answer then carries `dimension_filter` and `partial_view`).',
   useWhen:
     'You\'re reconciling a specific account or range (bank account drilldown, revenue audit, expense investigation) and need every voucher-line that hit the account.',
   doNotUseFor:
@@ -50,6 +56,8 @@ registerEndpoint({
     '`period_id` is required.',
     'Account ranges are inclusive on both bounds. `account_from=3000` includes 3000; `account_to=3999` includes 3999.',
     'Lines with `status != \'posted\'` (drafts, reversed) are excluded.',
+    'With `dim_no` + `dim_code` (always together) every opening_balance is 0: IB is company-wide and cannot be scoped to a dimension, so running and closing balances are the tagged lines\' movements only (`partial_view.opening_balances_included` is false).',
+    'A query parameter it does not document (e.g. from_date) is not applied: the answer names it in the X-Ignored-Query-Params header. A dimension filter is always applied or refused, never ignored.',
   ],
   example: {
     response: {
@@ -91,6 +99,17 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
+    // Same parser as the dashboard route: a half pair or a bad code is a
+    // 400, never a quietly unfiltered ledger.
+    const dimFilter = parseDimensionFilterParams(url.searchParams)
+    if (!dimFilter.ok) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { fields: ['dim_no', 'dim_code'], message: dimFilter.error },
+      })
+    }
+    const dimensions = dimFilter.dimensions
+
     const period = await loadPeriodFromQuery(request, {
       supabase: ctx.supabase,
       companyId: ctx.companyId!,
@@ -107,11 +126,22 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
           period.period.id,
           accountFrom,
           accountTo,
+          dimensions ? { dimensions } : undefined,
         ),
       { log: ctx.log, requestId: ctx.requestId, reportName: 'general-ledger' },
     )
     if (!gen.ok) return gen.response
 
-    return ok(gen.result, { requestId: ctx.requestId })
+    // The generator drops IB under a filter (it is company-wide); say so.
+    return ok(
+      dimensions
+        ? {
+            ...gen.result,
+            dimension_filter: dimensions,
+            partial_view: dimensionFilterPartialView(dimensions, { dropsOpeningBalances: true }),
+          }
+        : gen.result,
+      { requestId: ctx.requestId },
+    )
   },
 )

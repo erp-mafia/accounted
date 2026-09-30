@@ -4,11 +4,12 @@
  *
  * Single source of truth for the loading, the preconditions and the
  * `payment_file_format` / `payment_file_generated_at` stamp shared by the
- * dashboard routes (app/api/salary/runs/[id]/payment/{pain001,bg-lb}) and the
- * public endpoint (POST /api/v1/companies/:companyId/salary-runs/:id/payment-file).
- * The HTTP layers only translate the result: the dashboard keeps its legacy
- * `{ error: string }` envelope and download headers, v1 maps codes onto the
- * structured-error catalogue.
+ * dashboard routes (app/api/salary/runs/[id]/payment/{pain001,bg-lb}), the
+ * public endpoint (POST /api/v1/companies/:companyId/salary-runs/:id/payment-file)
+ * and the MCP operation (lib/operations/salary-payment-files.ts). The doors
+ * only translate the result: the dashboard keeps its legacy `{ error: string }`
+ * envelope and download headers, v1 and MCP map codes onto the
+ * structured-error catalogue through salaryPaymentFileRefusal().
  *
  * Preconditions, in the order they are checked (and the order the queries run,
  * which the dashboard route tests depend on):
@@ -20,7 +21,7 @@
  *   5. company IBAN present and BIC present or derivable (pain.001)
  *   6. the run has employees
  *   7. every employee with a positive payout has clearing + account
- *   8. every one of those accounts can be carried by the chosen format
+ *   8. every one of those accounts names a payable account
  *      (payeeAccountProblem, the same verdict the generators apply): all
  *      affected employees are named at once, never the account number
  *
@@ -168,6 +169,8 @@ interface RunEmployeeRow {
     last_name: string
     clearing_number: string | null
     bank_account_number: string | null
+    /** AGI specification number: the base of the LB utbetalningsnummer. */
+    specification_number: number | null
   } | null
 }
 
@@ -178,6 +181,65 @@ function fail(
   extra: { stage?: SalaryPaymentFileLoadStage; cause?: unknown } = {},
 ): SalaryPaymentFileError {
   return { ok: false, code, format, details, ...extra }
+}
+
+/** A builder refusal in the structured-errors catalogue (lib/errors/structured-errors.ts). */
+export interface SalaryPaymentFileRefusal {
+  code: string
+  /** What the caller's envelope carries beside the code. */
+  details?: Record<string, unknown>
+  /** The builder's own explanation, for the log line. */
+  reason?: string
+}
+
+/**
+ * The structured-errors code (and details) for a builder failure, shared by
+ * the v1 route and the MCP operation so both doors answer the same code for
+ * the same state. Null for DB_ERROR and ARCHIVE_FAILED: those carry the
+ * database error in `cause`, whose SQLSTATE decides the answer (a statement
+ * timeout is transient, a constraint is not).
+ */
+export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): SalaryPaymentFileRefusal | null {
+  switch (result.code) {
+    case 'RUN_NOT_FOUND':
+      return { code: 'SALARY_RUN_NOT_FOUND' }
+    case 'RUN_NOT_READY':
+      return { code: 'SALARY_RUN_PAYMENT_FILE_NOT_READY', details: result.details }
+    case 'COMPANY_NOT_FOUND':
+      return { code: 'COMPANY_NOT_FOUND' }
+    case 'SETTINGS_MISSING':
+    case 'IBAN_MISSING':
+    case 'BIC_MISSING':
+    case 'BANKGIRO_MISSING':
+    case 'BANKGIRO_INVALID':
+      return {
+        code: 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS',
+        reason: result.code,
+        details: { format: result.format, problem: result.code.toLowerCase(), ...result.details },
+      }
+    case 'NO_EMPLOYEES':
+      return { code: 'SALARY_RUN_NO_EMPLOYEES' }
+    case 'EMPLOYEE_BANK_MISSING':
+      return {
+        code: 'SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING',
+        details: { format: result.format, ...result.details },
+      }
+    case 'EMPLOYEE_BANK_INVALID':
+      return {
+        code: 'SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID',
+        reason: String(result.details.message ?? ''),
+        details: { format: result.format, ...result.details },
+      }
+    case 'GENERATOR_FAILED':
+      return {
+        code: 'SALARY_RUN_PAYMENT_FILE_GENERATION_FAILED',
+        reason: String(result.details.message ?? ''),
+        details: { format: result.format, ...result.details },
+      }
+    case 'ARCHIVE_FAILED':
+    case 'DB_ERROR':
+      return null
+  }
 }
 
 function resolveFormat(
@@ -290,7 +352,7 @@ export async function buildSalaryPaymentFile(
   // 6. Employees on the run.
   const { data: runEmployeesData, error: employeesErr } = await supabase
     .from('salary_run_employees')
-    .select('*, employee:employees(first_name, last_name, clearing_number, bank_account_number)')
+    .select('*, employee:employees(first_name, last_name, clearing_number, bank_account_number, specification_number)')
     .eq('salary_run_id', runId)
   if (employeesErr) return fail('DB_ERROR', format, {}, { stage: 'employees', cause: employeesErr })
 
@@ -315,14 +377,14 @@ export async function buildSalaryPaymentFile(
     })
   }
 
-  // 8. Accounts the chosen format cannot carry. Checked for every paid
-  // employee before generating, so the user gets the whole list by name in one
-  // pass instead of the generator stopping at the first one. `message` is the
+  // 8. Pairs that name no payable account. Checked for every paid employee
+  // before generating, so the user gets the whole list by name in one pass
+  // instead of the generator stopping at the first one. `message` is the
   // Swedish text for the HTTP layers; like `employees` it carries names and
   // problem codes, never a clearing or account number.
   const invalidBank = paid.flatMap(({ sre }) => {
     const emp = sre.employee as NonNullable<RunEmployeeRow['employee']>
-    const problem = payeeAccountProblem(emp.clearing_number, emp.bank_account_number, format)
+    const problem = payeeAccountProblem(emp.clearing_number, emp.bank_account_number)
     if (!problem) return []
     return [{ employee_id: sre.employee_id, name: `${emp.first_name} ${emp.last_name}`, problem }]
   })
@@ -350,7 +412,9 @@ export async function buildSalaryPaymentFile(
     if (checkEmployeeAccountChecksum(clearingNumber, bankAccountNumber) === 'invalid') {
       warnings.push(`${name}: kontrollsiffran i kontonumret verkar inte stämma. Dubbelkolla numret innan filen skickas.`)
     }
-    return { name, clearingNumber, bankAccountNumber, netSalary: effectiveNet }
+    // The LB file ties account to amount with an utbetalningsnummer built on
+    // the employee's specification number; pain.001 ignores it.
+    return { name, clearingNumber, bankAccountNumber, payeeNumber: emp.specification_number ?? 0, netSalary: effectiveNet }
   })
 
   const totalAmount = Math.round(employees.reduce((sum, e) => sum + e.netSalary, 0) * 100) / 100

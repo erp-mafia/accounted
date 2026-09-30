@@ -16,7 +16,7 @@ Run scripts from the repository root. Prefer the named commands in [package.json
 
 | Directory | Purpose |
 | --- | --- |
-| `self-host/` | Backup, restore, and access-control helpers |
+| `self-host/` | Backup, restore, and access-control helpers; `smoke-boot.sh` boots an image under `docker-compose.yml` (run by `docker-publish.yml` before `latest` moves) |
 | `sie-import/` | Import acceptance, staging benchmarks, and reviewed repairs |
 | `provider-migration/` | Synthetic load and recovery harnesses; [measured results](provider-migration/README.md) |
 | `migration/` | Targeted migration follow-up tools |

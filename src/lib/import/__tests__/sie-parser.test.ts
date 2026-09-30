@@ -631,6 +631,37 @@ describe('validateSIEFile', () => {
     expect(validation.errors).toHaveLength(0)
   })
 
+  it('warns when voucher texts carry characters the exporter already lost (U+FFFD)', () => {
+    const content = [
+      '#FLAGGA 0',
+      '#SIETYP 4',
+      '#FNAMN "Test"',
+      '#RAR 0 20250101 20251231',
+      '#KONTO 1930 "Bank"',
+      '#KONTO 3001 "F\uFFFDrs\uFFFDljning"',
+      '#VER A 1 20250115 "F\uFFFDrs\uFFFDljning januari"',
+      '{',
+      '#TRANS 1930 {} 100.00',
+      '#TRANS 3001 {} -100.00 20250115 "Int\uFFFDkt"',
+      '}',
+      '#VER A 2 20250116 "Bankavgift"',
+      '{',
+      '#TRANS 1930 {} -10.00',
+      '#TRANS 3001 {} 10.00',
+      '}',
+    ].join('\n')
+
+    const validation = validateSIEFile(parseSIEFile(content))
+    const warning = validation.warnings.find((w) => w.includes('saknas redan i filen'))
+    expect(warning).toBeDefined()
+    expect(warning).toMatch(/^1 verifikation har/)
+  })
+
+  it('does not warn about lost characters when voucher texts are intact', () => {
+    const validation = validateSIEFile(parseSIEFile(SIE_WITH_VOUCHERS))
+    expect(validation.warnings.some((w) => w.includes('saknas redan i filen'))).toBe(false)
+  })
+
   it('adds error for unbalanced vouchers', () => {
     const parsed = parseSIEFile(SIE_UNBALANCED_VOUCHER)
     const validation = validateSIEFile(parsed)
@@ -951,6 +982,16 @@ describe('decodeBuffer: fallback on U+FFFD', () => {
     const buf = new TextEncoder().encode('Företag').buffer
     const result = decodeBuffer(buf, 'utf8')
     expect(result).toBe('Företag')
+  })
+
+  it('keeps a U+FFFD the exporter wrote into a valid UTF-8 file instead of re-reading it as windows1252', () => {
+    // "F\uFFFDrs\uFFFDljning" as a Wint export wrote it: EF BF BD is the
+    // UTF-8 encoding of U+FFFD. Read as windows1252 it became "Fï¿½rsï¿½ljning".
+    const buf = new TextEncoder().encode('#VER A 1 20250501 "F\uFFFDrs\uFFFDljning"').buffer
+    expect(detectEncoding(buf)).toBe('utf8')
+    const result = decodeBuffer(buf, 'utf8')
+    expect(result).toBe('#VER A 1 20250501 "F\uFFFDrs\uFFFDljning"')
+    expect(result).not.toContain('ï¿½')
   })
 })
 

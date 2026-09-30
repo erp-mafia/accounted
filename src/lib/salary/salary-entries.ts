@@ -1,10 +1,20 @@
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { createJournalEntries } from '@/lib/bookkeeping/journal-entry-batch'
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import {
   coerceDimensionsBag,
   dimensionsBagKey,
+  normalizeLineDimensions,
+  type DimensionAliasInput,
   type LineDimensions,
 } from '@/lib/bookkeeping/dimension-resolver'
+import {
+  applyDimensionRules,
+  fetchActiveDimensionRules,
+  isDimensionRuleExemptSource,
+} from '@/lib/bookkeeping/dimension-rules'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { creditNatural, debitNatural } from '@/lib/bookkeeping/line-side'
@@ -229,14 +239,75 @@ function resolveLoneVaxlingPension(run: SalaryRunData): SalaryRunData {
   }
 }
 
+/** The source_type every salary-run voucher carries; source_id is the run id. */
+const SALARY_SOURCE_TYPE = 'salary_payment' as const
+
+type SalaryVoucherSlot = 'salary' | 'avgifter' | 'vacation' | 'pension'
+
+interface SalaryRunVoucher {
+  slot: SalaryVoucherSlot
+  description: string
+  lines: CreateJournalEntryLineInput[]
+}
+
+interface PostedLine extends DimensionAliasInput {
+  account_number: string
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+}
+
+/** A posted voucher of this run, as the resume lookup reads it. */
+type PostedRunVoucher = Omit<JournalEntry, 'lines'> & { lines?: PostedLine[] | null }
+
+export const SALARY_RUN_PARTIALLY_BOOKED = 'SALARY_RUN_PARTIALLY_BOOKED' as const
+
 /**
- * Create all journal entries for a salary run.
- * Creates 3 entries:
- *   1. Salary entry: gross salary expenses, tax withholding, net payment
- *   2. Avgifter entry: employer contributions expense + liability
- *   3. Vacation entry: vacation accrual expense + liability + avgifter on accrual
+ * The run already has posted vouchers that are not the ones this booking
+ * would post: a duplicate from an earlier retry, or a voucher posted before
+ * the run's data or the company's policy changed. Booking on would post the
+ * affärshändelse twice, so it stops and names the vouchers: reverse them
+ * (storno) and book again. The Swedish message is composed here with the
+ * voucher labels (thrown_message_sv in the error registry).
+ */
+export class SalaryRunPartiallyBookedError extends Error {
+  readonly code = SALARY_RUN_PARTIALLY_BOOKED
+  readonly details: { voucher_numbers: string[]; entry_ids: string[] }
+  readonly messageEn: string
+
+  constructor(entries: Array<Pick<JournalEntry, 'id' | 'voucher_series' | 'voucher_number'>>) {
+    const labels = entries.map((entry) => formatVoucher(entry)).join(', ')
+    super(
+      `Lönekörningen har redan bokförda verifikationer (${labels}) från ett tidigare försök som inte stämmer med körningen. Återför dem och bokför sedan lönekörningen igen.`,
+    )
+    this.name = 'SalaryRunPartiallyBookedError'
+    this.messageEn = `The salary run already has posted vouchers (${labels}) from an earlier attempt that do not match the run. Reverse them, then book the run again.`
+    this.details = {
+      voucher_numbers: entries.map((entry) => formatVoucher(entry)),
+      entry_ids: entries.map((entry) => entry.id),
+    }
+  }
+}
+
+/**
+ * Create all journal entries for a salary run: 1-4 vouchers
+ *   1. Salary: gross salary expenses, tax withholding, net payment
+ *   2. Avgifter (if the run has any): employer contributions expense + liability
+ *   3. Vacation (if anything accrues): accrual expense + liability, with avgifter
+ *   4. Pension (if löneväxling): pension provision + SLP
  *
- * All entries use source_type: 'salary_payment' and source_id: salaryRun.id
+ * All entries use source_type 'salary_payment' and source_id = the run id.
+ *
+ * The set is posted through createJournalEntries(): every voucher passes the
+ * engine's checks (required dimension rules, registry, accounts, balance)
+ * before the first one is numbered, so a refusal on any voucher posts none.
+ *
+ * Retry-safe: a posting that stopped partway (a transient error after voucher
+ * 1 committed) leaves the run unbooked with vouchers in the ledger. The next
+ * call reads the run's posted vouchers and adopts each one that is exactly the
+ * voucher it would post now (same date, accounts, amounts and dimensions),
+ * then posts only the missing ones. A posted voucher of the run that matches
+ * nothing (a duplicate, or one booked from data that has changed since) stops
+ * the booking with SalaryRunPartiallyBookedError instead of posting on.
  */
 export async function createSalaryRunEntries(
   supabase: SupabaseClient,
@@ -245,7 +316,7 @@ export async function createSalaryRunEntries(
   run: SalaryRunData
 ): Promise<{
   salaryEntry: JournalEntry
-  avgifterEntry: JournalEntry
+  avgifterEntry: JournalEntry | null
   vacationEntry: JournalEntry | null
   pensionEntry: JournalEntry | null
 }> {
@@ -258,54 +329,181 @@ export async function createSalaryRunEntries(
 
   const desc = salaryRunDescription(run)
 
-  await ensureSalaryAccountsExist(supabase, companyId, userId, postingRun)
+  // The bank account the net pay leaves from: the company's primary cash
+  // account, the same resolver the preview route calls (issue #3097).
+  const bankAccount = await resolvePrimaryBankAccount(supabase, companyId, log)
+
+  await ensureSalaryAccountsExist(supabase, companyId, userId, postingRun, bankAccount)
 
   // The four line sets come from the same builder the preview route renders,
   // so what the user approved on screen is what posts.
-  const built = buildSalaryRunEntryLines(postingRun, desc)
+  const built = buildSalaryRunEntryLines(postingRun, desc, bankAccount)
 
-  const post = (description: string, lines: CreateJournalEntryLineInput[]): Promise<JournalEntry> => {
-    const input: CreateJournalEntryInput = {
-      fiscal_period_id: fiscalPeriodId,
-      entry_date: run.payment_date,
-      description,
-      source_type: 'salary_payment',
-      source_id: run.id,
-      voucher_series: run.voucher_series,
-      lines,
-    }
-    log.info(`Creating salary run entry "${description}": ${lines.length} lines`)
-    return createJournalEntry(supabase, companyId, userId, input)
+  // The run's vouchers in posting order. Avgifter exists only when the run
+  // has any, vacation only when something accrues, pension only with
+  // löneväxling (per deductions-lonevaxling.md: pension = löneväxling × 1.058
+  // on 7410/2740, SLP = pension × 24.26% on 7533/2514). A voucher that is not
+  // in the set is absent, so a retry neither posts nor expects it.
+  const vouchers: SalaryRunVoucher[] = [{ slot: 'salary', description: desc, lines: built.salaryLines }]
+  if (built.avgifterLines.length > 0) {
+    vouchers.push({ slot: 'avgifter', description: `${desc}: Arbetsgivaravgifter`, lines: built.avgifterLines })
+  }
+  if (built.vacationLines.length > 0) {
+    vouchers.push({ slot: 'vacation', description: `${desc}: Semesteravsättning`, lines: built.vacationLines })
+  }
+  if (built.pensionLines.length > 0) {
+    vouchers.push({ slot: 'pension', description: `${desc}: Pensionsavsättning`, lines: built.pensionLines })
   }
 
-  // ─── Entry 1: Salary (brutto, skatt, netto) ───
-  const salaryEntry = await post(desc, built.salaryLines)
+  // What an earlier, interrupted attempt already posted for this run is
+  // adopted, never posted again.
+  const adopted = await adoptPostedRunVouchers(supabase, companyId, run.id, entryDate, vouchers)
+  const pending = vouchers.filter((voucher) => !adopted.has(voucher.slot))
 
-  // ─── Entry 2: Arbetsgivaravgifter ───
-  const avgifterEntry = await post(`${desc}: Arbetsgivaravgifter`, built.avgifterLines)
+  const inputs = pending.map((voucher): CreateJournalEntryInput => {
+    log.info(`Creating salary run entry "${voucher.description}": ${voucher.lines.length} lines`)
+    return {
+      fiscal_period_id: fiscalPeriodId,
+      entry_date: entryDate,
+      description: voucher.description,
+      source_type: SALARY_SOURCE_TYPE,
+      source_id: run.id,
+      voucher_series: run.voucher_series,
+      lines: voucher.lines,
+    }
+  })
+  const created = await createJournalEntries(supabase, companyId, userId, inputs)
 
-  // ─── Entry 3: Vacation accrual (if any) ───
-  const vacationEntry =
-    built.vacationLines.length > 0
-      ? await post(`${desc}: Semesteravsättning`, built.vacationLines)
-      : null
+  const bySlot = new Map<SalaryVoucherSlot, JournalEntry>(adopted)
+  pending.forEach((voucher, index) => bySlot.set(voucher.slot, created[index]))
+  const salaryEntry = bySlot.get('salary')
+  if (!salaryEntry) {
+    // Unreachable: the salary slot is always in the set and is either
+    // adopted or just created. Kept so the return type needs no assertion.
+    throw new Error('Lönekörningens verifikationer kunde inte bokföras.')
+  }
 
-  // ─── Entry 4: Pension provisions + SLP (if löneväxling) ───
-  // Per deductions-lonevaxling.md: pension = löneväxling × 1.058, SLP = pension × 24.26%
-  // Debit 7410 Pensionsförsäkringspremier / Credit 2740 Skuld pensionsförsäkringar
-  // Debit 7533 Särskild löneskatt / Credit 2514 Beräknad särskild löneskatt
-  const pensionEntry =
-    built.pensionLines.length > 0
-      ? await post(`${desc}: Pensionsavsättning`, built.pensionLines)
-      : null
+  return {
+    salaryEntry,
+    avgifterEntry: bySlot.get('avgifter') ?? null,
+    vacationEntry: bySlot.get('vacation') ?? null,
+    pensionEntry: bySlot.get('pension') ?? null,
+  }
+}
 
-  return { salaryEntry, avgifterEntry, vacationEntry, pensionEntry }
+/**
+ * The run's already-posted vouchers, matched to the vouchers this booking
+ * would post. The ledger is the record of what an earlier attempt did:
+ * source_type 'salary_payment' + source_id = run id, status 'posted' (a
+ * reversed voucher is 'reversed' and its storno has source_type 'storno', so
+ * a voucher the user has already cancelled is not counted).
+ *
+ * A posted voucher is adopted for a slot only when it IS that slot's voucher
+ * as it would be posted now: same entry date and the same lines (account,
+ * debit, credit, and dimensions after the company's default/fixed rules).
+ * Anything else is refused by name, because posting on would book the same
+ * affärshändelse twice. Fails closed: when the lookup itself fails, nothing
+ * is posted.
+ */
+async function adoptPostedRunVouchers(
+  supabase: SupabaseClient,
+  companyId: string,
+  runId: string,
+  entryDate: string,
+  vouchers: SalaryRunVoucher[],
+): Promise<Map<SalaryVoucherSlot, JournalEntry>> {
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('*, lines:journal_entry_lines(account_number, debit_amount, credit_amount, dimensions)')
+    .eq('company_id', companyId)
+    .eq('source_type', SALARY_SOURCE_TYPE)
+    .eq('source_id', runId)
+    .eq('status', 'posted')
+    .order('voucher_number', { ascending: true })
+
+  if (error) {
+    throw new Error(
+      `Kunde inte kontrollera lönekörningens tidigare bokförda verifikationer: ${error.message}`,
+    )
+  }
+  const posted = (data ?? []) as PostedRunVoucher[]
+  const adopted = new Map<SalaryVoucherSlot, JournalEntry>()
+  if (posted.length === 0) return adopted
+
+  // Compare with the lines as the engine would store them now: its
+  // default/fixed dimension rules are part of what would be posted.
+  const rules = isDimensionRuleExemptSource(SALARY_SOURCE_TYPE)
+    ? []
+    : await fetchActiveDimensionRules(supabase, companyId)
+  if (rules === null) {
+    // Without the rules a match cannot be proven, and a mismatch would tell
+    // the user to reverse vouchers that may be right. Stop; a retry decides.
+    throw new Error('Kunde inte läsa företagets dimensionsregler. Försök igen.')
+  }
+  const wanted = vouchers.map((voucher) => ({
+    slot: voucher.slot,
+    fingerprint: linesFingerprint(applyDimensionRules(voucher.lines, rules)),
+  }))
+
+  const strays: PostedRunVoucher[] = []
+  for (const entry of posted) {
+    const fingerprint = linesFingerprint(entry.lines ?? [])
+    const match =
+      entry.entry_date === entryDate
+        ? wanted.find((w) => !adopted.has(w.slot) && w.fingerprint === fingerprint)
+        : undefined
+    if (match) {
+      // Callers read the header (id, voucher number); `lines` on this row is
+      // only the column subset selected for the comparison above.
+      adopted.set(match.slot, entry as unknown as JournalEntry)
+    } else {
+      strays.push(entry)
+    }
+  }
+
+  if (strays.length > 0) {
+    throw new SalaryRunPartiallyBookedError(strays)
+  }
+  log.warn('resuming an interrupted salary booking: already-posted vouchers are adopted, not posted again', {
+    companyId,
+    salaryRunId: runId,
+    adopted: [...adopted.entries()].map(([slot, entry]) => ({ slot, entryId: entry.id })),
+  })
+  return adopted
+}
+
+/**
+ * Order-independent identity of a voucher's lines: account, debit and credit
+ * in öre, and the normalized dimensions bag. Descriptions are left out on
+ * purpose: an inline rättelse may reword them without changing what was
+ * booked.
+ */
+function linesFingerprint(
+  lines: Array<
+    DimensionAliasInput & {
+      account_number: string
+      debit_amount?: number | string | null
+      credit_amount?: number | string | null
+    }
+  >,
+): string {
+  return lines
+    .map((line) =>
+      [
+        line.account_number,
+        Math.round(Number(line.debit_amount || 0) * 100),
+        Math.round(Number(line.credit_amount || 0) * 100),
+        dimensionsBagKey(normalizeLineDimensions(line)),
+      ].join('\u0000'),
+    )
+    .sort()
+    .join('\u0001')
 }
 
 export interface SalaryRunEntryLines {
-  /** Entry 1: löner, kostnadsersättning, nettolöneavdrag, personalskatt, nettolön. */
+  /** Entry 1: löner, kostnadsersättning, nettolöneavdrag, personalskatt, nettolön (on the bank account). */
   salaryLines: CreateJournalEntryLineInput[]
-  /** Entry 2: arbetsgivaravgifter (7510 / 2731 / 3740). Always present, zero-shaped for a nollkörning. */
+  /** Entry 2: arbetsgivaravgifter (7510 / 2731 / 3740); empty when the run has no avgifter. */
   avgifterLines: CreateJournalEntryLineInput[]
   /** Entry 3: semesteravsättning; empty when nothing accrues. */
   vacationLines: CreateJournalEntryLineInput[]
@@ -321,8 +519,18 @@ export interface SalaryRunEntryLines {
  * 2731 split, dimension buckets) cannot be present in one and missing in
  * the other: feedback seq 384229 was a preview that debited 7385 for a
  * bilförmån with no counter line because it had its own copy of the loop.
+ *
+ * `bankAccount` is the ledger account the net pay is credited on. It is a
+ * fact about the company, not about payroll, so the builder takes it instead
+ * of carrying a constant: callers pass resolvePrimaryBankAccount() (a
+ * hardcoded 1930 here booked salaries off a company's real bank account,
+ * issue #3097).
  */
-export function buildSalaryRunEntryLines(run: SalaryRunData, desc: string): SalaryRunEntryLines {
+export function buildSalaryRunEntryLines(
+  run: SalaryRunData,
+  desc: string,
+  bankAccount: string,
+): SalaryRunEntryLines {
   const postingRun = resolveLoneVaxlingPension(run)
   const totalVacation = postingRun.employees.reduce((sum, e) => sum + e.vacation_accrual, 0)
   const totalVacationAvgifter = postingRun.employees.reduce(
@@ -332,7 +540,7 @@ export function buildSalaryRunEntryLines(run: SalaryRunData, desc: string): Sala
   const totalPension = postingRun.employees.reduce((sum, e) => sum + (e.pension_contribution || 0), 0)
   const totalSlp = postingRun.employees.reduce((sum, e) => sum + (e.pension_slp || 0), 0)
   return {
-    salaryLines: buildSalaryLines(postingRun, desc),
+    salaryLines: buildSalaryLines(postingRun, desc, bankAccount),
     avgifterLines: buildAvgifterLines(postingRun, desc),
     vacationLines:
       totalVacation > 0 || totalVacationAvgifter > 0
@@ -349,9 +557,13 @@ export function buildSalaryRunEntryLines(run: SalaryRunData, desc: string): Sala
  * Debit:  7321/7331 skattefri kostnadsersättning, 2820 utlägg repaid with
  *         the salary (outside gross, inside the net payout)
  * Credit: 2710 Personalskatt (total tax withheld)
- * Credit: 1930 Företagskonto (total net salary)
+ * Credit: `bankAccount`, the company's bank account (total net salary)
  */
-function buildSalaryLines(run: SalaryRunData, desc: string): CreateJournalEntryLineInput[] {
+function buildSalaryLines(
+  run: SalaryRunData,
+  desc: string,
+  bankAccount: string,
+): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
 
   // Aggregate salary expenses by (account, dimensions), dimensions PR8. The
@@ -494,7 +706,7 @@ function buildSalaryLines(run: SalaryRunData, desc: string): CreateJournalEntryL
   const totalNet = run.employees.reduce((sum, e) => sum + e.net_salary, 0)
   if (totalNet > 0) {
     lines.push({
-      account_number: SALARY_ACCOUNTS.BANK,
+      account_number: bankAccount,
       debit_amount: 0,
       credit_amount: Math.round(totalNet * 100) / 100,
       line_description: `${desc}: Nettolön`,
@@ -622,10 +834,13 @@ export function splitAvgifterLiability(
  * this alignment covers the booking as calculated.
  */
 function buildAvgifterLines(run: SalaryRunData, desc: string): CreateJournalEntryLineInput[] {
-  const dimBuckets = bucketByEmployeeDimensions(run.employees, (e) => e.avgifter_amount)
-  // Legacy shape parity: a run whose avgifter sum to zero still emits the
-  // single untagged debit line, exactly as before the dimension split.
-  const buckets = dimBuckets.length > 0 ? dimBuckets : [{ dimensions: undefined, amount: 0 }]
+  const buckets = bucketByEmployeeDimensions(run.employees, (e) => e.avgifter_amount)
+  // No avgifter anywhere in the run (a run that only repays utlägg, F-skatt
+  // payees, employees with 0% avgifter): nothing to book, so no voucher,
+  // exactly as vacation and pension produce none when nothing accrues. The
+  // zero-shaped lines this used to return could never post: the engine
+  // refuses a voucher whose total is zero.
+  if (buckets.length === 0) return []
   const roundedAvgifter = roundOre(buckets.reduce((sum, b) => sum + b.amount, 0))
   const { liabilityAvgifter, oresutjamning } = splitAvgifterLiability(run, roundedAvgifter)
 
@@ -636,10 +851,10 @@ function buildAvgifterLines(run: SalaryRunData, desc: string): CreateJournalEntr
       line_description: `${desc}: Arbetsgivaravgifter`,
       dimensions: bucket.dimensions,
     })),
-    // Skip the liability line only when the utjämning carries the whole
-    // (sub-1-krona) amount: a 0/0 line is verifikat noise. The zero-total
-    // parity shape (nollrun) keeps its single 0-credit line as before.
-    ...(liabilityAvgifter !== 0 || oresutjamning === 0
+    // Skip the liability line when it would be 0/0 (verifikat noise): the
+    // utjämning carries the whole sub-1-krona amount, or the buckets net to
+    // zero.
+    ...(liabilityAvgifter !== 0
       ? [
           {
             account_number: SALARY_ACCOUNTS.AVGIFTER_LIABILITY,
@@ -804,11 +1019,13 @@ async function ensureSalaryAccountsExist(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  run: SalaryRunData
+  run: SalaryRunData,
+  bankAccount: string,
 ): Promise<void> {
   const needed = new Set<string>()
 
   for (const account of Object.values(SALARY_ACCOUNTS)) needed.add(account)
+  needed.add(bankAccount)
 
   for (const emp of run.employees) {
     needed.add(getEmployeeSalaryAccount(emp.employment_type))

@@ -71,6 +71,16 @@ describe('booksReducer', () => {
     expect(booksReducer(s0, { type: 'PICK_SIE' }).path).toBe('migration')
   })
 
+  it('the SIE way out of a provider login lands on the SIE step without the provider', () => {
+    // A customer without the provider's paid API add-on picks SIE on the
+    // login screen: no registers login may follow the file.
+    const atLogin = booksReducer(initialState(entry()), { type: 'PICK_PROVIDER', provider: 'fortnox' })
+    expect(atLogin.step).toBe('provider')
+    const s = booksReducer(atLogin, { type: 'PICK_SIE' })
+    expect(s).toMatchObject({ step: 'sie', path: 'migration', provider: null })
+    expect(booksReducer(s, { type: 'GO_BACK', flags: ALL }).step).toBe('source')
+  })
+
   it('a new business skips the books and goes where the flags allow', () => {
     const s0 = initialState(entry())
     expect(booksReducer(s0, { type: 'PICK_FRESH', flags: ALL }).step).toBe('bank')

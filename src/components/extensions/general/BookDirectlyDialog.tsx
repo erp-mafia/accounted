@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -14,11 +15,12 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Trash2, Search, Check, BookmarkPlus } from 'lucide-react'
+import { Plus, Trash2, Search, Check, BookmarkPlus, Tags } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import TemplateApplyButton from '@/components/bookkeeping/TemplateApplyButton'
@@ -26,7 +28,7 @@ import { TemplateForm } from '@/components/settings/TemplateForm'
 import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import { useCompany } from '@/contexts/CompanyContext'
-import { useAccounts, useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useAccounts, useCashAccounts, useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import {
   useSubmitWithAccountActivation,
   throwOnStructuredError,
@@ -76,6 +78,9 @@ interface FormLine {
   account_number: string
   debit_amount: string
   credit_amount: string
+  // Kostnadsställe/projekt bag ({sie_dim_no: code}) posted on this line; a
+  // defined bag (possibly empty) means the line's picker row is open.
+  dimensions?: Record<string, string>
 }
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '' }
@@ -197,6 +202,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   const cashAccounts: CashAccount[] | null = cashAccountsLoading ? null : cachedCashAccounts
   const { periods } = useFiscalPeriods()
   const { accounts } = useAccounts()
+  // Per-line kostnadsställe/projekt (the route posts each line's bag). Same
+  // gate and row affordance as the voucher form, so its wording is reused.
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
+  const tJournal = useTranslations('journal_form')
   // Full BAS catalogue (static reference data, fetched once per session). Lets
   // the account picker surface standard accounts the company hasn't activated
   // yet; picking one activates it at commit via the existing
@@ -382,6 +392,8 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
         return {
           ...nl,
           account_number: existing.account_number || nl.account_number,
+          // A tag picked before the amounts re-derive stays on its line.
+          dimensions: existing.dimensions,
         }
       })
     })
@@ -504,6 +516,26 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     setLines((prev) => prev.length <= 2 ? prev : prev.filter((_, i) => i !== idx))
   }, [])
 
+  // Open/close a line's kostnadsställe/projekt row; closing clears its bag.
+  const toggleLineDimensions = useCallback((idx: number) => {
+    setLines((prev) =>
+      prev.map((l, i) => (i === idx ? { ...l, dimensions: l.dimensions ? undefined : {} } : l)),
+    )
+  }, [])
+
+  const updateLineDimension = useCallback((idx: number, dimNo: string, code: string | null) => {
+    setLines((prev) =>
+      prev.map((l, i) => {
+        if (i !== idx) return l
+        const dims = { ...(l.dimensions ?? {}) }
+        const trimmed = code?.trim()
+        if (trimmed) dims[dimNo] = trimmed
+        else delete dims[dimNo]
+        return { ...l, dimensions: dims }
+      }),
+    )
+  }, [])
+
   // Outstanding imbalance from every line except `excludeIndex`.
   // Positive => debit side is short (a debit on the target row balances it);
   // negative => credit side is short. Same semantics as JournalEntryForm.
@@ -589,6 +621,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
         account_number: l.account_number.trim(),
         debit_amount: parseFloat(l.debit_amount) || 0,
         credit_amount: parseFloat(l.credit_amount) || 0,
+        ...(l.dimensions && Object.keys(l.dimensions).length > 0 ? { dimensions: l.dimensions } : {}),
       })),
       transaction_id: selectedTransactionId ?? undefined,
     }
@@ -866,15 +899,36 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {lines.map((line, idx) => (
-                    <tr key={idx}>
+                  {lines.flatMap((line, idx) => [
+                    <tr key={`line-${idx}`}>
                       <td className="px-3 py-2">
-                        <AccountCombobox
-                          value={line.account_number}
-                          accounts={accounts}
-                          catalog={catalog}
-                          onChange={(v) => updateLine(idx, { account_number: v })}
-                        />
+                        {/* The line's tag toggle sits with its account: a
+                            bag describes the account's line. */}
+                        <div className="flex items-center gap-1">
+                          <div className="min-w-0 flex-1">
+                            <AccountCombobox
+                              value={line.account_number}
+                              accounts={accounts}
+                              catalog={catalog}
+                              onChange={(v) => updateLine(idx, { account_number: v })}
+                            />
+                          </div>
+                          {dimensionsEnabled && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => toggleLineDimensions(idx)}
+                              disabled={isSubmitting}
+                              aria-label={tJournal('row_dimensions_aria')}
+                              aria-expanded={line.dimensions != null}
+                              title={tJournal('row_dimensions_aria')}
+                              className={cn('shrink-0', line.dimensions != null ? 'text-foreground' : 'text-muted-foreground')}
+                            >
+                              <Tags className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
                       </td>
                       <td className="px-3 py-2">
                         <Input
@@ -914,8 +968,25 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </td>
-                    </tr>
-                  ))}
+                    </tr>,
+                    // The line's kostnadsställe/projekt, posted with the line.
+                    ...(dimensionsEnabled && line.dimensions != null
+                      ? [
+                          <tr key={`dims-${idx}`} className="bg-muted/20">
+                            <td colSpan={4} className="px-3 py-2">
+                              <div className="max-w-md">
+                                <LineDimensionFields
+                                  dimensions={line.dimensions}
+                                  onChange={(dimNo, code) => updateLineDimension(idx, dimNo, code)}
+                                  disabled={isSubmitting}
+                                  inputClassName="h-8"
+                                />
+                              </div>
+                            </td>
+                          </tr>,
+                        ]
+                      : []),
+                  ])}
                 </tbody>
                 <tfoot className="bg-muted/20 text-xs">
                   <tr>

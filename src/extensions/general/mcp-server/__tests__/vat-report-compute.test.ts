@@ -124,6 +124,57 @@ describe('computeVatReport', () => {
     expect(result.warnings).toEqual([])
   })
 
+  // #2919: the basis boxes were computed but never returned, so an agent saw
+  // ruta 30 and 48 with no way to tell rutor 20-24 were empty (FK004).
+  it('returns the reverse-charge basis rutor 20-24 next to ruta 30', async () => {
+    const lines: MockLine[] = [
+      // Non-EU service, cost on 6540 with the basis pair 4531/4598
+      { account_number: '6540', debit_amount: 250, credit_amount: 0, journal_entry_id: 'rc-1' },
+      { account_number: '1930', debit_amount: 0, credit_amount: 250, journal_entry_id: 'rc-1' },
+      { account_number: '2645', debit_amount: 62.5, credit_amount: 0, journal_entry_id: 'rc-1' },
+      { account_number: '2614', debit_amount: 0, credit_amount: 62.5, journal_entry_id: 'rc-1' },
+      { account_number: '4531', debit_amount: 250, credit_amount: 0, journal_entry_id: 'rc-1' },
+      { account_number: '4598', debit_amount: 0, credit_amount: 250, journal_entry_id: 'rc-1' },
+      // EU goods and EU services booked straight on their basis accounts
+      { account_number: '4515', debit_amount: 400, credit_amount: 0, journal_entry_id: 'rc-2' },
+      { account_number: '4535', debit_amount: 100, credit_amount: 0, journal_entry_id: 'rc-3' },
+      // Domestic reverse charge, goods and services
+      { account_number: '4415', debit_amount: 80, credit_amount: 0, journal_entry_id: 'rc-4' },
+      { account_number: '4425', debit_amount: 60, credit_amount: 0, journal_entry_id: 'rc-5' },
+    ]
+
+    const result = await computeVatReport(
+      { period_type: 'quarterly', year: 2026, period: 3 },
+      'company-1',
+      mockSupabaseWithLines(lines)
+    )
+
+    expect(result.rutor.ruta20).toBe(400)
+    expect(result.rutor.ruta21).toBe(100)
+    expect(result.rutor.ruta22).toBe(250)
+    expect(result.rutor.ruta23).toBe(80)
+    expect(result.rutor.ruta24).toBe(60)
+    expect(result.rutor.ruta30).toBe(62.5)
+    expect(result.rutor.ruta48).toBe(62.5)
+  })
+
+  it('reports rutor 20-24 as zero when only the fiktiv pair was booked (the #2919 shape)', async () => {
+    const lines: MockLine[] = [
+      { account_number: '6540', debit_amount: 250, credit_amount: 0, journal_entry_id: 'rc-1' },
+      { account_number: '1930', debit_amount: 0, credit_amount: 250, journal_entry_id: 'rc-1' },
+      { account_number: '2645', debit_amount: 62.5, credit_amount: 0, journal_entry_id: 'rc-1' },
+      { account_number: '2614', debit_amount: 0, credit_amount: 62.5, journal_entry_id: 'rc-1' },
+    ]
+    const result = await computeVatReport(
+      { period_type: 'quarterly', year: 2026, period: 3 },
+      'company-1',
+      mockSupabaseWithLines(lines)
+    )
+    expect(result.rutor.ruta30).toBe(62.5)
+    expect([result.rutor.ruta20, result.rutor.ruta21, result.rutor.ruta22, result.rutor.ruta23, result.rutor.ruta24])
+      .toEqual([0, 0, 0, 0, 0])
+  })
+
   it('emits a one-sided-reverse-charge warning when 2614 is booked without 2645 OR 2647', async () => {
     const lines: MockLine[] = [
       // Output booked but matching input missing (the most common reverse-charge error)
@@ -300,7 +351,7 @@ describe('computeVatReport', () => {
       expect(props).toHaveProperty('warnings')
       // rutor must declare each ruta the runtime returns.
       const rutorProps = (props.rutor as { properties: Record<string, unknown> }).properties
-      for (const r of ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta30', 'ruta31', 'ruta32', 'ruta35', 'ruta39', 'ruta40', 'ruta48', 'ruta49']) {
+      for (const r of ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32', 'ruta35', 'ruta39', 'ruta40', 'ruta48', 'ruta49']) {
         expect(rutorProps, `tool ${name} rutor.${r}`).toHaveProperty(r)
       }
     }
@@ -324,5 +375,20 @@ describe('computeVatReport', () => {
     await expect(
       computeVatReport({ period_type: 'monthly', year: 1900, period: 1 }, 'c', supabase)
     ).rejects.toThrow(/year must be between/)
+  })
+
+  it('answers a missing argument with VALIDATION_ERROR instead of computing on NaN', async () => {
+    const supabase = mockSupabaseWithLines([])
+    // A monthly call without `period` used to pass the range check as NaN
+    // (NaN < 1 is false) and reach the period-date arithmetic.
+    for (const args of [
+      { period_type: 'monthly', year: 2026 },
+      { period_type: 'quarterly', period: 1 },
+      { year: 2026, period: 1 },
+    ]) {
+      await expect(computeVatReport(args, 'c', supabase), JSON.stringify(args)).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+      })
+    }
   })
 })

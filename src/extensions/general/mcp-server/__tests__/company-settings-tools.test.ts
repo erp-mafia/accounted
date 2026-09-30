@@ -14,7 +14,6 @@ describe('company settings MCP tools: registration', () => {
     expect(getTool().annotations.readOnlyHint).toBe(true)
     expect(getTool().catalogVisibility).toBe('search')
     expect(updateTool().annotations.readOnlyHint).toBe(false)
-    expect(updateTool().annotations.idempotentHint).toBe(true)
     expect(updateTool().catalogVisibility).toBe('search')
     expect(TOOL_SCOPE_MAP.gnubok_get_company_settings).toBe('companies:read')
     expect(TOOL_SCOPE_MAP.gnubok_update_company_settings).toBe('companies:write')
@@ -29,36 +28,19 @@ describe('company settings MCP tools: registration', () => {
     expect(updateTool().inputSchema.additionalProperties).toBe(false)
   })
 
-  it('exposes the same field set on the read and write tools', () => {
-    const readFields = (
-      (getTool().outputSchema as { required: string[] }).required
-    )
-      .filter((field) => field !== 'company_id')
-      .sort()
+  it('keeps every field of the original tools, and only the non-legal ones are writable', () => {
     const writeFields = Object.keys(
       (updateTool().inputSchema as { properties: Record<string, unknown> }).properties,
     )
-      .filter((field) => field !== 'dry_run' && field !== 'idempotency_key')
-      .sort()
-
-    expect(writeFields).toEqual(readFields)
-    expect(readFields).toEqual(
-      [
-        'account_number',
-        'bank_name',
-        'bankgiro',
-        'bic',
-        'clearing_number',
-        'contact_person',
-        'email',
-        'iban',
-        'invoice_email_texts',
-        'phone',
-        'plusgiro',
-        'swish',
-        'website',
-      ],
-    )
+    for (const field of [
+      'account_number', 'bank_name', 'bankgiro', 'bic', 'clearing_number', 'contact_person', 'email',
+      'iban', 'invoice_email_texts', 'phone', 'plusgiro', 'swish', 'website', 'dry_run', 'idempotency_key',
+    ]) {
+      expect(writeFields, field).toContain(field)
+    }
+    for (const field of ['vat_registered', 'accounting_method', 'bookkeeping_locked_through', 'org_number', 'default_our_reference']) {
+      expect(writeFields, field).not.toContain(field)
+    }
   })
 
   it('keeps both settings schemas discoverable through tool search', async () => {
@@ -104,6 +86,7 @@ describe('gnubok_get_company_settings', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: {
+        entity_type: 'aktiebolag',
         bank_name: 'Testbanken',
         clearing_number: '1234',
         account_number: '1234567',
@@ -113,6 +96,7 @@ describe('gnubok_get_company_settings', () => {
         iban: null,
         bic: null,
         default_our_reference: 'Test Contact',
+        moms_period: 'quarterly',
       },
     })
 
@@ -122,17 +106,20 @@ describe('gnubok_get_company_settings', () => {
       company_id: 'company-1',
       bankgiro: '5050-1055',
       contact_person: 'Test Contact',
+      moms_period: 'quarterly',
+      // Never set: null, not missing.
+      website: null,
     })
     expect(supabase.from).toHaveBeenCalledWith('company_settings')
   })
 
-  it('fails when the company has no settings row', async () => {
+  it('fails with NOT_FOUND when the company has no settings row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: null })
 
     await expect(
       getTool().execute({}, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/not found/i)
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 })
 
@@ -140,6 +127,9 @@ describe('gnubok_update_company_settings', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
+
+  const OWNER = { data: { role: 'owner' } }
+  const HAS_DEADLINES = { data: null, count: 5 }
 
   it('rejects an empty change set before querying the database', async () => {
     const { supabase } = createQueuedMockSupabase()
@@ -164,43 +154,6 @@ describe('gnubok_update_company_settings', () => {
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
-  it('returns a merged dry-run preview without staging', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: {
-        bank_name: 'Old Bank',
-        clearing_number: '1234',
-        account_number: '1234567',
-        bankgiro: null,
-        plusgiro: null,
-        swish: null,
-        iban: null,
-        bic: null,
-        default_our_reference: 'Old Contact',
-      },
-    })
-
-    const result = (await updateTool().execute(
-      { bankgiro: '5050-1055', contact_person: 'New Contact', dry_run: true },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as {
-      staged: boolean
-      dry_run?: boolean
-      preview: { proposed?: Record<string, unknown> }
-    }
-
-    expect(result.staged).toBe(false)
-    expect(result.dry_run).toBe(true)
-    expect(result.preview.proposed).toMatchObject({
-      bank_name: 'Old Bank',
-      bankgiro: '5050-1055',
-      contact_person: 'New Contact',
-    })
-    expect(supabase.from).toHaveBeenCalledTimes(1)
-  })
-
   it('rejects an unknown invoice email placeholder before querying the database', async () => {
     const { supabase } = createQueuedMockSupabase()
 
@@ -218,25 +171,60 @@ describe('gnubok_update_company_settings', () => {
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
-  it('stages contact details and invoice email texts with a mapped preview', async () => {
+  it('refuses to stage for a member who is not owner or admin', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { company_id: 'company-1' } })
+    enqueue({ data: { role: 'member' } })
+
+    await expect(
+      updateTool().execute({ phone: '08-1' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  it('returns a merged dry-run preview without staging', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: {
-        bank_name: null,
-        clearing_number: null,
-        account_number: null,
+        bank_name: 'Old Bank',
+        clearing_number: '1234',
+        account_number: '1234567',
         bankgiro: null,
-        plusgiro: null,
-        swish: null,
-        iban: null,
-        bic: null,
-        default_our_reference: null,
-        email: null,
-        phone: null,
-        website: null,
-        invoice_email_texts: null,
+        default_our_reference: 'Old Contact',
       },
     })
+    enqueue(OWNER)
+    enqueue(HAS_DEADLINES)
+
+    const result = (await updateTool().execute(
+      { bankgiro: '5050-1055', contact_person: 'New Contact', dry_run: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      dry_run?: boolean
+      preview: Record<string, unknown>
+    }
+
+    expect(result.staged).toBe(false)
+    expect(result.dry_run).toBe(true)
+    expect(result.preview).toMatchObject({
+      bank_name: 'Old Bank',
+      bankgiro: '5050-1055',
+      contact_person: 'New Contact',
+      changes: { bankgiro: '5050-1055', contact_person: 'New Contact' },
+      previous: { bankgiro: null, contact_person: 'Old Contact' },
+      deadlines_will_regenerate: false,
+    })
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  it('stages contact details and invoice email texts with a mapped preview', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { company_id: 'company-1', email: null } })
+    enqueue(OWNER)
+    enqueue(HAS_DEADLINES)
     enqueue({ data: { id: 'op-settings-2' } })
 
     const result = (await updateTool().execute(
@@ -252,10 +240,7 @@ describe('gnubok_update_company_settings', () => {
     )) as {
       staged: boolean
       operation_id?: string
-      preview: {
-        changes?: Record<string, unknown>
-        proposed?: Record<string, unknown>
-      }
+      preview: { changes?: Record<string, unknown> } & Record<string, unknown>
     }
 
     expect(result.staged).toBe(true)
@@ -267,28 +252,15 @@ describe('gnubok_update_company_settings', () => {
       invoice_email_texts: { sv: { subject: 'Faktura {fakturanummer}' } },
     })
     expect(result.preview.changes).not.toHaveProperty('default_our_reference')
-    expect(result.preview.proposed).toMatchObject({
-      email: 'faktura@example.se',
-      website: 'https://example.se',
-    })
-    expect(supabase.from).toHaveBeenNthCalledWith(2, 'pending_operations')
+    expect(result.preview).toMatchObject({ email: 'faktura@example.se', website: 'https://example.se' })
+    expect(supabase.from).toHaveBeenNthCalledWith(4, 'pending_operations')
   })
 
-  it('stages a validated update for approval', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: {
-        bank_name: null,
-        clearing_number: null,
-        account_number: null,
-        bankgiro: null,
-        plusgiro: null,
-        swish: null,
-        iban: null,
-        bic: null,
-        default_our_reference: null,
-      },
-    })
+  it('stages the flat input as params, which the commit path runs as settings.update', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { company_id: 'company-1' } })
+    enqueue(OWNER)
+    enqueue(HAS_DEADLINES)
     enqueue({ data: { id: 'op-settings-1' } })
 
     const result = (await updateTool().execute(
@@ -303,6 +275,8 @@ describe('gnubok_update_company_settings', () => {
       operation_id: 'op-settings-1',
       risk_level: 'medium',
     })
-    expect(supabase.from).toHaveBeenNthCalledWith(2, 'pending_operations')
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { operation_type: string; params: unknown }
+    expect(inserted.operation_type).toBe('update_company_settings')
+    expect(inserted.params).toEqual({ contact_person: 'Test Contact' })
   })
 })

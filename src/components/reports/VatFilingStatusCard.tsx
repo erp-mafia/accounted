@@ -17,13 +17,20 @@ import {
 import { formatDate } from '@/lib/utils'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { vatFilingPeriodEnd, type VatFilingRecord } from '@/lib/vat/filing-record'
+import {
+  vatFilingPeriodEnd,
+  type VatFilingPeriodType,
+  type VatFilingRecord,
+} from '@/lib/vat/filing-record'
 
 interface VatFilingStatusCardProps {
-  periodType: 'monthly' | 'quarterly'
+  periodType: VatFilingPeriodType
+  /** Calendar year of the period; for yearly, the year the räkenskapsår ends. */
   year: number
   period: number
-  /** Swedish period label, e.g. "Kvartal 2 2026". */
+  /** Month (1-12) the räkenskapsår ends: places a yearly period. */
+  fiscalYearEndMonth: number
+  /** Period label, e.g. "Kvartal 2 2026" or "Räkenskapsår 2025/2026". */
   periodLabel: string
   /** The period's filing record, or null when nothing is recorded. */
   record: VatFilingRecord | null
@@ -33,7 +40,8 @@ interface VatFilingStatusCardProps {
 }
 
 /**
- * Filing status of the selected period under "Lämna in" (issue #2746): shows
+ * Filing status of the selected period under "Lämna in" (issues #2746,
+ * #2786), for every cadence including helårsmoms: shows
  * the recorded filing (through the Skatteverket connection or marked by
  * hand), or offers "Markera som inlämnad" for a declaration filed on
  * skatteverket.se. Recording the filing is free and sends nothing to
@@ -45,6 +53,7 @@ export function VatFilingStatusCard({
   periodType,
   year,
   period,
+  fiscalYearEndMonth,
   periodLabel,
   record,
   canWrite,
@@ -59,7 +68,7 @@ export function VatFilingStatusCard({
   const [error, setError] = useState<string | null>(null)
 
   const today = todayIsoStockholm()
-  const periodEnd = vatFilingPeriodEnd(periodType, year, period)
+  const periodEnd = vatFilingPeriodEnd(periodType, year, period, fiscalYearEndMonth)
   if (periodEnd >= today) return null
   // A declaration is filed after its period ends: the first selectable day is
   // the day after, matching the server's VAT_FILING_DATE_BEFORE_PERIOD_END rule.

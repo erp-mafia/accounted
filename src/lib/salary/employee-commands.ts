@@ -19,7 +19,8 @@ import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer
 import { getCompanyEntityType } from '@/lib/company/context'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
-import { jamkningIssueFromDbError, touchesJamkning, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
+import { jamkningIssueFromDbError, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
+import { validateEmployeeUpdate } from '@/lib/salary/employee-update-rules'
 
 export type EmployeeCommandResult<T> =
   | { ok: true; data: T }
@@ -72,6 +73,8 @@ const WRITABLE_COLUMNS = new Set([
   'default_dimensions',
 ])
 
+/** Undefined means absent (column unchanged); null is kept, it clears the
+ * column (the update contract, #3008). */
 function pickWritable(fields: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(fields)) {
@@ -225,47 +228,16 @@ export async function updateEmployee(
     return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
   }
 
-  // Merged-state validation (same rules as the internal PATCH route).
+  // Merged-state validation: the same rules, from the same module, as the
+  // dashboard and v1 PATCH routes. `updates` keeps explicit nulls (clear) and
+  // has no undefined (unchanged) keys. #3008
   const merged = { ...(existing as Record<string, unknown>), ...updates }
-  const issues: string[] = []
-  if (merged.salary_type === 'monthly' && (!merged.monthly_salary || (merged.monthly_salary as number) <= 0)) {
-    issues.push('Månadslön krävs och måste vara större än 0 för månadslöneform')
-  }
-  if (merged.salary_type === 'hourly' && (!merged.hourly_rate || (merged.hourly_rate as number) <= 0)) {
-    issues.push('Timlön krävs och måste vara större än 0 för timlöneform')
-  }
-  if (merged.f_skatt_status === 'a_skatt' && !merged.is_sidoinkomst && !merged.tax_table_number) {
-    issues.push('Skattetabell krävs för A-skatt anställda')
-  }
-  if (merged.vaxa_stod_eligible && !merged.vaxa_stod_start) {
-    issues.push('Startdatum för Växa-stöd måste anges när Växa-stöd är aktiverat')
-  }
-  // Jämkning is validated on the merged row through the shared validator,
-  // and only when the patch touches a jämkning key: a legacy row stored with
-  // an incomplete beslut must stay editable in unrelated ways. #2058
-  if (touchesJamkning(updates)) {
-    for (const issue of validateJamkning(merged)) issues.push(issue.message)
-  }
+  const issues = validateEmployeeUpdate(existing as Record<string, unknown>, updates)
   if (issues.length > 0) {
-    return { ok: false, code: 'VALIDATION_ERROR', details: { message: issues.join('. ') } }
-  }
-
-  const clearingChanged =
-    'clearing_number' in updates && updates.clearing_number !== (existing as Record<string, unknown>).clearing_number
-  const accountChanged =
-    'bank_account_number' in updates &&
-    updates.bank_account_number !== (existing as Record<string, unknown>).bank_account_number
-  if (clearingChanged || accountChanged) {
-    const bankIssues = validateEmployeeBankAccount(
-      merged.clearing_number as string | undefined,
-      merged.bank_account_number as string | undefined,
-    )
-    if (bankIssues.length > 0) {
-      return {
-        ok: false,
-        code: 'VALIDATION_ERROR',
-        details: { issues: bankIssues.map((i) => ({ field: i.field, message: i.message })) },
-      }
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { message: issues.map((i) => i.message).join('. '), issues },
     }
   }
 

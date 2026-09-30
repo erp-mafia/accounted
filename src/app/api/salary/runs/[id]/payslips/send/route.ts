@@ -1,192 +1,50 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { getEmailService } from '@/lib/email/service'
-import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
-import { rotateLinkForEmployee } from '@/lib/salary/payslips/links'
-import { buildPayslipLinkEmail } from '@/lib/salary/payslips/email-template'
-import { getCompanyDisplayName } from '@/lib/company/context'
-import { requireCapability } from '@/lib/entitlements/has-capability'
+import { sendPayslips } from '@/lib/salary/payslips/send'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { guardSandbox } from '@/lib/sandbox/guard'
+import { sandboxBlockedResponse } from '@/lib/sandbox/guard'
 
 ensureInitialized()
 
 /**
- * Send payslips to all employees with email addresses — as secure LINKS,
+ * Send payslips to all employees with email addresses: as secure LINKS,
  * never PDF attachments (salary data + personnummer must not sit in
  * inboxes). Each send rotates the employee's link: previously emailed links
  * stop resolving.
  *
  * Per BFL 7 kap.: every attempt (sent/failed/skipped) is persisted to
  * salary_payslip_deliveries as the audit trail.
+ *
+ * The rules (sandbox, email_send capability, approved+ status, the delivery
+ * log) live in lib/salary/payslips/send.ts, shared with the v1 operation
+ * salary-runs.send-payslips and gnubok_send_payslips. The sandbox and
+ * capability refusals keep the envelopes the UI has always read.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary_run.payslips_send',
   async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
 
-    // The sandbox must never send a real email (lib/sandbox/guard.ts): this
-    // route reaches the live Resend service on hosted, and the demo now ships
-    // with a booked salary run, which puts "Skicka lönebesked" one click from
-    // an anonymous visitor. Sibling send paths (/api/invoices/[id]/send) have
-    // always been guarded; this one was missed.
-    const sandboxBlocked = await guardSandbox(supabase, companyId)
-    if (sandboxBlocked) return sandboxBlocked
-
-    const blocked = await requireCapability(supabase, companyId, CAPABILITY.email_send)
-    if (blocked) return blocked
-
-    const emailService = getEmailService()
-
-    const { data: run } = await supabase
-      .from('salary_runs')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single()
-
-    if (!run) {
-      return errorResponseFromCode('SALARY_RUN_NOT_FOUND', log, { requestId })
-    }
-    if (!['approved', 'paid', 'booked'].includes(run.status)) {
-      return errorResponseFromCode('SALARY_PAYSLIPS_SEND_INVALID_STATUS', log, { requestId })
-    }
-
-    const { data: company } = await supabase
-      .from('companies')
-      .select('name, org_number')
-      .eq('id', companyId)
-      .single()
-
-    if (!company) {
-      return errorResponseFromCode('COMPANY_NOT_FOUND', log, { requestId })
-    }
-
-    // Email employer name follows the current company name
-    // (company_settings.company_name), not the frozen onboarding companies.name.
-    const displayName = await getCompanyDisplayName(supabase, companyId)
-
-    const { data: runEmployees } = await supabase
-      .from('salary_run_employees')
-      .select('employee_id, employee:employees(first_name, last_name, email)')
-      .eq('salary_run_id', id)
-
-    if (!runEmployees || runEmployees.length === 0) {
-      return errorResponseFromCode('SALARY_PAYSLIPS_NO_EMPLOYEES', log, { requestId })
-    }
-
-    // Brand mail (WL-13): payslip links and the sender identity follow the
-    // company's brand; no brand = canonical URL and platform sender as before.
-    const sender = await getSenderForCompany(companyId)
-    const appUrl = getBaseUrlForBrand(sender.brand)
-
-    let sent = 0
-    let skipped = 0
-    const errors: string[] = []
-
-    for (const sre of runEmployees) {
-      const emp = sre.employee as unknown as {
-        first_name: string
-        last_name: string
-        email: string | null
-      } | null
-
-      if (!emp?.email) {
-        skipped++
-        // Persist a 'skipped' record so the audit trail is complete
-        // (BFL 7 kap.). Placeholder address — the column is NOT NULL.
-        await supabase.from('salary_payslip_deliveries').insert({
-          company_id: companyId,
-          salary_run_id: id,
-          employee_id: sre.employee_id,
-          user_id: user.id,
-          email_address: '(saknas)',
-          status: 'skipped',
-          error_message: 'Anställd saknar e-postadress',
-        })
-        continue
+    const outcome = await sendPayslips({ supabase, companyId, userId: user.id, log }, id)
+    if (!outcome.ok) {
+      if (outcome.code === 'SALARY_PAYSLIPS_SEND_SANDBOX') return sandboxBlockedResponse()
+      if (outcome.code === 'SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED') {
+        return capabilityBlockedResponse(CAPABILITY.email_send)
       }
-
-      try {
-        const { token } = await rotateLinkForEmployee(supabase, {
-          companyId,
-          salaryRunId: id,
-          employeeId: sre.employee_id,
-          userId: user.id,
-        })
-
-        const email = buildPayslipLinkEmail({
-          employeeFirstName: emp.first_name,
-          companyName: displayName ?? company.name,
-          periodYear: run.period_year,
-          periodMonth: run.period_month,
-          paymentDate: run.payment_date,
-          url: `${appUrl}/payslip/${token}`,
-        })
-
-        const sendResult = await emailService.sendEmail({
-          to: emp.email,
-          subject: email.subject,
-          html: email.html,
-          text: email.text,
-          fromName: sender.fromName ?? undefined,
-          fromAddress: sender.fromAddress ?? undefined,
-          replyTo: sender.replyTo ?? undefined,
-        })
-
-        if (!sendResult.success) {
-          const msg = sendResult.error || 'E-postleverantör returnerade ett fel'
-          errors.push(`${emp.first_name} ${emp.last_name}: ${msg}`)
-          await supabase.from('salary_payslip_deliveries').insert({
-            company_id: companyId,
-            salary_run_id: id,
-            employee_id: sre.employee_id,
-            user_id: user.id,
-            email_address: emp.email,
-            status: 'failed',
-            provider: 'resend',
-            error_message: msg.slice(0, 500),
-          })
-          continue
-        }
-
-        await supabase.from('salary_payslip_deliveries').insert({
-          company_id: companyId,
-          salary_run_id: id,
-          employee_id: sre.employee_id,
-          user_id: user.id,
-          email_address: emp.email,
-          status: 'sent',
-          provider: 'resend',
-          provider_message_id: sendResult.messageId ?? null,
-        })
-
-        sent++
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Okänt fel'
-        errors.push(`${emp.first_name} ${emp.last_name}: ${msg}`)
-
-        await supabase.from('salary_payslip_deliveries').insert({
-          company_id: companyId,
-          salary_run_id: id,
-          employee_id: sre.employee_id,
-          user_id: user.id,
-          email_address: emp.email,
-          status: 'failed',
-          provider: 'resend',
-          error_message: msg.slice(0, 500),
-        })
-      }
+      return sessionFailureResponse(outcome, log, requestId)
     }
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
 
+    const { sent, skipped, errors, total } = outcome.data
     return NextResponse.json({
       data: {
         sent,
         skipped,
         errors: errors.length > 0 ? errors : undefined,
-        total: runEmployees.length,
+        total,
       },
     })
   },

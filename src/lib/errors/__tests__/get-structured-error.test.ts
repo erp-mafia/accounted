@@ -1,16 +1,27 @@
 import { describe, it, expect } from 'vitest'
+import { z } from 'zod'
 import { getStructuredError } from '../get-structured-error'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { dbError } from '../db-error'
 
 describe('getStructuredError', () => {
   it.each([
-    { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' },
-    { error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } },
-    new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_SOURCE_CHANGED', 'PT409'),
-  ])('requires refreshed input for a bank conflict rather than an automatic retry', error => {
-    expect(getStructuredError(error)).toMatchObject({
+    [{ code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' }, 'BANK_ANCHOR_SETTLEMENT_CHANGED'],
+    [{ error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } }, 'BANK_ANCHOR_SETTLEMENT_CHANGED'],
+    [new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_SOURCE_CHANGED', 'PT409'), 'BANK_BOOKING_SOURCE_CHANGED'],
+  ])('names a bank refusal and requires refreshed input rather than an automatic retry', (error, code) => {
+    expect(getStructuredError(error)).toMatchObject({ code, retryable: false })
+  })
+
+  it('keeps the generic conflict for an unregistered refusal name', () => {
+    expect(getStructuredError({ code: 'PT409', message: 'SOME_UNREGISTERED_REFUSAL' })).toMatchObject({
       code: 'CONFLICT', retryable: false, message_sv: 'En konflikt uppstod. Ladda om sidan och försök igen.',
+    })
+  })
+
+  it('marks a busy bank-account lock as retryable', () => {
+    expect(getStructuredError({ code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY' })).toMatchObject({
+      code: 'CASH_ACCOUNT_OPERATION_BUSY', retryable: true,
     })
   })
   it('extracts code from structured bookkeeping error', () => {
@@ -230,5 +241,51 @@ describe('getStructuredError: .single() with no row', () => {
       details: 'The result contains 2 rows',
     })
     expect(s.code).not.toBe('NOT_FOUND')
+  })
+})
+
+describe('getStructuredError: a ZodError that reached the dispatch', () => {
+  // A `.parse()` that threw past its tool (create_skill, set_inbox_extracted_data)
+  // answered UNKNOWN_ERROR with the raw issue JSON as message_en, while REST's
+  // errorResponse has always called the same error VALIDATION_ERROR.
+  const schema = z.object({ name: z.string(), steps: z.array(z.string().max(5)), days: z.number() }).strict()
+
+  function zodErrorFor(input: unknown): z.ZodError {
+    const parsed = schema.safeParse(input)
+    if (parsed.success) throw new Error('expected a failure')
+    return parsed.error
+  }
+
+  it('is VALIDATION_ERROR naming each path, never retryable', () => {
+    const s = getStructuredError(zodErrorFor({ steps: ['too long'], days: 1 }))
+    expect(s).toMatchObject({ code: 'VALIDATION_ERROR', retryable: false })
+    expect(s.message_en).toMatch(/^Invalid arguments: name: .+; steps\.0: /)
+  })
+
+  it('renders each reason in Swedish, telling a missing field from a wrong type', () => {
+    expect(getStructuredError(zodErrorFor({ steps: [], days: 'x' })).message_sv).toBe(
+      'name: Obligatoriskt fält saknas. days: Fel typ: ska vara ett tal.',
+    )
+  })
+
+  it('treats a thrown parse like the returned error', () => {
+    let thrown: unknown
+    try {
+      schema.parse({ steps: [], days: 1 })
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(z.ZodError)
+    expect(getStructuredError(thrown)).toMatchObject({ code: 'VALIDATION_ERROR', message_sv: 'name: Obligatoriskt fält saknas.' })
+  })
+
+  it('keeps INTERNAL_ERROR for a parse of data the server built itself (the create_skill body shape)', () => {
+    const s = getStructuredError(
+      Object.assign(new Error('The skill body built from these arguments failed its own validation (a server bug): Line 3: use plain Markdown'), {
+        code: 'INTERNAL_ERROR',
+      }),
+    )
+    expect(s.code).toBe('INTERNAL_ERROR')
+    expect(s.retryable).toBe(false)
   })
 })

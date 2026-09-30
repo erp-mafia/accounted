@@ -16,6 +16,7 @@ import {
 } from '../amounts';
 import { parseSourceVoucherRef } from '../source-voucher';
 import { creditNoteTypeCode } from '../dto';
+import { roundOre } from '@/lib/money';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
   return { value: value ?? 0, currencyCode: currency };
@@ -248,7 +249,12 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => {
     const debit = (row['DebetAmount'] as number) ?? 0;
     const credit = (row['CreditAmount'] as number) ?? 0;
-    const rowAmount = debit || credit;
+    // Signed, debit positive, the way Fortnox states its rows. `debit ||
+    // credit` read every credit row as a debit: the 2440 row, and with it an
+    // öresavrundning credit, the utgående moms of a reverse-charge pair or
+    // the 2514 of a särskild löneskatt pair, so no row set could add up to
+    // its invoice once the importer dropped the payable.
+    const rowAmount = roundOre(debit - credit);
     return {
       id: String(row['LineNumber'] ?? idx + 1),
       description: row['TransactionText'] as string | undefined,

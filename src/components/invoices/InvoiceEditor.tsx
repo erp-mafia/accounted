@@ -83,10 +83,10 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import {
   ROT_WORK_TYPES,
   RUT_WORK_TYPES,
+  articleDeductionPrefill,
   computeDeduction,
   deductionCapWarnings,
   deductionTypeForWorkType,
-  parseArticleHouseworkType,
   SCHABLON_WORK_TYPES,
   type PriorYearDeductions,
 } from '@/lib/invoices/rot-rut-rules'
@@ -154,7 +154,7 @@ export type InvoiceEditorProps = (
 // Subset of Article fields the line picker needs to pre-fill a row.
 type ArticleOption = Pick<
   Article,
-  'id' | 'article_number' | 'name' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
+  'id' | 'article_number' | 'name' | 'type' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
 >
 
 function RequiredMark() {
@@ -889,14 +889,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // and, when it is a Skatteverket arbetstypskod, its work type too. Legacy
     // articles carry only the kind (`ROT`/`RUT`): those pre-fill the deduction
     // and keep a same-kind arbetstyp already chosen on the row. An article
-    // WITHOUT any housework flag re-defaults the row to no deduction, the same
-    // overwrite semantics as description/price above: a material article
-    // picked onto a previously RUT-flagged row must not keep claiming a
-    // deduction on material. Proformas/delivery notes/self-billing have no
+    // WITHOUT any housework flag, and every goods (vara) article whatever its
+    // flag says (ROT/RUT is labor only), re-defaults the row to no deduction,
+    // the same overwrite semantics as description/price above: a material
+    // article picked onto a previously RUT-flagged row must not keep claiming
+    // a deduction on material. Proformas/delivery notes/self-billing have no
     // deduction model (their rows keep no ⋮ menu either), so they are left
     // untouched.
     if (isInvoiceDoc) {
-      const { deductionType: kind, workType } = parseArticleHouseworkType(a.housework_type)
+      const { deductionType: kind, workType } = articleDeductionPrefill(a)
       const currentWorkType = getValues(`items.${index}.work_type`) ?? null
       const keepCurrentWorkType =
         kind != null && !workType && deductionTypeForWorkType(currentWorkType) === kind

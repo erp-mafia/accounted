@@ -267,11 +267,14 @@ function plantStandardReports() {
       delta_varulager: 0,
       delta_kortfristiga_skulder: 0,
       skatt_betald: 0,
+      koncernbidrag: 0,
+      ovriga_poster: 0,
       total: 300_000,
     },
     investerings: {
       forvarv_anlaggningar: 0,
       avyttring_anlaggningar: 0,
+      kortfristiga_placeringar: 0,
       total: 0,
     },
     finansierings: {
@@ -282,6 +285,7 @@ function plantStandardReports() {
       total: 0,
     },
     total_cash_flow: 300_000,
+    unclassified_accounts: [],
     reconciliation: {
       opening_cash_1xxx: 300_000,
       closing_cash_1xxx: 600_000,

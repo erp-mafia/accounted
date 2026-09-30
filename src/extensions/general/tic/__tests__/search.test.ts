@@ -62,9 +62,9 @@ describe('searchCompaniesForLookup', () => {
 
   it('sinks ceased companies below active ones without reordering otherwise', async () => {
     mockSearch.mockResolvedValue([
-      doc({ companyId: 1, registrationNumber: '5560000019', isCeased: true }),
+      doc({ companyId: 1, registrationNumber: '5560000019', isCeased: true, activityStatus: 'isNoLongerActive' }),
       doc({ companyId: 2, registrationNumber: '5560000027' }),
-      doc({ companyId: 3, registrationNumber: '5560000035', isCeased: true }),
+      doc({ companyId: 3, registrationNumber: '5560000035', isCeased: true, activityStatus: 'isNoLongerActive' }),
       doc({ companyId: 4, registrationNumber: '5560000043' }),
     ])
     const hits = await searchCompaniesForLookup('Testbrand')

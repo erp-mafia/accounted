@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { syncDraftVatHeadersForCustomer } from '../sync-draft-vat-headers'
-import { deriveInvoiceVatHeader as derive, getVatRules, EU_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '../vat-rules'
+import {
+  deriveInvoiceVatHeader as derive,
+  getVatRules,
+  EU_GOODS_SUPPLY_NOTICE,
+  EU_REVERSE_CHARGE_NOTICE,
+  EXPORT_NOTICE_SV,
+} from '../vat-rules'
 
 const deriveInvoiceVatHeader = (
   customer: { customer_type: 'eu_business' | 'non_eu_business'; vat_number_validated?: boolean; country: string },
@@ -140,6 +146,67 @@ describe('syncDraftVatHeadersForCustomer', () => {
     expect(await syncDraftVatHeadersForCustomer(supabase, 'company-1', 'customer-1')).toBe(0)
     expect(mock.findCall('invoice_items', 'update')).toBeUndefined()
     expect(mock.findCall('invoices', 'update')).toBeUndefined()
+  })
+
+  describe('a draft that states its own treatment (#2906)', () => {
+    it('keeps a stated goods export whatever the customer turns into', async () => {
+      mock.enqueueMany([
+        { data: { ...validatedFr, id: 'customer-1', vat_number: 'FR12345678901' } },
+        {
+          data: [
+            {
+              id: 'draft-1',
+              vat_treatment: 'export',
+              moms_ruta: '36',
+              reverse_charge_text: EXPORT_NOTICE_SV,
+              vat_treatment_override: 'export',
+              delivery_country: 'NO',
+              items: [{ vat_rate: 0, line_type: 'product' }],
+            },
+          ],
+        },
+        { data: { vat_registered: true } },
+      ])
+
+      // Re-derived from the statement, not from the (reverse-charge) customer:
+      // the header already matches, so nothing is written.
+      expect(await syncDraftVatHeadersForCustomer(supabase, 'company-1', 'customer-1')).toBe(0)
+      expect(mock.findCall('invoices', 'update')).toBeUndefined()
+    })
+
+    it('falls back to the customer and clears the statement when the buyer VAT number loses its validation', async () => {
+      mock.enqueueMany([
+        { data: { ...unvalidatedFr, id: 'customer-1', vat_number: 'FR12345678901' } },
+        {
+          data: [
+            {
+              id: 'draft-1',
+              vat_treatment: 'reverse_charge',
+              moms_ruta: '35',
+              reverse_charge_text: EU_GOODS_SUPPLY_NOTICE,
+              vat_treatment_override: 'reverse_charge',
+              delivery_country: 'FR',
+              items: [{ vat_rate: 0, line_type: 'product' }],
+            },
+          ],
+        },
+        { data: { vat_registered: true } },
+        { data: null, error: null },
+      ])
+
+      expect(await syncDraftVatHeadersForCustomer(supabase, 'company-1', 'customer-1')).toBe(1)
+      // Never 0 % the facts no longer support, and no delivery_country left
+      // behind to route revenue to 3108.
+      expect(mock.findCall('invoices', 'update')).toEqual([
+        {
+          vat_treatment: 'standard_25',
+          moms_ruta: '05',
+          reverse_charge_text: null,
+          vat_treatment_override: null,
+          delivery_country: null,
+        },
+      ])
+    })
   })
 
   it('does nothing for an unknown customer', async () => {

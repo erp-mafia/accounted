@@ -1,12 +1,18 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CustomerType } from '@/types'
-import { deriveInvoiceVatHeader, getVatRules } from '@/lib/invoices/vat-rules'
+import {
+  deriveInvoiceVatHeader,
+  resolveInvoiceVatRules,
+  type InvoiceVatTreatmentOverride,
+} from '@/lib/invoices/vat-rules'
 
 interface DraftRow {
   id: string
   vat_treatment: string | null
   moms_ruta: string | null
   reverse_charge_text: string | null
+  vat_treatment_override: InvoiceVatTreatmentOverride | null
+  delivery_country: string | null
   items: { vat_rate: number | null; line_type: string | null }[] | null
 }
 
@@ -27,6 +33,15 @@ interface DraftRow {
  * the invoice they credit, and self-billed rows are the counterparty's
  * document, so neither is touched. Issued invoices never are.
  *
+ * A draft that states its own treatment (#2906: vat_treatment_override,
+ * delivery_country) is re-decided from that statement AND the customer as
+ * it is now, through the same resolveInvoiceVatRules the builder uses. When
+ * the customer no longer supports it (an intra-EU supply whose buyer VAT
+ * number lost its validation), the draft falls back to the customer's
+ * treatment and the statement is cleared with it: it never keeps 0 % the
+ * facts no longer support, and a delivery_country left behind under a
+ * header it no longer explains could not route revenue to 3105 / 3108.
+ *
  * Best effort: returns the number of drafts updated and never throws, so a
  * customer write that already succeeded is not reported as failed.
  */
@@ -38,7 +53,7 @@ export async function syncDraftVatHeadersForCustomer(
   try {
     const { data: customer } = await supabase
       .from('customers')
-      .select('customer_type, vat_number_validated, country')
+      .select('id, customer_type, vat_number, vat_number_validated, country')
       .eq('id', customerId)
       .eq('company_id', companyId)
       .maybeSingle()
@@ -46,7 +61,7 @@ export async function syncDraftVatHeadersForCustomer(
 
     const { data: drafts } = await supabase
       .from('invoices')
-      .select('id, vat_treatment, moms_ruta, reverse_charge_text, items:invoice_items(vat_rate, line_type)')
+      .select('id, vat_treatment, moms_ruta, reverse_charge_text, vat_treatment_override, delivery_country, items:invoice_items(vat_rate, line_type)')
       .eq('company_id', companyId)
       .eq('customer_id', customerId)
       .eq('status', 'draft')
@@ -62,11 +77,13 @@ export async function syncDraftVatHeadersForCustomer(
     const vatRegistered = settings?.vat_registered !== false
 
     const current = customer as {
+      id: string
       customer_type: CustomerType
+      vat_number: string | null
       vat_number_validated: boolean | null
       country: string | null
     }
-    const vatRules = getVatRules(current.customer_type, current.vat_number_validated ?? false, current.country)
+    const customerDefault = resolveInvoiceVatRules(current)
 
     let updated = 0
     for (const draft of drafts as DraftRow[]) {
@@ -77,19 +94,31 @@ export async function syncDraftVatHeadersForCustomer(
             .map((item) => item.vat_rate ?? 0),
         ),
       ]
-      const header = deriveInvoiceVatHeader(vatRules, lineRates, { vatRegistered })
+      const stated = draft.vat_treatment_override != null || draft.delivery_country != null
+      const resolved = stated
+        ? resolveInvoiceVatRules(current, {
+            vat_treatment: draft.vat_treatment_override,
+            delivery_country: draft.delivery_country,
+          })
+        : customerDefault
+      const fallback = !resolved.ok
+      const rules = resolved.ok ? resolved.rules : customerDefault.ok ? customerDefault.rules : null
+      if (!rules) continue
+      const header = deriveInvoiceVatHeader(rules, lineRates, { vatRegistered })
       if (
+        !fallback &&
         header.vat_treatment === draft.vat_treatment &&
         header.moms_ruta === draft.moms_ruta &&
         header.reverse_charge_text === draft.reverse_charge_text
       ) {
         continue
       }
+      const update = fallback ? { ...header, vat_treatment_override: null, delivery_country: null } : header
       // status = 'draft' again in the filter: a draft issued between the read
       // and this write keeps the header it was issued with.
       const { error } = await supabase
         .from('invoices')
-        .update(header)
+        .update(update)
         .eq('id', draft.id)
         .eq('company_id', companyId)
         .eq('status', 'draft')

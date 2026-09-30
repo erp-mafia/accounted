@@ -121,7 +121,7 @@ const LIVE_STATUSES: PeppolRegistrationStatus[] = ['pending', 'registered']
 
 /**
  * A pending row older than this is a crashed or timed-out attempt, not a call
- * in flight: the connector gives up after 60 s and the route after 90 s.
+ * in flight: the connector gives up after 50 s and the route after 90 s.
  */
 export const PEPPOL_PENDING_STALE_MS = 5 * 60 * 1000
 

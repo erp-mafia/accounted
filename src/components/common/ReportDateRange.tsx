@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn, formatDate } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
+import { sameWindow, windowFitsPeriod } from '@/lib/reports/report-drilldown'
 
 export type DateRangeValue = {
   /** Inclusive lower bound. ISO YYYY-MM-DD. `undefined` = period start. */
@@ -43,6 +44,15 @@ interface Props {
    * nobody chose.
    */
   storageKeyPrefix?: string
+  /**
+   * A window to open on instead of the remembered preset: a report
+   * drill-down passes the window of the amount that was clicked
+   * (lib/reports/report-drilldown.ts). Applied once, on the first
+   * resolution, and only when it fits the period; shown as the preset it
+   * equals, else as a custom range, and never remembered (it is the other
+   * report's window, not this user's default).
+   */
+  initialValue?: DateRangeValue
   className?: string
 }
 
@@ -146,6 +156,7 @@ export function ReportDateRange({
   onChange,
   defaultPreset = 'ytd',
   storageKeyPrefix = STORAGE_KEY_PREFIX,
+  initialValue,
   className,
 }: Props) {
   const t = useTranslations('reports')
@@ -156,12 +167,25 @@ export function ReportDateRange({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ top: 0, left: 0 })
+  // Consumed by the first resolution below, whether or not it fits.
+  const pendingInitialRef = useRef(initialValue)
 
   // Restore last-used preset per company, then resolve it against the
   // current fiscal period. The period selector lives upstream: when it
   // changes, we re-resolve so the dates always sit inside the visible year.
   useEffect(() => {
     if (!company?.id || typeof window === 'undefined') return
+    const initialWindow = pendingInitialRef.current
+    pendingInitialRef.current = undefined
+    if (initialWindow && windowFitsPeriod(initialWindow, periodStart, periodEnd)) {
+      const today = todayIso()
+      const match = MENU_PRESETS.find((p) =>
+        sameWindow(resolvePreset(p, periodStart, periodEnd, today), initialWindow, periodStart, periodEnd),
+      )
+      setPreset(match ?? 'custom')
+      onChange(match ? resolvePreset(match, periodStart, periodEnd, today) : initialWindow)
+      return
+    }
     const stored = window.localStorage.getItem(storageKeyPrefix + company.id) as Preset | null
     const initial: Preset = stored && PRESETS.includes(stored) ? stored : defaultPreset
     setPreset(initial)

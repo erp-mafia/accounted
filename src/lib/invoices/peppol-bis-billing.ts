@@ -5,6 +5,9 @@ import {
   validatePlusgiroNumber,
 } from '@/lib/bankgiro/luhn'
 import { isSaneDateString, normalizeOrgNumber } from '@/lib/invariants'
+import { normalizeIban } from '@/lib/cash-accounts/service'
+import { isEntityType, legalFormProfile, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import { isValidBic, isValidIban } from '@/lib/supplier-invoices/payment-details-backfill'
 import { resolveInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { computeLineAmounts, hasLineDiscount } from '@/lib/invoices/line-amounts'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
@@ -78,8 +81,14 @@ interface PreparedInvoice {
   supplier: PreparedParty
   buyer: PreparedParty
   payment: {
+    /** BT-84: the giro number's digits, or the IBAN in upper case without spaces. */
     accountId: string
-    branchId: 'SE:BANKGIRO' | 'SE:PLUSGIRO'
+    /**
+     * BT-86: SE:BANKGIRO or SE:PLUSGIRO names the Swedish giro system (SE-R-011);
+     * for an IBAN it is the BIC, or null when no valid BIC is on file.
+     */
+    branchId: string | null
+    /** BT-83: the OCR reference, one for whichever account is paid to. */
     paymentId: string
   }
   productItems: InvoiceItem[]
@@ -312,11 +321,17 @@ function prepareInvoice(input: PeppolInvoiceInput):
       'The customer must be a Swedish business or organization.',
     ))
   }
-  if (company.entity_type !== 'aktiebolag') {
+  // Every form with an organisationsnummer sends under scheme 0007. A form
+  // whose org number is the owner's personnummer would publish it as its
+  // Peppol identifier, so it waits for a 0088 GLN. prepareParty refuses a
+  // personnummer-shaped number whatever the form, so an unrecognised
+  // entity_type falls through to that check instead of defaulting a form.
+  if (isEntityType(company.entity_type) && usesPersonnummerAsOrgNumber(company.entity_type)) {
+    const form = legalFormProfile(company.entity_type).label
     issues.push(validationIssue(
       'SUPPLIER_ENTITY_TYPE_UNSUPPORTED', 'company.entity_type',
-      'Enskild firma kräver ett separat GLN som Peppol-identifierare. Exporten stöder därför endast aktiebolag tills GLN kan konfigureras.',
-      'A sole trader requires a separate GLN as its Peppol identifier. This export therefore supports limited companies only until GLN can be configured.',
+      `${form} har ägarens personnummer som organisationsnummer och behöver därför ett separat GLN som Peppol-identifierare. GLN kan inte konfigureras ännu.`,
+      `The company's legal form (${form}) uses the owner's personal identity number as its organisation number, so it needs a separate GLN as its Peppol identifier. GLN cannot be configured yet.`,
     ))
   }
 
@@ -346,8 +361,11 @@ function prepareInvoice(input: PeppolInvoiceInput):
   }, false, issues)
 
   // Same payee the PDF and the email print: the resolver, not the raw legacy
-  // columns. Peppol is SEK-only (validated above), so resolve for SEK.
+  // columns. Peppol is SEK-only (validated above), so resolve for SEK. The
+  // first valid of bankgiro, plusgiro and IBAN is paid to.
   const payee = resolveInvoicePaymentAccount(company, 'SEK', invoice.payment_details ?? null)
+  const iban = normalizeIban(payee?.iban)
+  const bic = payee?.bic?.replace(/\s+/g, '').toUpperCase() || null
   let payment: PreparedInvoice['payment'] | null = null
   if (hasText(payee?.bankgiro) && validateBankgiroNumber(payee.bankgiro)) {
     payment = {
@@ -361,11 +379,22 @@ function prepareInvoice(input: PeppolInvoiceInput):
       branchId: 'SE:PLUSGIRO',
       paymentId: generateOcrReference(invoice.invoice_number ?? ''),
     }
+  } else if (iban && isValidIban(iban)) {
+    // PaymentMeansCode stays 30 (credit transfer): the export is SEK-only and
+    // 58 is the euro SEPA scheme, and SE-R-012 asks for 30 on domestic credit
+    // transfers between Swedish parties. BT-83 keeps the OCR reference: one
+    // PaymentID serves any payment means (UBL-SR-44), and it is the key the
+    // bank matcher reads (lib/invoices/ocr-keys.ts).
+    payment = {
+      accountId: iban,
+      branchId: bic && isValidBic(bic) ? bic : null,
+      paymentId: generateOcrReference(invoice.invoice_number ?? ''),
+    }
   } else {
     issues.push(validationIssue(
       'PAYMENT_ACCOUNT_REQUIRED', 'company.bankgiro',
-      'Ett giltigt Bankgiro eller Plusgiro krävs för svensk Peppol-export.',
-      'A valid Bankgiro or Plusgiro account is required for Swedish Peppol export.',
+      'Ett giltigt Bankgiro, Plusgiro eller IBAN krävs för svensk Peppol-export.',
+      'A valid Bankgiro, Plusgiro or IBAN is required for Swedish Peppol export.',
     ))
   }
   if (payment && !/^\d{2,25}$/.test(payment.paymentId)) {
@@ -665,9 +694,13 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     `    <cbc:PaymentID>${prepared.payment.paymentId}</cbc:PaymentID>`,
     '    <cac:PayeeFinancialAccount>',
     `      <cbc:ID>${prepared.payment.accountId}</cbc:ID>`,
-    '      <cac:FinancialInstitutionBranch>',
-    `        <cbc:ID>${prepared.payment.branchId}</cbc:ID>`,
-    '      </cac:FinancialInstitutionBranch>',
+    ...(prepared.payment.branchId
+      ? [
+          '      <cac:FinancialInstitutionBranch>',
+          `        <cbc:ID>${prepared.payment.branchId}</cbc:ID>`,
+          '      </cac:FinancialInstitutionBranch>',
+        ]
+      : []),
     '    </cac:PayeeFinancialAccount>',
     '  </cac:PaymentMeans>',
     '  <cac:TaxTotal>',

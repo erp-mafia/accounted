@@ -55,6 +55,7 @@ const registeredRow = {
 function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTransport {
   return {
     provider: 'qvalia',
+    tenantId: 'SE5595386219',
     lookupRecipient: vi.fn(),
     submit: vi.fn(),
     verifyWebhook: vi.fn(),
@@ -100,7 +101,7 @@ describe('/api/settings/peppol', () => {
     delete process.env.PEPPOL_TRANSPORT_PROVIDER
   })
 
-  it('gives the connector call room to finish: the route outlives the 60 s transport timeout', () => {
+  it('gives the connector call room to finish: the route outlives the 50 s transport timeout', () => {
     expect(maxDuration).toBeGreaterThanOrEqual(90)
   })
 

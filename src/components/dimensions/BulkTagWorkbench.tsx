@@ -36,6 +36,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { dimensionDisplayName } from '@/components/dimensions/dimension-label'
+import { useDimensions } from '@/lib/reference-data/hooks'
 
 /** Line DTO inside a voucher from GET /api/dimensions/tagging/lines. */
 interface TaggingLine {
@@ -69,12 +71,6 @@ interface ApplyResult {
 const ACCOUNT_RE = /^\d{4}$/
 /** POST /api/dimensions/tagging/apply accepts at most 500 line_ids per call. */
 const APPLY_CHUNK = 500
-
-function dimensionLabel(sieDimNo: string): string {
-  if (sieDimNo === '1') return 'KS'
-  if (sieDimNo === '6') return 'Proj'
-  return `Dim ${sieDimNo}`
-}
 
 /** Stable grouping key for a dimensions map (sorted entries). */
 function mapKey(dims: Record<string, string>): string {
@@ -145,6 +141,10 @@ export default function BulkTagWorkbench() {
   const [vouchers, setVouchers] = useState<TaggingVoucher[] | null>(null)
   const [totalCapped, setTotalCapped] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  // Tag chips carry each dimension's registry name, as every other surface
+  // does (session-cached: the pickers below read the same entry).
+  const { dimensions: registry } = useDimensions()
+  const dimensionLabel = (sieDimNo: string) => dimensionDisplayName(registry, sieDimNo)
 
   // Selection (line-id based: the retag RPC is per line), expansion + apply
   const [selected, setSelected] = useState<Set<string>>(new Set())

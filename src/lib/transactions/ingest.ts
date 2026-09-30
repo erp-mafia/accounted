@@ -14,7 +14,7 @@ import { findRotRutPayoutSetMatch } from '@/lib/invoices/rot-rut-payout-set-matc
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, shiftIsoDate } from '@/lib/transactions/external-id'
+import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, reconcileStableExternalIds, shiftIsoDate } from '@/lib/transactions/external-id'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
@@ -94,6 +94,12 @@ export interface ExistingTransactionMaps {
    * consume an incoming import.
    */
   unbookedImported: DescBucket
+  /**
+   * The content bucket each stored `external_id` sits in, so a Layer-1 id match
+   * consumes its stored row even when the incoming row's date or amount drifted
+   * into a different bucket (see consumeByExternalId).
+   */
+  bucketKeyByExternalId: Map<string, string>
 }
 
 /** Push a row into its (date, öre) bucket, normalizing the description. */
@@ -108,7 +114,7 @@ function addToBucket(
   isImportFeed: boolean,
   currency: string | null,
   externalId: string | null,
-): void {
+): string {
   const key = contentBucketKey(date, amount)
   const entry: BucketEntry = {
     id,
@@ -122,6 +128,25 @@ function addToBucket(
   const entries = bucket.get(key)
   if (entries) entries.push(entry)
   else bucket.set(key, [entry])
+  return key
+}
+
+/**
+ * Remove the stored entry carrying `externalId` from its content bucket once a
+ * Layer-1 id match has claimed it. Exported so the dedup preview applies the
+ * same rule.
+ */
+export function consumeByExternalId(maps: ExistingTransactionMaps, externalId: string): void {
+  const bucketKey = maps.bucketKeyByExternalId.get(externalId)
+  if (bucketKey === undefined) return
+  for (const bucket of [maps.booked, maps.unbookedImported]) {
+    const entries = bucket.get(bucketKey)
+    const idx = entries?.findIndex((entry) => entry.externalId === externalId) ?? -1
+    if (idx !== -1) {
+      entries!.splice(idx, 1)
+      return
+    }
+  }
 }
 
 /**
@@ -164,7 +189,8 @@ export async function buildExistingTransactionMaps(
 ): Promise<ExistingTransactionMaps> {
   const booked: DescBucket = new Map()
   const unbookedImported: DescBucket = new Map()
-  if (rawTransactions.length === 0) return { booked, unbookedImported }
+  const bucketKeyByExternalId = new Map<string, string>()
+  if (rawTransactions.length === 0) return { booked, unbookedImported, bucketKeyByExternalId }
 
   const dates = rawTransactions.map((t) => t.date).sort()
   const dateFrom = dates[0]
@@ -188,7 +214,7 @@ export async function buildExistingTransactionMaps(
       // description: a title edit must never make the dedup bridge miss a
       // genuine re-import. Falls back to description for rows predating the
       // original_description column.
-      addToBucket(
+      const key = addToBucket(
         booked,
         tx.id ?? null,
         tx.date,
@@ -200,6 +226,7 @@ export async function buildExistingTransactionMaps(
         tx.currency ?? null,
         tx.external_id ?? null,
       )
+      if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
   } catch {
     // Non-critical: content-based dedup will be skipped
@@ -229,7 +256,7 @@ export async function buildExistingTransactionMaps(
     for (const tx of unbookedRows) {
       // See booked-map note: dedup on the immutable bank original so a
       // user title edit cannot reopen the duplicate-import window.
-      addToBucket(
+      const key = addToBucket(
         unbookedImported,
         tx.id ?? null,
         tx.date,
@@ -241,12 +268,23 @@ export async function buildExistingTransactionMaps(
         tx.currency ?? null,
         tx.external_id ?? null,
       )
+      if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
   } catch {
     // Non-critical: reconnect dedup will be skipped
   }
 
-  return { booked, unbookedImported }
+  return { booked, unbookedImported, bucketKeyByExternalId }
+}
+
+/**
+ * The unique index on (company_id, external_id) refusing an insert: the id
+ * was stored after the Layer-1 pre-fetch read the batch's ids. Matched by
+ * index name, like the other named-index checks (supplier-invoices/create.ts),
+ * so no other constraint is ever read as a duplicate.
+ */
+function isExternalIdConflict(error: { code?: string | null; message?: string | null } | null): boolean {
+  return error?.code === '23505' && (error.message ?? '').includes('idx_transactions_company_external_id')
 }
 
 /**
@@ -321,6 +359,17 @@ export async function ingestTransactions(
   // re-imports the same period via CSV, or the reverse, a CSV import that
   // predates the first PSD2 sync of the same account.
   const existingMaps = await buildExistingTransactionMaps(supabase, companyId, rawTransactions)
+
+  // Stable (date, öre, index) ids name a transaction only while its bucket's
+  // set of rows never changes; a late-booked sibling would otherwise take a
+  // stored row's index and be skipped as a duplicate. Re-key them against the
+  // stored rows before any dedup layer runs (see reconcileStableExternalIds).
+  const reconciledIds = reconcileStableExternalIds(
+    rawTransactions.map((raw) => ({ external_id: raw.external_id, description: normalizeImportedDescription(raw.description) })),
+    [...existingMaps.booked.values(), ...existingMaps.unbookedImported.values()].flat(),
+  )
+  rawTransactions = rawTransactions.map((raw, i) =>
+    reconciledIds[i] === raw.external_id ? raw : { ...raw, external_id: reconciledIds[i] })
 
   // Every row in one ingest call shares an import_source (EB sync passes
   // 'enable_banking', bank-file import passes 'csv_<format>'/'camt053'), so the
@@ -459,6 +508,13 @@ export async function ingestTransactions(
       .eq('company_id', companyId)
       .in('external_id', chunk)
     data?.forEach(r => existingExternalIds.add(r.external_id))
+  }
+  // A stored row an incoming id names is accounted for by Layer 1: take it out
+  // of the content buckets BEFORE the loop, so no other incoming row (earlier
+  // in the batch or later) can also be deduped against it. Counting semantics
+  // then hold across both layers, independent of batch order.
+  for (const raw of rawTransactions) {
+    if (existingExternalIds.has(raw.external_id)) consumeByExternalId(existingMaps, raw.external_id)
   }
 
   // Resolve the cash account this batch settled on, once. Every row in one
@@ -1041,6 +1097,24 @@ export async function ingestTransactions(
       : await supabase.from('transactions').insert(insertPayload).select().single()
 
     if (insertError || !newTransaction) {
+      // Layer 1, settled by the unique index instead of the pre-fetch: another
+      // writer of the same feed committed this external_id after the batch
+      // read the stored ids. The row exists, exactly as a pre-fetch one moment
+      // later would have found it, so it is a duplicate, not a failed batch
+      // (which would also skip the caller's balance refresh). Traced: with the
+      // shared sync lease, two writers of one feed should be rare.
+      if (isExternalIdConflict(insertError)) {
+        result.duplicates++
+        log.warn('import dedup: external_id stored concurrently, skipped as duplicate', {
+          decision: 'external-id-conflict',
+          mode: 'enforced',
+          bucket: bucketKey,
+          incomingExternalId: raw.external_id,
+          incomingSource: raw.import_source ?? null,
+          cashAccountId,
+        })
+        continue
+      }
       result.errors++
       if (!result.first_error && insertError) {
         result.first_error = {

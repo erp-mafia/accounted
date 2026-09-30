@@ -26,8 +26,8 @@ Answer each question with a tool, not an assumption:
 1. **Which company?** \`gnubok_list_companies\`. One company: use it. Several: use the \`company_id\` the handoff gave you, or ask which one. Pass that \`company_id\` on every call, including approval. The connection may default to another company.
 2. **Company facts.** \`gnubok_get_agent_briefing({ company_id })\`: identity, \`accounting_method\` (\`accrual\` = faktureringsmetoden, \`cash\` = kontantmetoden), memories, dimensions, recommended_tools. \`gnubok_get_company_settings\`: legal form (enskild firma or aktiebolag), whether the company is momsregistrerad, and the moms period. Legal form changes private bookings (EF 2013/2018, AB 2893). A company that is not momsregistrerad books no moms at all: the tools resolve every rate to exempt, so do not add moms legs by hand.
 3. **Periods.** \`gnubok_list_fiscal_periods\`: is there a fiscal year covering the transaction dates, and is it open, locked or closed? No period for a date: stop for those rows and tell the user the räkenskapsår must be created first. Locked or closed: see "When a tool call fails".
-4. **Bank.** \`gnubok_list_cash_accounts\`: which bank accounts exist and whether they are connected. If the transactions look stale or a month is missing, say so; a sync (\`gnubok_sync_bank\`) or bank connection is the user's call.
-5. **Domain rules.** Load \`horizontal/swedish-accounting-compliance\` and \`horizontal/swedish-vat\` with \`gnubok_load_skill\` before deciding anything about moms, representation, reverse charge or private items. Swedish rules come from those atoms, never from memory. If they do not answer a question, ask the user or stop; do not invent a rule.
+4. **Bank.** \`gnubok_list_cash_accounts\` (not in tools/list: invoke it through \`gnubok_call_tool\`): which bank accounts exist and whether they are connected. If the transactions look stale or a month is missing, say so; a sync (\`gnubok_sync_bank\`) or bank connection is the user's call.
+5. **Domain rules.** \`horizontal/swedish-accounting-compliance\` and \`horizontal/swedish-vat\` settle moms, representation, reverse charge and private items. When this run started with \`gnubok_get_task\` they are already in its \`knowledge\`: do not load them again. Otherwise load them with \`gnubok_load_skill\` before deciding anything about those. Swedish rules come from those atoms, never from memory. If they do not answer a question, ask the user or stop; do not invent a rule.
 
 ### Agree the scope
 
@@ -67,7 +67,7 @@ A suggestion is evidence, not permission. History shows what was booked before, 
 \`gnubok_categorize_transaction\` arguments (real schema):
 
 - \`transaction_id\` (required), \`category\` (required): one of income_services, income_products, income_other, expense_equipment, expense_software, expense_travel, expense_office, expense_marketing, expense_professional_services, expense_education, expense_representation, expense_consumables, expense_vehicle, expense_telecom, expense_bank_fees, expense_card_fees, expense_currency_exchange, expense_other, private.
-- \`vat_treatment\`: standard_25, reduced_12, reduced_6, reverse_charge, export, exempt. Default is standard_25 for business expenses; representation defaults to reduced_12. Set it from the underlag, not from habit.
+- \`vat_treatment\`: standard_25, reduced_12, reduced_6, reverse_charge, export, exempt, or reverse charge with its basis box named: reverse_charge_eu_services (ruta 21), reverse_charge_non_eu_services (ruta 22), reverse_charge_eu_goods (ruta 20). Default is standard_25 for business expenses; representation defaults to reduced_12. Set it from the underlag, not from habit.
 - \`vat_amount\`: the underlag's exact moms (> 0) when it is not rate times amount (dricks, a mixed-rate receipt, the representation cap). Only with a rate-based vat_treatment. Swedish moms only.
 - \`account_override\`: a 4-digit account string (e.g. "6072") that replaces the category's default account; the account must exist and be active (\`gnubok_list_accounts\`). Always pass an explicit \`vat_treatment\` with it: without one the override books gross with no moms line. Not valid with category private.
 - \`notes\`: short audit context (under 200 chars): for representation, deltagare and syfte.
@@ -94,8 +94,9 @@ Use what is already in Accounted before asking the user for anything:
 
 - \`gnubok_list_unmatched_documents\`: documents not linked to anything yet, with vendor, amount, currency and date hints. The amount is in the document's currency: compare foreign amounts against the transaction's currency, not a converted guess.
 - \`gnubok_list_inbox_items({ unprocessed_only: true })\` and \`gnubok_get_inbox_item({ inbox_item_id })\` for the extracted data; \`gnubok_get_document_content\` when you need to read the document itself.
-- A document belongs to a transaction only when vendor, amount and date agree. Then stage \`gnubok_attach_document_to_transaction({ transaction_id, document_id })\` alongside the booking, and use the document's moms (\`vat_amount\`, \`vat_treatment\`) in the categorize call. One document backs one purchase: never attach the same \`document_id\` to two rows. Two documents fit equally well: attach neither and ask.
+- A document belongs to a transaction only when vendor, amount and date agree. Then stage \`gnubok_attach_document_to_transaction({ transaction_id, document_id })\` alongside the booking, and use the document's moms (\`vat_amount\`, \`vat_treatment\`) in the categorize call. One document backs one purchase: never attach the same \`document_id\` to two rows, nor a document that carries \`pending_link\` (already proposed for another purchase). Two documents fit equally well: attach neither and ask.
 - A supplier invoice (faktura with due date, to be paid later) in the inbox: \`gnubok_create_supplier_invoice_from_inbox({ inbox_item_id })\` stages it as a leverantörsfaktura (use \`dry_run: true\` first to see supplier and lines). If it returns \`staged: false\` with supplier candidates, ask the user which supplier it is. When the payment later shows up in the bank, match it with \`gnubok_match_batch_allocate\`, do not categorize it. Attesting a registered supplier invoice is \`gnubok_approve_supplier_invoice({ supplier_invoice_id })\`, always staged.
+- A supplier's credit note (kreditfaktura) in the inbox is never a new leverantörsfaktura: \`gnubok_create_supplier_invoice_from_inbox\` answers \`staged: false\` with \`preview.credit_target\` (the invoice it credits, or candidates) and \`next\`. Stage \`gnubok_credit_supplier_invoice({ supplier_invoice_id, inbox_item_id })\`; a credit note for only part of an invoice is refused, hand it over (see \`kreditfaktura-process\`).
 - Several matched receipts that share one category and moms (e.g. a month of the same SaaS): \`gnubok_bulk_book_inbox_items({ item_ids, category, vat_treatment })\`, up to 200 items; unmatched or booked items are skipped, so check the preview for what was actually included.
 
 ## Special cases and the question to ask
@@ -114,7 +115,7 @@ Meals, gifts or events with customers or staff. Before staging, you need who too
 
 ### Foreign suppliers and reverse charge
 
-- The receipt shows no Swedish moms and the seller is a business abroad (typical SaaS in USD or EUR): \`vat_treatment: "reverse_charge"\`, but only when the underlag confirms no VAT was charged. Accounted books both sides (utgående and ingående moms), as the VAT atom requires.
+- The receipt shows no Swedish moms and the seller is a business abroad (typical SaaS in USD or EUR): reverse charge, but only when the underlag confirms no VAT was charged. Accounted books both sides (utgående and ingående moms) and the beskattningsunderlag (45xx / 4598) for ruta 20-22, as the VAT atom requires. Name the box from the seller on the underlag: \`reverse_charge_eu_services\` for an EU seller, \`reverse_charge_non_eu_services\` outside the EU; plain \`reverse_charge\` books EU services, and the staged preview's \`reverse_charge\` says which box it used.
 - The receipt shows foreign VAT (a hotel abroad, a foreign restaurant): not reverse charge, and foreign VAT is never deductible here. Book it gross with \`vat_treatment: "exempt"\`.
 - The company is not momsregistrerad, or it is goods from another EU country, or an import from outside the EU (tull, importmoms): check \`horizontal/swedish-vat\`. If it does not settle the case for this company, do not guess a treatment: ask the user or hand it over.
 - No underlag at all for a foreign charge: you cannot tell reverse charge from foreign VAT. Ask for the receipt first.
@@ -190,7 +191,7 @@ If more rows remain than you worked through, say how many and offer another roun
 
 ## Tools
 
-- \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`, \`gnubok_get_company_settings\`, \`gnubok_list_fiscal_periods\`, \`gnubok_list_cash_accounts\` (orientation)
+- \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`, \`gnubok_get_company_settings\`, \`gnubok_list_fiscal_periods\`, \`gnubok_list_cash_accounts\` (via \`gnubok_call_tool\`) (orientation)
 - \`gnubok_list_skills\`, \`gnubok_load_skill\` (domain atoms and sibling skills)
 - \`gnubok_list_uncategorized_transactions\`, \`gnubok_suggest_categories\`, \`gnubok_query_journal\`, \`gnubok_list_accounts\`, \`gnubok_list_dimensions\` (read)
 - \`gnubok_list_invoices\`, \`gnubok_list_supplier_invoices\` (open invoices before categorizing)

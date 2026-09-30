@@ -203,14 +203,14 @@ function SkatteverketPersonalConnectionCard() {
     // settings page never navigates, so browser history stays clean and
     // closing the settings afterwards cannot walk Back into the consumed
     // OAuth chain (the "redirected to Skatteverket again" bug).
-    const returnTo = encodeURIComponent('/settings/tax')
+    const returnTo = encodeURIComponent('/settings/skatteverket')
     const url = `/api/extensions/ext/skatteverket/authorize?return_to=${returnTo}`
     const tab = window.open(url, '_blank')
     popupRef.current = tab
     if (!tab) {
       // Tab blocked: fall back to the full-page flow. The callback then
-      // lands on /settings/tax?skv_connected=true, handled by
-      // TaxSettingsContent's query-param effect.
+      // lands on /settings/skatteverket?skv_connected=true, handled by
+      // SkatteverketSettingsContent's query-param effect.
       window.location.href = url
       return
     }

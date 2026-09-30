@@ -12,15 +12,34 @@
  * the user actually has open is M-2, not M-1, so the default tracks the
  * deadline. Over-40M companies declare M on the 26th of M+1, which makes the
  * most recently ended month the due one year-round.
+ *
+ * Helårsmoms periods are räkenskapsår, keyed by the calendar year they end in
+ * (lib/vat/filing-record.ts); `fiscalYearEndMonth` places them and defaults
+ * to December. Their declaration falls due within the twelve months after
+ * the year ends, so the most recently ended räkenskapsår is the open one.
  */
 
 import { getVatDeadlineForPeriod } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
+import type { VatPeriodType } from '@/types'
 
 export interface VatPeriodDefault {
   year: number
-  /** 1-12 for monthly, 1-4 for quarterly. */
+  /** 1-12 for monthly, 1-4 for quarterly, always 1 for yearly. */
   period: number
+}
+
+export interface VatPeriodCalendarOptions {
+  /** Month (1-12) the räkenskapsår ends; places yearly periods. Default 12. */
+  fiscalYearEndMonth?: number
+}
+
+/**
+ * The räkenskapsår running on `today`, keyed by the year it ends in: a year
+ * ending in June runs from July, so from July on it is next year's.
+ */
+function runningFiscalYear(today: Date, fiscalYearEndMonth: number): number {
+  return today.getMonth() + 1 > fiscalYearEndMonth ? today.getFullYear() + 1 : today.getFullYear()
 }
 
 /** Return the monthly VAT period a fixed number of months before a month. */
@@ -31,12 +50,16 @@ function previousMonth(year: number, month: number, monthsBack: number): VatPeri
 
 /** Select the latest ended VAT period that is currently relevant for filing. */
 export function mostRecentEndedVatPeriod(
-  periodType: 'monthly' | 'quarterly',
+  periodType: VatPeriodType,
   today: Date = new Date(),
-  opts: { over40m?: boolean } = {},
+  opts: { over40m?: boolean } & VatPeriodCalendarOptions = {},
 ): VatPeriodDefault {
   const year = today.getFullYear()
   const month = today.getMonth() + 1
+
+  if (periodType === 'yearly') {
+    return { year: runningFiscalYear(today, opts.fiscalYearEndMonth ?? 12) - 1, period: 1 }
+  }
 
   if (periodType === 'monthly') {
     const mostRecentEnded = previousMonth(year, month, 1)
@@ -64,11 +87,15 @@ export function mostRecentEndedVatPeriod(
 
 /** The period that is running today: the first one that cannot be filed yet. */
 export function currentVatPeriod(
-  periodType: 'monthly' | 'quarterly',
+  periodType: VatPeriodType,
   today: Date = new Date(),
+  opts: VatPeriodCalendarOptions = {},
 ): VatPeriodDefault {
   const year = today.getFullYear()
   const month = today.getMonth() + 1
+  if (periodType === 'yearly') {
+    return { year: runningFiscalYear(today, opts.fiscalYearEndMonth ?? 12), period: 1 }
+  }
   return periodType === 'monthly'
     ? { year, period: month }
     : { year, period: Math.ceil(month / 3) }
@@ -76,10 +103,10 @@ export function currentVatPeriod(
 
 /** The period immediately after `period`, rolling over the year boundary. */
 export function nextVatPeriod(
-  periodType: 'monthly' | 'quarterly',
+  periodType: VatPeriodType,
   period: VatPeriodDefault,
 ): VatPeriodDefault {
-  const periodsPerYear = periodType === 'monthly' ? 12 : 4
+  const periodsPerYear = periodType === 'monthly' ? 12 : periodType === 'quarterly' ? 4 : 1
   return period.period >= periodsPerYear
     ? { year: period.year + 1, period: 1 }
     : { year: period.year, period: period.period + 1 }

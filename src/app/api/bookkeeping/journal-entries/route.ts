@@ -4,7 +4,7 @@ import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
-import { CreateJournalEntrySchema } from '@/lib/api/schemas'
+import { CreateDashboardJournalEntrySchema } from '@/lib/api/schemas'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
 import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -27,8 +27,9 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   const status = searchParams.get('status')
   // Drafts get their own surface in the UI; the committed list excludes them.
   const excludeDraft = searchParams.get('exclude_draft') === 'true'
-  // Collapse a correction group to the live correction (hide the storno and the
-  // reversed original it replaced). The full chain stays reachable.
+  // Collapse a correction group to the live correction: fold the reversed
+  // original and its storno once a posted correction replaced them. A storno
+  // with no correction stays visible (#3149). The full chain stays reachable.
   const collapseCorrections = searchParams.get('collapse_corrections') === 'true'
   // Clamp pagination to bound DB work against oversized/pathological inputs
   // (compliance A.8.28 / ASVS V1.2.5). The UI page-size selector offers
@@ -357,11 +358,13 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     }
   }
 
-  // Collapse correction groups (voucher-sort / search path): hide the storno
-  // and the reversed originals a posted correction replaced, leaving the live
-  // correction. Pagination/count stay correct because these are query filters.
+  // Collapse correction groups (voucher-sort / search path): fold the reversed
+  // originals a posted correction replaced, and their stornos, leaving the live
+  // correction. A storno with no correction stays visible: it is the only row
+  // that carries its voucher number, so hiding it showed a hole in the series
+  // (#3149). Same rule as the RPC's p_collapse_corrections. Pagination/count
+  // stay correct because these are query filters.
   if (collapseCorrections) {
-    query = query.neq('source_type', 'storno')
     const { data: corrections } = await supabase
       .from('journal_entries')
       .select('correction_of_id')
@@ -373,7 +376,12 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       new Set((corrections ?? []).map((r) => r.correction_of_id).filter(Boolean) as string[])
     )
     if (correctedOriginalIds.length > 0) {
-      query = query.not('id', 'in', `(${correctedOriginalIds.join(',')})`)
+      const idList = `(${correctedOriginalIds.join(',')})`
+      query = query.not('id', 'in', idList)
+      // PostgREST or=(...): a row survives unless it is a storno of a corrected
+      // original. `is.null` keeps an unlinked storno visible, since
+      // NULL NOT IN (...) is NULL and would otherwise drop it.
+      query = query.or(`source_type.neq.storno,reverses_id.is.null,reverses_id.not.in.${idList}`)
     }
   }
 
@@ -395,7 +403,10 @@ export const POST = withRouteContext(
   async (request, ctx) => {
   const { supabase, companyId, user, log } = ctx
 
-  const validation = await validateBody(request, CreateJournalEntrySchema)
+  // source_type is limited to what the dashboard's own forms author: a
+  // caller-chosen label must not claim an engine-owned exemption
+  // (CreateDashboardJournalEntrySchema).
+  const validation = await validateBody(request, CreateDashboardJournalEntrySchema)
   if (!validation.success) return validation.response
   const body = validation.data
 

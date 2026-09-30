@@ -16,7 +16,12 @@ vi.mock('@/lib/reports/vat-declaration', () => ({
   resolvePeriodDates: (...a: unknown[]) => mockResolvePeriodDates(...a),
 }))
 
-import { buildMomsuppgift, buildAgiUnderlag, resolveRedovisare } from '../lib/declaration-prep'
+import {
+  buildMomsuppgift,
+  buildAgiUnderlag,
+  resolveRedovisare,
+  resolveRedovisningsperiod,
+} from '../lib/declaration-prep'
 import { rutorToMomsuppgift } from '../lib/mappers'
 
 const READ_KEYS = [
@@ -46,6 +51,32 @@ describe('resolveRedovisare', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { org_number: null, entity_type: 'aktiebolag' } })
     await expect(resolveRedovisare(supabase as never, 'company-1')).rejects.toThrow(/Organisationsnummer saknas/)
+  })
+})
+
+describe('resolveRedovisningsperiod', () => {
+  it('formats a calendar period as YYYYMM', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      resolveRedovisningsperiod(supabase as never, 'company-1', { periodType: 'quarterly', year: 2026, period: 1 }),
+    ).resolves.toBe('202603')
+  })
+
+  it('refuses to produce a period Skatteverket cannot read, before any request is built', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    // The shape that reached Skatteverket as "undefinedundefined" (7 requests,
+    // all 400): a caller that passed neither year nor a known period.
+    for (const input of [
+      { periodType: 'monthly', year: undefined, period: undefined },
+      { periodType: 'weekly', year: 2026, period: 1 },
+      { periodType: 'monthly', year: 2026, period: undefined },
+      { periodType: 'quarterly', year: 2026, period: 5 },
+    ]) {
+      await expect(
+        resolveRedovisningsperiod(supabase as never, 'company-1', input as never),
+        JSON.stringify(input),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    }
   })
 })
 

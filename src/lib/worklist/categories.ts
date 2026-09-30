@@ -29,6 +29,7 @@ import {
 } from '@/lib/invoices/matchable-statuses'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
+import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
 import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 
 // Canonical home is lib/worklist/types.ts (dependency-free, client-safe);
@@ -262,16 +263,28 @@ export async function countHeldDocuments(supabase: SupabaseClient, companyId: st
   return count ?? 0
 }
 
-/** Arkiv: admitted documents whose current model classification is 'other' or uncertain. */
+/**
+ * How far back "say what this is" reaches. The read backfill types years of history, and asking about every
+ * old document it could not name would bury Att göra (prod 2026-09-25: 621 such questions in 78 companies
+ * and growing as history was typed, 95 in one). Older ones stay in Dokument's folders, unasked.
+ */
+export const REVIEW_RECENT_DAYS = 60
+export const reviewSince = (now = new Date()): string => new Date(now.getTime() - REVIEW_RECENT_DAYS * 86_400_000).toISOString()
+
+/** Arkiv: recently uploaded, admitted documents whose current model classification is 'other' or uncertain. */
 export async function countUnclassifiedDocuments(supabase: SupabaseClient, companyId: string): Promise<number> {
   const { count, error } = await supabase
     .from('document_classifications')
-    .select('id', { count: 'exact', head: true })
+    .select('id, document_attachments!inner(created_at)', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('is_current', true)
     .eq('decided_by', 'model')
     .eq('relevance', 'relevant')
     .or('doc_type.eq.other,confidence.lt.0.6')
+    .gte('document_attachments.created_at', reviewSince())
+    // A booked document is never asked about: the verifikat already says what it is.
+    .is('document_attachments.journal_entry_id', null)
+    .is('document_attachments.journal_entry_line_id', null)
   if (error) return logAndZero('document_unclassified', companyId, error)
   return count ?? 0
 }
@@ -308,6 +321,24 @@ export async function countMissedAgreementPayments(supabase: SupabaseClient, com
     .eq('status', 'missed')
   if (error) return logAndZero('agreement_payment_missed', companyId, error)
   return count ?? 0
+}
+
+/**
+ * Issued invoices whose latest Peppol delivery failed: the number of ids the
+ * peppol_failed_invoice_ids function returns on the session client (lib/
+ * invoices/peppol-failed-invoices.ts), the same list the invoice chips show.
+ * The list is capped at PEPPOL_FAILED_INVOICE_LIMIT, so the count is too;
+ * a to-do badge needs no more.
+ */
+export async function countFailedPeppolDeliveries(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<number> {
+  try {
+    return (await listPeppolFailedInvoiceIds({ supabase, companyId })).length
+  } catch (err) {
+    return logAndZero('peppol_delivery_failed', companyId, err as { message?: string })
+  }
 }
 
 /** Overdue customer invoices (not credited). */

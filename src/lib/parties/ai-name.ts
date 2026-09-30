@@ -89,7 +89,7 @@ export async function readCounterpartName(texts: string[]): Promise<AiNameReadin
   if (distinct.length === 0 || !aiNameAvailable()) return null
   const prompt = ['Voucher descriptions for one counterpart:', ...distinct.map((t, i) => `${i + 1}. ${t}`)].join('\n')
   try {
-    const result = await getAiService().generateStructured({ tier: 'extraction', system: SYSTEM, prompt, maxTokens: 200, schema: SCHEMA })
+    const result = await getAiService().generateStructured({ tier: 'extraction', meter: { feature: 'party_name' }, system: SYSTEM, prompt, maxTokens: 200, schema: SCHEMA })
     const parsed = Reading.safeParse(result.value)
     if (!parsed.success) return null
     return {

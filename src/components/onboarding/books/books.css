@@ -141,7 +141,8 @@
 .th-line p { margin: 0; font-size: 12.5px; }
 .th-line .sub { margin-top: 2px; min-height: 16px; font-size: 12.5px; font-variant-numeric: tabular-nums; color: hsl(var(--muted-foreground)); }
 .th-line.is-ok .sub { color: hsl(var(--success)); }
-.th-line.is-err .sub { color: hsl(var(--destructive)); }
+/* an import failure arrives as several lines (reason, bullets, reference) */
+.th-line.is-err .sub { color: hsl(var(--destructive)); white-space: pre-line; }
 .th-hold { grid-column: 1 / -1; margin-top: 2px; text-align: center; font-size: 12.5px; color: hsl(var(--muted-foreground)); font-variant-numeric: tabular-nums; }
 @media (max-width: 640px) { .th-lines { grid-template-columns: repeat(2, minmax(0, 1fr)); } .th-stage { min-height: 320px; } }
 
@@ -229,7 +230,9 @@
 .brandbtn:hover { filter: brightness(1.06); }
 .brandbtn .pmark { width: 28px; height: 28px; border-color: transparent; }
 .brandbtn .pmark img { width: 18px; height: 18px; }
-.brandhint { text-align: center; font-size: 12.5px; color: hsl(var(--muted-foreground)); margin: 12px 0 0; }
+/* what the provider requires, above its button; the SIE way round it, below */
+.brandreq { max-width: 440px; margin: 0 0 18px; text-align: center; font-size: 13px; line-height: 1.6; }
+.brandhint { max-width: 400px; text-align: center; font-size: 12.5px; line-height: 1.55; color: hsl(var(--muted-foreground)); margin: 4px 0 0; }
 .bks-center-col { display: flex; flex-direction: column; align-items: center; }
 
 /* the connected line and the stat row */

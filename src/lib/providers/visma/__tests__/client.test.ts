@@ -84,3 +84,38 @@ describe('VismaClient pagination', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * A 1000-row register page is not a single-record read: the migration
+ * worker passes its own timeout, everything else keeps the 15 s default.
+ */
+describe('VismaClient timeouts', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let timeoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch');
+    timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    timeoutSpy.mockRestore();
+  });
+
+  it('getPage forwards a caller-supplied timeout to the request signal', async () => {
+    fetchSpy.mockResolvedValueOnce(page([{ Id: 'a' }], 1));
+
+    await new VismaClient().getPage('token', '/supplierinvoices', { page: 4, pageSize: 1000, timeoutMs: 60_000 });
+
+    expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(60_000);
+  });
+
+  it('get keeps the 15 s single-record default when no timeout is given', async () => {
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ Id: 'a' }));
+
+    await new VismaClient().get('token', '/supplierinvoices/a');
+
+    expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(15_000);
+  });
+});

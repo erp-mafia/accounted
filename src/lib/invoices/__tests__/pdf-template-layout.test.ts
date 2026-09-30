@@ -528,6 +528,31 @@ describe('page breaks', () => {
   })
 })
 
+describe('notes placement', () => {
+  const note = 'Leverans sker vecka 42 enligt offert.'
+  const reverseCharge = 'Omvänd betalningsskyldighet'
+  const invoice = { ...sentInvoice(), notes: note, reverse_charge_text: reverseCharge }
+  const tree = InvoicePDF({ invoice, customer, items: [makeItem()], company })
+  const leaves = textLeaves(tree)
+  const firstIndexOf = (needle: string) => leaves.findIndex((leaf) => leaf.includes(needle))
+
+  it('renders the note after the line items and before the totals', () => {
+    const noteAt = firstIndexOf(note)
+    expect(noteAt).toBeGreaterThan(firstIndexOf('Konsulttimmar'))
+    expect(noteAt).toBeLessThan(firstIndexOf('Delsumma:'))
+    expect(noteAt).toBeLessThan(firstIndexOf('Betalningsinformation'))
+  })
+
+  it('leaves the statutory VAT notice where it was, after the totals', () => {
+    expect(firstIndexOf(reverseCharge)).toBeGreaterThan(firstIndexOf('Delsumma:'))
+  })
+
+  it('keeps a short note in one unsplittable box', () => {
+    const box = elements(tree).find((el) => el.props.wrap !== undefined && containsText(el, note))
+    expect(box?.props.wrap).toBe(false)
+  })
+})
+
 const ORDINARY_LONG_WORDS = [
   'September',
   'Konsulttimmar',

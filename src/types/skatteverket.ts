@@ -90,9 +90,36 @@ export interface SkattekontoTransactionWithSuggestion extends StoredSkattekontoT
 }
 
 /**
+ * A live verifikat that already carries a Skatteverket event on 1630: a
+ * candidate the match flow offers for the row (exact amount and side, inside
+ * the match window, not cancelled by a storno pair). Booking the row would
+ * record the event a second time, so the booking refuses with
+ * LEDGER_TWIN_EXISTS and names these instead.
+ */
+export interface SkattekontoLedgerTwin {
+  journal_entry_id: string
+  voucher_series: string | null
+  voucher_number: number | null
+  entry_date: string
+  description: string
+  status: 'draft' | 'posted' | 'reversed'
+  /**
+   * Present when the verifikat carries the event together with these other
+   * open same-day rows (a combined candidate): linking links all of them.
+   */
+  combined_with?: Array<{
+    id: string
+    transaktionsdatum: string
+    transaktionstext: string
+    belopp_skatteverket: number
+  }>
+}
+
+/**
  * Per-row outcome from POST /skattekonto/transaktioner/bokfor-batch.
  * `journal_entry_id` is present on success AND on COMMIT_FAILED (the draft
  * was created and stays linked; only the commit step failed).
+ * `ledger_twins` is present on LEDGER_TWIN_EXISTS.
  */
 export interface SkattekontoBatchRowResult {
   id: string
@@ -108,9 +135,11 @@ export interface SkattekontoBatchRowResult {
     | 'NOT_SETTLED'
     | 'ROW_IGNORED'
     | 'TRANSACTION_NOT_FOUND'
+    | 'LEDGER_TWIN_EXISTS'
     | 'COMMIT_FAILED'
     | 'UNKNOWN'
   error_message?: string
+  ledger_twins?: SkattekontoLedgerTwin[]
 }
 
 /** Response envelope body for the bokfor-batch endpoint. */

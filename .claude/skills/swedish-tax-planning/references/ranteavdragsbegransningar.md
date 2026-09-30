@@ -29,6 +29,8 @@ Critical constraints:
 - Non-deductible amounts under förenklingsregeln **cannot be carried forward** (permanently lost)
 - Cannot be combined with EBITDA-regeln within the same intressegemenskap
 
+A proposal to raise the limit to 25 MSEK (lagrådsremiss "Förbättrade ränteavdragsregler för företag", June 2025) was not included in the 2026 budget and has not been enacted. IL 24 kap. 24 § still says 5 MSEK.
+
 ## Carry-forward (24 kap. 26 §)
 
 Under EBITDA-regeln only: excess negativt räntenetto becomes **kvarstående negativt räntenetto**, carried forward for **6 years**. Lost upon ägarförändring.
@@ -48,7 +50,7 @@ Additional restrictions BEFORE the generella regler apply:
 - Ränteavdrag denied if arrangement "uteslutande eller så gott som uteslutande" (90-100%) arose to generate väsentlig skatteförmån
 - Förvärvsregeln (24 kap. 19 §): underlying acquisition must be "väsentligen affärsmässigt motiverat"
 - Following HFD 2021 ref. 68 and HFD 2024, partly incompatible with EU law
-- Prop. 2025/26:20 adapts rules from January 1, 2026: denial limited to "rent konstlade upplägg" for EES-based lenders
+- Enacted from beskattningsår beginning after 2025-12-31 (IL 24 kap. 19 a §, SFS 2025:1333, prop. 2025/26:20): interest on debt to a company in the intressegemenskap is deductible when the company actually entitled to the interest income is resident in another EES state, unless the debt is part of a **konstlat upplägg** whose purpose is a väsentlig skatteförmån for the intressegemenskap (then denied wholly or partly)
 
 ## BAS accounts
 

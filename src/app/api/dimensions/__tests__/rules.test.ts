@@ -249,7 +249,7 @@ describe('PATCH /api/dimensions/rules/[id]', () => {
     const { status, body } = await parseJsonResponse<ErrorBody>(response)
 
     expect(status).toBe(400)
-    expect(body.error.code).toBe('VALIDATION_FAILED')
+    expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
   it('returns 404 for a rule outside the company', async () => {

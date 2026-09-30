@@ -1,3 +1,7 @@
+---
+areas: [moms]
+---
+
 # Vouchers och presentkort: SPV vs MPV
 
 ## Lagstöd
@@ -38,7 +42,7 @@
 - Vid utställande/försäljning av voucher = momspliktig leverans → 3001 + 2611 direkt.
 - Vid faktisk leverans av varan mot inlösen av voucher → ingen ny momspliktig händelse. Voucher-värdet är redan beskattat.
 - Bokföring (försäljning av SPV-presentkort 1 000 SEK):
-  - Dt 1930 (eller 1580) 1 000
+  - Dt 1930 (eller 1686) 1 000
   - Kr 3001 800
   - Kr 2611 200
 - Vid inlösen mot vara värt 1 000 SEK:

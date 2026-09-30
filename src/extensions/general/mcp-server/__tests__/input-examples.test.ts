@@ -72,6 +72,7 @@ describe('inputSchema examples are calls the server would accept', () => {
     expect(withExamples.map((t) => t.name).sort()).toEqual([
       'gnubok_approve_pending_operation',
       'gnubok_categorize_transaction',
+      'gnubok_client_overview',
       'gnubok_complete_document_upload',
       'gnubok_create_document_upload',
       'gnubok_create_voucher',
@@ -79,6 +80,7 @@ describe('inputSchema examples are calls the server would accept', () => {
       'gnubok_link_document_to_voucher',
       'gnubok_list_uncategorized_transactions',
       'gnubok_query_journal',
+      'gnubok_run_across_companies',
       'gnubok_search_tools',
     ])
   })

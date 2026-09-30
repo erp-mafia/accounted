@@ -10,10 +10,11 @@ import {
   isShrinkableImage,
   tooLargeMessage,
 } from '../upload-size'
-import { shrinkImageForUpload } from '../shrink-image'
+import { prepareForMultipartUpload, shrinkImageForUpload } from '../shrink-image'
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 describe('upload size limits', () => {
@@ -92,5 +93,49 @@ describe('shrinkImageForUpload', () => {
   it('returns the original where the browser cannot decode it', async () => {
     const file = fakeFile(9 * 1024 * 1024, 'image/heic')
     expect(await shrinkImageForUpload(file)).toBe(file)
+  })
+})
+
+// crm#203: a phone photo sent as a new version of a voucher's underlag died as
+// a platform 413 and surfaced as a bare "network error". Every multipart
+// document upload now goes through this gate first.
+describe('prepareForMultipartUpload', () => {
+  function fakeFile(size: number, type: string): File {
+    return { size, type, name: 'kvitto.jpg', lastModified: 0 } as File
+  }
+
+  it('passes a file that fits through untouched', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const file = fakeFile(1024, 'application/pdf')
+    expect(await prepareForMultipartUpload(file)).toEqual({ ok: true, file })
+  })
+
+  it('shrinks an oversized phone photo so it fits the platform ceiling', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    vi.stubGlobal('createImageBitmap', async () => ({ width: 4000, height: 3000, close: () => {} }))
+    vi.stubGlobal('document', {
+      createElement: () => ({
+        getContext: () => ({ drawImage: () => {} }),
+        toBlob: (resolve: (b: Blob) => void) => resolve(new Blob([new Uint8Array(1024)], { type: 'image/jpeg' })),
+      }),
+    })
+    const result = await prepareForMultipartUpload(fakeFile(8 * 1024 * 1024, 'image/jpeg'))
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.file.size).toBeLessThanOrEqual(HOSTED_MAX_UPLOAD_BYTES)
+      expect(result.file.type).toBe('image/jpeg')
+    }
+  })
+
+  it('refuses an oversized PDF with its size instead of sending it into a 413', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const result = await prepareForMultipartUpload(fakeFile(6 * 1024 * 1024, 'application/pdf'))
+    expect(result).toEqual({ ok: false, message: tooLargeMessage(6 * 1024 * 1024) })
+  })
+
+  it('sends anything as-is on self-hosted, where no proxy caps the body', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const file = fakeFile(8 * 1024 * 1024, 'application/pdf')
+    expect(await prepareForMultipartUpload(file)).toEqual({ ok: true, file })
   })
 })

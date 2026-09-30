@@ -15,6 +15,7 @@ function atom(overrides: Partial<DiscoveredAtom>): DiscoveredAtom {
     body_path: '.claude/skills/test/SKILL.md',
     body: 'body',
     parent_atom_id: null,
+    audience: 'agent',
     frontmatter_version: 1,
     schema_version: 1,
     ...overrides,
@@ -88,5 +89,13 @@ describe('buildMigrationSql', () => {
     expect(sql).toContain("SET is_active = false, mcp_exposed = false WHERE id IN ('community/withdrawn')")
     expect(sql).not.toContain('DELETE FROM')
     expect(sql).not.toContain('horizontal/test-old')
+  })
+
+  it('switches off developer-audience references by id, never deleting them', () => {
+    const sql = buildMigrationSql([atom({})], { 'horizontal/test': 1 }, [], ['horizontal/test/wire-format'])
+    expect(sql).toContain("SET is_active = false, mcp_exposed = false WHERE id IN ('horizontal/test/wire-format')")
+    expect(sql).not.toContain('DELETE FROM')
+    const insert = sql.slice(0, sql.indexOf('ON CONFLICT'))
+    expect(insert).not.toContain('horizontal/test/wire-format')
   })
 })

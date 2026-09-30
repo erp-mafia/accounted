@@ -32,9 +32,11 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
 import { createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
-import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import {
+  buildInvoiceMatchClearingLines,
+  invoiceMatchPaymentDescription,
+} from '@/lib/bookkeeping/invoice-payment-lines'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
@@ -400,6 +402,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
     const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
+    // A payment date outside an open period leaves the entry builders with
+    // nothing to book (the cash entry returns null), and the invoice used to
+    // be marked paid with no verifikat. Refuse before any write, the storno
+    // below included, exactly as the dashboard routes do.
+    const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, transaction.date)
+    if (!fiscalPeriodId) {
+      return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
+        requestId: ctx.requestId,
+        details: { payment_date: transaction.date },
+      })
+    }
+
     // A RECONCILIATION link (reconciliation_method set) is not a conflicting
     // booking: the entry is an independent verifikat that may evidence OTHER
     // affärshändelser; reversing it wholesale would be an over-broad rättelse
@@ -521,21 +535,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             details: { totalDebit, totalCredit },
           })
         }
-        const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, transaction.date)
-        if (!fiscalPeriodId) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
-            requestId: ctx.requestId,
-            details: { payment_date: transaction.date },
-          })
-        }
         const sourceType = useCashEntry ? 'invoice_cash_payment' : 'invoice_paid'
-        const desc = invoice.customer?.name
-          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
-          : `Inbetalning kundfaktura ${invoice.invoice_number}`
         const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
           fiscal_period_id: fiscalPeriodId,
           entry_date: transaction.date,
-          description: desc,
+          description: invoiceMatchPaymentDescription(invoice),
           source_type: sourceType,
           source_id: invoice.id,
           bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
@@ -562,21 +566,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         // 1510 credited at the invoice's booking rate, and a 3960/7960 FX-diff
         // line (or a 3740 öresavrundning line on pure SEK) making the verifikat
         // balance per BFL 5 kap 4-5§.
-        const fiscalPeriodId = await findFiscalPeriod(
-          ctx.supabase,
-          ctx.companyId!,
-          transaction.date,
-        )
-        if (!fiscalPeriodId) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
-            requestId: ctx.requestId,
-            details: { payment_date: transaction.date },
-          })
-        }
-        const desc = invoice.customer?.name
-          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
-          : `Inbetalning kundfaktura ${invoice.invoice_number}`
-        const { lines: clearingLines } = buildInvoicePaymentClearingLines(
+        // The invoice's dimension bag rides every leg, FX result lines
+        // included, so a project's kursvinst/kursförlust stays inside the
+        // project's result (the builder stamps it).
+        const { description, lines: clearingLines } = buildInvoiceMatchClearingLines(
           {
             amount: transaction.amount,
             amount_sek: transaction.amount_sek ?? null,
@@ -589,27 +582,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             remaining_amount: invoice.remaining_amount ?? null,
             total: invoice.total,
             paid_amount: invoice.paid_amount ?? null,
+            invoice_number: invoice.invoice_number,
+            customer: invoice.customer,
+            default_dimensions: (invoice as { default_dimensions?: unknown }).default_dimensions,
           },
-          desc,
           fx.required ? fx.paidInInvoiceCurrency : undefined,
           paymentAccount,
         )
-        // Re-propagate the invoice's default dimension bag onto every leg,
-        // including the FX result lines, so a project's kursvinst/kursförlust
-        // stays inside the project P&L. createInvoicePaymentJournalEntry did
-        // this for v1 before; keeping it means the switch to the shared
-        // line-builder is not a silent regression for dimension users. Copied
-        // per line: a shared object would let one line's mutation leak.
-        const defaultDimensions = coerceDimensionsBag(
-          (invoice as { default_dimensions?: unknown }).default_dimensions,
-        )
-        if (defaultDimensions) {
-          for (const line of clearingLines) line.dimensions = { ...defaultDimensions }
-        }
         const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
           fiscal_period_id: fiscalPeriodId,
           entry_date: transaction.date,
-          description: desc,
+          description,
           source_type: 'invoice_paid',
           source_id: invoice.id,
           bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
@@ -635,6 +618,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', txLog, {
         requestId: ctx.requestId,
         details: { reason: getErrorMessage(err, { context: 'invoice' }) },
+      })
+    }
+    // Fail closed, as the dashboard route does: a builder that booked nothing
+    // must never leave the invoice marked paid without its verifikat.
+    if (!journalEntryId) {
+      return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', txLog, {
+        requestId: ctx.requestId,
+        details: { reason: 'no_journal_entry_created' },
       })
     }
 

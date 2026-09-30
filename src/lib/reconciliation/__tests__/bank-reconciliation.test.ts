@@ -921,6 +921,7 @@ describe('manualLink', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen kunde inte hittas.')
+    expect(result.code).toBe('TRANSACTION_NOT_FOUND')
   })
 
   it('rejects when transaction is already linked to a LIVE (posted) entry', async () => {
@@ -935,6 +936,44 @@ describe('manualLink', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
+    expect(result.code).toBe('TRANSACTION_ALREADY_LINKED')
+  })
+
+  it('refuses an ignored transaction by name before any write (the CHECK constraint used to answer "Försök igen")', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null, is_ignored: true }) })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Transaktionen är ignorerad. Återställ den innan du kopplar.',
+      code: 'TRANSACTION_IGNORED',
+    })
+    // Nothing past the transaction read: no verifikat lookup, no write.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('tells a missing verifikat, a reversed one and a draft apart', async () => {
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null })
+
+    let m = createQueueMockSupabase()
+    m.enqueue({ data: tx })
+    m.enqueue({ data: null, error: { code: 'PGRST116', message: 'no rows' } })
+    let result = await manualLink(m.supabase as never, 'company-1', 'tx-1', 'je-typo', 'user-1', '1930')
+    expect(result).toMatchObject({ success: false, code: 'ENTRY_NOT_FOUND', error: 'Verifikationen kunde inte hittas.' })
+
+    m = createQueueMockSupabase()
+    m.enqueue({ data: tx })
+    m.enqueue({ data: { id: 'je-1', status: 'reversed' } })
+    result = await manualLink(m.supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    expect(result).toMatchObject({ success: false, code: 'ENTRY_REVERSED', error: 'Verifikationen är makulerad och kan inte kopplas.' })
+
+    m = createQueueMockSupabase()
+    m.enqueue({ data: tx })
+    m.enqueue({ data: { id: 'je-1', status: 'draft' } })
+    result = await manualLink(m.supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+    expect(result).toMatchObject({ success: false, code: 'ENTRY_NOT_POSTED', error: 'Verifikationen är inte bokförd ännu.' })
   })
 
   it('re-links a transaction stranded on a reversed entry (#988)', async () => {
@@ -970,6 +1009,7 @@ describe('manualLink', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Verifikationen saknar rad på 1930')
+    expect(result.code).toBe('NOT_SETTLED')
   })
 
   it('rejects when the transaction belongs to a different cash account', async () => {
@@ -991,6 +1031,7 @@ describe('manualLink', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen hör till 1931, inte 1930')
+    expect(result.code).toBe('TRANSACTION_OTHER_ACCOUNT')
   })
 
   it('succeeds when all validations pass (line on selected account)', async () => {
@@ -1023,6 +1064,7 @@ describe('manualLink', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
+    expect(result.code).toBe('TRANSACTION_ALREADY_LINKED')
     // Nothing past the transaction read: no verifikat lookup, no write.
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
@@ -1058,6 +1100,7 @@ describe('manualLink', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
+    expect(result.code).toBe('LINK_RACE')
   })
 
   it('succeeds for a bound transaction when the account matches', async () => {
@@ -1622,7 +1665,7 @@ describe('linkTransactionToVouchers', () => {
     const { supabase } = createQueuedMockSupabase()
 
     const one = await linkTransactionToVouchers(supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }], 'user-1')
-    expect(one).toEqual({ success: false, error: 'En delning kräver minst två verifikat.' })
+    expect(one).toEqual({ success: false, error: 'En delning kräver minst två verifikat.', code: 'INVALID_SPLIT' })
 
     const dup = await linkTransactionToVouchers(
       supabase as never,
@@ -1631,7 +1674,11 @@ describe('linkTransactionToVouchers', () => {
       [{ journal_entry_id: E1 }, { journal_entry_id: E1 }],
       'user-1',
     )
-    expect(dup).toEqual({ success: false, error: 'Samma verifikat förekommer flera gånger i fördelningen.' })
+    expect(dup).toEqual({
+      success: false,
+      error: 'Samma verifikat förekommer flera gånger i fördelningen.',
+      code: 'INVALID_SPLIT',
+    })
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
@@ -1641,6 +1688,7 @@ describe('linkTransactionToVouchers', () => {
     m.enqueue({ data: freeTx({ transaction_voucher_links: [{ journal_entry_id: 'je-x', role: 'bank_line' }] }) })
     let r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
     expect(r.error).toBe('Transaktionen är redan kopplad till en verifikation.')
+    expect(r.code).toBe('TRANSACTION_ALREADY_LINKED')
 
     // Live pointer.
     m = createQueuedMockSupabase()
@@ -1648,6 +1696,7 @@ describe('linkTransactionToVouchers', () => {
     m.enqueue({ data: { status: 'posted' } }) // hasLiveJournalEntryLink
     r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
     expect(r.error).toBe('Transaktionen är redan kopplad till en verifikation.')
+    expect(r.code).toBe('TRANSACTION_ALREADY_LINKED')
 
     // Payment row (match-invoice / match-batch).
     m = createQueuedMockSupabase()
@@ -1656,12 +1705,14 @@ describe('linkTransactionToVouchers', () => {
     m.enqueue({ data: [] })
     r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
     expect(r.error).toBe('Transaktionen är redan matchad mot en faktura.')
+    expect(r.code).toBe('TRANSACTION_ALREADY_LINKED')
 
     // Ignored.
     m = createQueuedMockSupabase()
     m.enqueue({ data: freeTx({ is_ignored: true }) })
     r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
     expect(r.error).toBe('Transaktionen är ignorerad. Återställ den innan du kopplar.')
+    expect(r.code).toBe('TRANSACTION_IGNORED')
   })
 
   it('re-links a row stranded on a reversed entry (#988), locking on the stale pointer', async () => {
@@ -1689,23 +1740,33 @@ describe('linkTransactionToVouchers', () => {
     expect(findCalls('transactions', 'eq').some((args) => args[0] === 'journal_entry_id' && args[1] === 'je-reversed')).toBe(true)
   })
 
-  it('refuses a verifikat that is not posted, one outside the company, and one without a line on the account', async () => {
+  it('refuses a verifikat that is not posted, reversed, outside the company, or without a line on the account, each by its code', async () => {
     let m = createQueuedMockSupabase()
     enqueueReads(m.enqueue, { entries: [postedEntries[0], { ...postedEntries[1], status: 'draft' }] })
     let r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
     expect(r.error).toBe('Verifikat A-12 är inte bokförd ännu.')
+    expect(r.code).toBe('ENTRY_NOT_POSTED')
 
-    // Only one of the two ids comes back inside the company.
+    m = createQueuedMockSupabase()
+    enqueueReads(m.enqueue, { entries: [postedEntries[0], { ...postedEntries[1], status: 'reversed' }] })
+    r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
+    expect(r.error).toBe('Verifikat A-12 är makulerat och kan inte kopplas.')
+    expect(r.code).toBe('ENTRY_REVERSED')
+
+    // Only one of the two ids comes back inside the company: the message
+    // names the one that did not, so a mistyped id is findable.
     m = createQueuedMockSupabase()
     enqueueReads(m.enqueue, { entries: [postedEntries[0]] })
     r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
-    expect(r.error).toBe('Verifikationen kunde inte hittas.')
+    expect(r.error).toBe(`Verifikationen ${E2} kunde inte hittas.`)
+    expect(r.code).toBe('ENTRY_NOT_FOUND')
 
     // E2 books nothing on 1930 (its bank line is on 1940).
     m = createQueuedMockSupabase()
     enqueueReads(m.enqueue, { lines: [bankLines[0]] })
     r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1', '1930')
     expect(r.error).toBe('Verifikat A-12 saknar rad på 1930')
+    expect(r.code).toBe('NOT_SETTLED')
   })
 
   it('refuses when the transaction belongs to another cash account', async () => {
@@ -1724,7 +1785,11 @@ describe('linkTransactionToVouchers', () => {
       '1930',
     )
 
-    expect(result).toEqual({ success: false, error: 'Transaktionen hör till 1940, inte 1930' })
+    expect(result).toEqual({
+      success: false,
+      error: 'Transaktionen hör till 1940, inte 1930',
+      code: 'TRANSACTION_OTHER_ACCOUNT',
+    })
   })
 
   it('reports a lost race (0 rows locked) as already linked and inserts nothing', async () => {
@@ -1741,7 +1806,11 @@ describe('linkTransactionToVouchers', () => {
       '1930',
     )
 
-    expect(result).toEqual({ success: false, error: 'Transaktionen är redan kopplad till en verifikation.' })
+    expect(result).toEqual({
+      success: false,
+      error: 'Transaktionen är redan kopplad till en verifikation.',
+      code: 'LINK_RACE',
+    })
     expect(findCalls('transaction_voucher_links', 'insert')).toEqual([])
   })
 
@@ -1762,7 +1831,11 @@ describe('linkTransactionToVouchers', () => {
       '1930',
     )
 
-    expect(result).toEqual({ success: false, error: 'Kunde inte koppla transaktionen. Försök igen.' })
+    expect(result).toEqual({
+      success: false,
+      error: 'Kunde inte koppla transaktionen. Försök igen.',
+      code: 'WRITE_FAILED',
+    })
     expect(findCalls('transaction_voucher_links', 'delete')).toHaveLength(1)
     const updates = findCalls('transactions', 'update')
     expect(updates).toHaveLength(2)
@@ -2809,6 +2882,134 @@ describe('getReconciliationStatus', () => {
     expect(status.is_reconciled).toBe(true)
     expect(status.unconvertible_gl_line_count).toBe(0)
     expect(status.not_reconcilable_reason).toBeNull()
+  })
+
+  describe('a linked pair that straddles the window edge', () => {
+    // Anonymised from a support case: the first fiscal year starts 2026-07-30,
+    // the company received a 25 000 kr deposit on 2026-07-17, and the deposit
+    // is linked to A6, dated inside the year. Filtered on the year, the
+    // verifikat counted and the deposit did not: 25 000 kr "oförklarat" on a
+    // fully linked account.
+    const tx = (id: string, date: string, amount: number, journalEntryId: string | null) => ({
+      id,
+      date,
+      amount,
+      journal_entry_id: journalEntryId,
+      reconciliation_method: journalEntryId ? 'manual' : null,
+      is_ignored: false,
+      cash_account_id: null,
+    })
+    const entry = (id: string, entryDate: string, sourceType = 'bank_import') => ({
+      id,
+      entry_date: entryDate,
+      status: 'posted',
+      source_type: sourceType,
+    })
+    const line = (journalEntryId: string, amount: number) => ({
+      debit_amount: amount > 0 ? amount : 0,
+      credit_amount: amount < 0 ? -amount : 0,
+      journal_entry_id: journalEntryId,
+    })
+
+    it('counts a bank row dated before the window in the window of the verifikat it is linked to', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      // 1) transactions read on their own date: only the in-window row.
+      enqueue({ data: [tx('t-in', '2026-08-05', -5000, 'e-a')] })
+      // 2) junction anchors of those rows: none.
+      enqueue({ data: [] })
+      // 3) 1930 lines in the window: A6 (+25 000) and the in-window payment.
+      enqueue({ data: [entry('e-6', '2026-08-01'), entry('e-a', '2026-08-05')] })
+      enqueue({ data: [line('e-6', 25000), line('e-a', -5000)] })
+      // 4) unmatched GL lines RPC: nothing (both vouchers are linked).
+      enqueue({ data: [] })
+      // 5) pull-in: rows before the window pointing at a window verifikat.
+      enqueue({ data: [tx('t-pre', '2026-07-17', 25000, 'e-6')] })
+      // 6) rows after the window pointing at one: none.
+      enqueue({ data: [] })
+      // 7) junction links to window verifikat: none.
+      enqueue({ data: [] })
+      // 8) junction anchors of the pulled-in row: none.
+      enqueue({ data: [] })
+
+      const status = await getReconciliationStatus(supabase as never, 'company-1', '2026-07-30', '2027-06-30')
+
+      expect(status.bank_transaction_total).toBe(20000)
+      expect(status.gl_1930_period_movement).toBe(20000)
+      expect(status.difference).toBe(0)
+      expect(status.matched_count).toBe(2)
+      expect(status.unmatched_transaction_count).toBe(0)
+      expect(status.unexplained_difference).toBe(0)
+      expect(status.is_reconciled).toBe(true)
+    })
+
+    it('pulls in a row linked only through transaction_voucher_links', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      enqueue({ data: [] }) // transactions in the window: none
+      enqueue({ data: [entry('e-6', '2026-08-01')] })
+      enqueue({ data: [line('e-6', 25000)] })
+      enqueue({ data: [] }) // unmatched GL RPC
+      enqueue({ data: [] }) // pointer rows before the window
+      enqueue({ data: [] }) // pointer rows after the window
+      enqueue({ data: [{ transaction_id: 't-j' }] }) // junction links to e-6
+      enqueue({ data: [tx('t-j', '2026-07-17', 25000, null)] }) // that row, scoped
+      enqueue({ data: [{ transaction_id: 't-j', journal_entry_id: 'e-6', role: 'bank_line' }] })
+
+      const status = await getReconciliationStatus(supabase as never, 'company-1', '2026-07-30', '2027-06-30')
+
+      expect(status.bank_transaction_total).toBe(25000)
+      expect(status.difference).toBe(0)
+      expect(status.matched_count).toBe(1)
+      expect(status.unexplained_difference).toBe(0)
+      expect(status.is_reconciled).toBe(true)
+    })
+
+    it('leaves a bank row inside the window out when its verifikat is dated before the window', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      // The mirror case: booked on the last day of the prior year, cleared
+      // the bank on the second day of this one. It belongs to the prior year.
+      enqueue({ data: [tx('t-late', '2027-07-31', -800, 'e-last'), tx('t-in', '2027-08-10', -300, 'e-b')] })
+      enqueue({ data: [] }) // junction anchors
+      enqueue({ data: [entry('e-b', '2027-08-10')] })
+      enqueue({ data: [line('e-b', -300)] })
+      enqueue({ data: [] }) // unmatched GL RPC
+      enqueue({ data: [] }) // pointer rows before the window
+      enqueue({ data: [] }) // junction links to window verifikat
+      // The date of e-last, read because it is outside the window.
+      enqueue({ data: [{ id: 'e-last', entry_date: '2027-07-29' }] })
+      enqueue({ data: [{ journal_entry_id: 'e-last' }] })
+
+      const status = await getReconciliationStatus(supabase as never, 'company-1', '2027-07-30')
+
+      expect(status.bank_transaction_total).toBe(-300)
+      expect(status.bank_transaction_count).toBe(1)
+      expect(status.difference).toBe(0)
+      expect(status.matched_count).toBe(1)
+      expect(status.unexplained_difference).toBe(0)
+      expect(status.is_reconciled).toBe(true)
+    })
+
+    it('still drops an unlinked row dated before the opening balance floor', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      // No caller window: the IB (2026-07-30) is the floor. The linked deposit
+      // follows its verifikat in; the unlinked one before the IB stays out.
+      enqueue({
+        data: [tx('t-pre', '2026-07-17', 25000, 'e-6'), tx('t-open', '2026-07-10', 999, null)],
+      })
+      enqueue({ data: [] }) // junction anchors
+      enqueue({ data: [entry('e-ib', '2026-07-30', 'opening_balance'), entry('e-6', '2026-08-01')] })
+      enqueue({ data: [line('e-ib', 1000), line('e-6', 25000)] })
+      enqueue({ data: [] }) // unmatched GL RPC
+
+      const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+      expect(status.gl_1930_opening_balance).toBe(1000)
+      expect(status.bank_transaction_total).toBe(25000)
+      expect(status.bank_transaction_count).toBe(1)
+      expect(status.unmatched_transaction_count).toBe(0)
+      expect(status.difference).toBe(0)
+      expect(status.unexplained_difference).toBe(0)
+      expect(status.is_reconciled).toBe(true)
+    })
   })
 })
 

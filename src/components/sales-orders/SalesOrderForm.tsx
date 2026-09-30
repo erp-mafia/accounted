@@ -1,9 +1,9 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Tags, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -20,8 +20,10 @@ import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import { resolveLineVatRates, FALLBACK_VAT_RATE } from '@/components/invoices/line-vat-rates'
-import { useArticles, useCustomers } from '@/lib/reference-data/hooks'
+import { useArticles, useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { hasDimensionValues } from '@/lib/invoices/editor-payload'
 import { sortArticles } from '@/lib/articles/sort'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
@@ -55,8 +57,21 @@ interface LineState {
   vat_rate: number
   article_id: string | null
   revenue_account: string | null
+  // Per-line dims override ({sie_dim_no: code}); a defined bag (possibly
+  // empty) means the row's panel is open. Converting the order to an invoice
+  // copies it onto the invoice item, merged over the order default.
+  dimensions?: Record<string, string>
   // Edit mode: what has already been invoiced on this line (read-only hint).
   invoiced_qty?: number
+}
+
+// Compact display of a dimensions bag, e.g. "KS01 · P001" (dim-number order).
+function compactDims(dims: Record<string, string>): string {
+  return Object.entries(dims)
+    .filter(([, v]) => v)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([, v]) => v)
+    .join(' · ')
 }
 
 interface SalesOrderFormProps {
@@ -88,6 +103,9 @@ function lineFromItem(item: SalesOrderItem): LineState {
     vat_rate: item.vat_rate,
     article_id: item.article_id,
     revenue_account: item.revenue_account,
+    // Carried whether or not the pickers show: the save replaces every line,
+    // so a line sent without its bag would lose it.
+    dimensions: hasDimensionValues(item.dimensions) ? { ...item.dimensions } : undefined,
     invoiced_qty: item.invoiced_qty,
   }
 }
@@ -158,6 +176,14 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
   })
   const [errors, setErrors] = useState<{ customer?: string; lines?: string }>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Dimension tagging (kostnadsställe/projekt): the pickers render only when
+  // company_settings.dimensions_enabled; stored bags round-trip either way.
+  // defaultDims is the order's default_dimensions, copied onto the invoice.
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
+  const [defaultDims, setDefaultDims] = useState<Record<string, string>>(
+    () => ({ ...(initial?.default_dimensions ?? {}) }),
+  )
 
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === customerId) ?? null,
@@ -177,6 +203,38 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
   function removeLine(key: string) {
     setLines((prev) => (prev.length > 1 ? prev.filter((l) => l.key !== key) : prev))
   }
+
+  // Closing a line's panel clears its bag so the line inherits the default.
+  function toggleLineDimensions(key: string) {
+    setLines((prev) =>
+      prev.map((l) => (l.key === key ? { ...l, dimensions: l.dimensions ? undefined : {} } : l)),
+    )
+  }
+
+  function updateLineDimension(key: string, dimNo: string, code: string | null) {
+    setLines((prev) =>
+      prev.map((l) => {
+        if (l.key !== key) return l
+        const dims = { ...(l.dimensions ?? {}) }
+        const trimmed = code?.trim()
+        if (trimmed) dims[dimNo] = trimmed
+        else delete dims[dimNo]
+        return { ...l, dimensions: dims }
+      }),
+    )
+  }
+
+  function setDefaultDimension(dimNo: string, code: string | null) {
+    setDefaultDims((prev) => {
+      const next = { ...prev }
+      const trimmed = code?.trim()
+      if (trimmed) next[dimNo] = trimmed
+      else delete next[dimNo]
+      return next
+    })
+  }
+
+  const defaultDimsSummary = compactDims(defaultDims)
 
   function applyArticle(key: string, value: string) {
     if (value === 'none') {
@@ -263,12 +321,18 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
       vat_rate: l.line_type === 'text' ? 0 : l.vat_rate,
       article_id: l.article_id,
       revenue_account: l.revenue_account,
+      // Every save replaces each line's stored bag: an absent one clears it.
+      ...(l.line_type === 'product' && hasDimensionValues(l.dimensions)
+        ? { dimensions: l.dimensions }
+        : {}),
     }))
 
     const body = {
       customer_id: customerId,
       order_date: orderDate,
       requested_delivery_date: requestedDeliveryDate || null,
+      // Replaces the stored bag; starts from it, so an untouched save is a no-op.
+      default_dimensions: defaultDims,
       currency,
       your_reference: yourReference.trim() || null,
       our_reference: ourReference.trim() || null,
@@ -398,6 +462,13 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
               maxLength={4000}
             />
           </div>
+          {/* Order-level default dims (kostnadsställe/projekt): copied onto
+              the invoice's default_dimensions when the order is invoiced. */}
+          {dimensionsEnabled && (
+            <div className="max-w-md sm:col-span-2 lg:col-span-3">
+              <LineDimensionFields dimensions={defaultDims} onChange={setDefaultDimension} />
+            </div>
+          )}
         </div>
       </DetailSection>
 
@@ -420,10 +491,12 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
               </tr>
             </thead>
             <tbody>
-              {lines.map((line) => {
+              {lines.map((line, index) => {
                 const isText = line.line_type === 'text'
+                const dimsOpen = dimensionsEnabled && !isText && line.dimensions != null
                 return (
-                  <tr key={line.key} className="align-top">
+                  <Fragment key={line.key}>
+                  <tr className="align-top">
                     <td className={cn(TD_CLASS, 'pl-0')}>
                       {isText ? (
                         <Input
@@ -543,19 +616,58 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
                       {!isText && formatCurrency(lineNet(line), currency)}
                     </td>
                     <td className={cn(TD_CLASS, 'pr-0 text-right')}>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => removeLine(line.key)}
-                        disabled={lines.length <= 1}
-                        aria-label={t('remove_row')}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <span className="inline-flex items-center gap-1">
+                        {dimensionsEnabled && !isText && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => toggleLineDimensions(line.key)}
+                            aria-label={t('row_dimensions_aria', { index: index + 1 })}
+                            aria-pressed={dimsOpen}
+                            title={t('row_dimensions_title')}
+                            className={dimsOpen ? 'text-foreground' : 'text-muted-foreground'}
+                          >
+                            <Tags className="h-4 w-4" />
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeLine(line.key)}
+                          disabled={lines.length <= 1}
+                          aria-label={t('remove_row')}
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </span>
                     </td>
                   </tr>
+                  {/* Per-line dims override: merged over the order default on
+                      the invoice line this order line becomes. */}
+                  {dimsOpen && (
+                    <tr>
+                      <td colSpan={8} className={cn(TD_CLASS, 'pl-0 pr-0')}>
+                        <div className="space-y-1 rounded-lg border border-border bg-muted/30 p-3">
+                          <div className="max-w-md">
+                            <LineDimensionFields
+                              dimensions={line.dimensions}
+                              onChange={(dimNo, code) => updateLineDimension(line.key, dimNo, code)}
+                              inputClassName="h-8"
+                            />
+                          </div>
+                          {defaultDimsSummary && (
+                            <p className="text-xs text-muted-foreground">
+                              {t('row_dimensions_inherit_hint', { dims: defaultDimsSummary })}
+                            </p>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )
               })}
             </tbody>

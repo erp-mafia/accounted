@@ -14,9 +14,16 @@ import type { ParsedSIEFile } from './types'
  * unknown customs fall back to "Dimension N", exactly mirroring the export's
  * orphan synthesis so a parse→import→re-export round-trip is lossless.
  *
- * Rows created here carry `created_by_import_id` so `undo_sie_import` can
- * remove registry values that the undone import introduced (and that nothing
- * else references): the lockstep the plan requires.
+ * Rows created here carry `created_by_import_id` as provenance. Undoing the
+ * import keeps them: the undo every door runs (request_sie_import_undo, then
+ * undo_sie_import_chunk) is a batch storno, so the imported verifikat stay in
+ * the ledger as reversed and their reversal lines copy each line's
+ * dimensions. Both still reference these codes, and the registry must keep
+ * declaring them (SIE #OBJEKT, report column names). The registry cleanup
+ * belonged to the older delete-based undo_sie_import (migration
+ * 20260702154500), which no door calls any more; only reset_fiscal_year
+ * still removes import-created rows that no posted or reversed line
+ * references.
  */
 
 export interface DimensionImportSummary {

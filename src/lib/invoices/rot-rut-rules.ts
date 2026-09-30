@@ -1,5 +1,6 @@
 import { roundOre } from '@/lib/money'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
+import type { ArticleType } from '@/types'
 
 /**
  * ROT/RUT-avdrag rules.
@@ -185,6 +186,25 @@ export function parseArticleHouseworkType(value: string | null | undefined): Art
   if (kindFromCode) return { deductionType: kindFromCode, workType: raw }
   if (raw === 'ROT' || raw === 'RUT') return { deductionType: raw.toLowerCase() as DeductionType, workType: null }
   return { deductionType: null, workType: null }
+}
+
+/**
+ * The deduction an article pre-fills onto an invoice line when it is picked.
+ *
+ * ROT and RUT are computed on arbetskostnaden only (IL 67 kap. 11-19 §§,
+ * HUSFL 2009:194): material, travel and machine hire never carry the
+ * reduction. A goods article (`vara`) therefore pre-fills no deduction,
+ * whatever its housework_type says. The article form already hides and
+ * clears the field for goods, but rows written by a file import or an older
+ * writer can still carry a flag nobody can see; this is the one place that
+ * turns the flag into a claim, so it is the one place that has to refuse it.
+ */
+export function articleDeductionPrefill(article: {
+  type?: ArticleType | null
+  housework_type?: string | null
+}): ArticleHousework {
+  if (article.type === 'vara') return { deductionType: null, workType: null }
+  return parseArticleHouseworkType(article.housework_type)
 }
 
 /**

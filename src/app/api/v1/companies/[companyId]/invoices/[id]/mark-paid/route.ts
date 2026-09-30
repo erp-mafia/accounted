@@ -59,7 +59,7 @@ import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 // payment/cash JE generators, which re-propagate the bag onto every leg —
 // dropping the column here silently untags the payment voucher.
 const INVOICE_MARK_PAID_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, payment_cash_account_id, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, vat_treatment_override, delivery_country, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, payment_cash_account_id, created_at, updated_at'
 
 const InvoiceMarkPaidResponse = z.object({
   id: z.string().uuid(),
@@ -160,6 +160,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           debit_amount: number
           credit_amount: number
           line_description?: string
+          dimensions?: Record<string, string>
         }[]
       | undefined
     let force = false
@@ -481,6 +482,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
               debit_amount: l.debit_amount,
               credit_amount: l.credit_amount,
               line_description: l.line_description ?? undefined,
+              // The line's own tags (DimensionsBagSchema-validated), as the
+              // dashboard mark-paid passes them through.
+              dimensions: l.dimensions,
             })),
           }
           const entry = await createJournalEntry(

@@ -16,6 +16,13 @@ interface ToolbarSearchProps extends React.InputHTMLAttributes<HTMLInputElement>
  * h-8 toolbar height. Form fields inside dialogs and forms keep the regular
  * rounded-lg Input; this variant exists only for toolbars.
  */
+/**
+ * A select trigger or text field that sits in a page toolbar next to the
+ * pickers and ToolbarSearch: the same 32px pill at 13px. Form fields in
+ * dialogs and forms keep their regular h-10 rounded-lg shape.
+ */
+export const TOOLBAR_FIELD_CLASS = 'h-8 rounded-full px-3.5 text-[13px]'
+
 export const ToolbarSearch = React.forwardRef<HTMLInputElement, ToolbarSearchProps>(
   ({ containerClassName, className, ...props }, ref) => (
     <div className={cn('relative min-w-[220px] max-w-xs flex-1', containerClassName)}>

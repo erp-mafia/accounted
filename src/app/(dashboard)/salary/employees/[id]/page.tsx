@@ -35,6 +35,7 @@ import { EmployeeRecurringLinesPanel } from '@/components/salary/EmployeeRecurri
 import { OpeningBalancesPanel } from '@/components/salary/OpeningBalancesPanel'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 import { jamkningPatch } from '@/lib/salary/jamkning-patch'
+import { clearableField } from '@/lib/salary/clearable-field'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 
 const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
@@ -162,11 +163,14 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       last_name: form.get('last_name') as string,
       employment_type: employmentType,
       employment_start: form.get('employment_start') as string || undefined,
-      employment_end: form.get('employment_end') as string || undefined,
-      // Sparse patch: an empty/cleared field is OMITTED (undefined keys are
-      // dropped by JSON.stringify) so the server's patch schema leaves the
-      // column unchanged. Hardcoded fallbacks here would silently reset real
-      // DB values on submit.
+      // Optional fields seeded from the row: emptying one sends null, which
+      // clears the column (#3008). Before, the emptied value was omitted and
+      // the stored slutdatum came back after save.
+      employment_end: clearableField(form.get('employment_end'), employee?.employment_end),
+      // Sparse patch for required columns: an empty field is OMITTED
+      // (undefined keys are dropped by JSON.stringify) so the server's patch
+      // schema leaves the column unchanged. Hardcoded fallbacks here would
+      // silently reset real DB values on submit.
       employment_degree: parseFloat(form.get('employment_degree') as string) || undefined,
       hours_per_week: parseFloat(form.get('hours_per_week') as string) || undefined,
       workdays_per_week: parseFloat(form.get('workdays_per_week') as string) || undefined,
@@ -184,13 +188,17 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       // phone number never wipes a stored beslut. Guarded on `tax` so a card
       // that has not reported yet sends nothing.
       ...(tax ? jamkningPatch(tax) : {}),
-      email: form.get('email') as string || undefined,
-      phone: form.get('phone') as string || undefined,
-      address_line1: form.get('address_line1') as string || undefined,
-      postal_code: form.get('postal_code') as string || undefined,
-      city: form.get('city') as string || undefined,
-      clearing_number: normalizeBankNumber(clearing) || undefined,
-      bank_account_number: normalizeBankNumber(account) || undefined,
+      // Contact and bank inputs are always rendered and seeded from the row,
+      // so emptying one clears it (null), like the slutdatum above. The tax
+      // card's municipality/table stay sparse: they are hidden outside
+      // A-skatt, and a hidden field must never be wiped by a save.
+      email: clearableField(form.get('email'), employee?.email),
+      phone: clearableField(form.get('phone'), employee?.phone),
+      address_line1: clearableField(form.get('address_line1'), employee?.address_line1),
+      postal_code: clearableField(form.get('postal_code'), employee?.postal_code),
+      city: clearableField(form.get('city'), employee?.city),
+      clearing_number: clearableField(normalizeBankNumber(clearing), employee?.clearing_number),
+      bank_account_number: clearableField(normalizeBankNumber(account), employee?.bank_account_number),
       vacation_rule: vacationRule,
       vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || undefined,
       // Always sent: an empty field (or a rule that hides it) clears the

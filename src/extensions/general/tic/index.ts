@@ -40,6 +40,7 @@ import {
   registrationDateToMs,
   searchCompaniesForLookup,
 } from './lib/lookup'
+import { isLensDocumentCeased } from './lib/lens-status'
 import { COMPANY_SEARCH_MIN_CHARS } from '@/lib/company-lookup/types'
 import type { RegistryHint } from '@/lib/company-lookup/types'
 import { createScbClient } from '@/lib/parties/scb/client'
@@ -890,7 +891,7 @@ export const ticExtension: Extension = {
           // TicWorkspace `!== 'ceased'` check still compares against, so
           // the UI keeps showing "Avregistrerat" for deregistered
           // companies without UI changes.
-          const isCeasedProfile = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
+          const isCeasedProfile = isLensDocumentCeased(doc)
           const profile: TICCompanyProfile = {
             companyId,
             orgNumber: doc.registrationNumber,

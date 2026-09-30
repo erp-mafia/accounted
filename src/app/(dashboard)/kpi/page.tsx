@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useId } from 'react'
+import { useState, useEffect, useCallback, useId, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Settings2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -10,12 +10,14 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { FyPicker } from '@/components/common/FyPicker'
+import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import { KPIPanes, KPIBreakdown } from '@/components/kpi/KPIStory'
 import { KPIMonthsTable } from '@/components/kpi/KPIMonthsTable'
 import { KPISettingsDialog } from '@/components/kpi/KPISettingsDialog'
 import { saveKPIPreferences } from '@/components/kpi/save-preferences'
 import { loadKPIPreferences } from '@/components/kpi/load-preferences'
 import { failureDescription, type ActionFailure } from '@/lib/browser/action-failure'
+import { dimensionScopedPreferences } from '@/lib/reports/kpi-definitions'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import type { KPIReport, KPIPreferences } from '@/types'
 
@@ -30,6 +32,9 @@ export default function KpiPage() {
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [selectedPeriod, setSelectedPeriod] = useState<string>('')
+  // The catalog flags nyckeltal as dimension-filterable; the API narrows the
+  // P&L figures and leaves the balance-side ones company-wide.
+  const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(null)
   const [report, setReport] = useState<KPIReport | null>(null)
   // null = the stored layout is not known: still loading, or the read failed
   // (prefsError). It never holds a fabricated value.
@@ -72,28 +77,36 @@ export default function KpiPage() {
     return () => { cancelled = true }
   }, [reloadKey, locale])
 
+  // Only the newest request may land: picking and clearing a filter value
+  // puts two reports in flight, and the filtered one is the slower. A
+  // superseded response is dropped rather than shown, or cleared after the
+  // newer one landed (which left the page blank).
+  const requestSeq = useRef(0)
+
   const fetchReport = useCallback(async (periodId: string) => {
+    const seq = ++requestSeq.current
     setIsLoadingReport(true)
     setError(null)
     try {
-      const res = await fetch(`/api/reports/kpi?period_id=${periodId}`)
+      const params = new URLSearchParams({ period_id: periodId })
+      if (dimensionFilter) {
+        params.set('dim_no', dimensionFilter.dimNo)
+        params.set('dim_code', dimensionFilter.code)
+      }
+      const res = await fetch(`/api/reports/kpi?${params}`)
       if (!res.ok) throw new Error(t('fetch_failed'))
       const { data } = await res.json()
-      setReport(data)
+      if (seq === requestSeq.current) setReport(data)
     } catch {
-      setError(t('fetch_failed'))
+      if (seq === requestSeq.current) setError(t('fetch_failed'))
     } finally {
-      setIsLoadingReport(false)
+      if (seq === requestSeq.current) setIsLoadingReport(false)
     }
-  }, [t])
+  }, [t, dimensionFilter])
 
   useEffect(() => {
     if (!selectedPeriod) return
-    let cancelled = false
-    fetchReport(selectedPeriod).then(() => {
-      if (cancelled) setReport(null)
-    })
-    return () => { cancelled = true }
+    void fetchReport(selectedPeriod)
   }, [selectedPeriod, fetchReport])
 
   /**
@@ -166,7 +179,7 @@ export default function KpiPage() {
                 // complete draft, so while the stored layout is unknown the
                 // control that opens it must not exist: a save from here would
                 // overwrite the row with a layout the user never chose.
-                <Button
+                <Button size="sm"
                   variant="outline"
                   className="gap-1.5"
                   disabled
@@ -209,6 +222,10 @@ export default function KpiPage() {
         </div>
       </div>
 
+      {/* Renders nothing unless the company uses dimensions; when a value is
+          picked it shows the partial-view chip the filtered reports carry. */}
+      <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />
+
       {error && (
         <p className="py-8 text-center text-sm text-muted-foreground">{error}</p>
       )}
@@ -222,7 +239,15 @@ export default function KpiPage() {
           {/* The panes are the preference-driven surface: with the layout
               unknown they stay off rather than render defaults as if they
               were the user's. The cost story below reads only the report. */}
-          {preferences && <KPIPanes report={report} preferences={preferences} />}
+          {/* Under a dimension filter the company-wide figures (cash, VAT,
+              receivables, payment days) are hidden: next to a project's
+              result they would read as the project's. */}
+          {preferences && (
+            <KPIPanes
+              report={report}
+              preferences={dimensionFilter ? dimensionScopedPreferences(preferences) : preferences}
+            />
+          )}
           {/* Same rule as the panes: a layout flag is only honoured once the
               stored layout is known. */}
           {preferences?.showMonthlyTable && <KPIMonthsTable report={report} />}

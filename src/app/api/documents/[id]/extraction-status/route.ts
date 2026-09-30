@@ -2,12 +2,16 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getAiStatus } from '@/lib/ai'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { readUnderlagFacts } from '@/lib/transactions/underlag-read'
 
 // GET /api/documents/:id/extraction-status
 //
 // Light-weight polling endpoint for the AI document-extraction pipeline.
 // Returns the minimal fields needed to drive an "extracting…" UI without
-// touching storage (no signed URL creation per poll).
+// touching storage (no signed URL creation per poll). Once the extraction
+// has succeeded it also returns the facts a booking needs off it (supplier,
+// totals, moms and its rate), so a review that just took an upload can book
+// the document's moms without another round trip.
 //
 // Derived status:
 //   running     : extracted_at IS NULL and this deployment has AI configured
@@ -79,6 +83,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         status,
         extracted_at: row.extracted_at,
         extraction_model: row.extraction_model,
+        facts: status === 'succeeded' ? readUnderlagFacts(row.extracted_data) : null,
       },
     })
   }

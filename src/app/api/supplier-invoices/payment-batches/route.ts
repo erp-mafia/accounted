@@ -5,8 +5,8 @@ import {
   CreateSupplierPaymentBatchSchema,
   SupplierPaymentBatchListQuerySchema,
 } from '@/lib/api/schemas'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { createSupplierPaymentBatch } from '@/lib/payments/batch-service'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { createPaymentBatch, loadBatchProgress } from '@/lib/payments/batch-operations'
 import type { SupplierPaymentBatch } from '@/types'
 
 /**
@@ -26,41 +26,15 @@ export const POST = withRouteContext(
     })
     if (!validation.success) return validation.response
 
-    const result = await createSupplierPaymentBatch(supabase, companyId, user.id, validation.data)
+    const outcome = await createPaymentBatch(
+      { supabase, companyId, userId: user.id, log },
+      validation.data,
+      { dryRun: false },
+    )
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) throw new Error('unreachable: create ran without a dry run')
 
-    if (!result.ok) {
-      switch (result.code) {
-        case 'debtor_incomplete':
-          return errorResponseFromCode('SI_BATCH_DEBTOR_INCOMPLETE', log, {
-            requestId,
-            details: { missing: result.missing },
-          })
-        case 'ineligible':
-          return errorResponseFromCode('SI_BATCH_INELIGIBLE_INVOICE', log, {
-            requestId,
-            details: { invoices: result.details },
-          })
-        case 'invalid_amount':
-          return errorResponseFromCode('SI_BATCH_INVALID_AMOUNT', log, {
-            requestId,
-            details: { invoices: result.details },
-          })
-        case 'amount_exceeds_remaining':
-          return errorResponseFromCode('SI_BATCH_AMOUNT_EXCEEDS_REMAINING', log, {
-            requestId,
-            details: { invoices: result.details },
-          })
-        case 'already_batched':
-          return errorResponseFromCode('SI_BATCH_DUPLICATE_INVOICE', log, {
-            requestId,
-            details: { invoices: result.details },
-          })
-        default:
-          return errorResponseFromCode('SI_BATCH_CREATE_FAILED', log, { requestId })
-      }
-    }
-
-    const { batch } = result
+    const batch = outcome.data
     return NextResponse.json(
       {
         data: {
@@ -105,25 +79,7 @@ export const GET = withRouteContext(
     const batchRows = (batches ?? []) as SupplierPaymentBatch[]
     const batchIds = batchRows.map((batch) => batch.id)
 
-    const settledCounts = new Map<string, number>()
-    const invoiceIdsByBatch = new Map<string, string[]>()
-    if (batchIds.length > 0) {
-      const { data: items } = await supabase
-        .from('supplier_payment_batch_items')
-        .select('batch_id, supplier_invoice_id, invoice:supplier_invoices(remaining_amount)')
-        .eq('company_id', companyId)
-        .in('batch_id', batchIds)
-
-      for (const item of items ?? []) {
-        const invoice = item.invoice as unknown as { remaining_amount: number } | null
-        if (invoice && invoice.remaining_amount <= 0.005) {
-          settledCounts.set(item.batch_id, (settledCounts.get(item.batch_id) ?? 0) + 1)
-        }
-        const list = invoiceIdsByBatch.get(item.batch_id)
-        if (list) list.push(item.supplier_invoice_id)
-        else invoiceIdsByBatch.set(item.batch_id, [item.supplier_invoice_id])
-      }
-    }
+    const { settledCounts, invoiceIdsByBatch } = await loadBatchProgress(supabase, companyId, batchIds)
 
     return NextResponse.json({
       data: batchRows.map((batch) => ({

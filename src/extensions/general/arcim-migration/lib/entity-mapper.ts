@@ -602,6 +602,13 @@ export interface MappedInvoice {
    * reference.
    */
   creditedInvoiceRef: CreditedInvoiceRefDto | null
+  /**
+   * Set by mapSupplierInvoice only: the provider's rows did not add up to the
+   * invoice the same payload states (see rowsContradictHeader), so `items`
+   * is empty and the invoice imports as a header. The orchestrator counts it,
+   * the job worker refuses the record the way it refuses any row mismatch.
+   */
+  rowsMismatch?: boolean
 }
 
 // ── Public mappers ──────────────────────────────────────────────────
@@ -734,12 +741,13 @@ function negate(n: number): number {
  * `is_credit_note`, which is how Kreditera writes one
  * (lib/supplier-invoices/credit-note.ts).
  *
- * The supplier side is also where a row net of zero is the normal case and
- * not a corner: Fortnox sends a supplier invoice's ACCOUNTING rows (the 2440
- * row against the cost and VAT rows; 19 of the 19 Fortnox supplier credit
- * notes with rows in production on 2026-09-21 balance to zero). The header
- * decides there, so the net is compared in whole öre: a float residue from
- * summing a balanced voucher must not pick the factor.
+ * On the supplier side Fortnox and Visma send a document's ACCOUNTING rows,
+ * the 2440 row against the cost and VAT rows (19 of the 19 Fortnox supplier
+ * credit notes with rows in production on 2026-09-21 balance to zero). The
+ * payable leg is removed before this runs (supplierInvoiceRows), so the net
+ * here is the document's own; a net that still comes to zero leaves the
+ * decision to the header, and it is compared in whole öre so a float residue
+ * from summing a balanced voucher cannot pick the factor.
  */
 function withAbsoluteAmounts<T extends SalesInvoiceDto | SupplierInvoiceDto>(dto: T): T {
   const abs = (amount: AmountType): AmountType => ({ ...amount, value: Math.abs(amount.value) })
@@ -1060,6 +1068,73 @@ function mapSalesInvoiceLine(
   }
 }
 
+/** BAS 244x, leverantörsskulder: the payable. */
+function isPayableAccount(accountNumber: string | undefined): boolean {
+  return accountNumber?.startsWith('244') ?? false
+}
+
+/** BAS 26xx: the VAT accounts, ingående and utgående alike. */
+function isVatAccount(accountNumber: string | undefined): boolean {
+  return accountNumber?.startsWith('26') ?? false
+}
+
+/**
+ * A supplier invoice's own rows: its kontering without the voucher legs the
+ * booking engine writes itself.
+ *
+ * Visma (SupplierInvoiceApi `Rows`) and Fortnox (`SupplierInvoiceRows`) send
+ * no invoice lines. They send the registration voucher's rows: cost and VAT
+ * against the payable. Every reader of supplier_invoice_items books each
+ * item as a cost line and writes the payable leg itself (2440 on
+ * registration, the bank under kontantmetoden), so a payable row stored as an
+ * item was booked twice. A kontantmetod payment of a 1 250 kr Visma invoice
+ * credited the bank 2 500 kr and debited 2440, which that method never
+ * credits; the same payment of a Fortnox invoice credited 2440 instead of the
+ * bank.
+ *
+ *   - The payable leg (244x) always goes.
+ *   - The VAT leg (26xx) goes when the provider also states a VAT amount
+ *     somewhere else (a header total, VAT on every line, or a net), because
+ *     the items then carry it and the engine posts 2641 from them. A stated
+ *     0 carries none of the rows: a reverse-charge pair (2645 against 2614)
+ *     is the buyer's own VAT, not the supplier's, so it stays. When the rows
+ *     are the only record of the VAT, as they are for both providers today,
+ *     they stay too: an item on 2641 with no VAT of its own is booked as it
+ *     stands, so the voucher repeats the source's kontering, reverse-charge
+ *     and SLP pairs included. An agent-written invoice that puts its VAT on a
+ *     line of its own has the same shape.
+ *
+ * Rows without an account (Bokio's invoice lines) are never touched.
+ */
+function supplierInvoiceRows(dto: SupplierInvoiceDto): SupplierInvoiceDto {
+  const withoutPayable = dto.lines.filter((line) => !isPayableAccount(line.accountNumber))
+  const statedVat = resolveInvoiceVat({ ...dto, lines: withoutPayable })
+  const vatStatedElsewhere = !statedVat.unresolved && statedVat.vatAmount !== 0
+  const lines = vatStatedElsewhere
+    ? withoutPayable.filter((line) => !isVatAccount(line.accountNumber))
+    : withoutPayable
+  return lines.length === dto.lines.length ? dto : { ...dto, lines }
+}
+
+/**
+ * How far a supplier invoice's rows may disagree with its header, net and
+ * VAT each, before none of them are stored. The completion pass's rule
+ * (#2302, complete-invoice-lines.ts): öresavrundning and per-row VAT rounding
+ * stay inside it, a row set that is off by a leg of the voucher does not.
+ */
+const ROWS_TOLERANCE_KR = 1
+
+/**
+ * Whether the mapped rows contradict the invoice they belong to. With no VAT
+ * established the header reads subtotal = the gross and 0 kr of VAT, so the
+ * rows are held to the amount the supplier is owed.
+ */
+function rowsContradictHeader(items: Record<string, unknown>[], subtotal: number, vatAmount: number): boolean {
+  const net = items.reduce((sum, item) => sum + Number(item.line_total ?? 0), 0)
+  const vat = items.reduce((sum, item) => sum + Number(item.vat_amount ?? 0), 0)
+  return Math.abs(net - subtotal) > ROWS_TOLERANCE_KR || Math.abs(vat - vatAmount) > ROWS_TOLERANCE_KR
+}
+
 export function mapSupplierInvoice(
   dto: SupplierInvoiceDto,
   userId: string,
@@ -1079,8 +1154,11 @@ export function mapSupplierInvoice(
   // negative twice over, which is why the mappers could not type one, and an
   // untyped one landed as an ordinary payable with a negative total (#2838).
   // Same normaliser as the sales side, applied once, header and rows
-  // together; everything below reads `amounts`, never `dto`'s figures.
-  const amounts = isCreditNote ? withAbsoluteAmounts(dto) : dto
+  // together; everything below reads `amounts`, never `dto`'s figures. It
+  // runs on the invoice's own rows: the voucher legs the booking engine
+  // writes itself are removed first (supplierInvoiceRows).
+  const rows = supplierInvoiceRows(dto)
+  const amounts = isCreditNote ? withAbsoluteAmounts(rows) : rows
 
   const total = round2(amounts.legalMonetaryTotal.payableAmount.value)
   const vat = resolveInvoiceVat(amounts)
@@ -1173,13 +1251,24 @@ export function mapSupplierInvoice(
     notes: isCreditNote ? creditNoteNote(dto.note, dto.creditedInvoiceRef) : (dto.note || null),
   }
 
-  const items = dto.supplierEvidence && !dto.supplierEvidence.itemsComplete
+  const rowsWithheld = Boolean(dto.supplierEvidence && !dto.supplierEvidence.itemsComplete)
+  const mappedItems = rowsWithheld
     ? []
     : amounts.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx, vat.rate))
+  // Rows that contradict their own invoice are worse than no rows: every
+  // booking path debits them as they stand and closes the entry on 2440 or
+  // the bank with whatever they sum to. A row set that the filter above
+  // emptied (a payable leg with nothing beside it) describes its invoice no
+  // better, and is reported the same way rather than passing as row-less.
+  const rowsFilteredAway = !rowsWithheld && dto.lines.length > 0 && amounts.lines.length === 0 && total !== 0
+  const rowsMismatch = rowsFilteredAway
+    || (mappedItems.length > 0 && rowsContradictHeader(mappedItems, subtotal, vatAmount))
+  const items = rowsMismatch ? [] : mappedItems
 
   return {
     invoice,
     items,
+    rowsMismatch,
     fxUnresolved: fx.unresolved,
     vatUnresolved: vat.unresolved,
     // supplier_invoices carries is_credit_note, so the row reads as a

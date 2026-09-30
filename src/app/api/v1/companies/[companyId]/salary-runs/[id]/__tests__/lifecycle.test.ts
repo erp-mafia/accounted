@@ -73,6 +73,7 @@ import { POST as approve } from '../approve/route'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 import { POST as markPaid } from '../mark-paid/route'
 import { POST as book } from '../book/route'
+import { SalaryRunPartiallyBookedError } from '@/lib/salary/salary-entries'
 import { POST as generateAgi } from '../generate-agi/route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -89,6 +90,8 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
   }
+  // Every chained call in order, so a test can assert filters and payloads.
+  const calls: Array<{ table: string; method: string; args: unknown[] }> = []
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -99,7 +102,10 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          calls.push({ table, method: String(prop), args })
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
@@ -107,6 +113,12 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
   // The generate-agi route also hits supabase.auth.admin.getUserById; stub
   // that so the helper-mock path doesn't trip on auth.
   return {
+    calls,
+    // RPCs answer from the 'rpc:<name>' key, like a table.
+    rpc: vi.fn((fn: string, args?: unknown) => {
+      calls.push({ table: `rpc:${fn}`, method: 'rpc', args: [args] })
+      return buildChain(`rpc:${fn}`)
+    }),
     from: vi.fn((table: string) => buildChain(table)),
     auth: {
       admin: {
@@ -118,6 +130,8 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+// The token claim_salary_run_booking hands the call that may book the run.
+const BOOKING_CLAIM = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const USER_ID = 'user-1'
 
 function makeRequest(url: string, init?: RequestInit): Request {
@@ -506,6 +520,7 @@ describe('POST /salary-runs/:id/book', () => {
           }, // status flip
         ],
         salary_run_employees: { data: [employeeRow], error: null },
+        'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
         idempotency_keys: { data: null, error: null },
       }),
     )
@@ -580,6 +595,7 @@ describe('POST /salary-runs/:id/book', () => {
           },
         ],
         salary_run_employees: { data: [overriddenRow, fSkattRow], error: null },
+        'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
         idempotency_keys: { data: null, error: null },
       }),
     )
@@ -618,6 +634,48 @@ describe('POST /salary-runs/:id/book', () => {
     })
   })
 
+  it('books a run without arbetsgivaravgifter: no avgifter entry, avgifter_entry_id null', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          { data: { ...paidRun, total_avgifter: 0 }, error: null },
+          {
+            data: {
+              id: RUN_ID, status: 'booked',
+              booked_at: '2026-05-26T09:15:00Z', booked_by: USER_ID,
+              salary_entry_id: 'je_salary', avgifter_entry_id: null,
+              vacation_entry_id: null, pension_entry_id: null,
+            },
+            error: null,
+          },
+        ],
+        salary_run_employees: { data: [{ ...employeeRow, avgifter_amount: 0 }], error: null },
+        'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    mocks.checkPeriodLock.mockResolvedValue({ locked: false })
+    mocks.createSalaryRunEntries.mockResolvedValue({
+      salaryEntry: { id: 'je_salary', voucher_number: 'L2026-0025' },
+      avgifterEntry: null,
+      vacationEntry: null,
+      pensionEntry: null,
+    })
+
+    const res = await book(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/book`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.avgifter_entry_id).toBeNull()
+    expect(body.data.entry_ids).toEqual(['je_salary'])
+  })
+
   it('returns PERIOD_LOCKED before invoking the engine when payment_date is locked', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -651,6 +709,7 @@ describe('POST /salary-runs/:id/book', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: paidRun, error: null },
         salary_run_employees: { data: [employeeRow], error: null },
+        'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
         idempotency_keys: { data: null, error: null },
       }),
     )
@@ -667,6 +726,34 @@ describe('POST /salary-runs/:id/book', () => {
     expect(res.status).toBe(500)
     const body = await res.json()
     expect(body.error.code).toBe('SALARY_RUN_BOOK_FAILED')
+  })
+
+  it('answers 409 SALARY_RUN_PARTIALLY_BOOKED with the vouchers to reverse when the run has posted vouchers that do not match', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: paidRun, error: null },
+        salary_run_employees: { data: [employeeRow], error: null },
+        'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    mocks.checkPeriodLock.mockResolvedValue({ locked: false })
+    mocks.createSalaryRunEntries.mockRejectedValue(
+      new SalaryRunPartiallyBookedError([{ id: 'je_stale', voucher_series: 'L', voucher_number: 7 }]),
+    )
+
+    const res = await book(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/book`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_PARTIALLY_BOOKED')
+    expect(body.error.details).toEqual({ voucher_numbers: ['L7'], entry_ids: ['je_stale'] })
   })
 
   it('refuses to book a non-paid run', async () => {
@@ -689,6 +776,252 @@ describe('POST /salary-runs/:id/book', () => {
     const body = await res.json()
     expect(body.error.code).toBe('SALARY_RUN_BOOK_NOT_PAID')
     expect(mocks.checkPeriodLock).not.toHaveBeenCalled()
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────
+// :book booking claim (accounted#3251)
+// ────────────────────────────────────────────────────────────────────
+
+describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
+  const paidRun = {
+    id: RUN_ID,
+    status: 'paid',
+    period_year: 2026,
+    period_month: 5,
+    payment_date: '2026-05-25',
+    voucher_series: 'L',
+    total_gross: 35000,
+    total_tax: 9500,
+    total_net: 25500,
+    total_avgifter: 10997,
+    total_vacation_accrual: 0,
+    calculation_params: { slpRate: 0.2426 },
+  }
+  const employeeRow = {
+    employee_id: 'emp_1',
+    employee: { employment_type: 'employee' },
+    gross_salary: 35000,
+    tax_withheld: 9500,
+    net_salary: 25500,
+    avgifter_amount: 10997,
+    avgifter_rate: 0.3142,
+    vacation_accrual: 0,
+    vacation_accrual_avgifter: 0,
+    line_items: [],
+  }
+  const bookedRow = {
+    id: RUN_ID, status: 'booked',
+    booked_at: '2026-05-26T09:15:00Z', booked_by: USER_ID,
+    salary_entry_id: 'je_salary', avgifter_entry_id: 'je_avg',
+    vacation_entry_id: null, pension_entry_id: null,
+  }
+  type Call = { table: string; method: string; args: unknown[] }
+  const post = () =>
+    book(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/book`, { method: 'POST' }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+  /** The .eq filters that follow the salary_runs update whose payload matches. */
+  const updateFilters = (calls: Call[], match: (payload: Record<string, unknown>) => boolean) => {
+    const start = calls.findIndex(
+      (c) => c.table === 'salary_runs' && c.method === 'update' && match(c.args[0] as Record<string, unknown>),
+    )
+    if (start === -1) return null
+    const out: unknown[][] = []
+    for (let i = start + 1; i < calls.length && calls[i].method === 'eq'; i++) out.push(calls[i].args)
+    return out
+  }
+
+  beforeEach(() => {
+    mocks.checkPeriodLock.mockResolvedValue({ locked: false })
+    mocks.createSalaryRunEntries.mockResolvedValue({
+      salaryEntry: { id: 'je_salary', voucher_number: 'L2026-0023' },
+      avgifterEntry: { id: 'je_avg' },
+      vacationEntry: null,
+      pensionEntry: null,
+    })
+  })
+
+  it('401 when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+
+    expect((await post()).status).toBe(401)
+    expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('404 SALARY_RUN_NOT_FOUND for a run outside the company', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await post()
+
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('SALARY_RUN_NOT_FOUND')
+    expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('claims the run before posting and flips it only for the claim holder', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: [
+        { data: paidRun, error: null },
+        { data: bookedRow, error: null },
+      ],
+      salary_run_employees: { data: [employeeRow], error: null },
+      'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await post()
+
+    expect(res.status).toBe(200)
+    expect(supabase.rpc).toHaveBeenCalledWith('claim_salary_run_booking', {
+      p_company_id: COMPANY_ID,
+      p_salary_run_id: RUN_ID,
+    })
+    const flip = updateFilters(supabase.calls, (payload) => payload.status === 'booked')
+    expect(flip).toEqual(
+      expect.arrayContaining([
+        ['company_id', COMPANY_ID],
+        ['id', RUN_ID],
+        ['status', 'paid'],
+        ['booking_claim_id', BOOKING_CLAIM],
+      ]),
+    )
+    const flipPayload = supabase.calls.find(
+      (c) => c.table === 'salary_runs' && c.method === 'update',
+    )?.args[0] as Record<string, unknown>
+    expect(flipPayload).toMatchObject({ booking_claim_id: null, booking_claimed_at: null })
+    // Booked: the flip cleared the claim, so there is nothing to release.
+    expect(supabase.calls.filter((c) => c.table === 'salary_runs' && c.method === 'update')).toHaveLength(1)
+  })
+
+  it('409 SALARY_RUN_BOOKING_IN_PROGRESS and posts nothing while another call holds the run', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      // precheck reads paid, the post-refusal re-read still reads paid
+      salary_runs: { data: paidRun, error: null },
+      salary_run_employees: { data: [employeeRow], error: null },
+      'rpc:claim_salary_run_booking': { data: null, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await post()
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_BOOKING_IN_PROGRESS')
+    expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
+    expect(supabase.calls.some((c) => c.table === 'salary_runs' && c.method === 'update')).toBe(false)
+  })
+
+  it('answers SALARY_RUN_BOOK_NOT_PAID when a concurrent call booked the run after the precheck', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          { data: paidRun, error: null }, // precheck: still paid
+          { data: { status: 'booked' }, error: null }, // re-read after the refused claim
+        ],
+        salary_run_employees: { data: [employeeRow], error: null },
+        'rpc:claim_salary_run_booking': { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await post()
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_BOOK_NOT_PAID')
+    expect(body.error.details).toEqual({ current_status: 'booked' })
+    expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('releases the claim when the engine throws, so the caller can retry at once', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: { data: paidRun, error: null },
+      salary_run_employees: { data: [employeeRow], error: null },
+      'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    mocks.createSalaryRunEntries.mockRejectedValue(new Error('Insufficient BAS account'))
+
+    const res = await post()
+
+    expect(res.status).toBe(500)
+    const release = updateFilters(
+      supabase.calls,
+      (payload) => payload.status === undefined && payload.booking_claim_id === null,
+    )
+    expect(release).toEqual([
+      ['id', RUN_ID],
+      ['company_id', COMPANY_ID],
+      ['booking_claim_id', BOOKING_CLAIM],
+    ])
+  })
+
+  it('releases the claim and reports the lost claim when the flip matches no row', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: [
+        { data: paidRun, error: null },
+        { data: null, error: null }, // flip: the claim is no longer ours
+      ],
+      salary_run_employees: { data: [employeeRow], error: null },
+      'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await post()
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_BOOK_FAILED')
+    expect(body.error.details).toEqual({ reason: 'booking_claim_lost', entry_ids: ['je_salary', 'je_avg'] })
+    // The release is conditional on this call's token, so it never touches a
+    // claim another call has taken since.
+    const release = updateFilters(
+      supabase.calls,
+      (payload) => payload.status === undefined && payload.booking_claim_id === null,
+    )
+    expect(release).toEqual([
+      ['id', RUN_ID],
+      ['company_id', COMPANY_ID],
+      ['booking_claim_id', BOOKING_CLAIM],
+    ])
+  })
+
+  it('answers a database error and posts nothing when the claim itself fails', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: { data: paidRun, error: null },
+      salary_run_employees: { data: [employeeRow], error: null },
+      'rpc:claim_salary_run_booking': {
+        data: null,
+        error: { message: 'connection reset', code: '08006' },
+      },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await post()
+
+    expect(res.status).toBeGreaterThanOrEqual(500)
+    expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
+    expect(supabase.calls.some((c) => c.table === 'salary_runs' && c.method === 'update')).toBe(false)
   })
 })
 
@@ -716,7 +1049,6 @@ describe('POST /salary-runs/:id/generate-agi', () => {
         totalTax: 28500,
         totalAvgifterBasis: 105000,
         totalAvgifterAmount: 32991,
-        totalSjuklonekostnad: 0,
         avgifterByCategory: {},
       },
       orgNumber: '5566778899',

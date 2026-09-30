@@ -6,13 +6,8 @@ import { UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { getCompanyEntityType } from '@/lib/company/context'
 import { encryptPersonnummer, extractLast4, maskEmployeeForResponse, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
-import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
-import {
-  jamkningIssueFromDbError,
-  touchesJamkning,
-  validateJamkning,
-  type JamkningFields,
-} from '@/lib/salary/jamkning-rules'
+import { validateEmployeeUpdate } from '@/lib/salary/employee-update-rules'
+import { jamkningIssueFromDbError, type JamkningFields } from '@/lib/salary/jamkning-rules'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -91,46 +86,14 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
     }
 
-    // Merged validation: combine existing + updates to check full integrity
+    // Merged-state rules (salary amount, tax table, Växa-stöd, jämkning when
+    // touched, bank details when changed) on the row as it would be stored.
+    // One copy for the dashboard, v1 and MCP doors. `body` is the parsed
+    // patch: absent keys are absent, explicit nulls (clear) survive. #3008
     const merged = { ...existing, ...body }
-    const mergedErrors: string[] = []
-
-    if (merged.salary_type === 'monthly' && (!merged.monthly_salary || merged.monthly_salary <= 0)) {
-      mergedErrors.push('Månadslön krävs och måste vara större än 0 för månadslöneform')
-    }
-    if (merged.salary_type === 'hourly' && (!merged.hourly_rate || merged.hourly_rate <= 0)) {
-      mergedErrors.push('Timlön krävs och måste vara större än 0 för timlöneform')
-    }
-    if (merged.f_skatt_status === 'a_skatt' && !merged.is_sidoinkomst && !merged.tax_table_number) {
-      mergedErrors.push('Skattetabell krävs för A-skatt anställda')
-    }
-    // Merged-state jämkning check through the shared validator (same rule as
-    // the v1 route and employee-commands): a non-null percentage needs both
-    // dates, and the dates must be ordered, but the schema can only see the
-    // body. Only run when the PATCH touches a jamkning field: a legacy row
-    // with inconsistent jamkning_* state must not block unrelated updates
-    // (fixing it requires touching those very fields). `body` is the parsed
-    // patch: absent keys are absent, explicit nulls survive. #2058
-    if (touchesJamkning(body)) {
-      for (const issue of validateJamkning(merged)) mergedErrors.push(issue.message)
-    }
+    const mergedErrors = validateEmployeeUpdate(existing, body)
     if (mergedErrors.length > 0) {
-      return NextResponse.json({ error: mergedErrors.join('. ') }, { status: 400 })
-    }
-
-    // Validate bank details only when the caller actually changes them, so a
-    // legacy employee with incomplete/free-text bank data (from before this
-    // validation existed) can still be edited in unrelated ways. Validate the
-    // merged pair so both-or-neither reflects the row's real end state.
-    const clearingChanged =
-      body.clearing_number !== undefined && body.clearing_number !== existing.clearing_number
-    const accountChanged =
-      body.bank_account_number !== undefined && body.bank_account_number !== existing.bank_account_number
-    if (clearingChanged || accountChanged) {
-      const bankIssues = validateEmployeeBankAccount(merged.clearing_number, merged.bank_account_number)
-      if (bankIssues.length > 0) {
-        return NextResponse.json({ error: bankIssues.map((i) => i.message).join('. ') }, { status: 400 })
-      }
+      return NextResponse.json({ error: mergedErrors.map((i) => i.message).join('. ') }, { status: 400 })
     }
 
     // Only when the caller is changing employment_type: block setting an EF's

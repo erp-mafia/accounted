@@ -24,7 +24,7 @@ const chain: any = {
 }
 
 const mockSupabase = {
-  auth: { getUser: vi.fn() },
+  auth: { getUser: vi.fn(), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   // The table name is unused by the shared chain, but declared so a test can
   // install a table-aware implementation of its own.
   from: vi.fn((_table?: string) => chain),
@@ -395,6 +395,30 @@ describe('PATCH /api/invoices/recurring/[id] combined edit rollback', () => {
     expect(status).toBe(200)
     expect(updatePayloads).toHaveLength(0)
     expect(itemsInserts).toHaveLength(1)
+  })
+
+  it('keeps the dimension bags the editor sends back: the item replace writes exactly them', async () => {
+    // The edit dialog re-sends the whole item list on every save, so a bag it
+    // carries must land verbatim and an item without one stores {}.
+    itemsSnapshot = [{ ...storedItem, dimensions: { '6': 'P001' } }]
+
+    const { status } = await parseJsonResponse(
+      await PATCH(
+        patchReq({
+          default_dimensions: { '1': 'KS01' },
+          items: [
+            { description: 'Rad A', quantity: 1, unit: 'st', unit_price: 1000, dimensions: { '6': 'P001' } },
+            { description: 'Rad B', quantity: 2, unit: 'st', unit_price: 50 },
+          ],
+        }),
+        params,
+      ),
+    )
+
+    expect(status).toBe(200)
+    expect(updatePayloads[0]).toEqual({ default_dimensions: { '1': 'KS01' } })
+    expect(itemsInserts).toHaveLength(1)
+    expect(itemsInserts[0].map((row) => row.dimensions)).toEqual([{ '6': 'P001' }, {}])
   })
 
   it('404s before writing the header when the schedule does not exist', async () => {

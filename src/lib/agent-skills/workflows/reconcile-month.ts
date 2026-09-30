@@ -35,7 +35,7 @@ Then tell the user in two lines what you found: the month, the accounts, which a
 
 \`gnubok_list_reconciliation_items({ account_key, bucket, date_from, date_to })\` (limit default 50, max 200; page with \`offset\`). Each item carries \`item_id\`, \`side\`, \`amount\`, a \`proposal\` and the \`actions\` it allows.
 
-1. **proposed**: outside rows with an exact twin verifikat. Link them in one call: \`gnubok_reconcile_match({ account_key, use_proposals: true, dry_run: true })\`, show the user the preview, then call again without \`dry_run\`. It stages. Rows in \`skipped[]\` are information: ALREADY_LINKED (done already), ENTRY_REVERSED or ENTRY_NOT_FOUND (the verifikat is gone or reversed: treat the row as unmatched), PAIR_NOT_CLOSED (amounts do not add up: see Step 3), UNSUPPORTED_PAIR_SHAPE (see Rules).
+1. **proposed**: outside rows with an exact twin verifikat. Link them in one call: \`gnubok_reconcile_match({ account_key, use_proposals: true, dry_run: true })\`, show the user the preview, then call again without \`dry_run\`. It stages. Rows in \`skipped[]\` are information: ALREADY_LINKED (done already), ENTRY_NOT_FOUND (no posted verifikat with that id in the company: a mistyped id is the usual cause, so copy the \`item_id\` again from \`unmatched_ledger\`; never book a residual for it), ENTRY_REVERSED (the verifikat is makulerat: treat the row as unmatched), NOT_FOUND (no such outside row: copy the \`item_id\` again from \`unmatched_external\`), ROW_IGNORED (restore the row first), PAIR_NOT_CLOSED (amounts do not add up: see Step 3), UNSUPPORTED_PAIR_SHAPE (see Rules). When every pair is skipped nothing is staged: the error code is the skip code they share, or VALIDATION_ERROR when the reasons differ.
 2. **unmatched_external** (only on the outside): see "Items on one side only" below.
 3. **unmatched_ledger** (only in the books): see the same section.
 4. **matched**, **ignored**, **upcoming**: explain the bridge and need no work. \`upcoming\` skattekonto rows are not yet settled at Skatteverket and cannot be booked.
@@ -49,7 +49,7 @@ Re-read the status after every approved round. Stop working an account when \`un
 - Bank row whose affärshändelse is already on a verifikat: link it with \`gnubok_reconcile_match({ account_key, pairs: [{ external_ids: [...], journal_entry_ids: [...] }] })\`. Find the verifikat with \`gnubok_query_journal\` (account, date window, amount) first.
 - Bank row that is not booked at all: it needs booking. A handful: \`gnubok_categorize_transaction\`. Many, or incoming customer payments: follow \`bank-reconciliation\` (it covers \`gnubok_match_transaction_to_invoice\` and \`gnubok_auto_match_period\`, which proposes invoice matches for a date range of unmatched income, dry run by default).
 - Bank row that is no business event (a duplicate, a PSD2 ghost row): \`gnubok_ignore_transaction({ transaction_id, dry_run: true })\`, then without \`dry_run\`. It writes no verifikat, so a locked period does not block it. Only when the user agrees it is noise.
-- Skattekonto row (ränta, avgift, moms, preliminärskatt, arbetsgivaravgift): book settled rows with \`gnubok_book_skattekonto_rows({ skattekonto_transaction_ids, dry_run: true })\`, then without \`dry_run\` (one row: \`gnubok_book_skattekonto_row\`). The preview shows the counter account each rule chose. Skipped reasons: NOT_SETTLED (wait for Skatteverket), ALREADY_BOOKED, ROW_IGNORED, NO_COUNTER_ACCOUNT (no rule: ask the user what the row is, or hand it over; a row that needs employer registration is often private A-skatt and not the company's). A skattekonto row that pairs with a verifikat the user already booked (for example the monthly skattedeklaration) is linked with \`gnubok_reconcile_match\`, not booked again.
+- Skattekonto row (ränta, avgift, moms, preliminärskatt, arbetsgivaravgift): book settled rows with \`gnubok_book_skattekonto_rows({ skattekonto_transaction_ids, dry_run: true })\`, then without \`dry_run\` (one row: \`gnubok_book_skattekonto_row\`). The preview shows the counter account each rule chose. Skipped reasons: NOT_SETTLED (wait for Skatteverket), ALREADY_BOOKED, ROW_IGNORED, LEDGER_TWIN_EXISTS (a verifikat, often one imported by SIE, already carries the event: link the row to it with \`gnubok_reconcile_match\`; \`allow_duplicate_ids\` only when the user confirms it happened twice), NO_COUNTER_ACCOUNT (no rule: ask the user what the row is, or hand it over; a row that needs employer registration is often private A-skatt and not the company's). A skattekonto row that pairs with a verifikat the user already booked (for example the monthly skattedeklaration) is linked with \`gnubok_reconcile_match\`, not booked again.
 
 **Ledger line, nothing outside** (\`unmatched_ledger\`):
 
@@ -83,8 +83,8 @@ The bank bridge runs from the start of the fiscal period, so a wrong ingående b
 
 ### The skattekonto is not imported
 
-- Error "Skattekontot är inte kopplat": Skatteverket is not connected. \`gnubok_connect_skatteverket\` returns the link where the user authorises with BankID. Tell the user, skip the skattekonto for now and continue with the other accounts.
-- Error "inga skattekontohändelser har hämtats ännu": connected but the first fetch has not finished. Skip it and say so.
+- SKATTEVERKET_NOT_CONNECTED: Skatteverket is not connected, or the connection expired before anything was fetched. \`gnubok_connect_skatteverket\` returns the link where the user authorises with BankID. Tell the user, skip the skattekonto for now and continue with the other accounts; do not ask again until they say they connected.
+- SKATTEKONTO_NOT_SYNCED: connected but the first fetch has not finished. Skip it, say so, and ask again later.
 - State \`stale\`, or NOT_FETCHED_THROUGH at sign-off: the snapshot is older than the month end. Ask the user to fetch in Accounted, then re-read. A skattekonto sign-off date can never pass the snapshot date.
 
 ### Other balance accounts (manual:BAS)
@@ -104,6 +104,8 @@ When \`unexplained_difference\` is 0 through the month end: \`gnubok_reconcile_s
 - SIGNOFF_RACE: someone else signed or reopened just now. Re-read the status before anything else.
 
 \`force: true\` with a \`note\` signs despite a difference. Only on the user's explicit decision, with the user's own words for the note, and never for the skattekonto integrity case above.
+
+A bank sign-off with \`unmatched_ledger\` lines still open satisfies Stäm av but not \`gnubok_vat_close_check\`, which keeps its \`bank_unreconciled\` blocker until those verifikat have bank rows: import the missing bank rows as a bank file (Importera, Bankfil) and link them; nothing is booked again.
 
 ## Questions for the user
 

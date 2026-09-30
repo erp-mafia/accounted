@@ -141,6 +141,15 @@ describe('runDocumentJobs', () => {
     expect(lastJobUpdate()).toEqual({ status: 'failed', last_error: 'model timeout', run_after: new Date(t0 + 8 * 60_000).toISOString(), locked_at: null, locked_by: null })
   })
 
+  it('settles a job the period-lock trigger refuses as skipped instead of retrying it five times', async () => {
+    enqueue({ data: [job({ kind: 'classify' })] })
+    mocked(classifyDocument).mockResolvedValue({ status: 'error', reason: 'document update failed: Cannot attach documents to entries in a locked/closed fiscal period' })
+    enqueue({})
+    await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0, returned: 0 })
+    expect(lastJobUpdate()).toMatchObject({ status: 'done', result: 'skipped: period_locked' })
+    expect(recordArkivUsage).not.toHaveBeenCalled()
+  })
+
   it('reads the rest of a capped loose-history document before extracting it when it is an acting type', async () => {
     enqueue({ data: [job({ kind: 'classify' })] })
     mocked(classifyDocument).mockResolvedValue({ status: 'classified', admission: 'admitted', classification: { doc_type: 'agreement.loan' } })

@@ -1,5 +1,34 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { MappingResult } from '@/types'
+import { costAccountReportsRcBasis, isReverseChargeBasisLeg } from './vat-entries'
+
+/**
+ * Reconcile a reverse-charge purchase's basis pair with the account its cost
+ * line was moved to. The category path adds the 45xx/4598 pair for its own
+ * default cost account; when an override puts the cost line on an account
+ * that reports ruta 20-24 by itself (a BAS basis account such as 4535, or a
+ * class 4-6 account configured with a reverse_charge_* treatment, per
+ * costAccountReportsRcBasis with the chart row's treatment), the pair would
+ * count the purchase twice. The fiktiv moms (2645/2614) stays either way.
+ *
+ * Only the money-out side can carry a reverse-charge purchase, so an income
+ * override is left alone. Shared by every account_override path (MCP and
+ * approval commit via applyAccountOverride, the dashboard and v1 routes).
+ */
+export function reconcileRcBasisWithCostAccount(
+  mappingResult: MappingResult,
+  transactionAmount: number,
+  account: string,
+  accountVatTreatment: string | null,
+): MappingResult {
+  if (transactionAmount >= 0) return mappingResult
+  if (!costAccountReportsRcBasis(account, accountVatTreatment)) return mappingResult
+  if (!mappingResult.vat_lines.some((l) => isReverseChargeBasisLeg(l.account_number))) return mappingResult
+  return {
+    ...mappingResult,
+    vat_lines: mappingResult.vat_lines.filter((l) => !isReverseChargeBasisLeg(l.account_number)),
+  }
+}
 
 /**
  * Apply an explicit account override to a category-derived MappingResult.
@@ -42,7 +71,7 @@ export async function applyAccountOverride(
 ): Promise<MappingResult> {
   const { data: account, error } = await supabase
     .from('chart_of_accounts')
-    .select('account_number, account_class, is_active')
+    .select('account_number, account_class, is_active, default_vat_treatment')
     .eq('company_id', companyId)
     .eq('account_number', accountOverride)
     .maybeSingle()
@@ -51,13 +80,13 @@ export async function applyAccountOverride(
     throw new Error(`Database error: ${error.message}`)
   }
   if (!account) {
-    throw new Error(
+    throw unusableOverride(
       `Konto ${accountOverride} finns inte i kontoplanen: account_override kräver ett befintligt aktivt konto. ` +
       'Skapa det först (gnubok_create_account) eller välj ett annat konto.',
     )
   }
   if (!account.is_active) {
-    throw new Error(
+    throw unusableOverride(
       `Konto ${accountOverride} är inaktivt i kontoplanen. ` +
       'Aktivera det först (gnubok_update_account med is_active=true) eller välj ett annat konto.',
     )
@@ -82,5 +111,20 @@ export async function applyAccountOverride(
     mappingResult.vat_lines = []
   }
 
-  return mappingResult
+  return reconcileRcBasisWithCostAccount(
+    mappingResult,
+    transactionAmount,
+    accountOverride,
+    account.default_vat_treatment ?? null,
+  )
+}
+
+/**
+ * An override account the chart cannot take (missing or inactive), coded
+ * TX_CATEGORIZE_INVALID_ACCOUNT as the v1 categorize route answers for the
+ * same argument; uncoded, an MCP agent got UNKNOWN_ERROR and retry advice.
+ * The text stays Swedish: the approval commit shows it to the user as is.
+ */
+function unusableOverride(message: string): Error {
+  return Object.assign(new Error(message), { code: 'TX_CATEGORIZE_INVALID_ACCOUNT' })
 }

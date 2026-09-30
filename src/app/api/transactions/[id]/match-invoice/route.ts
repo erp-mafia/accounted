@@ -2,10 +2,13 @@ import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
-import { createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
-import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { buildInvoiceCashLines, createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
+import {
+  buildInvoiceMatchClearingLines,
+  invoiceMatchPaymentDescription,
+} from '@/lib/bookkeeping/invoice-payment-lines'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
@@ -23,7 +26,7 @@ import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-inv
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
-import type { Currency, EntityType, Invoice, Transaction } from '@/types'
+import type { CreateJournalEntryLineInput, Currency, Invoice, Transaction } from '@/types'
 
 ensureInitialized()
 
@@ -337,47 +340,53 @@ export const POST = withRouteContext(
       })
     }
 
-    // A RECONCILIATION link (reconciliation_method set) is not a conflicting
-    // booking: the entry it points at is an independent verifikat (SIE import,
-    // salary run, manual booking) that may evidence OTHER affärshändelser, and
-    // reversing it wholesale as a side effect of matching one payment would be
-    // an over-broad rättelse (BFL 5 kap 5 §: a correction is scoped to the
-    // actual error). Nothing is detached HERE: the final transaction update
-    // below overwrites the pointer and clears reconciliation_method in the
-    // same write, so a failure anywhere in between leaves the existing link
-    // fully intact instead of orphaning the row.
-    const priorReconciliationLink =
-      transaction.journal_entry_id && transaction.reconciliation_method
-        ? {
-            journalEntryId: transaction.journal_entry_id as string,
-            method: transaction.reconciliation_method as string,
-          }
-        : null
+    // Vouchers this request has posted. A failure after the first of them is a
+    // partial commit and the response says so by naming them, as the agent
+    // executor's failed_partial does (#842), never as a clean-looking refusal.
+    const postedIds: Record<string, string> = {}
+    const withPostedIds = (details?: Record<string, unknown>) =>
+      Object.keys(postedIds).length > 0
+        ? { ...(details ?? {}), posted_ids: { ...postedIds } }
+        : details
 
-    // Storno conflicting auto-categorization JE before any other state change.
-    // If storno fails, return immediately: nothing else has been modified.
-    if (transaction.journal_entry_id && !priorReconciliationLink) {
-      try {
-        await reverseEntry(supabase, companyId, user.id, transaction.journal_entry_id)
-
-        const { error: clearJeError } = await supabase
-          .from('transactions')
-          .update({ journal_entry_id: null })
-          .eq('id', transactionId)
-        if (clearJeError) {
-          txLog.warn('failed to clear journal_entry_id after storno', clearJeError)
-        }
-
-        await logMatchEvent(supabase, user.id, transactionId, 'storno_conflict_resolved', {
-          invoiceId: invoice_id,
-          previousState: { journal_entry_id: transaction.journal_entry_id },
-          newState: { journal_entry_id: null },
+    // A failure while building or booking the payment verifikat.
+    const bookingFailure = (err: unknown) => {
+      // AccountsNotInChart is fatal so the UI can open the activation dialog.
+      if (err instanceof AccountsNotInChartError) {
+        return errorResponseFromCode(err.code, txLog, {
+          requestId,
+          details: withPostedIds({ account_numbers: err.accountNumbers }),
         })
-      } catch (err) {
-        txLog.error('failed to storno conflicting journal entry', err as Error)
-        return errorResponse(err, txLog, { requestId })
       }
+      // A foreign-currency invoice with no booking rate is a missing-input
+      // failure, not a transient booking failure: buildInvoicePaymentClearing
+      // Lines (and the cash builder, INVOICE_FX_RATE_MISSING) refuse rather
+      // than valuing it at a fabricated rate, as the preview does.
+      // Fully retryable once invoice.exchange_rate is on file. Dispatch on
+      // `code`, not instanceof: the class lives in a module route tests
+      // routinely vi.mock away. Typed bookkeeping errors (period locked, ...)
+      // map to their registered envelope the same way.
+      const code = (err as { code?: unknown })?.code
+      if (
+        code === 'MATCH_INVOICE_BOOKING_RATE_MISSING' ||
+        code === 'INVOICE_FX_RATE_MISSING' ||
+        isBookkeepingError(err)
+      ) {
+        return errorResponse(err, txLog, { requestId, details: withPostedIds() })
+      }
+      // Everything else returns the invoice-side payment-failure code with a
+      // Swedish reason via getErrorMessage, so the raw message never reaches
+      // the user (issue #337).
+      return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, {
+        requestId,
+        details: withPostedIds({ reason: getErrorMessage(err, { context: 'invoice' }) }),
+      })
     }
+
+    // Every refusal that can be decided from the request and the current state
+    // runs from here down to the storno, so a refused match leaves nothing
+    // posted: the storno of a conflicting categorisation and the payment
+    // verifikat only happen once nothing can refuse any more.
 
     // paidAmountInInvoiceCurrency is what gets accumulated into
     // invoice.paid_amount / remaining_amount and stored on the
@@ -390,8 +399,7 @@ export const POST = withRouteContext(
       : transaction.amount
 
     // Overshoot guard + paid/remaining math: shared with the v1 and agent
-    // (commit) paths via planInvoicePayment so they cannot drift again. Runs
-    // before any JE is created, so a doomed match never burns a voucher number.
+    // (commit) paths via planInvoicePayment so they cannot drift again.
     // Pure-SEK settlements absorb sub-krona öresavrundning (booked to 3740 by
     // buildInvoicePaymentClearingLines) so a whole-krona payment settles in full.
     const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
@@ -468,44 +476,126 @@ export const POST = withRouteContext(
       })
     }
 
+    // User-edited rows from the match dialog must balance.
+    if (customLines) {
+      const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
+      const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
+      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+        return errorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', txLog, {
+          requestId,
+          details: { totalDebit, totalCredit },
+        })
+      }
+    }
+
+    // One open period for every booking shape: the cash builder alone returns
+    // null for a closed one, which could only be reported as a generic failure.
+    const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, transaction.date)
+    if (!fiscalPeriodId) {
+      return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
+        requestId,
+        details: { paymentDate: transaction.date },
+      })
+    }
+
+    // The payment verifikat's rows, built up front so the builders' own
+    // refusals (a foreign invoice with no booking rate) and the chart check
+    // below come before anything is written. Custom rows are booked as sent;
+    // otherwise the rows come from the builders the booking itself uses, the
+    // same ones the preview shows, the invoice's dimensions on every leg.
+    const description = invoiceMatchPaymentDescription(invoice)
+    let paymentLines: CreateJournalEntryLineInput[]
+    try {
+      paymentLines = customLines
+        ? customLines
+        : useCashEntry
+          ? buildInvoiceCashLines(invoice as Invoice, entityType, invoice.customer?.name, paymentAccount).lines
+          : buildInvoiceMatchClearingLines(
+              {
+                amount: transaction.amount,
+                amount_sek: transaction.amount_sek ?? null,
+                currency: transaction.currency,
+                exchange_rate: transaction.exchange_rate ?? null,
+              },
+              {
+                currency: invoice.currency,
+                exchange_rate: invoice.exchange_rate ?? null,
+                remaining_amount: invoice.remaining_amount ?? null,
+                total: invoice.total,
+                paid_amount: invoice.paid_amount ?? null,
+                invoice_number: invoice.invoice_number,
+                customer: invoice.customer,
+                default_dimensions: (invoice as { default_dimensions?: unknown }).default_dimensions,
+              },
+              // Cross-currency: the spot-rate-converted invoice-currency amount,
+              // so 1510 is credited proportionally and the FX-diff line posted.
+              fx.required ? fx.paidInInvoiceCurrency : undefined,
+              paymentAccount,
+            ).lines
+    } catch (err) {
+      return bookingFailure(err)
+    }
+
+    // An account the engine cannot resolve refuses here, not after the storno
+    // (the dialog then offers to activate it).
+    const unresolvable = await findUnresolvableAccounts(
+      supabase,
+      companyId!,
+      paymentLines.map((l) => l.account_number),
+    )
+    if (unresolvable.length > 0) {
+      return errorResponse(new AccountsNotInChartError(unresolvable), txLog, { requestId })
+    }
+
+    // A RECONCILIATION link (reconciliation_method set) is not a conflicting
+    // booking: the entry it points at is an independent verifikat (SIE import,
+    // salary run, manual booking) that may evidence OTHER affärshändelser, and
+    // reversing it wholesale as a side effect of matching one payment would be
+    // an over-broad rättelse (BFL 5 kap 5 §: a correction is scoped to the
+    // actual error). Nothing is detached HERE: the final transaction update
+    // below overwrites the pointer and clears reconciliation_method in the
+    // same write, so a failure anywhere in between leaves the existing link
+    // fully intact instead of orphaning the row.
+    const priorReconciliationLink =
+      transaction.journal_entry_id && transaction.reconciliation_method
+        ? {
+            journalEntryId: transaction.journal_entry_id as string,
+            method: transaction.reconciliation_method as string,
+          }
+        : null
+
+    // From here on the request writes. Storno the conflicting
+    // auto-categorization JE first; if it fails, nothing has been written.
+    if (transaction.journal_entry_id && !priorReconciliationLink) {
+      try {
+        const reversal = await reverseEntry(supabase, companyId, user.id, transaction.journal_entry_id)
+        postedIds.reversal_journal_entry_id = reversal.id
+
+        const { error: clearJeError } = await supabase
+          .from('transactions')
+          .update({ journal_entry_id: null })
+          .eq('id', transactionId)
+        if (clearJeError) {
+          txLog.warn('failed to clear journal_entry_id after storno', clearJeError)
+        }
+
+        await logMatchEvent(supabase, user.id, transactionId, 'storno_conflict_resolved', {
+          invoiceId: invoice_id,
+          previousState: { journal_entry_id: transaction.journal_entry_id },
+          newState: { journal_entry_id: null },
+        })
+      } catch (err) {
+        txLog.error('failed to storno conflicting journal entry', err as Error)
+        return errorResponse(err, txLog, { requestId })
+      }
+    }
+
     let journalEntryId: string | null = null
 
     try {
-      if (customLines) {
-        // User-edited rows from the match dialog. Validate balance, then
-        // post via createJournalEntry directly. source_type still derives
-        // from the routing decision so downstream payment-sync (which keys
-        // off invoice_paid / invoice_cash_payment) keeps working.
-        const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-        const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-          return errorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', txLog, {
-            requestId,
-            details: { totalDebit, totalCredit },
-          })
-        }
-        const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, transaction.date)
-        if (!fiscalPeriodId) {
-          return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
-            requestId,
-            details: { paymentDate: transaction.date },
-          })
-        }
-        const sourceType = useCashEntry ? 'invoice_cash_payment' : 'invoice_paid'
-        const desc = invoice.customer?.name
-          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
-          : `Inbetalning kundfaktura ${invoice.invoice_number}`
-        const journalEntry = await createJournalEntry(supabase, companyId!, user.id, {
-          fiscal_period_id: fiscalPeriodId,
-          entry_date: transaction.date,
-          description: desc,
-          source_type: sourceType,
-          source_id: invoice.id,
-          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
-          lines: customLines,
-        })
-        journalEntryId = journalEntry?.id ?? null
-      } else if (useCashEntry) {
+      if (useCashEntry && !customLines) {
+        // The rows buildInvoiceCashLines produced above: the cash entry
+        // generator books exactly those.
         const journalEntry = await createInvoiceCashEntry(
           supabase, companyId, user.id, invoice as Invoice, transaction.date,
           entityType, invoice.customer?.name, paymentAccount,
@@ -513,113 +603,35 @@ export const POST = withRouteContext(
         )
         journalEntryId = journalEntry?.id ?? null
       } else {
-        // Clearing entry against 1510. Covers accrual and cash-with-prior-JE
-        // (mid-stream method switch). Pure kontantmetoden partials never
-        // reach this branch: they are rejected above, because 1510 has no
-        // prior balance to clear and the cash builder cannot book a partial.
-        //
-        // Builds lines via buildInvoicePaymentClearingLines so the verifikat
-        // is byte-identical to what the preview route showed the user. For
-        // same-currency invoices that's just 1930/1510. For cross-currency
-        // it also posts a 3960/7960 FX-diff line so the verifikat balances
-        // per BFL 5 kap 4-5§. Bypasses createInvoicePaymentJournalEntry on
-        // this single path (mark-paid and other callers still use it):
-        // see lib/bookkeeping/invoice-payment-lines.ts for the contract.
-        const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, transaction.date)
-        if (!fiscalPeriodId) {
-          return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
-            requestId,
-            details: { paymentDate: transaction.date },
-          })
-        }
-        const desc = invoice.customer?.name
-          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
-          : `Inbetalning kundfaktura ${invoice.invoice_number}`
-        const { lines: clearingLines } = buildInvoicePaymentClearingLines(
-          {
-            amount: transaction.amount,
-            amount_sek: transaction.amount_sek ?? null,
-            currency: transaction.currency,
-            exchange_rate: transaction.exchange_rate ?? null,
-          },
-          {
-            currency: invoice.currency,
-            exchange_rate: invoice.exchange_rate ?? null,
-            remaining_amount: invoice.remaining_amount ?? null,
-            total: invoice.total,
-            paid_amount: invoice.paid_amount ?? null,
-          },
-          desc,
-          // Cross-currency: pass the spot-rate-converted invoice-currency
-          // amount so the helper credits 1510 proportionally and posts the
-          // FX-diff line. Same-currency: undefined, helper just uses bankSek.
-          fx.required ? fx.paidInInvoiceCurrency : undefined,
-          paymentAccount,
-        )
-        // Re-propagate the invoice's default dimension bag onto every leg,
-        // including the FX result lines, so a project's kursvinst/kursförlust
-        // stays inside the project P&L. createInvoicePaymentJournalEntry does
-        // this for its own callers; the shared line-builder is dimension-
-        // agnostic, so the two routes that use it have to do it themselves or
-        // dimension users silently lose the tagging on payment vouchers.
-        // Copied per line: a shared object would let one line's mutation leak.
-        const defaultDimensions = coerceDimensionsBag(
-          (invoice as { default_dimensions?: unknown }).default_dimensions,
-        )
-        if (defaultDimensions) {
-          for (const line of clearingLines) line.dimensions = { ...defaultDimensions }
-        }
+        // Custom rows keep their routing's source_type so downstream
+        // payment-sync (which keys off invoice_paid / invoice_cash_payment)
+        // keeps working; generated clearing rows are always invoice_paid.
         const journalEntry = await createJournalEntry(supabase, companyId!, user.id, {
           fiscal_period_id: fiscalPeriodId,
           entry_date: transaction.date,
-          description: desc,
-          source_type: 'invoice_paid',
+          description,
+          source_type: customLines && useCashEntry ? 'invoice_cash_payment' : 'invoice_paid',
           source_id: invoice.id,
           bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
-          lines: clearingLines,
+          lines: paymentLines,
         })
         journalEntryId = journalEntry?.id ?? null
       }
     } catch (err) {
-      // AccountsNotInChart is fatal so the UI can open the activation dialog.
-      if (err instanceof AccountsNotInChartError) {
-        return errorResponse(err, txLog, { requestId })
-      }
-      // A foreign-currency invoice with no booking rate is a missing-input
-      // failure, not a transient booking failure: buildInvoicePaymentClearing
-      // Lines refuses rather than valuing the 1510 credit at a fabricated rate.
-      // Fully retryable once invoice.exchange_rate is on file.
-      // Dispatch on `code`, not instanceof: the class lives in a module route
-      // tests routinely vi.mock away, and the literal keeps a mocked-away
-      // export from turning into an `undefined === undefined` catch-all.
-      if ((err as { code?: unknown })?.code === 'MATCH_INVOICE_BOOKING_RATE_MISSING') {
-        return errorResponse(err, txLog, { requestId })
-      }
-      txLog.error('failed to create payment journal entry', err as Error)
-      // ANY failed payment voucher fails the whole match (mirrors
-      // match-supplier-invoice): proceeding used to mark the invoice paid and
-      // link the transaction with NO verifikat, an unrecoverable half-state:
-      // mark-paid rejects 'paid' invoices and this route rejects linked
-      // transactions, so no flow could ever complete the booking afterwards.
-      // Typed bookkeeping errors (period locked, no fiscal period, ...) map
-      // to their registered envelope; everything else returns the invoice-
-      // side payment-failure code with a Swedish reason via getErrorMessage,
-      // so the raw message never reaches the user (issue #337).
-      if (isBookkeepingError(err)) {
-        return errorResponse(err, txLog, { requestId })
-      }
-      return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, {
-        requestId,
-        details: { reason: getErrorMessage(err, { context: 'invoice' }) },
-      })
+      txLog.error('failed to create payment journal entry', err as Error, { postedIds })
+      return bookingFailure(err)
     }
 
     if (!journalEntryId) {
       // createJournalEntry resolved without an id: the same unrecoverable
       // half-state as a thrown failure, so the match aborts here too
       // (mirrors the supplier route's !journalEntryId guard).
-      return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, { requestId })
+      return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, {
+        requestId,
+        details: withPostedIds(),
+      })
     }
+    postedIds.payment_journal_entry_id = journalEntryId
 
     // Underlag for the payment verifikation: re-attach the invoice PDF that
     // was archived on send to the new payment journal entry. document_
@@ -682,12 +694,17 @@ export const POST = withRouteContext(
       .select('id')
 
     if (updateInvError) {
-      txLog.error('failed to update invoice status', updateInvError)
-      return errorResponse(updateInvError, txLog, { requestId })
+      txLog.error('failed to update invoice status', updateInvError, { postedIds })
+      return errorResponse(updateInvError, txLog, { requestId, details: withPostedIds() })
     }
 
     if (!updatedRows || updatedRows.length === 0) {
-      return errorResponseFromCode('MATCH_INVOICE_ALREADY_PAID', txLog, { requestId })
+      // Settled by a concurrent request: the payment verifikat posted above
+      // is named in the response rather than left behind silently.
+      return errorResponseFromCode('MATCH_INVOICE_ALREADY_PAID', txLog, {
+        requestId,
+        details: withPostedIds(),
+      })
     }
 
     // No cash-method note anymore: pure kontantmetoden partials are rejected
@@ -734,10 +751,16 @@ export const POST = withRouteContext(
 
     if (!recorded.ok) {
       if (recorded.code === '23505') {
-        return errorResponseFromCode('MATCH_INVOICE_DUPLICATE_PAYMENT', txLog, { requestId })
+        return errorResponseFromCode('MATCH_INVOICE_DUPLICATE_PAYMENT', txLog, {
+          requestId,
+          details: withPostedIds(),
+        })
       }
-      txLog.error('failed to record invoice payment', undefined, { error: recorded.error })
-      return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, { requestId })
+      txLog.error('failed to record invoice payment', undefined, { error: recorded.error, postedIds })
+      return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, {
+        requestId,
+        details: withPostedIds(),
+      })
     }
 
     // The invoice is now settled, so every OTHER transaction still carrying a
@@ -768,8 +791,11 @@ export const POST = withRouteContext(
       .eq('id', transactionId)
 
     if (updateTxError) {
-      txLog.error('failed to link transaction to invoice', updateTxError)
-      return errorResponseFromCode('MATCH_INVOICE_LINK_TX_FAILED', txLog, { requestId })
+      txLog.error('failed to link transaction to invoice', updateTxError, { postedIds })
+      return errorResponseFromCode('MATCH_INVOICE_LINK_TX_FAILED', txLog, {
+        requestId,
+        details: withPostedIds(),
+      })
     }
 
     // The deferred detach committed with the update above: record the release

@@ -2,10 +2,7 @@ import type Stripe from 'stripe'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getStripe } from '@/lib/stripe/client'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import {
-  generateReverseChargeBasisLines,
-  generateReverseChargeLines,
-} from '@/lib/bookkeeping/vat-entries'
+import { generateReverseChargePurchaseLines } from '@/lib/bookkeeping/vat-entries'
 import { createLogger, type Logger } from '@/lib/logger'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
 import { connectedAccountOptions } from './connect'
@@ -201,11 +198,10 @@ async function evaluateAndBook(
       credit_amount: 0,
       line_description: 'Stripe-avgifter (omvänd skattskyldighet, EU)',
     })
-    // Ruta 21 basis pair (4535 / 4598) + fiktiv moms (2645 / 2614): same
-    // generators as the supplier reverse-charge flow, so the VAT report
+    // Fiktiv moms (2645 / 2614) + ruta 21 basis pair (4535 / 4598): the
+    // same generator as the supplier reverse-charge flow, so the VAT report
     // picks the fees up identically.
-    lines.push(...generateReverseChargeBasisLines(round(fees), 0.25, 'eu_business'))
-    lines.push(...generateReverseChargeLines(round(fees), 0.25, false))
+    lines.push(...generateReverseChargePurchaseLines({ base: round(fees), rate: 0.25, kind: 'eu_services' }))
   }
   lines.push({
     account_number: '1686',

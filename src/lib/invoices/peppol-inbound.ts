@@ -128,6 +128,10 @@ export interface PeppolInboundTerminalDocument {
 }
 
 export interface PeppolInboundSyncResult {
+  /** Listing calls made this run, over both document types. */
+  pages: number
+  /** True in the hourly run that re-lists the last week (isPeppolInboundSweepRun). */
+  sweep: boolean
   listed: number
   archived: number
   duplicates: number
@@ -611,6 +615,45 @@ async function listingCursor(
   return newest === null ? null : new Date(newest - 1000).toISOString()
 }
 
+/** Listing calls one document type may make in a run: 10 pages of `limit` documents. */
+export const PEPPOL_INBOUND_MAX_PAGES = 10
+
+/**
+ * How far back the hourly sweep lists again. The cursor only moves forward,
+ * so a document the provider holds behind it (received out of order, or
+ * listed while an older one blocked the type) would otherwise never be
+ * listed; the sweep re-lists the last week and the archive's unique key
+ * absorbs everything already held. A week of more than
+ * PEPPOL_INBOUND_MAX_PAGES pages is swept up to the cap; the ordinary runs
+ * cover the newest end.
+ */
+export const PEPPOL_INBOUND_SWEEP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+
+/** The first run of each hour sweeps (UTC minute 0 to 9; the cron runs every ten minutes). */
+export function isPeppolInboundSweepRun(now: Date): boolean {
+  return now.getUTCMinutes() < 10
+}
+
+/**
+ * The cursor for the page after this one: one second before the newest
+ * `receivedAt` it listed, for the same reason as listingCursor. Null when no
+ * timestamp in the page parses.
+ */
+function nextPageCursor(messages: PeppolInboundMessage[]): string | null {
+  let newest: number | null = null
+  for (const message of messages) {
+    const at = parseTimestamp(message.receivedAt)
+    if (at !== null && (newest === null || at > newest)) newest = at
+  }
+  return newest === null ? null : new Date(newest - 1000).toISOString()
+}
+
+/** The earlier of two cursors; no cursor (list from the start) is the earliest. */
+function earlierCursor(a: string | null, b: string | null): string | null {
+  if (a === null || b === null) return null
+  return Date.parse(a) <= Date.parse(b) ? a : b
+}
+
 /**
  * Oldest first, stable, unparsable or missing timestamps last: the order in
  * which the archive must fill so the newest archived `received_at` is
@@ -625,13 +668,21 @@ export function orderInboundMessagesOldestFirst(messages: PeppolInboundMessage[]
 
 /**
  * One polling pass: list unread invoices and credit notes at the provider,
- * archive, route and deliver each, oldest first. Processing errors are per
- * document; an archive failure stops the document type for this run, because
- * archiving a newer document past an older one that is not in the archive
- * would move the listing cursor beyond it (the provider re-lists the rest
- * next run; the archive's unique key tolerates the repeat). A payload the
- * archive can never hold is recorded as a terminal stub instead, so it does
- * not block the cursor forever.
+ * archive, route and deliver each, oldest first. A full page (`limit`
+ * documents) is followed by the next one, the cursor moved to one second
+ * before the newest document listed, up to PEPPOL_INBOUND_MAX_PAGES per type;
+ * paging stops at a short page, at a full page that does not move the cursor
+ * (a provider that ignores it, or answers newest first) and at the cap, and
+ * the next run carries on from the archive. The first run of each hour sweeps
+ * instead: it starts from a week back (never later than the archive cursor)
+ * and pages the same way.
+ *
+ * Processing errors are per document; an archive failure stops the document
+ * type for this run, because archiving a newer document past an older one
+ * that is not in the archive would move the listing cursor beyond it (the
+ * provider re-lists the rest next run; the archive's unique key tolerates the
+ * repeat). A payload the archive can never hold is recorded as a terminal
+ * stub instead, so it does not block the cursor forever.
  */
 export async function syncInboundPeppolDocuments(args: {
   service: SupabaseClient
@@ -643,94 +694,147 @@ export async function syncInboundPeppolDocuments(args: {
 }): Promise<PeppolInboundSyncResult> {
   const { service, transport, log } = args
   const now = args.now ?? new Date()
+  const limit = args.limit ?? 50
+  const sweep = isPeppolInboundSweepRun(now)
   const result: PeppolInboundSyncResult = {
-    listed: 0, archived: 0, duplicates: 0, routed: 0, unrouted: 0, delivered: 0, failed: 0,
+    pages: 0, sweep, listed: 0, archived: 0, duplicates: 0, routed: 0, unrouted: 0, delivered: 0, failed: 0,
     terminal: 0, terminalDocuments: [], errors: [],
   }
   if (!transport.listInboundDocuments) return result
 
   for (const documentType of ['Invoice', 'CreditNote'] as const) {
-    let messages: PeppolInboundMessage[] = []
+    // The cursor lets a provider that supports it skip what we already hold;
+    // the archive's unique key dedupes for one that does not.
+    let receivedAfter: string | null
     try {
-      // The cursor lets a provider that supports it skip what we already
-      // hold; the archive's unique key dedupes for one that does not.
-      const receivedAfter = await listingCursor(service, transport.provider, documentType)
-      messages = await transport.listInboundDocuments({
-        documentType,
-        limit: args.limit ?? 50,
-        ...(receivedAfter ? { receivedAfter } : {}),
-      })
+      receivedAfter = await listingCursor(service, transport.provider, documentType)
     } catch (err) {
       log.error('inbound Peppol listing failed', err as Error, { documentType })
       result.errors.push({ providerDocumentId: `list:${documentType}`, reason: describeError(err) })
       continue
     }
-    result.listed += messages.length
+    if (sweep) {
+      receivedAfter = earlierCursor(receivedAfter, new Date(now.getTime() - PEPPOL_INBOUND_SWEEP_WINDOW_MS).toISOString())
+    }
 
-    const ordered = orderInboundMessagesOldestFirst(messages)
-    for (let index = 0; index < ordered.length; index += 1) {
-      const message = ordered[index]
-      let archived: Awaited<ReturnType<typeof archiveInboundPeppolMessage>>
+    for (let page = 1; page <= PEPPOL_INBOUND_MAX_PAGES; page += 1) {
+      let messages: PeppolInboundMessage[]
       try {
-        archived = await archiveInboundPeppolMessage({ service, transport, message, log, now })
-      } catch (err) {
-        if (err instanceof PeppolInboundArchiveError && err.deterministic) {
-          try {
-            const stub = await archiveUnarchivableInboundMessage({ service, message, reason: describeError(err), now })
-            result.terminal += 1
-            result.terminalDocuments.push({ id: stub.id, providerDocumentId: message.providerDocumentId, reason: stub.last_error ?? '' })
-            log.warn('inbound Peppol payload cannot be archived, recorded as terminal', {
-              providerDocumentId: message.providerDocumentId,
-              reason: describeError(err),
-            })
-            continue
-          } catch (stubErr) {
-            err = stubErr
-          }
-        }
-        const reason = describeError(err)
-        result.failed += 1
-        result.errors.push({ providerDocumentId: message.providerDocumentId, reason })
-        log.warn('inbound Peppol listing stopped at a document that could not be archived; newer ones are re-listed next run', {
+        messages = await transport.listInboundDocuments({
           documentType,
-          providerDocumentId: message.providerDocumentId,
-          reason,
-          skipped: ordered.length - index - 1,
+          limit,
+          ...(receivedAfter ? { receivedAfter } : {}),
+        })
+      } catch (err) {
+        log.error('inbound Peppol listing failed', err as Error, { documentType, page })
+        result.errors.push({ providerDocumentId: `list:${documentType}`, reason: describeError(err) })
+        break
+      }
+      result.pages += 1
+      result.listed += messages.length
+
+      const archiveStopped = await archiveListedPage({
+        service, transport, deliver: args.deliver, log, documentType, messages, now, result,
+      })
+      if (archiveStopped || messages.length < limit) break
+
+      const next = nextPageCursor(messages)
+      if (next === null || (receivedAfter !== null && Date.parse(next) <= Date.parse(receivedAfter))) {
+        log.warn('inbound Peppol listing returned a full page that does not move the cursor; the rest is listed next run', {
+          documentType,
+          page,
+          receivedAfter,
         })
         break
       }
-      if (archived.created) result.archived += 1
-      else result.duplicates += 1
-
-      try {
-        const processed = await processInboundPeppolRow({
-          service,
-          row: archived.row,
-          document: archived.document,
-          deliver: args.deliver,
-          log,
-        })
-        if (processed.outcome === 'delivered') result.delivered += 1
-        else if (processed.outcome === 'routed') result.routed += 1
-        else if (processed.outcome === 'unrouted') result.unrouted += 1
-        else if (processed.outcome === 'failed') result.failed += 1
-        else if (processed.outcome === 'terminal') {
-          result.terminal += 1
-          result.terminalDocuments.push({
-            id: processed.row.id,
-            providerDocumentId: processed.row.provider_document_id,
-            reason: processed.row.last_error ?? '',
-          })
-        }
-      } catch (err) {
-        result.failed += 1
-        result.errors.push({ providerDocumentId: message.providerDocumentId, reason: describeError(err) })
-        log.error('inbound Peppol document failed', err as Error, { providerDocumentId: message.providerDocumentId })
+      receivedAfter = next
+      if (page === PEPPOL_INBOUND_MAX_PAGES) {
+        log.info('inbound Peppol listing reached the page cap; the rest is listed next run', { documentType, pages: page })
       }
     }
   }
 
   return result
+}
+
+/**
+ * Archive, route and deliver one listed page, oldest first, counting into
+ * `result`. True when a document could not be archived: the caller stops the
+ * document type there, so the cursor never passes an unarchived document.
+ */
+async function archiveListedPage(args: {
+  service: SupabaseClient
+  transport: PeppolTransport
+  deliver: PeppolInboundDeliverer | null
+  log: Logger
+  documentType: PeppolInboundDocumentType
+  messages: PeppolInboundMessage[]
+  now: Date
+  result: PeppolInboundSyncResult
+}): Promise<boolean> {
+  const { service, transport, log, documentType, now, result } = args
+  const ordered = orderInboundMessagesOldestFirst(args.messages)
+  for (let index = 0; index < ordered.length; index += 1) {
+    const message = ordered[index]
+    let archived: Awaited<ReturnType<typeof archiveInboundPeppolMessage>>
+    try {
+      archived = await archiveInboundPeppolMessage({ service, transport, message, log, now })
+    } catch (err) {
+      if (err instanceof PeppolInboundArchiveError && err.deterministic) {
+        try {
+          const stub = await archiveUnarchivableInboundMessage({ service, message, reason: describeError(err), now })
+          result.terminal += 1
+          result.terminalDocuments.push({ id: stub.id, providerDocumentId: message.providerDocumentId, reason: stub.last_error ?? '' })
+          log.warn('inbound Peppol payload cannot be archived, recorded as terminal', {
+            providerDocumentId: message.providerDocumentId,
+            reason: describeError(err),
+          })
+          continue
+        } catch (stubErr) {
+          err = stubErr
+        }
+      }
+      const reason = describeError(err)
+      result.failed += 1
+      result.errors.push({ providerDocumentId: message.providerDocumentId, reason })
+      log.warn('inbound Peppol listing stopped at a document that could not be archived; newer ones are re-listed next run', {
+        documentType,
+        providerDocumentId: message.providerDocumentId,
+        reason,
+        skipped: ordered.length - index - 1,
+      })
+      return true
+    }
+    if (archived.created) result.archived += 1
+    else result.duplicates += 1
+
+    try {
+      const processed = await processInboundPeppolRow({
+        service,
+        row: archived.row,
+        document: archived.document,
+        deliver: args.deliver,
+        log,
+      })
+      if (processed.outcome === 'delivered') result.delivered += 1
+      else if (processed.outcome === 'routed') result.routed += 1
+      else if (processed.outcome === 'unrouted') result.unrouted += 1
+      else if (processed.outcome === 'failed') result.failed += 1
+      else if (processed.outcome === 'terminal') {
+        result.terminal += 1
+        result.terminalDocuments.push({
+          id: processed.row.id,
+          providerDocumentId: processed.row.provider_document_id,
+          reason: processed.row.last_error ?? '',
+        })
+      }
+    } catch (err) {
+      result.failed += 1
+      result.errors.push({ providerDocumentId: message.providerDocumentId, reason: describeError(err) })
+      log.error('inbound Peppol document failed', err as Error, { providerDocumentId: message.providerDocumentId })
+    }
+  }
+  return false
 }
 
 /**

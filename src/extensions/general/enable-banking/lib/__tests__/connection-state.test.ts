@@ -22,6 +22,7 @@ function conn(overrides: {
   last_synced_at?: string | null
   created_at?: string
   bank_name?: string
+  error_message?: string | null
 }) {
   return {
     status: 'active',
@@ -175,5 +176,26 @@ describe('buildPageAttentionSentence', () => {
     )
     const fresh = new Date(NOW - 5000).toISOString()
     expect(selectPageAttention([conn({ status: 'pending', created_at: fresh })], NOW)).toBeNull()
+  })
+})
+
+describe('needs_configuration (sync stopped on a stale account selection)', () => {
+  const advice = 'Banksynkningen har stannat: kontovalet behöver sparas om.'
+
+  it('derives it from a stored message on an active row, ahead of an expiring consent', () => {
+    expect(getConnectionUiState(conn({ error_message: advice }), NOW)).toBe('needs_configuration')
+    expect(getConnectionUiState(conn({ error_message: advice, consent_expires: iso(2) }), NOW)).toBe('needs_configuration')
+    expect(getConnectionUiState(conn({ error_message: null }), NOW)).toBe('active')
+    expect(getConnectionUiState(conn({ status: 'error', error_message: advice }), NOW)).toBe('error')
+  })
+
+  it('earns the page sentence over an expiring consent, pointing at the account picker', () => {
+    const stopped = conn({ bank_name: 'SEB', error_message: advice })
+    const expiring = conn({ bank_name: 'Nordea', consent_expires: iso(2) })
+    const attention = selectPageAttention([expiring, stopped], NOW)
+    expect(attention).toEqual({ state: 'needs_configuration', connection: stopped })
+    expect(buildPageAttentionSentence(attention!, NOW)).toBe(
+      'SEB: synkningen har stannat. Öppna Välj konton och spara kontovalet igen.',
+    )
   })
 })

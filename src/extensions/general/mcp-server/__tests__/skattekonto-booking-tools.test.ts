@@ -18,11 +18,19 @@ import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
 const mockAttach = vi.fn()
 const mockBokforSingle = vi.fn()
 const mockBokforBatch = vi.fn()
-vi.mock('@/extensions/general/skatteverket/lib/skattekonto-booking', () => ({
-  attachBookingSuggestions: (...a: unknown[]) => mockAttach(...a),
-  bokforSkattekontoTransaction: (...a: unknown[]) => mockBokforSingle(...a),
-  bokforSkattekontoTransactionsBatch: (...a: unknown[]) => mockBokforBatch(...a),
-}))
+// The ledger-twin search is mocked so the tests control whether the ledger
+// already carries the event; the message builder stays real.
+const mockTwins = vi.fn()
+vi.mock('@/extensions/general/skatteverket/lib/skattekonto-booking', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/extensions/general/skatteverket/lib/skattekonto-booking')>()
+  return {
+    ledgerTwinMessage: actual.ledgerTwinMessage,
+    attachBookingSuggestions: (...a: unknown[]) => mockAttach(...a),
+    findSkattekontoLedgerTwins: (...a: unknown[]) => mockTwins(...a),
+    bokforSkattekontoTransaction: (...a: unknown[]) => mockBokforSingle(...a),
+    bokforSkattekontoTransactionsBatch: (...a: unknown[]) => mockBokforBatch(...a),
+  }
+})
 
 import { tools } from '../server'
 
@@ -54,9 +62,33 @@ function attachWithSuggestion(): void {
   )
 }
 
+const TWIN = {
+  journal_entry_id: 'je-imported-185',
+  voucher_series: 'A',
+  voucher_number: 185,
+  entry_date: '2026-03-12',
+  description: 'Preliminärskatt (import)',
+  status: 'posted',
+}
+
+/** Default: the ledger holds no twin for any row. */
+function noTwins(): void {
+  mockTwins.mockImplementation(async (_supabase, _companyId, rows: Array<{ id: string }>) =>
+    new Map(rows.map((r) => [r.id, []])),
+  )
+}
+
+/** The ledger already carries the event of these rows. */
+function twinsFor(...ids: string[]): void {
+  mockTwins.mockImplementation(async (_supabase, _companyId, rows: Array<{ id: string }>) =>
+    new Map(rows.map((r) => [r.id, ids.includes(r.id) ? [TWIN] : []])),
+  )
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   attachWithSuggestion()
+  noTwins()
 })
 
 describe('book skattekonto tools: registration', () => {
@@ -260,5 +292,131 @@ describe('gnubok_book_skattekonto_rows: batch staging', () => {
         'company-1', 'user-1', supabase as never,
       ),
     ).rejects.toThrow(/ALREADY_BOOKED/)
+  })
+})
+
+describe('book skattekonto tools: ledger twin guard', () => {
+  it('row: refuses to stage when a verifikat already carries the event, naming it and the link tool', async () => {
+    twinsFor(ROW.id)
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW } })
+
+    const err = (await single
+      .execute({ skattekonto_transaction_id: ROW.id }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)) as Error & { code?: string; remediation?: { tool?: string } }
+
+    expect(err.code).toBe('SKATTEKONTO_BOOK_LEDGER_TWIN_EXISTS')
+    expect(err.message).toContain('verifikat A185 (2026-03-12)')
+    expect(err.remediation?.tool).toBe('gnubok_reconcile_match')
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+    expect(mockBokforSingle).not.toHaveBeenCalled()
+  })
+
+  it('row: a combined twin links the row together with its same-day companions, not alone', async () => {
+    const companion = { id: 'row-agavg', transaktionsdatum: '2026-03-12', transaktionstext: 'Arbetsgivaravgift', belopp_skatteverket: -4000 }
+    mockTwins.mockImplementation(async (_supabase, _companyId, rows: Array<{ id: string }>) =>
+      new Map(rows.map((r) => [r.id, [{ ...TWIN, combined_with: [companion] }]])),
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW } })
+
+    const err = (await single
+      .execute({ skattekonto_transaction_id: ROW.id }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)) as Error & {
+      code?: string
+      remediation?: { tool?: string; description?: string; args?: { pairs?: Array<{ external_ids: string[]; journal_entry_ids: string[] }> } }
+    }
+
+    expect(err.code).toBe('SKATTEKONTO_BOOK_LEDGER_TWIN_EXISTS')
+    expect(err.message).toContain('tillsammans med en annan rad från samma dag')
+    expect(err.remediation?.args?.pairs).toEqual([
+      { external_ids: [ROW.id, 'row-agavg'], journal_entry_ids: ['je-imported-185'] },
+    ])
+    expect(err.remediation?.description).toContain('together with the 1 other open row(s)')
+  })
+
+  it('row: allow_duplicate stages the override with the twin in the preview and a reviewer warning', async () => {
+    twinsFor(ROW.id)
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW } })          // row fetch
+    enqueue({ data: null })                // period check: company_settings
+    enqueue({ data: null })                // period check: fiscal_periods
+    enqueue({ data: { id: 'op-3' } })      // pending_operations insert
+
+    const result = (await single.execute(
+      { skattekonto_transaction_id: ROW.id, allow_duplicate: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toEqual({ transaction_id: ROW.id, allow_duplicate: true })
+    expect(result.preview.ledger_twins).toEqual([TWIN])
+    expect(String(result.preview.compliance_warning)).toContain('DUPLICATE_OVERRIDE')
+    expect(mockBokforSingle).not.toHaveBeenCalled()
+  })
+
+  it('row: allow_duplicate without a twin stores no override, so the commit keeps the guard on', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW } })          // row fetch
+    enqueue({ data: null })                // period check: company_settings
+    enqueue({ data: null })                // period check: fiscal_periods
+    enqueue({ data: { id: 'op-5' } })      // pending_operations insert
+
+    const result = (await single.execute(
+      { skattekonto_transaction_id: ROW.id, allow_duplicate: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toEqual({ transaction_id: ROW.id })
+    expect(result.preview.compliance_warning).toBeUndefined()
+  })
+
+  it('rows: a twin row is skipped with LEDGER_TWIN_EXISTS and its twins; an allowed one is staged with the override', async () => {
+    twinsFor('skv-twin', 'skv-allowed')
+    const rows = [
+      { ...ROW, id: 'skv-ok' },
+      { ...ROW, id: 'skv-twin' },
+      { ...ROW, id: 'skv-allowed' },
+    ]
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: rows })                // batch row fetch
+    enqueue({ data: null })                // period check: company_settings
+    enqueue({ data: null })                // period check: fiscal_periods
+    enqueue({ data: { id: 'op-4' } })      // pending_operations insert
+
+    const result = (await batch.execute(
+      {
+        skattekonto_transaction_ids: ['skv-ok', 'skv-twin', 'skv-allowed'],
+        allow_duplicate_ids: ['skv-allowed'],
+      },
+      'company-1', 'user-1', supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toEqual({ ids: ['skv-ok', 'skv-allowed'], allow_duplicate_ids: ['skv-allowed'] })
+    expect(result.preview.skipped).toEqual([
+      { skattekonto_transaction_id: 'skv-twin', reason: 'LEDGER_TWIN_EXISTS', ledger_twins: [TWIN] },
+    ])
+    expect(String(result.preview.compliance_warning)).toContain('DUPLICATE_OVERRIDE')
+    // One search for all open rows.
+    expect(mockTwins).toHaveBeenCalledTimes(1)
+    expect(mockBokforBatch).not.toHaveBeenCalled()
+  })
+
+  it('rows: refuses with the coded twin refusal when every row is already in the ledger', async () => {
+    twinsFor('skv-a', 'skv-b')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...ROW, id: 'skv-a' }, { ...ROW, id: 'skv-b' }] })
+
+    const err = (await batch
+      .execute({ skattekonto_transaction_ids: ['skv-a', 'skv-b'] }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)) as Error & { code?: string }
+
+    expect(err.code).toBe('SKATTEKONTO_BOOK_LEDGER_TWIN_EXISTS')
+    expect(err.message).toContain('Alla 2 rader finns redan i bokföringen')
   })
 })

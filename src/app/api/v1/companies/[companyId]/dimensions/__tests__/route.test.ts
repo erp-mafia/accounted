@@ -3,6 +3,10 @@
  *   GET  /api/v1/companies/:companyId/dimensions
  *   POST /api/v1/companies/:companyId/dimensions/:id/values
  *
+ * Value create runs createDimensionValue (lib/dimensions/registry-service.ts),
+ * the rules the dashboard and the MCP commit share: is_active is honoured and
+ * dates are refused on a resets-annually dimension on this door too.
+ *
  * Mirrors the suppliers/accounts test pattern: a Proxy-backed Supabase mock
  * returns whatever the route awaits, keyed by table name (plus an `rpc` key
  * for ensure_company_dimensions).
@@ -45,6 +49,8 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
   }
+  // Every chained call, so a test can read what reached an insert.
+  const calls: Array<{ table: string; method: string; args: unknown[] }> = []
   const buildChain = (key: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -55,12 +61,16 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(key)
+        return (...args: unknown[]) => {
+          calls.push({ table: key, method: String(prop), args })
+          return buildChain(key)
+        }
       },
     }
     return new Proxy({}, handler)
   }
   return {
+    calls,
     from: vi.fn((table: string) => buildChain(table)),
     rpc: vi.fn(() => buildChain('rpc')),
   }
@@ -323,5 +333,81 @@ describe('POST /api/v1/companies/:companyId/dimensions/:id/values', () => {
     const body = await res.json()
     expect(body.data.dry_run).toBe(true)
     expect(body.data.preview.code).toBe('P001')
+  })
+  it('creates the value archived when is_active=false, as the dashboard does', async () => {
+    const client = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      dimensions: { data: { id: DIMENSION_ID, resets_annually: false }, error: null },
+      dimension_values: { data: { ...SAMPLE_VALUE, is_active: false, created_at: '2026-09-27T12:00:00Z' }, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await createValue(
+      makeRequest(url, {
+        method: 'POST',
+        body: JSON.stringify({ code: 'BUTIK', name: 'Butiken', is_active: false }),
+      }),
+      detailParams,
+    )
+
+    expect(res.status).toBe(201)
+    expect((await res.json()).data.is_active).toBe(false)
+    const insert = client.calls.find((c) => c.table === 'dimension_values' && c.method === 'insert')
+    expect(insert?.args[0]).toEqual({
+      company_id: COMPANY_ID,
+      dimension_id: DIMENSION_ID,
+      code: 'BUTIK',
+      name: 'Butiken',
+      is_active: false,
+      start_date: null,
+      end_date: null,
+    })
+  })
+
+  it('refuses start/end dates on a resets-annually dimension with 400 DIMENSION_VALUE_DATES_NOT_ALLOWED', async () => {
+    const client = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      dimensions: { data: { id: DIMENSION_ID, resets_annually: true }, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await createValue(
+      makeRequest(url, {
+        method: 'POST',
+        body: JSON.stringify({ code: 'KS01', name: 'Kontoret', start_date: '2026-01-01' }),
+      }),
+      detailParams,
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('DIMENSION_VALUE_DATES_NOT_ALLOWED')
+    expect(client.calls.some((c) => c.table === 'dimension_values' && c.method === 'insert')).toBe(false)
+  })
+
+  it('keeps start/end dates on an accumulating dimension (projekt)', async () => {
+    const client = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      dimensions: { data: { id: DIMENSION_ID, resets_annually: false }, error: null },
+      dimension_values: {
+        data: { ...SAMPLE_VALUE, code: 'P001', start_date: '2026-01-01', end_date: '2026-12-31', created_at: null },
+        error: null,
+      },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await createValue(
+      makeRequest(url, {
+        method: 'POST',
+        body: JSON.stringify({ code: 'P001', name: 'Villa Almgren', start_date: '2026-01-01', end_date: '2026-12-31' }),
+      }),
+      detailParams,
+    )
+
+    expect(res.status).toBe(201)
+    const insert = client.calls.find((c) => c.table === 'dimension_values' && c.method === 'insert')
+    expect(insert?.args[0]).toMatchObject({ start_date: '2026-01-01', end_date: '2026-12-31' })
   })
 })

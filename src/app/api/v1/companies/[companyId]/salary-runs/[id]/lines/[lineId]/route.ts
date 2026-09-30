@@ -55,6 +55,7 @@ registerEndpoint({
     'Draft-only: 400 SALARY_RUN_LINE_NOT_DRAFT once the run has advanced.',
     'A lineId that belongs to a different run returns 404 SALARY_LINE_NOT_FOUND.',
     'Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards.',
+    'A line the calculation owns (absence, Övertid 50/100 % and OB rows, förmån and recurring-line rows, the engine\'s semesterersättning and öresavrundning rows), or a patch changing item_type to such a type, returns 400 SALARY_LINE_CALCULATED: the next :calculate would overwrite the edit. Change the source (absence, worked hours, the förmån, the recurring line) instead.',
     'The row is validated as it reads after the patch: flipping is_net_deduction or is_gross_deduction on, setting is_taxable false, or making the amount non-positive on a line that carries one_off_tax_percent is refused with 400 VALIDATION_ERROR; clear the percentage (null) in the same call.',
     'vacation_category (paid, extra_paid, saved, unpaid, advance) is only valid while item_type is vacation, and vacation_saved_year only with category saved; a patch that breaks either is refused with 400 VALIDATION_ERROR.',
   ],
@@ -171,7 +172,7 @@ registerEndpoint({
     'Removing an employee from the run entirely: DELETE /salary-runs/{id}/employees/{employeeId}. Suppressing engine-derived lines: fix the source data (absence days, benefits).',
   pitfalls: [
     'Draft-only: 400 SALARY_RUN_LINE_NOT_DRAFT once the run has advanced.',
-    'Deleting an engine-derived line is futile: :calculate regenerates it from source data.',
+    'A line the calculation owns (absence, Övertid 50/100 % and OB rows, förmån and recurring-line rows, the engine\'s semesterersättning and öresavrundning rows) returns 400 SALARY_LINE_CALCULATED: :calculate would bring it back. Change the source (absence, worked hours, the förmån, the recurring line) instead.',
   ],
   example: { response: { data: null } },
   scope: 'payroll:write',

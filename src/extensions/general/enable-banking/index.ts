@@ -20,17 +20,26 @@ import { syncAccountTransactions } from './lib/sync'
 import { emitBankSyncFailed } from './lib/sync-failure-event'
 import {
   applyRateLimitCooldown,
+  claimSyncLease,
   holdSyncLease,
   rateLimitCooldownMs,
   rateLimitHoldUntil,
 } from './lib/sync-lease'
 import { rateLimitMessages, retryAfterSeconds } from './lib/rate-limit-message'
-import { persistBankSyncResult, persistBankSyncFailure, BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
-import { isBankRoutingConflict } from '@/lib/bank-sync/ingest-route'
+import {
+  persistBankSyncResult,
+  persistBankSyncFailure,
+  persistBankRouteNeedsConfiguration,
+  BankSyncResultObsoleteError,
+} from '@/lib/bank-sync/persist-sync-result'
+import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
 import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
+import { INITIAL_SYNC_DEFERRED, INITIAL_SYNC_TIMEOUT } from '@/lib/bank-sync/initial-sync-error'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions } from './lib/session-sharing'
-import { revokeUnusedSession } from './lib/session-revocation'
+import { retireBankConnection } from './lib/retire-connection'
+import { hasSelectableAccounts } from './lib/claimed-accounts'
+import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
 import {
   runUnattendedReconciliationSweep,
   toSweepSummary,
@@ -46,7 +55,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import type { StoredAccount } from './types'
 import { createServiceClient } from '@/lib/supabase/server'
-import { attachSharedBankSession, disconnectBankConnection, readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
+import { attachSharedBankSession, readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 
 // Per-user limits keep one tenant from spamming any single bank handler.
@@ -495,15 +504,60 @@ export const enableBankingExtension: Extension = {
             // deliberate escape hatch. Runs AFTER the sweep so a
             // never-activated zombie cannot block a legitimate fresh connect.
             if (forceNew !== true) {
-              const { data: establishedRow } = await supabase
-                .from('bank_connections')
-                .select('id, status, consent_expires')
-                .eq('company_id', companyId)
-                .eq('bank_name', resolvedAspspName)
-                .in('status', ['expired', 'error', 'pending_selection'])
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle()
+              type EstablishedRow = {
+                id: string
+                status: string
+                consent_expires?: string | null
+                accounts_data?: StoredAccount[] | null
+              }
+              const findEstablishedRow = async (): Promise<EstablishedRow | null> => {
+                const { data } = await supabase
+                  .from('bank_connections')
+                  .select('id, status, consent_expires, accounts_data')
+                  .eq('company_id', companyId)
+                  .eq('bank_name', resolvedAspspName)
+                  .in('status', ['expired', 'error', 'pending_selection'])
+                  .order('created_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle()
+                return data as EstablishedRow | null
+              }
+              let establishedRow = await findEstablishedRow()
+
+              // A connection waiting for account selection that leaves nothing
+              // to pick is not one to finish or renew: the consent reached only
+              // accounts another company already books (a login for the wrong
+              // company) or none at all. Resuming it reopened an empty picker
+              // from every surface, with no way to log in again. This login
+              // replaces it, removed the way "Ta bort anslutningen" removes it
+              // before the bank is asked for anything. Bounded so a removal
+              // that somehow did not take cannot spin.
+              for (
+                let removed = 0;
+                removed < 3 &&
+                establishedRow?.status === 'pending_selection' &&
+                !hasSelectableAccounts(establishedRow.accounts_data);
+                removed++
+              ) {
+                log.info('[enable-banking] Fresh connect replaces a connection with nothing to pick', {
+                  existing_id: establishedRow.id,
+                  bank: resolvedAspspName,
+                  account_count: establishedRow.accounts_data?.length ?? 0,
+                })
+                try {
+                  await retireBankConnection({
+                    supabase,
+                    companyId,
+                    userId: user.id,
+                    connectionId: establishedRow.id,
+                    log,
+                    emit: ctx?.emit,
+                  })
+                } catch (error) {
+                  return errorResponse(error, log)
+                }
+                establishedRow = await findEstablishedRow()
+              }
 
               // A 'pending_selection' row is not dead: the bank is already
               // authorized and only the account choice is missing (the user
@@ -517,9 +571,7 @@ export const enableBankingExtension: Extension = {
               // authorization_url" would navigate to undefined. A row whose
               // consent has already lapsed has nothing to resume and falls
               // through to the renewal answer.
-              const waitingRow = establishedRow as
-                | { id: string; status: string; consent_expires?: string | null }
-                | null
+              const waitingRow = establishedRow
               const consentStillValid =
                 !waitingRow?.consent_expires ||
                 new Date(waitingRow.consent_expires).getTime() > Date.now()
@@ -953,7 +1005,22 @@ export const enableBankingExtension: Extension = {
             trigger: 'manual',
             error,
           })
-          if (isBankRoutingConflict(error)) return errorResponse(error, log)
+          if (isBankRoutingConflict(error)) {
+            // The account selection no longer matches the bound cash account:
+            // the 409 carries the picker advice (BANK_INGEST_ROUTE_UNRESOLVED),
+            // and the row stores it too so the panel keeps saying it after the
+            // toast is gone. Status stays as it is; the next successful sync
+            // clears the message.
+            if (isBankRouteUnresolved(error)) {
+              await persistBankRouteNeedsConfiguration(supabase, { companyId, connectionId: connection.id }).catch(
+                (persistError: unknown) => log.warn('[enable-banking] Sync: could not store the account selection advice', {
+                  connection_id: connection.id,
+                  message: persistError instanceof Error ? persistError.message : String(persistError),
+                }),
+              )
+            }
+            return errorResponse(error, log)
+          }
           // A bank 429 keeps every path away for hours, not minutes. The hold
           // covers every connection on the session, which crosses companies:
           // RLS limits a user update to the active company, so this one write
@@ -1247,6 +1314,22 @@ export const enableBankingExtension: Extension = {
           )
         }
 
+        // A card account that only mirrors the main account is never switched
+        // on, whatever the client sent (lib/bank-sync/mirror-card-account.ts):
+        // syncing it adds an opposite-sign twin of every card purchase that
+        // can be neither booked nor deleted. It stays off and gets no ledger,
+        // and one that was switched on before this rule is turned off here.
+        // The pickers no longer offer it; this is what makes that a rule.
+        const mirrorCardUids = new Set(existing.filter(isMirrorCardAccount).map(a => a.uid))
+        const selectedUids = enabled_uids.filter(uid => !mirrorCardUids.has(uid))
+        if (selectedUids.length === 0) {
+          return NextResponse.json(
+            { error: 'Välj minst ett konto, eller koppla bort banken om inga konton ska synkas.' },
+            { status: 400 }
+          )
+        }
+        mappings = mappings.filter(m => !mirrorCardUids.has(m.uid))
+
         // Verify any provided ledger_account values actually exist in the
         // company's chart of accounts. Prevents users from typing arbitrary
         // numbers via the API and breaking journal entry creation later.
@@ -1273,7 +1356,7 @@ export const enableBankingExtension: Extension = {
           }
         }
 
-        const enabledSet = new Set(enabled_uids)
+        const enabledSet = new Set(selectedUids)
         const mappingsByUid = new Map(mappings.map(m => [m.uid, m]))
         let updatedAccounts: StoredAccount[] = existing.map(a => {
           const mapping = mappingsByUid.get(a.uid)
@@ -1295,7 +1378,6 @@ export const enableBankingExtension: Extension = {
             delete next.claimed_by_company_id
             delete next.claimed_by_company_name
             delete next.deselected_elsewhere
-            delete next.mirror_card_account
           }
           return next
         })
@@ -1530,10 +1612,12 @@ export const enableBankingExtension: Extension = {
         const newStatus = saved.status
         log.info('[enable-banking] Account selection saved', {
           connectionId: connection.id,
-          enabledCount: enabled_uids.length,
+          enabledCount: enabledSet.size,
           totalCount: existing.length,
           previousStatus: connection.status,
           newStatus,
+          // Unused rows of unchecked accounts deleted when they gave their ledger up.
+          yieldedCashAccounts: saved.yielded ?? [],
           userId: user.id,
           companyId,
         })
@@ -1547,7 +1631,7 @@ export const enableBankingExtension: Extension = {
               bankName: (connection as { bank_name?: string | null }).bank_name ?? null,
               previousStatus: connection.status,
               newStatus,
-              enabledCount: enabled_uids.length,
+              enabledCount: enabledSet.size,
               totalCount: existing.length,
               userId: user.id,
               companyId,
@@ -1576,7 +1660,40 @@ export const enableBankingExtension: Extension = {
         } | null = null
         let initialSyncError: string | null = null
 
+        // One writer per first import. The cron and the agent-triggered sync
+        // claim the shared lease (lib/sync-lease.ts) before they reach the
+        // bank, and so must this backfill: when the 60 s race below gives up,
+        // the backfill keeps running, and the next hourly cron (seeing
+        // initial_sync_completed_at IS NULL) used to start the same import
+        // beside it. Both derive the same external_ids, so the loser's insert
+        // hit the unique index and its sync failed before the balance refresh.
+        // Like theirs, the claim is never released: its 15-minute window
+        // outlasts this route's maxDuration, so it covers a backfill that
+        // outlives the response. When another sync holds the lease, that sync
+        // owns the connection now and the backfill is left to the cron,
+        // answered like a timeout. A claim that errors is treated the same
+        // way: running without the lease is exactly the race.
+        let initialSyncLeased = false
         if (connection.status === 'pending_selection') {
+          try {
+            initialSyncLeased = await claimSyncLease(supabase, connection.id, Date.now())
+          } catch (leaseError) {
+            log.warn('[enable-banking] Could not claim the sync lease for the initial backfill', {
+              connectionId: connection.id,
+              message: leaseError instanceof Error ? leaseError.message : String(leaseError),
+            })
+          }
+          if (!initialSyncLeased) {
+            initialSyncError = INITIAL_SYNC_DEFERRED
+            log.info('[enable-banking] Inline initial backfill skipped: sync lease not taken, cron will run it', {
+              connectionId: connection.id,
+              userId: user.id,
+              companyId,
+            })
+          }
+        }
+
+        if (initialSyncLeased) {
           const accountsToSync = updatedAccounts.filter(a => a.enabled !== false)
           const toDate = new Date().toISOString().split('T')[0]
           const fromDate = new Date(Date.now() - initialLookbackDays * 24 * 60 * 60 * 1000)
@@ -1642,13 +1759,13 @@ export const enableBankingExtension: Extension = {
             // bank API would surface as an unhandledRejection: Node 22 (the
             // self-hosted Docker runtime) terminates the process by default on
             // those, taking the whole server down. The cron retries the
-            // backfill via initial_sync_completed_at IS NULL, so a no-op
-            // catch is the right policy here.
+            // backfill via initial_sync_completed_at IS NULL once the lease
+            // claimed above expires, so a no-op catch is the right policy here.
             syncPromise.catch(() => {})
 
             const TIMEOUT_MS = 60_000
             const timeoutPromise = new Promise<never>((_, reject) => {
-              timeoutHandle = setTimeout(() => reject(new Error('initial_sync_timeout')), TIMEOUT_MS)
+              timeoutHandle = setTimeout(() => reject(new Error(INITIAL_SYNC_TIMEOUT)), TIMEOUT_MS)
             })
             const results = await Promise.race([syncPromise, timeoutPromise])
 
@@ -1777,7 +1894,7 @@ export const enableBankingExtension: Extension = {
 
         return NextResponse.json({
           success: true,
-          enabled_count: enabled_uids.length,
+          enabled_count: enabledSet.size,
           total_count: existing.length,
           ...(initialSyncSummary ? { initial_sync: initialSyncSummary } : {}),
           ...(initialSyncError ? { initial_sync_error: initialSyncError } : {}),
@@ -1812,47 +1929,17 @@ export const enableBankingExtension: Extension = {
         if (!parsed.success) return errorResponse(parsed.error, log)
         const { connection_id } = parsed.data
 
-        let connection: Awaited<ReturnType<typeof disconnectBankConnection>>
         try {
-          const snapshot = await readBankConfiguration(supabase, companyId, connection_id)
-          connection = await disconnectBankConnection(supabase, companyId, user.id, connection_id, snapshot.token)
+          await retireBankConnection({
+            supabase,
+            companyId,
+            userId: user.id,
+            connectionId: connection_id,
+            log,
+            emit: ctx?.emit,
+          })
         } catch (error) {
           return errorResponse(error, log)
-        }
-
-        // Both local writes have committed. The service-only claim checks all
-        // companies and prevents a new holder attaching before provider HTTP.
-        if (connection.session_id) {
-          try {
-            const { createServiceClient } = await import('@/lib/supabase/server')
-            await revokeUnusedSession(await createServiceClient(), connection.session_id)
-          } catch {
-            // Local disconnect remains committed if upstream cleanup fails.
-            // The claim records provider failure and fences later attachment.
-            log.warn('[enable-banking] Upstream consent cleanup was not confirmed', {
-              connectionId: connection_id, userId: user.id, companyId,
-            })
-          }
-        }
-
-        try {
-          const emit = ctx?.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
-          await emit({
-            type: 'bank_connection.revoked',
-            payload: {
-              connectionId: connection.connection_id,
-              bankName: connection.bank_name,
-              userId: user.id,
-              companyId,
-            },
-          })
-        } catch (emitError) {
-          log.error('[enable-banking] Failed to emit revoke event', {
-            errorMessage: emitError instanceof Error ? emitError.message : String(emitError),
-            connectionId: connection.connection_id,
-            userId: user.id,
-            companyId,
-          })
         }
 
         return NextResponse.json({ success: true })

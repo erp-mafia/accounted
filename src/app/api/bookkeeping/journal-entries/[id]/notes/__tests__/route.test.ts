@@ -62,11 +62,13 @@ describe('PATCH /api/bookkeeping/journal-entries/[id]/notes', () => {
   it('returns 404 instead of phantom success when no row matches', async () => {
     enqueue({ data: null }) // update matched zero rows
 
-    const { status, body } = await parseJsonResponse<{ error: string }>(
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await patch({ notes: 'En anteckning' })
     )
     expect(status).toBe(404)
-    expect(body.error).toBe('Verifikationen hittades inte.')
+    // Failures answer the structured envelope (sessionFailureResponse) since the
+    // route moved onto the shared operation service; the message is in error.message.
+    expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_FOUND')
   })
 
   it('updates the note on the happy path', async () => {

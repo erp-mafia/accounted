@@ -18,16 +18,12 @@
 
 import { z } from 'zod'
 import { paginated } from '@/lib/api/v1/response'
-import {
-  decodeDefaultCursor,
-  encodeDefaultCursor,
-  parsePaginationParams,
-  PaginationQueryShape,
-} from '@/lib/api/v1/pagination'
+import { parsePaginationParams, PaginationQueryShape } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { SALARY_PAYMENT_FILE_FORMATS } from '@/lib/salary/payment/build-payment-file'
+import { listSalaryPaymentFiles } from '@/lib/salary/payment/payment-file-archive'
 
 const ArchivedSalaryPaymentFile = z.object({
   /** Id of the archived row (the payment_file_id the generate call returned). */
@@ -49,8 +45,6 @@ const ArchivedSalaryPaymentFile = z.object({
   content: z.string(),
 })
 
-// Explicit projection: never SELECT *. One literal so the phantom-column
-// guard (tests/schema) can check every name against the migration.
 registerEndpoint({
   operation: 'salary-runs.payment-files.list',
   method: 'GET',
@@ -99,21 +93,6 @@ registerEndpoint({
   response: { success: listEnvelope(ArchivedSalaryPaymentFile) },
 })
 
-type Row = {
-  id: string
-  format: 'pain001' | 'bg_lb'
-  filename: string
-  content_type: 'application/xml' | 'text/plain'
-  charset: 'utf-8' | 'iso-8859-1'
-  sha256: string
-  byte_size: number
-  payment_date: string
-  employee_count: number
-  total_amount: number | string
-  generated_at: string
-  content: string
-}
-
 export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'salary-runs.payment-files.list',
   async (request, ctx, params) => {
@@ -126,74 +105,26 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       })
     }
 
-    // 404 the run itself first so an empty list unambiguously means
+    // The query lives in lib/salary/payment/payment-file-archive.ts, shared
+    // with the MCP operation: the run is 404'd first, so an empty list means
     // "run exists, no file generated yet".
-    const { data: run, error: runErr } = await ctx.supabase
-      .from('salary_runs')
-      .select('id')
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .maybeSingle()
-    if (runErr) {
-      return v1ErrorResponse(runErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!run) {
-      return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-
-    const url = new URL(request.url)
-    const { limit, cursor } = parsePaginationParams(url)
-    // The default cursor carries (created_at, id); here the timestamp is
-    // generated_at, the archive row's only clock.
-    const decoded = decodeDefaultCursor(cursor)
-
-    let query = ctx.supabase
-      .from('salary_payment_files')
-      .select('id, format, filename, content_type, charset, sha256, byte_size, payment_date, employee_count, total_amount, generated_at, content')
-      .eq('company_id', ctx.companyId!)
-      .eq('salary_run_id', idParse.data)
-      .order('generated_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(limit + 1)
-
-    if (decoded) {
-      query = query.or(
-        `generated_at.lt.${decoded.ts},and(generated_at.eq.${decoded.ts},id.lt.${decoded.id})`,
-      )
+    const { limit, cursor } = parsePaginationParams(new URL(request.url))
+    const result = await listSalaryPaymentFiles(ctx.supabase, {
+      companyId: ctx.companyId!,
+      salaryRunId: idParse.data,
+      limit,
+      cursor,
+    })
+    if (!result.ok) {
+      if (result.code === 'RUN_NOT_FOUND') {
+        return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+      }
+      return v1ErrorResponse(result.cause, ctx.log, { requestId: ctx.requestId })
     }
 
-    const { data, error } = await query
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
-    const rows = ((data ?? []) as unknown) as Row[]
-    const trimmed = rows.slice(0, limit)
-    const hasMore = rows.length > limit
-
-    const items = trimmed.map((r) => ({
-      payment_file_id: r.id,
-      format: r.format,
-      filename: r.filename,
-      content_type: r.content_type,
-      charset: r.charset,
-      sha256: r.sha256,
-      byte_size: r.byte_size,
-      payment_date: r.payment_date,
-      employee_count: r.employee_count,
-      total_amount: Number(r.total_amount),
-      generated_at: r.generated_at,
-      content: r.content,
-    }))
-
-    const last = trimmed[trimmed.length - 1]
-    const nextCursor = hasMore && last
-      ? encodeDefaultCursor({ id: last.id, created_at: last.generated_at })
-      : null
-
-    return paginated(items, {
+    return paginated(result.files, {
       requestId: ctx.requestId,
-      nextCursor: nextCursor ?? undefined,
+      nextCursor: result.nextCursor ?? undefined,
     })
   },
 )

@@ -14,11 +14,13 @@ import {
   JournalEntryNotFoundError,
   JournalLineBothSidesNonZeroError,
   JournalLineNegativeAmountError,
+  MandatoryDimensionMissingError,
   accountsNotInChartResponse,
   bookkeepingErrorResponse,
   isAccountsNotInChartError,
   isBookkeepingError,
 } from '../errors'
+import { formatDimensionValidationIssues } from '../dimension-errors'
 
 describe('Typed bookkeeping errors', () => {
   it('AccountsNotInChartError carries sorted, deduped account numbers', () => {
@@ -158,8 +160,8 @@ describe('Typed bookkeeping errors', () => {
 
   it('DimensionValidationError carries issues and a Swedish message naming every code', () => {
     const err = new DimensionValidationError([
-      { sie_dim_no: '6', code: 'P999', reason: 'unknown_value' },
-      { sie_dim_no: '1', code: 'KS-GAMMAL', reason: 'archived_value' },
+      { sie_dim_no: '6', code: 'P999', reason: 'unknown_value', dimension_name: 'Projekt' },
+      { sie_dim_no: '1', code: 'KS-GAMMAL', reason: 'archived_value', dimension_name: 'Kostnadsställe' },
       { sie_dim_no: '9', code: null, reason: 'unknown_dimension' },
     ])
     expect(err.code).toBe('DIMENSION_VALIDATION_FAILED')
@@ -167,12 +169,58 @@ describe('Typed bookkeeping errors', () => {
     expect(err).toBeInstanceOf(Error)
     expect(err.issues).toHaveLength(3)
     expect(err.message).toContain(
-      'Okänt kostnadsställe/projekt: "P999" (dimension 6). Skapa värdet i registret först.'
+      'Okänt värde "P999" i Projekt (dimension 6). Skapa värdet i registret först.'
     )
     expect(err.message).toContain(
-      '"KS-GAMMAL" är arkiverat: återaktivera värdet för att använda det.'
+      '"KS-GAMMAL" i Kostnadsställe (dimension 1) är arkiverat: återaktivera värdet för att använda det.'
     )
     expect(err.message).toContain('Okänd dimension 9. Skapa dimensionen i registret först.')
+  })
+
+  it('DimensionValidationError names a custom dimension, never "kostnadsställe/projekt"', () => {
+    const named = new DimensionValidationError([
+      { sie_dim_no: '21', code: 'KB7', reason: 'unknown_value', dimension_name: 'Kostnadsbärare' },
+    ])
+    expect(named.message).toBe(
+      'Okänt värde "KB7" i Kostnadsbärare (dimension 21). Skapa värdet i registret först.'
+    )
+    // No registry name at hand (e.g. an older serialized envelope): the number.
+    const unnamed = new DimensionValidationError([
+      { sie_dim_no: '21', code: 'KB7', reason: 'archived_value' },
+    ])
+    expect(unnamed.message).toBe(
+      '"KB7" i dimension 21 är arkiverat: återaktivera värdet för att använda det.'
+    )
+    expect(`${named.message} ${unnamed.message}`).not.toMatch(/kostnadsställe\/projekt/i)
+  })
+
+  it('formatDimensionValidationIssues rebuilds the named sentence from serialized details', () => {
+    expect(
+      formatDimensionValidationIssues([
+        { sie_dim_no: '21', code: 'KB7', reason: 'unknown_value', dimension_name: 'Kostnadsbärare' },
+      ])
+    ).toBe('Okänt värde "KB7" i Kostnadsbärare (dimension 21). Skapa värdet i registret först.')
+    expect(
+      formatDimensionValidationIssues([
+        { sie_dim_no: '21', code: 'KB1', reason: 'archived_dimension', dimension_name: 'Kostnadsbärare' },
+      ])
+    ).toBe(
+      '"KB1" i Kostnadsbärare (dimension 21): dimensionen är arkiverad. Återaktivera dimensionen för att använda värdet.'
+    )
+    // A malformed name is not trusted into the sentence.
+    expect(
+      formatDimensionValidationIssues([
+        { sie_dim_no: '21', code: 'KB7', reason: 'unknown_value', dimension_name: 42 },
+      ])
+    ).toBeNull()
+  })
+
+  it('MandatoryDimensionMissingError names account and dimension without a dash', () => {
+    const err = new MandatoryDimensionMissingError([
+      { account_number: '4010', sie_dim_no: '21', dimension_name: 'Kostnadsbärare' },
+    ])
+    expect(err.message).toBe('Konto 4010 kräver Kostnadsbärare: välj ett värde innan bokföring.')
+    expect(err.message).not.toMatch(/[\u2013\u2014]/)
   })
 })
 
@@ -349,16 +397,18 @@ describe('bookkeepingErrorResponse', () => {
 
   it('returns 400 for DimensionValidationError with issue details and Swedish message', async () => {
     const response = bookkeepingErrorResponse(
-      new DimensionValidationError([{ sie_dim_no: '6', code: 'P999', reason: 'unknown_value' }])
+      new DimensionValidationError([
+        { sie_dim_no: '6', code: 'P999', reason: 'unknown_value', dimension_name: 'Projekt' },
+      ])
     )!
     expect(response.status).toBe(400)
     const body = await response.json()
     expect(body.error.code).toBe('DIMENSION_VALIDATION_FAILED')
     expect(body.error.message).toBe(
-      'Okänt kostnadsställe/projekt: "P999" (dimension 6). Skapa värdet i registret först.'
+      'Okänt värde "P999" i Projekt (dimension 6). Skapa värdet i registret först.'
     )
     expect(body.error.details).toEqual({
-      issues: [{ sie_dim_no: '6', code: 'P999', reason: 'unknown_value' }],
+      issues: [{ sie_dim_no: '6', code: 'P999', reason: 'unknown_value', dimension_name: 'Projekt' }],
     })
   })
 

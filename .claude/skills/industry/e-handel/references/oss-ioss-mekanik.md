@@ -1,3 +1,7 @@
+---
+areas: [moms]
+---
+
 # OSS- och IOSS-mekanik
 
 ## OSS: unionsordningen för distansförsäljning

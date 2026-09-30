@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { VAXA_STOD_AGI_FIELDS_RETIRED_FROM } from '../vaxa-stod'
 
 /**
  * Zod schemas for Skatteverket AGI pre-flight kontrollera endpoints.
@@ -80,8 +81,8 @@ export const AGIKontrolleraIUSchema = z
 
     // Flags
     formanHarJusterats: z.boolean().optional(),  // FK048
-    forstaAnstalld: z.boolean().optional(),      // FK062
-    vaxaStod: z.boolean().optional(),            // FK063
+    forstaAnstalld: z.boolean().optional(),      // FK062, last valid period 202512
+    vaxaStod: z.boolean().optional(),            // FK063, last valid period 202512
     borttag: z.boolean().optional(),             // FK205
   })
   .strict()
@@ -92,6 +93,23 @@ export const AGIKontrolleraIUSchema = z
       path: ['vaxaStod'],
     },
   )
+  // Växa-stöd left the AGI with redovisningsperiod 202601 (Lag 2025:1334,
+  // lib/salary/vaxa-stod.ts). The fields stay in the schema for the periods
+  // they were valid in; for later ones the claim is refused here with the
+  // rule instead of Skatteverket's verdict on an unknown field.
+  .superRefine((iu, ctx) => {
+    if (Number.parseInt(iu.redovisningsPeriod, 10) < VAXA_STOD_AGI_FIELDS_RETIRED_FROM) return
+    for (const field of ['forstaAnstalld', 'vaxaStod'] as const) {
+      if (iu[field] !== true) continue
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'Växa-stöd (FK062 ForstaAnstalld, FK063 VaxaStod) redovisas inte i arbetsgivardeklarationen från redovisningsperiod 202601. ' +
+          'Redovisa fulla arbetsgivaravgifter och ansök om återbetalning hos Skatteverket.',
+        path: [field],
+      })
+    }
+  })
 
 /**
  * Hard cap on the raw JSON body for kontrollera endpoints. Even a fully

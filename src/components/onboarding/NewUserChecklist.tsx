@@ -26,6 +26,8 @@ import {
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useAssistantAvailable, useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { PROVIDER_DISPLAY_NAMES } from '@/lib/providers/unfinished-connect'
+import type { ProviderName } from '@/lib/providers/types'
 import type { InitialSetupPath, InitialSetupState } from '@/types'
 import { useBranding } from '@/lib/branding/brand-context'
 
@@ -49,6 +51,10 @@ interface NewUserChecklistProps {
    *  errors > 0 was incomplete (a whole account may have been skipped), so it
    *  also says nothing rather than presenting partial numbers as the result. */
   sieSweep?: { auto_linked: number; suggested: number; unmatched: number; errors: number } | null
+  /** The latest provider connect that never got a token (lib/providers/
+   *  unfinished-connect): the books step offers to retry it or upload a SIE
+   *  file instead. Null = say nothing. */
+  unfinishedConnect?: { provider: ProviderName } | null
 }
 
 /**
@@ -90,6 +96,7 @@ export default function NewUserChecklist({
   hasMcpKey = false,
   vatLine = null,
   sieSweep = null,
+  unfinishedConnect = null,
 }: NewUserChecklistProps) {
   const t = useTranslations('initial_setup')
   const locale = useLocale()
@@ -254,11 +261,19 @@ export default function NewUserChecklist({
 
   // Recording the chosen path is owner/admin only; the step itself is not.
   // A member skips the write and goes straight to the step.
-  const goMigration = async () => {
+  // `provider` reopens that provider's connect step (the unfinished-connect
+  // retry); without it the wizard starts at the provider list.
+  const goMigration = async (provider?: ProviderName) => {
     const updated = canRecord ? await persist({ path: 'migration' }, 'migration') : state
     if (updated) {
       captureSetup('onboarding_setup_step_started', { step: 'books', path: 'migration' })
-      router.push(hasMigration ? '/import?mode=migration' : '/import?mode=sie')
+      router.push(
+        !hasMigration
+          ? '/import?mode=sie'
+          : provider
+            ? `/import?mode=migration&provider=${provider}`
+            : '/import?mode=migration',
+      )
     }
   }
   const goFresh = () =>
@@ -358,6 +373,31 @@ export default function NewUserChecklist({
               <LogoMark src="/logos/bokio.png" name="Bokio" />
               <span className="text-[11px] text-muted-foreground">{t('step_books_sie')}</span>
             </>
+          }
+          footnote={
+            hasMigration && unfinishedConnect ? (
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5">
+                <span>
+                  {t('step_books_unfinished', {
+                    provider: PROVIDER_DISPLAY_NAMES[unfinishedConnect.provider] ?? unfinishedConnect.provider,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  disabled={saving !== null}
+                  onClick={() => void goMigration(unfinishedConnect.provider)}
+                  className="text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                >
+                  {t('step_books_unfinished_retry')}
+                </button>
+                <Link
+                  href="/import?mode=sie"
+                  className="text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                >
+                  {t('step_books_unfinished_sie')}
+                </Link>
+              </div>
+            ) : undefined
           }
         >
           {canRecord ? (

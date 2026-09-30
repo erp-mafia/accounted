@@ -61,8 +61,8 @@ import {
   buildLundifyActivationUrl,
   getBjornLundenActivationKey,
 } from '@/lib/providers/bjornlunden/activation'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { SIEJobValidationError } from '@/lib/import/sie-jobs'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { SIEJobDatabaseError, SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import {
@@ -73,7 +73,9 @@ import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
 import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { createLogger } from '@/lib/logger'
+import { requestCspNonce } from '@/lib/security/csp'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
+import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
 
 const moduleLog = createLogger('extensions/arcim-migration')
 
@@ -110,6 +112,15 @@ const SESSION_MISSING_MESSAGE =
   'Ingen inloggad session hittades i det här fönstret. Logga in och starta om anslutningen.'
 
 /**
+ * access_denied: the customer pressed cancel in the provider's consent screen.
+ * The callback flags it (`cancelled`) so the wizard can count a cancel apart
+ * from a provider error. Matched on this sentence because the white-label
+ * handoff carries only the translated text across the hop.
+ */
+const OAUTH_CANCELLED_MESSAGE =
+  'Du avbröt anslutningen i leverantörens inloggning. Försök igen om du vill koppla kontot.'
+
+/**
  * Map known OAuth error codes from providers (Fortnox, Visma) to actionable
  * Swedish guidance. Falls back to the raw provider message so we never hide
  * unknown errors from the user.
@@ -122,7 +133,7 @@ function translateOAuthError(error: string, description: string | null): string 
   }
 
   if (error === 'access_denied') {
-    return 'Du avbröt anslutningen i leverantörens inloggning. Försök igen om du vill koppla kontot.'
+    return OAUTH_CANCELLED_MESSAGE
   }
 
   if (error === 'invalid_scope') {
@@ -364,15 +375,21 @@ export const arcimMigrationExtension: Extension = {
             .limit(1)
             .maybeSingle()
 
-          // Get entity counts (to show what's already been imported)
+          // Get entity counts (to show what's already been imported), and the
+          // latest connect that never got a token so the wizard can offer to
+          // resume it (service client: provider_consent_tokens has no user
+          // policy).
+          const { createServiceClient } = await import('@/lib/supabase/server')
           const [
             { count: customerCount },
             { count: supplierCount },
             { count: invoiceCount },
+            unfinishedConnect,
           ] = await Promise.all([
             supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
             supabase.from('suppliers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
             supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
+            findUnfinishedConnect(createServiceClient(), companyId),
           ])
 
           return NextResponse.json({
@@ -386,6 +403,7 @@ export const arcimMigrationExtension: Extension = {
             sieImports: sieImports ?? [],
             hasCompletedSieImport: latestCompletedSieImport != null,
             latestCompletedSieImport: latestCompletedSieImport ?? null,
+            unfinishedConnect,
             entityCounts: {
               customers: customerCount ?? 0,
               suppliers: supplierCount ?? 0,
@@ -673,6 +691,13 @@ export const arcimMigrationExtension: Extension = {
                 details: { provider, reason: error.message },
               })
             }
+            // Bokio: the plan has no API access, so re-pasting the token
+            // cannot help; name the plans that include it instead.
+            if (error.kind === 'plan-no-api') {
+              return errorResponseFromCode('BOKIO_PLAN_NO_API', moduleLog, {
+                details: { provider, reason: error.message },
+              })
+            }
             return errorResponseFromCode('PROVIDER_TOKEN_INVALID', moduleLog, {
               details: { provider, reason: error.message },
             })
@@ -728,11 +753,18 @@ export const arcimMigrationExtension: Extension = {
         const jsLiteral = (value: unknown) =>
           JSON.stringify(value ?? '').replace(/</g, '\\u003c')
 
+        // The proxy's CSP (lib/security/csp.ts) has no 'unsafe-inline': the
+        // popup scripts below run only because they carry this request's
+        // nonce.
+        const scriptNonce = requestCspNonce(request.headers)
+
         const respondWithError = (reason: string, consentId?: string) => {
+          const cancelled = reason === OAUTH_CANCELLED_MESSAGE
           const fallbackUrl = new URL(`${responseOrigin}/import`)
           fallbackUrl.searchParams.set('migration', 'error')
           fallbackUrl.searchParams.set('reason', reason)
           if (consentId) fallbackUrl.searchParams.set('consentId', consentId)
+          if (cancelled) fallbackUrl.searchParams.set('cancelled', '1')
 
           const escapedReason = reason
             .replace(/&/g, '&amp;')
@@ -751,9 +783,9 @@ export const arcimMigrationExtension: Extension = {
           // state that is already spent, so a Back or a reload onto it can
           // only fail. no-store keeps it out of the browser cache for the same
           // reason.
-          const html = `<!DOCTYPE html><html><body><script>
+          const html = `<!DOCTYPE html><html><body><script nonce="${scriptNonce}">
             if (window.opener) {
-              window.opener.postMessage({ type: 'arcim-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(responseOrigin)});
+              window.opener.postMessage({ type: 'arcim-oauth-error', reason: ${jsLiteral(reason)}, cancelled: ${cancelled} }, ${jsLiteral(responseOrigin)});
             } else {
               window.location.replace(${jsLiteral(fallbackUrl.toString())});
             }
@@ -912,7 +944,7 @@ export const arcimMigrationExtension: Extension = {
           // consequence of leaving the URL in history: a second delivery 19
           // seconds after a successful connect, answered with a red "ingen
           // giltig migrationssession" about a connection that had just worked.
-          const html = `<!DOCTYPE html><html><body><script>
+          const html = `<!DOCTYPE html><html><body><script nonce="${scriptNonce}">
             if (window.opener) {
               window.opener.postMessage({ type: 'arcim-oauth-success', consentId: ${jsLiteral(consentId)} }, ${jsLiteral(responseOrigin)});
               window.close();
@@ -1479,6 +1511,14 @@ export const arcimMigrationExtension: Extension = {
           // wizard as "Importens resultat kunde inte bekräftas" with the
           // reason buried in details.reason.
           if (error instanceof SIEJobValidationError) return sieJobValidationResponse(error, moduleLog, ctx?.requestId)
+          // A job RPC that refused rolled back, so the outcome is known: nothing
+          // started. Answer with the code the manual upload route gives it (409
+          // SIE_IMPORT_PERIOD_ALREADY_IMPORTED for a year that already holds an
+          // import), not the 500 "could not be confirmed", which is for a call
+          // whose outcome really is unknown.
+          if (error instanceof SIEJobDatabaseError && error.code && getErrorEntry(error.code)) {
+            return errorResponse(error, moduleLog, { requestId: ctx?.requestId })
+          }
           log.error('arcim sie import failed', error as Error)
           return providerFailureResponse(error, 'SIE_IMPORT_UNEXPECTED')
         }

@@ -36,6 +36,10 @@ import {
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import {
+  resolveSupplierPaymentSek,
+  supplierPaymentSekInputIssue,
+} from '@/lib/bookkeeping/supplier-payment-amounts'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { findDuplicatePaymentCandidatesForSupplierInvoice } from '@/lib/invoices/duplicate-payment-candidates'
@@ -74,7 +78,9 @@ registerEndpoint({
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'payment_date must fall in an open fiscal period: locked period returns 400 PERIOD_LOCKED.',
-    'exchange_rate_difference (SEK delta vs the booked rate at registration) is required for foreign-currency SIs to book the FX gain/loss to 3960 / 7960. Omitting it on a non-SEK SI under accrual mis-books FX.',
+    'Foreign-currency SIs under accrual: amount is in the invoice currency and the verifikat is in SEK. The SEK cleared off 2440 is read from the ledger (the registration verifikat minus earlier payments), never computed by the caller; an SI with no registration verifikat (migrated) clears at its own exchange_rate, and one with no rate either returns 400 SI_FX_RATE_MISSING. State what the payment cost in SEK with amount_sek (the SEK that left the payment account; the difference to the cleared SEK books on 3960 gain / 7960 loss) or with exchange_rate_difference (cleared SEK minus paid SEK; 0 for none). One of the two is required, not both.',
+    'Foreign-currency SI whose linked vouchers contradict each other (a batch voucher shared with another invoice, payment rows that do not add up to paid_amount, a registration or payment voucher reversed with no single correction), or whose 2440 balance is more than 10% away from remaining_amount x exchange_rate (reason ledger_rate_mismatch: the registration was corrected for something other than the rate), or whose history is longer than one request resolves (reason ledger_history_too_long: more than 50 payment rows or 20 storno hops), returns 409 SI_PAID_SEK_UNRESOLVED with details.reason and books nothing. Check the SEK against the ledger and resend with explicit SEK lines.',
+    'Kontantmetoden company paying an SI that was registered on 2440 (booked at receipt, before a switch of method): the payment clears 2440 like under faktureringsmetoden, so a foreign-currency one needs amount_sek or exchange_rate_difference too. Only an SI never registered gets the cash entry (expense + ingående moms at payment).',
     'Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner: retry the call.',
     'Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.',
     'Cash basis + öresavrundning: a SEK invoice with ore_rounding on and an öre-bearing total is paid in whole kronor, so the generated entry credits the payment account with the rounded amount and books the residual on 3740 (no VAT). amount, paid_amount and remaining_amount stay in exact öre. Invoices whose rounding is already an invoice row on 3740 have a whole-krona total and are unaffected.',
@@ -131,6 +137,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     let bodyAmount: number | undefined
+    let bodyAmountSek: number | undefined
     let bodyPaymentDate: string | undefined
     let exchangeRateDifference: number | undefined
     let bodyNotes: string | undefined
@@ -143,6 +150,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       const parsed = MarkSupplierInvoicePaidSchema.safeParse(rawBody)
       if (!parsed.success) return v1ValidationError(ctx, parsed.error)
       bodyAmount = parsed.data.amount
+      bodyAmountSek = parsed.data.amount_sek
       bodyPaymentDate = parsed.data.payment_date
       exchangeRateDifference = parsed.data.exchange_rate_difference
       bodyNotes = parsed.data.notes
@@ -179,7 +187,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         id, supplier_id, status, currency, exchange_rate, total, paid_amount, remaining_amount,
         supplier_invoice_number, arrival_number, invoice_date, vat_treatment, reverse_charge, payment_reference,
         subtotal, subtotal_sek, vat_amount, vat_amount_sek, total_sek, due_date, received_date,
-        is_credit_note, credited_invoice_id, payment_journal_entry_id, default_dimensions,
+        is_credit_note, credited_invoice_id, payment_journal_entry_id, registration_journal_entry_id, default_dimensions,
         supplier:suppliers(id, name, supplier_type),
         items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, apply_slp, dimensions)
       `)
@@ -243,6 +251,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    const sekInputIssue = supplierPaymentSekInputIssue({
+      currency: typed.currency,
+      amountSek: bodyAmountSek,
+      exchangeRateDifference,
+      hasLines: !!customLines,
+    })
+    if (sekInputIssue) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: sekInputIssue,
+      })
+    }
+
+    // In the invoice's currency, like remaining_amount and the payment row.
     const paymentAmount = bodyAmount != null
       ? Math.round(bodyAmount * 100) / 100
       : Math.round(typed.remaining_amount * 100) / 100
@@ -328,7 +350,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (
       typed.currency !== 'SEK' &&
       !useCashEntry &&
-      exchangeRateDifference === undefined
+      exchangeRateDifference === undefined &&
+      bodyAmountSek === undefined
     ) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -336,11 +359,32 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           issues: [{
             field: 'exchange_rate_difference',
             message:
-              'exchange_rate_difference (SEK delta vs the registration rate) is required when paying a non-SEK supplier invoice under faktureringsmetoden. Use 0 if there is no rate movement.',
+              'exchange_rate_difference (cleared SEK minus paid SEK) or amount_sek (the SEK that left the payment account) is required when paying a non-SEK supplier invoice under faktureringsmetoden. Use exchange_rate_difference 0 if the payment cost exactly the SEK the invoice carries on 2440.',
           }],
           invoice_currency: typed.currency,
         },
       })
+    }
+
+    // The 2440 clearing books SEK, read from the ledger (#2955): the invoice-
+    // currency amount used to be posted as if it were kronor. Resolved before
+    // the dry-run so a preview shows the SEK and cannot mask a refusal.
+    let clearingSek = paymentAmount
+    if (!customLines && !useCashEntry) {
+      const sek = await resolveSupplierPaymentSek(
+        ctx.supabase,
+        ctx.companyId!,
+        typed as unknown as SupplierInvoice,
+        { amount: paymentAmount, amountSek: bodyAmountSek, exchangeRateDifference },
+      )
+      if (!sek.ok) {
+        return v1ErrorResponseFromCode(sek.code, ctx.log, {
+          requestId: ctx.requestId,
+          details: sek.details,
+        })
+      }
+      clearingSek = sek.clearingSek
+      exchangeRateDifference = sek.exchangeRateDifference
     }
 
     const pickSupplier = (s: SI['supplier']): SupplierObj | null => {
@@ -398,6 +442,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           paid_at: newStatus === 'paid' ? paidAt : null,
           payment_date: paymentDate,
           payment_amount: paymentAmount,
+          // SEK the accrual clearing takes off 2440, and the kursdifferens
+          // (> 0 gain on 3960, < 0 loss on 7960). Custom lines and the cash
+          // entry carry their own SEK.
+          ...(!customLines && !useCashEntry
+            ? { payment_amount_sek: clearingSek, exchange_rate_difference: exchangeRateDifference ?? 0 }
+            : {}),
           // The account the committed entry will credit, already resolved, so
           // a caller can verify the routing before committing.
           payment_account: bodyPaymentAccount ?? DEFAULT_SUPPLIER_PAYMENT_ACCOUNT,
@@ -450,6 +500,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           supplierRow?.supplier_type ?? 'swedish_business',
           supplierRow?.name,
           bodyPaymentAccount,
+          // Foreign invoice: the SEK that left the account pins the entry to
+          // the payment-date rate, as a bank match does.
+          bodyAmountSek,
         )
         journalEntryId = entry?.id ?? null
       } else {
@@ -458,7 +511,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           ctx.companyId!,
           ctx.userId,
           typed as unknown as SupplierInvoice,
-          paymentAmount,
+          clearingSek,
           paymentDate,
           exchangeRateDifference,
           supplierRow?.name,

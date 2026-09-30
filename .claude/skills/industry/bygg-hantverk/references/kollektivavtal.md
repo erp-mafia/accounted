@@ -1,3 +1,7 @@
+---
+areas: [lon]
+---
+
 # Kollektivavtal per sub-vertikal inom SNI 41-43
 
 Samtliga avtal har period **2025-05-01 till 2027-04-30** med märket 6,4 % över 24 månader (3,4 % år 1 + 3,0 % år 2). Försäkringspaket via **Fora** för kollektivanställda: AGS, AGB, TFA, TGL och Avtalspension SAF-LO. Tjänstemän har ITP via Collectum.

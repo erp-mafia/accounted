@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
-import { uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
+import { declaredDocumentType, uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -29,7 +29,9 @@ export const POST = withRouteContext(
       return errorResponseFromCode('DOC_UPLOAD_NO_FILE', log, { requestId })
     }
 
-    const validationError = validateDocumentFile({ size: file.size, type: file.type })
+    // A HEIC dropped from a Mac arrives with no declared type: the extension says what it is, the bytes are verified below.
+    const declaredType = declaredDocumentType({ name: file.name, type: file.type })
+    const validationError = validateDocumentFile({ size: file.size, type: declaredType })
     if (validationError) {
       // The validator returns a Swedish string today. Bucket the failure into
       // a size or type code based on its content.
@@ -38,7 +40,7 @@ export const POST = withRouteContext(
         : 'DOC_UPLOAD_UNSUPPORTED_TYPE'
       return errorResponseFromCode(code, log, {
         requestId,
-        details: { reason: validationError, sizeBytes: file.size, mimeType: file.type },
+        details: { reason: validationError, sizeBytes: file.size, mimeType: declaredType },
       })
     }
 
@@ -64,7 +66,7 @@ export const POST = withRouteContext(
       const document = await uploadDocument(supabase, user.id, companyId!, {
         name: file.name,
         buffer,
-        type: file.type,
+        type: declaredType,
       }, {
         upload_source: uploadSource,
         journal_entry_id: journalEntryId || undefined,

@@ -3,6 +3,7 @@ import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
 import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
+import { formatLineDimensions, loadDimensionNames } from '@/lib/reports/dimension-labels'
 import {
   reportToWorkbook,
   textColumn,
@@ -23,6 +24,8 @@ interface FlatRow {
   debit: number
   credit: number
   balance: number
+  /** The line's tags, "Kostnadsställe KS01, Projekt P100"; '' on IB/UB rows. */
+  dimensions: string
 }
 
 export const GET = withRouteContext('report.general_ledger.xlsx', async (request, { supabase, companyId }) => {
@@ -70,6 +73,17 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
       toDate: range.toDate,
     })
 
+    // The web huvudbok shows each line's tags; the file carries them too, in
+    // a last column so the existing columns keep their positions. Only when
+    // some exported line is tagged: a company without dimensions gets the
+    // same file as before, and no registry read.
+    const tagged = report.accounts.some((acc) =>
+      acc.lines.some((line) => line.dimensions && Object.keys(line.dimensions).length > 0),
+    )
+    const dimensionNames = tagged
+      ? await loadDimensionNames(supabase, companyId)
+      : new Map<string, string>()
+
     // Flatten accounts + their lines into a single sheet. Each account contributes
     // an opening-balance row, its lines (with running balance), and a closing
     // row: matching how huvudbok is read in Fortnox/Visma.
@@ -85,6 +99,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
         debit: 0,
         credit: 0,
         balance: acc.opening_balance,
+        dimensions: '',
       })
       for (const line of acc.lines) {
         rows.push({
@@ -99,6 +114,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
           debit: line.debit,
           credit: line.credit,
           balance: line.balance,
+          dimensions: formatLineDimensions(line.dimensions, dimensionNames),
         })
       }
       rows.push({
@@ -111,6 +127,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
         debit: acc.total_debit,
         credit: acc.total_credit,
         balance: acc.closing_balance,
+        dimensions: '',
       })
     }
 
@@ -129,6 +146,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
         debit: null as unknown as number,
         credit: null as unknown as number,
         balance: null as unknown as number,
+        dimensions: '',
       })
     }
 
@@ -145,6 +163,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
           currencyColumn('Debet'),
           currencyColumn('Kredit'),
           currencyColumn('Saldo'),
+          ...(tagged ? [textColumn('Dimensioner')] : []),
         ],
         rows,
         mapRow: (r) => [
@@ -157,6 +176,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
           r.debit,
           r.credit,
           r.balance,
+          ...(tagged ? [r.dimensions] : []),
         ],
       },
     ])

@@ -85,8 +85,8 @@ export async function readFields(input: { def: ExtractionSchemaDef; company: Com
 
   const ai = getAiService()
   const [a, b] = await Promise.all([
-    ai.generateStructured({ tier: 'extraction', system, prompt: prompts[0], maxTokens: MAX_TOKENS, schema }),
-    ai.generateStructured({ tier: 'cheap', system, prompt: prompts[1], maxTokens: MAX_TOKENS, schema }),
+    ai.generateStructured({ tier: 'extraction', meter: { feature: 'arkiv_extract' }, system, prompt: prompts[0], maxTokens: MAX_TOKENS, schema }),
+    ai.generateStructured({ tier: 'cheap', meter: { feature: 'arkiv_extract' }, system, prompt: prompts[1], maxTokens: MAX_TOKENS, schema }),
   ])
 
   const merged = mergeReadings(def, readingsFromAnswer(def, a.value), readingsFromAnswer(def, b.value))

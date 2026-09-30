@@ -238,6 +238,19 @@ describe('buildBrRows', () => {
     expect(summaEk?.previous).toBe(300_000)
   })
 
+  it('keys the registered aktiekapital and the equity total for the kontrollbalans check', () => {
+    // completeness.ts compares them (ABL 25 kap. 13 §) without reading labels.
+    const mapping = mapTrialBalancesToK2(currentPair(), null)
+    const { equityLiabilities } = buildBrRows(mapping)
+    const byKey = (key: string) => equityLiabilities.filter((r) => r.semantic_key === key)
+    expect(byKey('balance_sheet_share_capital')).toEqual([
+      expect.objectContaining({ label: 'Aktiekapital', current: 50_000 }),
+    ])
+    expect(byKey('balance_sheet_equity_total')).toEqual([
+      expect.objectContaining({ label: 'Summa eget kapital', current: 600_000, is_total: true }),
+    ])
+  })
+
   it('produces no mapper warnings for the balanced fixture', () => {
     const mapping = mapTrialBalancesToK2(currentPair(), previousPair())
     expect(mapping.warnings).toEqual([])

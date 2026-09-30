@@ -2,7 +2,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { StoredSkattekontoTransaction } from '../types'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import { loadCancelledEntryIds } from '@/lib/skatteverket/skattekonto-cancelled-entries'
+import {
+  groupSettlesEntry,
+  linkSkattekontoRows,
+  SkattekontoLinkError,
+} from '@/lib/skatteverket/skattekonto-link'
 
 /**
  * "Matcha mot befintligt verifikat"-flöde för skattekonto-rader.
@@ -28,6 +35,16 @@ import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill
  */
 
 const DATE_WINDOW_DAYS = 14
+/** Most same-day events combined against one verifikat (tax + avgift + a correction or two). */
+const MAX_COMBINED_EVENTS = 4
+/** Same-day, same-sign open events considered for a combination; bounds the subset search. */
+const MAX_COMBINED_POOL = 10
+/**
+ * Only a live verifikat carries an event: a reversed one is gone and a
+ * cancelled draft (an abandoned or failed booking keeps its lines) never
+ * reached the ledger, so neither may be proposed nor block a booking.
+ */
+const LIVE_ENTRY_STATUSES = ['draft', 'posted']
 
 export class SkattekontoMatchError extends Error {
   constructor(
@@ -66,6 +83,25 @@ export interface SkattekontoMatchCandidate {
    * lines). The link still settles the whole entry, so the pair closes.
    */
   matched_via_entry_total?: boolean
+  /**
+   * Present when this row settles the verifikat only TOGETHER with these
+   * other open Skatteverket rows (same day, same sign, amounts summing
+   * exactly to the 1630 movement, crm#128). Linking links all of them.
+   */
+  combined_with?: Array<{
+    id: string
+    transaktionsdatum: string
+    transaktionstext: string
+    belopp_skatteverket: number
+  }>
+  /** Absolute sum of this row and combined_with: the 1630 amount the group settles. */
+  combined_total?: number
+  /**
+   * Present when the verifikat already carries links to this many other rows
+   * and adding this row keeps the group settling it (crm#104: a payment and
+   * a debit booked in one voucher).
+   */
+  joins_linked_count?: number
 }
 
 /** Swedish month names exactly as SKV writes them in prod transaktionstext. */
@@ -264,17 +300,134 @@ function periodKey(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, '0')}`
 }
 
+/** The 1630 lines of one candidate entry plus the SKV rows already linked to it. */
+type EntryHead = {
+  id: string
+  voucher_number: number | null
+  voucher_series: string | null
+  entry_date: string
+  description: string
+  status: 'draft' | 'posted' | 'reversed'
+  company_id: string
+}
+type LineRow = { debit_amount: number; credit_amount: number; journal_entries: EntryHead }
+type EntryView = {
+  entry: EntryHead
+  lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+  /** Amounts of SKV rows already linked to this entry. */
+  linked: number[]
+}
+
+function buildEntryViews(
+  lines: LineRow[],
+  linkedRows: Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }>,
+  cancelled: Set<string>,
+): Map<string, EntryView> {
+  const views = new Map<string, EntryView>()
+  for (const line of lines) {
+    const e = line.journal_entries
+    if (cancelled.has(e.id)) continue
+    let view = views.get(e.id)
+    if (!view) {
+      view = { entry: e, lines: [], linked: [] }
+      views.set(e.id, view)
+    }
+    view.lines.push({
+      account_number: SKATTEKONTO_ACCOUNT,
+      debit_amount: roundOre(Number(line.debit_amount)),
+      credit_amount: roundOre(Number(line.credit_amount)),
+    })
+  }
+  for (const r of linkedRows) {
+    if (!r.journal_entry_id) continue
+    const view = views.get(r.journal_entry_id)
+    // A linked row whose amount is unreadable makes the entry unusable for a
+    // group check (NaN never settles), which is the safe direction.
+    if (view) view.linked.push(Number(r.belopp_skatteverket))
+  }
+  return views
+}
+
+/** First day of the AGI period every row names, or null when they disagree or name none. */
+function sharedPeriodStart(rows: Array<{ transaktionstext?: string | null }>): string | null {
+  let key: string | null = null
+  for (const r of rows) {
+    const p = r.transaktionstext ? parseAgiPeriod(r.transaktionstext) : null
+    if (!p) return null
+    const k = periodKey(p.year, p.month)
+    if (key && key !== k) return null
+    key = k
+  }
+  return key ? `${key}-01` : null
+}
+
+/**
+ * Date window for a COMBINED match (several same-day events against one
+ * verifikat): +/-14 days around the event date, widened back to the first
+ * day of the declaration period when every event names the same AGI period
+ * ("Avdragen skatt maj 2026" + "Arbetsgivaravgift maj 2026" accept a
+ * verifikat dated in May, 2026-05-01 onward). An AGI liability is commonly
+ * booked in the salary month while Skatteverket draws it on the 12th of the
+ * next month, a 31-day gap on prod (crm#128).
+ */
+export function combinedMatchWindow(
+  eventDate: string,
+  rows: Array<{ transaktionstext?: string | null }>,
+): { from: string; to: string } {
+  const base = addDays(eventDate, -DATE_WINDOW_DAYS)
+  const periodStart = sharedPeriodStart(rows)
+  return {
+    from: periodStart && periodStart < base ? periodStart : base,
+    to: addDays(eventDate, DATE_WINDOW_DAYS),
+  }
+}
+
+/** Every subset of `items` with a size in [minSize, maxSize], smallest first. */
+function subsets<T>(items: T[], minSize: number, maxSize: number): T[][] {
+  const out: T[][] = []
+  const pick = (start: number, acc: T[], size: number) => {
+    if (acc.length === size) {
+      out.push([...acc])
+      return
+    }
+    for (let i = start; i < items.length; i++) {
+      acc.push(items[i])
+      pick(i + 1, acc, size)
+      acc.pop()
+    }
+  }
+  for (let size = minSize; size <= Math.min(maxSize, items.length); size++) pick(0, [], size)
+  return out
+}
+
 /**
  * Bulk-enrich a list of unmatched SKV rows with a `match_suggestion` field
  * pointing to a "high confidence" candidate verifikat.
  *
- * Matching has two layers:
+ * Matching has three layers:
  *   1. AGI period-code disambiguation. If the transaktionstext carries a period
  *      token and the AGI declaration for that period maps to journal entries,
  *      the matcher prefers candidates from that set even when other amount
  *      matches exist.
  *   2. Strict amount+side match. We auto-suggest only when there is EXACTLY ONE
- *      candidate to avoid silently linking the wrong entry.
+ *      candidate to avoid silently linking the wrong entry. An entry that
+ *      already carries links qualifies only when the whole group, this row
+ *      included, still settles it (groupSettlesEntry).
+ *   3. Combined match (crm#128): rows still without a suggestion that share a
+ *      date and a sign are tried in groups of 2 to MAX_COMBINED_EVENTS whose
+ *      amounts sum EXACTLY to an unlinked verifikat's 1630 movement, inside
+ *      combinedMatchWindow. A group is proposed only when neither the group's
+ *      rows nor the verifikat appear in any other combination. Every row of
+ *      the group gets the same suggestion, with `combined_with` naming the
+ *      others; accepting it links them together or not at all.
+ *   4. Interchangeable rows (accounted#1300): rows still without a
+ *      suggestion that are identical (same date, amount, sign and text) and
+ *      share the same candidates nobody else wants are assigned one to one,
+ *      since which identical row links where does not change the ledger.
+ *
+ * Verifikat that are economically cancelled (a storno pair, in-app or
+ * imported, see lib/skatteverket/skattekonto-cancelled-entries.ts) are never
+ * candidates.
  */
 export async function findMatchSuggestionsBulk(
   supabase: SupabaseClient,
@@ -291,31 +444,20 @@ export async function findMatchSuggestionsBulk(
   if (unmatched.length === 0) return new Map()
 
   const dates = unmatched.map(r => r.transaktionsdatum).sort()
-  const from = addDays(dates[0], -DATE_WINDOW_DAYS)
+  const widest = unmatched
+    .map(r => combinedMatchWindow(r.transaktionsdatum, [r]).from)
+    .sort()[0]
+  const from = widest < addDays(dates[0], -DATE_WINDOW_DAYS) ? widest : addDays(dates[0], -DATE_WINDOW_DAYS)
   const to = addDays(dates[dates.length - 1], DATE_WINDOW_DAYS)
-
-  type Row = {
-    debit_amount: number
-    credit_amount: number
-    journal_entries: {
-      id: string
-      voucher_number: number | null
-      voucher_series: string | null
-      entry_date: string
-      description: string
-      status: 'draft' | 'posted' | 'reversed'
-      company_id: string
-    }
-  }
 
   // Driven from the journal_entries side (lib/bookkeeping/entry-lines.ts):
   // the scope filters used to sit on a `journal_entries!inner` embed, which
   // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
   // journal_entry_lines table across all tenants. The parent is reattached
   // under the same `journal_entries` key, so the candidate build is unchanged.
-  let lines: Row[]
+  let lines: LineRow[]
   try {
-    lines = await fetchEntryLines<Row>({
+    lines = await fetchEntryLines<LineRow>({
       supabase,
       entryColumns: 'id, voucher_number, voucher_series, entry_date, description, status, company_id',
       lineColumns: 'debit_amount, credit_amount',
@@ -324,7 +466,7 @@ export async function findMatchSuggestionsBulk(
           .eq('company_id', companyId)
           .gte('entry_date', from)
           .lte('entry_date', to)
-          .neq('status', 'reversed'),
+          .in('status', LIVE_ENTRY_STATUSES),
       filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
     })
   } catch {
@@ -332,21 +474,17 @@ export async function findMatchSuggestionsBulk(
     return new Map()
   }
 
-  // Filter out entries already linked to another SKV row.
+  // SKV rows already linked to a candidate entry, with their amounts: an
+  // entry with links is only a candidate for a row that the group check
+  // still accepts together with them.
   const candidateEntryIds = Array.from(new Set(lines.map(l => l.journal_entries.id)))
   const { data: linked } = candidateEntryIds.length
     ? await supabase
         .from('skattekonto_transactions')
-        .select('journal_entry_id')
+        .select('journal_entry_id, belopp_skatteverket')
         .eq('company_id', companyId)
         .in('journal_entry_id', candidateEntryIds)
     : { data: [] }
-
-  const linkedSet = new Set(
-    (linked ?? [])
-      .map((l: { journal_entry_id: string | null }) => l.journal_entry_id)
-      .filter((id): id is string => !!id),
-  )
 
   // AGI period extraction across the batch.
   const periods: Array<{ year: number; month: number }> = []
@@ -360,32 +498,21 @@ export async function findMatchSuggestionsBulk(
   }
   const agiIndex = await loadAgiEntryIndex(supabase, companyId, periods)
 
-  // Per-entry view of the 1630 movement: which single lines exist, and what
-  // the entry nets to. The net is the entry-level fallback for a manual
-  // voucher that split one SKV event over two 1630 lines.
-  type EntryView = {
-    entry: Row['journal_entries']
-    debits: number[]
-    credits: number[]
-    net: number
-    lineCount: number
+  let cancelled: Set<string>
+  try {
+    cancelled = candidateEntryIds.length
+      ? await loadCancelledEntryIds(supabase, companyId, from, to)
+      : new Set()
+  } catch {
+    // Without the storno check no candidate is safe to propose.
+    return new Map()
   }
-  const entryViews = new Map<string, EntryView>()
-  for (const line of lines) {
-    const e = line.journal_entries
-    if (linkedSet.has(e.id)) continue
-    const debit = roundOre(Number(line.debit_amount))
-    const credit = roundOre(Number(line.credit_amount))
-    let view = entryViews.get(e.id)
-    if (!view) {
-      view = { entry: e, debits: [], credits: [], net: 0, lineCount: 0 }
-      entryViews.set(e.id, view)
-    }
-    if (debit > 0 && credit === 0) view.debits.push(debit)
-    if (credit > 0 && debit === 0) view.credits.push(credit)
-    view.net = roundOre(view.net + debit - credit)
-    view.lineCount++
-  }
+
+  const entryViews = buildEntryViews(
+    lines,
+    (linked ?? []) as Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }>,
+    cancelled,
+  )
 
   // Candidates per row, then a one-to-one assignment across rows: two rows
   // that each see "exactly one candidate" must not both be proposed the same
@@ -408,7 +535,6 @@ export async function findMatchSuggestionsBulk(
   for (const row of ordered) {
     const amount = Math.round(Math.abs(Number(row.belopp_skatteverket)) * 100) / 100
     const side = expectedSide(Number(row.belopp_skatteverket))
-    const signedNet = side === 'debit' ? amount : -amount
     const rowFrom = addDays(row.transaktionsdatum, -DATE_WINDOW_DAYS)
     const rowTo = addDays(row.transaktionsdatum, DATE_WINDOW_DAYS)
 
@@ -422,10 +548,8 @@ export async function findMatchSuggestionsBulk(
     for (const view of entryViews.values()) {
       const e = view.entry
       if (e.entry_date < rowFrom || e.entry_date > rowTo) continue
-      const singleLine =
-        side === 'debit' ? view.debits.includes(amount) : view.credits.includes(amount)
-      const entryTotal = !singleLine && view.lineCount > 1 && view.net === signedNet
-      if (!singleLine && !entryTotal) continue
+      const settles = groupSettlesEntry(view.lines, [...view.linked, Number(row.belopp_skatteverket)])
+      if (!settles.ok) continue
       matches.push({
         journal_entry_id: e.id,
         voucher_number: e.voucher_number,
@@ -436,7 +560,8 @@ export async function findMatchSuggestionsBulk(
         matched_amount: amount,
         matched_side: side,
         matched_via_agi_period: periodEntryIds?.has(e.id) ?? false,
-        matched_via_entry_total: entryTotal,
+        matched_via_entry_total: settles.via === 'entry_total',
+        ...(view.linked.length > 0 ? { joins_linked_count: view.linked.length } : {}),
       })
     }
     // Nearest date first so the assignment below is deterministic.
@@ -480,6 +605,120 @@ export async function findMatchSuggestionsBulk(
     }
   }
 
+  // Combined pass, one date group at a time in date order so an earlier
+  // group's verifikat is taken before a later group's wider window sees it.
+  const groups = new Map<string, typeof ordered>()
+  for (const row of ordered) {
+    if (suggestions.has(row.id)) continue
+    const amount = Number(row.belopp_skatteverket)
+    if (!amount) continue
+    const key = `${row.transaktionsdatum}|${amount > 0 ? '+' : '-'}`
+    const list = groups.get(key) ?? []
+    list.push(row)
+    groups.set(key, list)
+  }
+  for (const pool of groups.values()) {
+    if (pool.length < 2 || pool.length > MAX_COMBINED_POOL) continue
+    const found: Array<{ rows: typeof pool; view: EntryView }> = []
+    for (const subset of subsets(pool, 2, MAX_COMBINED_EVENTS)) {
+      const window = combinedMatchWindow(subset[0].transaktionsdatum, subset)
+      for (const view of entryViews.values()) {
+        if (usedEntries.has(view.entry.id) || view.linked.length > 0) continue
+        if (view.entry.entry_date < window.from || view.entry.entry_date > window.to) continue
+        const settles = groupSettlesEntry(view.lines, subset.map(r => Number(r.belopp_skatteverket)))
+        if (settles.ok) found.push({ rows: subset, view })
+      }
+    }
+    for (const m of found) {
+      const rowIds = new Set(m.rows.map(r => r.id))
+      const contested = found.some(
+        o =>
+          o !== m &&
+          (o.view.entry.id === m.view.entry.id || o.rows.some(r => rowIds.has(r.id))),
+      )
+      if (contested) continue
+      const e = m.view.entry
+      const total = roundOre(m.rows.reduce((s, r) => s + Number(r.belopp_skatteverket), 0))
+      for (const row of m.rows) {
+        suggestions.set(row.id, {
+          journal_entry_id: e.id,
+          voucher_number: e.voucher_number,
+          voucher_series: e.voucher_series,
+          entry_date: e.entry_date,
+          description: e.description,
+          status: e.status,
+          matched_amount: roundOre(Math.abs(Number(row.belopp_skatteverket))),
+          matched_side: expectedSide(Number(row.belopp_skatteverket)),
+          matched_via_agi_period: periodIdsByRow.get(row.id)?.has(e.id) ?? false,
+          combined_with: m.rows
+            .filter(o => o.id !== row.id)
+            .map(o => ({
+              id: o.id,
+              transaktionsdatum: o.transaktionsdatum,
+              transaktionstext: o.transaktionstext ?? '',
+              belopp_skatteverket: Number(o.belopp_skatteverket),
+            })),
+          combined_total: Math.abs(total),
+        })
+      }
+      usedEntries.add(e.id)
+    }
+  }
+
+  // Interchangeable pass, last so it only fills rows every earlier pass left
+  // without a proposal. Identical open rows (same date, amount, sign and
+  // text) that all see the same free candidates, which no other open row
+  // sees, cannot be told apart: whichever row links to whichever verifikat,
+  // the ledger ends up the same. Assign them one to one instead of proposing
+  // nothing. Two 1 kr interest rows against two imported 1 kr verifikat got
+  // no proposal on prod and were booked a second time. A row that sees more
+  // verifikat than there are identical rows (different dates, say) stays
+  // ambiguous and unproposed; more identical rows than verifikat leaves the
+  // surplus rows (events the ledger lacks) unproposed.
+  const identical = new Map<string, typeof ordered>()
+  for (const row of ordered) {
+    if (suggestions.has(row.id)) continue
+    const key = [
+      row.transaktionsdatum,
+      Math.round(Number(row.belopp_skatteverket) * 100),
+      (row.transaktionstext ?? '').trim().toLowerCase(),
+    ].join('|')
+    const list = identical.get(key) ?? []
+    list.push(row)
+    identical.set(key, list)
+  }
+  const freeCandidates = (rowId: string) =>
+    (candidatesByRow.get(rowId) ?? []).filter(m => !usedEntries.has(m.journal_entry_id))
+  for (const group of identical.values()) {
+    if (group.length < 2) continue
+    const shared = freeCandidates(group[0].id)
+    if (shared.length < 2 || shared.length > group.length) continue
+    // Plain single-line matches only: a split-line or joined verifikat is
+    // never interchangeable.
+    if (shared.some(m => m.matched_via_entry_total || m.joins_linked_count)) continue
+    const sharedIds = new Set(shared.map(m => m.journal_entry_id))
+    const sameSet = group.every(r => {
+      const free = freeCandidates(r.id)
+      return free.length === sharedIds.size && free.every(m => sharedIds.has(m.journal_entry_id))
+    })
+    if (!sameSet) continue
+    const groupIds = new Set(group.map(r => r.id))
+    const contested = ordered.some(
+      o =>
+        !groupIds.has(o.id) &&
+        !suggestions.has(o.id) &&
+        freeCandidates(o.id).some(m => sharedIds.has(m.journal_entry_id)),
+    )
+    if (contested) continue
+    shared.forEach((entry, i) => {
+      const row = group[i]
+      const own = freeCandidates(row.id).find(m => m.journal_entry_id === entry.journal_entry_id)
+      if (!own) return
+      suggestions.set(row.id, own)
+    })
+    for (const id of sharedIds) usedEntries.add(id)
+  }
+
   return suggestions
 }
 
@@ -501,8 +740,18 @@ function expectedSide(beloppSkatteverket: number): 'debit' | 'credit' {
 }
 
 /**
- * Find existing journal entries that look like the bank side of this
+ * Find existing journal entries that look like the ledger side of this
  * skattekonto row.
+ *
+ * Three kinds of candidate, all exact to the öre on 1630:
+ *   * a verifikat whose 1630 movement this row settles on its own (+/-14 days);
+ *   * a verifikat already linked to other rows that, with this row added,
+ *     the group still settles (+/-14 days; crm#104);
+ *   * a verifikat whose 1630 movement this row settles TOGETHER with other
+ *     open same-day, same-sign rows (combinedMatchWindow; crm#128). The
+ *     candidate names those rows in `combined_with` and linking it links all
+ *     of them.
+ * Cancelled verifikat (storno pairs) are never listed.
  *
  * Returns up to 25 candidates ordered by AGI-period match, then date proximity
  * to the SKV row.
@@ -533,34 +782,163 @@ export async function findMatchCandidates(
     )
   }
 
-  const amount = Math.round(Math.abs(Number(tx.belopp_skatteverket)) * 100) / 100
-  const side = expectedSide(Number(tx.belopp_skatteverket))
-  const from = addDays(tx.transaktionsdatum, -DATE_WINDOW_DAYS)
-  const to = addDays(tx.transaktionsdatum, DATE_WINDOW_DAYS)
+  const byRow = await findLedgerTwinCandidates(supabase, companyId, [tx])
+  return { tx, candidates: (byRow.get(tx.id) ?? []).slice(0, 25) }
+}
 
-  type Row = {
-    debit_amount: number
-    credit_amount: number
-    journal_entries: {
-      id: string
-      voucher_number: number | null
-      voucher_series: string | null
-      entry_date: string
-      description: string
-      status: 'draft' | 'posted' | 'reversed'
-      company_id: string
+/**
+ * findLedgerTwinCandidates for rows given by id: reads the rows first and
+ * searches only the open ones (not linked, not ignored). A booked, ignored or
+ * unknown id is left out of the map; the booking gates answer for those.
+ */
+export async function findLedgerTwinCandidatesForIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  ids: string[],
+): Promise<Map<string, SkattekontoMatchCandidate[]>> {
+  if (ids.length === 0) return new Map()
+  const { data, error } = await supabase
+    .from('skattekonto_transactions')
+    .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket')
+    .eq('company_id', companyId)
+    .in('id', ids)
+    .eq('is_ignored', false)
+    .is('journal_entry_id', null)
+  if (error) throw searchFailed(error.message)
+  return findLedgerTwinCandidates(supabase, companyId, (data ?? []) as LedgerTwinProbe[])
+}
+
+/** The fields of an open Skatteverket row the candidate search reads. */
+export interface LedgerTwinProbe {
+  id: string
+  transaktionsdatum: string
+  transaktionstext?: string | null
+  belopp_skatteverket: number | string
+}
+
+type CompanionRow = {
+  id: string
+  transaktionsdatum: string
+  transaktionstext: string | null
+  belopp_skatteverket: number | string
+}
+
+const SEARCH_FAILED_PREFIX = 'Kunde inte söka kandidater'
+
+function searchFailed(err: unknown): Error {
+  return new Error(`${SEARCH_FAILED_PREFIX}: ${err instanceof Error ? err.message : String(err)}`)
+}
+
+/** Max journal_entry ids per `.in()` filter on the link read (URL length). */
+const LINKED_ID_CHUNK = 100
+
+/**
+ * Every candidate verifikat for each of `probes`: the ledger entries that
+ * already carry the row's event, by the definition documented on
+ * findMatchCandidates (exact to the öre on 1630, alone, joined to rows
+ * already linked, or combined with other open same-day rows; storno pairs
+ * never count). The window data (1630 entries, links, AGI entries, same-day
+ * open rows, storno pairs) is read once per cluster of rows whose windows lie
+ * close together (clusterProbesByWindow), so a batch of rows in one month
+ * costs the same handful of queries as one row, and a batch spread over
+ * years reads only the rows' own windows, not everything in between.
+ *
+ * This is both the match dialog's list and the booking guard's "the ledger
+ * already has this event" test (skattekonto-booking.ts): one definition, so
+ * a refused booking always points at candidates the match dialog shows.
+ *
+ * Returns an entry for every probe (an empty list when nothing matches),
+ * ordered AGI-period match first, then date proximity, then voucher number
+ * descending. Throws when any read fails: without the links or the storno
+ * check no answer is safe.
+ */
+export async function findLedgerTwinCandidates(
+  supabase: SupabaseClient,
+  companyId: string,
+  probes: LedgerTwinProbe[],
+): Promise<Map<string, SkattekontoMatchCandidate[]>> {
+  const out = new Map<string, SkattekontoMatchCandidate[]>()
+  for (const p of probes) out.set(p.id, [])
+  if (probes.length === 0) return out
+
+  // One window read per cluster of rows whose windows lie close together,
+  // never one read across the whole span of a batch: two rows years apart
+  // must not pull every verifikat in between. A row only ever uses entries
+  // inside its own window, so every row still sees all its candidates, and
+  // an isolated row gets exactly the read the single-row search makes.
+  for (const cluster of clusterProbesByWindow(probes)) {
+    const found = await searchLedgerTwinWindow(supabase, companyId, cluster)
+    for (const [id, candidates] of found) out.set(id, candidates)
+  }
+  return out
+}
+
+/**
+ * Rows whose windows lie at most this many days apart share one window read:
+ * reading a short gap costs less than a second round of queries.
+ */
+const TWIN_WINDOW_MERGE_GAP_DAYS = 31
+
+/** The entry dates a row's candidates can have: [combined window start, date + 14 days]. */
+function probeWindow(p: LedgerTwinProbe): { from: string; to: string } {
+  return {
+    from: combinedMatchWindow(p.transaktionsdatum, [p]).from,
+    to: addDays(p.transaktionsdatum, DATE_WINDOW_DAYS),
+  }
+}
+
+/**
+ * Split probes into groups whose windows overlap or lie within
+ * TWIN_WINDOW_MERGE_GAP_DAYS of each other, so a read covers the rows'
+ * windows and short gaps only, never the whole span of a batch.
+ */
+export function clusterProbesByWindow<T extends LedgerTwinProbe>(probes: T[]): T[][] {
+  const sorted = probes
+    .map(p => ({ p, w: probeWindow(p) }))
+    .sort((a, b) => (a.w.from < b.w.from ? -1 : a.w.from > b.w.from ? 1 : 0))
+  const clusters: T[][] = []
+  let current: T[] = []
+  let currentTo = ''
+  for (const { p, w } of sorted) {
+    if (current.length > 0 && w.from > addDays(currentTo, TWIN_WINDOW_MERGE_GAP_DAYS)) {
+      clusters.push(current)
+      current = []
+      currentTo = ''
     }
+    current.push(p)
+    if (!currentTo || w.to > currentTo) currentTo = w.to
+  }
+  if (current.length > 0) clusters.push(current)
+  return clusters
+}
+
+/** findLedgerTwinCandidates for one cluster of probes: one read of their joint window. */
+async function searchLedgerTwinWindow(
+  supabase: SupabaseClient,
+  companyId: string,
+  probes: LedgerTwinProbe[],
+): Promise<Map<string, SkattekontoMatchCandidate[]>> {
+  const out = new Map<string, SkattekontoMatchCandidate[]>()
+  for (const p of probes) out.set(p.id, [])
+
+  // Widest window any probe's candidate can use (a combined candidate may
+  // reach back to its AGI period start); per-row windows are applied below.
+  let from = ''
+  let to = ''
+  for (const p of probes) {
+    const pFrom = combinedMatchWindow(p.transaktionsdatum, [p]).from
+    const pTo = addDays(p.transaktionsdatum, DATE_WINDOW_DAYS)
+    if (!from || pFrom < from) from = pFrom
+    if (!to || pTo > to) to = pTo
   }
 
-  // 1630-lines with the right amount + side, scoped to entries in the date
-  // window. The scope used to sit on a `journal_entries!inner` embed, which
-  // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
-  // journal_entry_lines table across all tenants (see
-  // lib/bookkeeping/entry-lines.ts). The old `.limit(50)` went with it: the
-  // amount+side match is exact, so the candidate set is already tiny.
-  let typedRows: Row[]
+  // Every 1630 line of the entries in the window; the amount test runs in
+  // memory because a combined or joined candidate does not carry the row's
+  // amount on any line. The scope sits on the journal_entries side (see
+  // lib/bookkeeping/entry-lines.ts for why an !inner embed is not used).
+  let typedRows: LineRow[]
   try {
-    typedRows = await fetchEntryLines<Row>({
+    typedRows = await fetchEntryLines<LineRow>({
       supabase,
       entryColumns: 'id, voucher_number, voucher_series, entry_date, description, status, company_id',
       lineColumns: 'debit_amount, credit_amount',
@@ -569,96 +947,206 @@ export async function findMatchCandidates(
           .eq('company_id', companyId)
           .gte('entry_date', from)
           .lte('entry_date', to)
-          .neq('status', 'reversed'),
-      filterLines: (q: EntryLinesQuery) => {
-        const scoped = q.eq('account_number', SKATTEKONTO_ACCOUNT)
-        return side === 'debit'
-          ? scoped.eq('debit_amount', amount).eq('credit_amount', 0)
-          : scoped.eq('credit_amount', amount).eq('debit_amount', 0)
-      },
+          .in('status', LIVE_ENTRY_STATUSES),
+      filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
     })
   } catch (err) {
-    throw new Error(
-      `Kunde inte söka kandidater: ${err instanceof Error ? err.message : String(err)}`
-    )
+    throw searchFailed(err)
   }
 
-  if (typedRows.length === 0) {
-    return { tx, candidates: [] }
-  }
+  if (typedRows.length === 0) return out
 
-  // Filter out entries already linked to another skattekonto_transactions
-  // row: those represent payments we've already accounted for.
+  // Rows already linked to a candidate entry, with their amounts. A failed
+  // read throws: treating a linked entry as unlinked would invent a twin.
   const candidateEntryIds = Array.from(new Set(typedRows.map(r => r.journal_entries.id)))
-  const { data: linked } = await supabase
-    .from('skattekonto_transactions')
-    .select('journal_entry_id')
-    .eq('company_id', companyId)
-    .in('journal_entry_id', candidateEntryIds)
-
-  const linkedSet = new Set(
-    (linked ?? [])
-      .map((l: { journal_entry_id: string | null }) => l.journal_entry_id)
-      .filter((id): id is string => !!id),
-  )
-
-  // Resolve AGI-linked entries for this single row's period (if any).
-  const period = tx.transaktionstext ? parseAgiPeriod(tx.transaktionstext) : null
-  const agiIndex = period
-    ? await loadAgiEntryIndex(supabase, companyId, [period])
-    : new Map<string, AgiEntryLookup>()
-  const periodEntryIds = period
-    ? agiIndex.get(periodKey(period.year, period.month))?.entryIds ?? null
-    : null
-
-  const seen = new Set<string>()
-  const candidates: SkattekontoMatchCandidate[] = []
-  for (const row of typedRows) {
-    const e = row.journal_entries
-    if (linkedSet.has(e.id)) continue
-    if (seen.has(e.id)) continue
-    seen.add(e.id)
-    candidates.push({
-      journal_entry_id: e.id,
-      voucher_number: e.voucher_number,
-      voucher_series: e.voucher_series,
-      entry_date: e.entry_date,
-      description: e.description,
-      status: e.status,
-      matched_amount: amount,
-      matched_side: side,
-      matched_via_agi_period: periodEntryIds?.has(e.id) ?? false,
-    })
+  const linked: Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }> = []
+  for (let i = 0; i < candidateEntryIds.length; i += LINKED_ID_CHUNK) {
+    const { data, error } = await supabase
+      .from('skattekonto_transactions')
+      .select('journal_entry_id, belopp_skatteverket')
+      .eq('company_id', companyId)
+      .in('journal_entry_id', candidateEntryIds.slice(i, i + LINKED_ID_CHUNK))
+    if (error) throw searchFailed(error.message)
+    linked.push(...((data ?? []) as typeof linked))
   }
 
-  // Order: AGI-period match first, then date proximity, then voucher number desc.
-  const target = new Date(tx.transaktionsdatum + 'T00:00:00Z').getTime()
-  candidates.sort((a, b) => {
-    if (a.matched_via_agi_period !== b.matched_via_agi_period) {
-      return a.matched_via_agi_period ? -1 : 1
-    }
-    const da = Math.abs(new Date(a.entry_date + 'T00:00:00Z').getTime() - target)
-    const db = Math.abs(new Date(b.entry_date + 'T00:00:00Z').getTime() - target)
-    if (da !== db) return da - db
-    return (b.voucher_number ?? 0) - (a.voucher_number ?? 0)
-  })
+  // AGI-linked entries for every period the probes name.
+  const periodKeyByProbe = new Map<string, string>()
+  const periods: Array<{ year: number; month: number }> = []
+  for (const p of probes) {
+    const period = p.transaktionstext ? parseAgiPeriod(p.transaktionstext) : null
+    if (!period) continue
+    periods.push(period)
+    periodKeyByProbe.set(p.id, periodKey(period.year, period.month))
+  }
+  const agiIndex = periods.length
+    ? await loadAgiEntryIndex(supabase, companyId, periods)
+    : new Map<string, AgiEntryLookup>()
 
-  return { tx, candidates: candidates.slice(0, 25) }
+  // Open rows on the probes' dates: the pool a combined candidate draws from.
+  const dates = Array.from(new Set(probes.map(p => p.transaktionsdatum)))
+  let companionData: CompanionRow[]
+  try {
+    companionData = await fetchAllRows<CompanionRow>(
+      ({ from: rangeFrom, to: rangeTo }) =>
+        supabase
+          .from('skattekonto_transactions')
+          .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket')
+          .eq('company_id', companyId)
+          .in('transaktionsdatum', dates)
+          .eq('status', 'booked')
+          .eq('is_ignored', false)
+          .is('journal_entry_id', null)
+          .order('id', { ascending: true })
+          .range(rangeFrom, rangeTo),
+      { dedupeBy: (r) => r.id },
+    )
+  } catch (err) {
+    throw searchFailed(err)
+  }
+  const openByDate = new Map<string, CompanionRow[]>()
+  for (const c of companionData) {
+    const list = openByDate.get(c.transaktionsdatum) ?? []
+    list.push(c)
+    openByDate.set(c.transaktionsdatum, list)
+  }
+
+  let cancelled: Set<string>
+  try {
+    cancelled = await loadCancelledEntryIds(supabase, companyId, from, to)
+  } catch (err) {
+    throw searchFailed(err)
+  }
+
+  const views = buildEntryViews(typedRows, linked, cancelled)
+
+  for (const p of probes) {
+    const belopp = Number(p.belopp_skatteverket)
+    const amount = Math.round(Math.abs(belopp) * 100) / 100
+    const side = expectedSide(belopp)
+    const singleFrom = addDays(p.transaktionsdatum, -DATE_WINDOW_DAYS)
+    const singleTo = addDays(p.transaktionsdatum, DATE_WINDOW_DAYS)
+    // The widest window any of this row's candidates can use: a combined
+    // group only reaches back to the period start this row names itself.
+    const probeFrom = combinedMatchWindow(p.transaktionsdatum, [p]).from
+    const pKey = periodKeyByProbe.get(p.id)
+    const periodEntryIds = pKey ? agiIndex.get(pKey)?.entryIds ?? null : null
+
+    // Open same-day, same-sign rows that may settle a verifikat together
+    // with this one: the first MAX_COMBINED_POOL other open same-sign rows of
+    // the day (an opposite-sign row can never be part of the group, so it
+    // must not take a slot).
+    const companions = (openByDate.get(p.transaktionsdatum) ?? [])
+      .filter(c => c.id !== p.id)
+      .filter(c => Math.sign(Number(c.belopp_skatteverket)) === Math.sign(belopp) && belopp !== 0)
+      .slice(0, MAX_COMBINED_POOL)
+    const companionSubsets = subsets(companions, 1, MAX_COMBINED_EVENTS - 1)
+
+    const candidates: SkattekontoMatchCandidate[] = []
+    for (const view of views.values()) {
+      const e = view.entry
+      // A batch reads one window for all rows; skip what this row cannot reach.
+      if (e.entry_date < probeFrom || e.entry_date > singleTo) continue
+      const base = {
+        journal_entry_id: e.id,
+        voucher_number: e.voucher_number,
+        voucher_series: e.voucher_series,
+        entry_date: e.entry_date,
+        description: e.description,
+        status: e.status,
+        matched_amount: amount,
+        matched_side: side,
+        matched_via_agi_period: periodEntryIds?.has(e.id) ?? false,
+      }
+      const nearby = e.entry_date >= singleFrom && e.entry_date <= singleTo
+      if (nearby) {
+        const settles = groupSettlesEntry(view.lines, [...view.linked, belopp])
+        if (settles.ok) {
+          candidates.push({
+            ...base,
+            ...(settles.via === 'entry_total' ? { matched_via_entry_total: true } : {}),
+            ...(view.linked.length > 0 ? { joins_linked_count: view.linked.length } : {}),
+          })
+          continue
+        }
+      }
+      if (view.linked.length > 0) continue
+      for (const subset of companionSubsets) {
+        const window = combinedMatchWindow(p.transaktionsdatum, [p, ...subset])
+        if (e.entry_date < window.from || e.entry_date > window.to) continue
+        const amounts = [belopp, ...subset.map(c => Number(c.belopp_skatteverket))]
+        if (!groupSettlesEntry(view.lines, amounts).ok) continue
+        candidates.push({
+          ...base,
+          combined_with: subset.map(c => ({
+            id: c.id,
+            transaktionsdatum: c.transaktionsdatum,
+            transaktionstext: c.transaktionstext ?? '',
+            belopp_skatteverket: Number(c.belopp_skatteverket),
+          })),
+          combined_total: Math.abs(roundOre(amounts.reduce((s, a) => s + a, 0))),
+        })
+        break // smallest group first; one proposal per verifikat
+      }
+    }
+
+    // Order: AGI-period match first, then date proximity, then voucher number desc.
+    const target = new Date(p.transaktionsdatum + 'T00:00:00Z').getTime()
+    candidates.sort((a, b) => {
+      if (a.matched_via_agi_period !== b.matched_via_agi_period) {
+        return a.matched_via_agi_period ? -1 : 1
+      }
+      const da = Math.abs(new Date(a.entry_date + 'T00:00:00Z').getTime() - target)
+      const db = Math.abs(new Date(b.entry_date + 'T00:00:00Z').getTime() - target)
+      if (da !== db) return da - db
+      return (b.voucher_number ?? 0) - (a.voucher_number ?? 0)
+    })
+    out.set(p.id, candidates)
+  }
+
+  return out
+}
+
+const LINK_TO_MATCH_CODE: Record<string, SkattekontoMatchError['code']> = {
+  TRANSACTION_NOT_FOUND: 'TRANSACTION_NOT_FOUND',
+  ALREADY_BOOKED: 'ALREADY_BOOKED',
+  ROW_IGNORED: 'ROW_IGNORED',
+  ENTRY_NOT_FOUND: 'ENTRY_NOT_FOUND',
+  ENTRY_ALREADY_LINKED: 'ENTRY_ALREADY_LINKED',
+  INVALID_CANDIDATE: 'INVALID_CANDIDATE',
+  LINK_RACE: 'ENTRY_ALREADY_LINKED',
+  NOT_LINKED: 'INVALID_CANDIDATE',
 }
 
 /**
  * Link a skattekonto_transactions row to an existing journal entry.
  *
  * Re-validates the candidate server-side: the entry must still belong to
- * the company, still have a 1630-line on the expected side with the
- * expected amount, and must not have been linked in the meantime.
+ * the company and its 1630 movement must be settled by this row together
+ * with any rows already linked to it (groupSettlesEntry). With
+ * `alsoTransactionIds` (a combined candidate) the whole group is linked in
+ * one all-or-nothing write by the core helper.
  */
 export async function matchSkattekontoToEntry(
   supabase: SupabaseClient,
   companyId: string,
   transactionId: string,
   journalEntryId: string,
+  alsoTransactionIds: string[] = [],
 ): Promise<void> {
+  const others = [...new Set(alsoTransactionIds)].filter(id => id !== transactionId)
+  if (others.length > 0) {
+    try {
+      await linkSkattekontoRows(supabase, companyId, [transactionId, ...others], journalEntryId)
+      return
+    } catch (err) {
+      if (err instanceof SkattekontoLinkError) {
+        throw new SkattekontoMatchError(err.message, LINK_TO_MATCH_CODE[err.code] ?? 'INVALID_CANDIDATE')
+      }
+      throw err
+    }
+  }
+
   const { data: tx, error: txError } = await supabase
     .from('skattekonto_transactions')
     .select('*')
@@ -719,36 +1207,32 @@ export async function matchSkattekontoToEntry(
     )
   }
 
-  const amount = Math.round(Math.abs(Number(tx.belopp_skatteverket)) * 100) / 100
-  const side = expectedSide(Number(tx.belopp_skatteverket))
+  // Rows already on this verifikat join the check (crm#104): the entry is
+  // only "taken" when the group with this row added no longer settles it.
+  const { data: linkedData } = await supabase
+    .from('skattekonto_transactions')
+    .select('id, belopp_skatteverket')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', journalEntryId)
+  const linkedRows = (Array.isArray(linkedData) ? linkedData : linkedData ? [linkedData] : []) as Array<{
+    id: string
+    belopp_skatteverket?: number | string | null
+  }>
   type Line = { account_number: string; debit_amount: number; credit_amount: number }
-  const hasMatchingLine = (entry.lines as Line[] | null)?.some(l => {
-    if (l.account_number !== SKATTEKONTO_ACCOUNT) return false
-    const debit = Math.round(Number(l.debit_amount) * 100) / 100
-    const credit = Math.round(Number(l.credit_amount) * 100) / 100
-    return side === 'debit'
-      ? debit === amount && credit === 0
-      : credit === amount && debit === 0
-  })
-
-  if (!hasMatchingLine) {
+  const settles = groupSettlesEntry(entry.lines as Line[] | null, [
+    ...linkedRows.map(r => Number(r.belopp_skatteverket)),
+    Number(tx.belopp_skatteverket),
+  ])
+  if (!settles.ok) {
+    if (linkedRows.length > 0) {
+      throw new SkattekontoMatchError(
+        'Verifikatet är redan kopplat till en annan skattekonto-transaktion.',
+        'ENTRY_ALREADY_LINKED',
+      )
+    }
     throw new SkattekontoMatchError(
       'Verifikatet saknar en matchande rad på 1630.',
       'INVALID_CANDIDATE',
-    )
-  }
-
-  const { data: alreadyLinked } = await supabase
-    .from('skattekonto_transactions')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('journal_entry_id', journalEntryId)
-    .maybeSingle()
-
-  if (alreadyLinked) {
-    throw new SkattekontoMatchError(
-      'Verifikatet är redan kopplat till en annan skattekonto-transaktion.',
-      'ENTRY_ALREADY_LINKED',
     )
   }
 

@@ -3,11 +3,13 @@ import type { Currency, Customer, InvoiceDocumentType } from '@/types'
 import {
   deriveInvoiceVatHeader,
   explainVatTreatment,
-  getVatRules,
-  getPermittedVatRates,
+  resolveInvoiceVatRules,
+  type InvoiceVatOverride,
+  type InvoiceVatTreatmentOverride,
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
 import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
+import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -138,6 +140,15 @@ export interface InvoiceWriteInput {
   deduction_brf_org_number?: string
   /** Dimensions PR7: invoice-level bag applied to every generated journal line. */
   default_dimensions?: Record<string, string>
+  /**
+   * Per-invoice VAT treatment (#2906), a pair with delivery_country: either
+   * key present replaces both (the absent one reads as null); neither
+   * present keeps `existingVatOverride` (a draft edit that does not mention
+   * them). Validated by resolveInvoiceVatRules.
+   */
+  vat_treatment?: InvoiceVatTreatmentOverride | null
+  /** ISO alpha-2 country the goods are transported to (#2906). */
+  delivery_country?: string | null
   items: InvoiceWriteItemInput[]
 }
 
@@ -164,6 +175,9 @@ export type InvoiceWriteFields = {
   vat_rate: number | null
   moms_ruta: string | null
   reverse_charge_text: string | null
+  /** What the invoice stated about its own supply (#2906); null = the customer decided. */
+  vat_treatment_override: InvoiceVatTreatmentOverride | null
+  delivery_country: string | null
   your_reference: string | null | undefined
   our_reference: string | null | undefined
   invoice_marking: string | null
@@ -237,22 +251,15 @@ export async function buildInvoiceWriteData(params: {
    * of failing ROT/RUT validation or wiping the ciphertext.
    */
   existingPersonnummer?: { encrypted: string; last4: string | null } | null
+  /**
+   * Update paths only: the draft's stored per-invoice VAT treatment (#2906).
+   * An edit that sends neither vat_treatment nor delivery_country keeps it,
+   * and it is validated again against the customer as it is now.
+   */
+  existingVatOverride?: InvoiceVatOverride | null
 }): Promise<BuildInvoiceWriteResult> {
   const { supabase, companyId, customer, documentType, input, existingPersonnummer } = params
   const items = input.items
-
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
-  // Gate on the PERMITTED set, not the picker default. Under huvudregeln
-  // (ML 6 kap. 34 §) a service to a foreign business is taxed where the buyer
-  // is established, so 0% is the default; but the ML 6 kap. exceptions taxed
-  // where the supply is performed (fastighetstjänster, persontransporter,
-  // korttidsuthyrning of vehicles, restaurang/catering, admission to cultural
-  // and sports events) carry Swedish VAT even to a German or a US company.
-  // Refusing every non-zero rate made a Stockholm hotel night or a conference
-  // ticket impossible to invoice. The default is still 0% (vatRules.rate is
-  // the fallback below), so a Swedish rate only lands here when set explicitly.
-  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
-  const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   // VAT registration gate (defense in depth: the invoice form already hides
   // the Moms column when vat_registered is false). A non-momsregistrerad
@@ -268,6 +275,45 @@ export async function buildInvoiceWriteData(params: {
   if (notVatRegistered && documentType !== 'delivery_note') {
     for (const item of items) item.vat_rate = 0
   }
+
+  // What the invoice says about its own supply (#2906): a pair, replaced
+  // together, kept from the draft when the edit does not mention it.
+  // The country is stored as the ISO code the rules read (the request schema
+  // already normalises; this covers the doors that feed stored values back).
+  const overrideSent = input.vat_treatment !== undefined || input.delivery_country !== undefined
+  const statedOverride = overrideSent
+    ? { vat_treatment: input.vat_treatment ?? null, delivery_country: input.delivery_country ?? null }
+    : params.existingVatOverride
+  const vatOverride: InvoiceVatOverride = {
+    vat_treatment: statedOverride?.vat_treatment ?? null,
+    delivery_country: normalizeCountryCode(statedOverride?.delivery_country),
+  }
+  const hasVatOverride = vatOverride.vat_treatment !== null || vatOverride.delivery_country !== null
+  // A seller outside the VAT register charges no VAT and files no
+  // momsdeklaration: export, intra-EU supply and "Swedish VAT" are all
+  // statements it cannot make, and every line is momsfri regardless.
+  if (hasVatOverride && notVatRegistered) {
+    return { ok: false, code: 'INVOICE_VAT_TREATMENT_NOT_VAT_REGISTERED', details: { ...vatOverride } }
+  }
+
+  // The one rule decision: the customer's treatment, or the invoice's own
+  // when it states one, refused when the stated facts do not support it.
+  // Gate on the PERMITTED set, not the picker default. Under huvudregeln
+  // (ML 6 kap. 34 §) a service to a foreign business is taxed where the buyer
+  // is established, so 0% is the default; but the ML 6 kap. exceptions taxed
+  // where the supply is performed (fastighetstjänster, persontransporter,
+  // korttidsuthyrning of vehicles, restaurang/catering, admission to cultural
+  // and sports events) carry Swedish VAT even to a German or a US company.
+  // Refusing every non-zero rate made a Stockholm hotel night or a conference
+  // ticket impossible to invoice. The default is still 0% (vatRules.rate is
+  // the fallback below), so a Swedish rate only lands here when set explicitly.
+  // A goods export or intra-EU supply the invoice states permits 0 % only.
+  const resolved = resolveInvoiceVatRules(customer, vatOverride)
+  if (!resolved.ok) {
+    return { ok: false, code: resolved.code, details: resolved.details }
+  }
+  const vatRules = resolved.rules
+  const allowedRates = new Set(resolved.permittedRates.map((r) => r.rate))
 
   // Periodisering guards. The line schema already validates the period shape;
   // here we gate the flows where deferral has no meaning: cash method
@@ -616,6 +662,11 @@ export async function buildInvoiceWriteData(params: {
     vat_rate: documentType === 'delivery_note' ? 0 : (isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate)),
     moms_ruta: vatHeader.moms_ruta,
     reverse_charge_text: vatHeader.reverse_charge_text,
+    // Stored so a draft edit and a customer change re-decide the header from
+    // the same statement (sync-draft-vat-headers), and so booking knows the
+    // goods went abroad (3105 / 3108, not 3305 / 3308).
+    vat_treatment_override: vatOverride.vat_treatment,
+    delivery_country: vatOverride.delivery_country,
     your_reference: input.your_reference,
     our_reference: input.our_reference,
     // Always a concrete value so a draft edit that cleared the field NULLs
@@ -751,8 +802,10 @@ export async function buildInvoiceWriteData(params: {
   // rows so the rates the warning names are the rates the invoice carries.
   // A non-momsregistrerad seller charges no VAT (every rate was zeroed above)
   // and a delivery note carries none, so neither has anything to explain.
+  // An invoice that states its own treatment (Swedish VAT, or goods with a
+  // destination) is not described by the customer-based sentence.
   const warnings =
-    notVatRegistered || documentType === 'delivery_note'
+    notVatRegistered || documentType === 'delivery_note' || !resolved.explainFromCustomer
       ? []
       : explainVatTreatment(
           customer,

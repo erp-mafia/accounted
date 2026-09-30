@@ -19,7 +19,19 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectDuplicatePaymentVoucher: vi.fn(async () => null),
 }))
 
+// Kontantmetoden guard (lib/invoices/batch-cash-method-guard.ts). Mocked so
+// it consumes no slot in the queued Supabase mock; defaults to "nothing
+// unbooked" (accrual). Its own query shape is pinned by
+// lib/invoices/__tests__/batch-cash-method-guard.test.ts.
+const { mockFindCashUnbooked } = vi.hoisted(() => ({
+  mockFindCashUnbooked: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, unbooked: [] })),
+}))
+vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
+  findCashMethodUnbookedAllocations: mockFindCashUnbooked,
+}))
+
 import { tools } from '../server'
+import { toToolError } from '../tool-result'
 
 const allocate = tools.find((t) => t.name === 'gnubok_match_batch_allocate')!
 
@@ -67,8 +79,9 @@ function enqueuePreGuard(enqueue: (r: { data?: unknown; error?: unknown }) => vo
   enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null })
 }
 
-/** period_status lookups + the pending_operations insert. */
+/** The bank leg's cash account, period_status lookups + the pending_operations insert. */
 function enqueueStage(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
+  enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null }) // cash_accounts (resolveSettlementAccount)
   enqueue({ data: { bookkeeping_locked_through: null }, error: null }) // company_settings
   enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null }) // fiscal_periods
   enqueue({ data: { id: 'op-batch-1' }, error: null }) // pending_operations insert
@@ -105,6 +118,66 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
     enqueuePreGuard(enqueue)
 
     await expect(run(supabase)).rejects.toThrow(/gnubok_link_transaction_to_journal_entry/)
+  })
+
+  describe('the refusal names only link tools the calling key can use (feedback seqs 817176, 817189)', () => {
+    /** The envelope the agent receives when the dispatcher injected these scopes. */
+    async function refusalFor(keyScopes: string[], vouchers = explainingSet.vouchers) {
+      mockDetectSet.mockResolvedValue({ ...explainingSet, vouchers })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueuePreGuard(enqueue)
+      const err = await run(supabase, { __keyScopes: keyScopes }).then(() => null, (e: unknown) => e)
+      expect(err).toBeInstanceOf(Error)
+      return toToolError(err, { toolName: 'gnubok_match_batch_allocate' }).error
+    }
+
+    it('with reconciliation:write: the reconcile_match pair, and the registry hint', async () => {
+      const error = await refusalFor(['transactions:write', 'reconciliation:write'])
+      expect(error.code).toBe('BATCH_TX_POSSIBLE_DUPLICATE')
+      expect(error.message_en).toContain(`gnubok_reconcile_match (account_key "bank:ca-1", pairs [{ external_ids: ["${TX_ID}"]`)
+      expect(error.message_en).not.toContain('reconciliation:write')
+      expect(error.remediation?.tool).toBe('gnubok_reconcile_match')
+    })
+
+    it('without reconciliation:write and several vouchers: says the key lacks the scope and sends the user to Avstämning or a reconnect', async () => {
+      const error = await refusalFor(['transactions:read', 'transactions:write'])
+      expect(error.code).toBe('BATCH_TX_POSSIBLE_DUPLICATE')
+      expect(error.retryable).toBe(false)
+      expect(error.message_en).toContain('saknar behörigheten reconciliation:write')
+      expect(error.message_en).toContain('sidan Avstämning i Accounted')
+      expect(error.message_en).toContain('kopplar om connectorn')
+      // No call the key cannot make is offered as the way out.
+      expect(error.message_en).not.toContain('pairs [{')
+      expect(error.remediation?.tool).toBeUndefined()
+      expect(error.remediation?.description).toMatch(/lacks the reconciliation:write scope/)
+      expect(error.remediation?.description).toMatch(/Avstämning page/)
+      // The force binding stays available for a genuinely separate event.
+      expect(error.message_en).toContain(`expected_journal_entry_ids=${JSON.stringify([JE_A, JE_B])}`)
+    })
+
+    it('without reconciliation:write and one voucher: names gnubok_link_transaction_to_journal_entry, which the key can call', async () => {
+      const error = await refusalFor(['transactions:read', 'transactions:write'], [explainingSet.vouchers[0]])
+      expect(error.message_en).toContain(
+        `gnubok_link_transaction_to_journal_entry (transaction_id="${TX_ID}", journal_entry_id="${JE_A}"`,
+      )
+      expect(error.message_en).toContain('saknar behörigheten reconciliation:write')
+      expect(error.message_en).toContain('sidan Avstämning i Accounted')
+      expect(error.message_en).toContain('koppla om connectorn')
+      expect(error.message_en).not.toContain('pairs [{')
+      expect(error.remediation).toMatchObject({
+        tool: 'gnubok_link_transaction_to_journal_entry',
+        args: { transaction_id: TX_ID, journal_entry_id: JE_A },
+      })
+    })
+
+    it('without injected scopes (outside the dispatcher): the unchanged reconcile_match wording', async () => {
+      mockDetectSet.mockResolvedValue(explainingSet)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueuePreGuard(enqueue)
+      const err = (await run(supabase).then(() => null, (e: unknown) => e)) as Error
+      expect(err.message).toContain('gnubok_reconcile_match (account_key "bank:ca-1"')
+      expect(err.message).not.toContain('reconciliation:write')
+    })
   })
 
   it('stages with a compliance warning when force names exactly the detected set, and persists the binding', async () => {

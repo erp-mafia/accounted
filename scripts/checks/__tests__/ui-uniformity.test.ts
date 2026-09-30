@@ -89,6 +89,29 @@ describe('findInSource', () => {
     expect(rules(`const a = <div>{busy && <Loader2 className="h-4 w-4 animate-spin" />}</div>`)).toEqual([])
   })
 
+  it('flags a button that is not toolbar-sized beside a picker, and accepts sm / icon-sm', () => {
+    expect(rules(`const a = <div><FyPicker /><Button variant="outline">Anpassa</Button></div>`)).toEqual([
+      'toolbar-button-size',
+    ])
+    expect(rules(`const a = <div>{open && <ToolbarSearch />}<Button size="sm">Ny</Button><Button size="icon-sm" /></div>`)).toEqual([])
+    expect(rules(`const a = <div><Input /><Button>Spara</Button></div>`)).toEqual([])
+  })
+
+  it('flags top-bar buttons in a PageHeader action or a hand-rolled .page-header', () => {
+    expect(rules(`const a = <PageHeader title="x" action={<><Button>Ny</Button><Button size="sm">Export</Button></>} />`)).toEqual([
+      'toolbar-button-size',
+    ])
+    expect(rules(`const a = <div className="page-header flex"><h1 /><Button size="icon" /></div>`)).toEqual([
+      'toolbar-button-size',
+    ])
+  })
+
+  it('does not count buttons inside an overlay opened from the top bar', () => {
+    expect(
+      rules(`const a = <div className="page-header"><Button size="sm">Öppna</Button><Dialog><DialogContent><Button>Spara</Button></DialogContent></Dialog></div>`),
+    ).toEqual([])
+  })
+
   it('flags native browser dialogs', () => {
     expect(rules(`if (!window.confirm('Säker?')) return`)).toEqual(['native-dialog'])
     expect(rules(`alert('x')`)).toEqual(['native-dialog'])

@@ -25,10 +25,14 @@ describe('GET /.well-known/oauth-authorization-server', () => {
     expect(body.authorization_response_iss_parameter_supported).toBe(true)
   })
 
-  it('does not enumerate write scopes in public discovery', async () => {
+  it('advertises only the mcp marker, like the protected-resource document', async () => {
+    // Clients that request whatever discovery lists (Grok, Gemini) get the
+    // same consent as a bare `mcp` request. A list of read scopes here was
+    // echoed back as an explicit request, which /authorize takes as the
+    // ceiling, so every such connection was read-only. Write scopes stay
+    // unlisted either way.
     const res = await GET(new Request('https://app.example.test/.well-known/oauth-authorization-server'))
     const body = await res.json()
-    expect(body.scopes_supported).toContain('mcp')
-    expect(body.scopes_supported.some((s: string) => s.endsWith(':write'))).toBe(false)
+    expect(body.scopes_supported).toEqual(['mcp'])
   })
 })

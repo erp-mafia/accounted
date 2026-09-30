@@ -534,3 +534,191 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     })
   })
 })
+
+describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (#2955)', () => {
+  // createSupplierInvoicePaymentEntry(supabase, companyId, userId, invoice,
+  // paymentAmount, paymentDate, exchangeRateDifference, ...)
+  const SEK_ARG = 4
+  const FX_DIFF_ARG = 6
+
+  // 37.50 USD at 9.6414, registered at 361.55 kr on 2440.
+  const USD_SI = {
+    ...APPROVED_SI,
+    currency: 'USD',
+    exchange_rate: 9.6414,
+    total: 37.5,
+    total_sek: 361.55,
+    subtotal: 37.5,
+    vat_amount: 0,
+    remaining_amount: 37.5,
+    registration_journal_entry_id: 'je-reg',
+  }
+
+  /** The invoice, then the resolver's ledger read, then the commit. */
+  function usdClient(calls?: RecordedCall[], opts: { sharedRegistration?: boolean } = {}) {
+    return makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: [
+        { data: USD_SI, error: null },
+        { data: opts.sharedRegistration ? [{ id: 'si-other' }] : [], error: null },
+        { data: { ...USD_SI, status: 'paid', paid_amount: 37.5, remaining_amount: 0 }, error: null },
+      ],
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      journal_entries: { data: { id: 'je-reg', status: 'posted' }, error: null },
+      supplier_invoice_payments: [{ data: [], error: null }, { data: null, error: null }],
+      journal_entry_lines: {
+        data: [{ id: 'l-1', journal_entry_id: 'je-reg', debit_amount: 0, credit_amount: 361.55 }],
+        error: null,
+      },
+    }, calls)
+  }
+
+  it('returns 401 without a valid API key', async () => {
+    mockValidate.mockResolvedValue({ error: 'invalid api key', status: 401 })
+    mockServiceClient.mockReturnValue(usdClient())
+    const res = await markPaid(makeRequest({ exchange_rate_difference: 0 }), detailParams())
+    expect(res.status).toBe(401)
+    expect(mockPaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 for an invoice outside the company', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: { data: null, error: null },
+      }),
+    )
+    const res = await markPaid(makeRequest({ exchange_rate_difference: 0 }), detailParams())
+    expect(res.status).toBe(404)
+  })
+
+  it('37.50 USD clears the 361.55 kr the registration put on 2440, not 37.50 kr', async () => {
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(usdClient(calls))
+
+    const res = await markPaid(
+      makeRequest({ payment_date: '2026-05-12', exchange_rate_difference: 0 }),
+      detailParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockPaymentEntry).toHaveBeenCalledTimes(1)
+    expect(mockPaymentEntry.mock.calls[0][SEK_ARG]).toBe(361.55)
+    expect(mockPaymentEntry.mock.calls[0][FX_DIFF_ARG]).toBeUndefined()
+    // The door reads the registration link it routes and resolves on.
+    const invoiceSelect = calls.find((c) => c.table === 'supplier_invoices' && c.method === 'select')
+    expect(String(invoiceSelect?.args[0])).toContain('registration_journal_entry_id')
+    const paymentRow = calls.find((c) => c.table === 'supplier_invoice_payments' && c.method === 'insert')
+    expect(paymentRow?.args[0]).toMatchObject({ amount: 37.5, currency: 'USD', exchange_rate_difference: 0 })
+  })
+
+  it('amount_sek derives the kursdifferens from the ledger SEK and records it', async () => {
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(usdClient(calls))
+
+    const res = await markPaid(makeRequest({ payment_date: '2026-05-12', amount_sek: 365 }), detailParams())
+
+    expect(res.status).toBe(200)
+    expect(mockPaymentEntry.mock.calls[0][SEK_ARG]).toBe(361.55)
+    expect(mockPaymentEntry.mock.calls[0][FX_DIFF_ARG]).toBe(-3.45)
+    const paymentRow = calls.find((c) => c.table === 'supplier_invoice_payments' && c.method === 'insert')
+    expect(paymentRow?.args[0]).toMatchObject({ exchange_rate_difference: -3.45 })
+  })
+
+  it('amount_sek together with exchange_rate_difference is a 400', async () => {
+    mockServiceClient.mockReturnValue(usdClient())
+    const res = await markPaid(
+      makeRequest({ payment_date: '2026-05-12', amount_sek: 365, exchange_rate_difference: 0 }),
+      detailParams(),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(mockPaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('an ambiguous ledger is a 409 and nothing is booked or flipped', async () => {
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(usdClient(calls, { sharedRegistration: true }))
+
+    const res = await markPaid(
+      makeRequest({ payment_date: '2026-05-12', exchange_rate_difference: 0 }),
+      detailParams(),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_PAID_SEK_UNRESOLVED')
+    expect(body.error.details.reason).toBe('registration_voucher_shared')
+    expect(mockPaymentEntry).not.toHaveBeenCalled()
+    expect(calls.some((c) => c.table === 'supplier_invoices' && c.method === 'update')).toBe(false)
+  })
+
+  // The select used to omit registration_journal_entry_id, so this door
+  // routed every kontantmetoden payment to the cash entry, even for an
+  // invoice registered on 2440 before the company switched method: expense
+  // and ingående moms booked a second time, the 2440 credit never cleared.
+  // The mock returns every column whatever the select asks for, so each test
+  // also pins the column onto the select the routing depends on.
+  describe('routes on the booking state, not the current accounting method', () => {
+    function cashCompanyClient(si: typeof APPROVED_SI | typeof USD_SI, calls?: RecordedCall[]) {
+      return makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: [
+          { data: si, error: null },
+          { data: { ...si, status: 'paid', paid_amount: si.total, remaining_amount: 0 }, error: null },
+        ],
+        company_settings: { data: { accounting_method: 'cash' }, error: null },
+        supplier_invoice_payments: { data: null, error: null },
+      }, calls)
+    }
+
+    it('kontantmetoden, SEK invoice with a registration verifikat: clears 2440, no second cash entry', async () => {
+      const calls: RecordedCall[] = []
+      mockServiceClient.mockReturnValue(cashCompanyClient(APPROVED_SI, calls))
+
+      const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }), detailParams())
+
+      expect(res.status).toBe(200)
+      expect(mockPaymentEntry).toHaveBeenCalledTimes(1)
+      expect(mockPaymentEntry.mock.calls[0][SEK_ARG]).toBe(1000)
+      expect(mockCashEntry).not.toHaveBeenCalled()
+      const invoiceSelect = calls.find((c) => c.table === 'supplier_invoices' && c.method === 'select')
+      expect(String(invoiceSelect?.args[0])).toContain('registration_journal_entry_id')
+    })
+
+    it('kontantmetoden, registered foreign invoice: the SEK outcome is required like under accrual', async () => {
+      const calls: RecordedCall[] = []
+      mockServiceClient.mockReturnValue(cashCompanyClient(USD_SI, calls))
+
+      const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }), detailParams())
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details.issues[0].field).toBe('exchange_rate_difference')
+      expect(mockPaymentEntry).not.toHaveBeenCalled()
+      expect(mockCashEntry).not.toHaveBeenCalled()
+      const invoiceSelect = calls.find((c) => c.table === 'supplier_invoices' && c.method === 'select')
+      expect(String(invoiceSelect?.args[0])).toContain('registration_journal_entry_id')
+    })
+  })
+
+  it('dry-run shows the SEK the commit would clear and the kursdifferens', async () => {
+    mockServiceClient.mockReturnValue(usdClient())
+
+    const res = await markPaid(
+      makeRequest({ payment_date: '2026-05-12', amount_sek: 365 }, { dryRun: true }),
+      detailParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview).toMatchObject({
+      payment_amount: 37.5,
+      payment_amount_sek: 361.55,
+      exchange_rate_difference: -3.45,
+    })
+    expect(mockPaymentEntry).not.toHaveBeenCalled()
+  })
+})

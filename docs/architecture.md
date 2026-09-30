@@ -120,7 +120,7 @@ transactions, draft vouchers, reconcile periods, generate reports and
 declarations.
 
 - Authentication uses scoped API keys (stored as SHA-256 hashes, rate limited
-  per key). Claude, ChatGPT and Grok connectors instead authenticate with OAuth 2.1
+  per key). Claude, ChatGPT, Grok and Gemini connectors instead authenticate with OAuth 2.1
   (PKCE; `src/app/api/mcp-oauth/{authorize,register,token}` plus the
   `.well-known` discovery documents), which mints a scoped API key behind the
   scenes. Authentication is lazy: a client can connect, list tools, and call a

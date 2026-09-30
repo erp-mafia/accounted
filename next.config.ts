@@ -3,6 +3,11 @@ import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
 import { LEGACY_HOST_REDIRECT_EXCLUSIONS } from "./src/lib/domains/legacy-redirect";
+import {
+  STATIC_POLICY_SOURCE,
+  buildContentSecurityPolicy,
+  cspOriginsFromEnv,
+} from "./src/lib/security/csp";
 
 const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
@@ -11,28 +16,6 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === "development";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-
-// Hosted builds only widen the CSP when Turnstile is prepared. The generic
-// Docker image builds with a site-key sentinel, so it always includes this
-// origin and can safely enable Turnstile later through runtime substitution.
-const turnstileOrigin = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY
-  ? " https://challenges.cloudflare.com"
-  : "";
-
-// WebSocket origin for Supabase Realtime. Hosted projects are covered by the
-// wss://*.supabase.co wildcard below, but a SELF-HOSTED Supabase URL is not:
-// Realtime opens wss://<supabase-host>/realtime/v1/websocket, and WebKit
-// throws synchronously on a CSP-blocked `new WebSocket()`, unmounting the
-// dashboard into the error boundary (issue #893). The Docker image bakes the
-// __NEXT_PUBLIC_SUPABASE_WS_URL__ sentinel at build time and
-// docker-entrypoint.sh substitutes the real value at runtime (a build-time
-// https-to-wss replace would only rewrite the sentinel); the fallback derives
-// wss:/ws: from the https/http URL for non-Docker builds where the real URL
-// is present at build time. Empty supabaseUrl stays empty, mirroring how
-// ${supabaseUrl} is interpolated below (extra whitespace is valid in CSP).
-const supabaseWsUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_WS_URL ??
-  supabaseUrl.replace(/^http(s?):/, "ws$1:");
 
 // Brand logos (WL-12 slice A3) are served from Supabase Storage public
 // objects. The tenant-logo <Image> elements (components/branding/) render
@@ -52,31 +35,20 @@ try {
   supabaseImageHostname = "";
 }
 
-const cspDirectives = [
-  "default-src 'self'",
-  // No analytics hosts here on purpose. PostHog replaced Recapt and is
-  // routed through the same-origin `/rl` rewrite below, so ingestion is
-  // covered by `connect-src 'self'` and its lazy-loaded replay/survey
-  // bundles by `script-src 'self'`. Adding `*.posthog.com` back would
-  // re-widen the policy for no benefit and undo the ad-blocker resistance.
-  `connect-src 'self' ${supabaseUrl} ${supabaseWsUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com`,
-  `style-src 'self' 'unsafe-inline' https://*.enablebanking.com`,
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com${turnstileOrigin}`,
-  "img-src 'self' data: blob: https:",
-  "font-src 'self'",
-  "worker-src 'self' blob:",
-  // object-src must explicitly allow blob:: Chrome's built-in PDF viewer
-  // renders inline PDFs via an internal <embed>, which falls under
-  // object-src. Without this, blob:-URL invoice previews (created via
-  // URL.createObjectURL on /api/invoices/preview-pdf responses) show
-  // "Det här innehållet har blockerats" in Chrome. Firefox uses PDF.js and
-  // Edge uses its own viewer, so neither hits this. See crbug.com/271452.
-  "object-src 'self' blob:",
-  `frame-src 'self' blob: ${supabaseUrl}${turnstileOrigin}`,
-  "frame-ancestors 'none'",
-].join("; ");
+// The CSP for every response the proxy does not stamp with its per-request
+// nonce policy: static assets, the /rl analytics rewrite, .well-known, the
+// storage proxy. Built at build time from the public env; the generic Docker
+// image carries sentinels here that docker-entrypoint.sh substitutes in
+// routes-manifest.json. See lib/security/csp.ts for both policies.
+const staticContentSecurityPolicy = buildContentSecurityPolicy({
+  origins: cspOriginsFromEnv(),
+  isDev,
+});
 
 const nextConfig: NextConfig = {
+  // No `X-Powered-By: Next.js`: it only tells a scanner which framework (and
+  // which set of known issues) to try.
+  poweredByHeader: false,
   // Standalone output feeds the Docker image (Dockerfile copies
   // .next/standalone). Vercel never reads it: its build adapter
   // (onBuildComplete) traces and packages functions itself, and as of Next
@@ -152,10 +124,11 @@ const nextConfig: NextConfig = {
     cpus: 2,
   },
   // PostHog reverse proxy. Keeping analytics same-origin buys three things:
-  // the strict CSP below needs NO posthog hosts (`connect-src 'self'` already
-  // covers ingestion, `script-src 'self'` the lazy-loaded replay/survey
-  // bundles), tracking blockers have no third-party host to match, and the
-  // Recapt host allowlist is replaced by nothing at all.
+  // the strict CSP needs NO posthog hosts (`connect-src 'self'` already
+  // covers ingestion, and the lazy-loaded replay/survey bundles are inserted
+  // by the nonce-trusted SDK, which 'strict-dynamic' allows), tracking
+  // blockers have no third-party host to match, and the Recapt host
+  // allowlist is replaced by nothing at all.
   //
   // `/rl` is deliberately meaningless: PostHog's own guidance is that obvious
   // prefixes (/analytics, /tracking, /telemetry, /posthog, and increasingly
@@ -250,10 +223,11 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     // The catch-all excludes /api/documents/:id/inline so the strict
-    // X-Frame-Options: DENY + frame-ancestors 'none' don't conflict with
-    // the embeddable override below: Next.js applies every matching
-    // header rule, and duplicate X-Frame-Options/CSP values trigger
-    // "Det här innehållet har blockerats" in Chromium browsers.
+    // X-Frame-Options: DENY doesn't conflict with the embeddable override
+    // below (the proxy likewise leaves that route's CSP alone, so its
+    // frame-ancestors 'self' is the only one): Next.js applies every
+    // matching header rule, and duplicate X-Frame-Options/CSP values
+    // trigger "Det här innehållet har blockerats" in Chromium browsers.
     return [
       {
         source: "/((?!api/documents/[^/]+/inline$).*)",
@@ -278,9 +252,18 @@ const nextConfig: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=(), payment=()",
           },
+        ],
+      },
+      // Content-Security-Policy, only where the proxy does not set its
+      // per-request nonce policy (src/proxy.ts): the paths its matcher skips
+      // and the storage proxy route. Never on a path the proxy stamps, or the
+      // browser would enforce both headers (lib/security/csp.ts).
+      {
+        source: STATIC_POLICY_SOURCE,
+        headers: [
           {
             key: "Content-Security-Policy",
-            value: cspDirectives,
+            value: staticContentSecurityPolicy,
           },
         ],
       },

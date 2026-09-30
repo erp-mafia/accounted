@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { dbError } from '@/lib/errors/db-error'
+import { isUuid } from '@/lib/invariants/uuid'
+import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
+import { chunk } from '@/lib/utils'
 import {
   linkSkattekontoRow,
   linkSkattekontoRows,
@@ -13,6 +18,7 @@ import {
   linkTransactionToVouchers,
   manualLink,
   unlinkReconciliation,
+  type BankLinkRefusalCode,
 } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import { parseAccountKey } from './schemas'
@@ -55,7 +61,7 @@ export type PairSkipCode =
 export interface AppliedLink {
   external_id: string
   journal_entry_id: string
-  via?: 'line' | 'entry_total'
+  via?: 'line' | 'entry_total' | 'lines'
   /** Present on the links of a 1:N split: the slice of the row this verifikat settles. */
   allocated_amount?: number
 }
@@ -98,6 +104,160 @@ function skipCodeFor(err: unknown): { code: PairSkipCode; message: string } {
   return { code: 'UNKNOWN', message: err instanceof Error ? err.message : String(err) }
 }
 
+/**
+ * The bank engine's refusals in this surface's vocabulary. PAIR_NOT_CLOSED is
+ * the amounts only (the verifikat does not settle the row on the account):
+ * every refusal used to carry it, so a mistyped journal_entry_id read as a
+ * gap to book as a residual (feedback seq 740266).
+ */
+const BANK_SKIP_CODE: Record<BankLinkRefusalCode, PairSkipCode> = {
+  TRANSACTION_NOT_FOUND: 'NOT_FOUND',
+  TRANSACTION_OTHER_ACCOUNT: 'NOT_FOUND',
+  TRANSACTION_IGNORED: 'ROW_IGNORED',
+  TRANSACTION_ALREADY_LINKED: 'ALREADY_LINKED',
+  ENTRY_NOT_FOUND: 'ENTRY_NOT_FOUND',
+  ENTRY_NOT_POSTED: 'ENTRY_NOT_FOUND',
+  ENTRY_REVERSED: 'ENTRY_REVERSED',
+  NOT_SETTLED: 'PAIR_NOT_CLOSED',
+  INVALID_SPLIT: 'UNSUPPORTED_PAIR_SHAPE',
+  LINK_RACE: 'LINK_RACE',
+  WRITE_FAILED: 'UNKNOWN',
+}
+
+function bankSkipCode(code: BankLinkRefusalCode | undefined): PairSkipCode {
+  return code ? BANK_SKIP_CODE[code] : 'UNKNOWN'
+}
+
+/** Ids per read: keeps a PostgREST `in` filter well inside URL limits. */
+const FACT_READ_CHUNK = 100
+
+interface PairFacts {
+  entries: Map<string, { status: string; voucher_series: string | null; voucher_number: number | null }>
+  /** Outside rows by id; `linked` already folds in the live-pointer and junction rules. */
+  rows: Map<string, { is_ignored: boolean; linked: boolean }>
+}
+
+/**
+ * What the commit would refuse before it looks at amounts, for every pair of
+ * one verifikat at once: the verifikat is not a posted entry of the company,
+ * or an outside row is not the company's, is ignored or is already linked.
+ * Two batched reads whatever the pair count. The commit path re-validates
+ * all of it and the amounts; this only stops a stage-time preview from
+ * offering a pair that can never be linked (feedback seq 740266: a
+ * journal_entry_id with one wrong character was staged, approved and only
+ * then refused).
+ */
+async function readPairFacts(
+  supabase: SupabaseClient,
+  companyId: string,
+  kind: 'bank' | 'skattekonto',
+  pairs: ReconciliationPair[],
+): Promise<PairFacts> {
+  const entryIds = new Set<string>()
+  const rowIds = new Set<string>()
+  for (const pair of pairs) {
+    if (pair.journal_entry_ids.length !== 1) continue
+    // A malformed id is simply absent (22P02 would fail the whole read).
+    if (isUuid(pair.journal_entry_ids[0])) entryIds.add(pair.journal_entry_ids[0])
+    for (const id of pair.external_ids) if (isUuid(id)) rowIds.add(id)
+  }
+
+  const rowFacts: Array<{ id: string; journal_entry_id: string | null; is_ignored: boolean; bank_line: boolean }> = []
+  for (const part of chunk([...rowIds], FACT_READ_CHUNK)) {
+    const { data, error } =
+      kind === 'bank'
+        ? await supabase
+            .from('transactions')
+            .select('id, journal_entry_id, is_ignored, transaction_voucher_links(role)')
+            .eq('company_id', companyId)
+            .in('id', part)
+        : await supabase
+            .from('skattekonto_transactions')
+            .select('id, journal_entry_id, is_ignored')
+            .eq('company_id', companyId)
+            .in('id', part)
+    if (error) throw dbError(error, 'Kunde inte läsa raderna')
+    for (const row of (data ?? []) as Array<{
+      id: string
+      journal_entry_id: string | null
+      is_ignored: boolean | null
+      transaction_voucher_links?: Array<{ role?: string | null }> | null
+    }>) {
+      rowFacts.push({
+        id: row.id,
+        journal_entry_id: row.journal_entry_id,
+        is_ignored: row.is_ignored === true,
+        bank_line: hasBankLineJunctionRow(row.transaction_voucher_links),
+      })
+      // A bank row's pointer blocks a link only while its verifikat is
+      // posted (manualLink, issue #988), so its status is read with the rest.
+      if (kind === 'bank' && row.journal_entry_id && isUuid(row.journal_entry_id)) {
+        entryIds.add(row.journal_entry_id)
+      }
+    }
+  }
+
+  const entries: PairFacts['entries'] = new Map()
+  for (const part of chunk([...entryIds], FACT_READ_CHUNK)) {
+    const { data, error } = await supabase
+      .from('journal_entries')
+      .select('id, status, voucher_series, voucher_number')
+      .eq('company_id', companyId)
+      .in('id', part)
+    if (error) throw dbError(error, 'Kunde inte läsa verifikaten')
+    for (const e of (data ?? []) as Array<{ id: string; status: string; voucher_series: string | null; voucher_number: number | null }>) {
+      entries.set(e.id, e)
+    }
+  }
+
+  const rows: PairFacts['rows'] = new Map()
+  for (const r of rowFacts) {
+    const linked =
+      kind === 'bank'
+        ? r.bank_line || (r.journal_entry_id !== null && entries.get(r.journal_entry_id)?.status === 'posted')
+        : r.journal_entry_id !== null
+    rows.set(r.id, { is_ignored: r.is_ignored, linked })
+  }
+  return { entries, rows }
+}
+
+function entrySkip(facts: PairFacts, journalEntryId: string): { code: PairSkipCode; message: string } | null {
+  const entry = facts.entries.get(journalEntryId)
+  if (!entry) {
+    return {
+      code: 'ENTRY_NOT_FOUND',
+      message: `Verifikationen ${journalEntryId} finns inte i företaget. Kontrollera id:t.`,
+    }
+  }
+  if (entry.status === 'reversed') {
+    return {
+      code: 'ENTRY_REVERSED',
+      message: `Verifikat ${formatVoucher(entry)} (${journalEntryId}) är makulerat och kan inte kopplas.`,
+    }
+  }
+  if (entry.status !== 'posted') {
+    return { code: 'ENTRY_NOT_FOUND', message: `Verifikationen ${journalEntryId} är inte bokförd.` }
+  }
+  return null
+}
+
+function rowSkip(
+  facts: PairFacts,
+  kind: 'bank' | 'skattekonto',
+  externalId: string,
+): { code: PairSkipCode; message: string } | null {
+  const row = facts.rows.get(externalId)
+  const noun = kind === 'bank' ? 'Transaktionen' : 'Skattekonto-transaktionen'
+  if (!row) return { code: 'NOT_FOUND', message: `${noun} ${externalId} finns inte i företaget. Kontrollera id:t.` }
+  if (row.is_ignored) {
+    return { code: 'ROW_IGNORED', message: `${noun} ${externalId} är ignorerad. Återställ den innan du kopplar.` }
+  }
+  if (row.linked) {
+    return { code: 'ALREADY_LINKED', message: `${noun} ${externalId} är redan kopplad till en verifikation.` }
+  }
+  return null
+}
+
 async function proposalsAsPairs(
   supabase: SupabaseClient,
   companyId: string,
@@ -109,9 +269,17 @@ async function proposalsAsPairs(
   if (parsed.kind === 'skattekonto') {
     const status = await getSkattekontoReconciliationStatus(supabase, companyId)
     if (!status) return []
-    return status.items.proposed
-      .filter((i) => i.proposal && i.proposal.confidence >= threshold)
-      .map((i) => ({ external_ids: [i.item_id], journal_entry_ids: [i.proposal!.journal_entry_id] }))
+    // Rows of one combined proposal become ONE pair so the group is linked
+    // together (a single row alone does not settle the verifikat).
+    const pairsByEntry = new Map<string, ReconciliationPair>()
+    for (const i of status.items.proposed) {
+      if (!i.proposal || i.proposal.confidence < threshold) continue
+      const entryId = i.proposal.journal_entry_id
+      const ids = i.proposal.external_ids ?? [i.item_id]
+      const key = i.proposal.external_ids ? `group:${entryId}` : `row:${i.item_id}`
+      if (!pairsByEntry.has(key)) pairsByEntry.set(key, { external_ids: ids, journal_entry_ids: [entryId] })
+    }
+    return Array.from(pairsByEntry.values())
   }
   if (parsed.kind === 'bank') {
     const { data } = await supabase
@@ -135,9 +303,10 @@ async function proposalsAsPairs(
  * all-or-nothing with the sum settling the verifikat), or, on a bank account,
  * ONE transaction against SEVERAL verifikat (1:N, issue #1553): all-or-nothing
  * with the slices summing to the transaction. Any other shape is reported as
- * UNSUPPORTED_PAIR_SHAPE, never silently reduced. Dry run validates shapes and
- * resolves proposals without writing; a 1:N dry run also resolves the slices
- * so a reviewer sees exactly what would be linked.
+ * UNSUPPORTED_PAIR_SHAPE, never silently reduced. Dry run validates shapes,
+ * resolves proposals and checks every verifikat and outside row against the
+ * ledger (readPairFacts) without writing; a 1:N dry run also resolves the
+ * slices so a reviewer sees exactly what would be linked.
  * Partial success is first-class: `applied` and `skipped` together cover
  * every considered pair.
  */
@@ -162,6 +331,10 @@ export async function matchPairs(
 
   const applied: AppliedLink[] = []
   const skipped: SkippedPair[] = []
+  // A dry run checks every pair of one verifikat against the ledger up front
+  // (the 1:N split validates itself below); a live run leaves that to the
+  // link helpers, which re-check under the write.
+  const facts = dryRun ? await readPairFacts(supabase, companyId, parsed.kind, pairs) : null
 
   const emitMatched = async (externalId: string, journalEntryId: string) => {
     await eventBus.emit({
@@ -254,7 +427,7 @@ export async function matchPairs(
           { dryRun },
         )
         if (!r.success || !r.allocations) {
-          skipped.push({ pair, code: 'PAIR_NOT_CLOSED', message: r.error ?? 'Kunde inte koppla' })
+          skipped.push({ pair, code: bankSkipCode(r.code), message: r.error ?? 'Kunde inte koppla' })
           continue
         }
         for (const a of r.allocations) {
@@ -278,9 +451,33 @@ export async function matchPairs(
     }
     const [journalEntryId] = pair.journal_entry_ids
 
-    if (dryRun) {
+    if (facts) {
+      const entryProblem = entrySkip(facts, journalEntryId)
+      if (entryProblem) {
+        skipped.push({ pair, ...entryProblem })
+        continue
+      }
+      if (parsed.kind === 'skattekonto') {
+        // All or nothing, as linkSkattekontoRows: one bad row skips the group.
+        const rowProblem = externalIds.map((id) => rowSkip(facts, 'skattekonto', id)).find((p) => p !== null)
+        if (rowProblem) {
+          skipped.push({ pair, ...rowProblem })
+          continue
+        }
+        for (const externalId of externalIds) {
+          applied.push({ external_id: externalId, journal_entry_id: journalEntryId })
+        }
+        continue
+      }
+      // Bank rows link one by one (manualLink per transaction), so a bad row
+      // skips alone, reported the way the live run reports it.
       for (const externalId of externalIds) {
-        applied.push({ external_id: externalId, journal_entry_id: journalEntryId })
+        const rowProblem = rowSkip(facts, 'bank', externalId)
+        if (rowProblem) {
+          skipped.push({ pair: { external_ids: [externalId], journal_entry_ids: [journalEntryId] }, ...rowProblem })
+        } else {
+          applied.push({ external_id: externalId, journal_entry_id: journalEntryId })
+        }
       }
       continue
     }
@@ -310,7 +507,7 @@ export async function matchPairs(
           if (!r.success) {
             skipped.push({
               pair: { external_ids: [externalId], journal_entry_ids: [journalEntryId] },
-              code: 'PAIR_NOT_CLOSED',
+              code: bankSkipCode(r.code),
               message: r.error ?? 'Kunde inte koppla',
             })
             continue

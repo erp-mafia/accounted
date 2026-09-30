@@ -48,6 +48,8 @@ import {
   usesPersonnummerAsOrgNumber,
 } from '@/lib/company/entity-type'
 import { suggestedFormForOrgNumber } from '@/lib/onboarding-journey/org-number-hint'
+import { shouldGateDuplicate, type ExistingCompanyMatch } from '@/lib/onboarding-journey/duplicate-gate'
+import { performCompanySwitch } from '@/lib/company/switch-client'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
 
 /** The two chips every picker shows (AB first, as before). */
@@ -199,6 +201,13 @@ export default function OnboardingJourney({
   const [narration, setNarration] = useState<string | null>(null)
   const [monogram, setMonogram] = useState<string | null>(null)
   const [dupName, setDupName] = useState<string | null>(null)
+  // The company the user already has under the org number being set up, and
+  // the org number they explicitly chose a separate copy for. Together they
+  // drive the duplicate stop (shouldGateDuplicate).
+  const [dupMatch, setDupMatch] = useState<ExistingCompanyMatch | null>(null)
+  const [dupAckOrg, setDupAckOrg] = useState<string | null>(null)
+  const [dupOpening, setDupOpening] = useState(false)
+  const [dupSwitchFailed, setDupSwitchFailed] = useState(false)
   // The SCB picker: rows for the current text, whether SCB cut the list,
   // and the keyboard-highlighted row (-1: none, Enter runs the Enter path).
   const [suggestions, setSuggestions] = useState<CompanySuggestion[]>([])
@@ -253,16 +262,29 @@ export default function OnboardingJourney({
     window.setTimeout(() => setOrgShake(false), 400)
   }, [])
 
+  const dupCheckedOrg = useRef<string | null>(null)
   const checkDuplicate = useCallback((orgNumber: string) => {
     setDupName(null)
+    setDupMatch(null)
+    const canonical = normalizeOrgNumber(orgNumber)
+    dupCheckedOrg.current = canonical
     fetch(`/api/company/check-org-number?org_number=${encodeURIComponent(orgNumber)}`)
       .then(async (res) => {
         if (!res.ok) return
         const { data } = await res.json()
-        setDupName(data?.companies?.[0]?.name ?? null)
+        const first = data?.companies?.[0] as { id: string; name: string } | undefined
+        setDupName(first?.name ?? null)
+        setDupMatch(first && canonical ? { orgNumber: canonical, companyId: first.id, name: first.name } : null)
       })
       .catch(() => {})
   }, [])
+
+  // A restored draft (Back/refresh) lands past the orgnr step without the
+  // submit that normally runs the check, which would skip the duplicate stop.
+  const draftOrg = state.step === 'orgnr' ? null : normalizeOrgNumber(state.settings.org_number ?? '')
+  useEffect(() => {
+    if (draftOrg && dupCheckedOrg.current !== draftOrg) checkDuplicate(draftOrg)
+  }, [draftOrg, checkDuplicate])
 
   const lookupFor = useCallback(
     (orgNumber: string): Promise<CompanyLookupOutcome> => {
@@ -613,6 +635,45 @@ export default function OnboardingJourney({
 
   function renderStep() {
     const s = state.settings
+    if (
+      dupMatch &&
+      shouldGateDuplicate({
+        match: dupMatch,
+        orgNumber: s.org_number,
+        acknowledgedOrgNumber: dupAckOrg,
+        step: state.step,
+      })
+    ) {
+      return (
+        <Question
+          title={t('journey_dup_title', { name: dupMatch.name })}
+          sub={t('journey_dup_sub', { appName })}
+          attn={dupSwitchFailed ? t('journey_dup_open_failed') : undefined}
+        >
+          <ChipRow
+            options={[
+              { key: 'open', label: t('journey_dup_open', { name: dupMatch.name }) },
+              { key: 'copy', label: t('journey_dup_copy') },
+            ]}
+            disabled={dupOpening}
+            onPick={(k) => {
+              if (k === 'copy') {
+                setDupAckOrg(dupMatch.orgNumber)
+                return
+              }
+              setDupOpening(true)
+              setDupSwitchFailed(false)
+              performCompanySwitch(dupMatch.companyId).then((result) => {
+                if (result?.error) {
+                  setDupOpening(false)
+                  setDupSwitchFailed(true)
+                }
+              })
+            }}
+          />
+        </Question>
+      )
+    }
     switch (state.step) {
       case 'orgnr':
         return (

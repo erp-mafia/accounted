@@ -262,6 +262,25 @@ describe('GET /api/salary/runs/[id]/preview: previews the booking builder (feedb
     expect(data.balanced).toBe(true)
   })
 
+  // Issue #3097: the booking credits the net pay on the company's primary
+  // cash account; the preview resolves it the same way.
+  it("previews the net pay on the company's primary bank account (1931), not 1930", async () => {
+    enqueue({ data: CALCULATED_RUN }) // salary_runs
+    enqueue({ data: [EMPLOYEE_ROW] }) // salary_run_employees
+    enqueue({ data: { ledger_account: '1931', enabled: true, currency: 'SEK' } }) // cash_accounts primary
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/preview'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    expect(response.status).toBe(200)
+    const { data } = await response.json()
+    const lines = data.salaryEntry.lines as Line[]
+    expect(lines.find((l) => l.account_number === '1931')?.credit_amount).toBe(38890)
+    expect(lines.some((l) => l.account_number === '1930')).toBe(false)
+    expect(data.salaryEntry.balanced).toBe(true)
+  })
+
   it('applies the per-employee tax override exactly like the booking', async () => {
     enqueue({ data: CALCULATED_RUN }) // salary_runs
     enqueue({ data: [{ ...EMPLOYEE_ROW, tax_withheld_override: 12000 }] }) // salary_run_employees

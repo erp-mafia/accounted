@@ -34,7 +34,8 @@ import { ContextPicker } from '@/components/common/ContextPicker'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import InboxDocumentPicker, { type AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
-import { useAccounts, useBookingTemplates } from '@/lib/reference-data/hooks'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { useAccounts, useBookingTemplates, useCompanySettings } from '@/lib/reference-data/hooks'
 import type { BookingTemplateWithUsage } from '@/lib/reference-data/fetchers'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
@@ -189,6 +190,11 @@ export default function ExpenseClaimsPage() {
   const [bookingRows, setBookingRows] = useState<BookingRow[] | null>(null)
   const [showRowEditor, setShowRowEditor] = useState(false)
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
+  // Claim-level kostnadsställe/projekt: the service puts it on every cost
+  // (class 3-8) row of the verifikat. Pickers only when dimensions are on.
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
+  const [claimDims, setClaimDims] = useState<Record<string, string>>({})
   const [claimant, setClaimant] = useState(OWNER_VALUE)
   const [ownerName, setOwnerName] = useState('')
   const [inboxChoice, setInboxChoice] = useState(NO_RECEIPT_VALUE)
@@ -641,8 +647,19 @@ export default function ExpenseClaimsPage() {
     setBookingRows(null)
     setShowRowEditor(false)
     setShowSaveTemplate(false)
+    setClaimDims({})
     setStep(1)
     setCreating(false)
+  }
+
+  function setClaimDimension(dimNo: string, code: string | null) {
+    setClaimDims((prev) => {
+      const next = { ...prev }
+      const trimmed = code?.trim()
+      if (trimmed) next[dimNo] = trimmed
+      else delete next[dimNo]
+      return next
+    })
   }
 
   /** Prefill only fields the user has not already filled in. */
@@ -830,6 +847,7 @@ export default function ExpenseClaimsPage() {
         })),
         { account_number: liabilityAccount, debit_amount: 0, credit_amount: parsedAmount },
       ]
+      if (dimensionsEnabled && Object.keys(claimDims).length > 0) body.dimensions = claimDims
       if (uploaded) {
         body.inbox_item_id = uploaded.inboxItemId
         if (uploaded.documentId) body.document_id = uploaded.documentId
@@ -933,9 +951,9 @@ export default function ExpenseClaimsPage() {
         description={t('description')}
         action={
           canWrite ? (
-            <Button onClick={() => setCreating(true)}>{t('new_claim')}</Button>
+            <Button size="sm" onClick={() => setCreating(true)}>{t('new_claim')}</Button>
           ) : (
-            <Button disabled title={t('viewer_disabled_tooltip')}>
+            <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
               <Lock className="mr-2 h-4 w-4" />
               {t('new_claim')}
             </Button>
@@ -986,7 +1004,7 @@ export default function ExpenseClaimsPage() {
           ]}
         />
         {canWrite && selected.size > 0 && (
-          <Button
+          <Button size="sm"
             variant="outline"
             disabled={!selectionValid}
             title={selectionValid ? undefined : t('payout_selection_invalid')}
@@ -1618,6 +1636,13 @@ export default function ExpenseClaimsPage() {
                               ? t('seller_country_noneu_hint')
                               : t('rc_region_required')}
                       </p>
+                    </div>
+                  )}
+                  {/* Kostnadsställe/projekt for the claim: tags the cost rows,
+                      never the VAT or liability legs. */}
+                  {dimensionsEnabled && (
+                    <div className="max-w-md">
+                      <LineDimensionFields dimensions={claimDims} onChange={setClaimDimension} />
                     </div>
                   )}
                   <div className="flex flex-wrap items-center gap-2">

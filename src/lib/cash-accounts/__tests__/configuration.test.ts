@@ -37,6 +37,16 @@ describe('checked bank configuration calls', () => {
     await expect(saveBankAccountSelection(supabase, 'company', 'user', 'connection', 'token', [])).rejects.toMatchObject({ code })
   })
 
+  it('carries a registered refusal name as the code and keeps unknown names on the SQLSTATE', async () => {
+    const save = (error: { code: string; message: string }) =>
+      saveBankAccountSelection(client(null, error).supabase, 'company', 'user', 'connection', 'token', [])
+    await expect(save({ code: '23514', message: 'CASH_ACCOUNT_KEEPER_IDENTITY_CONFLICT' }))
+      .rejects.toMatchObject({ code: 'CASH_ACCOUNT_KEEPER_IDENTITY_CONFLICT', pgCode: '23514' })
+    await expect(save({ code: 'PT409', message: 'BANK_CONFIGURATION_CHANGED' }))
+      .rejects.toMatchObject({ code: 'BANK_CONFIGURATION_CHANGED', pgCode: 'PT409' })
+    await expect(save({ code: '23514', message: 'some_check_constraint' })).rejects.toMatchObject({ code: '23514' })
+  })
+
   it('refuses absent read and write receipts', async () => {
     const { supabase } = client(null)
     await expect(readBankConfiguration(supabase, 'company', 'connection')).rejects.toThrow('snapshot missing')

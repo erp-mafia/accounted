@@ -389,7 +389,7 @@ export default function MileagePage() {
         title={t('title')}
         action={
           canWrite ? (
-            <Button onClick={openCreate}>
+            <Button size="sm" onClick={openCreate}>
               <Plus className="mr-2 h-4 w-4" />
               {t('new_trip')}
             </Button>
@@ -405,12 +405,12 @@ export default function MileagePage() {
         )}
         <div className="ml-auto flex items-center gap-2">
           {canWrite && draftTrips.length > 0 && (
-            <Button variant="secondary" onClick={openBook}>
+            <Button size="sm" variant="secondary" onClick={openBook}>
               {t('book_period')}
             </Button>
           )}
           {trips.length > 0 && (
-            <Button variant="ghost" asChild>
+            <Button size="sm" variant="ghost" asChild>
               <a href={exportHref} download>
                 <Download className="mr-2 h-4 w-4" />
                 {t('export_csv')}

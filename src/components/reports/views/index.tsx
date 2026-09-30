@@ -5,7 +5,7 @@
 // The regulated table/figure rendering is unchanged from the original monolith.
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { useDimensions } from '@/lib/reference-data/hooks'
+import { useDimensions, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,10 +20,12 @@ import { SegmentedControl } from '@/components/ui/segmented-control'
 import { EmptyState } from '@/components/ui/empty-state'
 import { FyPicker } from '@/components/common/FyPicker'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
-import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
+import { fiscalPeriodForVatYear, resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
 import {
   indexVatFilings,
+  vatFilingFiscalYearEndMonth,
   vatFilingKey,
+  vatFilingTaxPeriod,
   type VatFilingRecord,
 } from '@/lib/vat/filing-record'
 import { VatFilingStatusCard } from '@/components/reports/VatFilingStatusCard'
@@ -37,7 +39,6 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { PageHeader } from '@/components/ui/page-header'
-import { HandoffButton } from '@/components/ai-handoff/HandoffButton'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
 import { rcInputTotalsFromDeclaration } from '@/lib/reports/vat-declaration'
@@ -1504,12 +1505,14 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   const [year, setYear] = useState(currentYear)
   const [period, setPeriod] = useState(currentQuarter)
   // Annual VAT (helårsmoms) is reported per räkenskapsår, not per calendar
-  // year — picked inline in yearly mode. Monthly/quarterly are calendar
-  // periods and need no fiscal year. The period's end date rides along so
-  // the Skatteverket panel can target the FY-end month (broken fiscal years
-  // do not end in December).
-  const [fiscalPeriodId, setFiscalPeriodId] = useState('')
-  const [fiscalPeriodEnd, setFiscalPeriodEnd] = useState<string | null>(null)
+  // year. In yearly mode `year` is the year the räkenskapsår ends (the same
+  // key every cadence uses, lib/vat/filing-record.ts) and the fiscal period
+  // below is derived from it; a pick in the räkenskapsår picker is kept as an
+  // explicit override (and moves `year` along). Monthly/quarterly are
+  // calendar periods and need no fiscal year.
+  const [pickedFiscalPeriodId, setPickedFiscalPeriodId] = useState('')
+  const { periods: fiscalPeriods } = useFiscalPeriods()
+  const tReports = useTranslations('reports')
   // Latest fetch outcome, tagged with the fetch key it was requested under.
   // loading / error / data are all derived by comparing that tag with the
   // current key, so the fetch effect never sets state synchronously.
@@ -1579,19 +1582,25 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   const filingsReady = filings !== null && filings.key === companyKey
   const filedByPeriod = filingsReady ? filings.byPeriod : null
 
+  // Where the räkenskapsår ends: places a yearly period, as on the server.
+  const fiscalYearEndMonth = vatFilingFiscalYearEndMonth(settings)
+
   // Seeded once settings AND the filing records for the company have
-  // settled, so the seed can step past an already-filed period (#2746)
-  // instead of reopening it on every visit until the next period ends.
+  // settled, so the seed can step past an already-filed period (#2746,
+  // helårsmoms included since #2786) instead of reopening it on every visit
+  // until the next period ends.
   if (companyKey !== null && filingsReady && appliedCompany !== companyKey) {
     setAppliedCompany(companyKey)
     const initial = resolveInitialVatPeriodSelection({
       momsPeriod: settings?.moms_period ?? null,
       over40m: settings?.vat_taxable_base_over_40m === true,
+      fiscalYearEndMonth,
       isFiled: (cadence, y, p) => filings.byPeriod.has(vatFilingKey(cadence, y, p)),
     })
     setPeriodType(initial.periodType)
     setYear(initial.year)
     setPeriod(initial.period)
+    setPickedFiscalPeriodId('')
   }
 
   // Settings row present and the company answered "not VAT-registered" —
@@ -1613,21 +1622,28 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // never sees an inconsistent periodType/period pair.
   const handlePeriodTypeChange = (value: VatPeriodType) => {
     setPeriodType(value)
-    if (value === 'monthly' || value === 'quarterly') {
-      const ended = mostRecentEndedVatPeriod(value, new Date(), {
-        over40m: settings?.vat_taxable_base_over_40m === true,
-      })
-      setYear(ended.year)
-      setPeriod(ended.period)
-    } else {
-      setPeriod(1)
-    }
+    const ended = mostRecentEndedVatPeriod(value, new Date(), {
+      over40m: settings?.vat_taxable_base_over_40m === true,
+      fiscalYearEndMonth,
+    })
+    setYear(ended.year)
+    setPeriod(ended.period)
+    setPickedFiscalPeriodId('')
   }
 
   // Annual VAT (helårsmoms) is reported per räkenskapsår, not per calendar year.
   // For yearly we pass the selected fiscal period so the API uses its actual
   // bounds (handles extended/shortened years); monthly/quarterly stay calendar.
+  // The fiscal period is the explicit pick, else the one the yearly key names
+  // (the räkenskapsår ending in `year`). Its end date lets the Skatteverket
+  // panel target the FY-end month (broken fiscal years do not end in December).
   const isYearly = periodType === 'yearly'
+  const yearlyFiscalPeriod = isYearly
+    ? (fiscalPeriods.find((p) => p.id === pickedFiscalPeriodId) ??
+      fiscalPeriodForVatYear(fiscalPeriods, year, formatDateISO(new Date())))
+    : null
+  const fiscalPeriodId = yearlyFiscalPeriod?.id ?? ''
+  const fiscalPeriodEnd = yearlyFiscalPeriod?.period_end ?? null
   const awaitingFiscalPeriod = isYearly && !fiscalPeriodId
   const vatQueryString = () => {
     const params = new URLSearchParams({
@@ -1684,11 +1700,10 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   })
   const bookingStatus = settlement.upToDate ? settlement.bookingStatus : null
   const { canWrite } = useCanWrite()
-  // The selected period's filing record, if any. Helårsmoms has no calendar
-  // key and never resolves one, as before: its deadline is labelled per
-  // räkenskapsår and is completed from the calendar.
+  // The selected period's filing record, if any: one key for every cadence
+  // (helårsmoms: the year the räkenskapsår ends, period 1).
   const filingRecord =
-    filedByPeriod && (periodType === 'monthly' || periodType === 'quarterly')
+    filedByPeriod && periodType
       ? (filedByPeriod.get(vatFilingKey(periodType, year, period)) ?? null)
       : null
   const deadlineCompleted = !!settlement.booked && filingRecord !== null
@@ -1953,6 +1968,13 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   }
   const fusedLabel =
     periodType === 'quarterly' ? `Kvartal ${period} ${year}` : `${MONTH_NAMES[period - 1]} ${year}`
+  // The selected period as the filing card names it. A räkenskapsår carries
+  // the deadline's own label (2026, or 2025/2026 for a broken year).
+  const filingPeriodLabel = isYearly
+    ? tReports('vat_filing_period_yearly', {
+        label: vatFilingTaxPeriod('yearly', year, period, fiscalYearEndMonth),
+      })
+    : fusedLabel
 
   return (
     <VatDrillContext.Provider value={{ fiscalPeriodId: isYearly ? fiscalPeriodId : undefined }}>
@@ -1967,7 +1989,6 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           title={pageTitle}
           action={
             <div className="flex items-center gap-2">
-            <HandoffButton disabled={!data} task={{ kind: 'vat', scope: { ...(data ? { date_from: data.period.start, date_to: data.period.end } : {}), ...(isYearly && fiscalPeriodId ? { fiscal_period_id: fiscalPeriodId } : {}) } }} />
             <ReportExportMenu
               variant="outline"
               items={[
@@ -1999,8 +2020,12 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
               <FyPicker
                 value={fiscalPeriodId || null}
                 onChange={(id, fp) => {
-                  setFiscalPeriodId(id || '')
-                  setFiscalPeriodEnd(fp?.period_end ?? null)
+                  setPickedFiscalPeriodId(id || '')
+                  // The yearly key follows the pick: the year it ends in.
+                  if (fp) {
+                    setYear(Number(fp.period_end.slice(0, 4)))
+                    setPeriod(1)
+                  }
                 }}
                 includeAllOption={false}
                 hideFuturePeriods
@@ -2379,15 +2404,15 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
               xmlHref={`/api/reports/vat-declaration/eskd?${vatQueryString()}`}
               pdfHref={`/api/reports/vat-declaration/pdf?${vatQueryString()}`}
             />
-              {/* Filing record (#2746): what makes the page open the next
-                  period once this one is done. Calendar periods only; the
-                  helårsmoms deadline is completed from the calendar. */}
-              {(periodType === 'monthly' || periodType === 'quarterly') && (
+              {/* Filing record (#2746, #2786): what makes the page open the
+                  next period once this one is done, for every cadence. */}
+              {periodType && (
                 <VatFilingStatusCard
                   periodType={periodType}
                   year={year}
                   period={period}
-                  periodLabel={fusedLabel}
+                  fiscalYearEndMonth={fiscalYearEndMonth}
+                  periodLabel={filingPeriodLabel}
                   record={filingRecord}
                   canWrite={canWrite}
                   onChanged={() => setFilingsRefreshKey((k) => k + 1)}
@@ -2839,8 +2864,14 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
   const [error, setError] = useState<string | null>(null)
   const [accountFrom, setAccountFrom] = useState('')
   const [accountTo, setAccountTo] = useState('')
+  // Only the newest request may land. The window changes right after mount
+  // (the date-range control resolves its preset, or a drill-down's window),
+  // and the superseded request must not overwrite the ledger it was
+  // replaced by when it happens to finish last.
+  const requestSeq = React.useRef(0)
 
   const fetchData = useCallback(async (fromOverride?: string, toOverride?: string) => {
+    const seq = ++requestSeq.current
     const from = fromOverride ?? accountFrom
     const to = toOverride ?? accountTo
     setLoading(true)
@@ -2857,6 +2888,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
       }
       const res = await fetch(`/api/reports/general-ledger?${params}`)
       const result = await res.json()
+      if (seq !== requestSeq.current) return
       if (result.error) {
         // Envelope object, not a string: see the note on the other report
         // fetches. Rendering it bare blanks the page.
@@ -2865,9 +2897,9 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
         setData(result.data)
       }
     } catch {
-      setError('Kunde inte hämta huvudbok')
+      if (seq === requestSeq.current) setError('Kunde inte hämta huvudbok')
     } finally {
-      setLoading(false)
+      if (seq === requestSeq.current) setLoading(false)
     }
   }, [periodId, accountFrom, accountTo, dimensionFilter, dateRange])
 
@@ -3568,6 +3600,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
 // --- Resultat per projekt/kostnadsställe (dimension P&L matrix) ---
 
 export function DimensionPnlView({ periodId, dateRange }: { periodId: string; dateRange: DateRangeValue }) {
+  const t = useTranslations('reports')
   // Loading is DERIVED (result key ≠ current query string) instead of a
   // setState at effect start: keeps react-hooks/set-state-in-effect clean
   // and is race-safe when the pivot/date changes mid-flight.
@@ -3676,7 +3709,18 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        {pivotPicker || <span />}
+        <div className="flex flex-wrap items-center gap-3">
+          {pivotPicker}
+          {/* The window the amounts cover, as the server computed it: a
+              quarter picked above reads as that quarter, not the year to date. */}
+          <p className="text-sm text-muted-foreground tabular-nums">
+            {t('date_range_label')}:{' '}
+            {t('date_range_custom_summary', {
+              from: formatDate(data.period.start),
+              to: formatDate(data.period.end),
+            })}
+          </p>
+        </div>
         <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/dimension-pnl/xlsx?${reportQs}` }]} />
       </div>
 

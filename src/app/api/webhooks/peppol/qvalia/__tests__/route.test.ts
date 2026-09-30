@@ -116,6 +116,8 @@ describe('POST /api/webhooks/peppol/qvalia', () => {
       p_company_id: 'company-1',
       p_idempotency_key: '33333333-3333-4333-8333-333333333333',
       p_provider: 'qvalia',
+      // The adapter's label (the sending account), as on the delivery row.
+      p_provider_tenant_id: 'SE5560000000',
       p_provider_submission_id: 'int-1',
       p_provider_event_id: 'document_delivery:int-1:processed',
       p_normalized_status: 'transport_succeeded',

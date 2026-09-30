@@ -79,10 +79,13 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
     enqueue({ data: null, error: null }) // ownership check finds nothing
 
     const response = await GET(makeGet(), params())
-    const { body } = await parseJsonResponse<{ error: string }>(response)
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(response.status).toBe(404)
-    expect(body.error).toContain('hittades inte')
+    // Failures answer the structured envelope (sessionFailureResponse) since the
+    // route moved onto the shared operation service; the message is in error.message.
+    expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_FOUND')
+    expect(body.error.message).toContain('hittas')
     expect(createServiceClientMock).not.toHaveBeenCalled()
   })
 
@@ -172,9 +175,11 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
     enqueue({ data: null, error: { message: 'boom' } })
 
     const response = await GET(makeGet(), params())
-    const { body } = await parseJsonResponse<{ error: string }>(response)
+    const { body } = await parseJsonResponse<{ error: { message: string } }>(response)
 
     expect(response.status).toBe(500)
-    expect(body.error).toContain('historik')
+    // Failures answer the structured envelope (sessionFailureResponse) since the
+    // route moved onto the shared operation service; the message is in error.message.
+    expect(body.error.message).toContain('historik')
   })
 })

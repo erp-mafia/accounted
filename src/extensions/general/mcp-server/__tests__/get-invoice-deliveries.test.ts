@@ -219,7 +219,7 @@ describe('gnubok_get_invoice_deliveries: execute', () => {
       getDeliveries.execute({}, COMPANY_ID, USER_ID, supabase as never, {
         type: 'api_key',
       } as never),
-    ).rejects.toThrow(/invoice_id is required/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/invoice_id: is required/) })
   })
 
   it('surfaces an RPC failure instead of reporting zero deliveries', async () => {

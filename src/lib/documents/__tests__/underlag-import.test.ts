@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync, readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { buildUnderlagPlan, planPermitsAttach } from '@/lib/documents/underlag-import'
+import { buildUnderlagPlan, isPeriodLocked, planPermitsAttach } from '@/lib/documents/underlag-import'
 import type { FiscalPeriodRow, VoucherRow } from '@/lib/documents/voucher-ref-resolver'
 
 const PERIOD_OPEN = 'period-open'
@@ -350,5 +352,27 @@ describe('planPermitsAttach', () => {
     await expect(planPermitsAttach(supabase, 'company-1', 'kvitto.pdf', 'je-1', PERIOD_OPEN, false)).resolves.toBe(
       false,
     )
+  })
+})
+
+describe('isPeriodLocked', () => {
+  // Two receipt-migration previews (this plan and gnubok_link_documents_to_vouchers)
+  // predict the trigger's refusal with this one predicate, so it must keep
+  // saying what the LATEST definition of the trigger function says.
+  it('mirrors enforce_period_lock_documents', () => {
+    const dir = resolve(__dirname, '../../../../supabase/migrations')
+    const pattern = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+public\.enforce_period_lock_documents\s*\(\)[\s\S]*?\$\$;/gi
+    let latest: string | undefined
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+      for (const match of readFileSync(resolve(dir, file), 'utf8').match(pattern) ?? []) latest = match
+    }
+    expect(latest).toMatch(/JOIN public\.fiscal_periods fp ON fp\.id = je\.fiscal_period_id/)
+    expect(latest).toMatch(/IF v_is_closed OR v_locked_at IS NOT NULL THEN/)
+
+    expect(isPeriodLocked({ is_closed: false, locked_at: null })).toBe(false)
+    expect(isPeriodLocked({ is_closed: true, locked_at: null })).toBe(true)
+    expect(isPeriodLocked({ is_closed: false, locked_at: '2026-09-26T08:33:14Z' })).toBe(true)
+    // An entry without a period: the trigger's lookup finds no row and lets the link through.
+    expect(isPeriodLocked(undefined)).toBe(false)
   })
 })

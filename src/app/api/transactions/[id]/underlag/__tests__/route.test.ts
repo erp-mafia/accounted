@@ -24,7 +24,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { NextResponse } from 'next/server'
 
-type Body = { data: { source: string | null; document: { id: string } | null; inbox_item_id: string | null; facts: { vat_amount: number | null; supplier: string | null } | null } }
+type Body = { data: { source: string | null; document: { id: string } | null; inbox_item_id: string | null; facts: { vat_amount: number | null; vat_rate: number | null; supplier: string | null } | null } }
 
 const req = () => new Request('http://localhost/api/transactions/tx-1/underlag')
 
@@ -78,6 +78,27 @@ describe('GET /api/transactions/[id]/underlag', () => {
     expect(body.data.source).toBe('matched')
     expect(body.data.document?.id).toBe('doc-matched')
     expect(body.data.facts).toBeNull()
+  })
+
+  it("reads a pinned document's own extraction when no inbox item carries one", async () => {
+    // Attached from the drawer: the document never went through the inbox.
+    enqueue({ data: { id: 'tx-1', document_id: 'doc-pinned' } })
+    enqueue({ data: null }) // no inbox item
+    enqueue({
+      data: {
+        id: 'doc-pinned',
+        file_name: 'faktura.pdf',
+        mime_type: 'application/pdf',
+        extracted_data: { supplier: { name: 'Idrottsmassage' }, totals: { vatAmount: 200 }, vatBreakdown: [{ rate: 25, base: 800, amount: 200 }] },
+      },
+    })
+    const { status, body } = await parseJsonResponse<Body>(await GET(req(), createMockRouteParams({ id: 'tx-1' })))
+    expect(status).toBe(200)
+    expect(body.data.source).toBe('pinned')
+    expect(body.data.document).toEqual({ id: 'doc-pinned', file_name: 'faktura.pdf', mime_type: 'application/pdf' })
+    expect(body.data.facts?.vat_amount).toBe(200)
+    expect(body.data.facts?.vat_rate).toBe(25)
+    expect(body.data.facts?.supplier).toBe('Idrottsmassage')
   })
 
   it('says nothing when there is nothing', async () => {

@@ -13,9 +13,17 @@
  *      the token when one is supplied.
  *   4. When the URL contains `companyId`, verifies the API key's user has
  *      access to that company via `company_members`. Multi-company keys are
- *      supported transparently: the URL is the source of truth. A `viewer`
+ *      supported transparently: the URL is the source of truth. A key with a
+ *      company allowlist (api_key_companies) is additionally refused outside
+ *      it, with the same NOT_FOUND a non-member company gets. A `viewer`
  *      (read-only) membership is refused for every write: mutating method
- *      or non-`:read` scope (FORBIDDEN, details.code ROLE_READ_ONLY).
+ *      or non-`:read` scope (FORBIDDEN, details.code ROLE_READ_ONLY). So is
+ *      a company the key has read-only access to (FORBIDDEN, details.code
+ *      CONNECTION_READ_ONLY). A report read (GET on a `reports.*` or
+ *      `arsredovisning.*` operation) refuses a dimension filter its endpoint
+ *      does not register (VALIDATION_ERROR) and names any other unregistered
+ *      query parameter in `X-Ignored-Query-Params` (STRICT_REPORT_QUERY_PARAMS
+ *      refuses those too).
  *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
  *   6. Resolves `Idempotency-Key` (header) and replays cached responses. The
  *      dry-run flag is part of the cache identity and dry-run responses are
@@ -65,6 +73,13 @@ import { resolveRequiredScope } from '@/lib/auth/scopes'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import { getEndpointByConcretePath } from './registry'
 import {
+  assertReportQuery,
+  IGNORED_QUERY_PARAMS_HEADER,
+  isReportRead,
+  registeredQueryParams,
+  STRICT_REPORT_QUERY_PARAMS,
+} from './report-period'
+import {
   checkIdempotencyKey,
   hashRequest,
   IdempotencyKeyReuseError,
@@ -103,6 +118,14 @@ export interface ApiV1Context {
   apiKeyName: string | undefined
   /** Scopes granted to the calling key. */
   scopes: ApiKeyScope[]
+  /**
+   * The key's company allowlist (api_key_companies): null when the key
+   * reaches every company its user belongs to, else the only company ids it
+   * may reach. The wrapper already refuses a URL companyId outside it; the
+   * company-less routes (`/companies`, `/portfolio/*`) must filter their
+   * own membership listings by it.
+   */
+  allowedCompanyIds: string[] | null
   /**
    * Largest amount in SEK this key may commit with no human approving it, or
    * null for no ceiling (the default, and what every key predating the column
@@ -318,6 +341,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           apiKeyId: undefined,
           apiKeyName: undefined,
           scopes: [],
+          allowedCompanyIds: null,
           unattendedCommitLimit: null,
           mode: 'live',
           supabase: createAnonClient(),
@@ -334,6 +358,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               apiKeyId: auth.apiKeyId,
               apiKeyName: auth.apiKeyName,
               scopes: auth.scopes,
+              allowedCompanyIds: auth.allowedCompanyIds,
               unattendedCommitLimit: auth.unattendedCommitLimit,
               mode: auth.mode,
               supabase: createServiceClientNoCookies(),
@@ -425,6 +450,22 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           })
         }
 
+        // Per-key company allowlist (api_key_companies): a member company the
+        // key was not issued for is answered exactly like a non-member one, so
+        // the allowlist reveals nothing membership would not. Checked after
+        // the membership row so the two denials share one shape, and before
+        // the role and seat gates so a refused company costs no extra read.
+        if (
+          auth.allowedCompanyIds &&
+          !auth.allowedCompanyIds.some((id) => id.toLowerCase() === companyId.toLowerCase())
+        ) {
+          userLog.warn('company in URL is outside the key allowlist', { companyId, ...forensic })
+          return await v1ErrorResponseFromCode('NOT_FOUND', userLog, {
+            requestId,
+            details: { companyId },
+          })
+        }
+
         const membershipRole = (membership as { role?: string }).role
 
         // Read-only role gate. Cookie routes enforce the viewer role through
@@ -465,6 +506,35 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           })
         }
 
+        // Read-only connection gate: the key reaches this company but was
+        // given read-only access to it (api_key_companies.access = 'read',
+        // migration 20260928112724). Same write test as the role gate above,
+        // and after it, so a viewer keeps the answer that names the role.
+        if (
+          auth.readOnlyCompanyIds &&
+          auth.readOnlyCompanyIds.some((id) => id.toLowerCase() === companyId.toLowerCase()) &&
+          (!SAFE_METHODS.has(request.method) || scopeKind(requiredScope) === 'write')
+        ) {
+          userLog.warn('read-only company access refused write request', {
+            companyId,
+            method: request.method,
+            requiredScope,
+            ...forensic,
+          })
+          return await v1ErrorResponseFromCode('FORBIDDEN', userLog, {
+            requestId,
+            status: 403,
+            reason: 'connection_read_only',
+            details: {
+              code: 'CONNECTION_READ_ONLY',
+              companyId,
+              required_scope: requiredScope,
+              message:
+                'This API key has read-only access to this company: write requests are refused. Give the key write access to the company under Settings > API & MCP.',
+            },
+          })
+        }
+
         // Multi-user seat gate: the API-key surface is a chokepoint like the
         // cookie routes and MCP. A non-owner membership in a frozen company
         // (multi_user lapsed past its 20-day grace) is refused here so an old
@@ -484,6 +554,35 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
                 message: 'Company is paused for this account: multiple users require a paid plan. Ask the company owner to upgrade.',
               },
             })
+          }
+        }
+      }
+
+      // 5b. Report query gate. A report dropped any parameter it did not
+      //     read, so ?dim_no=6&dim_code=P001 on the trial balance answered
+      //     the whole company's report to a caller who believed it filtered.
+      //     A dimension filter the report does not register is now refused
+      //     (400); any other stray parameter is served and named in
+      //     X-Ignored-Query-Params, unless STRICT_REPORT_QUERY_PARAMS refuses
+      //     it too. The registered query is what the spec publishes and, per
+      //     query-params-registered.test.ts, what the route reads, so the
+      //     allowlist cannot drift from the parser. After the access gates,
+      //     so a company the key cannot see still answers 404, never 400.
+      let ignoredQueryParams: string[] = []
+      if (isReportRead(request.method, operation)) {
+        const registered = registeredQueryParams(getEndpointByConcretePath(request.method, path))
+        if (registered) {
+          const gate = await assertReportQuery(request, registered, { requestId, log: userLog }, {
+            strict: STRICT_REPORT_QUERY_PARAMS,
+          })
+          // Stamped like a handler's answer: the routes that refused in
+          // their handler before sent the wrapped security headers too.
+          if (!gate.ok) return stampHeaders(gate.response, requestId)
+          ignoredQueryParams = gate.ignored
+          if (ignoredQueryParams.length > 0) {
+            // Names only (values can be personal data): which parameters
+            // integrations send is the evidence the strict switch waits for.
+            userLog.info('report read ignored unregistered query params', { ignored_params: ignoredQueryParams })
           }
         }
       }
@@ -566,6 +665,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         apiKeyId: auth.apiKeyId,
         apiKeyName: auth.apiKeyName,
         scopes: auth.scopes,
+        allowedCompanyIds: auth.allowedCompanyIds,
         unattendedCommitLimit: auth.unattendedCommitLimit,
         mode: auth.mode,
         supabase,
@@ -601,6 +701,13 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // request was simulation-only without inspecting the body.
       if (ctx.mode === 'test') {
         response.headers.set('X-Gnubok-Mode', 'test')
+      }
+
+      // A served report names the parameters it did not apply. Only on a
+      // success: a route that refuses them itself (the four with their own
+      // allowlist) must not also say it ignored them.
+      if (ignoredQueryParams.length > 0 && response.status < 400) {
+        response.headers.set(IGNORED_QUERY_PARAMS_HEADER, ignoredQueryParams.join(', '))
       }
 
       // 10. Persist idempotency cache (best-effort).

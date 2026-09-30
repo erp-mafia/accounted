@@ -69,8 +69,11 @@ export function migrationRetrySeconds(failures: number): number {
 }
 
 /** Group internal failure codes into actionable, translated messages. */
-export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'retry' {
+export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'exists' | 'retry' {
   if (code === 'PROVIDER_AUTH_EXPIRED') return 'connection'
+  // A record with the same number already exists and differs. Resuming
+  // repeats the same outcome, so never suggest a retry (23505 = unique_violation).
+  if (code === 'MIGRATION_INVOICE_NUMBER_TAKEN' || code === '23505') return 'exists'
   if (code?.includes('LICENSE') || code?.includes('MODULE') || code === 'MIGRATION_WRITE_FORBIDDEN') return 'access'
   if (code?.includes('AMBIGUOUS') || code?.includes('REVIEW') || code?.includes('CHANGED')) return 'review'
   if (code?.includes('ROWS') || code?.includes('LINES')) return 'lines'

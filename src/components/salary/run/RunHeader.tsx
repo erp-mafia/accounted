@@ -278,7 +278,7 @@ export function RunHeader({
             // The span carries the tooltip: browsers suppress `title` on
             // disabled elements, and hover events don't fire on them.
             <span title={!hasEmailSend ? t('payslips_send_requires_subscription') : undefined}>
-              <Button
+              <Button size="sm"
                 variant="outline"
                 onClick={onSendPayslips}
                 disabled={busy || !hasEmailSend}
@@ -293,7 +293,7 @@ export function RunHeader({
           )}
 
           {primaryAction && (
-            <Button onClick={primaryAction.onClick} disabled={busy} loading={actionLoading === primaryAction.key}>
+            <Button size="sm" onClick={primaryAction.onClick} disabled={busy} loading={actionLoading === primaryAction.key}>
               {primaryAction.label}
             </Button>
           )}
@@ -301,7 +301,7 @@ export function RunHeader({
           {hasMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label={t('more_actions')} loading={menuBusy}>
+                <Button variant="ghost" size="icon-sm" aria-label={t('more_actions')} loading={menuBusy}>
                   {!menuBusy && <MoreHorizontal className="h-4 w-4" />}
                 </Button>
               </DropdownMenuTrigger>

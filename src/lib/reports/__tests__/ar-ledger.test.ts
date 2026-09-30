@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ============================================================
 // Mock: sequential result queue
@@ -683,5 +683,89 @@ describe('generateARLedger: historical as-of reconstruction (#1020)', () => {
 
     expect(report.entries[0].invoices[0].outstanding).toBe(2000)
     expect(report.total_outstanding).toBe(2000)
+  })
+})
+
+describe('generateARLedger: partially paid invoices (feedback seq 817399)', () => {
+  // Invoice 2026024 from the report: 15 625 invoiced, one payment of 15 000
+  // on 2026-07-01, 625 still open. The ledger used to drop it entirely.
+  const partiallyPaid = {
+    id: 'inv-pp',
+    customer_id: 'cust-s',
+    customer: { id: 'cust-s', name: 'Kunden AB' },
+    invoice_number: '2026024',
+    invoice_date: '2026-06-01',
+    due_date: '2026-07-01',
+    total: 15625,
+    paid_amount: 15000,
+    remaining_amount: 625,
+    paid_at: null,
+    currency: 'SEK',
+    status: 'partially_paid',
+  }
+  const payment = { invoice_id: 'inv-pp', amount: 15000, payment_date: '2026-07-01' }
+
+  // The first status filter recorded is the invoices query.
+  const invoiceStatusFilter = () =>
+    calls.find((c) => c.method === 'in' && c.args[0] === 'status')?.args[1]
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-28T12:00:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('live view lists it with the unpaid remainder outstanding', async () => {
+    results = [{ data: [partiallyPaid], error: null }]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(invoiceStatusFilter()).toContain('partially_paid')
+    expect(report.entries).toHaveLength(1)
+    expect(report.entries[0].customer_name).toBe('Kunden AB')
+    expect(report.entries[0].invoices[0]).toMatchObject({
+      invoice_number: '2026024',
+      total: 15625,
+      paid_amount: 15000,
+      outstanding: 625,
+      outstanding_sek: 625,
+    })
+    // Due 2026-07-01: 89 days overdue on the pinned today.
+    expect(report.entries[0].days_61_90).toBe(625)
+    expect(report.total_outstanding).toBe(625)
+    expect(report.total_overdue).toBe(625)
+    expect(report.unpaid_count).toBe(1)
+  })
+
+  it('historical view before the payment date reopens the full total', async () => {
+    results = [
+      { data: [partiallyPaid], error: null },
+      { data: [payment], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2026-06-30')
+
+    expect(invoiceStatusFilter()).toEqual(expect.arrayContaining(['partially_paid', 'paid']))
+    expect(report.entries[0].invoices[0].paid_amount).toBe(0)
+    expect(report.entries[0].invoices[0].outstanding).toBe(15625)
+    expect(report.total_outstanding).toBe(15625)
+  })
+
+  it('historical view on or after the payment date shows the remainder', async () => {
+    results = [
+      { data: [partiallyPaid], error: null },
+      { data: [payment], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2026-07-01')
+
+    expect(invoiceStatusFilter()).toContain('partially_paid')
+    expect(report.entries[0].invoices[0].paid_amount).toBe(15000)
+    expect(report.entries[0].invoices[0].outstanding).toBe(625)
+    expect(report.total_outstanding).toBe(625)
+    expect(report.unpaid_count).toBe(1)
   })
 })

@@ -64,6 +64,15 @@ export interface ARLedgerReport {
 }
 
 /**
+ * Invoice statuses in the live kundreskontra. 'partially_paid' is as open as
+ * 'sent' and 'overdue': the first partial payment moves an invoice there and
+ * it stays until the rest is paid. 'credited' originals are kept so they net
+ * against their credit notes. The customer drill-down route reads this same
+ * list, so the aggregate and its detail rows cannot drift apart.
+ */
+export const AR_LEDGER_STATUSES = ['sent', 'overdue', 'partially_paid', 'credited'] as const
+
+/**
  * Generate AR ledger (kundreskontra) with aging analysis.
  * BFL 5 kap. 4 §: sidoordnad bokföring: outstanding customer invoices with aging.
  *
@@ -99,8 +108,8 @@ export async function generateARLedger(
         // Proformas, delivery notes and quotes are never receivables.
         .eq('document_type', 'invoice')
       query = isHistorical
-        ? query.in('status', ['sent', 'overdue', 'credited', 'paid']).lte('invoice_date', asOfDate!)
-        : query.in('status', ['sent', 'overdue', 'credited'])
+        ? query.in('status', [...AR_LEDGER_STATUSES, 'paid']).lte('invoice_date', asOfDate!)
+        : query.in('status', [...AR_LEDGER_STATUSES])
       return query
         // Stable total order for correct paging (see fetch-all.ts).
         .order('id', { ascending: true })

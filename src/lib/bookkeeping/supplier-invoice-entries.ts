@@ -4,10 +4,11 @@ import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { resolveBookingAccount } from './accruals/account-suggestions'
 import { buildSupplierDescription } from './supplier-invoice-description'
 import {
-  generateReverseChargeLines,
+  generateReverseChargePurchaseLines,
   generateReverseChargeBasisLines,
   isReverseChargeBasisAccount,
   resolveReverseChargeRate,
+  reverseChargeKindForSupplierType,
 } from './vat-entries'
 import { generateSlpLines, isSlpPensionAccount } from './slp-lines'
 import { treatmentDeductsInputVat } from '@/lib/vat/supplier-invoice-line-checks'
@@ -21,7 +22,12 @@ import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { creditNatural, debitNatural } from './line-side'
 import { isSupplierInvoiceRoundingItem } from '@/lib/supplier-invoices/rounding-item'
-import { resolveSupplierCashSettlement, supplierOreRoundingLine } from './supplier-payment-lines'
+import {
+  addSupplierBankFeeLine,
+  buildSupplierPaymentClearingLines,
+  resolveSupplierCashSettlement,
+  supplierOreRoundingLine,
+} from './supplier-payment-lines'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExpenseClaimLineInput } from '@/lib/expenses/expense-claims-service'
 import type {
@@ -90,8 +96,10 @@ export class SupplierInvoiceFxRateMissingError extends Error {
  * above when a foreign invoice reaches a booking path with no rate at all.
  * Every conversion in this file goes through here so no leg (expense, moms,
  * fiktiv moms, basbelopp, 2440) can be posted at a fabricated 1:1 rate.
+ * Exported for the paths that must reproduce a posted registration's SEK
+ * figures exactly (lib/supplier-invoices/item-account.ts).
  */
-function toSekOrThrow(
+export function toSekOrThrow(
   amount: number,
   currency: string,
   exchangeRate: number | null | undefined
@@ -163,6 +171,29 @@ export async function createSupplierInvoiceRegistrationEntry(
   supplierType: string,
   supplierName?: string
 ): Promise<JournalEntry | null> {
+  const input = await buildSupplierInvoiceRegistrationEntryInput(
+    supabase, companyId, invoice, items, supplierType, supplierName
+  )
+  if (!input) return null
+  return createJournalEntry(supabase, companyId, userId, input)
+}
+
+/**
+ * The registration verifikat createSupplierInvoiceRegistrationEntry would
+ * post, without posting it: the fiscal period lookup is the only database
+ * read, and nothing is written. The deferred "Bokför" dry run previews these
+ * lines. Returns null when no open fiscal period covers invoice_date. Throws
+ * the same generator errors (SupplierInvoiceFxRateMissingError) the
+ * committing path throws.
+ */
+export async function buildSupplierInvoiceRegistrationEntryInput(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: SupplierInvoice,
+  items: SupplierInvoiceItem[],
+  supplierType: string,
+  supplierName?: string
+): Promise<CreateJournalEntryInput | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, invoice.invoice_date)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for invoice date:', invoice.invoice_date)
@@ -202,7 +233,6 @@ export async function createSupplierInvoiceRegistrationEntry(
   lines.push(...debitLines)
 
   const isReverseCharge = (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && invoice.reverse_charge
-  const isDomesticRC = supplierType === 'swedish_business' && invoice.reverse_charge
 
   if (isReverseCharge) {
     // Reverse charge: fiktiv moms entries per rate group
@@ -231,13 +261,13 @@ export async function createSupplierInvoiceRegistrationEntry(
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
     for (const [rate, baseAmount] of baseByRate) {
       if (rate > 0 && baseAmount > 0) {
-        const rcLines = generateReverseChargeLines(baseAmount, rate, isDomesticRC)
+        const rcLines = generateReverseChargePurchaseLines({
+          base: baseAmount,
+          rate,
+          kind: reverseChargeKindForSupplierType(rcSupplierType),
+          basisBase: nonBasisBaseByRate.get(rate) || 0,
+        })
         lines.push(...rcLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
-        const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
-        if (nonBasisBase > 0) {
-          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)
-          lines.push(...basisLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
-        }
       }
     }
   } else if (itemsHaveVat(items, invoice.vat_treatment)) {
@@ -291,11 +321,46 @@ export async function createSupplierInvoiceRegistrationEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return input
+}
+
+export interface SupplierInvoicePaymentLinesOptions {
+  /**
+   * SEK cleared off 2440: at the booked rate when there is a kursdifferens;
+   * with `sekClearingDebt`, the SEK that left the bank for the invoice, net
+   * of any fee. Always SEK, never the invoice's currency: the manual doors
+   * resolve it with resolveSupplierPaymentSek (#2955).
+   */
+  paymentAmount: number
+  /** Kursvinst (> 0) or kursförlust (< 0) in SEK; omit for none. */
+  exchangeRateDifference?: number
+  supplierName?: string
+  /** Account credited; DEFAULT_SUPPLIER_PAYMENT_ACCOUNT when omitted. */
+  paymentAccount?: string
+  /** Bank fee on top of the invoice (splitSupplierBankFee), booked on 6570. */
+  bankFeeSek?: number
+  /**
+   * Pure-SEK bank match: the SEK debt this payment clears off 2440 (the
+   * invoice's remaining). There is no kursdifferens in SEK, so
+   * exchangeRateDifference must be omitted.
+   */
+  sekClearingDebt?: number
+}
+
+export interface SupplierInvoicePaymentLines {
+  description: string
+  /** The payment account the bank leg credits. */
+  creditAccount: string
+  lines: CreateJournalEntryLineInput[]
+  /** The öresavrundning booked on 3740 (SEK clearing only); 0 for none. */
+  oreDiffSek: number
 }
 
 /**
- * Create journal entry when a supplier invoice is paid (accrual method)
+ * The verifikat of a supplier payment under faktureringsmetoden, pure:
+ * createSupplierInvoicePaymentEntry books exactly these lines and the payment
+ * previews show them, so the rows a user approves or edits carry what gets
+ * booked, the invoice's dimensions on every leg included.
  *
  *   Debit  2440 Leverantörsskulder   [payment amount]
  *   Credit 1930 Företagskonto        [payment amount]
@@ -304,33 +369,39 @@ export async function createSupplierInvoiceRegistrationEntry(
  *   Debit  2440 Leverantörsskulder   [original SEK amount]
  *   Credit 1930 Företagskonto        [actual SEK paid]
  *   Credit/Debit 3960/7960           [difference]
+ *
+ * SEK clearing of a matched bank row (`sekClearingDebt`): the lines come from
+ * buildSupplierPaymentClearingLines, so a sub-krona difference between the
+ * debt and the bank amount is booked on 3740 and 2440 clears in full.
  */
-export async function createSupplierInvoicePaymentEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  invoice: SupplierInvoice,
-  paymentAmount: number,
-  paymentDate: string,
-  exchangeRateDifference?: number,
-  supplierName?: string,
-  paymentAccount?: string,
-  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
-): Promise<JournalEntry | null> {
-  const creditAccount = paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
-  if (!fiscalPeriodId) {
-    log.warn('No open fiscal period found for payment date:', paymentDate)
-    return null
+export function buildSupplierInvoicePaymentLines(
+  invoice: Pick<SupplierInvoice, 'supplier_invoice_number' | 'arrival_number' | 'default_dimensions'>,
+  options: SupplierInvoicePaymentLinesOptions,
+): SupplierInvoicePaymentLines {
+  const { paymentAmount, exchangeRateDifference, supplierName, bankFeeSek, sekClearingDebt } = options
+  if (sekClearingDebt !== undefined && exchangeRateDifference) {
+    throw new Error('buildSupplierInvoicePaymentLines: a SEK clearing has no exchange rate difference')
   }
+  const creditAccount = options.paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
 
   const desc = buildSupplierDescription('Utbetalning leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
   const lines: CreateJournalEntryLineInput[] = []
   // Dimensions PR7: the payment voucher re-propagates the linked invoice's
   // default bag onto every leg (incl. FX result lines), see the stamp below.
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
+  let oreDiffSek = 0
 
-  if (exchangeRateDifference && exchangeRateDifference !== 0) {
+  if (sekClearingDebt !== undefined) {
+    // Matched SEK bank row: 3740 öresavrundning and the 6570 bank fee included.
+    const clearing = buildSupplierPaymentClearingLines({
+      apSek: sekClearingDebt,
+      bankSek: paymentAmount,
+      paymentAccount: creditAccount,
+      bankFeeSek,
+    })
+    lines.push(...clearing.lines)
+    oreDiffSek = clearing.oreDiffSek
+  } else if (exchangeRateDifference && exchangeRateDifference !== 0) {
     // Foreign currency with exchange rate difference
     const originalSekAmount = paymentAmount
     const actualSekPaid = paymentAmount - exchangeRateDifference
@@ -385,6 +456,8 @@ export async function createSupplierInvoicePaymentEntry(
       line_description: desc,
     })
   }
+  // The clearing builder above books the fee itself.
+  if (sekClearingDebt === undefined) addSupplierBankFeeLine(lines, creditAccount, bankFeeSek)
 
   if (defaultDimensions) {
     // Copy per line: a shared bag object would let one line's mutation
@@ -392,10 +465,49 @@ export async function createSupplierInvoicePaymentEntry(
     for (const line of lines) line.dimensions = { ...defaultDimensions }
   }
 
+  return { description: desc, creditAccount, lines, oreDiffSek }
+}
+
+/**
+ * Create the journal entry when a supplier invoice is paid (accrual method):
+ * the lines of buildSupplierInvoicePaymentLines, booked in the open period of
+ * the payment date. Returns null when no open period covers it.
+ */
+export async function createSupplierInvoicePaymentEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  invoice: SupplierInvoice,
+  // SEK, see SupplierInvoicePaymentLinesOptions.paymentAmount.
+  paymentAmount: number,
+  paymentDate: string,
+  exchangeRateDifference?: number,
+  supplierName?: string,
+  paymentAccount?: string,
+  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>,
+  // Bank fee on top of the invoice (splitSupplierBankFee), booked on 6570.
+  bankFeeSek?: number,
+  // Pure-SEK bank match: see SupplierInvoicePaymentLinesOptions.sekClearingDebt.
+  sekClearingDebt?: number,
+): Promise<JournalEntry | null> {
+  const { description, creditAccount, lines } = buildSupplierInvoicePaymentLines(invoice, {
+    paymentAmount,
+    exchangeRateDifference,
+    supplierName,
+    paymentAccount,
+    bankFeeSek,
+    sekClearingDebt,
+  })
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
+  if (!fiscalPeriodId) {
+    log.warn('No open fiscal period found for payment date:', paymentDate)
+    return null
+  }
+
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: paymentDate,
-    description: desc,
+    description,
     source_type: 'supplier_invoice_paid',
     source_id: invoice.id,
     ...(bankTransaction ? { bank_booking_context: [bankBookingContext(bankTransaction, creditAccount)] } : {}),
@@ -419,6 +531,8 @@ export interface SupplierInvoiceCashLinesOptions {
    * user was told to pay.
    */
   settledBankSek?: number
+  /** Bank fee on top of the invoice (splitSupplierBankFee), booked on 6570. */
+  bankFeeSek?: number
 }
 
 export interface SupplierInvoiceCashLinesResult {
@@ -449,7 +563,7 @@ export function buildSupplierInvoiceCashLines(
   supplierType: string,
   options: SupplierInvoiceCashLinesOptions = {},
 ): SupplierInvoiceCashLinesResult {
-  const { supplierName, paymentAccount, settledBankSek } = options
+  const { supplierName, paymentAccount, settledBankSek, bankFeeSek } = options
   const creditAccount = paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
 
   // Under kontantmetoden the booked affärshändelse IS the payment (BFL 5 kap:
@@ -499,7 +613,6 @@ export function buildSupplierInvoiceCashLines(
   }
 
   const isReverseCharge = (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && invoice.reverse_charge
-  const isDomesticRC = supplierType === 'swedish_business' && invoice.reverse_charge
 
   if (isReverseCharge) {
     // Reverse charge: fiktiv moms entries per rate group
@@ -520,13 +633,13 @@ export function buildSupplierInvoiceCashLines(
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
     for (const [rate, baseAmount] of baseByRate) {
       if (rate > 0 && baseAmount > 0) {
-        const rcLines = generateReverseChargeLines(baseAmount, rate, isDomesticRC)
+        const rcLines = generateReverseChargePurchaseLines({
+          base: baseAmount,
+          rate,
+          kind: reverseChargeKindForSupplierType(rcSupplierType),
+          basisBase: nonBasisBaseByRate.get(rate) || 0,
+        })
         lines.push(...rcLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
-        const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
-        if (nonBasisBase > 0) {
-          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)
-          lines.push(...basisLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
-        }
       }
     }
   } else if (itemsHaveVat(items, invoice.vat_treatment)) {
@@ -604,6 +717,8 @@ export function buildSupplierInvoiceCashLines(
       dimensions: defaultDimensions,
     })
   }
+  // The fee is part of this invoice's payment: it carries the same bag.
+  addSupplierBankFeeLine(lines, creditAccount, bankFeeSek, defaultDimensions)
 
   return {
     description: desc,
@@ -637,7 +752,8 @@ export async function createSupplierInvoiceCashEntry(
   // SEK that actually settled the invoice (the amount that left the bank),
   // see SupplierInvoiceCashLinesOptions.settledBankSek.
   settledBankSek?: number,
-  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
+  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>,
+  bankFeeSek?: number,
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -649,6 +765,7 @@ export async function createSupplierInvoiceCashEntry(
     supplierName,
     paymentAccount,
     settledBankSek,
+    bankFeeSek,
   })
 
   const input: CreateJournalEntryInput = {

@@ -3,6 +3,8 @@ import {
   BokioApiError,
   BokioClient,
   BokioResponseError,
+  bokioErrorCode,
+  isBokioPricePlanError,
   normalizeBokioAccessToken,
   unwrapBokioCompanyInformation,
 } from '../client';
@@ -195,5 +197,84 @@ describe('normalizeBokioAccessToken', () => {
 
   it('does not remove internal token characters', () => {
     expect(normalizeBokioAccessToken('token with spaces')).toBe('token with spaces');
+  });
+});
+
+// Documented plan-refusal body (docs.bokio.se/docs/price-plan-requirements).
+const PLAN_BODY_ERROR = JSON.stringify({
+  error: 'price_plan_feature_required',
+  message: 'This feature requires Integrations (API) or a Plus plan',
+  details: { requiredFeature: 'PrivateApi', availableIn: ['Plus', 'Premium', 'Business'], isInTrial: false },
+});
+// Same refusal in the shape of Bokio's generic apiError schema (`code`).
+const PLAN_BODY_CODE = JSON.stringify({
+  code: 'price_plan_feature_required',
+  message: 'This feature requires a plan with API access',
+});
+
+describe('isBokioPricePlanError', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  it.each([
+    ['the documented `error` field', PLAN_BODY_ERROR],
+    ['the apiError `code` field', PLAN_BODY_CODE],
+  ])('recognises a 403 plan refusal carried in %s', (_label, body) => {
+    expect(isBokioPricePlanError(new BokioApiError('Bokio API error: 403', 403, body))).toBe(true);
+  });
+
+  it.each([
+    ['a scope refusal', JSON.stringify({ code: 'forbidden', message: 'Missing scope' })],
+    ['a non-JSON body', '<html>Forbidden</html>'],
+    ['an empty body', ''],
+    ['no body', undefined],
+  ])('keeps a 403 with %s an ordinary refusal', (_label, body) => {
+    expect(isBokioPricePlanError(new BokioApiError('Bokio API error: 403', 403, body))).toBe(false);
+  });
+
+  it('only counts a 403, never another status carrying the same string', () => {
+    expect(isBokioPricePlanError(new BokioApiError('Bokio API error: 401', 401, PLAN_BODY_ERROR))).toBe(false);
+    expect(isBokioPricePlanError(new BokioApiError('Bokio API error: 404', 404, PLAN_BODY_ERROR))).toBe(false);
+  });
+
+  it('ignores anything that is not a BokioApiError', () => {
+    expect(isBokioPricePlanError(new Error('price_plan_feature_required'))).toBe(false);
+    expect(isBokioPricePlanError(null)).toBe(false);
+  });
+
+  it('keeps the body of a 403 from the company probe so the refusal can be recognised', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(PLAN_BODY_ERROR, { status: 403, statusText: 'Forbidden' }),
+    );
+
+    const err: unknown = await new BokioClient()
+      .getCompany('integration-token', COMPANY_ID)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(BokioApiError);
+    expect(isBokioPricePlanError(err)).toBe(true);
+    // A 403 is a verdict, not a transient: one request, no retries.
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('bokioErrorCode', () => {
+  it('reads the `error` field, then the `code` field', () => {
+    expect(bokioErrorCode(PLAN_BODY_ERROR)).toBe('price_plan_feature_required');
+    expect(bokioErrorCode(PLAN_BODY_CODE)).toBe('price_plan_feature_required');
+  });
+
+  it.each([
+    ['no body', undefined],
+    ['an empty body', ''],
+    ['a non-JSON body', 'Forbidden'],
+    ['a JSON array', '[]'],
+    ['a body without a code', JSON.stringify({ message: 'Forbidden' })],
+    ['a code that is free text', JSON.stringify({ error: 'Token abc123 is not valid for company x' })],
+    ['a code that is not a string', JSON.stringify({ code: 403 })],
+  ])('returns null for %s, so nothing but a code ever reaches a log', (_label, body) => {
+    expect(bokioErrorCode(body)).toBeNull();
   });
 });

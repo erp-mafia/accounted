@@ -721,18 +721,20 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     enqueue({ data: [bankRow({ amount: -1000 })], error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
       body: {},
     })
     const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
-    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
+    // Past the guard (no duplicate), the 2440 clearing has no SEK to clear:
+    // no rate and no registration verifikat. Refused instead of booking
+    // 1 000 EUR as 1 000 kr (#2955).
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_FX_RATE_MISSING')
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
   })
 
   it('EUR invoice: a 1 000 EUR bank row still matches in its own currency', async () => {

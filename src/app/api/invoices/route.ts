@@ -459,6 +459,9 @@ async function createCreditNote(
       vat_rate: originalInvoice.vat_rate,
       moms_ruta: originalInvoice.moms_ruta,
       reverse_charge_text: originalInvoice.reverse_charge_text,
+      // The same supply (#2906): goods delivered abroad reverse on 3105 / 3108.
+      vat_treatment_override: originalInvoice.vat_treatment_override ?? null,
+      delivery_country: originalInvoice.delivery_country ?? null,
       your_reference: originalInvoice.your_reference,
       our_reference: originalInvoice.our_reference,
       // Same buyer routing on the kreditfaktura as the original.

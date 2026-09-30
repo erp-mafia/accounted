@@ -40,6 +40,25 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: (...args: unknown[]) => mocks.getActiveCompanyId(...args),
 }))
 
+// Single-company user: the consent page renders no company picker and the
+// POST carries no allowlist, so these tests stay about the redirect URI.
+vi.mock('@/lib/company/company-picker', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/company/company-picker')>()
+  return {
+    ...actual,
+    listUserCompaniesForPicker: (
+      _supabase: unknown,
+      _userId: string,
+      options?: { activeCompanyId?: string | null },
+    ) =>
+      Promise.resolve(
+        options?.activeCompanyId
+          ? [{ company_id: options.activeCompanyId, name: 'Test AB', role: 'owner' }]
+          : [],
+      ),
+  }
+})
+
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => mocks.getBranding(),
 }))

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadAtomsAsSkills, loadReferenceById } from './atoms'
 import { loadCompanySkillRows, ownSkill, type CompanySkillRow } from './company-skills'
 import { workflowSkills } from './workflows'
+import { communityPageUrl } from './community-repo'
 import { kvittojaktenSkills } from './workflows/kvittojakten'
 import type { Skill } from './types'
 
@@ -9,6 +10,10 @@ export interface CatalogSkill extends Skill {
   active: boolean
   installations: Array<{ installation_id: string; scope: 'company' | 'team' }>
   shareStatus?: CompanySkillRow['share_status']
+  /** A published own item: its public page. */
+  publishedUrl?: string | null
+  /** A shared own item Accounted sent back, and why. */
+  reviewNote?: string | null
   /** Saved by an AI, waiting for a person to add it on the Skills page. */
   draft?: boolean
 }
@@ -33,12 +38,14 @@ export async function loadSkillCatalog(supabase: SupabaseClient, companyId: stri
     }),
     ...rows.flatMap((row): CatalogSkill[] => {
       const skill = ownSkill(row)
-      // Withdrawn submissions and AI-saved drafts remain visible in the UI,
-      // but are never returned as active or loadable to an AI.
+      // AI-saved drafts remain visible in the UI, but are never returned as
+      // active or loadable to an AI.
       if (!skill && (row.atom_id || !row.name || !row.body)) return []
       return [{
-        ...(skill ?? { slug: `own/${row.id}`, name: row.name!, summary: row.description ?? '', body: row.body!, tags: ['own'], tier: 'own' as const, source: 'own' as const }),
-        active: row.share_status !== 'withdrawn' && !row.draft, shareStatus: row.share_status,
+        ...(skill ?? { slug: `own/${row.id}`, name: row.name!, summary: row.description ?? '', body: row.body!, tags: ['own'], tier: 'own' as const, source: 'own' as const, itemKind: row.kind ?? 'workflow' }),
+        active: !row.draft, shareStatus: row.share_status,
+        ...(row.share_status === 'published' && row.published_atom_id ? { publishedUrl: communityPageUrl(row.published_atom_id.replace(/^community\//, '')) } : {}),
+        ...(row.share_status === 'private' && row.review_note ? { reviewNote: row.review_note } : {}),
         ...(row.draft ? { draft: true } : {}),
         installations: [{ installation_id: row.id, scope: row.team_id ? 'team' : 'company' }],
       }]
@@ -46,11 +53,11 @@ export async function loadSkillCatalog(supabase: SupabaseClient, companyId: stri
   ]
 }
 
-/** includeInactive: the Skills page may read withdrawn skills and drafts; an agent never may. */
+/** includeInactive: the Skills page may read drafts; an agent never may. */
 export async function loadCatalogSkill(supabase: SupabaseClient, companyId: string, slug: string, includeInactive = false): Promise<Skill | null> {
   const catalog = await loadSkillCatalog(supabase, companyId)
   const skill = catalog.find((item) => item.slug === slug)
-  if (skill) return (skill.shareStatus === 'withdrawn' || skill.draft) && !includeInactive ? null : skill
+  if (skill) return skill.draft && !includeInactive ? null : skill
   // Kvittojakten is not listed (one body per client), but each body loads by its slug.
   const kvittojakten = kvittojaktenSkills.find((item) => item.slug === slug)
   if (kvittojakten) return kvittojakten

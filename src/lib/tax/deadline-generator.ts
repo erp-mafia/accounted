@@ -557,9 +557,11 @@ export async function generateTaxDeadlinesForUser(
 }
 
 /**
- * Create linked report period object for navigation
+ * Create linked report period object for navigation. Exported for the VAT
+ * filing record (lib/vat/filing-record-store.ts), which builds the period's
+ * deadline row itself when the company has none and must build it the same way.
  */
-function createLinkedReportPeriod(
+export function createLinkedReportPeriod(
   instance: DeadlineInstance,
   _type: TaxDeadlineType
 ): Record<string, unknown> | null {

@@ -112,6 +112,7 @@ interface DashboardNavProps {
   hasExpenseClaims?: boolean
   // Whether the company is in the Arkiv rollout (ARKIV_COMPANY_IDS). Computed by the layout.
   arkivEnabled?: boolean
+  agentsEnabled?: boolean
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
   // Signed-in user's full name + email: drives the bottom-left account
@@ -325,7 +326,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, arkivEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, arkivEnabled = false, agentsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -573,6 +574,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     if (item.requiresExpenses && !hasExpenseClaims) return false
     // Arkiv rolls out per company; outside the rollout the pages 404.
     if (item.requiresArkiv && !arkivEnabled) return false
+    // The Agenter page is hidden in production while it is finished.
+    if (item.requiresAgents && !agentsEnabled) return false
     // Paywalled surfaces (e.g. the AI-only Dokumentinkorg) are hidden unless
     // the active company holds the capability. The page + API gates enforce
     // the paywall; this keeps the sidebar from advertising a dead workspace.

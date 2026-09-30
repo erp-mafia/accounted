@@ -195,9 +195,10 @@ describe('POST /api/transactions/[id]/match-expense-payout', () => {
     enqueue({ data: makeTxRow() })
     mockCreatePayoutBatch.mockResolvedValue({ ok: false, code: 'ALREADY_PAID' })
     const response = await POST(makeReq(), routeParams)
-    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
+    // Structured envelope since the route shares expense-claim-actions.ts with v1 and MCP.
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
     expect(status).toBe(409)
-    expect(body.code).toBe('ALREADY_PAID')
-    expect(body.error).toContain('redan utbetalt')
+    expect(body.error.code).toBe('EXPENSE_PAYOUT_ALREADY_PAID')
+    expect(body.error.message).toContain('redan utbetalt')
   })
 })

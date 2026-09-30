@@ -57,6 +57,11 @@ import { StartCard } from '@/components/dashboard/StartCard'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
 import InvoiceInboxSkeleton from '@/components/extensions/general/InvoiceInboxSkeleton'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
+import { InboxMailDoor } from '@/components/extensions/general/InboxMailDoor'
+import { summarizeMailboxes } from '@/components/extensions/general/mail-connections'
+import { useMailConnections } from '@/components/extensions/general/use-mail-connections'
+import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
@@ -78,6 +83,7 @@ import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDi
 // InboxCustomDomainDialog (egen domän) is built but gated off: see
 // INBOX_CUSTOM_DOMAINS_ENABLED in extensions/general/invoice-inbox/index.ts.
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
+import { InboxCreditNotePanel } from './InboxCreditNotePanel'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import {
   getErrorMessage as getUserErrorMessage,
@@ -686,9 +692,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [purchases, setPurchases] = useState<PurchaseWithoutUnderlag[]>([])
   const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(null)
 
-  // Where underlag come from. Two routes in, and the page should say so:
-  // WhatsApp for photographed receipts, and the forwarding address that works
-  // with nothing connected at all.
+  // Where underlag come from. Three routes in, and the page should say so:
+  // WhatsApp for photographed receipts, the Gmail mailboxes the hunt
+  // searches when asked, and the forwarding address that works with nothing
+  // connected at all.
   const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phoneMasked?: string; verifiedAt?: string | null } | null>(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
   // Received-mail history (#2181): read when its panel is first opened, so
@@ -749,8 +756,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     })()
   }, [])
 
-  const sourceCount = (whatsapp?.linked ? 1 : 0) + (inboxAddress ? 1 : 0)
-
   const fetchPurchases = useCallback(async () => {
     try {
       const res = await fetch('/api/extensions/ext/invoice-inbox/purchases')
@@ -765,6 +770,30 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   useEffect(() => {
     void fetchPurchases()
   }, [fetchPurchases])
+
+  // The Gmail door. Read only where the mail extension is built in: without
+  // it there is no route to ask, and its 404 is not news. A failed read
+  // leaves the door out rather than guessing at the mailboxes.
+  const mailDoor = useMailConnections(ENABLED_EXTENSION_IDS.has('mail'))
+  const mailboxes = summarizeMailboxes(mailDoor.view)
+  const hasAiCapability = useCapability(CAPABILITY.ai)
+  // A pass files receipts and stages their pairing, which moves rows between
+  // both lists, and it moves each mailbox's lastSearchedAt: all three refresh
+  // as the run goes rather than at the end.
+  const receiptHunt = useReceiptHunt(() => {
+    void fetchItems()
+    void fetchPurchases()
+    void mailDoor.reload()
+  })
+
+  // Counting rows would not answer whether anything is searched: a mailbox
+  // waiting for a new consent is still a row, and the hunt skips it. Only
+  // the ones it reads are sources; the others surface on the chip, but only
+  // when this company may start a consent. Outside the connect allowlist the
+  // reconnect would be refused, so the chip would nag about something nobody
+  // here can fix; the mailbox still shows its state inside the panel.
+  const sourceCount = (whatsapp?.linked ? 1 : 0) + (inboxAddress ? 1 : 0) + mailboxes.active.length
+  const mailboxNeedsReconnect = mailboxes.needsReconnect.length > 0 && mailboxes.canConnect
 
   const selectedPurchase = useMemo(
     () => purchases.find((p) => p.id === selectedPurchaseId) ?? null,
@@ -1271,7 +1300,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         deletable.map((it) =>
           fetch(`/api/extensions/ext/invoice-inbox/items/${it.id}`, { method: 'DELETE' })
             .then(async (res) => {
-              if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'fail')
+              if (!res.ok) throw await resolveFailure(res)
             })
         )
       )
@@ -1365,16 +1394,27 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           <h1 className="text-sm shrink-0">Dokumentinkorg</h1>
           {/* Where the page's contents come from, behind one chip. The detail
               is a thing people look up when something seems wrong, not
-              something they read every visit. */}
-          {sourceCount > 0 ? (
+              something they read every visit. A mailbox that has stopped
+              being read is the exception, so that surfaces on the chip
+              itself: a dead door looking healthy is the failure the Gmail
+              door exists to show. */}
+          {sourceCount > 0 || mailboxNeedsReconnect ? (
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setSourcesOpen((v) => !v)}
-              className="font-normal shrink-0 text-muted-foreground"
+              className={cn(
+                'font-normal shrink-0',
+                mailboxNeedsReconnect ? 'text-attn' : 'text-muted-foreground',
+              )}
               aria-expanded={sourcesOpen}
             >
-              {`${sourceCount} ${sourceCount === 1 ? 'källa' : 'källor'}`}
+              {mailboxNeedsReconnect && <AlertTriangle className="h-3 w-3 mr-1.5" />}
+              {mailboxNeedsReconnect
+                ? t('source_gmail_reconnect_chip')
+                : sourceCount === 1
+                  ? t('sources_one', { count: sourceCount })
+                  : t('sources_many', { count: sourceCount })}
               <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
             </Button>
           ) : addressLoadFailed ? (
@@ -1414,7 +1454,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             onChange={handleFileInputChange}
           />
           {agentHandoff && (agentHandoff.count > 0 || purchases.length > 0) && (
-            <KvittojaktenButton clients={agentHandoff.clients} variant="button" />
+            <KvittojaktenButton clients={agentHandoff.clients} />
           )}
           <Button
             variant="outline"
@@ -1464,10 +1504,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         )}
       </div>
 
-      {/* Opened from the chip. Two ways in, each with the one fact that
-          matters about it: an address you can forward to, and the number
-          receipts arrive from. Nothing here is configuration; that still
-          lives in Inställningar. */}
+      {/* Opened from the chip. Three ways in, each with the one fact that
+          matters about it: an address you can forward to, the mailboxes we
+          search when asked, and the number receipts arrive from. Nothing
+          here is configuration; that still lives in Inställningar. */}
       {sourcesOpen && (
         <div className="border-b bg-muted/20 text-xs">
           {inboxAddress && (
@@ -1538,6 +1578,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 )}
               </div>
             </details>
+          )}
+
+          {mailDoor.view && mailboxes.available && (
+            <InboxMailDoor view={mailDoor.view} hunt={receiptHunt} hasAi={hasAiCapability} />
           )}
 
           {whatsapp?.linked && (
@@ -1885,10 +1929,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   { method: 'POST' },
                 )
                 if (!res.ok) {
-                  const json = await res.json().catch(() => ({}))
+                  const failure = await resolveFailure(res)
                   toast({
                     title: 'Kunde inte avbryta matchningen',
-                    description: json.error ?? `HTTP ${res.status}`,
+                    description: failure.message,
                     variant: 'destructive',
                   })
                   return
@@ -2625,7 +2669,13 @@ type SuggestedBooking = {
     | 'no_transaction'
     | 'already_booked'
     | 'currency_unsupported'
-  lines: { account_number: string; debit_amount: number; credit_amount: number; description: string }[]
+  lines: {
+    account_number: string
+    debit_amount: number
+    credit_amount: number
+    description: string
+    dimensions?: Record<string, string>
+  }[]
   confidence: number | null
   requires_review?: boolean
   direction_mismatch?: boolean
@@ -3339,6 +3389,27 @@ function FieldsRail({
               className="w-full text-xs text-muted-foreground hover:text-foreground hover:underline pt-1"
             >
               {isUnmatchingTx ? 'Avbryter…' : 'Avbryt matchning'}
+            </button>
+          </>
+        ) : resolvedKind === 'credit_note' ? (
+          <>
+            {/* A supplier's credit note credits the invoice it references
+                (issue #2980): never a payable of its own. The verifikat
+                editor stays below for a partial credit note. */}
+            <InboxCreditNotePanel
+              itemId={item.id}
+              extracted={(data ?? null) as Record<string, unknown> | null}
+              onCredited={async () => {
+                await onBookedLocally?.()
+              }}
+              onFieldsUpdated={(next) => onFieldsUpdated(next as unknown as InvoiceExtractionResult)}
+            />
+            <button
+              type="button"
+              onClick={onBookDirect}
+              className="w-full text-xs text-muted-foreground hover:text-foreground hover:underline pt-1"
+            >
+              {t('payer_open_editor')}
             </button>
           </>
         ) : (

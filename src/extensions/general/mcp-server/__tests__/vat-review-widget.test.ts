@@ -190,7 +190,9 @@ describe('VAT review widget', () => {
         )
       ).json()
       expect(withUi.result.isError).toBeUndefined()
-      expect(withUi.result._meta).toEqual({ ui: { resourceUri: 'ui://vat-review/app.html' } })
+      // _meta also carries the company echo on every company-scoped call;
+      // the UI directive is what this test pins.
+      expect(withUi.result._meta).toMatchObject({ ui: { resourceUri: 'ui://vat-review/app.html' } })
 
       const withoutUi = await (
         await handleMcpRequest(
@@ -201,7 +203,7 @@ describe('VAT review widget', () => {
         )
       ).json()
       expect(withoutUi.result.isError).toBeUndefined()
-      expect(withoutUi.result._meta).toBeUndefined()
+      expect(withoutUi.result._meta?.ui).toBeUndefined()
     })
 
     it('refuses an external VAT report while the database holds an unfinished import', async () => {

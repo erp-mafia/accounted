@@ -13,7 +13,7 @@ The first slice implemented the invoice profile. The second slice added an immut
 
 `POST /api/invoices/{id}/peppol` now stores the exact generated XML as an immutable staged delivery. Staging assigns a stable UUID idempotency key, stores the recipient, profile identifiers, filename, SHA-256, retention date, and an append-only local audit event. It explicitly returns `network_submitted: false`. Repeating the request for the same invoice and XML returns the existing staged record.
 
-`GET /api/invoices/{id}/peppol/deliveries` returns a minimized status timeline projection without exposing XML, raw webhooks, or provider evidence. The invoice page can prepare a delivery; since 2026-08-21 its send control performs the network send through `POST /api/invoices/{id}/peppol/send` for companies holding a Peppol access grant (aktiebolag senders, standard invoices only; see "Access point: Qvalia" below).
+`GET /api/invoices/{id}/peppol/deliveries` returns a minimized status timeline projection without exposing XML, raw webhooks, or provider evidence. The invoice page can prepare a delivery; since 2026-08-21 its send control performs the network send through `POST /api/invoices/{id}/peppol/send` for companies holding a Peppol access grant (senders with an organisationsnummer, which is every legal form except enskild firma; standard invoices only; see "Access point: Qvalia" below).
 
 The provider-neutral `PeppolTransport` boundary separates:
 
@@ -27,9 +27,9 @@ Core registers an adapter only when provider credentials are present in the envi
 The export supports:
 
 - numbered standard sales invoices, not credit notes, self-billing, proformas, or delivery notes;
-- Swedish limited-company sellers and organization-number buyers identified with scheme `0007`;
+- Swedish sellers and buyers with an organization number (every legal form whose org number is not a personnummer), identified with scheme `0007`;
 - SEK invoices with Swedish standard VAT categories at 6, 12, or 25 percent;
-- Bankgiro or Plusgiro credit transfers using payment means code `30` and an OCR reference;
+- credit transfers using payment means code `30` and an OCR reference, paid to the first valid of Bankgiro, Plusgiro, or IBAN (with the BIC as `FinancialInstitutionBranch` when one is on file);
 - mixed supported VAT rates, text-line omission, and UNECE unit mappings for Accounted's invoice units;
 - Accounted's SEK rounding as `PayableRoundingAmount`;
 - buyer reference, address, VAT, F-tax, payment, totals, and line reconciliation checks;
@@ -37,7 +37,7 @@ The export supports:
 
 Unsupported input is rejected with structured, field-addressable errors. The generator never emits partial XML after a failed preflight.
 
-Sole-trader sellers and personnummer-derived `0007` identifiers are rejected. They require a separately configured `0088` GLN so the export does not publish personal identity data as a Peppol participant identifier.
+Sellers whose legal form uses the owner's personnummer as org number (enskild firma) and personnummer-derived `0007` identifiers are rejected. They require a separately configured `0088` GLN so the export does not publish personal identity data as a Peppol participant identifier.
 
 The local preflight is not a replacement for the official validation stack. Before network delivery, every document must pass the UBL XSD, EN 16931 Schematron rules, and the Peppol BIS Billing rules for the active release. The selected access-point provider must perform that validation as part of submission. Accounted should also run the same release-pinned artifacts before calling the provider so failures can be explained before transport.
 

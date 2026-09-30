@@ -58,6 +58,7 @@
 import type { CreateJournalEntryLineInput } from '@/types'
 import { ORE_TOLERANCE, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 import { resolveSekAmount } from './currency-utils'
+import { coerceDimensionsBag } from './dimension-resolver'
 
 const TWO_DP = (n: number): number => Math.round(n * 100) / 100
 
@@ -384,4 +385,54 @@ export function buildInvoicePaymentClearingLines(
   }
 
   return { bankSek, arSek, fxDiffSek, oreRoundingSek, lines }
+}
+
+/**
+ * The verifikat text of a bank-matched customer payment: the entry header and
+ * the bank and 1510 rows of its clearing lines. One definition for the match
+ * routes, the agent executor and the match preview.
+ */
+export function invoiceMatchPaymentDescription(invoice: {
+  invoice_number: string | null
+  customer?: { name?: string | null } | null
+}): string {
+  return invoice.customer?.name
+    ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
+    : `Inbetalning kundfaktura ${invoice.invoice_number}`
+}
+
+export interface InvoiceMatchClearingInvoice extends PaymentClearingInvoice {
+  invoice_number: string | null
+  customer?: { name?: string | null } | null
+  /** The invoice's stored bag; every clearing leg carries it. */
+  default_dimensions?: unknown
+}
+
+/**
+ * The clearing verifikat of a bank-matched customer payment, exactly as the
+ * match routes and the agent executor book it and the match preview shows
+ * it: buildInvoicePaymentClearingLines under the payment's description, with
+ * the invoice's dimension bag on every leg (FX and öre lines included, so a
+ * project's kursvinst stays inside the project's result).
+ */
+export function buildInvoiceMatchClearingLines(
+  tx: PaymentClearingTx,
+  invoice: InvoiceMatchClearingInvoice,
+  paidInInvoiceCurrency: number | undefined,
+  paymentAccount: string,
+): { description: string; lines: CreateJournalEntryLineInput[] } {
+  const description = invoiceMatchPaymentDescription(invoice)
+  const { lines } = buildInvoicePaymentClearingLines(
+    tx,
+    invoice,
+    description,
+    paidInInvoiceCurrency,
+    paymentAccount,
+  )
+  const bag = coerceDimensionsBag(invoice.default_dimensions)
+  if (bag) {
+    // Copied per line: a shared object would let one line's mutation leak.
+    for (const line of lines) line.dimensions = { ...bag }
+  }
+  return { description, lines }
 }

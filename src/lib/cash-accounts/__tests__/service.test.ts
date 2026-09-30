@@ -17,11 +17,12 @@ import {
   pickKeeper,
   sameCashAccount,
   normalizeIban,
-  defaultLedgerForCurrency,
   getRevokedConnectionIds,
   upsertFromPsd2,
   ensureManualCashAccount,
 } from '../service'
+import { defaultLedgerForCurrency } from '../ledger-slots'
+import { allocateLedgers, ledgerClaims } from '@/lib/onboarding-books/ledger'
 
 type CashRow = {
   ledger_account: string
@@ -167,7 +168,7 @@ describe('findFreeLedgerAccount', () => {
   it('returns the default when only a MANUAL row holds it (seed promotion)', async () => {
     // The seeded 1930 row has no bank connection — upsertFromPsd2 promotes it
     // in place, so the slot counts as free.
-    const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: null }])
+    const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: null, currency: 'SEK' }])
     expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBe('1930')
   })
 
@@ -176,7 +177,7 @@ describe('findFreeLedgerAccount', () => {
     // that fix still point at the revoked connection; they must count as
     // manual holders so a reconnect lands back on 1930, not 1939.
     const supabase = makeSupabase(
-      [{ ledger_account: '1930', bank_connection_id: 'conn-revoked' }],
+      [{ ledger_account: '1930', bank_connection_id: 'conn-revoked', currency: 'SEK' }],
       { connections: [{ id: 'conn-revoked', status: 'revoked' }] },
     )
     expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBe('1930')
@@ -252,6 +253,69 @@ describe('findFreeLedgerAccount', () => {
   it('returns null when the lookup fails', async () => {
     const supabase = makeSupabase([], { error: { message: 'boom' } })
     expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBeNull()
+  })
+})
+
+describe('findFreeLedgerAccount: only a holder of the same bank account gives up its slot (crm#129)', () => {
+  // promote_psd2_cash_account refuses to take over a holder in another
+  // currency or with another IBAN (CASH_ACCOUNT_KEEPER_IDENTITY_CONFLICT) and
+  // rolls back the whole bank callback. Proposing such a slot failed every
+  // connect attempt the same way, so the allocator must apply the same rule.
+  const OWN = 'SE4550000000058398257466'
+  const OTHER = 'SE9912000000000000000001'
+
+  it('overflows past a manual 1930 that carries another IBAN', async () => {
+    const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: null, iban: OTHER, currency: 'SEK' }])
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { iban: OWN })).toBe('1931')
+  })
+
+  it('takes over a manual 1930 that carries the same IBAN, however it is formatted', async () => {
+    const supabase = makeSupabase([
+      { ledger_account: '1930', bank_connection_id: null, iban: 'se45 5000 0000 0583 9825 7466', currency: 'SEK' },
+    ])
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { iban: OWN })).toBe('1930')
+  })
+
+  it('takes over a manual 1930 without an IBAN (the seeded row)', async () => {
+    const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: null, iban: null, currency: 'SEK' }])
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { iban: OWN })).toBe('1930')
+  })
+
+  it('overflows past a revoked connection row that carries another IBAN', async () => {
+    const supabase = makeSupabase(
+      [{ ledger_account: '1930', bank_connection_id: 'conn-revoked', iban: OTHER, currency: 'SEK' }],
+      { connections: [{ id: 'conn-revoked', status: 'revoked' }] },
+    )
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { iban: OWN })).toBe('1931')
+  })
+
+  it('overflows past a manual holder in another currency', async () => {
+    // A NOK account has no default of its own and asks for 1930 like SEK.
+    const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: null, iban: null, currency: 'SEK' }])
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'NOK', new Set(), { iban: OWN })).toBe('1931')
+  })
+
+  it('an account without an IBAN never takes over a holder that has one', async () => {
+    const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: null, iban: OTHER, currency: 'SEK' }])
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { iban: null })).toBe('1931')
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBe('1931')
+  })
+
+  it('lands a new SEK account on the first free overflow slot in a crowded 19xx range', async () => {
+    // 1930 manual with another IBAN, 1931 EUR and 1932 USD on live
+    // connections, 1935 and 1936 manual, 1940 live.
+    const supabase = makeSupabase(
+      [
+        { ledger_account: '1930', bank_connection_id: null, iban: OTHER, currency: 'SEK' },
+        { ledger_account: '1931', bank_connection_id: 'conn-live', iban: 'SE1', currency: 'EUR' },
+        { ledger_account: '1932', bank_connection_id: 'conn-live', iban: 'SE2', currency: 'USD' },
+        { ledger_account: '1935', bank_connection_id: null, currency: 'SEK' },
+        { ledger_account: '1936', bank_connection_id: null, currency: 'SEK' },
+        { ledger_account: '1940', bank_connection_id: 'conn-live', iban: 'SE3', currency: 'SEK' },
+      ],
+      { connections: [{ id: 'conn-live', status: 'active' }] },
+    )
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { iban: OWN })).toBe('1937')
   })
 })
 
@@ -414,6 +478,58 @@ describe('findFreeLedgerAccount: chart awareness', () => {
   })
 })
 
+describe('the onboarding preview hands out what the server would', () => {
+  // The preview's choice goes to PATCH /accounts as an explicit mapping, so it
+  // must land where the callback's own allocation (one findFreeLedgerAccount
+  // per account, earlier picks excluded) puts the same accounts.
+  const cases: Array<{ name: string; rows: CashRow[]; chart: string[]; currencies: string[]; ibans?: string[] }> = [
+    {
+      name: 'four SEK accounts on a fresh company',
+      rows: [{ ledger_account: '1930', bank_connection_id: null, iban: null, currency: 'SEK' }],
+      chart: ['1930', '1940'],
+      currencies: ['SEK', 'SEK', 'SEK', 'SEK'],
+    },
+    { name: 'SEK accounts ahead of EUR and USD', rows: [], chart: ['1930'], currencies: ['SEK', 'SEK', 'SEK', 'EUR', 'USD'] },
+    {
+      name: 'another bank on 1930 and a chart-named 1935',
+      rows: [{ ledger_account: '1930', bank_connection_id: 'conn-old', currency: 'SEK' }],
+      chart: ['1930', '1935'],
+      currencies: ['SEK', 'SEK', 'GBP'],
+    },
+    {
+      name: 'a manual 1930 of another bank account (crm#129)',
+      rows: [{ ledger_account: '1930', bank_connection_id: null, iban: 'SE9912000000000000000001', currency: 'SEK' }],
+      chart: ['1930'],
+      currencies: ['SEK', 'EUR'],
+      ibans: ['SE4550000000058398257466', 'SE4550000000058398257467'],
+    },
+    {
+      name: 'a manual 1930 of the same bank account',
+      rows: [{ ledger_account: '1930', bank_connection_id: null, iban: 'SE4550000000058398257466', currency: 'SEK' }],
+      chart: ['1930'],
+      currencies: ['SEK'],
+      ibans: ['SE45 5000 0000 0583 9825 7466'],
+    },
+  ]
+
+  it.each(cases)('$name', async ({ rows, chart, currencies, ibans = [] }) => {
+    const supabase = makeSupabase(rows, { chart })
+    const exclude = new Set<string>()
+    const server: string[] = []
+    for (const [i, currency] of currencies.entries()) {
+      const ledger = await findFreeLedgerAccount(supabase, 'c1', currency, exclude, { iban: ibans[i] ?? null })
+      if (!ledger) throw new Error('no slot')
+      exclude.add(ledger)
+      server.push(ledger)
+    }
+
+    const { used, connected, holders } = ledgerClaims(rows, 'conn-new')
+    const ticked = currencies.map((currency, i) => ({ uid: `a${i}`, currency, iban: ibans[i] ?? null }))
+    const preview = allocateLedgers(ticked, used, {}, connected, chart, holders)
+    expect(currencies.map((_, i) => preview[`a${i}`])).toEqual(server)
+  })
+})
+
 describe('normalizeIban', () => {
   it('strips formatting so the same account compares equal', () => {
     expect(normalizeIban('SE45 5000 0000 0583 9825 7466')).toBe('SE4550000000058398257466')
@@ -515,6 +631,21 @@ describe('resolvePsd2LedgerAccount', () => {
 
     expect(resolved?.source).toBe('allocated')
     expect(resolved?.ledgerAccount).not.toBe('1930')
+  })
+
+  it('passes the IBAN to allocation: a manual 1930 of another account is not taken over', async () => {
+    // The callback and PATCH /accounts both land here for an unknown IBAN.
+    const supabase = makeSupabase([
+      { id: 'row-other', ledger_account: '1930', bank_connection_id: null, iban: 'SE9912000000000000000001', currency: 'SEK' },
+    ])
+
+    const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', {
+      iban: IBAN,
+      currency: 'SEK',
+      prepareOnly: true,
+    })
+
+    expect(resolved).toEqual({ ledgerAccount: '1931', reuseCashAccountId: null, source: 'allocated' })
   })
 
   it('allocates for an account the bank gave no IBAN for', async () => {

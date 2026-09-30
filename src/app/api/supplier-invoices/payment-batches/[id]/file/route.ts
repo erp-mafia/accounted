@@ -1,7 +1,6 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { renderSupplierPaymentBatchFile } from '@/lib/payments/batch-service'
-import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { downloadPaymentBatchFile } from '@/lib/payments/batch-operations'
 
 /**
  * Download the payment file for a batch.
@@ -14,55 +13,21 @@ import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
  *
  * Per BFL the generated file is räkenskapsinformation (underlag) for the
  * payments it initiates; the batch rows it derives from are retained.
+ * Rules in lib/payments/batch-operations.ts (shared with v1).
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.payment_batch.file',
-  async (_request, { supabase, companyId, log, requestId }, { params }) => {
+  async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
 
-    const { data: batch } = await supabase
-      .from('supplier_payment_batches')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single()
+    const outcome = await downloadPaymentBatchFile({ supabase, companyId, userId: user.id, log }, id)
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) throw new Error('unreachable: a read has no dry run')
 
-    if (!batch) {
-      return errorResponseFromCode('SI_BATCH_NOT_FOUND', log, { requestId })
-    }
-    if ((batch as SupplierPaymentBatch).status === 'cancelled') {
-      return errorResponseFromCode('SI_BATCH_CANCELLED', log, { requestId })
-    }
-
-    const { data: items } = await supabase
-      .from('supplier_payment_batch_items')
-      .select('*')
-      .eq('batch_id', id)
-      .eq('company_id', companyId)
-      .order('created_at', { ascending: true })
-
-    if (!items || items.length === 0) {
-      return errorResponseFromCode('SI_BATCH_NOT_FOUND', log, { requestId })
-    }
-
-    const rendered = renderSupplierPaymentBatchFile(
-      batch as SupplierPaymentBatch,
-      items as SupplierPaymentBatchItem[],
-    )
-
-    await supabase
-      .from('supplier_payment_batches')
-      .update({
-        file_generated_at: new Date().toISOString(),
-        download_count: ((batch as SupplierPaymentBatch).download_count ?? 0) + 1,
-      })
-      .eq('id', id)
-      .eq('company_id', companyId)
-
-    return new Response(rendered.content, {
+    return new Response(outcome.data.content, {
       headers: {
-        'Content-Type': rendered.contentType,
-        'Content-Disposition': `attachment; filename="${rendered.filename}"`,
+        'Content-Type': outcome.data.contentType,
+        'Content-Disposition': `attachment; filename="${outcome.data.filename}"`,
       },
     })
   },

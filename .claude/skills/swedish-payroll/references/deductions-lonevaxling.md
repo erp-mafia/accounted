@@ -49,8 +49,8 @@ SLP_on_pension = pension_contribution × 0.2426
 
 ### Thresholds to flag
 
-If post-löneväxling salary drops below 8.07 × IBB / 12 (2025: ~54,204 SEK/month), the employee loses pension accrual in allmänna pensionssystemet. Löneväxling also reduces SGI. Software should flag when post-reduction salary approaches this floor.
+If post-löneväxling salary drops below 8.07 × IBB / 12 (2026: ~56,087 SEK/month), the employee loses pension accrual in allmänna pensionssystemet. Löneväxling also reduces SGI. Software should flag when post-reduction salary approaches this floor.
 
 ### Employer pension deductibility cap
 
-35% of pensionsmedförande lön or 10 × PBB/year (2025: 588,000 SEK), whichever is lower.
+35% of pensionsmedförande lön or 10 × PBB/year (2026: 592,000 SEK), whichever is lower.

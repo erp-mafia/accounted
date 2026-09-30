@@ -10,6 +10,7 @@ import {
   useState,
 } from 'react'
 import { useTranslations } from 'next-intl'
+import { useNonce } from '@/components/providers/NonceProvider'
 import {
   getTurnstileRolloutState,
   resolveTurnstileSiteKey,
@@ -68,6 +69,7 @@ export const TurnstileChallenge = forwardRef<
   TurnstileChallengeProps
 >(function TurnstileChallenge({ action, onTokenChange }, ref) {
   const t = useTranslations('auth')
+  const nonce = useNonce()
   const siteKey = resolveTurnstileSiteKey()
   const rolloutState = getTurnstileRolloutState()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -162,6 +164,7 @@ export const TurnstileChallenge = forwardRef<
         id="cloudflare-turnstile"
         src={TURNSTILE_SCRIPT_URL}
         strategy="afterInteractive"
+        nonce={nonce}
         onReady={renderWidget}
         onError={() => clearToken('error')}
       />

@@ -22,6 +22,8 @@ import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import type { Logger } from '@/lib/logger'
 import {
+  ApiWorkedDaysRangeSchema,
+  ApiWorkedDaysUpsertSchema,
   WORKED_DAYS_RANGE_MAX_DAYS,
   deleteWorkedDaysRange,
   listWorkedDays,
@@ -30,11 +32,6 @@ import {
   type WorkedDayPreview,
   type WorkedDayRow,
 } from '@/lib/salary/worked-days'
-
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD date format')
-const timeString = z
-  .string()
-  .regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Expected HH:MM or HH:MM:SS time format')
 
 /**
  * Result codes the shared module emits that have no structured-error entry
@@ -82,12 +79,9 @@ function toApiRow(row: WorkedDayRow) {
   }
 }
 
-const RangeQuery = z
-  .object({
-    from: isoDate.describe('YYYY-MM-DD. First day of the range (inclusive). Required.'),
-    to: isoDate.describe('YYYY-MM-DD. Last day of the range (inclusive), not before from. Required.'),
-  })
-  .refine((v) => v.from <= v.to, { message: 'from must be <= to', path: ['from'] })
+// The request schemas live with the service (lib/salary/worked-days.ts): the
+// MCP operations validate with the same ones.
+const RangeQuery = ApiWorkedDaysRangeSchema
 
 registerEndpoint({
   operation: 'employees.worked-days.list',
@@ -182,30 +176,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 // ──────────────────────────────────────────────────────────────────
 
 /**
- * The per-day input. Same validators as UpsertWorkedDaySchema (lib/api/schemas.ts)
- * minus salary_run_employee_id: the run link is set by the dashboard, never
- * by an API caller. hours is required here: an external operator states the
- * hours it registers, there is no "assume a full day" default on v1.
+ * 1..92 explicit days (ApiWorkedDaySchema in lib/salary/worked-days.ts: hours
+ * required, shift window both or neither, no salary_run_employee_id).
  */
-const WorkedDayInputSchema = z
-  .object({
-    work_date: isoDate,
-    hours: z.number().positive().max(24),
-    // Optional shift window. Feeds the shift-premium engine: without explicit
-    // times, the engine assumes a default 08:00-17:00 day shift. Either both
-    // fields are provided or neither.
-    start_time: timeString.optional(),
-    end_time: timeString.optional(),
-    notes: z.string().max(2000).optional(),
-  })
-  .refine(
-    (d) => (d.start_time == null && d.end_time == null) || (d.start_time != null && d.end_time != null),
-    { message: 'Provide both start_time and end_time, or neither.', path: ['start_time'] },
-  )
-
-const UpsertBody = z.object({
-  days: z.array(WorkedDayInputSchema).min(1).max(WORKED_DAYS_RANGE_MAX_DAYS),
-})
+const UpsertBody = ApiWorkedDaysUpsertSchema
 
 const UpsertResponse = z.object({
   count: z.number().int(),

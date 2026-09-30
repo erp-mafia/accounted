@@ -62,7 +62,7 @@ export default async function ExtensionDetailPage({
         title={extensionName}
         action={
           hasWorkspace ? (
-            <Button asChild>
+            <Button size="sm" asChild>
               <Link href={`/e/${sectorSlug}/${extensionSlug}`}>
                 {t('open')}
               </Link>

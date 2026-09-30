@@ -7,7 +7,7 @@ vi.mock('@/lib/ai', () => ({
   getAiStatus: vi.fn(() => ({ configured: true })),
 }))
 
-import { classifyDocument, recordHumanClassification, buildClassifySystem, contentHash } from '../classify'
+import { classifyDocument, recordHumanClassification, buildClassifySystem, contentHash, kindFromInbox, kindFromVerifikat } from '../classify'
 import { getAiStatus } from '@/lib/ai'
 
 type Row = Record<string, unknown>
@@ -17,6 +17,10 @@ interface Scripted {
   pages?: Row[]
   /** Twins the duplicate check finds for the document. */
   duplicates?: Row[]
+  /** What the period lock says to an update of the document row, when it refuses it. */
+  rowRefusal?: string
+  /** The verifikat the document is booked on, as journal_entries answers with its lines embedded. */
+  entry?: Row | null
 }
 type Write = { table: string; op: 'insert' | 'update'; payload: Row; filters: Row }
 
@@ -40,12 +44,15 @@ function makeSupabase(script: Scripted) {
       if (table === 'document_attachments') return Promise.resolve({ data: script.document ?? null, error: null })
       if (table === 'document_classifications') return Promise.resolve({ data: script.current ?? null, error: null })
       if (table === 'companies') return Promise.resolve({ data: { name: 'Exempelbolaget AB', org_number: '559000-0000' }, error: null })
+      if (table === 'journal_entries') return Promise.resolve({ data: script.entry ?? null, error: null })
       return Promise.resolve({ data: null, error: null })
     }
     api.update = (payload: Row) => { state.op = 'update'; state.payload = payload; return api }
     api.insert = (payload: Row) => { writes.push({ table, op: 'insert', payload, filters: {} }); return Promise.resolve({ error: null }) }
     // An update chain ends on its last .eq(): resolve when awaited.
     api.then = (resolve: (v: unknown) => void) => {
+      // The period lock refuses every update of a document row in a closed period: nothing is written.
+      if (state.op === 'update' && table === 'document_attachments' && script.rowRefusal) return resolve({ error: { message: script.rowRefusal } })
       if (state.op === 'update') writes.push({ table, op: 'update', payload: state.payload!, filters: state.filters })
       resolve({ error: null })
     }
@@ -103,6 +110,58 @@ describe('classifyDocument', () => {
     expect(typed.writes.find((w) => w.table === 'document_classifications' && w.op === 'insert')!.payload.signals).toEqual([])
   })
 
+  it('lets the inbox reading decide the direction when the model calls an invoice addressed to the company a customer invoice', async () => {
+    generateStructured.mockResolvedValue(answer({ doc_type: 'customer_invoice', addressed_to: 'Exempelbolaget AB', summary: 'Faktura från Expisoft AB till Exempelbolaget AB.' }))
+    const { supabase, writes } = makeSupabase({
+      document: { ...doc, admission_state: 'admitted', extracted_data: { documentKind: 'supplier_invoice', supplier: { name: 'Expisoft AB' } } },
+      pages: [{ page_no: 1, text: 'Kundfaktura 10863. Fakturamottagare: Exempelbolaget AB. Säljare: Expisoft AB.', reader: 'pdf_text', has_text_layer: true }],
+    })
+    const out = await classifyDocument(supabase, 'doc-1', company)
+    expect(out.status).toBe('classified')
+    const inserted = writes.find((w) => w.table === 'document_classifications' && w.op === 'insert')!.payload
+    expect(inserted).toMatchObject({ doc_type: 'supplier_invoice', signals: ['inbox_kind'] })
+    expect(writes.find((w) => w.table === 'document_attachments' && w.op === 'update')!.payload).toMatchObject({ doc_type: 'supplier_invoice' })
+
+    // A receipt read by the inbox, and a model answer that is not customer_invoice, are left as the model said.
+    expect(kindFromInbox({ documentKind: 'receipt' })).toBe('receipt')
+    expect(kindFromInbox({ documentKind: 'invoice' })).toBe('supplier_invoice')
+    expect(kindFromInbox({ documentKind: 'other' })).toBeNull()
+    expect(kindFromInbox(null)).toBeNull()
+    generateStructured.mockResolvedValue(answer({ doc_type: 'agreement.subscription' }))
+    const untouched = makeSupabase({ document: { ...doc, extracted_data: { documentKind: 'supplier_invoice' } }, pages: [{ page_no: 1, text: 'Terms of service', reader: 'pdf_text', has_text_layer: true }] })
+    await classifyDocument(untouched.supabase, 'doc-1', company)
+    expect(untouched.writes.find((w) => w.table === 'document_classifications' && w.op === 'insert')!.payload).toMatchObject({ doc_type: 'agreement.subscription', signals: [] })
+  })
+
+  it('lets the verifikat decide the direction: a document booked as a purchase is a supplier invoice whatever the model says, and the other way round', async () => {
+    const purchase = { source_type: 'manual', journal_entry_lines: [{ account_number: '2440', debit_amount: 0, credit_amount: '11231.25' }, { account_number: '2641', debit_amount: '2246.25', credit_amount: 0 }, { account_number: '6540', debit_amount: 8985, credit_amount: 0 }] }
+    generateStructured.mockResolvedValue(answer({ doc_type: 'customer_invoice', addressed_to: 'Exempelbolaget AB', summary: 'Försäljningsfaktura från The Intelligence Company AB till Exempelbolaget AB.' }))
+    let made = makeSupabase({ document: { ...doc, admission_state: 'admitted', journal_entry_id: 'je-367' }, pages: [{ page_no: 1, text: 'Kundfaktura 20251264', reader: 'pdf_text', has_text_layer: true }], entry: purchase })
+    let out = await classifyDocument(made.supabase, 'doc-1', company)
+    expect(out).toMatchObject({ status: 'classified', classification: { doc_type: 'supplier_invoice' } })
+    expect(made.writes[1].payload).toMatchObject({ doc_type: 'supplier_invoice', signals: expect.arrayContaining(['verifikat_kind']) })
+
+    const sale = { source_type: 'import', journal_entry_lines: [{ account_number: '1510', debit_amount: 12500, credit_amount: 0 }, { account_number: '3001', debit_amount: 0, credit_amount: 10000 }, { account_number: '2611', debit_amount: 0, credit_amount: 2500 }] }
+    generateStructured.mockResolvedValue(answer({ doc_type: 'supplier_invoice', summary: 'Faktura till kund.' }))
+    made = makeSupabase({ document: { ...doc, admission_state: 'admitted', journal_entry_id: 'je-12' }, pages: [{ page_no: 1, text: 'Faktura 1001', reader: 'pdf_text', has_text_layer: true }], entry: sale })
+    out = await classifyDocument(made.supabase, 'doc-1', company)
+    expect(out).toMatchObject({ status: 'classified', classification: { doc_type: 'customer_invoice' } })
+
+    // A receipt on a purchase booking is left as the model read it: only the two invoice types are ever swapped.
+    generateStructured.mockResolvedValue(answer({ doc_type: 'receipt', summary: 'Kvitto.' }))
+    made = makeSupabase({ document: { ...doc, admission_state: 'admitted', journal_entry_id: 'je-1' }, pages: [{ page_no: 1, text: 'Kvitto', reader: 'pdf_text', has_text_layer: true }], entry: purchase })
+    out = await classifyDocument(made.supabase, 'doc-1', company)
+    expect(out).toMatchObject({ status: 'classified', classification: { doc_type: 'receipt' } })
+    expect(made.writes[1].payload.signals).not.toContain('verifikat_kind')
+  })
+
+  it('tells the model that who issued an invoice decides its direction, whatever the heading says', () => {
+    const system = buildClassifySystem(company)
+    expect(system).toContain('who issued it decides the type')
+    expect(system).toContain('headed "Faktura" or "Kundfaktura"')
+    expect(system).toContain('neither issuer nor recipient')
+  })
+
   it('holds a document the model cannot tie to the company', async () => {
     generateStructured.mockResolvedValue(answer({ doc_type: 'receipt', relevance: 'ask', relevance_reason: 'Ingen koppling till bolaget syns.' }))
     const { supabase, writes } = makeSupabase({ document: { ...doc, admission_state: 'held' }, pages: [{ page_no: 1, text: 'Kvitto' }] })
@@ -146,6 +205,21 @@ describe('classifyDocument', () => {
     expect(system).toContain('- decision.skatteverket:')
   })
 
+  it('tells the model that a bill from an authority is a supplier invoice and a credit note is never other', () => {
+    const system = buildClassifySystem(company)
+    // Prod 2026-09-25: congestion-tax bills were typed as Skatteverket decisions and Cursor credit notes as other.
+    expect(system).toMatch(/trängselskatt[\s\S]*supplier_invoice|supplier_invoice[\s\S]*trängselskatt/)
+    expect(system).toMatch(/credit note is credit_note, never other/)
+    expect(system).toMatch(/decision\.skatteverket: .*nothing to pay/)
+  })
+
+  it('keeps what a document is apart from who it is addressed to', () => {
+    // Prod 2026-09-26: 1 435 documents typed other, most of them receipts addressed to the owner personally.
+    const system = buildClassifySystem(company)
+    expect(system).toMatch(/addressed to a person[\s\S]*is still a receipt or invoice/)
+    expect(system).toMatch(/never because of who it is addressed to/)
+  })
+
   it('tells the model that a bill for an agreement is not the agreement', () => {
     // Prod 2026-09-21: a Bitwarden subscription invoice was typed agreement.subscription and became an agreement with obligations and a deadline.
     const system = buildClassifySystem({ name: 'Arcim Technology AB', orgNumber: '559538-6219' })
@@ -156,6 +230,27 @@ describe('classifyDocument', () => {
   })
 })
 
+describe('kindFromVerifikat', () => {
+  it('reads the direction off the booking: a supplier debt or an expense is a purchase, a customer claim or revenue a sale', () => {
+    expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '2440', debit_amount: 0, credit_amount: 5775 }, { account_number: '2641', debit_amount: 1155, credit_amount: 0 }, { account_number: '5420', debit_amount: 4620, credit_amount: 0 }] })).toBe('supplier_invoice')
+    expect(kindFromVerifikat({ source_type: 'bank_transaction', lines: [{ account_number: '1930', debit_amount: 0, credit_amount: 12500 }, { account_number: '6530', debit_amount: 10000, credit_amount: 0 }, { account_number: '2641', debit_amount: 2500, credit_amount: 0 }] })).toBe('supplier_invoice')
+    expect(kindFromVerifikat({ source_type: 'import', lines: [{ account_number: '1510', debit_amount: 12500, credit_amount: 0 }, { account_number: '3001', debit_amount: 0, credit_amount: 10000 }, { account_number: '2611', debit_amount: 0, credit_amount: 2500 }] })).toBe('customer_invoice')
+    // A payment says nothing: the document on it is as often a payment notice as the invoice (prod 2026-09-26: 1 324
+    // Fortnox Finans inbetalningsavier on 1510 C / 1938 D in one company), and the text is the better judge there.
+    expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '1930', debit_amount: 12500, credit_amount: 0 }, { account_number: '1510', debit_amount: 0, credit_amount: 12500 }] })).toBeNull()
+    expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '2440', debit_amount: 5775, credit_amount: 0 }, { account_number: '1930', debit_amount: 0, credit_amount: 5775 }] })).toBeNull()
+    expect(kindFromVerifikat({ source_type: 'invoice_paid', lines: [{ account_number: '1930', debit_amount: 12500, credit_amount: 0 }, { account_number: '1510', debit_amount: 0, credit_amount: 12500 }] })).toBeNull()
+    // The engine's own source types say it outright, the cash-method payment included (the invoice is booked as it is paid).
+    expect(kindFromVerifikat({ source_type: 'supplier_invoice_paid', lines: [] })).toBe('supplier_invoice')
+    expect(kindFromVerifikat({ source_type: 'invoice_created', lines: [] })).toBe('customer_invoice')
+    expect(kindFromVerifikat({ source_type: 'invoice_cash_payment', lines: [] })).toBe('customer_invoice')
+    // A mixed or unrelated booking says nothing, and so does a loose document.
+    expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '1510', debit_amount: 100, credit_amount: 0 }, { account_number: '2440', debit_amount: 0, credit_amount: 100 }] })).toBeNull()
+    expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '1930', debit_amount: 100, credit_amount: 0 }, { account_number: '2893', debit_amount: 0, credit_amount: 100 }] })).toBeNull()
+    expect(kindFromVerifikat(null)).toBeNull()
+  })
+})
+
 describe('recordHumanClassification', () => {
   it('stores a human decision as the current classification and admits the document', async () => {
     const { supabase, writes } = makeSupabase({ document: { ...doc, admission_state: 'held' }, current: { summary: 'Kvitto från restaurang.', language: 'sv', addressed_to: null, is_multi_document: false } })
@@ -163,5 +258,16 @@ describe('recordHumanClassification', () => {
     expect(out).toMatchObject({ status: 'classified', admission: 'admitted' })
     expect(writes[1].payload).toMatchObject({ decided_by: 'human', decided_by_user_id: 'user-1', confidence: 1, doc_type: 'receipt', summary: 'Kvitto från restaurang.', relevance_reason: 'Lunch med kund' })
     expect(writes[2].payload).toMatchObject({ admission_state: 'admitted', admission_reason: 'Lunch med kund' })
+  })
+
+  it('keeps the type on the classification when the period lock refuses the document row', async () => {
+    const { supabase, writes } = makeSupabase({ document: { ...doc, admission_state: 'admitted' }, current: null, rowRefusal: 'Cannot attach documents to entries in a locked/closed fiscal period' })
+    const out = await recordHumanClassification(supabase, 'doc-1', 'user-1', { docType: 'receipt', relevance: 'relevant' })
+    expect(out).toMatchObject({ status: 'classified', admission: 'admitted' })
+    expect(writes.map((w) => [w.table, w.op])).toEqual([
+      ['document_classifications', 'update'],
+      ['document_classifications', 'insert'],
+    ])
+    expect(writes[1].payload).toMatchObject({ doc_type: 'receipt', decided_by: 'human', is_current: true })
   })
 })

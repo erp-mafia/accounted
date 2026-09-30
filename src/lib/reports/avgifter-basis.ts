@@ -8,7 +8,9 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
  * - Standard (31.42%)
  * - Reduced 65+ (10.21%)
  * - Youth (20.81%, Apr 2026-Sep 2027)
- * - Växa-stöd (10.21%)
+ *
+ * Växa-stöd is no category: since Lag (2025:1334) it is a refund applied for
+ * after filing, and the avgifter are declared at the employee's full sats.
  *
  * Used for reconciling against AGI filings (Ruta 060-062)
  * and verifying correct avgifter calculations per social-charges.md.
@@ -40,7 +42,6 @@ const CATEGORY_LABELS: Record<string, string> = {
   standard: 'Standard (31,42%)',
   reduced_65plus: 'Reducerad 67+ (10,21%)',
   youth: 'Ungdomsrabatt (20,81%)',
-  vaxa_stod: 'Växa-stöd (10,21%)',
   exempt: 'Undantagen (0%)',
 }
 

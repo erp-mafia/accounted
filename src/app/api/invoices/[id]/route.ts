@@ -93,7 +93,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // received self-billing document) may be edited.
     const { data: existing, error: fetchError } = await supabase
       .from('invoices')
-      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, document_type, quote_status, deduction_personnummer_encrypted, deduction_personnummer_last4')
+      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, document_type, quote_status, deduction_personnummer_encrypted, deduction_personnummer_last4, vat_treatment_override, delivery_country')
       .eq('id', id)
       .eq('company_id', companyId!)
       .single()
@@ -157,6 +157,12 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
             last4: existing.deduction_personnummer_last4 ?? null,
           }
         : null,
+      // The editor never sends vat_treatment / delivery_country, so a draft
+      // that stated its own treatment over the API (#2906) keeps it here.
+      existingVatOverride: {
+        vat_treatment: existing.vat_treatment_override ?? null,
+        delivery_country: existing.delivery_country ?? null,
+      },
     })
     if (!build.ok) {
       if ('dbError' in build) {

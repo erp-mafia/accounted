@@ -1,12 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-const { mockBlGet, mockBokioGetCompany, mockWintGet, mockLoginWint } = vi.hoisted(() => ({
+const { mockBlGet, mockBokioGetCompany, mockWintGet, mockLoginWint, mockLogWarn } = vi.hoisted(() => ({
   mockBlGet: vi.fn(),
   mockBokioGetCompany: vi.fn(),
   mockWintGet: vi.fn(),
   mockLoginWint: vi.fn(),
+  mockLogWarn: vi.fn(),
 }))
+
+// Capture only provider-client's own warnings (what a Bokio refusal logs);
+// every other module keeps the real logger.
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Record<string, unknown>) => {
+      const logger = actual.createLogger(module, base)
+      return module === 'extensions/arcim-migration/provider-client'
+        ? { ...logger, warn: mockLogWarn }
+        : logger
+    },
+  }
+})
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
@@ -231,6 +247,88 @@ describe('submitProviderToken', () => {
     ).catch((e: unknown) => e)
 
     expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect(err).toMatchObject({ kind: 'credentials' })
+  })
+
+  // ── Bokio plan refusal ────────────────────────────────────────────
+  //
+  // A plan without API access (Basic, or an expired plan) answers 403
+  // price_plan_feature_required on every company endpoint. The token can be
+  // fine, so this is its own verdict, not "check the credentials".
+
+  const PLAN_REFUSAL_BODY = JSON.stringify({
+    error: 'price_plan_feature_required',
+    message: 'This feature requires a plan with API access',
+    details: { requiredFeature: 'PrivateApi', availableIn: ['Plus', 'Premium', 'Business'] },
+  })
+
+  it('maps a 403 plan refusal from the Bokio probe to plan-no-api, stores nothing and logs only the status and code', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBokioGetCompany.mockRejectedValueOnce(
+      new BokioApiError('Bokio API error: 403 Forbidden', 403, PLAN_REFUSAL_BODY),
+    )
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'secret-integration-token',
+      'bokio-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect(err).toMatchObject({ kind: 'plan-no-api' })
+    expect(tablesTouched()).not.toContain('provider_consent_tokens')
+
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Bokio refused the integration token probe',
+      { consentId: 'consent-1', status: 403, bokioErrorCode: 'price_plan_feature_required' },
+    )
+    const logged = JSON.stringify(mockLogWarn.mock.calls)
+    expect(logged).not.toContain('secret-integration-token')
+    expect(logged).not.toContain('This feature requires')
+  })
+
+  it('keeps any other Bokio 403 as invalid credentials and still logs its code', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBokioGetCompany.mockRejectedValueOnce(
+      new BokioApiError(
+        'Bokio API error: 403 Forbidden',
+        403,
+        JSON.stringify({ code: 'forbidden', message: 'The token lacks a required scope' }),
+      ),
+    )
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'tok',
+      'bokio-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect(err).toMatchObject({ kind: 'credentials' })
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Bokio refused the integration token probe',
+      { consentId: 'consent-1', status: 403, bokioErrorCode: 'forbidden' },
+    )
+  })
+
+  it('treats only a 403 as a plan refusal, never a 401 that happens to carry the string', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBokioGetCompany.mockRejectedValueOnce(
+      new BokioApiError('Bokio API error: 401 Unauthorized', 401, PLAN_REFUSAL_BODY),
+    )
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'tok',
+      'bokio-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
     expect(err).toMatchObject({ kind: 'credentials' })
   })
 

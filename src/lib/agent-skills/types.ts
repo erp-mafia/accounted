@@ -46,6 +46,8 @@ export interface Skill {
   version?: number
   reviewedAt?: string | null
   source?: 'accounted' | 'community' | 'own'
+  /** For own items: a flow, knowledge or an analysis. */
+  itemKind?: 'workflow' | 'rules' | 'analysis'
   /** URL-safe id, used in tool args and resource URIs. Workflow skills use a
    *  flat slug ("month-end-close"); atoms use their tier-prefixed registry id
    *  ("vertical/konsult-it"). */

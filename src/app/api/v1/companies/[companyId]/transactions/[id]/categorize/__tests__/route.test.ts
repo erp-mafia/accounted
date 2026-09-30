@@ -418,7 +418,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize orphaned counter-account
       },
       cash_accounts: [
         // 1: resolveSettlementAccount reads the row's own ledger (1930).
-        { data: { ledger_account: '1930' }, error: null },
+        { data: { ledger_account: '1930', currency: 'SEK' }, error: null },
         // 2: the guard's topology scan: 1931 is held by a revoked connection
         // and shares the live row's (IBAN, currency): a stale twin.
         {
@@ -555,4 +555,156 @@ describe('VAT registration (lib/bookkeeping/vat-registration.ts)', () => {
       expect(mapping.vat_lines).toHaveLength(vatLineCount)
     },
   )
+})
+
+describe('reverse-charge basis pair (#2919)', () => {
+  // The real category builder runs: a reverse-charge purchase posts the
+  // 45xx/4598 basis pair next to the fiktiv moms, and an account_override onto
+  // an account that reports ruta 20-24 itself drops that pair again.
+  function rcSupabase(chartRow?: Record<string, unknown>) {
+    return makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_ID,
+            company_id: COMPANY_ID,
+            date: '2026-09-10',
+            amount: -250,
+            currency: 'SEK',
+            merchant_name: 'Google Play',
+            cash_account_id: null,
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [{ id: TX_ID }], error: null },
+      ],
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ...(chartRow ? { chart_of_accounts: { data: chartRow, error: null } } : {}),
+    })
+  }
+
+  it.each([
+    { account_override: undefined, chartRow: undefined, expected: ['2645', '2614', '4535', '4598'] },
+    {
+      account_override: '4531',
+      chartRow: { account_number: '4531', account_class: 4, is_active: true, default_vat_treatment: null },
+      expected: ['2645', '2614'],
+    },
+    {
+      account_override: '6541',
+      chartRow: { account_number: '6541', account_class: 6, is_active: true, default_vat_treatment: 'reverse_charge_eu_services' },
+      expected: ['2645', '2614'],
+    },
+  ])('posts $expected with account_override $account_override', async ({ account_override, chartRow, expected }) => {
+    const { supabase } = rcSupabase(chartRow)
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest({
+        is_business: true,
+        category: 'expense_software',
+        vat_treatment: 'reverse_charge',
+        ...(account_override ? { account_override } : {}),
+      }),
+      routeParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const mapping = createTxJE.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
+    expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(expected)
+  })
+})
+
+// Learned dimension bags (D5): the template picked by counterparty_template_id
+// is loaded through the same pruning loader as the dashboard door, so a
+// learned code whose value was archived since is dropped instead of turning
+// the booking into a DimensionValidationError. An explicit pick is not.
+describe('counterparty template with a learned bag', () => {
+  const TEMPLATE_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+  function templateSupabase(template: Record<string, unknown> | null) {
+    return makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_ID,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -1250,
+            currency: 'SEK',
+            merchant_name: 'Telia',
+            cash_account_id: null,
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [{ id: TX_ID }], error: null },
+      ],
+      // One row serves the entity read and the registry toggle read.
+      company_settings: { data: { entity_type: 'aktiebolag', dimensions_enabled: true }, error: null },
+      categorization_templates: { data: template, error: null },
+      dimensions: { data: [{ id: 'dim-1', sie_dim_no: 1 }, { id: 'dim-6', sie_dim_no: 6 }], error: null },
+      dimension_values: {
+        data: [
+          { dimension_id: 'dim-1', code: 'KS01', is_active: true },
+          { dimension_id: 'dim-6', code: 'P001', is_active: false },
+        ],
+        error: null,
+      },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+  }
+  const template = {
+    id: TEMPLATE_ID,
+    company_id: COMPANY_ID,
+    counterparty_name: 'telia',
+    counterparty_aliases: [],
+    debit_account: '6200',
+    credit_account: '1930',
+    vat_treatment: null,
+    vat_account: null,
+    category: null,
+    line_pattern: null,
+    occurrence_count: 3,
+    confidence: 0.9,
+    source: 'user_approved',
+    is_active: true,
+    default_dimensions: { '1': 'KS01', '6': 'P001' },
+  }
+
+  it('books the learned bag without the archived code', async () => {
+    mockServiceClient.mockReturnValue(templateSupabase(template).supabase)
+
+    const res = await POST(makeRequest({ is_business: true, counterparty_template_id: TEMPLATE_ID }), routeParams())
+
+    expect(res.status).toBe(200)
+    const mapping = createTxJE.mock.calls[0][4] as { dimensions?: Record<string, string> }
+    expect(mapping.dimensions).toEqual({ '1': 'KS01' })
+  })
+
+  it('passes an explicit pick through unfiltered', async () => {
+    mockServiceClient.mockReturnValue(templateSupabase(template).supabase)
+
+    const res = await POST(
+      makeRequest({ is_business: true, counterparty_template_id: TEMPLATE_ID, dimensions: { '6': 'P001' } }),
+      routeParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const mapping = createTxJE.mock.calls[0][4] as { dimensions?: Record<string, string> }
+    expect(mapping.dimensions).toEqual({ '6': 'P001' })
+  })
+
+  it('404 NOT_FOUND for a template that is not an active one of the company', async () => {
+    mockServiceClient.mockReturnValue(templateSupabase(null).supabase)
+
+    const res = await POST(makeRequest({ is_business: true, counterparty_template_id: TEMPLATE_ID }), routeParams())
+
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('NOT_FOUND')
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
 })

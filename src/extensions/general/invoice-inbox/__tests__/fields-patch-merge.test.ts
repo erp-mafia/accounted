@@ -175,6 +175,32 @@ describe('PATCH /items/:id/fields', () => {
     expect(merged.totalSource).toBe('prominent')
   })
 
+  it('lets a person say what the document is, and name the invoice a credit note credits (issue #2980)', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({
+      data: { id: 'item-1', extracted_data: { ...fullExtraction(), documentKind: 'credit_note' }, created_supplier_invoice_id: null },
+    })
+    mock.enqueue({ data: { id: 'item-1', extracted_data: {} } })
+
+    const res = await fieldsRoute.handler(
+      makeReq({ documentKind: 'supplier_invoice', invoice: { creditedInvoiceNumber: '10234' } }),
+      buildCtx(mock.supabase),
+    )
+    expect(res.status).toBe(200)
+
+    const update = mock.calls.find((c) => c.method === 'update')
+    const merged = (update?.args?.[0] as { extracted_data: InvoiceExtractionResult }).extracted_data
+    expect(merged.documentKind).toBe('supplier_invoice')
+    expect(merged.invoice?.creditedInvoiceNumber).toBe('10234')
+    expect(merged.invoice?.invoiceNumber).toBe('8841')
+  })
+
+  it('refuses a document kind outside the vocabulary', async () => {
+    const mock = createQueuedMockSupabase()
+    const res = await fieldsRoute.handler(makeReq({ documentKind: 'parking_ticket' }), buildCtx(mock.supabase))
+    expect(res.status).toBe(400)
+  })
+
   it('returns 409 when the row changed under the edit (optimistic concurrency)', async () => {
     // The handler is read-merge-write over the whole jsonb blob; a racing
     // autosave would otherwise restore stale fields (including a
@@ -194,8 +220,10 @@ describe('PATCH /items/:id/fields', () => {
     const ctx = buildCtx(mock.supabase)
     const res = await fieldsRoute.handler(makeReq({ totals: { total: 2500 } }), ctx)
     expect(res.status).toBe(409)
-    const { body } = await parseJsonResponse<{ error: string }>(res)
-    expect(body.error).toContain('samtidigt')
+    // Failures ride the structured envelope now (sessionFailureResponse).
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(body.error.code).toBe('INBOX_ITEM_EDIT_CONFLICT')
+    expect(body.error.message).toContain('samtidigt')
   })
 
   it('refuses once the item became a supplier invoice', async () => {
@@ -206,7 +234,8 @@ describe('PATCH /items/:id/fields', () => {
     const ctx = buildCtx(mock.supabase)
     const res = await fieldsRoute.handler(makeReq({ totals: { total: 2500 } }), ctx)
     expect(res.status).toBe(409)
-    const { body } = await parseJsonResponse<{ error: string }>(res)
-    expect(body.error).toContain('leverantörsfaktura')
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(body.error.code).toBe('INBOX_ITEM_EDIT_LOCKED')
+    expect(body.error.message).toContain('leverantörsfaktura')
   })
 })

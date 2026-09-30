@@ -9,6 +9,7 @@ import { createClient } from '@/lib/supabase/client'
 import { guardBrowserWrite } from '@/lib/company/tab-guard'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { AttnLine } from '@/components/ui/attn-line'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import {
@@ -117,6 +118,12 @@ const PEPPOL_STATUS_KEYS = new Set([
   'no_route', 'failed',
 ])
 const PEPPOL_SENDABLE_STATUSES = new Set<InvoiceStatus>(['draft', 'sent', 'overdue'])
+// A delivery that ended without reaching the buyer; sending again stages a
+// new delivery that replaces it.
+const PEPPOL_FAILED_DELIVERY_STATUSES = new Set(['failed', 'no_route'])
+// How long the access point may hold a submission without news of delivery
+// before the page says so.
+const PEPPOL_UNCONFIRMED_AFTER_MS = 60 * 60 * 1000
 
 // How long the preview waits for the PDF route to say whether it will render
 // before giving up and closing the placeholder tab. Generous: a cold
@@ -300,6 +307,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     remaining_sends: number | null
   } | null>(null)
   const [peppolDeliveries, setPeppolDeliveries] = useState<PeppolDeliveryView[]>([])
+  // When the deliveries were read: the clock the "not confirmed yet" line
+  // measures against, set with the rows so rendering stays pure.
+  const [peppolReadAt, setPeppolReadAt] = useState<number | null>(null)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
@@ -1171,6 +1181,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const rows = Array.isArray(payload.data) ? [...payload.data] : []
       rows.sort((a, b) => (a.status_at < b.status_at ? 1 : a.status_at > b.status_at ? -1 : 0))
       setPeppolDeliveries(rows)
+      setPeppolReadAt(Date.now())
       setPeppolTransportAvailable(payload.transport?.available === true)
       setPeppolAccess(payload.access ?? null)
     } catch {
@@ -1216,6 +1227,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             }),
         variant: 'destructive',
       })
+      // A failed send can still have issued the draft and recorded a failed
+      // delivery: show where the invoice stands.
+      await fetchInvoice()
+      await loadPeppolDeliveries()
     } finally {
       setIsSendingPeppol(false)
     }
@@ -1705,6 +1720,25 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const peppolStatusLabel = (status: string) =>
     PEPPOL_STATUS_KEYS.has(status) ? t(`peppol_status_${status}`) : status
   const latestPeppolDelivery = peppolDeliveries[0] ?? null
+  // The page's one Peppol sentence (convention 6), while the invoice can
+  // still be sent: the latest delivery failed, or the access point has held
+  // it for over an hour without news of delivery.
+  const peppolAttention: 'failed' | 'unconfirmed' | null =
+    !latestPeppolDelivery || !PEPPOL_SENDABLE_STATUSES.has(invoice.status)
+      ? null
+      : PEPPOL_FAILED_DELIVERY_STATUSES.has(latestPeppolDelivery.status)
+        ? 'failed'
+        : latestPeppolDelivery.status === 'submission_accepted'
+            && peppolReadAt !== null
+            && peppolReadAt - Date.parse(latestPeppolDelivery.status_at) > PEPPOL_UNCONFIRMED_AFTER_MS
+          ? 'unconfirmed'
+          : null
+  // The other way to the buyer. A draft (put back after the failure) can be
+  // emailed from here; an issued invoice cannot (the email send issues
+  // drafts only), so it offers the PDF to send by hand.
+  const peppolOtherWay = invoice.status === 'draft'
+    ? (canWrite ? { label: t('peppol_failed_email_action'), onClick: () => openSendDialog('email') } : null)
+    : { label: t('download_pdf'), onClick: () => void downloadPDF() }
   const showDestructive =
     invoice.status !== 'cancelled' &&
     invoice.status !== 'credited' &&
@@ -1798,7 +1832,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             className="shrink-0"
           />
           {isEditableDraft && canWrite && (
-            <Button variant="outline" asChild>
+            <Button size="sm" variant="outline" asChild>
               <Link href={`/invoices/${invoice.id}/edit`}>
                 <Pencil className="mr-2 h-4 w-4" />
                 {t('edit_draft')}
@@ -1807,13 +1841,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
           {/* Review in the browser (#1190); the download lives in the menu. */}
           {!isSelfBilled && (
-            <Button variant="outline" onClick={() => previewPDF()}>
+            <Button size="sm" variant="outline" onClick={() => previewPDF()}>
               <Eye className="mr-2 h-4 w-4" />
               {t('preview_pdf')}
             </Button>
           )}
           {isProforma && invoice.status !== 'cancelled' && (
-            <Button
+            <Button size="sm"
               onClick={convertToInvoice}
               disabled={!canWrite}
               loading={isConverting}
@@ -1828,7 +1862,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           )}
           {canDecideQuote && quoteStatus !== 'accepted' && (
-            <Button
+            <Button size="sm"
               variant="outline"
               onClick={acceptQuote}
               disabled={isConverting || !canWrite}
@@ -1840,7 +1874,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           )}
           {canConvertQuote && (
-            <Button
+            <Button size="sm"
               onClick={startQuoteConvert}
               disabled={isDeciding || !canWrite}
               loading={isConverting}
@@ -1855,7 +1889,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           )}
           {isUnnumberedDraft && (
-            <Button
+            <Button size="sm"
               onClick={openFinalizeDialog}
               disabled={isFinalizing || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1866,7 +1900,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
           {invoice.status === 'draft' && !isDeliveryNote && invoice.invoice_number && (
             preferredSendMode === 'email' ? (
-              <Button
+              <Button size="sm"
                 onClick={() => openSendDialog('email')}
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1875,7 +1909,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 {t(issuesByBooking ? 'send_via_email_and_book' : 'send_via_email')}
               </Button>
             ) : (
-              <Button
+              <Button size="sm"
                 onClick={() => openSendDialog('manual')}
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1886,7 +1920,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             )
           )}
           {creditNoteNeedsRepair && (
-            <Button
+            <Button size="sm"
               onClick={() => openSendDialog('manual')}
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1896,7 +1930,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           )}
           {isDeliveryNote && invoice.status === 'draft' && (
-            <Button
+            <Button size="sm"
               onClick={() => updateStatus('sent')}
               disabled={!canWrite}
               loading={isUpdating}
@@ -1913,7 +1947,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {/* partially_paid included (#1717): completes a stuck partial, e.g.
               a sub-krona öresavrundning remaining, via the same dialog. */}
           {(invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'partially_paid') && isRealInvoice && !isCreditNote && (
-            <Button
+            <Button size="sm"
               onClick={() => setShowPaymentDialog(true)}
               disabled={isUpdating || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1928,7 +1962,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon"
+                  size="icon-sm"
                   aria-label={tCommon('more_options')}
                   loading={isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder}
                 >
@@ -2100,8 +2134,41 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             .map((item) => item.vat_rate ?? 0)}
           onValidated={() => void fetchInvoice()}
           editHref={`/invoices/${invoice.id}/edit`}
+          // One ochre sentence per page: a failed Peppol delivery holds it.
+          tone={peppolAttention ? 'muted' : 'attn'}
         />
       )}
+
+      {/* The latest Peppol delivery, when it needs the user: the operator's
+          own reason (status_detail, never adapter text) and the ways on. */}
+      {peppolAttention === 'failed' && latestPeppolDelivery && (
+        <AttnLine
+          action={canWrite && canSendPeppol
+            ? { label: t('peppol_failed_resend_action'), onClick: () => setShowPeppolSendDialog(true) }
+            : undefined}
+          trailing={peppolOtherWay && (
+            <>
+              {' '}
+              <button
+                type="button"
+                onClick={peppolOtherWay.onClick}
+                className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                {peppolOtherWay.label}
+              </button>
+            </>
+          )}
+        >
+          {latestPeppolDelivery.status_detail
+            ? t.rich('peppol_failed_attn', {
+                reason: latestPeppolDelivery.status_detail,
+                // data-ph-mask: the operator's reason can quote the invoice number
+                mask: (chunks) => <span data-ph-mask="">{chunks}</span>,
+              })
+            : t('peppol_failed_attn_no_reason')}
+        </AttnLine>
+      )}
+      {peppolAttention === 'unconfirmed' && <AttnLine>{t('peppol_unconfirmed_attn')}</AttnLine>}
 
       {/* Kund and Detaljer side by side like an invoice head: who it is for
           on the left, the facts on the right. */}

@@ -1,0 +1,70 @@
+import { describe, expect, it } from 'vitest'
+import { communitySlug, detectConnections, githubNewFileUrl, isReservedCommunitySlug, parseCommunitySkillMd, privacyFindings, publicBody, toCommunitySkillMd } from '../community-repo'
+
+const submission = {
+  slug: 'manadsavstamning-bank', title: 'Månadsavstämning av banken', description: 'Stämmer av bankkontot varje månad.',
+  kind: 'rules' as const, author: 'jakob', submissionId: '00000000-0000-4000-8000-000000000001',
+  body: '# Månadsavstämning av banken\n\nStäm av 1930.\n\n## Så beskrev användaren det\n\nVi har Swedbank och kunden Acme.\n',
+}
+
+describe('community-repo', () => {
+  it('makes a folder name from a Swedish title', () => {
+    expect(communitySlug('Månadsavstämning av banken')).toBe('manadsavstamning-av-banken')
+    expect(communitySlug('  !!  ')).toBe('instruktion')
+  })
+
+  it('never names a community folder like one of Accounted\'s own packs (swedish-*)', () => {
+    expect(communitySlug('Swedish VAT')).toBe('community-swedish-vat')
+    expect(communitySlug('Swedish')).toBe('swedish')
+    expect(communitySlug(`Swedish ${'x'.repeat(80)}`)).toHaveLength(60)
+    expect(isReservedCommunitySlug(communitySlug(`Swedish ${'x'.repeat(80)}`))).toBe(false)
+    const md = toCommunitySkillMd({ ...submission, slug: 'swedish-vat' })
+    expect(parseCommunitySkillMd('swedish-vat', md)).toMatchObject({ error: expect.stringContaining('reserved') })
+  })
+
+  it('keeps the user\'s own words out of what goes public', () => {
+    expect(publicBody(submission.body)).toBe('# Månadsavstämning av banken\n\nStäm av 1930.\n')
+  })
+
+  it('writes a SKILL.md that reads back as the same item, knowledge called knowledge in the repo', () => {
+    const md = toCommunitySkillMd(submission)
+    expect(md).toContain('kind: knowledge')
+    expect(md).not.toContain('Acme')
+    const parsed = parseCommunitySkillMd('manadsavstamning-bank', md)
+    expect(parsed).toMatchObject({ slug: 'manadsavstamning-bank', title: 'Månadsavstämning av banken', kind: 'rules', author: 'jakob', submissionId: submission.submissionId, industries: [] })
+  })
+
+  it('names what to fix in a broken file', () => {
+    expect(parseCommunitySkillMd('x', '# no frontmatter')).toEqual({ error: 'missing frontmatter' })
+    expect(parseCommunitySkillMd('other', toCommunitySkillMd(submission))).toEqual({ error: 'name must match the folder name' })
+    expect(parseCommunitySkillMd('Bad Name', 'x')).toMatchObject({ error: expect.stringContaining('folder name') })
+    const wrongKind = toCommunitySkillMd(submission).replace('kind: knowledge', 'kind: poem')
+    expect(parseCommunitySkillMd('manadsavstamning-bank', wrongKind)).toMatchObject({ error: expect.stringContaining('kind') })
+  })
+
+  it('flags what must never be published', () => {
+    const found = privacyFindings('Ring 070-123 45 67 eller mejla anna@firma.se. Personnr 19850101-1234, orgnr 559538-6219.')
+    expect(found.map((f) => f.kind)).toEqual(expect.arrayContaining(['phone', 'email', 'personnummer', 'orgnummer']))
+    expect(privacyFindings('Bokför på konto 5420 med 25 % moms.')).toEqual([])
+  })
+
+  it('opens GitHub\'s editor with the file, or hands over when it is too long', () => {
+    expect(githubNewFileUrl('x', 'short')).toBe('https://github.com/erp-mafia/accounted-skills/new/main?filename=community%2Fx%2FSKILL.md&value=short')
+    expect(githubNewFileUrl('x', 'å'.repeat(5000))).toBeNull()
+  })
+
+  it('guesses what an instruction touches from its words, tool names included', () => {
+    expect(detectConnections('Sök kvittot i Gmail och matcha mot banktransaktionen.')).toEqual(['gmail', 'bank'])
+    expect(detectConnections('Anropa gmail_search_threads för varje verifikat.')).toEqual(['gmail'])
+    expect(detectConnections('Läs inkorgen och skicka ett mejl till kunden.')).toEqual(['mail'])
+    expect(detectConnections('Stäm av skattekontot innan momsdeklarationen.')).toEqual(['skatteverket'])
+    expect(detectConnections('Föreslå konto för varje rad i huvudboken. Ingen email.')).toEqual([])
+  })
+
+  it('writes the guessed connections into the file the reviewer opens, and leaves them out when there are none', () => {
+    const touching = toCommunitySkillMd({ ...submission, body: '# Kvitton\n\nSök i Gmail och koppla till banktransaktionen.' })
+    expect(touching).toContain('connections:\n  - gmail\n  - bank\n')
+    expect(parseCommunitySkillMd(submission.slug, touching)).not.toHaveProperty('error')
+    expect(toCommunitySkillMd({ ...submission, title: 'Kontoplanen', description: 'Följer BAS.', body: '# Regler\n\nFölj BAS-kontoplanen.' })).not.toContain('connections:')
+  })
+})

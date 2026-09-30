@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { AR_LEDGER_STATUSES } from '@/lib/reports/ar-ledger'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -55,7 +56,7 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
     // Proformas, delivery notes and quotes are never receivables (parity
     // with generateARLedger).
     .eq('document_type', 'invoice')
-    .in('status', ['sent', 'overdue', 'credited'])
+    .in('status', [...AR_LEDGER_STATUSES])
     .order('invoice_date', { ascending: true })
     .limit(PAGE_LIMIT)
 

@@ -48,6 +48,7 @@ import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
+import { dimensionDisplayName } from '@/components/dimensions/dimension-label'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -177,8 +178,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
   // Dimension registry, fetched once when any line carries a dimensions map:
-  // used to resolve display names for the per-line dimension text ('KS: Butik');
-  // it falls back to raw codes when the fetch fails or a code is unregistered.
+  // used to resolve display names for the per-line dimension text
+  // ('Kostnadsställe: Butik') and the retag history; it falls back to raw
+  // codes when the fetch fails or a code is unregistered.
   // Dimension names for tagged lines, from the session-cached registry
   // (lib/reference-data); null until it is there, raw codes render meanwhile.
   const { dimensions } = useDimensions()
@@ -483,17 +485,13 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // Include current entry in the chain for the visualization
   const fullChain = [entry, ...chain]
 
-  // SIE dimension prefixes. 'KS' is the market-standard abbreviation for
-  // kostnadsställe; projekt has no standard abbreviation (Fortnox/Visma show
-  // the dimension name, and 'PR' collides with prisnivå in some BAS setups,
-  // flagged in the #859 compliance review), so dim 6 falls through to the
-  // registry name below. Stays Swedish per .claude/rules/i18n.md.
-  const DIM_BADGE_PREFIX: Record<string, string> = { '1': 'KS' }
-
-  // Display-only dimension text for a line (e.g. 'KS: Butik · Projekt: P001').
-  // Names resolve through the registry when loaded; raw codes otherwise.
-  // Muted text, not chips: dimensions are normal data on a line, and chips
-  // mark exceptions only.
+  // Display-only dimension text for a line (e.g. 'Kostnadsställe: Butik ·
+  // Projekt: P001'). Every dimension is prefixed by its registry name
+  // (dimensionDisplayName), the system pair included, so a custom dimension
+  // reads like the built-in ones. Value names resolve through the registry
+  // when loaded; raw codes otherwise. Muted text, not chips: dimensions are
+  // normal data on a line, and chips mark exceptions only. Stays Swedish per
+  // .claude/rules/i18n.md.
   const renderDimensions = (line: JournalEntryLine) => {
     const entries = Object.entries(line.dimensions ?? {})
       .filter(([, code]) => code)
@@ -503,9 +501,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       .map(([dimNo, code]) => {
         const dim = registryDims?.find((d) => String(d.sie_dim_no) === dimNo)
         const value = dim?.values.find((v) => v.code === code)
-        const prefix = DIM_BADGE_PREFIX[dimNo] ?? dim?.name ?? `Dim ${dimNo}`
         const hasName = !!value && value.name !== '' && value.name !== value.code
-        return `${prefix}: ${hasName ? value.name : code}`
+        return `${dimensionDisplayName(registryDims, dimNo)}: ${hasName ? value.name : code}`
       })
       .join(' · ')
     return (
@@ -604,7 +601,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           {showActions && (
             <div className="flex shrink-0 flex-wrap items-center gap-2">
               {entry.status === 'draft' && (
-                <Button
+                <Button size="sm"
                   variant="outline"
                   onClick={() => setShowEdit(true)}
                   disabled={!canWrite}
@@ -615,7 +612,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 </Button>
               )}
               {entry.status === 'draft' && (
-                <Button
+                <Button size="sm"
                   onClick={openCommitConfirm}
                   disabled={!canWrite}
                   loading={isCommitting}
@@ -626,7 +623,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 </Button>
               )}
               {canCorrect && isOpeningBalance && (
-                <Button
+                <Button size="sm"
                   variant="outline"
                   onClick={() => setShowCorrectIB(true)}
                   disabled={!canWrite}
@@ -637,7 +634,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 </Button>
               )}
               {showStrikeButton && (
-                <Button
+                <Button size="sm"
                   variant="outline"
                   onClick={() => setShowStrikeLines(true)}
                   disabled={!canWrite}
@@ -650,7 +647,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" aria-label={tCommon('more_options')}>
+                  <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
                     <MoreHorizontal className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -1112,7 +1109,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       )}
 
       {/* Dimension retag history (dimensions plan PR6): the immutable
-          before/after trail. Stays Swedish (voucher detail surface). */}
+          before/after trail. Stays Swedish (voucher detail surface). Each
+          side shows the dimension's registry name and the code as logged:
+          codes are what the trail recorded, names can change later. */}
       {dimensionsEnabled && retagLog.length > 0 && (
         <DetailSection kicker="Ändringshistorik för dimensioner">
           <ul className="divide-y divide-border text-sm">
@@ -1120,7 +1119,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               const lineForRow = lines.find((l) => l.id === row.line_id)
               const fmt = (dims: Record<string, string>) => {
                 const entries = Object.entries(dims ?? {}).sort(([a], [b]) => Number(a) - Number(b))
-                return entries.length > 0 ? entries.map(([no, code]) => `${no}: ${code}`).join(', ') : '-'
+                return entries.length > 0
+                  ? entries.map(([no, code]) => `${dimensionDisplayName(registryDims, no)}: ${code}`).join(', ')
+                  : '-'
               }
               return (
                 <li key={row.id} className="py-2">
@@ -1128,7 +1129,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                     <span className="tabular-nums text-muted-foreground">{formatDate(row.created_at)}</span>
                     {lineForRow && <AccountNumber number={lineForRow.account_number} />}
                   </div>
-                  <p className="tabular-nums">
+                  {/* data-ph-mask: dimension names and codes are user data */}
+                  <p data-ph-mask="" className="tabular-nums">
                     <span className="text-muted-foreground line-through">{fmt(row.old_dimensions)}</span>
                     {' → '}
                     <span>{fmt(row.new_dimensions)}</span>

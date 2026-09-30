@@ -69,7 +69,9 @@ export async function generateARReconciliation(
       .eq('company_id', companyId)
       // Proformas, delivery notes and quotes are never receivables.
       .eq('document_type', 'invoice')
-      .in('status', ['sent', 'overdue'])
+      // A partially paid invoice still carries total - paid_amount on 1510;
+      // leaving it out turned that remainder into a reconciliation difference.
+      .in('status', ['sent', 'overdue', 'partially_paid'])
       .order('id', { ascending: true })
       .range(from, to)
   )

@@ -150,12 +150,10 @@ describe('generateAGIXml: Huvuduppgift (HU)', () => {
       ...totals,
       totalTax: 12268,
       totalAvgifterAmount: 16073.84,
-      totalSjuklonekostnad: 1234.99,
     }
     const xml = generateAGIXml(company, employees, oreTotals)
     expect(xml).toContain('<gem:SummaSkatteavdr faltkod="497">12268</gem:SummaSkatteavdr>')
     expect(xml).toContain('<gem:SummaArbAvgSlf faltkod="487">16073</gem:SummaArbAvgSlf>')
-    expect(xml).toContain('<gem:TotalSjuklonekostnad faltkod="499">1234</gem:TotalSjuklonekostnad>')
   })
 
   it('does not let IEEE drift under an exact krona lose it in truncation', () => {
@@ -181,17 +179,10 @@ describe('generateAGIXml: Huvuduppgift (HU)', () => {
     expect(hu).not.toContain('faltkod="062"')
   })
 
-  it('emits TotalSjuklonekostnad FK499 when sjuklön cost is reported', () => {
-    const withSjuklon = { ...totals, totalSjuklonekostnad: 4200 }
-    const xml = generateAGIXml(company, employees, withSjuklon)
-    expect(xml).toContain('<gem:TotalSjuklonekostnad faltkod="499">4200</gem:TotalSjuklonekostnad>')
-  })
-
-  it('omits TotalSjuklonekostnad when zero or undefined', () => {
+  it('never emits FK499 TotalSjuklonekostnad: retired with högkostnadsskyddet, invalid after 202406', () => {
     const xml = generateAGIXml(company, employees, totals)
+    expect(xml).not.toContain('faltkod="499"')
     expect(xml).not.toContain('TotalSjuklonekostnad')
-    const zero = { ...totals, totalSjuklonekostnad: 0 }
-    expect(generateAGIXml(company, employees, zero)).not.toContain('TotalSjuklonekostnad')
   })
 })
 
@@ -545,7 +536,6 @@ describe('generateAGIXml: nolldeklaration (HU-only, no IU)', () => {
     totalTax: 0,
     totalAvgifterBasis: 0,
     totalAvgifterAmount: 0,
-    totalSjuklonekostnad: 0,
     avgifterByCategory: {},
   }
 
@@ -561,11 +551,11 @@ describe('generateAGIXml: nolldeklaration (HU-only, no IU)', () => {
     expect(xml).not.toContain('Franvarouppgift')
   })
 
-  it('omits every zero HU total field (FK497/FK487/FK499)', () => {
+  it('omits every zero HU total field (FK497/FK487)', () => {
     const xml = generateAGIXml(company, [], zeroTotals)
     expect(xml).not.toContain('faltkod="497"') // SummaSkatteavdr
     expect(xml).not.toContain('faltkod="487"') // SummaArbAvgSlf
-    expect(xml).not.toContain('faltkod="499"') // TotalSjuklonekostnad
+    expect(xml).not.toContain('faltkod="499"') // TotalSjuklonekostnad: retired, never emitted
   })
 
   it('still validates required company data for a nolldeklaration', () => {

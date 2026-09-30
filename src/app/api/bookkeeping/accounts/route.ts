@@ -5,16 +5,12 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { CreateAccountSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { accountClassTypeConflict } from '@/lib/pending-operations/schemas/account'
-import {
-  defaultRateForVatTreatment,
-  isVatTreatmentAllowedForAccountClass,
-} from '@/lib/vat/account-vat-treatment'
-import { isVatBoxAccount } from '@/lib/vat/account-vat-box'
+import { createAccount } from '@/lib/bookkeeping/chart-of-accounts-service'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
-// Response shapes are legacy `{ data }` / `{ error: string }` — several pages
-// (import, supplier-invoices, article form) consume the list directly.
+// Success shapes are legacy `{ data }`: several pages (import,
+// supplier-invoices, article form) consume the list directly. Create failures
+// answer the canonical `{ error: { code, message } }` envelope.
 
 const ListQuerySchema = z.object({
   class: z.coerce.number().int().min(1).max(8).optional(),
@@ -86,10 +82,16 @@ export const GET = withRouteContext('bookkeeping.accounts.list', async (request,
   }
 })
 
+/**
+ * POST: create one account. The rules (class/type fit, VAT treatment and
+ * momsruta fit, BAS prefill, duplicate vs deactivated duplicate) live in
+ * lib/bookkeeping/chart-of-accounts-service.ts, shared with the v1 operation
+ * accounts.create and gnubok_create_account.
+ */
 export const POST = withRouteContext(
   'bookkeeping.accounts.create',
   async (request, ctx) => {
-    const { supabase, companyId, user, log } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
 
     const validation = await validateBody(request, CreateAccountSchema, {
       log,
@@ -97,91 +99,16 @@ export const POST = withRouteContext(
     })
     if (!validation.success) return validation.response
     const body = validation.data
-    const accountClass = parseInt(body.account_number[0])
-    // Same class/type rule the MCP create path enforces: account_class is
-    // derived from the first digit below, so a contradicting type (2999 +
-    // expense) would put the account on the wrong side of every report.
-    if (accountClassTypeConflict(body.account_number, body.account_type)) {
-      return NextResponse.json(
-        { error: 'Kontotypen passar inte kontoklassen för det här kontonumret.' },
-        { status: 400 },
-      )
-    }
-    if (
-      body.default_vat_treatment &&
-      !isVatTreatmentAllowedForAccountClass(body.default_vat_treatment, accountClass)
-    ) {
-      return NextResponse.json(
-        { error: 'Momskoden kan inte användas för den här kontoklassen.' },
-        { status: 400 },
-      )
-    }
-    if (body.vat_box && !isVatBoxAccount(body.account_number)) {
-      return NextResponse.json(
-        { error: 'Momsruta kan bara väljas för momskonton (26xx, inte 2650).' },
-        { status: 400 },
-      )
-    }
-    const defaultVatRate = body.default_vat_treatment && body.default_vat_rate == null
-      ? defaultRateForVatTreatment(body.default_vat_treatment, accountClass)
-      : body.default_vat_rate ?? null
 
-    const { data, error } = await supabase
-      .from('chart_of_accounts')
-      .insert({
-        user_id: user.id,
-        company_id: companyId,
-        account_number: body.account_number,
-        account_name: body.account_name,
-        account_class: accountClass,
-        account_group: body.account_number.substring(0, 2),
-        account_type: body.account_type,
-        normal_balance: body.normal_balance,
-        plan_type: body.plan_type || 'k1',
-        is_system_account: false,
-        description: body.description || null,
-        default_vat_code: body.default_vat_code || null,
-        default_vat_rate: defaultVatRate,
-        default_vat_treatment: body.default_vat_treatment ?? null,
-        vat_box: body.vat_box ?? null,
-        sru_code: body.sru_code || null,
-        sort_order: parseInt(body.account_number),
-      })
-      .select()
-      .single()
-
-    if (error) {
-      if (error.code === '23505') {
-        // The unique constraint counts deactivated rows, so "already exists"
-        // covers two very different situations. Only look up which one it is
-        // on the failing path: the happy path stays a single insert.
-        const { data: existing } = await supabase
-          .from('chart_of_accounts')
-          .select('is_active')
-          .eq('company_id', companyId)
-          .eq('account_number', body.account_number)
-          .maybeSingle()
-
-        if (existing && existing.is_active === false) {
-          // Re-creating can never succeed here; the caller must reactivate
-          // instead. The distinct code is what AddAccountDialog keys on to
-          // offer that as a one-click action rather than a dead end.
-          return errorResponseFromCode('ACCOUNT_EXISTS_INACTIVE', log, {
-            status: 409,
-            messageSv: `Kontonummer ${body.account_number} finns redan i din kontoplan men är inaktiverat.`,
-            details: { account_number: body.account_number },
-          })
-        }
-
-        return NextResponse.json(
-          { error: `Kontonummer ${body.account_number} finns redan i din kontoplan.` },
-          { status: 409 },
-        )
-      }
-      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-    }
-
-    return NextResponse.json({ data })
+    // The Kontoplan dialog's accounts have always been labelled k1, which
+    // keeps a hand-added account out of the prune dialog's preselection.
+    const outcome = await createAccount(
+      { supabase, companyId, userId: user.id, log },
+      { ...body, plan_type: body.plan_type ?? 'k1' },
+    )
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

@@ -5,6 +5,13 @@ import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-serv
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { getPrimary as getPrimaryCashAccount } from '@/lib/cash-accounts/service'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import {
+  findLedgerTwinCandidates,
+  findLedgerTwinCandidatesForIds,
+  type LedgerTwinProbe,
+  type SkattekontoMatchCandidate,
+} from './skattekonto-match'
 import type {
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
@@ -15,6 +22,7 @@ import type {
   SkattekontoBatchResult,
   SkattekontoBatchRowResult,
   SkattekontoBookingSuggestion,
+  SkattekontoLedgerTwin,
 } from '@/types/skatteverket'
 
 /**
@@ -73,7 +81,10 @@ export class SkattekontoBookingError extends Error {
       | 'ALREADY_BOOKED'
       | 'NOT_SETTLED'
       | 'ROW_IGNORED'
-      | 'TRANSACTION_NOT_FOUND',
+      | 'TRANSACTION_NOT_FOUND'
+      | 'LEDGER_TWIN_EXISTS',
+    /** The verifikat that already carry the event (LEDGER_TWIN_EXISTS only). */
+    public readonly ledgerTwins?: SkattekontoLedgerTwin[],
   ) {
     super(message)
     this.name = 'SkattekontoBookingError'
@@ -398,6 +409,80 @@ export async function attachBookingSuggestions<
   return enriched
 }
 
+function toLedgerTwin(c: SkattekontoMatchCandidate): SkattekontoLedgerTwin {
+  return {
+    journal_entry_id: c.journal_entry_id,
+    voucher_series: c.voucher_series,
+    voucher_number: c.voucher_number,
+    entry_date: c.entry_date,
+    description: c.description,
+    status: c.status,
+    ...(c.combined_with?.length ? { combined_with: c.combined_with } : {}),
+  }
+}
+
+function toLedgerTwinMap(
+  byRow: Map<string, SkattekontoMatchCandidate[]>,
+): Map<string, SkattekontoLedgerTwin[]> {
+  return new Map(Array.from(byRow, ([id, list]) => [id, list.map(toLedgerTwin)]))
+}
+
+/**
+ * The verifikat that already carry each row's event on 1630: the candidates
+ * the match flow offers (findLedgerTwinCandidates), so a refusal always
+ * points at something "Koppla" can link. Every row gets an entry, empty when
+ * the ledger has no twin. Throws when the search cannot be completed.
+ */
+export async function findSkattekontoLedgerTwins(
+  supabase: SupabaseClient,
+  companyId: string,
+  rows: LedgerTwinProbe[],
+): Promise<Map<string, SkattekontoLedgerTwin[]>> {
+  return toLedgerTwinMap(await findLedgerTwinCandidates(supabase, companyId, rows))
+}
+
+/**
+ * Swedish refusal naming the twins (up to three) and the way out. A row
+ * Skatteverket has not settled yet cannot be linked (linkSkattekontoRow
+ * refuses it), so for `settled: false` the way out is to wait and link then.
+ * A combined twin names how many other rows of the day it links together.
+ */
+export function ledgerTwinMessage(
+  twins: SkattekontoLedgerTwin[],
+  opts: { settled?: boolean } = {},
+): string {
+  const ref = (t: SkattekontoLedgerTwin) =>
+    t.voucher_number != null && t.voucher_number !== 0
+      ? `verifikat ${formatVoucher(t)} (${t.entry_date})`
+      : `ett utkast (${t.entry_date})`
+  const shown = twins.slice(0, 3).map(ref)
+  const rest = twins.length - shown.length
+  const list =
+    rest > 0
+      ? `${shown.join(', ')} och ${rest} till`
+      : shown.length > 1
+        ? `${shown.slice(0, -1).join(', ')} och ${shown[shown.length - 1]}`
+        : shown[0]
+  const companions = twins.length === 1 ? twins[0].combined_with?.length ?? 0 : 0
+  const target =
+    twins.length > 1
+      ? 'rätt verifikat'
+      : companions === 1
+        ? 'det tillsammans med en annan rad från samma dag'
+        : companions > 1
+          ? `det tillsammans med ${companions} andra rader från samma dag`
+          : 'det'
+  const wayOut =
+    opts.settled === false
+      ? `Skatteverket har inte genomfört händelsen ännu: vänta tills den är genomförd och koppla då raden till ${target} i stället för att bokföra händelsen en gång till. `
+      : `Koppla raden till ${target} i stället för att bokföra händelsen en gång till. `
+  return (
+    `Händelsen finns redan i bokföringen: ${list} innehåller den redan på konto 1630. ` +
+    wayOut +
+    'Bokför ändå bara om händelsen verkligen har inträffat två gånger.'
+  )
+}
+
 /**
  * Partial unique index journal_entries_system_source_live_unique (migration
  * 20260920145033): one live (draft or posted) source_type = 'system' entry per
@@ -420,6 +505,8 @@ function isSystemSourceLiveUniqueError(err: unknown): boolean {
  * Throws SkattekontoBookingError on:
  *   - already-booked rows (journal_entry_id present, or a live verifikat for
  *     the row already exists: journal_entries_system_source_live_unique)
+ *   - a ledger twin: another live verifikat already carries the event on
+ *     1630 (LEDGER_TWIN_EXISTS), unless allowDuplicate
  *   - missing/locked fiscal period for the transaktionsdatum
  *   - no rule match → user must categorize manually
  *
@@ -435,11 +522,20 @@ export async function bokforSkattekontoTransaction(
   // once per batch instead of once per row. Omitted → per-call fetches,
   // identical to the original single-row behaviour.
   ruleContext?: SkattekontoRuleContext,
-  // requireSettled: reject rows that Skatteverket has not settled yet
-  // (status !== 'booked'). The batch commit path sets this: a kommande row
-  // must never land in an immutable posted verifikat. The single-row draft
-  // endpoint keeps its historical behaviour (draft for user review).
-  options?: { requireSettled?: boolean },
+  options?: {
+    // requireSettled: reject rows that Skatteverket has not settled yet
+    // (status !== 'booked'). The batch commit path sets this: a kommande row
+    // must never land in an immutable posted verifikat. The single-row draft
+    // endpoint keeps its historical behaviour (draft for user review).
+    requireSettled?: boolean
+    // allowDuplicate: book even though a ledger twin exists. Only an explicit
+    // per-row decision by the user or agent sets it (the event really
+    // happened twice); no caller defaults it.
+    allowDuplicate?: boolean
+    // ledgerTwins: this row's twins, precomputed by a batch caller in one
+    // search for all rows. Omitted → searched here for this row alone.
+    ledgerTwins?: SkattekontoLedgerTwin[]
+  },
 ): Promise<JournalEntry> {
   // 1. Load the transaction
   const { data: tx, error: txError } = await supabase
@@ -479,6 +575,31 @@ export async function bokforSkattekontoTransaction(
       'Händelsen är inte genomförd hos Skatteverket ännu och kan inte bokföras.',
       'NOT_SETTLED',
     )
+  }
+
+  // The ledger may already hold this event: a verifikat imported by SIE from
+  // the previous system, a manual voucher, a bank-feed transfer. The feed's
+  // dedup key only knows skattekonto rows, so without this check the same
+  // event lands on 1630 twice. The test is the match flow's own candidate
+  // search (exact öre and side, inside the window, not already linked, not a
+  // storno pair), so the refusal names exactly what "Koppla" can link. It
+  // runs before the rule match on purpose: for a twin the answer is Koppla,
+  // never "create it manually", which would duplicate it by hand. A row
+  // Skatteverket has not settled yet (the single-row draft path opens
+  // kommande rows) cannot be linked either, so its refusal says to wait and
+  // link once it is settled.
+  if (!options?.allowDuplicate) {
+    const twins =
+      options?.ledgerTwins ??
+      (await findSkattekontoLedgerTwins(supabase, companyId, [tx])).get(tx.id) ??
+      []
+    if (twins.length > 0) {
+      throw new SkattekontoBookingError(
+        ledgerTwinMessage(twins, { settled: tx.status === 'booked' }),
+        'LEDGER_TWIN_EXISTS',
+        twins,
+      )
+    }
   }
 
   // 2+3. Resolve counter-account via skattekonto_rules (entity_type decides
@@ -667,14 +788,30 @@ function isPeriodLockTriggerError(err: unknown): boolean {
  * commit failed (e.g. a mandatory-dimension policy), the draft is kept and
  * stays linked to the row: that degrades to the pre-existing
  * draft-then-review flow instead of deleting bookkeeping material.
+ *
+ * A row whose event the ledger already holds is skipped with
+ * LEDGER_TWIN_EXISTS and its twins listed, unless its id is in
+ * `allowDuplicateIds`. The twins of all rows are searched once up front.
  */
 export async function bokforSkattekontoTransactionsBatch(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   ids: string[],
+  options?: { allowDuplicateIds?: string[] },
 ): Promise<SkattekontoBatchResult> {
   const ruleContext = await loadRuleContext(supabase, companyId)
+  const allowDuplicate = new Set(options?.allowDuplicateIds ?? [])
+  // One candidate search for every open row the guard applies to. A row
+  // missing from the map (booked, ignored or gone at read time) searches for
+  // itself if it is still bookable when its turn comes.
+  const twinsByRow = toLedgerTwinMap(
+    await findLedgerTwinCandidatesForIds(
+      supabase,
+      companyId,
+      ids.filter(id => !allowDuplicate.has(id)),
+    ),
+  )
   // A one-row batch is the inline single-row flow: attribute it as a normal
   // user acceptance; real bulk runs are attributed as bulk_accept.
   const commitMethod = ids.length === 1 ? 'user_accept' : 'bulk_accept'
@@ -689,9 +826,13 @@ export async function bokforSkattekontoTransactionsBatch(
         userId,
         id,
         ruleContext,
-        // Batch rows commit immediately: never post an unsettled (kommande)
-        // Skatteverket row into an immutable verifikat.
-        { requireSettled: true },
+        {
+          // Batch rows commit immediately: never post an unsettled (kommande)
+          // Skatteverket row into an immutable verifikat.
+          requireSettled: true,
+          allowDuplicate: allowDuplicate.has(id),
+          ledgerTwins: twinsByRow.get(id),
+        },
       )
     } catch (err) {
       if (err instanceof SkattekontoBookingError) {
@@ -700,6 +841,7 @@ export async function bokforSkattekontoTransactionsBatch(
           ok: false,
           error_code: err.code,
           error_message: err.message,
+          ...(err.ledgerTwins ? { ledger_twins: err.ledgerTwins } : {}),
         })
       } else if (isPeriodLockTriggerError(err)) {
         results.push({

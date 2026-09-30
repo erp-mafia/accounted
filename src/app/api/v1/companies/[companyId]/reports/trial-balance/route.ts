@@ -49,6 +49,7 @@ registerEndpoint({
     '`period_id` is required as a query parameter.',
     '`isBalanced=false` means the period has unbalanced postings: a data-integrity red flag. The lib generator rounds at the source so a true imbalance is rare; investigate immediately.',
     'Closed/locked periods are still queryable: the report is read-only.',
+    'No dimension filter: the saldobalans is company-wide, so dim_no/dim_code answer 400 VALIDATION_ERROR rather than an unfiltered report. For one project or cost centre use /reports/income-statement or /reports/general-ledger with dim_no + dim_code.',
   ],
   example: {
     response: {

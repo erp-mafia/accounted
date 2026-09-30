@@ -2,11 +2,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AiTier } from '@/lib/ai/types'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { getAiStatus } from '@/lib/ai'
+import { withAiMeter } from '@/lib/ai/meter'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { createLogger } from '@/lib/logger'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
 import { readDocumentBytes } from './router'
-import { historyReaderTier, readLaneFor, readPlanFor, isActingType, type ReadPlan } from './lanes'
+import { keptPreview } from '@/lib/documents/preview'
+import { historyReaderTier, readLaneFor, readPlanFor, isActingType, isBooked, type ReadPlan } from './lanes'
 import { READER_UNAVAILABLE, ReaderUnavailableError, readerForMime, type ReadOutcome } from './types'
 
 const log = createLogger('documents/read')
@@ -58,15 +60,26 @@ export async function readAndStoreDocument(
   if (kind === null) return stamp(supabase, doc.id, { status: 'skipped', reason: 'unsupported_mime' }, null)
   if (kind === 'structured') return stamp(supabase, doc.id, { status: 'skipped', reason: 'structured' }, null)
 
-  const { blob, error } = await downloadDocumentObject(supabase, doc.storage_path, doc.company_id)
-  if (error || !blob) {
-    return stamp(supabase, doc.id, { status: 'error', reason: `download_failed: ${error?.message ?? 'no data'}` }, null)
+  // A photo the viewer already sized is read from that JPEG: no second HEIC decode, no second resize.
+  const preview = kind === 'claude_vision' ? await keptPreview(supabase, { id: doc.id, company_id: doc.company_id }) : null
+  let bytes: Buffer
+  let mime = doc.mime_type
+  if (preview) {
+    bytes = preview
+    mime = 'image/jpeg'
+  } else {
+    const { blob, error } = await downloadDocumentObject(supabase, doc.storage_path, doc.company_id)
+    if (error || !blob) {
+      return stamp(supabase, doc.id, { status: 'error', reason: `download_failed: ${error?.message ?? 'no data'}` }, null)
+    }
+    bytes = Buffer.from(await blob.arrayBuffer())
   }
-  const bytes = Buffer.from(await blob.arrayBuffer())
 
   let outcome: ReadOutcome
   try {
-    outcome = await readDocumentBytes(bytes, doc.mime_type, { allowModel, maxModelPages: opts.maxModelPages ?? null, ...(opts.tier ? { tier: opts.tier } : {}) })
+    outcome = await withAiMeter({ feature: 'document_read', companyId: doc.company_id }, () =>
+      readDocumentBytes(bytes, mime, { allowModel, maxModelPages: opts.maxModelPages ?? null, ...(opts.tier ? { tier: opts.tier } : {}) }),
+    )
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
     if (err instanceof ReaderUnavailableError) {
@@ -124,7 +137,7 @@ export function storableText(s: string): string {
 
 /** The lane's plan for this document now: null when nothing more is read up front. */
 export function planForDocument(doc: ReadableDocumentRow, now = new Date()): ReadPlan | null {
-  return readPlanFor({ lane: readLaneFor(doc, now), inRollout: isArkivEnabled(doc.company_id), docType: doc.doc_type ?? null, pagesRead: !!doc.pages_read_at })
+  return readPlanFor({ lane: readLaneFor(doc, now), inRollout: isArkivEnabled(doc.company_id), docType: doc.doc_type ?? null, pagesRead: !!doc.pages_read_at, tied: isBooked(doc) })
 }
 
 /** Read what the lane says to read. The runner and the backfill both come through here. */
@@ -183,8 +196,11 @@ export async function readUnreadDocuments(
   const walkByPlan = async (docs: ReadableDocumentRow[]): Promise<boolean> => {
     for (const doc of docs) {
       if (spentTime()) return true
-      const { outcome } = await readDocumentByPlan(supabase, doc, now)
-      const out = outcome ?? { status: 'skipped' as const, reason: 'lane_done' }
+      const plan = planForDocument(doc, now)
+      // History costs the model only while the company has a budget; without one the backfill reads text layers and a question reads the rest.
+      const out = plan
+        ? await readAndStoreDocument(supabase, doc, { allowModel: plan.allowModel && (plan.lane === 'live' || budget > 0), maxModelPages: plan.maxModelPages, tier: plan.tier })
+        : { status: 'skipped' as const, reason: 'lane_done' }
       await tally(doc, out)
       if (isReaderUnavailable(out)) return false
     }
@@ -193,8 +209,9 @@ export async function readUnreadDocuments(
   // The shelf is on for every company: nobody goes first, and everyone's gated rows are retried under the budget.
   if (!spentTime() && getAiStatus().configured) {
     const room = limit - counts.processed
-    const retry = supabase.from('document_attachments').select('id, company_id, storage_path, mime_type, created_at, journal_entry_id, journal_entry_line_id, doc_type, pages_read_at, read_error').in('read_error', RETRY_REASONS)
-    const { data, error } = await retry.order('pages_read_at', { ascending: true }).limit(room * 4)
+    // Oldest stamp first, leaving out rows the stamp cannot land on: a gated document on a locked period was read
+    // again with the model every run and led the next batch (prod 2026-09-24: 19 rows took every run's budget).
+    const { data, error } = await supabase.rpc('document_retry_candidates', { p_reasons: RETRY_REASONS, p_limit: room * 4 })
     if (error) throw new Error(`fetch retry documents failed: ${error.message}`)
     // Vision pages already spent today per company, read once and kept as the pass spends more.
     const spent = new Map<string, number>()
@@ -219,25 +236,24 @@ export async function readUnreadDocuments(
       const lane = readLaneFor(doc, now)
       const tier = historyReaderTier()
       let plan: { allowModel: boolean; maxModelPages: number | null; tier?: AiTier } | null = null
-      if (lane === 'live') plan = { allowModel: true, maxModelPages: null }
+      if (lane === 'live') plan = isBooked(doc) ? null : { allowModel: true, maxModelPages: null }
+      else if ((await roomToday(doc.company_id)) <= 0) plan = null
       else if (lane === 'history_loose') plan = !doc.doc_type ? { allowModel: true, maxModelPages: 1, tier } : isActingType(doc.doc_type) ? { allowModel: true, maxModelPages: null, tier } : null
-      else if ((await roomToday(doc.company_id)) > 0) plan = { allowModel: true, maxModelPages: null, tier }
+      else plan = { allowModel: true, maxModelPages: null, tier }
       if (!plan) continue
       taken++
       const out = await readAndStoreDocument(supabase, doc, plan)
       await tally(doc, out)
       if (isReaderUnavailable(out)) return counts
-      if (lane === 'history_tied' && out.status === 'read') spent.set(doc.company_id, (spent.get(doc.company_id) ?? 0) + out.pages)
+      if (lane !== 'live' && out.status === 'read') spent.set(doc.company_id, (spent.get(doc.company_id) ?? 0) + out.pages)
     }
   }
 
   if (spentTime()) return counts
-  const { data, error } = await supabase
-    .from('document_attachments')
-    .select('id, company_id, storage_path, mime_type, created_at, journal_entry_id, journal_entry_line_id, doc_type, pages_read_at, read_error')
-    .is('pages_read_at', null)
-    .order('created_at', { ascending: false })
-    .limit(limit - counts.processed)
+  // Only documents the stamp can land on: a bank response is never read, and a row on a locked period or an
+  // archived reset source refuses the update, so it stayed the newest unread and was read again every run
+  // (prod 2026-09-24: backlog reads down to 3 a day). Those are read when someone opens them.
+  const { data, error } = await supabase.rpc('document_backfill_candidates', { p_limit: limit - counts.processed })
   if (error) throw new Error(`fetch unread documents failed: ${error.message}`)
   await walkByPlan((data ?? []) as ReadableDocumentRow[])
   return counts

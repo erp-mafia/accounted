@@ -57,6 +57,8 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
   }
+  // Payloads handed to `.update()`, per table: what a PATCH actually writes.
+  const updates: Record<string, unknown[]> = {}
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -67,12 +69,15 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          if (prop === 'update') (updates[table] ??= []).push(args[0])
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
   }
-  return { from: vi.fn((table: string) => buildChain(table)) }
+  return { updates, from: vi.fn((table: string) => buildChain(table)) }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -1102,6 +1107,125 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
   })
 })
 
+/**
+ * The update contract (#3008), the same one the dashboard PATCH and the MCP
+ * update_employee tool honour: an explicit null clears a nullable column, an
+ * absent key leaves it unchanged, and the merged row must stay valid.
+ */
+describe('PATCH /api/v1/companies/:companyId/employees/:id clearing fields (#3008)', () => {
+  const ENDED = { ...SAMPLE_EMPLOYEE, employment_end: '2026-06-30' }
+  const url = `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`
+
+  function patch(body: Record<string, unknown>) {
+    return updateEmployee(
+      makeRequest(url, { method: 'PATCH', body: JSON.stringify(body) }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+  }
+
+  function useRows(existing: Record<string, unknown>, updated: Record<string, unknown> = existing) {
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: [{ data: existing, error: null }, { data: updated, error: null }],
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+    return mock.updates
+  }
+
+  it('clears the slutdatum with an explicit null and writes only that key', async () => {
+    const updates = useRows(ENDED, { ...ENDED, employment_end: null })
+
+    const res = await patch({ employment_end: null })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ employment_end: null }])
+    const body = await res.json()
+    expect(body.data.employment_end).toBeNull()
+  })
+
+  it('previews a cleared field under ?dry_run=true without writing', async () => {
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: ENDED, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+
+    const res = await updateEmployee(
+      makeRequest(`${url}?dry_run=true`, { method: 'PATCH', body: JSON.stringify({ employment_end: null }) }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.employment_end).toBeNull()
+    expect(mock.updates.employees).toBeUndefined()
+  })
+
+  it('returns 400 VALIDATION_ERROR for null on a NOT NULL column', async () => {
+    const updates = useRows(ENDED)
+
+    const res = await patch({ employment_start: null })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 400 VALIDATION_ERROR when clearing the monthly salary of a monthly employee', async () => {
+    const updates = useRows(ENDED)
+
+    const res = await patch({ monthly_salary: null })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('monthly_salary')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 400 VALIDATION_ERROR when clearing the tax table of an A-skatt employee', async () => {
+    const updates = useRows(ENDED)
+
+    const res = await patch({ tax_table_number: null })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.details.field).toBe('tax_table_number')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 400 VALIDATION_ERROR when clearing the Växa-stöd start while the flag stays on', async () => {
+    const updates = useRows({ ...ENDED, vaxa_stod_eligible: true, vaxa_stod_start: '2026-01-01' })
+
+    const res = await patch({ vaxa_stod_start: null })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.details.field).toBe('vaxa_stod_start')
+    expect(body.error.details.message).toBe(
+      'Startdatum för Växa-stöd måste anges när Växa-stöd är aktiverat. Skicka även `vaxa_stod_start` i samma PATCH.',
+    )
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('clears both bank fields, but refuses clearing only one (both-or-neither)', async () => {
+    const both = useRows(ENDED, { ...ENDED, clearing_number: null, bank_account_number: null })
+    const resBoth = await patch({ clearing_number: null, bank_account_number: null })
+    expect(resBoth.status).toBe(200)
+    expect(both.employees).toEqual([{ clearing_number: null, bank_account_number: null }])
+
+    const one = useRows(ENDED)
+    const resOne = await patch({ clearing_number: null })
+    expect(resOne.status).toBe(400)
+    const body = await resOne.json()
+    expect(body.error.details.field).toBe('clearing_number')
+    expect(one.employees).toBeUndefined()
+  })
+})
+
 describe('DELETE /api/v1/companies/:companyId/employees/:id', () => {
   it('soft-deletes via is_active=false (no hard delete)', async () => {
     mockServiceClient.mockReturnValue(
@@ -1160,5 +1284,68 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id', () => {
     expect(res.status).toBe(404)
     const body = await res.json()
     expect(body.error.code).toBe('EMPLOYEE_NOT_FOUND')
+  })
+
+  // The rule moved to lib/salary/employee-soft-delete.ts (shared with MCP):
+  // the wire behaviour is pinned here so the move cannot change it.
+  const ROW = { id: EMPLOYEE_ID, first_name: 'Anna', last_name: 'Andersson', is_active: true }
+
+  it('writes is_active=false and nothing else', async () => {
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: ROW, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+
+    const res = await deleteEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'DELETE',
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(204)
+    expect(mock.updates.employees).toEqual([{ is_active: false }])
+  })
+
+  it('does not write for an employee who is already inactive', async () => {
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: { ...ROW, is_active: false }, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+
+    const res = await deleteEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'DELETE',
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(204)
+    expect(mock.updates.employees).toBeUndefined()
+  })
+
+  it('previews { id, is_active: false } under ?dry_run=true and writes nothing', async () => {
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: ROW, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+
+    const res = await deleteEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}?dry_run=true`, {
+        method: 'DELETE',
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toEqual({ dry_run: true, preview: { id: EMPLOYEE_ID, is_active: false } })
+    expect(mock.updates.employees).toBeUndefined()
   })
 })

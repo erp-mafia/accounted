@@ -22,8 +22,14 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { persistBankSyncResult, persistBankSyncFailure, BankSyncResultObsoleteError, type BankSyncInitialResult } from '@/lib/bank-sync/persist-sync-result'
-import { isBankRoutingConflict } from '@/lib/bank-sync/ingest-route'
+import {
+  persistBankSyncResult,
+  persistBankSyncFailure,
+  persistBankRouteNeedsConfiguration,
+  BankSyncResultObsoleteError,
+  type BankSyncInitialResult,
+} from '@/lib/bank-sync/persist-sync-result'
+import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import {
   INCREMENTAL_LOOKBACK_DAYS,
@@ -419,6 +425,23 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         })
       } else {
         ctx.log.error('sync failed for connection', error as Error, failureContext)
+      }
+
+      // The one transient-classified failure a retry never fixes: the account
+      // selection no longer matches the bound cash account. Leaving it silent
+      // stopped syncs for days with nothing but a stale "Synkad" date, so the
+      // row gets the picker advice while status stays 'active' (the cron only
+      // takes active rows, and the picker only saves on them). The next
+      // successful sync clears it. Best effort: the run goes on regardless.
+      if (isBankRouteUnresolved(error)) {
+        try {
+          await persistBankRouteNeedsConfiguration(supabase, {
+            companyId: connection.company_id,
+            connectionId: connection.id,
+          })
+        } catch (persistError) {
+          ctx.log.error('could not store the account selection advice', persistError as Error, failureContext)
+        }
       }
 
       if (!isTransient) {

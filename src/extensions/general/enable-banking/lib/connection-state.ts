@@ -37,6 +37,7 @@ export type ConnectionUiState =
   | 'pending'
   | 'abandoned'
   | 'error'
+  | 'needs_configuration'
   | 'expired'
   | 'expiring'
   | 'stale'
@@ -53,6 +54,10 @@ export interface ConnectionStateInput {
    *  PENDING_ABANDON_MS is an abandoned attempt. Optional so callers that
    *  never see pending rows need not pass it. */
   created_at?: string
+  /** On an 'active' row this is written only when sync stopped on a stale
+   *  account selection (BANK_INGEST_ROUTE_UNRESOLVED); the next successful
+   *  sync clears it. Optional for callers that never render it. */
+  error_message?: string | null
 }
 
 export function getConnectionUiState(
@@ -73,6 +78,9 @@ export function getConnectionUiState(
       return 'expired'
     default: {
       // 'active' (and, defensively, any unknown status): refine by liveness.
+      // A stored message on an active row means sync has stopped until the
+      // account selection is saved again: that outranks an expiring consent.
+      if (connection.error_message) return 'needs_configuration'
       if (connection.consent_expires) {
         const expires = new Date(connection.consent_expires).getTime()
         if (expires <= now + EXPIRY_WARNING_DAYS * DAY_MS) return 'expiring'
@@ -94,11 +102,12 @@ const STATE_PRECEDENCE: Record<ConnectionUiState, number> = {
   pending: 1,
   abandoned: 2,
   error: 3,
-  expired: 4,
-  expiring: 5,
-  stale: 6,
-  never_synced: 7,
-  active: 8,
+  needs_configuration: 4,
+  expired: 5,
+  expiring: 6,
+  stale: 7,
+  never_synced: 8,
+  active: 9,
 }
 
 export function sortConnectionsByPrecedence<
@@ -116,10 +125,18 @@ export function sortConnectionsByPrecedence<
 
 /** States that earn the page's one .attn sentence (design convention 6:
  *  attention is ONE ochre sentence per page). Worst first. */
-export type PageAttentionState = 'error' | 'abandoned' | 'expired' | 'expiring' | 'stale' | 'never_synced'
+export type PageAttentionState =
+  | 'error'
+  | 'needs_configuration'
+  | 'abandoned'
+  | 'expired'
+  | 'expiring'
+  | 'stale'
+  | 'never_synced'
 
 const ATTENTION_PRECEDENCE: PageAttentionState[] = [
   'error',
+  'needs_configuration',
   'abandoned',
   'expired',
   'expiring',
@@ -155,6 +172,8 @@ export function buildPageAttentionSentence(
   switch (attention.state) {
     case 'error':
       return `${bank}: anslutningen har ett fel. Försök igen eller förnya samtycket.`
+    case 'needs_configuration':
+      return `${bank}: synkningen har stannat. Öppna Välj konton och spara kontovalet igen.`
     case 'abandoned':
       return `${bank}: anslutningen slutfördes inte hos banken. Starta bankkopplingen på nytt och slutför alla steg direkt.`
     case 'expired':

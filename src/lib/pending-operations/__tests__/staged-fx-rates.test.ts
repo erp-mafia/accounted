@@ -452,18 +452,18 @@ function inboxParams(overrides: Record<string, unknown> = {}) {
   }
 }
 
-/** CAS claim → inbox → supplier → [fx] → arrival RPC → supplier_invoices
- *  insert → items insert → company_settings → SI update → inbox update →
+/** CAS claim → inbox → supplier → [fx] → company_settings → arrival RPC →
+ *  supplier_invoices insert → items insert → SI update → inbox update →
  *  dispatcher update. */
 function inboxQueue() {
   return [
     { data: { id: 'op-1' } },
     { data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' } },
     { data: { id: 'supplier-1', name: 'Leverantör AB', supplier_type: 'swedish_business' } },
+    { data: { accounting_method: 'accrual' } },
     { data: 42 }, // get_next_arrival_number
     { data: makeSupplierInvoice({ id: 'inv-1', supplier_invoice_number: 'INV-100' }) },
     { data: null }, // items insert
-    { data: { accounting_method: 'accrual' } },
     { data: null }, // supplier_invoices update with JE id
     { data: null }, // invoice_inbox_items update
     { data: null }, // dispatcher commit update

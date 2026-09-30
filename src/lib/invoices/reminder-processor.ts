@@ -376,9 +376,13 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       : 0
 
     // Book the fee as a journal entry. Booked BEFORE creating the
-    // invoice_reminders row so we can persist fee_journal_entry_id.
-    // Failure to book the fee is logged but does not abort the reminder
-    // send: the customer still needs to receive the notification.
+    // invoice_reminders row so we can persist fee_journal_entry_id, and
+    // before the email so the fee is charged ONLY when its verifikat exists:
+    // a fee in the email (and on the action page, which reads the row) with
+    // no booking is a claim the ledger does not know about. A failed booking
+    // (engine error) or a skipped one (no open fiscal period) is logged and
+    // the reminder still goes out, without the fee: the customer still needs
+    // the notification. The fee carries the reminded invoice's dimensions.
     let feeJournalEntryId: string | null = null
     if (reminderFee > 0) {
       try {
@@ -389,6 +393,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
           userId: invoice.user_id,
           feeAmount: reminderFee,
           asOfDate,
+          invoiceDefaultDimensions: (invoice as Invoice).default_dimensions ?? null,
         })
         feeJournalEntryId = feeResult?.journal_entry_id ?? null
       } catch (feeError) {
@@ -396,9 +401,15 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
           `Failed to book reminder fee for invoice ${invoice.invoice_number}:`,
           feeError as Error,
         )
-        // Continue: surcharge still appears in the email, but no JE is linked.
+      }
+      if (!feeJournalEntryId) {
+        log.warn('Sending reminder without its fee: the fee was not booked', {
+          invoiceId: invoice.id,
+          invoiceNumber: invoice.invoice_number,
+        })
       }
     }
+    const chargedFee = feeJournalEntryId ? reminderFee : 0
 
     // No "totalDue" scalar is computed here on purpose: invoice.total and
     // interest.amount are in the invoice currency while reminderFee is a
@@ -419,7 +430,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
         interest_rate: interest.rate,
         interest_from_date: interest.fromDate,
         interest_days: interest.days,
-        reminder_fee: reminderFee,
+        reminder_fee: chargedFee,
         fee_journal_entry_id: feeJournalEntryId,
       })
       .select('action_token')
@@ -449,7 +460,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
         interestRate: interest.rate,
         interestFromDate: interest.fromDate,
         interestDays: interest.days,
-        reminderFee,
+        reminderFee: chargedFee,
       },
       await resolveInvoiceSender(supabase, invoice.company_id, company.company_name),
     )

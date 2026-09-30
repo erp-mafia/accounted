@@ -218,6 +218,10 @@ export async function convertToInvoice(params: {
       vat_rate: source.vat_rate,
       moms_ruta: source.moms_ruta,
       reverse_charge_text: source.reverse_charge_text,
+      // What the source stated about its own supply (#2906) travels with the
+      // header it produced, so the draft's re-derivations keep it.
+      vat_treatment_override: source.vat_treatment_override ?? null,
+      delivery_country: source.delivery_country ?? null,
       your_reference: source.your_reference,
       our_reference: source.our_reference,
       // Buyer routing survives conversion (Peppol BT-10 may rely on it alone).

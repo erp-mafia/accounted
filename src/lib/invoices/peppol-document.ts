@@ -5,6 +5,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   generatePeppolBisBillingInvoice,
   type PeppolInvoiceResult,
+  type PeppolValidationIssue,
 } from '@/lib/invoices/peppol-bis-billing'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
@@ -29,10 +30,71 @@ export type LoadPeppolDocumentResult =
   | { ok: true; document: GeneratedPeppolInvoice; invoice: PeppolInvoiceRecord; company: CompanySettings }
   | RefusedPeppolResult
 
+export type PeppolRecordRows =
+  | { ok: true; invoice: PeppolInvoiceRecord; company: CompanySettings }
+  | { ok: false; code: 'INVOICE_NOT_FOUND' | 'INVOICE_SEND_COMPANY_SETTINGS_MISSING' }
+
 /**
  * Fetch the invoice (with customer and lines) and the company settings the
  * Peppol generator needs, with the same explicit `company_id` isolation as the
- * other invoice routes. Shared by the export, stage and send routes.
+ * other invoice routes. No HTTP here: the Peppol services
+ * (lib/invoices/peppol-send-service.ts) and the routes below share it.
+ */
+export async function fetchPeppolRecordRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoiceId: string,
+): Promise<PeppolRecordRows> {
+  const { data: invoice, error: invoiceError } = await supabase
+    .from('invoices')
+    .select(`
+      *,
+      customer:customers(*),
+      items:invoice_items(*)
+    `)
+    .eq('id', invoiceId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (invoiceError || !invoice) return { ok: false, code: 'INVOICE_NOT_FOUND' }
+
+  const { data: company, error: companyError } = await supabase
+    .from('company_settings')
+    .select('*')
+    .eq('company_id', companyId)
+    .single()
+
+  if (companyError || !company) return { ok: false, code: 'INVOICE_SEND_COMPANY_SETTINGS_MISSING' }
+
+  return { ok: true, invoice: invoice as PeppolInvoiceRecord, company: company as CompanySettings }
+}
+
+/** The customer-missing refusal, in both languages (the generator needs a buyer). */
+export const PEPPOL_CUSTOMER_MISSING_MESSAGE_SV = 'Fakturan saknar en kund som kan användas för Peppol-export.'
+export const PEPPOL_CUSTOMER_MISSING_MESSAGE_EN = 'The invoice has no customer available for Peppol export.'
+
+/**
+ * Run the BIS Billing 3 generator on loaded records. A missing customer is
+ * reported as `customer_missing`; a failed preflight carries the issues.
+ */
+export function generatePeppolDocument(
+  invoice: PeppolInvoiceRecord,
+  company: CompanySettings,
+): GeneratedPeppolInvoice | { ok: false; reason: 'customer_missing' } | { ok: false; reason: 'invalid'; issues: PeppolValidationIssue[] } {
+  if (!invoice.customer) return { ok: false, reason: 'customer_missing' }
+  const document = generatePeppolBisBillingInvoice({
+    invoice,
+    customer: invoice.customer,
+    items: invoice.items ?? [],
+    company,
+  })
+  if (!document.ok) return { ok: false, reason: 'invalid', issues: document.issues }
+  return document
+}
+
+/**
+ * Fetch the invoice and company settings as above, answering a refusal as a
+ * ready-built response for the routes that stream XML.
  */
 export async function loadPeppolRecords(args: {
   supabase: SupabaseClient
@@ -41,52 +103,15 @@ export async function loadPeppolRecords(args: {
   log: RouteLog
   requestId: string
 }): Promise<LoadPeppolRecordsResult> {
-  const { data: invoice, error: invoiceError } = await args.supabase
-    .from('invoices')
-    .select(`
-      *,
-      customer:customers(*),
-      items:invoice_items(*)
-    `)
-    .eq('id', args.invoiceId)
-    .eq('company_id', args.companyId)
-    .single()
-
-  if (invoiceError || !invoice) {
+  const rows = await fetchPeppolRecordRows(args.supabase, args.companyId, args.invoiceId)
+  if (!rows.ok) {
     return {
       ok: false,
-      code: 'INVOICE_NOT_FOUND',
-      response: privateNoStore(errorResponseFromCode(
-        'INVOICE_NOT_FOUND',
-        args.log,
-        { requestId: args.requestId },
-      )),
+      code: rows.code,
+      response: privateNoStore(errorResponseFromCode(rows.code, args.log, { requestId: args.requestId })),
     }
   }
-
-  const { data: company, error: companyError } = await args.supabase
-    .from('company_settings')
-    .select('*')
-    .eq('company_id', args.companyId)
-    .single()
-
-  if (companyError || !company) {
-    return {
-      ok: false,
-      code: 'INVOICE_SEND_COMPANY_SETTINGS_MISSING',
-      response: privateNoStore(errorResponseFromCode(
-        'INVOICE_SEND_COMPANY_SETTINGS_MISSING',
-        args.log,
-        { requestId: args.requestId },
-      )),
-    }
-  }
-
-  return {
-    ok: true,
-    invoice: invoice as PeppolInvoiceRecord,
-    company: company as CompanySettings,
-  }
+  return rows
 }
 
 /**
@@ -99,48 +124,42 @@ export function generatePeppolDocumentOrResponse(args: {
   log: RouteLog
   requestId: string
 }): { ok: true; document: GeneratedPeppolInvoice } | RefusedPeppolResult {
-  if (!args.invoice.customer) {
+  const document = generatePeppolDocument(args.invoice, args.company)
+  if (document.ok) return { ok: true, document }
+  if (document.reason === 'customer_missing') {
     return {
       ok: false,
       code: 'VALIDATION_ERROR',
       response: privateNoStore(errorResponseFromCode('VALIDATION_ERROR', args.log, {
         requestId: args.requestId,
-        messageSv: 'Fakturan saknar en kund som kan användas för Peppol-export.',
-        messageEn: 'The invoice has no customer available for Peppol export.',
+        messageSv: PEPPOL_CUSTOMER_MISSING_MESSAGE_SV,
+        messageEn: PEPPOL_CUSTOMER_MISSING_MESSAGE_EN,
         details: { field: 'invoice.customer' },
       })),
     }
   }
-
-  const document = generatePeppolBisBillingInvoice({
-    invoice: args.invoice,
-    customer: args.invoice.customer,
-    items: args.invoice.items ?? [],
-    company: args.company,
-  })
-  if (!document.ok) {
-    const first = document.issues[0]
-    return {
-      ok: false,
-      code: 'VALIDATION_ERROR',
-      issues: document.issues.map((item) => item.code),
-      response: privateNoStore(errorResponseFromCode('VALIDATION_ERROR', args.log, {
-        requestId: args.requestId,
-        messageSv: first?.messageSv,
-        messageEn: first?.messageEn,
-        details: {
-          issues: document.issues.map((item) => ({
-            code: item.code,
-            field: item.field,
-            message_sv: item.messageSv,
-            message_en: item.messageEn,
-          })),
-        },
-      })),
-    }
+  const first = document.issues[0]
+  return {
+    ok: false,
+    code: 'VALIDATION_ERROR',
+    issues: document.issues.map((item) => item.code),
+    response: privateNoStore(errorResponseFromCode('VALIDATION_ERROR', args.log, {
+      requestId: args.requestId,
+      messageSv: first?.messageSv,
+      messageEn: first?.messageEn,
+      details: { issues: peppolIssueDetails(document.issues) },
+    })),
   }
+}
 
-  return { ok: true, document }
+/** The issue list as the error envelope's details carry it. */
+export function peppolIssueDetails(issues: PeppolValidationIssue[]) {
+  return issues.map((item) => ({
+    code: item.code,
+    field: item.field,
+    message_sv: item.messageSv,
+    message_en: item.messageEn,
+  }))
 }
 
 export async function loadPeppolDocument(args: {

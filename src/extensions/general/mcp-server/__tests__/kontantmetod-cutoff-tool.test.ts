@@ -66,6 +66,7 @@ const collection = {
   }],
   unknownVatTreatment: [],
   strayVatOnZeroRate: [],
+  undatedSettlements: [] as string[],
 }
 
 beforeEach(() => {
@@ -185,13 +186,58 @@ describe('gnubok_post_kontantmetod_cutoff', () => {
     )).rejects.toThrow(/redan bokförd/i)
 
     vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce({
-      collection: { receivables: [], payables: [], unknownVatTreatment: [], strayVatOnZeroRate: [] },
+      collection: { receivables: [], payables: [], unknownVatTreatment: [], strayVatOnZeroRate: [], undatedSettlements: [] },
       lines: buildCutoffLines([], [], 'aktiebolag'),
       postings: { complete: true, hasAny: false, receivableEntryId: null, receivableReversalId: null, payableEntryId: null, payableReversalId: null, missing: [], duplicates: [] },
     })
     await expect(tool.execute(
       { fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', makeSupabase() as never,
     )).rejects.toThrow(/Inga obetalda/i)
+  })
+
+  // Feedback seq 798354: invoices settled with neither a payment row nor a
+  // payment date are taken as settled on the balance date, which is an
+  // assumption the approver must see before anything is booked.
+  it('discloses invoices whose period-end state was assumed in the staged preview', async () => {
+    const undated = { ...collection, undatedSettlements: ['F-7', 'L-3'] }
+    vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce({
+      collection: undated,
+      lines: buildCutoffLines(undated.receivables, undated.payables, 'aktiebolag'),
+      postings: {
+        complete: false, hasAny: false, receivableEntryId: null,
+        receivableReversalId: null, payableEntryId: null, payableReversalId: null,
+        missing: ['receivable', 'receivable_reversal', 'payable', 'payable_reversal'],
+        duplicates: [],
+      },
+    })
+    const supabase = makeSupabase()
+    const result = (await tool.execute(
+      { fiscal_period_id: 'fp-1' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { message: string; preview: Record<string, unknown> }
+
+    expect(result.preview).toMatchObject({
+      undated_settlement_count: 2,
+      undated_settlements_sample: ['F-7', 'L-3'],
+      compliance_warning: expect.stringMatching(/^2 fakturor saknar betalningsdatum: .* per 2026-12-31 som i dag/),
+    })
+    expect(result.message).toMatch(/WARNING: 2 fakturor saknar betalningsdatum/)
+    expect(supabase.inserts[0]).toMatchObject({
+      preview_data: expect.objectContaining({
+        compliance_warning: expect.stringContaining('saknar betalningsdatum'),
+      }),
+    })
+  })
+
+  it('names the assumption when it leaves nothing to post', async () => {
+    vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce({
+      collection: { receivables: [], payables: [], unknownVatTreatment: [], strayVatOnZeroRate: [], undatedSettlements: ['F-1'] },
+      lines: buildCutoffLines([], [], 'aktiebolag'),
+      postings: { complete: true, hasAny: false, receivableEntryId: null, receivableReversalId: null, payableEntryId: null, payableReversalId: null, missing: [], duplicates: [] },
+    })
+    await expect(tool.execute(
+      { fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', makeSupabase() as never,
+    )).rejects.toThrow(/Inga obetalda .*\. 1 faktura saknar betalningsdatum/)
   })
 
   it('refuses to stage before the fiscal period has ended', async () => {

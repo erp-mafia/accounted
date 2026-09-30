@@ -5,6 +5,11 @@ import { VISMA_BASE_URL, VISMA_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 import { cleanProviderPayload } from '../provider-text';
 
+/**
+ * Default per-attempt timeout for ordinary API reads (an invoice, a customer).
+ * Callers reading whole register pages pass their own: a 1000-row supplier
+ * invoice page took longer than this on every attempt for one register.
+ */
 const FETCH_TIMEOUT_MS = 15_000;
 
 export class VismaApiError extends Error {
@@ -43,7 +48,8 @@ export class VismaClient {
     this.rateLimiter = new TokenBucketRateLimiter(VISMA_RATE_LIMIT, 'ratelimit:visma');
   }
 
-  async get<T>(accessToken: string, path: string): Promise<T> {
+  async get<T>(accessToken: string, path: string, options: { timeoutMs?: number } = {}): Promise<T> {
+    const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
     return withRetry(
       async () => {
         await this.rateLimiter.acquire();
@@ -54,7 +60,7 @@ export class VismaClient {
             Accept: 'application/json',
             'Content-Type': 'application/json',
           },
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          signal: AbortSignal.timeout(timeoutMs),
         });
 
         if (!response.ok) {
@@ -84,6 +90,7 @@ export class VismaClient {
       pageSize?: number;
       modifiedSince?: string;
       modifiedField?: string;
+      timeoutMs?: number;
     },
   ): Promise<{ items: T[]; page: number; totalPages: number; totalCount: number }> {
     const pageSize = options?.pageSize ?? 100;
@@ -107,7 +114,9 @@ export class VismaClient {
     const separator = path.includes('?') ? '&' : '?';
     const fullPath = `${path}${separator}${params.toString()}`;
 
-    const response = await this.get<VismaPaginatedResponse<T> & { Meta?: { TotalNumberOfResults?: number; TotalNumberOfPages?: number } }>(accessToken, fullPath);
+    const response = await this.get<VismaPaginatedResponse<T> & { Meta?: { TotalNumberOfResults?: number; TotalNumberOfPages?: number } }>(
+      accessToken, fullPath, { timeoutMs: options?.timeoutMs },
+    );
 
     const totalPages = response.Meta?.TotalNumberOfPages ?? 1;
     const totalCount = response.Meta?.TotalNumberOfResults ?? 0;

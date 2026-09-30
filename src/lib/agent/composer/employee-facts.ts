@@ -30,7 +30,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  *     (DECISIONS.md archive 2026-07-17), so a non-null value settles the question in
  *     BOTH directions.
  *  4. `company_settings.pays_salaries` (NOT NULL DEFAULT false, 20260401000000):
- *     the "Betalar löner" toggle on /settings/tax. `true` is evidence. `false`
+ *     the "Betalar löner" toggle on /settings/salary. `true` is evidence. `false`
  *     is NOT: the column defaults to false, no onboarding step asks, and its
  *     only writer is that settings form. Reading the default as "nej" would
  *     state a fact nobody entered, and would drop the composer's verification

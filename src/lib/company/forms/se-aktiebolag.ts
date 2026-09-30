@@ -17,6 +17,7 @@ export const SE_AKTIEBOLAG: LegalFormProfile = {
     closing: '2099',
     closingName: 'Årets resultat',
     priorYearCarry: '2098',
+    retained: '2091',
     hasOwners: true,
     settlement: { withdrawal: '2893', contribution: '2893' },
   },

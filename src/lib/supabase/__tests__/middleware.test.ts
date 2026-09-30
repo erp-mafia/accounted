@@ -905,12 +905,22 @@ describe('updateSession redirect destinations', () => {
       expect((await run('/api/invoices', { headers })).status).toBe(403)
     })
 
-    it('does not gate BankID-linked users, nor anyone when MFA is off', async () => {
+    it('does not gate BankID-linked users', async () => {
       state.user = { ...MFA_USER, app_metadata: { bankid_linked: true } }
       expect((await run('/api/invoices')).status).toBe(200)
+    })
 
+    it('still gates an enrolled user when MFA is not required, and lets a factor-less one through', async () => {
+      // The step-up protects whoever enrolled a factor; the flag only forces
+      // enrolment. Production carried the flag as "true\n", which reads as off.
+      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true\n'
       state.user = MFA_USER
+      expect((await run('/api/invoices')).status).toBe(403)
+
       delete process.env.NEXT_PUBLIC_REQUIRE_MFA
+      expect((await run('/api/invoices')).status).toBe(403)
+
+      state.user = SIGNED_IN
       expect((await run('/api/invoices')).status).toBe(200)
     })
 
@@ -1273,6 +1283,57 @@ describe('updateSession redirect destinations', () => {
       expect(lastLog().status).toBe(307)
     })
 
+    it('Vercel production keeps the numbers in the log line but sends no timing header', async () => {
+      try {
+        vi.stubEnv('VERCEL_ENV', 'production')
+        vi.stubEnv('EXPOSE_TIMING_HEADERS', undefined)
+        state.user = SIGNED_IN
+        const page = await run('/invoices')
+        expect(page.status).toBe(200)
+        expect(page.headers.get('server-timing')).toBeNull()
+        expect(page.headers.get('x-proxy-timing')).toBeNull()
+        const ctx = lastLog()
+        expect(ctx.kind).toBe('page')
+        expect(typeof ctx.totalMs).toBe('number')
+        expect(typeof ctx.authMs).toBe('number')
+        expect(typeof ctx.companyMs).toBe('number')
+        logState.info.mockClear()
+
+        const api = await run('/api/settings')
+        expect(api.headers.get('x-proxy-timing')).toBeNull()
+        expect(api.headers.get('server-timing')).toBeNull()
+        expect(lastLog().kind).toBe('api')
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
+    it('a self-hosted production server (NODE_ENV only) sends no timing header either', async () => {
+      try {
+        vi.stubEnv('VERCEL_ENV', undefined)
+        vi.stubEnv('EXPOSE_TIMING_HEADERS', undefined)
+        vi.stubEnv('NODE_ENV', 'production')
+        const res = await run('/invoices')
+        expect(res.status).toBe(307)
+        expect(res.headers.get('server-timing')).toBeNull()
+        expect(lastLog().status).toBe(307)
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
+    it('EXPOSE_TIMING_HEADERS=true brings the header back in production', async () => {
+      try {
+        vi.stubEnv('VERCEL_ENV', 'production')
+        vi.stubEnv('EXPOSE_TIMING_HEADERS', 'true')
+        state.user = SIGNED_IN
+        const res = await run('/invoices')
+        expect(res.headers.get('server-timing')).toMatch(TIMING_RE)
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
     it('never logs a token-carrying path or a raw entity id', async () => {
       const res = await run('/invite/9f8e7d6c5b4a3928171605f4e3d2c1b0')
       expect(res.status).toBe(200)
@@ -1284,9 +1345,28 @@ describe('updateSession redirect destinations', () => {
     })
   })
 
-  describe('MFA-disabled and self-hosted paths are unchanged', () => {
-    it('does not redirect when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {
+  describe('MFA-disabled and self-hosted paths', () => {
+    it('steps up an enrolled user even when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {
       state.user = MFA_USER
+      state.jwtAal = 'aal1'
+
+      const response = await run('/settings/tax')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/mfa/verify')
+    })
+
+    it('does not force enrolment when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {
+      state.user = SIGNED_IN
+      state.jwtAal = 'aal1'
+
+      const response = await run('/settings/tax')
+
+      expect(response.status).toBe(200)
+    })
+
+    it('does not force enrolment under the unreadable production value "true\\n"', async () => {
+      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true\n'
+      state.user = SIGNED_IN
       state.jwtAal = 'aal1'
 
       const response = await run('/settings/tax')

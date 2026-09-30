@@ -157,6 +157,14 @@ export function decodeBuffer(buffer: ArrayBuffer, encoding: SIEEncoding): string
   const primary = decodeBufferRaw(buffer, encoding)
   if (!primary.includes('\uFFFD')) return primary
 
+  // A U+FFFD inside a file that IS valid UTF-8 was written by the exporter:
+  // the character was lost before the file reached us, and no decoding brings
+  // it back. Retrying such a file as Windows-1252 turned each U+FFFD into its
+  // three bytes, "ï¿½", and passed that off as a clean decode (a Wint export,
+  // feedback seq 743529). Keep the honest replacement character instead;
+  // validateSIEFile warns about it.
+  if (encoding === 'utf8' && isValidUtf8(buffer)) return primary
+
   const alternates: SIEEncoding[] = (['utf8', 'windows1252', 'cp437'] as const).filter(
     (e) => e !== encoding
   )
@@ -165,6 +173,15 @@ export function decodeBuffer(buffer: ArrayBuffer, encoding: SIEEncoding): string
     if (!candidate.includes('\uFFFD')) return candidate
   }
   return primary
+}
+
+function isValidUtf8(buffer: ArrayBuffer): boolean {
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function decodeBufferRaw(buffer: ArrayBuffer, encoding: SIEEncoding): string {
@@ -1268,6 +1285,20 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
         `Om senare räkenskapsår importeras kommer balansräkningen att visa en differens på ${Math.abs(plResidual).toFixed(2)} kr tills omföringen bokförs.`
       )
     }
+  }
+
+  // U+FFFD in voucher texts means the source system lost the character (most
+  // often å, ä or ö) when it wrote the file; the import cannot restore it.
+  const vouchersWithLostCharacters = parsed.vouchers.filter(
+    (voucher) =>
+      voucher.description.includes('\uFFFD') ||
+      voucher.lines.some((line) => line.description?.includes('\uFFFD')),
+  ).length
+  if (vouchersWithLostCharacters > 0) {
+    warnings.push(
+      `${vouchersWithLostCharacters === 1 ? '1 verifikation har' : `${vouchersWithLostCharacters} verifikationer har`} tecken som saknas redan i filen (visas som \uFFFD, oftast å, ä eller ö). ` +
+      'Texterna importeras som de står och kan inte återskapas vid import: exportera om filen från källsystemet om de ska bli hela.'
+    )
   }
 
   // Add parse issues as errors/warnings

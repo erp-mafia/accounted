@@ -59,6 +59,24 @@ describe('buildPayslipData', () => {
     expect(data.personnummerMasked).toBe('19900101-****')
   })
 
+  it('leaves the växa-stöd refund note off the employee payslip: it is an instruction to the employer', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({
+        calculation_breakdown: {
+          steps: [
+            { label: 'Bruttolön', formula: '35000', output: 35000 },
+            { label: 'Växa-stöd: ansök om återbetalning hos Skatteverket', formula: 'växa-stöd sänker inte avgiften', output: null },
+          ],
+        },
+      }),
+      employee,
+      company: { name: 'Bolaget AB', org_number: null },
+    })
+
+    expect((data.breakdownSteps ?? []).map(s => s.label)).toEqual(['Bruttolön'])
+  })
+
   it('coalesces tax/avgifter overrides and adjusts net accordingly', () => {
     const data = buildPayslipData({
       run,

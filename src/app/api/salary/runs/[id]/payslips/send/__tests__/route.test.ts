@@ -23,14 +23,19 @@ vi.mock('@/lib/email/service', () => ({ getEmailService: vi.fn() }))
 // short-circuit it in tests since the queued mock-supabase is shaped for the
 // route's existing fetch chain, not an extra pre-flight read. Mirrors the same
 // mock on the sibling /api/invoices/[id]/send route.
-vi.mock('@/lib/sandbox/guard', () => ({
+// The rules moved into lib/salary/payslips/send.ts, which asks
+// isSandboxCompany / hasCapability; the route maps a refusal to the same
+// sandbox and capability envelopes as before (the real response builders).
+vi.mock('@/lib/sandbox/guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/sandbox/guard')>()),
   guardSandbox: vi.fn().mockResolvedValue(null),
   isSandboxCompany: vi.fn().mockResolvedValue(false),
-  sandboxBlockedResponse: vi.fn(),
 }))
 
-vi.mock('@/lib/entitlements/has-capability', () => ({
+vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/entitlements/has-capability')>()),
   requireCapability: vi.fn().mockResolvedValue(null),
+  hasCapability: vi.fn().mockResolvedValue(true),
 }))
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appUrl: 'https://app.example.test' }),
@@ -110,10 +115,8 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     // The demo ships a booked salary run, which puts "Skicka lönebesked" one
     // click from an anonymous visitor. Without this gate the route reaches the
     // live mail provider and bounces off the production sending domain.
-    const { guardSandbox } = await import('@/lib/sandbox/guard')
-    vi.mocked(guardSandbox).mockResolvedValueOnce(
-      NextResponse.json({ sandbox_blocked: true }, { status: 403 }),
-    )
+    const { isSandboxCompany } = await import('@/lib/sandbox/guard')
+    vi.mocked(isSandboxCompany).mockResolvedValueOnce(true)
     const { supabase } = createQueuedMockSupabase()
     authed(supabase)
     const sendEmail = mockEmail({ success: true, messageId: 'm-1' })
@@ -122,14 +125,13 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
 
     expect(response.status).toBe(403)
+    expect((await response.json()).sandbox_blocked).toBe(true)
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
   it('returns 403 when the company lacks the email_send capability', async () => {
-    const { requireCapability } = await import('@/lib/entitlements/has-capability')
-    vi.mocked(requireCapability).mockResolvedValueOnce(
-      NextResponse.json({ capability_blocked: true }, { status: 403 }),
-    )
+    const { hasCapability } = await import('@/lib/entitlements/has-capability')
+    vi.mocked(hasCapability).mockResolvedValueOnce(false)
     const { supabase } = createQueuedMockSupabase()
     authed(supabase)
     mockEmail({ success: true })
@@ -137,6 +139,7 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
     expect(response.status).toBe(403)
+    expect((await response.json()).capability_blocked).toBe(true)
   })
 
   it('returns 404 when the run does not exist', async () => {

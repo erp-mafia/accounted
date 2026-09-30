@@ -17,6 +17,17 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectDuplicatePaymentVoucher: vi.fn(async () => null),
 }))
 
+// Kontantmetoden guard (lib/invoices/batch-cash-method-guard.ts). Mocked so
+// it consumes no slot in the queued Supabase mock; defaults to "nothing
+// unbooked" (accrual). Its own query shape is pinned by
+// lib/invoices/__tests__/batch-cash-method-guard.test.ts.
+const { mockFindCashUnbooked } = vi.hoisted(() => ({
+  mockFindCashUnbooked: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, unbooked: [] })),
+}))
+vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
+  findCashMethodUnbookedAllocations: mockFindCashUnbooked,
+}))
+
 import { tools } from '../server'
 
 const allocate = tools.find((t) => t.name === 'gnubok_match_batch_allocate')!
@@ -25,6 +36,11 @@ const TX_ID = '11111111-1111-4111-8111-111111111111'
 const INV_A = '22222222-2222-4222-8222-222222222222'
 const INV_B = '33333333-3333-4333-8333-333333333333'
 const SI_A = '44444444-4444-4444-8444-444444444444'
+
+/** resolveSettlementAccount: the row's cash_account_id resolves to this ledger account. */
+function enqueueBankAccount(enqueue: (r: { data?: unknown; error?: unknown }) => void, ledgerAccount: string) {
+  enqueue({ data: { ledger_account: ledgerAccount, currency: 'SEK' }, error: null }) // cash_accounts
+}
 
 function enqueueStage(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
   enqueue({ data: { bookkeeping_locked_through: null }, error: null }) // company_settings
@@ -53,6 +69,7 @@ describe('gnubok_match_batch_allocate: expected_lines in the staged preview', ()
       ],
       error: null,
     })
+    enqueueBankAccount(enqueue, '1930')
     enqueueStage(enqueue)
 
     const result = (await allocate.execute(
@@ -87,14 +104,17 @@ describe('gnubok_match_batch_allocate: expected_lines in the staged preview', ()
     expect(result.next?.description).toContain('expected_lines')
   })
 
-  it('supplier batch: Dr 2440 per bill, Cr 1930 for the payment', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+  // Issue #3097: the bank row sits on a cash account booked on 1931; the RPC
+  // credits 1931 (capture_bank_booking_context), so the preview must too.
+  it("supplier batch: Dr 2440 per bill, Cr the row's own bank account (1931) for the payment", async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({
       data: { id: TX_ID, description: 'LB UTBET', merchant_name: null, amount: -1250, currency: 'SEK', amount_sek: null, exchange_rate: null, cash_account_id: 'ca-1', date: '2026-08-05', journal_entry_id: null },
       error: null,
     })
     // 1 249,60 owed, 1 250 paid: the öre lands on 3740 (issue #1717).
     enqueue({ data: [{ id: SI_A, currency: 'SEK', exchange_rate: null, remaining_amount: 1249.6, total: 1249.6 }], error: null })
+    enqueueBankAccount(enqueue, '1931')
     enqueueStage(enqueue)
 
     const result = (await allocate.execute(
@@ -108,9 +128,46 @@ describe('gnubok_match_batch_allocate: expected_lines in the staged preview', ()
     expect(result.preview.expected_lines).toEqual([
       { account_number: '2440', description: 'Leverantörsfaktura 1 av 1', debit: 1249.6, credit: 0 },
       { account_number: '3740', description: 'Öresavrundning', debit: 0.4, credit: 0 },
-      { account_number: '1930', description: 'Utbetalning 2026-08-05', debit: 0, credit: 1250 },
+      { account_number: '1931', description: 'Utbetalning 2026-08-05', debit: 0, credit: 1250 },
     ])
     expect(result.preview.expected_lines_balanced).toBe(true)
+    // One bill: the RPC's single-invoice header wording (feedback 708521),
+    // without the number and supplier name it appends.
+    expect(result.preview.expected_description).toBe('Utbetalning leverantörsfaktura')
+    // Resolved from the transaction's own cash account, in this company.
+    expect(findCalls('cash_accounts', 'eq')).toEqual(
+      expect.arrayContaining([['id', 'ca-1'], ['company_id', 'company-1']]),
+    )
+  })
+
+  it('refuses to stage unbooked invoices under kontantmetoden and names the per-invoice route', async () => {
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: true,
+      unbooked: [{ kind: 'customer_invoice', id: INV_A, invoice_number: '231' }],
+    })
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: TX_ID, description: 'BGGIRERING', merchant_name: null, amount: 62500, currency: 'SEK', amount_sek: null, exchange_rate: null, cash_account_id: 'ca-1', date: '2026-07-31', journal_entry_id: null },
+      error: null,
+    })
+    enqueue({
+      data: [{ id: INV_A, document_type: 'invoice', currency: 'SEK', exchange_rate: null, remaining_amount: 62500, total: 62500 }],
+      error: null,
+    })
+
+    await expect(
+      allocate.execute(
+        { transaction_id: TX_ID, allocations: [{ kind: 'customer_invoice', invoice_id: INV_A, amount: 62500 }] },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' } as never,
+      ),
+    ).rejects.toMatchObject({
+      code: 'BATCH_CASH_METHOD_UNBOOKED_INVOICE',
+      message: expect.stringContaining('gnubok_match_transaction_to_invoice'),
+    })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
   it('keeps the tool description inside the catalog budget', () => {

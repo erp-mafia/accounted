@@ -1,4 +1,5 @@
 import type { VatTreatment } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /**
  * Icke momsregistrerad verksamhet has no deduction right for input VAT
@@ -47,4 +48,57 @@ export function vatTreatmentForRegistration<T extends string | null | undefined>
 ): T | typeof NO_VAT_TREATMENT {
   if (!isNotVatRegistered(vatRegistered)) return treatment
   return treatment && RATE_BEARING.has(treatment) ? NO_VAT_TREATMENT : treatment
+}
+
+/**
+ * The supplier-invoice half of the rule, for the paths that build lines from
+ * an underlag (the inbox tool, its commit executor, the inbox convert): the
+ * moms a seller charged a non-registered company can never be reclaimed, so
+ * it is part of what the purchase cost, and the company still owes the
+ * seller all of it. True when the company is not registered and the invoice
+ * is not reverse charge (the carve-out the create route makes, for the same
+ * reason as above). An exempt or export label does not change the answer:
+ * the moms on the underlag is still owed, and the net path those labels take
+ * for a registered company would drop it from the payable.
+ */
+export function sellerVatIsCost(vatRegistered: VatRegistration, reverseCharge: boolean): boolean {
+  return isNotVatRegistered(vatRegistered) && !reverseCharge
+}
+
+/** The supplier-invoice line fields foldSellerVatIntoCost reads and rewrites. */
+export interface SellerVatLine {
+  line_total: number
+  unit_price: number
+  vat_rate: number
+  vat_amount: number
+}
+
+/**
+ * Book each line's seller moms as cost, for an invoice where sellerVatIsCost
+ * holds: vat_amount is added to line_total, the unit price scales with it,
+ * and the line carries vat_rate 0 and vat_amount 0. The registration
+ * verifikat then debits the gross on the cost account, books nothing on 2641
+ * and credits 2440 with the same payable a registered company would owe.
+ * `sellerVat` is the moms moved, for a preview to name.
+ */
+export function foldSellerVatIntoCost<T extends SellerVatLine>(
+  lines: readonly T[],
+): { lines: T[]; sellerVat: number } {
+  const folded = lines.map((line) => {
+    if (line.vat_rate === 0 && line.vat_amount === 0) return line
+    const gross = roundOre(line.line_total + line.vat_amount)
+    const unitPrice = line.line_total === 0
+      ? line.unit_price
+      : roundOre(line.unit_price * (gross / line.line_total))
+    return { ...line, line_total: gross, unit_price: unitPrice, vat_rate: 0, vat_amount: 0 }
+  })
+  const sellerVat = roundOre(lines.reduce((sum, line) => sum + line.vat_amount, 0))
+  return { lines: folded, sellerVat }
+}
+
+/** What a preview says about a fold: the moms it moved and the payable left on 2440. */
+export function sellerVatAsCostNote(sellerVat: number, payable: number): string {
+  return 'The company is not VAT-registered, so it has no avdragsrätt for ingående moms (13 kap. ML 2023:200): '
+    + (sellerVat !== 0 ? `the seller's VAT ${sellerVat} is added to the cost lines` : 'the lines carry no seller VAT')
+    + `, nothing is booked on 2641, and 2440 is credited with ${payable}.`
 }

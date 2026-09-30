@@ -10,6 +10,7 @@ import {
 function makeTransport(provider: string): PeppolTransport {
   return {
     provider,
+    tenantId: provider,
     lookupRecipient: vi.fn(),
     submit: vi.fn(),
     verifyWebhook: vi.fn(),

@@ -99,6 +99,34 @@ describe('POST /api/mcp-oauth/register', () => {
     expect(response.status).toBe(400)
   })
 
+  it('registers Gemini as a public client although it asks for a client secret', async () => {
+    // The body Gemini custom apps send (github.com/a91453/mml-tools pull 136):
+    // a confidential-client request on Google's relay. The answer is the same
+    // public PKCE client every caller gets, with no secret to hold.
+    const redirect = 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1234567890-app_accounted_se'
+    const response = await POST(createRequest({
+      client_name: 'Gemini',
+      redirect_uris: [redirect],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'client_secret_basic',
+      scope: 'mcp offline_access',
+      application_type: 'web',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual([redirect])
+    expect(body.token_endpoint_auth_method).toBe('none')
+    expect(body.client_secret).toBeUndefined()
+  })
+
+  it('rejects a Google relay callback that is not a Gemini custom app', async () => {
+    const response = await POST(createRequest({
+      redirect_uris: ['https://oauth-redirect.googleusercontent.com/r/some-cloud-project'],
+    }))
+    expect(response.status).toBe(400)
+  })
+
   it('rejects registration with disallowed redirect_uris', async () => {
     const response = await POST(createRequest({
       redirect_uris: ['https://evil.com/callback'],

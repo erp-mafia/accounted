@@ -32,6 +32,97 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // payment-routing surface. Staged (agents never silently mint reporting
   // values) but at the lowest tier next to create_customer/create_article.
   create_dimension_value: 'low',
+  create_dimension: 'low',
+  // Operation registry, wave 4: Peppol, årsredovisning, IB, AP actions.
+  send_invoice_peppol: 'high',
+  register_peppol_participant: 'high',
+  request_peppol_access: 'medium',
+  update_arsredovisning_narrative: 'medium',
+  update_arsredovisning_compliance: 'medium',
+  create_arsredovisning_version: 'high',
+  add_arsredovisning_signature: 'medium',
+  set_opening_balances_manual: 'high',
+  correct_opening_balances: 'high',
+  delete_supplier_invoice: 'medium',
+  uncredit_supplier_invoice: 'high',
+  update_supplier_invoice_item_account: 'high',
+  // Operation registry, wave 3: documents, transactions, rättelse, filing.
+  delete_document: 'medium',
+  delete_inbox_item: 'medium',
+  detach_document_from_transaction: 'low',
+  unmatch_inbox_item_transaction: 'low',
+  undo_bank_import: 'high',
+  correct_entry_metadata: 'high',
+  correct_entry_lines_inline: 'high',
+  redate_entry: 'high',
+  mark_no_document_required: 'medium',
+  book_vat_settlement: 'high',
+  // Momsdeklaration filing record: completes or reopens the period's moms
+  // deadline and nothing else (no verifikat, nothing sent to Skatteverket).
+  // A Skatteverket-confirmed filing is never relabelled or reopened.
+  mark_vat_period_filed: 'low',
+  unmark_vat_period_filed: 'low',
+  // Operation registry, wave 2: booking, payment files, utlägg, payroll.
+  send_payslips: 'medium',
+  revert_salary_run: 'low',
+  unapprove_salary_run: 'medium',
+  attach_salary_expense_claims: 'medium',
+  // Payroll over MCP (lib/operations/salary-run-structure.ts and
+  // salary-employee-setup.ts). No verifikat, but each changes a pay outcome
+  // (who is paid, a payslip line, hours, a förmån, a recurring line), so human
+  // review at medium like update_payslip_line and set_run_salary, stricter
+  // than the v1 doors' 'low'. Marking a run paid records that the money left.
+  // Deactivating an employee cannot be undone on the API. The correction run
+  // storno-reverses the run's verifikationer: high, like booking it.
+  add_salary_run_employee: 'medium',
+  remove_salary_run_employee: 'medium',
+  add_payslip_line: 'medium',
+  delete_payslip_line: 'medium',
+  mark_salary_run_paid: 'medium',
+  correct_salary_run: 'high',
+  set_worked_days: 'medium',
+  delete_worked_days: 'medium',
+  add_employee_benefit: 'medium',
+  update_employee_benefit: 'medium',
+  delete_employee_benefit: 'medium',
+  add_employee_recurring_line: 'medium',
+  update_employee_recurring_line: 'medium',
+  delete_employee_recurring_line: 'medium',
+  delete_employee: 'medium',
+  create_supplier_payment_batch: 'high',
+  cancel_supplier_payment_batch: 'medium',
+  book_invoice: 'high',
+  bulk_book_invoices: 'high',
+  book_supplier_invoice: 'high',
+  create_expense_claim: 'medium',
+  delete_expense_claim: 'medium',
+  record_expense_payout: 'medium',
+  match_expense_payout: 'medium',
+  // Operation registry, wave 1: setup capabilities.
+  create_cash_account: 'low',
+  update_cash_account: 'medium',
+  set_primary_cash_account: 'medium',
+  set_invoice_payee_default: 'medium',
+  create_fiscal_period: 'medium',
+  update_fiscal_period: 'medium',
+  close_fiscal_period_external: 'high',
+  reopen_fiscal_period_external: 'high',
+  delete_account: 'medium',
+  activate_accounts: 'low',
+  deactivate_accounts: 'low',
+  update_company_tax_profile: 'high',
+  update_bookkeeping_lock: 'high',
+  update_dimension: 'low',
+  // Deleting is refused by the DB guard when anything is booked on the
+  // dimension, but it removes the dimension and its values for good.
+  delete_dimension: 'medium',
+  // Account dimension rules: bookkeeping policy over reporting tags, no
+  // journal impact. A required rule can refuse a later booking until its
+  // line is tagged, and that booking says so (MANDATORY_DIMENSION_MISSING);
+  // each change is undone in one call.
+  create_dimension_rule: 'low',
+  update_dimension_rule: 'low',
+  delete_dimension_rule: 'low',
   // Kontoplan reference data: adding an account has no journal impact (a
   // wrong account only becomes bookable, nothing is booked), and update is
   // limited to name/description/VAT-default/SRU/is_active: the same surface

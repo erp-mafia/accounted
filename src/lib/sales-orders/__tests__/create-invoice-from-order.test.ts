@@ -419,6 +419,31 @@ describe('createInvoiceFromSalesOrder', () => {
     expect(findCall('invoices', 'delete')).toBeUndefined()
   })
 
+  it("hands the order's default_dimensions and each line's bag to the invoice builder", async () => {
+    // The order form's dimension pickers only matter if invoicing carries the
+    // tags over: the builder merges each item bag over the invoice default.
+    enqueue({
+      data: orderWith([makeSalesOrderItem({ id: IDS.item1, dimensions: { '6': 'P001' } })], {
+        default_dimensions: { '1': 'KS01' },
+      }),
+    })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer() })
+    enqueue({ data: { id: IDS.invoice, status: 'draft', invoice_number: null, sales_order_id: IDS.order } })
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: orderWith() }) // reload
+    enqueue({ data: [invoicedRow(IDS.item1, 10)] })
+
+    const result = await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+
+    expect(result.ok).toBe(true)
+    const buildArg = mockBuildInvoiceWriteData.mock.calls[0][0] as {
+      input: { default_dimensions?: Record<string, string>; items: Array<{ dimensions?: Record<string, string> }> }
+    }
+    expect(buildArg.input.default_dimensions).toEqual({ '1': 'KS01' })
+    expect(buildArg.input.items[0].dimensions).toEqual({ '6': 'P001' })
+  })
+
   it('sets delivery_date from the picked lines when the pick is covered by deliveries', async () => {
     // The header last_delivery_date is display-only and deliberately later
     // than the line's date: the invoice must take the LINE date.

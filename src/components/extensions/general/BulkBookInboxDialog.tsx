@@ -16,6 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import type { InvoiceExtractionResult, VatTreatment } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { summarizeUnderlagTotals } from './bulk-book-inbox-totals'
@@ -120,6 +122,27 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
     [items],
   )
 
+  // Shared kostnadsställe/projekt bag: the route puts it on the business
+  // (cost/revenue) lines of every verifikat, like single categorize. Renders
+  // only when company_settings.dimensions_enabled; starts empty on each open
+  // so a tag never carries over to an unrelated batch.
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
+  const [dimensions, setDimensions] = useState<Record<string, string>>({})
+  useEffect(() => {
+    if (open) setDimensions({})
+  }, [open])
+
+  function setDimension(dimNo: string, code: string | null) {
+    setDimensions((prev) => {
+      const next = { ...prev }
+      const trimmed = code?.trim()
+      if (trimmed) next[dimNo] = trimmed
+      else delete next[dimNo]
+      return next
+    })
+  }
+
   // Reset to the category-derived default each time the dialog opens.
   // Currency is deliberately NOT used to preselect omvänd skattskyldighet: a
   // foreign currency does not imply a foreign seller: a Swedish supplier can
@@ -161,6 +184,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
           item_ids: bookable.map((it) => it.id),
           category,
           ...(vatTreatment !== 'auto' ? { vat_treatment: vatTreatment } : {}),
+          ...(dimensionsEnabled && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
         }),
       })
       const json = await res.json().catch(() => ({}))
@@ -261,6 +285,13 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
               </div>
             )}
           </div>
+
+          {dimensionsEnabled && (
+            <div className="space-y-1">
+              <LineDimensionFields dimensions={dimensions} onChange={setDimension} />
+              <p className="text-xs text-muted-foreground">{t('dimensions_hint')}</p>
+            </div>
+          )}
 
           {!isMixedCurrency && underlagTotals.length === 1 && (
             <p className="text-xs text-muted-foreground tabular-nums">

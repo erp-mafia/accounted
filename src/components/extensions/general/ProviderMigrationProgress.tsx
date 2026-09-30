@@ -90,6 +90,7 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
         {status?.issues.length ? <ul className="space-y-1 text-sm text-muted-foreground">
           {status.issues.slice(0, 10).map(issue => <li key={issue.id}>
             {t(`ext_arcim_job_resource_${issue.resource}`)}: {issue.source_id}: {t(`ext_arcim_job_error_${migrationIssueKind(issue.error_code)}`)}
+            {issue.error_code && <span className="ml-2 font-mono text-xs">{issue.error_code}</span>}
           </li>)}
         </ul> : null}
         {status?.job.error_code === 'PROVIDER_AUTH_EXPIRED' && <Button variant="outline" onClick={() => onReconnect(status)}>{t('ext_arcim_job_reconnect')}</Button>}

@@ -585,6 +585,41 @@ describe('dispatcher injects __keyScopes into gnubok_get_agent_briefing', () => 
   })
 })
 
+// The already-explained refusal of gnubok_match_batch_allocate names the link
+// tool to use instead; without the key's scopes it named gnubok_reconcile_match
+// to a key minted before reconciliation:write existed (feedback seqs 817176,
+// 817189).
+describe('dispatcher injects __keyScopes into gnubok_match_batch_allocate', () => {
+  beforeEach(() => {
+    vi.mocked(validateApiKey).mockResolvedValueOnce({
+      userId: 'user-1',
+      companyId: '11111111-1111-4111-8111-111111111111',
+      scopes: ['transactions:read', 'transactions:write'],
+      apiKeyId: 'key-1',
+      apiKeyName: 'MCP-klient (OAuth)',
+      mode: 'live',
+    } as never)
+  })
+
+  it('passes the validated key scopes as __keyScopes', async () => {
+    const allocate = tools.find((t) => t.name === 'gnubok_match_batch_allocate')!
+    const spy = vi.spyOn(allocate, 'execute').mockResolvedValue({ stubbed: true })
+    try {
+      await handleMcpRequest(
+        mcpToolCall('gnubok_match_batch_allocate', {
+          transaction_id: 'tx-1',
+          allocations: [{ kind: 'customer_invoice', invoice_id: 'inv-1', amount: 100 }],
+        }),
+      )
+      expect(spy).toHaveBeenCalledTimes(1)
+      const args = spy.mock.calls[0][0] as Record<string, unknown>
+      expect(args.__keyScopes).toEqual(['transactions:read', 'transactions:write'])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
 // tools/list advertises company_id on the bridge itself, so agents send it
 // next to `tool`. It used to be dropped there and the inner tool ran on the
 // key's default company (feedback seq 561118, 694132): another company's data,

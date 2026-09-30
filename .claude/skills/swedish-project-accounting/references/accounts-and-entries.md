@@ -1,12 +1,16 @@
 # BAS Accounts and Journal Entries for Project Accounting
 
-## Table of contents
 
-1. Which account classes get project-tagged
-2. Core WIP accounts in detail
-3. Journal entry patterns by scenario
-4. Gemensamma kostnader and fördelningsnycklar
-5. Project closing entries
+<!-- toc -->
+**Contents**
+
+- [1. Which account classes get project-tagged](#1-which-account-classes-get-project-tagged)
+- [2. Core WIP accounts in detail](#2-core-wip-accounts-in-detail)
+- [3. Journal entry patterns by scenario](#3-journal-entry-patterns-by-scenario)
+- [4. Gemensamma kostnader and fördelningsnycklar](#4-gemensamma-kostnader-and-fördelningsnycklar)
+- [5. Project closing entries](#5-project-closing-entries)
+
+<!-- /toc -->
 
 ---
 
@@ -50,6 +54,18 @@ Project dimensions apply primarily to P&L accounts but extend to specific balanc
 ---
 
 ## 2. Core WIP accounts in detail
+
+### Key project accounts (summary)
+
+| Account | Name | Purpose |
+|---------|------|---------|
+| 1470 | Pågående arbeten | WIP asset under alternativregeln (completed contract) |
+| 1620 | Upparbetad men ej fakturerad intäkt | WIP receivable under successiv vinstavräkning |
+| 2420 | Förskott från kunder | Customer advance payments |
+| 2450 | Fakturerad men ej upparbetad intäkt | Deferred revenue (invoiced > earned) |
+| 4970 | Förändring pågående arbeten | P&L counterpart for 1470 adjustments |
+| 3041 | Försäljning tjänster 25% | Typical project revenue account |
+| 3980 | Erhållna offentliga bidrag | Grant revenue |
 
 ### 1470 Pågående arbeten för annans räkning
 
@@ -104,6 +120,16 @@ Sub-accounts:
 - Used when a company capitalizes internally generated assets (software, R&D)
 - Project collects costs; at period end, capitalization entry: Debet 10xx (tillgång) / Kredit 38xx
 - Only permitted under K3 aktiveringsmodellen. Prohibited under K2 (punkt 10.4).
+
+### Moms timing mismatch
+
+This is the highest-error-rate area in project accounting:
+
+- **Upparbetad ej fakturerad intäkt (1620)**: pure periodisering, NO moms impact. VAT is only triggered when an actual invoice is issued.
+- **Fakturerad ej upparbetad intäkt (2450)**: moms on those invoices must be reported AT TIME OF INVOICING even though accounting books revenue as liability.
+- **Omvänd skattskyldighet** in construction: seller invoices without VAT when buyer "more than temporarily" sells byggtjänster. Per-project tracking of reverse charge status required.
+
+The engine must track moms reporting independently from revenue recognition on every project.
 
 ---
 

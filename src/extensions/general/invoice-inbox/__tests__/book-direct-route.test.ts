@@ -184,6 +184,53 @@ describe('POST /items/:id/book-direct', () => {
     )
   })
 
+  it('posts each line with its own dimensions bag (the dialog tags lines one by one)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: null }) })
+    enqueue({ data: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: {
+        ...VALID_BODY,
+        lines: [
+          { account_number: '6540', debit_amount: 79.2, credit_amount: 0, dimensions: { '1': 'KS01', '6': 'P001' } },
+          { account_number: '2641', debit_amount: 19.8, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 99 },
+        ],
+      },
+      searchParams: { _id: 'item-1' },
+    })
+    const { status } = await parseJsonResponse(await route.handler(request, ctx))
+
+    expect(status).toBe(200)
+    const input = createJournalEntryMock.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; dimensions?: Record<string, string> }>
+    }
+    expect(input.lines.map((l) => l.dimensions)).toEqual([{ '1': 'KS01', '6': 'P001' }, undefined, undefined])
+  })
+
+  it('rejects a malformed line dimensions bag with 400 before booking', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: {
+        ...VALID_BODY,
+        lines: [
+          { account_number: '6540', debit_amount: 99, credit_amount: 0, dimensions: { projekt: 'P001' } },
+          { account_number: '1930', debit_amount: 0, credit_amount: 99 },
+        ],
+      },
+      searchParams: { _id: 'item-1' },
+    })
+    const { status } = await parseJsonResponse(await route.handler(request, ctx))
+
+    expect(status).toBe(400)
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
   it('returns 404 when transaction_id is provided but not found', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({}) })

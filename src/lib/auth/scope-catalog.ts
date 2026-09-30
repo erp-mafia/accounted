@@ -98,15 +98,6 @@ export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
 ]
 
 /**
- * Scopes advertised in the RFC 8414 authorization-server metadata document
- * (/.well-known/oauth-authorization-server). Restricted to the same set that
- * /authorize will grant by default: destructive scopes still work when
- * requested explicitly, they just aren't enumerated for unauthenticated
- * callers (defense-in-depth against scope-escalation reconnaissance).
- */
-export const PUBLIC_OAUTH_METADATA_SCOPES: ApiKeyScope[] = [...DEFAULT_OAUTH_SCOPES]
-
-/**
  * Scopes that allow staging a pending_operation. Used to detect a
  * segregation-of-duties conflict when paired with `pending_operations:approve`
  * on the same API key (ISO 27001:2022 A.5.3, SOC 2 CC6.1).
@@ -208,6 +199,14 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_companies:                  'companies:read',
   gnubok_create_company:                  'companies:write',
   gnubok_lookup_company:                  'companies:read',
+  // Multi-company (one connection, every company): the scoped read tools
+  // need companies:read for the scope itself; run_across_companies then
+  // checks the inner tool's own scope per call, and stage_across_companies
+  // requires the inner write tool's scope on top of this one.
+  gnubok_client_overview:                 'companies:read',
+  gnubok_portfolio_readiness:             'reports:read',
+  gnubok_run_across_companies:            'companies:read',
+  gnubok_stage_across_companies:          'companies:read',
   gnubok_connect_bank:                    'companies:read',
   gnubok_sync_bank:                       'transactions:write',
   gnubok_connect_skatteverket:            'companies:read',
@@ -280,6 +279,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_vat_report:                  'reports:read',
   gnubok_vat_review_widget:               'reports:read',
   gnubok_vat_close_check:                 'reports:read',
+  gnubok_list_vat_filings:                'reports:read',
   gnubok_get_kpi_report:                  'reports:read',
   gnubok_get_income_statement:            'reports:read',
   gnubok_list_accounts:                   'reports:read',
@@ -301,6 +301,109 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_dimensions:                 'reports:read',
   gnubok_list_dimension_values:           'reports:read',
   gnubok_create_dimension_value:          'bookkeeping:write',
+  // Operation registry, wave 4: Peppol, årsredovisning, IB, AP actions.
+  gnubok_get_invoice_peppol_readiness: 'invoices:read',
+  gnubok_send_invoice_peppol: 'invoices:write',
+  gnubok_list_invoice_peppol_deliveries: 'invoices:read',
+  gnubok_get_peppol_registration: 'companies:read',
+  gnubok_register_peppol_participant: 'companies:write',
+  gnubok_request_peppol_access: 'companies:write',
+  gnubok_update_arsredovisning_narrative: 'bookkeeping:write',
+  gnubok_update_arsredovisning_compliance: 'bookkeeping:write',
+  gnubok_create_arsredovisning_version: 'bookkeeping:write',
+  gnubok_add_arsredovisning_signature: 'bookkeeping:write',
+  gnubok_validate_arsredovisning_ixbrl: 'reports:read',
+  gnubok_set_opening_balances_manual: 'bookkeeping:write',
+  gnubok_correct_opening_balances: 'bookkeeping:write',
+  gnubok_delete_supplier_invoice: 'suppliers:write',
+  gnubok_uncredit_supplier_invoice: 'suppliers:write',
+  gnubok_update_supplier_invoice_item_account: 'suppliers:write',
+  gnubok_agi_validate_huvuduppgift: 'compliance:read',
+  // Operation registry, wave 3: documents, transactions, rättelse, filing.
+  gnubok_delete_document: 'documents:write',
+  gnubok_detach_document_from_transaction: 'transactions:write',
+  gnubok_delete_inbox_item: 'documents:write',
+  gnubok_unmatch_inbox_item_transaction: 'documents:write',
+  gnubok_undo_bank_import: 'transactions:write',
+  gnubok_correct_entry_metadata: 'bookkeeping:write',
+  gnubok_correct_entry_lines: 'bookkeeping:write',
+  gnubok_redate_entry: 'bookkeeping:write',
+  gnubok_mark_no_document_required: 'bookkeeping:write',
+  gnubok_get_rattelse_log: 'reports:read',
+  gnubok_get_ink2_declaration: 'reports:read',
+  gnubok_get_ne_bilaga: 'reports:read',
+  gnubok_get_periodisk_sammanstallning: 'reports:read',
+  gnubok_get_cash_flow_statement: 'reports:read',
+  gnubok_get_behandlingshistorik: 'reports:read',
+  gnubok_get_bokslutsbilagor: 'reports:read',
+  gnubok_get_vat_settlement_proposal: 'reports:read',
+  gnubok_book_vat_settlement: 'bookkeeping:write',
+  gnubok_mark_vat_period_filed: 'bookkeeping:write',
+  gnubok_unmark_vat_period_filed: 'bookkeeping:write',
+  // Operation registry, wave 2: booking, payment files, utlägg, payroll.
+  gnubok_send_payslips: 'payroll:write',
+  gnubok_revert_salary_run: 'payroll:write',
+  gnubok_unapprove_salary_run: 'payroll:write',
+  gnubok_attach_salary_expense_claims: 'payroll:write',
+  // Payroll over MCP, run structure (lib/operations/salary-run-structure.ts).
+  gnubok_list_salary_runs: 'payroll:read',
+  gnubok_add_salary_run_employee: 'payroll:write',
+  gnubok_remove_salary_run_employee: 'payroll:write',
+  gnubok_add_payslip_line: 'payroll:write',
+  gnubok_delete_payslip_line: 'payroll:write',
+  gnubok_correct_salary_run: 'payroll:write',
+  gnubok_mark_salary_run_paid: 'payroll:write',
+  gnubok_list_salary_payment_files: 'payroll:read',
+  // Payroll over MCP, employee setup (lib/operations/salary-employee-setup.ts).
+  gnubok_list_worked_days: 'payroll:read',
+  gnubok_set_worked_days: 'payroll:write',
+  gnubok_delete_worked_days: 'payroll:write',
+  gnubok_list_employee_benefits: 'payroll:read',
+  gnubok_add_employee_benefit: 'payroll:write',
+  gnubok_update_employee_benefit: 'payroll:write',
+  gnubok_delete_employee_benefit: 'payroll:write',
+  gnubok_list_employee_recurring_lines: 'payroll:read',
+  gnubok_add_employee_recurring_line: 'payroll:write',
+  gnubok_update_employee_recurring_line: 'payroll:write',
+  gnubok_delete_employee_recurring_line: 'payroll:write',
+  gnubok_delete_employee: 'payroll:write',
+  gnubok_preview_supplier_payment_batch: 'suppliers:read',
+  gnubok_list_supplier_payment_batches: 'suppliers:read',
+  gnubok_get_supplier_payment_batch: 'suppliers:read',
+  gnubok_create_supplier_payment_batch: 'suppliers:write',
+  gnubok_cancel_supplier_payment_batch: 'suppliers:write',
+  gnubok_book_invoice: 'invoices:write',
+  gnubok_bulk_book_invoices: 'invoices:write',
+  gnubok_book_supplier_invoice: 'suppliers:write',
+  gnubok_list_expense_claims: 'suppliers:read',
+  gnubok_create_expense_claim: 'suppliers:write',
+  gnubok_delete_expense_claim: 'suppliers:write',
+  gnubok_record_expense_payout: 'suppliers:write',
+  gnubok_match_expense_payout: 'transactions:write',
+  // Operation registry, wave 1: setup capabilities.
+  gnubok_create_cash_account: 'companies:write',
+  gnubok_update_cash_account: 'companies:write',
+  gnubok_set_primary_cash_account: 'companies:write',
+  gnubok_set_invoice_payee_default: 'companies:write',
+  gnubok_create_fiscal_period: 'bookkeeping:write',
+  gnubok_update_fiscal_period: 'bookkeeping:write',
+  gnubok_close_fiscal_period_external: 'bookkeeping:write',
+  gnubok_reopen_fiscal_period_external: 'bookkeeping:write',
+  gnubok_delete_account: 'bookkeeping:write',
+  gnubok_activate_accounts: 'bookkeeping:write',
+  gnubok_deactivate_accounts: 'bookkeeping:write',
+  gnubok_update_company_tax_profile: 'companies:write',
+  gnubok_update_bookkeeping_lock: 'companies:write',
+  gnubok_create_dimension:                'bookkeeping:write',
+  gnubok_update_dimension:                'bookkeeping:write',
+  gnubok_delete_dimension:                'bookkeeping:write',
+  // Account dimension rules (operations dimension-rules.*).
+  gnubok_list_dimension_rules:            'reports:read',
+  gnubok_create_dimension_rule:           'bookkeeping:write',
+  gnubok_update_dimension_rule:           'bookkeeping:write',
+  gnubok_delete_dimension_rule:           'bookkeeping:write',
+  // Retag history of posted lines (operation dimensions.retag-log).
+  gnubok_list_dimension_retag_log:        'reports:read',
   gnubok_get_dimension_pnl:               'reports:read',
   // Staged bulk retag of posted-line dimensions (dimensions PR6).
   gnubok_tag_journal_lines:               'bookkeeping:write',
@@ -319,6 +422,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_record_links:                'documents:read',
   gnubok_get_fact_history:                'documents:read',
   gnubok_get_source:                      'documents:read',
+  gnubok_list_records:                    'documents:read',
+  gnubok_read_document:                   'documents:read',
   gnubok_ask_document:                    'documents:read',
   gnubok_resolve_missing:                 'agent:write',
   gnubok_get_neighbourhood:               'documents:read',

@@ -264,6 +264,53 @@ describe('parseArticlesFile ROT/RUT (housework) column', () => {
     expect(result.warnings.some((w) => w.includes('2 rader hade ett ROT/RUT-värde'))).toBe(true)
   })
 
+  it('drops ROT/RUT on goods rows and counts them: the deduction is on labor only', () => {
+    const buffer = buildXlsx([
+      ['Benämning', 'Pris', 'Typ', 'Husarbete'],
+      ['Montering', '650', 'tjänst', 'VVS'],
+      ['Kakel', '400', 'vara', 'ROT'],
+      ['Blandare', '1900', 'vara', 'VVS'],
+      ['Kabel', '20', 'vara', ''],
+      // Not a work type at all: counted by the existing warning, not this one.
+      ['Skruv', '2', 'vara', '1'],
+    ])
+
+    const result = parseArticlesFile(buffer, 'artiklar.xlsx')
+
+    expect(result.rows.map((r) => [r.name, r.type, r.housework_type])).toEqual([
+      ['Montering', 'tjanst', 'VVS'],
+      ['Kakel', 'vara', null],
+      ['Blandare', 'vara', null],
+      ['Kabel', 'vara', null],
+      ['Skruv', 'vara', null],
+    ])
+    expect(result.warnings.some((w) => w.startsWith('2 varor hade ett ROT/RUT-värde som ignorerades'))).toBe(true)
+    expect(result.warnings.some((w) => w.startsWith('1 rad hade ett ROT/RUT-värde som inte är en arbetstyp'))).toBe(true)
+    expect(result.notices).toContainEqual({
+      code: 'articles_housework_on_goods_dropped',
+      severity: 'notice',
+      params: { count: 2 },
+    })
+    expect(result.notices).toContainEqual({
+      code: 'articles_housework_dropped',
+      severity: 'notice',
+      params: { count: 1 },
+    })
+  })
+
+  it('keeps ROT/RUT on rows without a type column (they import as tjänst)', () => {
+    const buffer = buildXlsx([
+      ['Benämning', 'Pris', 'Husarbete'],
+      ['Takläggning', '700', 'BYGG'],
+    ])
+
+    const result = parseArticlesFile(buffer, 'artiklar.xlsx')
+
+    expect(result.rows[0].type).toBe('tjanst')
+    expect(result.rows[0].housework_type).toBe('BYGG')
+    expect(result.notices?.some((n) => n.code === 'articles_housework_on_goods_dropped')).toBe(false)
+  })
+
   it('emits structured notices beside the warning strings', () => {
     const buffer = buildXlsx([
       ['Benämning', 'Pris inkl. moms', 'Moms', 'Valuta'],

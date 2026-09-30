@@ -114,6 +114,39 @@ describe('commitPendingOperation: book_skattekonto_row(s)', () => {
     expect(book).toHaveBeenCalledWith(expect.anything(), 'user-1', 'company-1', { ids: ['skv-1'] })
   })
 
+  it('passes the approved ledger-twin override through for both op shapes', async () => {
+    const book = vi.fn().mockResolvedValue({
+      ok: true,
+      results: [{ id: 'skv-1', ok: true, journal_entry_id: 'je-1', voucher_number: 7, voucher_series: 'A' }],
+      summary: { total: 1, succeeded: 1, failed: 0 },
+    })
+    registerFakeSkatteverket({ commitBookSkattekontoRows: book })
+
+    const single = createQueuedMockSupabase()
+    single.enqueue({ data: { id: 'op-1' }, error: null })
+    single.enqueue({ data: null, error: null })
+    await commitPendingOperation(single.supabase as never, 'user-1', 'company-1', makePendingOp({
+      operation_type: 'book_skattekonto_row',
+      params: { transaction_id: 'skv-1', allow_duplicate: true },
+    }))
+    expect(book).toHaveBeenLastCalledWith(expect.anything(), 'user-1', 'company-1', {
+      ids: ['skv-1'],
+      allow_duplicate_ids: ['skv-1'],
+    })
+
+    const rows = createQueuedMockSupabase()
+    rows.enqueue({ data: { id: 'op-2' }, error: null })
+    rows.enqueue({ data: null, error: null })
+    await commitPendingOperation(rows.supabase as never, 'user-1', 'company-1', makePendingOp({
+      id: 'op-2',
+      params: { ids: ['skv-1', 'skv-2'], allow_duplicate_ids: ['skv-2'] },
+    }))
+    expect(book).toHaveBeenLastCalledWith(expect.anything(), 'user-1', 'company-1', {
+      ids: ['skv-1', 'skv-2'],
+      allow_duplicate_ids: ['skv-2'],
+    })
+  })
+
   it('partial batch still commits, with the failed rows in result_data', async () => {
     const book = vi.fn().mockResolvedValue({
       ok: true,

@@ -1,6 +1,12 @@
+---
+areas: [lopande]
+---
+
 # Payment Provider: bokföringsmappning per aktör
 
 Per provider: jurisdiktion, reverse charge-status, faktureringsmodell, payout-cykel, BAS-konton, fee-struktur.
+
+**BAS 2026:** clearingkontot är **1686** Fordringar för kontokort och kuponger; 1580 togs bort ur BAS 2026. Underkontona 1581-1586 nedan är den äldre BAS 2025-uppläggningen: i BAS 2026 bokas allt på 1686, uppdelat per provider med objekt/dimension eller företagsegna underkonton.
 
 ## Stripe
 
@@ -99,4 +105,4 @@ Per provider: jurisdiktion, reverse charge-status, faktureringsmodell, payout-cy
 
 3. **FX-omräkning fordringskonto**: om provider håller saldo i EUR/USD och payout sker i samma valuta till valutakonto 1980, ingen FX-diff vid payout: diffen uppstår först vid växling till SEK på 1930. Om provider växlar internt vid payout, bokas diff på 3960/7960 vid varje payout.
 
-4. **Reserves och hold**: vissa providers håller en del av payouten i reserve (vanligt första 6 mån för nya merchants). Reserve-saldot ska synas separat på underkonto till 1580.
+4. **Reserves och hold**: vissa providers håller en del av payouten i reserve (vanligt första 6 mån för nya merchants). Reserve-saldot ska synas separat på underkonto till 1686.

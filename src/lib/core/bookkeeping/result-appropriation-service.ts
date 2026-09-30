@@ -1,10 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
-import { getOpeningBalances } from '@/lib/reports/opening-balances'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
+import { addDaysIso } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
-import type { JournalEntry, CreateJournalEntryLineInput } from '@/types'
+import type {
+  CreateJournalEntryLineInput,
+  EntityType,
+  JournalEntry,
+  ResultAppropriationPreview,
+} from '@/types'
+import { carryAfterDispositions, priorResultCarry, type PriorResultCarry } from './prior-result-carry'
+import { findNextPeriod } from './period-service'
 
 const log = createLogger('result-appropriation-service')
 
@@ -22,7 +29,11 @@ export interface ResultAppropriationPlan {
   resultAccount: string
   /** Where last year's result is carried (AB 2098, ideell förening 2068). */
   priorResultAccount: string
-  /** Net result-account IB balance, credit-positive (a profit is > 0, a loss is < 0). */
+  /**
+   * Amount carried, credit-positive (a profit is > 0, a loss is < 0): the
+   * result account's IB balance less what a disposition booked by hand in the
+   * period already moved.
+   */
   net: number
   /** Absolute, öre-rounded amount that moves between the two accounts. */
   amount: number
@@ -42,7 +53,9 @@ export interface ResultAppropriationPlan {
  *    a reversed one has been stornoed, no longer moves any balance, and must
  *    not block re-planning: the year-end undo flow reverses the omföring and
  *    the subsequent re-run has to be able to post a fresh one), or
- *  - 2099 carries no balance (within ORE_TOLERANCE).
+ *  - 2099 carries no balance (within ORE_TOLERANCE), or
+ *  - the automatic omföring or a disposition booked by hand in the period
+ *    already moved it (see priorResultCarry).
  *
  * Shared by generateResultAppropriation (which posts the plan) and the
  * retroactive catch-up script (which previews it in dry-run) so the preview
@@ -66,23 +79,8 @@ export async function planResultAppropriation(
   // closes straight into 2010 and has nothing to reclassify.
   const accounts = resultClosingAccounts(entityType)
   if (!accounts.priorYearCarry) return null
-  const resultAccount = accounts.closing
-  const priorResultAccount = accounts.priorYearCarry
 
-  // Idempotency: never plan a second omföring for a period that already has a
-  // LIVE one. Deliberately posted-only: a reversed omföring is storno-cancelled
-  // (net zero effect on 2099), so it must not block the re-run after an
-  // administrative year-end undo (scripts/undo-year-end-closing.ts).
-  const { data: existing } = await supabase
-    .from('journal_entries')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', periodId)
-    .eq('source_type', 'result_appropriation')
-    .eq('status', 'posted')
-    .limit(1)
-    .maybeSingle()
-  if (existing) return null
+  if (await hasLiveAppropriation(supabase, companyId, periodId)) return null
 
   const { data: period } = await supabase
     .from('fiscal_periods')
@@ -92,20 +90,44 @@ export async function planResultAppropriation(
     .single()
   if (!period) throw new Error('Fiscal period not found')
 
-  // Read 2099 from the period's INGÅENDE BALANS only: the carried-forward
-  // prior result that the IB entry mirrored from last year's UB: NOT the full
-  // trial balance. The omföring must reclassify exactly that carried amount;
-  // scoping to IB makes it correct even when the period already has current-year
-  // 2099 activity (e.g. the retroactive catch-up script running mid-year, where
-  // closing = IB + activity would over/under-reclassify). getOpeningBalances
-  // reads the committed opening_balance entry, falling back to a server-side
-  // aggregate of prior posted lines when none is set. credit − debit is positive
-  // for a profit (2099 is credit-normal).
-  const { balances } = await getOpeningBalances(supabase, companyId, period)
-  const ibResult = balances.get(resultAccount)
-  const net = ibResult ? roundOre(ibResult.credit - ibResult.debit) : 0
-  if (Math.abs(net) < ORE_TOLERANCE) return null
+  // What is still carried on the result account: its ingående balans less
+  // what a disposition already booked in this period moved (by the owner, or
+  // the old system's vinstdisposition arriving by SIE). Carry only that, and
+  // nothing when it is all moved: the omföring duplicated a disposition booked
+  // before the close (PostHog PH 108). Same computation the readiness check uses.
+  const carry = await priorResultCarry(supabase, companyId, { id: periodId, ...period }, entityType)
+  if (!carry || carry.remaining === 0) {
+    if (carry && carry.ibNet !== 0) {
+      log.info('Prior result already disposed; no automatic omföring', {
+        operation: 'result_appropriation.skip_disposed',
+        companyId,
+        entityType: 'fiscal_period',
+        entityId: periodId,
+        vouchers: carry.movedBy,
+      })
+    }
+    return null
+  }
 
+  return {
+    periodId,
+    periodName: period.name,
+    periodStart: period.period_start,
+    ...omforingFor(carry),
+  }
+}
+
+/**
+ * The omföring that moves what is still carried (`carry.remaining`, non-zero)
+ * off the result account onto the carry account. Pure: the close posts it
+ * (planResultAppropriation) and the year-end previews disclose it
+ * (previewResultAppropriation), so the two cannot differ.
+ */
+function omforingFor(
+  carry: PriorResultCarry,
+): Pick<ResultAppropriationPlan, 'resultAccount' | 'priorResultAccount' | 'net' | 'amount' | 'direction' | 'lines'> {
+  const { resultAccount, priorResultAccount } = carry
+  const net = carry.remaining
   const amount = roundOre(Math.abs(net))
   const lines: CreateJournalEntryLineInput[] =
     net > 0
@@ -139,18 +161,76 @@ export async function planResultAppropriation(
             line_description: 'Omföring av föregående års resultat',
           },
         ]
+  return { resultAccount, priorResultAccount, net, amount, direction: net > 0 ? 'profit' : 'loss', lines }
+}
 
-  return {
-    periodId,
-    periodName: period.name,
-    periodStart: period.period_start,
-    resultAccount,
-    priorResultAccount,
-    net,
-    amount,
-    direction: net > 0 ? 'profit' : 'loss',
-    lines,
+/**
+ * Idempotency: whether the period already has a LIVE omföring. Deliberately
+ * posted-only: a reversed omföring is storno-cancelled (net zero effect on
+ * 2099), so it must not block the re-run after an administrative year-end undo
+ * (scripts/undo-year-end-closing.ts).
+ */
+async function hasLiveAppropriation(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodId: string,
+): Promise<boolean> {
+  const { data: existing } = await supabase
+    .from('journal_entries')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', periodId)
+    .eq('source_type', 'result_appropriation')
+    .eq('status', 'posted')
+    .limit(1)
+    .maybeSingle()
+  return Boolean(existing)
+}
+
+/**
+ * The omföring the year-end close will book in the next period, disclosed
+ * before the close (feedback seq 707985: run_year_end booked one the owner's
+ * migrated books had already made, and no preview had said it would).
+ *
+ * Same rule as planResultAppropriation, applied to the next period's ingående
+ * balans as the close will write it: `projectedIbNet` is this period's closing
+ * balance on the result account after the closing entry. The next period may
+ * not exist yet (the close creates it); when it does, a disposition already
+ * booked there counts exactly as it will after the close. Null for forms that
+ * close straight into equity (enskild firma) and when there is nothing to move.
+ */
+export async function previewResultAppropriation(
+  supabase: SupabaseClient,
+  companyId: string,
+  closing: { periodId: string; periodEnd: string; entityType: EntityType; projectedIbNet: number },
+): Promise<ResultAppropriationPreview | null> {
+  const accounts = resultClosingAccounts(closing.entityType)
+  if (!accounts.priorYearCarry || Math.abs(closing.projectedIbNet) < ORE_TOLERANCE) return null
+
+  const next = await findNextPeriod(supabase, companyId, closing.periodId)
+  const base = {
+    from_account: accounts.closing,
+    to_account: accounts.priorYearCarry,
+    direction: closing.projectedIbNet > 0 ? ('profit' as const) : ('loss' as const),
+    // The close creates a missing next period starting the day after this one.
+    entry_date: next?.period_start ?? addDaysIso(closing.periodEnd, 1),
   }
+  if (next && (await hasLiveAppropriation(supabase, companyId, next.id))) {
+    return { ...base, amount: 0, skipped_reason: 'already_booked', disposed_by: [] }
+  }
+
+  const carry = await carryAfterDispositions(
+    supabase,
+    companyId,
+    next?.id ?? null,
+    closing.entityType,
+    closing.projectedIbNet,
+  )
+  if (!carry || carry.ibNet === 0) return null
+  if (carry.remaining === 0) {
+    return { ...base, amount: 0, skipped_reason: 'already_disposed', disposed_by: carry.movedBy }
+  }
+  return { ...base, amount: omforingFor(carry).amount, skipped_reason: null, disposed_by: carry.movedBy }
 }
 
 /**

@@ -410,6 +410,24 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
               {fmt(data.kassaflodesanalys.lopande.skatt_betald)}
             </Text>
           </View>
+          {data.kassaflodesanalys.lopande.koncernbidrag !== 0 && (
+            <View style={styles.tableRow}>
+              <Text style={styles.colLabel}>Koncernbidrag</Text>
+              <Text style={styles.colAmount}>
+                {fmt(data.kassaflodesanalys.lopande.koncernbidrag)}
+              </Text>
+            </View>
+          )}
+          {data.kassaflodesanalys.lopande.ovriga_poster !== 0 && (
+            <View style={styles.tableRow}>
+              <Text style={styles.colLabel}>
+                Övriga poster (konto {data.kassaflodesanalys.unclassified_accounts.join(', ')})
+              </Text>
+              <Text style={styles.colAmount}>
+                {fmt(data.kassaflodesanalys.lopande.ovriga_poster)}
+              </Text>
+            </View>
+          )}
           <View style={styles.tableRowSubtotal}>
             <Text style={styles.colLabel}>Kassaflöde från den löpande verksamheten</Text>
             <Text style={styles.colAmount}>{fmt(data.kassaflodesanalys.lopande.total)}</Text>
@@ -428,6 +446,14 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
               {fmt(data.kassaflodesanalys.investerings.avyttring_anlaggningar)}
             </Text>
           </View>
+          {data.kassaflodesanalys.investerings.kortfristiga_placeringar !== 0 && (
+            <View style={styles.tableRow}>
+              <Text style={styles.colLabel}>Förändring av kortfristiga placeringar</Text>
+              <Text style={styles.colAmount}>
+                {fmt(data.kassaflodesanalys.investerings.kortfristiga_placeringar)}
+              </Text>
+            </View>
+          )}
           <View style={styles.tableRowSubtotal}>
             <Text style={styles.colLabel}>Kassaflöde från investeringsverksamheten</Text>
             <Text style={styles.colAmount}>
@@ -437,7 +463,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
 
           <Text style={styles.sectionTitle}>Finansieringsverksamheten</Text>
           <View style={styles.tableRow}>
-            <Text style={styles.colLabel}>Förändring av lån (långfristiga skulder)</Text>
+            <Text style={styles.colLabel}>Förändring av lån</Text>
             <Text style={styles.colAmount}>
               {fmt(data.kassaflodesanalys.finansierings.delta_lan)}
             </Text>

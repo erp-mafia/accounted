@@ -144,6 +144,23 @@ describe('buildCutoffLines: fordringar', () => {
     expect(totals.debit).toBe(totals.credit)
   })
 
+  it('splits goods delivered abroad (#2906) from services on the same treatment', () => {
+    // An unpaid goods export books its cut-off revenue where its own verifikat
+    // will (3105, ruta 36); a services export stays on 3305 (ruta 40).
+    const { receivableLines } = buildCutoffLines(
+      [
+        receivable({ id: 'inv-goods', vatTreatment: 'export', goodsDeliveryCountry: 'NO', outstanding: 5000, vat: 0 }),
+        receivable({ id: 'inv-svc', vatTreatment: 'export', outstanding: 2000, vat: 0 }),
+      ],
+      [],
+      'aktiebolag',
+    )
+    expect(receivableLines.find((l) => l.account_number === '3105')?.credit_amount).toBe(5000)
+    expect(receivableLines.find((l) => l.account_number === '3305')?.credit_amount).toBe(2000)
+    const totals = sum(receivableLines)
+    expect(totals.debit).toBe(totals.credit)
+  })
+
   it('still balances if a stray moms amount reaches buildCutoffLines directly', () => {
     // The collector now excludes these rows and the posting step refuses them,
     // so this is the last-resort path. It must never invent a moms account and
@@ -343,10 +360,12 @@ describe('cut-off snapshot and posting inspection', () => {
       payables: [payable({ id: 'p' })],
       unknownVatTreatment: [],
       strayVatOnZeroRate: [],
+      undatedSettlements: ['F-9', 'F-8'],
     }
     const reordered = {
       ...first,
       receivables: [...first.receivables].reverse(),
+      undatedSettlements: [...first.undatedSettlements].reverse(),
     }
     expect(cutoffCollectionsEqual(first, reordered)).toBe(true)
     expect(
@@ -354,6 +373,11 @@ describe('cut-off snapshot and posting inspection', () => {
         ...reordered,
         receivables: [receivable({ id: 'a', outstanding: 1300 }), receivable({ id: 'b' })],
       }),
+    ).toBe(false)
+    // The disclosure is part of what the approver saw: a preview whose
+    // assumed invoices changed is stale even when the lines did not move.
+    expect(
+      cutoffCollectionsEqual(first, { ...reordered, undatedSettlements: ['F-9'] }),
     ).toBe(false)
   })
 
@@ -363,6 +387,7 @@ describe('cut-off snapshot and posting inspection', () => {
       payables: [payable({ id: 'p' })],
       unknownVatTreatment: [],
       strayVatOnZeroRate: [],
+      undatedSettlements: [],
     }
     const reordered = { ...first, receivables: [...first.receivables].reverse() }
     const fingerprint = cutoffPreviewFingerprint({
@@ -556,18 +581,64 @@ describe('cut-off snapshot and posting inspection', () => {
 })
 
 describe('collectKontantmetodCutoff', () => {
-  function makePagedSupabase(rows: Record<string, Array<Record<string, unknown>>>) {
+  type Row = Record<string, unknown>
+  // Only the credit-note read (fetchCreditedAfter) uses gt() and not(). They
+  // are applied as PostgREST does, so a credit note dated on or before period
+  // end, or a voided one, never reads as a later credit.
+  function applyCreditNoteFilters(query: Record<string, unknown>, keep: Array<(row: Row) => boolean>) {
+    query.gt = (column: string, value: string) => {
+      keep.push((row) => String(row[column] ?? '') > value)
+      return query
+    }
+    query.not = (column: string, op: string, value: unknown) => {
+      if (op === 'is' && value === null) keep.push((row) => row[column] != null)
+      if (op === 'in') {
+        const excluded = String(value).replace(/[()]/g, '').split(',')
+        keep.push((row) => !excluded.includes(String(row[column])))
+      }
+      return query
+    }
+  }
+
+  function makePagedSupabase(rows: Record<string, Array<Row>>) {
     return {
       from: (table: string) => {
         let range = { from: 0, to: 999 }
+        const keep: Array<(row: Row) => boolean> = []
         const query: Record<string, unknown> = {}
         for (const name of ['select', 'eq', 'lte', 'in', 'order']) query[name] = () => query
+        applyCreditNoteFilters(query, keep)
         query.range = (from: number, to: number) => {
           range = { from, to }
           return query
         }
         query.then = (resolve: (value: unknown) => unknown) => resolve({
-          data: (rows[table] ?? []).slice(range.from, range.to + 1),
+          data: (rows[table] ?? [])
+            .filter((row) => keep.every((test) => test(row)))
+            .slice(range.from, range.to + 1),
+          error: null,
+        })
+        return query
+      },
+    }
+  }
+
+  // makePagedSupabase ignores lte(), so it cannot tell a December payment or
+  // credit note from a January one. This one applies it, as PostgREST does:
+  // the collector reads every payment row and dates them itself.
+  function makeDateFilteringSupabase(rows: Record<string, Array<Row>>) {
+    return {
+      from: (table: string) => {
+        const keep: Array<(row: Row) => boolean> = []
+        const query: Record<string, unknown> = {}
+        for (const name of ['select', 'eq', 'in', 'order', 'range']) query[name] = () => query
+        query.lte = (column: string, value: string) => {
+          keep.push((row) => String(row[column]) <= value)
+          return query
+        }
+        applyCreditNoteFilters(query, keep)
+        query.then = (resolve: (value: unknown) => unknown) => resolve({
+          data: (rows[table] ?? []).filter((row) => keep.every((test) => test(row))),
           error: null,
         })
         return query
@@ -661,44 +732,39 @@ describe('collectKontantmetodCutoff', () => {
 
   // A migrated supplier invoice arrives settled (status 'paid') with no payment
   // row: the provider names neither a payment date nor a payment voucher. The
-  // cut-off keys on payment DATE alone, so until a row exists the invoice reads
-  // as a skuld at year end. attach_supplier_invoice_settlement_voucher writes
-  // that row, dated at the verifikat that paid it.
+  // cut-off follows the leverantörsreskontra's as-of rule: a payment row is
+  // authoritative, then paid_at, and with neither the state it has today is
+  // assumed to have stood at period end and disclosed (feedback seq 798354).
+  // attach_supplier_invoice_settlement_voucher writes the row that replaces
+  // the assumption, dated at the verifikat that paid it.
   describe('migrated supplier invoice settled without a payment row', () => {
     const migratedPaid = {
       id: 'si-migrated', supplier_invoice_number: 'L-MIG', invoice_date: '2026-12-10', status: 'paid',
       total: 1250, vat_amount: 250, reverse_charge: false, is_credit_note: false, currency: 'SEK',
+      paid_amount: 1250, remaining_amount: 0, paid_at: null as string | null,
       items: [{ account_number: '5410', line_total: 1000 }],
     }
-    // makePagedSupabase ignores lte(), so it cannot tell a December payment
-    // from a January one. This one applies it, as PostgREST does, which also
-    // pins that the collector asks for payments up to period end at all.
-    function makeDateFilteringSupabase(rows: Record<string, Array<Record<string, unknown>>>) {
-      return {
-        from: (table: string) => {
-          let result = rows[table] ?? []
-          const query: Record<string, unknown> = {}
-          for (const name of ['select', 'eq', 'in', 'order', 'range']) query[name] = () => query
-          query.lte = (column: string, value: string) => {
-            result = result.filter((row) => String(row[column]) <= value)
-            return query
-          }
-          query.then = (resolve: (value: unknown) => unknown) => resolve({ data: result, error: null })
-          return query
-        },
-      }
-    }
-    const collect = (payments: Array<Record<string, unknown>>) =>
+    const collect = (
+      payments: Array<Record<string, unknown>>,
+      invoice: Record<string, unknown> = migratedPaid,
+    ) =>
       collectKontantmetodCutoff(makeDateFilteringSupabase({
         invoices: [],
         invoice_payments: [],
-        supplier_invoices: [migratedPaid],
+        supplier_invoices: [invoice],
         supplier_invoice_payments: payments,
       }) as never, 'co-1', '2026-01-01', '2026-12-31')
 
-    it('counts it as a payable while no row explains the settlement', async () => {
+    it('leaves it out and discloses it as undated while nothing dates the settlement', async () => {
       const result = await collect([])
+      expect(result.payables).toEqual([])
+      expect(result.undatedSettlements).toEqual(['L-MIG'])
+    })
+
+    it('keeps it when paid_at says it was settled after period end', async () => {
+      const result = await collect([], { ...migratedPaid, paid_at: '2027-01-15T08:00:00Z' })
       expect(result.payables[0]).toMatchObject({ outstanding: 1250, vat: 250 })
+      expect(result.undatedSettlements).toEqual([])
     })
 
     it('drops it once the evidence row is dated on or before period end', async () => {
@@ -707,6 +773,7 @@ describe('collectKontantmetodCutoff', () => {
         transaction_id: null, journal_entry_id: 'je-v342',
       }])
       expect(result.payables).toEqual([])
+      expect(result.undatedSettlements).toEqual([])
     })
 
     // The reason the row is dated at the verifikat and not at the invoice: a
@@ -717,6 +784,214 @@ describe('collectKontantmetodCutoff', () => {
         transaction_id: null, journal_entry_id: 'je-v7',
       }])
       expect(result.payables[0]).toMatchObject({ outstanding: 1250, vat: 250 })
+      expect(result.undatedSettlements).toEqual([])
+    })
+
+    it('does not disclose an unpaid invoice: nothing about it is assumed', async () => {
+      const result = await collect([], {
+        ...migratedPaid, status: 'registered', paid_amount: 0, remaining_amount: 1250,
+      })
+      expect(result.payables[0]).toMatchObject({ outstanding: 1250, vat: 250 })
+      expect(result.undatedSettlements).toEqual([])
+    })
+  })
+
+  // Feedback seq 798354: a company migrated from Fortnox had every customer
+  // invoice imported as paid (paid_amount = total) with neither a payment row
+  // nor a payment date, and the cut-off proposed the whole invoiced history as
+  // year-end fordringar. The kundreskontra's as-of rule decides instead.
+  describe('customer invoice settled without a payment row (feedback seq 798354)', () => {
+    const migratedPaid = {
+      id: 'inv-migrated', invoice_number: 'F-MIG', invoice_date: '2026-11-30', status: 'paid',
+      total: 1250, vat_amount: 250, vat_treatment: 'standard_25', document_type: 'invoice',
+      currency: 'SEK', paid_amount: 1250, remaining_amount: 0, paid_at: null as string | null,
+    }
+    const collect = (
+      invoices: Array<Record<string, unknown>>,
+      payments: Array<Record<string, unknown>> = [],
+    ) =>
+      collectKontantmetodCutoff(makePagedSupabase({
+        invoices,
+        invoice_payments: payments,
+      }) as never, 'co-1', '2026-01-01', '2026-12-31')
+
+    it('leaves a migrated paid invoice out of the cut-off and discloses it as undated', async () => {
+      const result = await collect([migratedPaid])
+      expect(result.receivables).toEqual([])
+      expect(result.undatedSettlements).toEqual(['F-MIG'])
+    })
+
+    it('keeps it when paid_at says it was paid after period end', async () => {
+      const result = await collect([{ ...migratedPaid, paid_at: '2027-01-20T09:00:00Z' }])
+      expect(result.receivables).toEqual([
+        expect.objectContaining({ id: 'inv-migrated', outstanding: 1250, vat: 250 }),
+      ])
+      expect(result.undatedSettlements).toEqual([])
+    })
+
+    it('drops it without a disclosure when paid_at is on or before period end', async () => {
+      const result = await collect([{ ...migratedPaid, paid_at: '2026-12-31T10:00:00Z' }])
+      expect(result.receivables).toEqual([])
+      expect(result.undatedSettlements).toEqual([])
+    })
+
+    it('still counts it as outstanding when a real payment row is dated after period end', async () => {
+      const result = await collect([migratedPaid], [{
+        id: 'ip-late', invoice_id: 'inv-migrated', amount: 1250, payment_date: '2027-01-08',
+      }])
+      expect(result.receivables).toEqual([
+        expect.objectContaining({ id: 'inv-migrated', outstanding: 1250, vat: 250 }),
+      ])
+      expect(result.undatedSettlements).toEqual([])
+    })
+
+    it('carries only the undated remainder of a partial payment, and discloses it', async () => {
+      const result = await collect([{
+        ...migratedPaid, status: 'partially_paid', paid_amount: 500, remaining_amount: 750,
+      }])
+      expect(result.receivables).toEqual([
+        expect.objectContaining({ outstanding: 750, vat: 150 }),
+      ])
+      expect(result.undatedSettlements).toEqual(['F-MIG'])
+    })
+
+    it('does not disclose an unpaid invoice: nothing about it is assumed', async () => {
+      const result = await collect([{
+        ...migratedPaid, status: 'sent', paid_amount: 0, remaining_amount: 1250,
+      }])
+      expect(result.receivables).toEqual([expect.objectContaining({ outstanding: 1250 })])
+      expect(result.undatedSettlements).toEqual([])
+    })
+
+    // The reporting company's own pair: Fortnox netted the kreditfaktura into
+    // the balance of the invoice it credits (imported paid, paid_amount =
+    // total), and the importer wrote the credit note inert at 'credited'.
+    // Counting it once its original is taken as settled would book a phantom
+    // negative fordran of the whole credit.
+    it('treats a migrated credit note as settled with the invoice it was netted into', async () => {
+      const result = await collect([
+        {
+          ...migratedPaid, id: 'inv-original', invoice_number: '10',
+          total: 133750, vat_amount: 26750, paid_amount: 133750,
+        },
+        {
+          ...migratedPaid, id: 'inv-credit', invoice_number: '11', invoice_date: '2026-12-03',
+          status: 'credited', total: -133750, vat_amount: -26750, paid_amount: 0,
+        },
+      ])
+      expect(result.receivables).toEqual([])
+      expect(result.undatedSettlements).toEqual(['10', '11'])
+      expect(buildCutoffLines(result.receivables, [], 'aktiebolag').receivableLines).toEqual([])
+    })
+  })
+
+  // A kreditfaktura settles its original on its own date. Kreditera zeroes a
+  // supplier original's remaining_amount and a migrated original holds the
+  // provider's netted balance, so the live state alone would read a credit
+  // made after period end as a settlement on the day.
+  describe('original credited after period end', () => {
+    const periodEnd = '2025-12-31'
+    const supplierOriginal = {
+      id: 'si-orig', supplier_invoice_number: 'L-10', invoice_date: '2025-12-10', status: 'credited',
+      total: 1000, total_sek: 1000, vat_amount: 200, vat_amount_sek: 200, reverse_charge: false,
+      is_credit_note: false, currency: 'SEK', paid_amount: 0, remaining_amount: 0, paid_at: null,
+      items: [{ account_number: '5410', line_total: 800 }],
+    }
+    const supplierCredit = (invoiceDate: string) => ({
+      ...supplierOriginal, id: 'si-credit', supplier_invoice_number: 'KREDIT-L-10',
+      invoice_date: invoiceDate, is_credit_note: true, credited_invoice_id: 'si-orig',
+    })
+    const customerOriginal = {
+      id: 'inv-orig', invoice_number: '10', invoice_date: '2025-12-10', status: 'credited',
+      total: 1000, total_sek: 1000, vat_amount: 200, vat_amount_sek: 200,
+      vat_treatment: 'standard_25', document_type: 'invoice', currency: 'SEK',
+      paid_amount: 0, remaining_amount: 1000, paid_at: null,
+    }
+    const customerCredit = (invoiceDate: string, over: Row = {}) => ({
+      ...customerOriginal, id: 'inv-credit', invoice_number: 'KR-10', invoice_date: invoiceDate,
+      status: 'sent', total: -1000, total_sek: -1000, vat_amount: -200, vat_amount_sek: -200,
+      remaining_amount: 0, credited_invoice_id: 'inv-orig', ...over,
+    })
+    // What a provider migration writes for the same pair: the original paid
+    // with the credit netted in, the credit note inert at 'credited'.
+    const migratedOriginal = { ...customerOriginal, status: 'paid', paid_amount: 1000, remaining_amount: 0 }
+    const collect = (rows: Record<string, Array<Row>>) =>
+      collectKontantmetodCutoff(
+        makeDateFilteringSupabase(rows) as never, 'co-1', '2025-01-01', periodEnd,
+      )
+
+    it('keeps a supplier invoice credited with Kreditera after period end at its full total', async () => {
+      const result = await collect({
+        supplier_invoices: [supplierOriginal, supplierCredit('2026-01-15')],
+      })
+      expect(result.payables).toEqual([
+        expect.objectContaining({ id: 'si-orig', outstanding: 1000, vat: 200 }),
+      ])
+      expect(result.undatedSettlements).toEqual([])
+    })
+
+    it('still nets a supplier invoice credited on or before period end to zero', async () => {
+      const result = await collect({
+        supplier_invoices: [supplierOriginal, supplierCredit('2025-12-20')],
+      })
+      expect(result.payables).toEqual([])
+      expect(buildCutoffLines([], result.payables, 'aktiebolag').payableLines).toEqual([])
+    })
+
+    it('keeps a customer invoice credited after period end at its full total', async () => {
+      for (const [original, credit] of [
+        [customerOriginal, customerCredit('2026-01-15')],
+        [migratedOriginal, customerCredit('2026-01-15', { status: 'credited' })],
+      ]) {
+        const result = await collect({ invoices: [original, credit] })
+        expect(result.receivables).toEqual([
+          expect.objectContaining({ id: 'inv-orig', outstanding: 1000, vat: 200 }),
+        ])
+        expect(result.undatedSettlements).toEqual([])
+      }
+    })
+
+    it('still nets a customer invoice credited on or before period end to zero', async () => {
+      for (const [original, credit] of [
+        [customerOriginal, customerCredit('2025-12-20')],
+        [migratedOriginal, customerCredit('2025-12-20', { status: 'credited' })],
+      ]) {
+        const result = await collect({ invoices: [original, credit] })
+        expect(buildCutoffLines(result.receivables, [], 'aktiebolag').receivableLines).toEqual([])
+      }
+    })
+
+    it('does not count a credit note that never took effect', async () => {
+      // A kreditfaktura started in January and left as a draft credited
+      // nothing: the migrated original's settlement stays the undated one.
+      const result = await collect({
+        invoices: [migratedOriginal, customerCredit('2026-01-15', { status: 'draft' })],
+      })
+      expect(result.receivables).toEqual([])
+      expect(result.undatedSettlements).toEqual(['10'])
+    })
+
+    it('fails closed when the credit notes cannot be read', async () => {
+      const supabase = {
+        from: (table: string) => {
+          let creditNoteRead = false
+          const query: Record<string, unknown> = {}
+          for (const name of ['select', 'eq', 'lte', 'in', 'order', 'range', 'not']) query[name] = () => query
+          query.gt = () => {
+            creditNoteRead = true
+            return query
+          }
+          query.then = (resolve: (value: unknown) => unknown) => resolve(
+            creditNoteRead && table === 'supplier_invoices'
+              ? { data: null, error: { message: 'credit note read failed' } }
+              : { data: [], error: null },
+          )
+          return query
+        },
+      }
+      await expect(
+        collectKontantmetodCutoff(supabase as never, 'co-1', '2025-01-01', periodEnd),
+      ).rejects.toThrow(/kunde inte läsa kreditfakturor/i)
     })
   })
 
@@ -889,19 +1164,27 @@ describe('collectKontantmetodCutoff', () => {
     expect(result.receivables.at(-1)?.id).toBe('inv-1000')
   })
 
-  it('reconstructs customer and supplier credits as of period end', async () => {
+  it('nets customer and supplier credits to zero as of period end', async () => {
+    // The rows as the in-app credit flows leave them. Customer side: the
+    // original moves to 'credited' with paid_amount untouched and the credit
+    // note rests at 'sent', so the pair offsets line by line. Supplier side:
+    // Kreditera zeroes the original's remaining_amount and the credit note
+    // rests at 'credited' with nothing remaining, so the credit is already
+    // applied and neither row enters the cut-off. No payment row dates that
+    // settlement, so both are disclosed.
     const result = await collectKontantmetodCutoff(makePagedSupabase({
       invoices: [
         {
           id: 'inv-original', invoice_number: 'F-1', invoice_date: '2026-11-01', status: 'credited',
           total: 1250, total_sek: 1250, vat_amount: 250, vat_amount_sek: 250,
           vat_treatment: 'standard_25', document_type: 'invoice', currency: 'SEK',
+          paid_amount: 0, remaining_amount: 1250,
         },
         {
           id: 'inv-credit', invoice_number: 'K-1', invoice_date: '2026-12-01', status: 'sent',
           total: -1250, total_sek: -1250, vat_amount: -250, vat_amount_sek: -250,
           vat_treatment: 'standard_25', document_type: 'invoice', currency: 'SEK',
-          credited_invoice_id: 'inv-original',
+          credited_invoice_id: 'inv-original', paid_amount: 0, remaining_amount: 0,
         },
       ],
       supplier_invoices: [
@@ -909,19 +1192,21 @@ describe('collectKontantmetodCutoff', () => {
           id: 'si-original', supplier_invoice_number: 'L-1', invoice_date: '2026-11-01', status: 'credited',
           total: 1250, total_sek: 1250, vat_amount: 250, vat_amount_sek: 250,
           reverse_charge: false, is_credit_note: false, currency: 'SEK',
+          paid_amount: 0, remaining_amount: 0,
           items: [{ account_number: '5410', line_total: 1000 }],
         },
         {
-          id: 'si-credit', supplier_invoice_number: 'LK-1', invoice_date: '2026-12-01', status: 'registered',
+          id: 'si-credit', supplier_invoice_number: 'LK-1', invoice_date: '2026-12-01', status: 'credited',
           total: 1250, total_sek: 1250, vat_amount: 250, vat_amount_sek: 250,
           reverse_charge: false, is_credit_note: true, currency: 'SEK',
-          credited_invoice_id: 'si-original',
+          credited_invoice_id: 'si-original', paid_amount: 0, remaining_amount: 0,
           items: [{ account_number: '5410', line_total: 1000 }],
         },
       ],
     }) as never, 'co-1', '2026-01-01', '2026-12-31')
     expect(result.receivables.map((item) => item.outstanding)).toEqual([1250, -1250])
-    expect(result.payables.map((item) => item.outstanding)).toEqual([1250, -1250])
+    expect(result.payables).toEqual([])
+    expect(result.undatedSettlements).toEqual(['L-1', 'LK-1'])
     const lines = buildCutoffLines(result.receivables, result.payables, 'aktiebolag')
     expect(lines.receivableLines).toEqual([])
     expect(lines.payableLines).toEqual([])

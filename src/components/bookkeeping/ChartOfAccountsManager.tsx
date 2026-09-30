@@ -575,7 +575,7 @@ export default function ChartOfAccountsManager() {
         <button type="button" className={QUIET_LINK_CLASS} onClick={() => setPruneDialogOpen(true)}>
           {t('prune_button')}
         </button>
-        <Button onClick={() => setAddDialogOpen(true)}>
+        <Button size="sm" onClick={() => setAddDialogOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
           {t('add_own')}
         </Button>

@@ -2,13 +2,38 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import crypto from 'crypto'
 import type { RedirectUriResolution } from '@/lib/auth/oauth-allowlist'
 
+type PickerCompany = { company_id: string; name: string; role: string }
+
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
   resolveRedirectUri: vi.fn(),
   getActiveCompanyId: vi.fn(),
   getBranding: vi.fn(),
   createAuthCode: vi.fn<(...args: unknown[]) => string>(() => 'test-auth-code'),
+  // Default: a single-company user, so the consent page renders no picker and
+  // every pre-existing test keeps its shape. Multi-company tests override
+  // with mockResolvedValue; clearAllMocks keeps this implementation.
+  listUserCompaniesForPicker: vi.fn(
+    (_supabase: unknown, _userId: string, options?: { activeCompanyId?: string | null }) =>
+      Promise.resolve(
+        options?.activeCompanyId
+          ? [{ company_id: options.activeCompanyId, name: 'Test AB', role: 'owner' }]
+          : [],
+      ),
+  ),
 }))
+
+vi.mock('@/lib/company/company-picker', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/company/company-picker')>()
+  return {
+    ...actual,
+    listUserCompaniesForPicker: (
+      supabase: unknown,
+      userId: string,
+      options?: { activeCompanyId?: string | null },
+    ) => mocks.listUserCompaniesForPicker(supabase, userId, options),
+  }
+})
 
 vi.mock('@/lib/auth/oauth-codes', () => ({
   createAuthCode: (...args: unknown[]) => mocks.createAuthCode(...args),
@@ -43,6 +68,7 @@ const CHATGPT: RedirectUriResolution = { allowed: true, kind: 'built_in', provid
 const GROK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'grok' }
 const CURSOR: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor' }
 const CURSOR_DEEPLINK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor_deeplink' }
+const GEMINI: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'gemini' }
 const REGISTERED: RedirectUriResolution = {
   allowed: true,
   kind: 'registered',
@@ -164,6 +190,52 @@ describe('GET /api/mcp-oauth/authorize: CSP', () => {
     expect(csp).toMatch(/form-action 'self' https:\/\/claude\.ai(;|$)/)
     // 'self' is preserved so the same-origin POST still works.
     expect(csp).toContain("form-action 'self'")
+  })
+
+  it("binds the consent script to the proxy's nonce so it runs under either CSP header", async () => {
+    // The proxy (src/proxy.ts) sets its own nonce policy on this response
+    // too, and a self-hosted `next start` delivers only that one: the page's
+    // script must carry the proxy's nonce, and so must the route's own policy.
+    const proxyNonce = 'cHJveHktbm9uY2UtMTIzNDU2Nzg='
+    const request = new Request(
+      buildAuthorizeUrl({
+        response_type: 'code',
+        redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+        code_challenge: 'abc',
+        code_challenge_method: 'S256',
+        scope: 'mcp',
+      }),
+      { headers: { 'x-nonce': proxyNonce } },
+    )
+    const response = await GET(request)
+    expect(response.status).toBe(200)
+
+    const csp = response.headers.get('Content-Security-Policy') ?? ''
+    expect(csp).toContain(`script-src 'nonce-${proxyNonce}'`)
+    const html = await response.text()
+    expect(html).toContain(`<script nonce="${proxyNonce}">`)
+    expect(html).not.toMatch(/<script(?![^>]*nonce=)/)
+  })
+
+  it('mints its own nonce when the request did not come through the proxy', async () => {
+    const request = new Request(
+      buildAuthorizeUrl({
+        response_type: 'code',
+        redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+        code_challenge: 'abc',
+        code_challenge_method: 'S256',
+        scope: 'mcp',
+      }),
+      // Not something the proxy produces: ignored, never echoed.
+      { headers: { 'x-nonce': 'x" onload="alert(1)' } },
+    )
+    const response = await GET(request)
+    const csp = response.headers.get('Content-Security-Policy') ?? ''
+    const nonce = csp.match(/script-src 'nonce-([^']+)'/)?.[1]
+    expect(nonce).toMatch(/^[A-Za-z0-9+/]+={0,2}$/)
+    const html = await response.text()
+    expect(html).toContain(`<script nonce="${nonce}">`)
+    expect(html).not.toContain('onload="alert(1)')
   })
 
   it('form-action uses the redirect origin only (no path/query leakage)', async () => {
@@ -667,6 +739,72 @@ describe('role cap on consent', () => {
   })
 })
 
+describe('Gemini custom apps', () => {
+  const params = {
+    response_type: 'code',
+    redirect_uri: 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1234567890-app_accounted_se',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    scope: 'mcp offline_access',
+    state: 'xyz',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
+    mocks.resolveRedirectUri.mockResolvedValue(GEMINI)
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
+    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+  })
+
+  it('names Gemini as a verified client and shows Google\'s relay as the redirect host', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+
+    expect(html).toContain('Gemini (Google)')
+    expect(html).toContain('Verifierad')
+    expect(html).toContain('oauth-redirect.googleusercontent.com')
+  })
+
+  it.each(['mcp offline_access', 'offline_access'])(
+    'treats offline_access as a marker like mcp, so scope=%s offers the full set',
+    async (scope) => {
+      // Gemini adds offline_access to ask for a refresh token, which every
+      // grant gets anyway. Refusing it as an unknown scope would end the
+      // sign-in; reading it as a granular request would cap the consent.
+      const response = await GET(new Request(buildAuthorizeUrl({ ...params, scope })))
+      expect(response.status).toBe(200)
+      const html = await response.text()
+
+      expect(checkboxFor(html, 'transactions:write')).toContain('checked')
+      expect(checkboxFor(html, 'pending_operations:approve')).toContain('checked')
+      expect(checkboxFor(html, 'transactions:read')).toContain('checked')
+    },
+  )
+
+  it('still refuses a request whose only non-marker scopes are unknown', async () => {
+    const response = await GET(
+      new Request(buildAuthorizeUrl({ ...params, scope: 'offline_access not:a-scope' })),
+    )
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe('invalid_scope')
+  })
+
+  it('POST keeps the write scopes the user left ticked', async () => {
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentForm('mcp offline_access', ['transactions:read', 'transactions:write']),
+      }),
+    )
+    expect(response.status).toBe(303)
+    const location = new URL(response.headers.get('location')!)
+    expect(location.origin).toBe('https://oauth-redirect.googleusercontent.com')
+    expect(location.searchParams.get('code')).toBe('test-auth-code')
+    expect(lastMintedPayload().scopes).toEqual(['transactions:read', 'transactions:write'])
+  })
+})
+
 describe('MFA step-up on /api/mcp-oauth/authorize', () => {
   // Consent here ultimately mints a long-lived API key that bypasses MFA on
   // every subsequent request, so an AAL1 (password-only) session must never
@@ -877,6 +1015,214 @@ describe('account with no company yet (issue #1814)', () => {
     const payload = lastMintedPayload()
     expect(payload.companyId).toBeNull()
     expect(payload.scopes).toEqual(['companies:write', 'companies:read'])
+  })
+})
+
+describe('company picker on consent (per-key company allowlist)', () => {
+  const ACTIVE = '11111111-1111-4111-8111-111111111111'
+  const OTHER = '22222222-2222-4222-8222-222222222222'
+  const THIRD = '33333333-3333-4333-8333-333333333333'
+  const FOREIGN = '99999999-9999-4999-8999-999999999999'
+  const twoCompanies: PickerCompany[] = [
+    { company_id: ACTIVE, name: 'Aktiva AB', role: 'owner' },
+    { company_id: OTHER, name: 'Andra & Co', role: 'owner' },
+  ]
+  const threeCompanies: PickerCompany[] = [
+    ...twoCompanies,
+    { company_id: THIRD, name: 'Tredje AB', role: 'owner' },
+  ]
+  const params = {
+    response_type: 'code',
+    redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    scope: 'mcp',
+    state: 'xyz',
+  }
+
+  /** One `company_access=<id>:<level>` field per entry, as the picker posts them. */
+  function consentWithAccess(entries: Array<[string, 'write' | 'read' | 'none']>): FormData {
+    const form = consentForm('mcp', ['reports:read'])
+    for (const [id, level] of entries) form.append('company_access', `${id}:${level}`)
+    return form
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }, 'Aktiva AB'))
+    mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
+    mocks.getActiveCompanyId.mockResolvedValue(ACTIVE)
+    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+  })
+
+  // One-shot overrides: vi.clearAllMocks() keeps the last implementation, so
+  // a persistent mockResolvedValue here would leak into later describes.
+  it('GET renders an access choice per company, preset to read and write, active first and tagged', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce([
+      ...twoCompanies,
+      { company_id: THIRD, name: 'Läsbolaget AB', role: 'viewer' },
+    ])
+    const response = await GET(new Request(buildAuthorizeUrl(params)))
+    expect(response.status).toBe(200)
+    const html = await response.text()
+
+    for (const id of [ACTIVE, OTHER, THIRD]) {
+      const select = html.match(
+        new RegExp(`<select[^>]*name="company_access"[^>]*data-company="${id}"[^>]*>[\\s\\S]*?</select>`),
+      )?.[0]
+      expect(select).toBeDefined()
+      expect(select).toContain(`<option value="${id}:write" selected>Läsa och skriva</option>`)
+      expect(select).toContain(`<option value="${id}:read">Bara läsa</option>`)
+      expect(select).toContain(`<option value="${id}:none">Ingen åtkomst</option>`)
+    }
+    // Active company listed first and marked; a viewer company is marked too.
+    expect(html.indexOf(ACTIVE)).toBeLessThan(html.indexOf(OTHER))
+    expect(html).toContain('(aktivt)')
+    expect(html).toContain('(du är läsare)')
+    expect(html).toContain('Alla: bara läsa')
+    expect(html).toContain('Lämnar du alla på Läsa och skriva följer anslutningen även företag du blir medlem i senare.')
+    // Names are escaped like everything else on the page.
+    expect(html).toContain('Andra &amp; Co')
+    expect(html).not.toContain('Andra & Co')
+    // The listing was asked for with the active company first.
+    expect(mocks.listUserCompaniesForPicker).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-1',
+      { activeCompanyId: ACTIVE },
+    )
+  })
+
+  it('GET renders no picker for a one-company user (unchanged UI)', async () => {
+    const response = await GET(new Request(buildAuthorizeUrl(params)))
+    expect(response.status).toBe(200)
+    const html = await response.text()
+    // No access selects (the inline script's selector string is always present).
+    expect(html).not.toMatch(/<select[^>]*name="company_access"/)
+    expect(html).not.toContain('(aktivt)')
+    // The plain company fact row is still there.
+    expect(html).toContain('Aktiva AB')
+  })
+
+  it('GET fails closed with server_error when the company listing errors', async () => {
+    mocks.listUserCompaniesForPicker.mockRejectedValueOnce(new Error('boom'))
+    const response = await GET(new Request(buildAuthorizeUrl(params)))
+    expect(response.status).toBe(500)
+    expect((await response.json()).error).toBe('server_error')
+  })
+
+  it('POST with every company at read and write carries companyIds null (unrestricted)', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce(twoCompanies)
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentWithAccess([[OTHER, 'write'], [ACTIVE, 'write']]),
+      }),
+    )
+    expect(response.status).toBe(303)
+    const payload = lastMintedPayload()
+    expect(payload.companyIds).toBeNull()
+    expect(payload.readOnlyCompanyIds).toBeNull()
+    expect(payload.companyId).toBe(ACTIVE)
+  })
+
+  it('POST with a read-only company keeps every company as a list and carries the read-only one', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce(threeCompanies)
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentWithAccess([[ACTIVE, 'write'], [OTHER, 'read'], [THIRD, 'write']]),
+      }),
+    )
+    expect(response.status).toBe(303)
+    const payload = lastMintedPayload()
+    expect(payload.companyIds).toEqual([ACTIVE, OTHER, THIRD])
+    expect(payload.readOnlyCompanyIds).toEqual([OTHER])
+    expect(payload.companyId).toBe(ACTIVE)
+  })
+
+  it('POST lets the most restrictive choice win when a company is posted twice', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce(twoCompanies)
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentWithAccess([[ACTIVE, 'write'], [OTHER, 'write'], [OTHER, 'read']]),
+      }),
+    )
+    expect(response.status).toBe(303)
+    const payload = lastMintedPayload()
+    expect(payload.companyIds).toEqual([ACTIVE, OTHER])
+    expect(payload.readOnlyCompanyIds).toEqual([OTHER])
+  })
+
+  it('POST with a strict subset carries companyIds and swaps the default when the active company is left out', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce(threeCompanies)
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentWithAccess([[ACTIVE, 'none'], [THIRD, 'write'], [OTHER, 'write']]),
+      }),
+    )
+    expect(response.status).toBe(303)
+    expect(new URL(response.headers.get('location')!).searchParams.get('code')).toBe('test-auth-code')
+    const payload = lastMintedPayload()
+    // Picker order, not submission order; the default is the first selected.
+    expect(payload.companyIds).toEqual([OTHER, THIRD])
+    expect(payload.readOnlyCompanyIds).toBeNull()
+    expect(payload.companyId).toBe(OTHER)
+  })
+
+  it('POST keeps the active company as default when it is inside the subset, read-only or not', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce(threeCompanies)
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentWithAccess([[THIRD, 'write'], [ACTIVE, 'read'], [OTHER, 'none']]),
+      }),
+    )
+    expect(response.status).toBe(303)
+    const payload = lastMintedPayload()
+    expect(payload.companyIds).toEqual([ACTIVE, THIRD])
+    expect(payload.readOnlyCompanyIds).toEqual([ACTIVE])
+    expect(payload.companyId).toBe(ACTIVE)
+  })
+
+  it('POST ignores an id outside the memberships instead of trusting the form', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce(twoCompanies)
+    const form = consentWithAccess([[FOREIGN, 'write'], [ACTIVE, 'write'], [OTHER, 'none']])
+    form.append('company_access', 'not-a-uuid:write')
+    const response = await POST(new Request(buildAuthorizeUrl(params), { method: 'POST', body: form }))
+    expect(response.status).toBe(303)
+    const payload = lastMintedPayload()
+    expect(payload.companyIds).toEqual([ACTIVE])
+    expect(payload.companyId).toBe(ACTIVE)
+  })
+
+  it('POST with no company chosen answers 400 invalid_request and mints no code', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce(twoCompanies)
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentWithAccess([[ACTIVE, 'none'], [OTHER, 'none'], [FOREIGN, 'write']]),
+      }),
+    )
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe('invalid_request')
+    expect(mocks.createAuthCode).not.toHaveBeenCalled()
+  })
+
+  it('POST for a one-company user ignores the access field and stays unrestricted', async () => {
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentWithAccess([[ACTIVE, 'read']]),
+      }),
+    )
+    expect(response.status).toBe(303)
+    const payload = lastMintedPayload()
+    expect(payload.companyIds).toBeNull()
+    expect(payload.readOnlyCompanyIds).toBeNull()
+    expect(payload.companyId).toBe(ACTIVE)
   })
 })
 

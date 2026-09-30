@@ -192,11 +192,15 @@ describe('POST /api/bookkeeping/accounts', () => {
         normal_balance: 'debit',
       },
     })
-    const { status, body } = await parseJsonResponse<{ error: string }>(
+    // Failures answer the canonical envelope since the route moved onto
+    // lib/bookkeeping/chart-of-accounts-service.ts (the UI already reads it
+    // through getUserErrorMessage).
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
       await createPOST(req, routeParams)
     )
     expect(status).toBe(409)
-    expect(body.error).toContain('5010')
+    expect(body.error.code).toBe('ACCOUNT_EXISTS')
+    expect(body.error.message).toContain('5010')
   })
 
   it('keeps the plain 409 when the colliding account is active', async () => {
@@ -214,11 +218,11 @@ describe('POST /api/bookkeeping/accounts', () => {
         normal_balance: 'debit',
       },
     })
-    const { status, body } = await parseJsonResponse<{ error: string }>(
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await createPOST(req, routeParams)
     )
     expect(status).toBe(409)
-    expect(typeof body.error).toBe('string')
+    expect(body.error.code).toBe('ACCOUNT_EXISTS')
   })
 
   it('returns ACCOUNT_EXISTS_INACTIVE when the colliding account is deactivated', async () => {
@@ -350,9 +354,12 @@ describe('POST /api/bookkeeping/accounts', () => {
         normal_balance: 'debit',
       },
     })
-    const { status, body } = await parseJsonResponse<{ error: string }>(await createPOST(req, routeParams))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await createPOST(req, routeParams),
+    )
     expect(status).toBe(400)
-    expect(body.error).toMatch(/Kontotypen/)
+    expect(body.error.code).toBe('ACCOUNT_TYPE_CLASS_CONFLICT')
+    expect(body.error.message).toMatch(/Kontotypen/)
     expect(calls.some((c) => c.method === 'insert')).toBe(false)
   })
 
@@ -411,18 +418,21 @@ describe('DELETE /api/bookkeeping/accounts/[number]', () => {
     expect(selectArgs).not.toContain('id, journal_entries!inner(company_id)')
   })
 
-  it('refuses deleting an account used in this company with 400', async () => {
+  // 409 ACCOUNT_IN_USE (was a bare 400): the same code the v1 and MCP doors
+  // answer, a conflict with booked history rather than a malformed request.
+  it('refuses deleting an account used in this company with 409 ACCOUNT_IN_USE', async () => {
     const { supabase } = createCapturingSupabase([
       { data: { id: 'acc-1', is_system_account: false } },
       { data: [{ account_number: '5010', usage_count: 3 }] },
     ])
     auth(supabase)
 
-    const { status, body } = await parseJsonResponse<{ error: string }>(
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
       await DELETE(createMockRequest('/api/bookkeeping/accounts/5010'), numberParams)
     )
-    expect(status).toBe(400)
-    expect(body.error).toContain('Inaktivera')
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('ACCOUNT_IN_USE')
+    expect(body.error.message).toContain('Inaktivera')
   })
 
   it('refuses deleting a system account', async () => {
@@ -456,9 +466,12 @@ describe('PUT /api/bookkeeping/accounts/[number]', () => {
       method: 'PUT',
       body: { account_name: 'Nytt namn' },
     })
-    const { status, body } = await parseJsonResponse<{ error: string }>(await PUT(req, numberParams))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await PUT(req, numberParams),
+    )
     expect(status).toBe(404)
-    expect(body.error).toBe('Kontot hittades inte')
+    expect(body.error.code).toBe('ACCOUNT_NOT_FOUND')
+    expect(body.error.message).toBe('Kontot hittades inte.')
   })
 
   it('updates the account', async () => {
@@ -501,11 +514,12 @@ describe('PUT /api/bookkeeping/accounts/[number]', () => {
       method: 'PUT',
       body: { vat_box: '60' },
     })
-    const { status, body } = await parseJsonResponse<{ error: string }>(
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
       await PUT(req, { params: Promise.resolve({ number: '4545' }) })
     )
     expect(status).toBe(400)
-    expect(body.error).toMatch(/26xx/)
+    expect(body.error.code).toBe('ACCOUNT_VAT_BOX_NOT_VAT_ACCOUNT')
+    expect(body.error.message).toMatch(/26xx/)
     expect(calls.find((c) => c.method === 'update')).toBeUndefined()
   })
 

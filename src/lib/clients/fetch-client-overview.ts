@@ -15,7 +15,10 @@
  *   6. open deadlines (status-engine semantics)
  *   7. latest posted verifikat per company (embedded order+limit, one query)
  *
- * fetchAllRows guards every query that can exceed PostgREST's 1000-row cap.
+ * Steps 3-7 are fetchOverviewRowsForCompanies, shared with the portfolio
+ * reads (lib/portfolio/overview.ts), which bring their own company list: a
+ * membership scope instead of a byrå team. fetchAllRows guards every query
+ * that can exceed PostgREST's 1000-row cap.
  */
 
 import { chunk as chunked } from '@/lib/utils'
@@ -23,6 +26,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   countByCompany,
+  groupDeadlinesByCompany,
   pickNextDeadlines,
   sortClientRows,
   type ClientOverviewRow,
@@ -34,6 +38,22 @@ export interface ClientOverview {
   /** The caller's role in the byrå team: gates the create action (WL-15). */
   role: 'owner' | 'admin' | 'member'
   clients: ClientOverviewRow[]
+}
+
+/** The company identity fetchOverviewRowsForCompanies needs per row. */
+export interface OverviewCompanyInput {
+  id: string
+  name: string
+  org_number: string | null
+}
+
+export interface OverviewRowsOptions {
+  /**
+   * Also return each row's open deadlines (`deadlines`, earliest first,
+   * capped per company). Off by default so the byrå cockpit payload stays
+   * exactly what it was; the portfolio deadline-kind filter needs it.
+   */
+  includeDeadlines?: boolean
 }
 
 /** Max ids per PostgREST .in() filter (mirrors lib/worklist IN_CLAUSE_CHUNK). */
@@ -87,11 +107,7 @@ export async function fetchClientOverview(
   // 2. Client companies: everything hanging on the byrå team, archived
   // excluded. RLS additionally scopes this to companies the caller can read
   // (team sync makes every byrå member a member of every client company).
-  const companies = await fetchAllRows<{
-    id: string
-    name: string
-    org_number: string | null
-  }>(({ from, to }) =>
+  const companies = await fetchAllRows<OverviewCompanyInput>(({ from, to }) =>
     supabase
       .from('companies')
       .select('id, name, org_number')
@@ -108,6 +124,25 @@ export async function fetchClientOverview(
       clients: [],
     }
   }
+
+  return {
+    team: { id: membership.teamId, name: membership.teamName },
+    role: membership.role,
+    clients: await fetchOverviewRowsForCompanies(supabase, companies),
+  }
+}
+
+/**
+ * One urgency-sorted overview row per given company (steps 3-7 above). The
+ * caller owns the company list and its authorization: every id passed in
+ * is queried as-is, so it must already be membership-checked.
+ */
+export async function fetchOverviewRowsForCompanies(
+  supabase: SupabaseClient,
+  companies: OverviewCompanyInput[],
+  options: OverviewRowsOptions = {},
+): Promise<ClientOverviewRow[]> {
+  if (companies.length === 0) return []
 
   const companyIds = companies.map((c) => c.id)
   const idChunks = chunked(companyIds, IN_CLAUSE_CHUNK)
@@ -204,6 +239,9 @@ export async function fetchClientOverview(
     deadlineRows.push(...rows)
   }
   const nextDeadlineByCompany = pickNextDeadlines(deadlineRows)
+  const deadlinesByCompany = options.includeDeadlines
+    ? groupDeadlinesByCompany(deadlineRows)
+    : null
 
   // 7. Latest posted verifikat date per company: ONE query using PostgREST's
   // per-parent embedded order + limit (lateral join under the hood), instead
@@ -227,9 +265,9 @@ export async function fetchClientOverview(
     }
   }
 
-  const clients: ClientOverviewRow[] = companies.map((company) => {
+  const rows: ClientOverviewRow[] = companies.map((company) => {
     const settings = settingsByCompany.get(company.id)
-    return {
+    const row: ClientOverviewRow = {
       companyId: company.id,
       name: settings?.company_name || company.name,
       orgNumber: company.org_number ?? settings?.org_number ?? null,
@@ -238,11 +276,9 @@ export async function fetchClientOverview(
       nextDeadline: nextDeadlineByCompany.get(company.id) ?? null,
       lastBookedDate: lastBookedByCompany.get(company.id) ?? null,
     }
+    if (deadlinesByCompany) row.deadlines = deadlinesByCompany.get(company.id) ?? []
+    return row
   })
 
-  return {
-    team: { id: membership.teamId, name: membership.teamName },
-    role: membership.role,
-    clients: sortClientRows(clients),
-  }
+  return sortClientRows(rows)
 }

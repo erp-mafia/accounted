@@ -40,6 +40,20 @@ vi.mock('@/lib/invoices/vat-rules', async () => {
     // The builder gates on the permitted set (taxed-where-performed exceptions);
     // these route tests only care that the gate reads the stubbed rates.
     getPermittedVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
+    // The builder's one rule entry (#2906): the customer path reads the
+    // stubs above; an invoice that states its own treatment uses the real one.
+    resolveInvoiceVatRules: (
+      customer: { customer_type: string; vat_number_validated?: boolean | null; country?: string | null },
+      override?: { vat_treatment: string | null; delivery_country: string | null } | null,
+    ) =>
+      override?.vat_treatment || override?.delivery_country
+        ? actual.resolveInvoiceVatRules(customer as Parameters<typeof actual.resolveInvoiceVatRules>[0], override as Parameters<typeof actual.resolveInvoiceVatRules>[1])
+        : {
+            ok: true,
+            rules: mockGetVatRules(customer.customer_type, customer.vat_number_validated, customer.country),
+            permittedRates: mockGetAvailableVatRates(customer.customer_type, customer.vat_number_validated, customer.country),
+            explainFromCustomer: true,
+          },
     calculateTotal: vi.fn(),
     // Real: the warnings channel is what the response-shape test below pins.
     explainVatTreatment: actual.explainVatTreatment,

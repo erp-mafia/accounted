@@ -20,6 +20,7 @@ Use the `/supabase-migration` skill for new migrations.
 6. Never modify enforcement triggers (migration 017), legally required
 7. Apply via Supabase MCP `apply_migration`
 8. Always end with `NOTIFY pgrst, 'reload schema'` when altering table structure
+9. GRANT every new public table, view and sequence in the migration that creates it: new relations get no privileges for `anon`/`authenticated`/`service_role` by default (migration `20260929220000_own_default_privileges`; every Supabase project from 2026-10-30). `service_role` gets DML, `authenticated` what its RLS policies allow, `anon` nothing unless public; a role that must not reach it gets `-- no-grant: <role> on public.<table> (<reason>)`. Prefer uuid or identity keys (serial needs a sequence grant). Never bulk-grant (`ON ALL TABLES`, `ALTER DEFAULT PRIVILEGES ... GRANT`). `check:guards` (table-without-grant) enforces it; template in `/supabase-migration`. A replay from an empty database runs `supabase/bootstrap.sql` first.
 
 **pg-real tests**: any PR touching a trigger/RPC/RLS/DEFERRABLE must include or extend a `*.pg.test.ts`. Parallel Vitest project against real Postgres (CI: `supabase/postgres:15`, migrations replayed). Local: `npm run test:pg`. Helpers: `tests/pg/setup.ts` (`getPool()`, `withUserContext()`), `tests/pg/fixtures.ts` (`seedCompany()`, `insertDraftJournalEntry()`, etc.).
 

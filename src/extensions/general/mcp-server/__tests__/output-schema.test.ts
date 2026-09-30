@@ -1,5 +1,32 @@
 import { describe, it, expect } from 'vitest'
-import { tools } from '../server'
+import { tools, isStagingTool } from '../server'
+
+// The one closed output object allowed: the staged envelope's next hint, the
+// same object in every staging tool. DECISIONS.md 2026-09-01 kept it closed and
+// staging.test.ts pins it; its keys are fixed by the NextActionHint type.
+const STAGED_NEXT = (tools.find(isStagingTool)!.outputSchema as { properties: { next: unknown } }).properties.next
+
+// Keywords whose value is a subschema (or a list of them), and those whose value
+// maps names to subschemas. Everything else (enum, const, examples) is data.
+const SUBSCHEMA_KEYWORDS = ['items', 'prefixItems', 'additionalItems', 'contains', 'additionalProperties', 'propertyNames', 'not', 'if', 'then', 'else', 'oneOf', 'anyOf', 'allOf']
+const SUBSCHEMA_MAP_KEYWORDS = ['properties', 'patternProperties', 'dependentSchemas', '$defs', 'definitions']
+
+/** Path of every object schema below `schema` that refuses undeclared keys. */
+function closedObjectPaths(schema: unknown, path: string): string[] {
+  if (Array.isArray(schema)) return schema.flatMap((child, i) => closedObjectPaths(child, `${path}[${i}]`))
+  if (typeof schema !== 'object' || schema === null || schema === STAGED_NEXT) return []
+  const node = schema as Record<string, unknown>
+  const found = node.additionalProperties === false || node.unevaluatedProperties === false ? [path] : []
+  for (const key of SUBSCHEMA_KEYWORDS) {
+    if (key in node) found.push(...closedObjectPaths(node[key], `${path}.${key}`))
+  }
+  for (const key of SUBSCHEMA_MAP_KEYWORDS) {
+    const map = node[key]
+    if (typeof map !== 'object' || map === null) continue
+    for (const [name, child] of Object.entries(map)) found.push(...closedObjectPaths(child, `${path}.${key}.${name}`))
+  }
+  return found
+}
 
 describe('outputSchema coverage', () => {
   it('every tool declares an outputSchema', () => {
@@ -15,11 +42,13 @@ describe('outputSchema coverage', () => {
     }
   })
 
-  it('no outputSchema is closed at the top level: clients cache tools/list and validate against it', () => {
+  it('no outputSchema closes an object at any depth: clients cache tools/list and validate against it', () => {
     // 2026-09-21: a field added to gnubok_ask_document under additionalProperties: false made every
     // session connected before the deploy refuse the response. Inputs stay closed (strict-schemas.test.ts).
-    const closed = tools.filter((t) => (t.outputSchema as { additionalProperties?: boolean } | undefined)?.additionalProperties === false)
-    expect(closed.map((t) => t.name)).toEqual([])
+    // 2026-09-29 (feedback seq 788784): the same break one level down, where the top-level check could
+    // not see it: assetView() gained three fields under a closed item and strict clients refused every
+    // gnubok_list_assets call. The refusal happens in the client, so our telemetry saw successes.
+    expect(tools.flatMap((t) => closedObjectPaths(t.outputSchema, t.name))).toEqual([])
   })
 
   it('every tool has a tight description (<= 280 chars)', () => {

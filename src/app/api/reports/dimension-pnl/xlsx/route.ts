@@ -14,12 +14,13 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 
 // One row per account; the dimension values are dynamic columns, exactly as
 // the on-screen matrix renders. Column labels stay Swedish (report surface).
+// null cells are the blank amounts of the period row.
 type FlatRow = {
   group: string
   account_number: string
   account_name: string
-  values: number[]
-  total: number
+  values: Array<number | null>
+  total: number | null
 }
 
 export const GET = withRouteContext(
@@ -62,20 +63,31 @@ export const GET = withRouteContext(
     }
 
     try {
-      // Only toDate: the matrix is cumulative from period_start by design.
+      // The resultatrapport's window: activity inside from_date..to_date.
       const report: DimensionPnlReport = await generateDimensionPnl(
         supabase,
         companyId!,
         periodId,
         dimNo,
-        { toDate: parsed.range.toDate },
+        { fromDate: parsed.range.fromDate, toDate: parsed.range.toDate },
       )
 
       const valueHeaders = report.columns.map((c) =>
         c.code === null ? '(Utan dimension)' : c.name ? `${c.code} ${c.name}` : c.code,
       )
 
-      const rows: FlatRow[] = []
+      // The window rides as the first body row (reportToWorkbook has no
+      // preamble): with a from-date the amounts are one quarter or month,
+      // and the file must say which, not only the filename's end date.
+      const rows: FlatRow[] = [
+        {
+          group: `Period: ${report.period.start} till ${report.period.end}`,
+          account_number: '',
+          account_name: '',
+          values: report.columns.map(() => null),
+          total: null,
+        },
+      ]
       for (const g of report.groups) {
         for (const r of g.rows) {
           rows.push({

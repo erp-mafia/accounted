@@ -12,8 +12,9 @@ import {
 } from '@/components/dimensions/types'
 import { useDimensions } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { Badge } from '@/components/ui/badge'
 
-interface DimensionComboboxProps {
+interface DimensionComboboxBaseProps {
   /** SIE dimension number as a string ('1' = kostnadsställe, '6' = projekt). */
   sieDimNo: string
   /** Selected object code, or null when the line carries no value for this dim. */
@@ -22,7 +23,24 @@ interface DimensionComboboxProps {
   disabled?: boolean
   /** Extra classes merged into the trigger Input (callers pass `h-8` for dense rows). */
   className?: string
+  /**
+   * Offer "Skapa ny" for a typed code the registry lacks (default true). A
+   * report filter only reads the registry, so it passes false.
+   */
+  allowCreate?: boolean
 }
+
+/**
+ * Archived values are never suggested for tagging. A report filter must still
+ * reach them (a finished project stays reportable), so it opts in, and then
+ * names the marker an archived value carries in the list: the type makes an
+ * unmarked archived value impossible.
+ */
+type ArchivedValues =
+  | { includeArchived?: false; archivedLabel?: never }
+  | { includeArchived: true; archivedLabel: string }
+
+type DimensionComboboxProps = DimensionComboboxBaseProps & ArchivedValues
 
 /**
  * Searchable picker for dimension values: sibling of
@@ -42,6 +60,9 @@ interface DimensionComboboxProps {
  */
 export default function DimensionCombobox({
   sieDimNo,
+  includeArchived = false,
+  archivedLabel,
+  allowCreate = true,
   value,
   onChange,
   disabled,
@@ -64,8 +85,8 @@ export default function DimensionCombobox({
   )
   const dimensionId = dimension?.id ?? null
   const values = useMemo(
-    () => dimension?.values.filter((v) => v.is_active) ?? [],
-    [dimension],
+    () => dimension?.values.filter((v) => includeArchived || v.is_active) ?? [],
+    [dimension, includeArchived],
   )
   // The committed value's registry row, looked up in the FULL list: an
   // archived code stays readable in history even though it is never offered.
@@ -113,11 +134,11 @@ export default function DimensionCombobox({
   // Inline create is offered when the typed text is a valid new code.
   const createCandidate = useMemo(() => {
     const term = search.trim()
-    if (!term || !dimensionId) return null
+    if (!allowCreate || !term || !dimensionId) return null
     if (!DIMENSION_CODE_PATTERN.test(term)) return null
     if (values.some((v) => v.code.toLowerCase() === term.toLowerCase())) return null
     return term
-  }, [search, values, dimensionId])
+  }, [allowCreate, search, values, dimensionId])
 
   // Keyboard list: matching values first, the create affordance last.
   const optionCount = filteredValues.length + (createCandidate ? 1 : 0)
@@ -338,6 +359,11 @@ export default function DimensionCombobox({
                   <span className="flex-1 min-w-0 break-words text-muted-foreground">
                     {item.name !== item.code ? item.name : ''}
                   </span>
+                  {!item.is_active && archivedLabel ? (
+                    <Badge variant="outline" className="shrink-0 self-center font-normal">
+                      {archivedLabel}
+                    </Badge>
+                  ) : null}
                 </button>
               )
             })}

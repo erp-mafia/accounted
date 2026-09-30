@@ -390,7 +390,7 @@ describe('POST batch-categorize', () => {
           error: null,
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        cash_accounts: { data: { ledger_account: '1931' }, error: null },
+        cash_accounts: { data: { ledger_account: '1931', currency: 'SEK' }, error: null },
         fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
       }).supabase,
     )
@@ -508,7 +508,7 @@ describe('POST batch-categorize', () => {
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         cash_accounts: [
           { data: null, error: { message: 'temporary lookup failure' } },
-          { data: { ledger_account: '1931' }, error: null },
+          { data: { ledger_account: '1931', currency: 'SEK' }, error: null },
         ],
         fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
       }).supabase,

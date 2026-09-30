@@ -52,6 +52,7 @@ import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import type { InboxChannelContext, Transaction, TransactionCategory, EntityType, VatTreatment } from '@/types'
+import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 
 const log = createLogger('transactions/categorize-core')
 
@@ -71,6 +72,11 @@ export interface CategorizeCoreResult {
 export interface CategorizeMatchedTransactionOpts {
   category: TransactionCategory
   vatTreatment?: VatTreatment
+  /**
+   * Basis box of a reverse-charge purchase (ruta 20/21/22). Omitted = EU
+   * services, see buildMappingResultFromCategory.
+   */
+  reverseChargeKind?: ReverseChargeKind
   /**
    * The underlag's actual VAT when it differs from rate × belopp (e.g. dricks).
    * Only valid with a rate-based vat_treatment; see buildMappingResultFromCategory.
@@ -248,7 +254,7 @@ export async function categorizeMatchedTransaction(
    */
   exclude?: BookingDuplicateExclusions,
 ): Promise<CategorizeCoreResult> {
-  const { category, vatTreatment, vatAmount, notes, allowDuplicate, dimensions, accountOverride } = opts
+  const { category, vatTreatment, reverseChargeKind, vatAmount, notes, allowDuplicate, dimensions, accountOverride } = opts
 
   // The junction rows ride along on the same read: a row bulk-booked into a
   // samlingsverifikat or split over several verifikat (1:N, #1553) carries
@@ -386,7 +392,7 @@ export async function categorizeMatchedTransaction(
   // (lib/bookkeeping/vat-registration.ts); the flag is passed as loaded.
   let mappingResult = buildMappingResultFromCategory(
     category, transaction as Transaction, isBusiness, entityType, vatTreatment, vatAmount,
-    settings?.vat_registered ?? null,
+    settings?.vat_registered ?? null, reverseChargeKind,
   )
   const settlementAccount = await resolveSettlementAccount(
     supabase,

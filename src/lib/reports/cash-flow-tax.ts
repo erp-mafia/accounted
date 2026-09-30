@@ -17,6 +17,17 @@ const OTHER_TAX_BALANCE = new Set(['2513', '2514', '2515'])
 const OTHER_TAX_EXPENSE = new Set(['5191', '7533', '7550'])
 const r2 = (value: number) => Math.round(value * 100) / 100 || 0
 
+/**
+ * The accounts whose whole movement calculateCashFlowTax accounts for: the
+ * income-tax and other-tax balances, and every 89xx account except deferred
+ * tax (894x) and 8999, which the bridge either counts as current tax or
+ * refuses. The cash-flow statement must not place these anywhere else.
+ */
+export function isCashFlowTaxBridgeAccount(account: string): boolean {
+  return CURRENT_TAX_BALANCE.has(account) || OTHER_TAX_BALANCE.has(account)
+    || (account.startsWith('89') && !account.startsWith('894') && account !== '8999')
+}
+
 export class CashFlowTaxAllocationError extends Error {
   readonly code = 'CASH_FLOW_TAX_ALLOCATION_REQUIRED'
 

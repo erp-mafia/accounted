@@ -169,8 +169,9 @@ export async function buildArsredovisningData(
   // Every prior period needed by the comparatives and/or the flerårsöversikt
   // gets its TB pair fetched exactly once. Comparative RR figures need the
   // same statutory view as the current year: keep booked depreciation,
-  // appropriations, and tax, excluding only the linked final result-closing
-  // entry. A failed pair downgrades to null so a broken prior year (e.g. a
+  // appropriations, and tax, excluding only the result-closing entry (also
+  // when the previous system booked it and it arrived by SIE import). A
+  // failed pair downgrades to null so a broken prior year (e.g. a
   // partial SIE import without IB continuity) never blocks the document.
   const tbTargets = new Map<string, PeriodRow>()
   if (prevPeriodRow) tbTargets.set(prevPeriodRow.id, prevPeriodRow)
@@ -244,11 +245,13 @@ export async function buildArsredovisningData(
   const currentYearResult = mapping.br['AretsResultatEgetKapital']?.current ?? 0
   const distributableEquity = mapping.totals.frittEgetKapital.current
 
-  // Duplicate-value consistency with the RR (mirrors build-input.ts): the
-  // flerårsöversikt is computed from the income statement (ALL class-3
-  // revenue), but nettoomsättning per ÅRL is strictly 3000-3799. Override
-  // the current + previous year so the FB table ties to the RR two pages
-  // later. Older years have no RR in the document and keep the IS values.
+  // Duplicate-value consistency with the RR (mirrors build-input.ts). Since
+  // #1116 buildFlerarsoversikt maps every year through mapTrialBalancesToK2
+  // on the pre-closing trial balance (Nettoomsattning = 3000-3799), so this
+  // is not a class-3 correction: it pins the current and previous year to
+  // the very mapping the RR is built from, so the FB table ties to the RR
+  // two pages later by construction rather than by a second computation.
+  // Older years have no RR in the document and keep their own mapping.
   if (flerarsoversikt.length > 0) {
     const lastIdx = flerarsoversikt.length - 1
     flerarsoversikt[lastIdx] = {
@@ -315,6 +318,7 @@ export async function buildArsredovisningData(
         investerings: cashFlow.investerings,
         finansierings: cashFlow.finansierings,
         total_cash_flow: cashFlow.total_cash_flow,
+        unclassified_accounts: cashFlow.unclassified_accounts,
         reconciliation: cashFlow.reconciliation,
       }
     } else {

@@ -1,3 +1,7 @@
+---
+audience: developer
+---
+
 # Peppol Network Architecture, AS4, SMP, SML, PKI
 
 ## The four-corner model

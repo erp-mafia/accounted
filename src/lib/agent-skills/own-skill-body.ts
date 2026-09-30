@@ -45,20 +45,64 @@ export function buildOwnSkill(
     `- ${copy.approvalLine}`,
     `- ${copy.lockedLine}`,
     '',
-    `## ${copy.toldHeading}`,
-    '',
-    cleanText(told.description, 2000),
-    '',
+  ]
+  // What the user said goes in only when they said something: no empty heading for the AI to puzzle over.
+  const said = cleanText(told.description, 2000)
+  const toldLines = [
     ...told.turns.map((turn) => `- ${cleanText(turn.question, 200)} ${cleanText(turn.answer, 400)}`),
     ...told.extra.map((item) => `- ${copy.addedLabel} ${cleanText(item, 400)}`),
-    '',
   ]
+  if (said || toldLines.length > 0) lines.push(`## ${copy.toldHeading}`, '', ...(said ? [said, ''] : []), ...toldLines, ...(toldLines.length ? [''] : []))
   return { name, description: lede, body: lines.join('\n') }
 }
 
+/** One step of an own flow: a numbered line. What the page lists and what "Redigera" rewrites. */
+const STEP_LINE = /^\d+\.\s+(.+)$/
+
 /** The numbered steps of an own skill's body, for the sheet's step list. */
 export function ownSkillSteps(body: string): string[] {
-  return body.split('\n').map((line) => /^\d+\.\s+(.+)$/.exec(line.trim())?.[1]).filter((step): step is string => !!step)
+  return body.split('\n').map((line) => STEP_LINE.exec(line.trim())?.[1]).filter((step): step is string => !!step)
+}
+
+/**
+ * An own flow's body after "Redigera": the new name as its heading, the new
+ * one-line description where the old one stood, and the new steps where the
+ * numbered list was. Everything else the body carries (the rules an AI wrote
+ * into it, what the user said) stays as it was: the form shows only the name,
+ * the description and the steps, so it must not drop what it does not show.
+ */
+export function editedFlowBody(body: string, edit: { name: string; description: string; previousDescription: string; steps: string[]; stepsHeading: string }): string {
+  const lines = body.replace(/\r\n?/g, '\n').split('\n')
+  const list = edit.steps.map((step, i) => `${i + 1}. ${step}`)
+  const firstStep = lines.findIndex((line) => STEP_LINE.test(line.trim()))
+  let next = firstStep === -1
+    ? [...lines, '', `## ${edit.stepsHeading}`, '', ...list]
+    : lines.flatMap((line, i) => (i === firstStep ? list : STEP_LINE.test(line.trim()) ? [] : [line]))
+  const top = next.findIndex((line) => line.trim() !== '')
+  next = top !== -1 && /^#\s/.test(next[top])
+    ? next.map((line, i) => (i === top ? `# ${edit.name}` : line))
+    : [`# ${edit.name}`, '', ...next]
+  const previous = edit.previousDescription.trim()
+  const lede = previous ? next.findIndex((line) => line.trim() === previous) : -1
+  if (lede !== -1) next[lede] = edit.description
+  return `${next.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`
+}
+
+/**
+ * The text of own knowledge or an analysis as "Redigera" shows it: the saved
+ * body without the name heading and one-line description that Skriv själv
+ * (and buildOwnText) put above it, so saving writes them once, not twice.
+ */
+export function ownItemText(body: string, description: string): string {
+  const lines = body.replace(/\r\n?/g, '\n').split('\n')
+  let start = lines.findIndex((line) => line.trim() !== '')
+  if (start === -1) return ''
+  if (/^#\s/.test(lines[start])) {
+    start += 1
+    while (start < lines.length && lines[start].trim() === '') start += 1
+    if (description.trim() && lines[start]?.trim() === description.trim()) start += 1
+  }
+  return lines.slice(start).join('\n').trim()
 }
 
 /**
@@ -87,4 +131,15 @@ export const OWN_SKILL_COPY: Record<'sv' | 'en', OwnSkillCopy> = {
     toldHeading: 'How the user described it',
     addedLabel: 'Added afterwards:',
   },
+}
+
+/**
+ * Own knowledge or an analysis, as an AI saves it: the name, one line on
+ * what it is, then the text as written, in the same shape "Skriv själv"
+ * saves. The text keeps its paragraphs; SkillBodySchema decides what passes.
+ */
+export function buildOwnText(name: string, description: string, text: string): { name: string; description: string; body: string } {
+  const title = cleanText(name, 120)
+  const lede = cleanText(description, 500)
+  return { name: title, description: lede, body: `# ${title}\n\n${lede}\n\n${text.trim()}\n` }
 }

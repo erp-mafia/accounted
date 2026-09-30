@@ -30,7 +30,8 @@ registerEndpoint({
   doNotUseFor:
     'Real-time accrual posting (handled per salary run). Vacation request management (not in scope for v1).',
   pitfalls: [
-    '`year` is required.',
+    '`year` is required. The report is as of December 31 of that year.',
+    'Amounts specify what is booked on 2920/2940: the latest closed vacation year\'s computed liability plus every accrual booked after its year end (before any close: the cutover opening liability plus every accrual booked so far). Day columns describe the vacation year containing December 31 under the company\'s vacation-year basis.',
     'Employees with vacation_rule = none or semesterersattning are excluded: they have no semesterlöneskuld liability.',
     'advanceVacationDebt (per row and in totals) is the förskottsskuld loaded as a cutover opening balance (SemL 29 a §): a receivable on the employee. totalLiability stays the booked 2920 + 2940 liability and is what bokslut and reconciliation use; netLiability subtracts the förskottsskuld for information only.',
   ],
@@ -62,7 +63,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     const gen = await safeGenerate(
-      () => generateVacationLiability(ctx.supabase, ctx.companyId!, yearParse.data),
+      () => generateVacationLiability(ctx.supabase, ctx.companyId!, `${yearParse.data}-12-31`),
       { log: ctx.log, requestId: ctx.requestId, reportName: 'vacation-liability' },
     )
     if (!gen.ok) return gen.response

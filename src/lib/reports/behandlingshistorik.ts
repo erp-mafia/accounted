@@ -224,6 +224,9 @@ export const AUDITED_TABLES = [
   // Which bank account customer invoices pay to, per currency (migration
   // 20260904010000).
   'invoice_payee_defaults',
+  // Which mailboxes the receipt hunt reads underlag from: connected and
+  // disconnected, written by hand without tokens (extensions/general/mail).
+  'mail_connections',
 ] as const
 
 /**
@@ -257,7 +260,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED,SUBLEDGER_LINK_REMOVED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED,SUBLEDGER_LINK_REMOVED)'
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   manual: 'Manuell',
@@ -1084,6 +1087,38 @@ function apiKeyAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | nul
   }
 }
 
+/**
+ * A mailbox the receipt hunt reads underlag from: who connected it, with
+ * which access, and when it was disconnected (and whether the provider
+ * confirmed the access was withdrawn).
+ */
+function mailConnectionAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.new_state ?? row.old_state
+  const object = str(row.new_state?.email_address) ?? str(row.old_state?.email_address) ?? null
+  switch (row.action) {
+    case 'INSERT': {
+      const scopes = state?.scopes
+      const details = Array.isArray(scopes) && scopes.length > 0 ? [`Behörighet: ${fmtValue(scopes)}`] : []
+      return auditEvent(row, { category: 'atkomst', code: 'mail_connection.connected', event: 'Brevlåda ansluten', object, details })
+    }
+    case 'DELETE': {
+      const revocation = str(row.new_state?.provider_revocation)
+      const details = revocation ? [`Återkallad hos leverantören: ${MAIL_REVOCATION_LABELS[revocation] ?? revocation}`] : []
+      return auditEvent(row, { category: 'atkomst', code: 'mail_connection.disconnected', event: 'Brevlåda frånkopplad', object, details })
+    }
+    default:
+      return null
+  }
+}
+
+const MAIL_REVOCATION_LABELS: Record<string, string> = {
+  revoked: 'ja',
+  already_invalid: 'redan ogiltig',
+  failed: 'ej bekräftat',
+  shared: 'nej, brevlådan används av ett annat företag',
+  no_token: 'nej, ingen behörighet sparad',
+}
+
 function genericAuditEvent(
   row: AuditLogEntry,
   opts: { category: BehandlingshistorikCategory; codePrefix: string; noun: string; fields: Record<string, string>; objectKeys: string[] },
@@ -1372,6 +1407,19 @@ export function auditRowToEvent(
         objectKeys: ['name'],
       })
     case 'cash_accounts':
+      // A user removing an unbooked account (remove_cash_account,
+      // 20260927212000): the account is old_state, what went with it
+      // new_state. Removing one moves the bank leg resolveSettlementAccount
+      // picks, like turning it off does.
+      if (row.action === 'DELETE' && row.new_state?.deleted_transactions !== undefined) {
+        return auditEvent(row, {
+          category: 'installningar',
+          code: 'cash_account.deleted',
+          event: 'Bankkonto borttaget',
+          object: [str(row.old_state?.name), str(row.old_state?.ledger_account)].filter(Boolean).join(' ') || null,
+          details: [`Obokförda transaktioner borttagna: ${fmtValue(row.new_state.deleted_transactions)}`],
+        })
+      }
       return genericAuditEvent(row, {
         category: 'installningar',
         codePrefix: 'cash_account',
@@ -1391,6 +1439,8 @@ export function auditRowToEvent(
       })
     case 'salary_payroll_config':
       return payrollConfigAuditEvent(row)
+    case 'mail_connections':
+      return mailConnectionAuditEvent(row)
     // The import tables emit their own events from the rows themselves; the
     // audit trail only adds what the rows can no longer show: a deletion.
     case 'sie_imports':
@@ -1859,7 +1909,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED,SUBLEDGER_LINK_REMOVED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED,SUBLEDGER_LINK_REMOVED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })

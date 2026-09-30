@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { shouldEnforceMfa } from './mfa'
+import { mfaStepUpApplies } from './mfa'
 import type { JwtPayload, User, SupabaseClient } from '@supabase/supabase-js'
 import { claimsPinned, userFromClaims } from './claims'
 
@@ -15,7 +15,8 @@ type AuthResult =
  * Auth + MFA guard for API routes.
  *
  * Returns the authenticated user and Supabase client, or a JSON error response.
- * When MFA is required (hosted deployment), verifies AAL2 assurance level.
+ * On hosted, a session of a user with a verified factor must be AAL2, whatever
+ * NEXT_PUBLIC_REQUIRE_MFA says (see mfaStepUpApplies in ./mfa).
  *
  * Fast path: getClaims() performs local WebCrypto verification against the
  * shared 10-minute JWKS cache instead of a per-request network getUser()
@@ -72,7 +73,11 @@ export async function requireAuth(): Promise<AuthResult> {
     }
   }
 
-  if (shouldEnforceMfa(user) && !(await sessionIsMfaAssured(supabase, claims))) {
+  // Enrolment is never forced here (the middleware's page branch owns that);
+  // this is the step-up alone: a session below AAL2 of a user who HAS a
+  // verified factor is refused. sessionIsMfaAssured answers true for a user
+  // without one.
+  if (mfaStepUpApplies(user) && !(await sessionIsMfaAssured(supabase, claims))) {
     return {
       user: null,
       supabase,

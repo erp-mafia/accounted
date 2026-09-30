@@ -302,6 +302,36 @@ describe('generateARReconciliation', () => {
     expect(statusFilters.map((c) => c.args[1])).toContainEqual(['posted', 'reversed'])
   })
 
+  it('includes partially paid invoices: their remainder is still on 1510 (feedback seq 817399)', async () => {
+    results = [
+      // 0: invoices: 15 625 invoiced, 15 000 paid, 625 open
+      {
+        data: [{ id: 'inv-pp', total: 15625, paid_amount: 15000, currency: 'SEK', exchange_rate: null }],
+        error: null,
+      },
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
+      // 1510: the invoice debit and the partial payment credit
+      {
+        data: [
+          { debit_amount: 15625, credit_amount: 0, journal_entry_id: 'invoice' },
+          { debit_amount: 0, credit_amount: 15000, journal_entry_id: 'payment' },
+        ],
+        error: null,
+      },
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    // The first status filter recorded is the open invoices query.
+    const invoiceStatuses = calls.find((c) => c.method === 'in' && c.args[0] === 'status')?.args[1]
+    expect(invoiceStatuses).toContain('partially_paid')
+    expect(result.ar_ledger_total).toBe(625)
+    expect(result.account_1510_balance).toBe(625)
+    expect(result.difference).toBe(0)
+    expect(result.is_reconciled).toBe(true)
+  })
+
   it('uses Math.round for monetary precision', async () => {
     results = [
       {

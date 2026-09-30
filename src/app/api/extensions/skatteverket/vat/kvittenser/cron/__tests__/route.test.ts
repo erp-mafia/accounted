@@ -245,7 +245,7 @@ describe('VAT kvittenser cron', () => {
     errorSpy.mockClear()
   })
 
-  it('yearly picker params complete the moms_yearly deadline with the fiscal-year label', async () => {
+  it('yearly picker params record the filing through the same store as the other cadences', async () => {
     mockCreateClient.mockReturnValueOnce(
       stubHappyTables({ ...LOCKED_STATE, periodType: 'yearly', period: 12 }),
     )
@@ -257,11 +257,14 @@ describe('VAT kvittenser cron', () => {
 
     await GET(makeRequest())
 
-    // Calendar FY (company_settings unstubbed → default start month 1):
-    // the moms_yearly tax_period is the plain year label.
-    expect(mockCompleteTaxDeadline).toHaveBeenCalledWith(
-      expect.anything(), 'comp-1', ['moms_yearly'], '2026', 'confirmed',
-    )
+    // The store places the räkenskapsår from the company's settings; the
+    // cron only names the period (year = the year it ends, period 1).
+    expect(mockRecordVatFilingConfirmed).toHaveBeenCalledWith(expect.anything(), 'comp-1', {
+      periodType: 'yearly',
+      year: 2026,
+      period: 1,
+    })
+    expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
   })
 
   it('legacy state without picker params still flips status but skips the deadline', async () => {

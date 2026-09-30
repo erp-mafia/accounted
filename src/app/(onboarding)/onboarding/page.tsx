@@ -121,21 +121,13 @@ export default async function OnboardingPage({
     redirect('/')
   }
 
-  const { data: teamMembership } = await supabase
-    .from('team_members')
-    .select('team_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle()
-
-  let teamId = teamMembership?.team_id
-
-  // Ensure user has a team (fallback for edge cases)
-  if (!teamId) {
-    const { data: newTeamId } = await supabase.rpc('ensure_user_team')
-    teamId = newTeamId
-  }
-
+  // Deterministic personal-team attachment (WL-08), same as /companies/new:
+  // ensure_user_team returns the user's PERSONAL team (creating one if
+  // missing). The previous bare `.limit(1)` membership pick returned whichever
+  // row came first, so a byrå member's new company landed in the personal or
+  // the byrå team at random. Byrå clients bind their team explicitly via
+  // /companies/new-client.
+  const { data: teamId } = await supabase.rpc('ensure_user_team')
   if (!teamId) {
     redirect('/login')
   }

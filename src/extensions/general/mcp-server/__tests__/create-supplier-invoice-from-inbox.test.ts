@@ -9,6 +9,9 @@ import { tools } from '../server'
 import { toToolError } from '../tool-result'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
+import { buildSupplierInvoiceRegistrationEntryInput } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { makeSupplierInvoice } from '@/tests/helpers'
+import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 vi.mock('@/lib/currency/riksbanken', () => ({
   fetchExchangeRate: vi.fn().mockResolvedValue(11.5),
@@ -68,6 +71,8 @@ function makeMock(opts: {
   supplierList?: Array<Record<string, unknown>>
   /** Served by the .single() defaults/tenancy fetch. Pass explicit null to simulate a supplier missing from the company. */
   supplierRecord?: Record<string, unknown> | null
+  /** When set, company_settings serves this vat_registered flag. */
+  vatRegistered?: boolean
 }) {
   const inboxResult = { data: opts.inbox ?? null, error: opts.inbox ? null : { message: 'not found' } }
   const supplierByOrgResult = { data: opts.supplierByOrg ?? null, error: null }
@@ -167,6 +172,12 @@ function makeMock(opts: {
       if (table === 'invoice_inbox_items') return inboxChain()
       if (table === 'suppliers') return supplierChain()
       if (table === 'pending_operations') return pendingChain()
+      if (table === 'company_settings' && opts.vatRegistered !== undefined) {
+        return staticChain({
+          data: { vat_registered: opts.vatRegistered, dimensions_enabled: opts.dimensions?.enabled ?? false },
+          error: null,
+        })
+      }
       if (table === 'company_settings' && opts.dimensions) {
         return staticChain({ data: { dimensions_enabled: opts.dimensions.enabled }, error: null })
       }
@@ -1267,5 +1278,312 @@ describe('gnubok_create_supplier_invoice_from_inbox: reverse charge registers th
     expect(params.items[0].vat_rate).toBe(0.25)
     expect(result.preview.payable_recomputed).toBeUndefined()
     expect(result.preview.warning).toBeUndefined()
+  })
+})
+
+interface StagedParams {
+  invoice_date: string
+  currency: string
+  exchange_rate: number | null
+  vat_treatment: string
+  subtotal: number
+  vat_amount: number
+  total: number
+  items: Array<{
+    line_number: number
+    account_number: string
+    quantity: number
+    unit_price: number
+    line_total: number
+    vat_rate: number
+    vat_amount: number
+  }>
+}
+
+/**
+ * The registration verifikat the commit would post for a staged op, built by
+ * the real generator (only the fiscal-period lookup is stubbed): 2440 is the
+ * balancing sum of what the items debit.
+ */
+async function registrationLines(params: StagedParams) {
+  const periodChain: unknown = new Proxy(
+    {},
+    {
+      get: (_t, prop) =>
+        prop === 'then'
+          ? (resolve: (v: unknown) => void) => resolve({ data: [{ id: 'period-1' }], error: null })
+          : () => periodChain,
+    },
+  )
+  const invoice = makeSupplierInvoice({
+    invoice_date: params.invoice_date,
+    currency: params.currency,
+    exchange_rate: params.exchange_rate,
+    vat_treatment: params.vat_treatment as SupplierInvoice['vat_treatment'],
+    subtotal: params.subtotal,
+    vat_amount: params.vat_amount,
+    total: params.total,
+  })
+  const items = params.items.map((item, i) => ({
+    ...item,
+    id: `item-${i}`,
+    supplier_invoice_id: invoice.id,
+    sort_order: i,
+    reverse_charge_rate: null,
+  })) as unknown as SupplierInvoiceItem[]
+  const input = await buildSupplierInvoiceRegistrationEntryInput(
+    { from: () => periodChain } as never,
+    'company-1',
+    invoice,
+    items,
+    'swedish_business',
+    'Leverantör AB',
+  )
+  return input!.lines
+}
+
+describe('gnubok_create_supplier_invoice_from_inbox: a non-VAT-registered company books the seller VAT as cost (feedback 708521)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // A supplier invoice for an ideell förening (vat_registered false) as
+  // extracted: 2000 + 25 % = 2500. The tool staged 500 on 2641, which the
+  // förening can never reclaim.
+  const ringo = {
+    supplier: { name: 'Bryggleverantören AB' },
+    invoice: { invoiceNumber: '5571', invoiceDate: '2026-01-16', dueDate: '2026-02-15', currency: 'SEK' },
+    totals: { subtotal: 2000, vat: 500, total: 2500 },
+    lineItems: [
+      { description: 'Båtplats', quantity: 1, unitPrice: 2000, lineTotal: 2000, vatRate: 25, accountSuggestion: '5010' },
+    ],
+  }
+
+  async function stage(opts: { vatRegistered: boolean; args?: Record<string, unknown>; extracted?: unknown }) {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-nr',
+        status: 'received',
+        extracted_data: opts.extracted ?? ringo,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-nr',
+      },
+      inserts,
+      vatRegistered: opts.vatRegistered,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-nr', ...opts.args },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+    return { result, params: inserts[0]?.params as StagedParams }
+  }
+
+  it('stages one cost line of 2500 at 0 %, payable 2500, and the preview says why', async () => {
+    const { result, params } = await stage({ vatRegistered: false })
+
+    expect(result.staged).toBe(true)
+    expect(params.vat_treatment).toBe('standard_25')
+    expect(params.items).toHaveLength(1)
+    expect(params.items[0]).toMatchObject({ account_number: '5010', quantity: 1, unit_price: 2500, line_total: 2500, vat_rate: 0, vat_amount: 0 })
+    expect(params.subtotal).toBe(2500)
+    expect(params.vat_amount).toBe(0)
+    expect(params.total).toBe(2500)
+
+    expect(result.preview.vat_registration).toMatchObject({ vat_registered: false, seller_vat_added_to_cost: 500 })
+    const note = String((result.preview.vat_registration as { note: string }).note)
+    expect(note).toMatch(/not VAT-registered/)
+    expect(note).toContain("the seller's VAT 500 is added to the cost lines")
+    expect(note).toContain('2440 is credited with 2500')
+    expect(note).not.toMatch(/differs from the document total/)
+    expect(result.preview.warning).toBeUndefined()
+    expect(result.preview.payable_recomputed).toBeUndefined()
+
+    const lines = await registrationLines(params)
+    expect(lines.find((l) => l.account_number === '2641')).toBeUndefined()
+    expect(lines.find((l) => l.account_number === '5010')?.debit_amount).toBe(2500)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(2500)
+  })
+
+  it('keeps the seller VAT in the payable when the treatment is overridden to exempt (the reported workaround)', async () => {
+    // The net path of an exempt label would have registered 2000 and
+    // dropped the 500 the förening still owes the seller.
+    const { result, params } = await stage({ vatRegistered: false, args: { vat_treatment_override: 'exempt' } })
+
+    expect(params.vat_treatment).toBe('exempt')
+    expect(params.items[0]).toMatchObject({ line_total: 2500, vat_rate: 0, vat_amount: 0 })
+    expect(params.total).toBe(2500)
+    expect(result.preview.payable_recomputed).toBeUndefined()
+    expect(result.preview.vat_registration).toMatchObject({ seller_vat_added_to_cost: 500 })
+  })
+
+  it('names a document total the lines do not reach instead of registering it', async () => {
+    const { result, params } = await stage({
+      vatRegistered: false,
+      extracted: { ...ringo, totals: { subtotal: 2000, vat: 500, total: 2600 } },
+    })
+
+    // The payable is what 2440 is credited with; the gap is not rounding.
+    expect(params.total).toBe(2500)
+    expect(params.items.some((i) => i.account_number === '3740')).toBe(false)
+    expect(String((result.preview.vat_registration as { note: string }).note)).toContain(
+      'That differs from the document total 2600',
+    )
+  })
+
+  it('leaves a VAT-registered company unchanged: 2000 on the cost line, 500 on 2641, 2500 payable', async () => {
+    const { result, params } = await stage({ vatRegistered: true })
+
+    expect(params.items[0]).toMatchObject({ unit_price: 2000, line_total: 2000, vat_rate: 0.25, vat_amount: 500 })
+    expect(params.subtotal).toBe(2000)
+    expect(params.vat_amount).toBe(500)
+    expect(params.total).toBe(2500)
+    expect(result.preview.vat_registration).toBeUndefined()
+
+    const lines = await registrationLines(params)
+    expect(lines.find((l) => l.account_number === '2641')?.debit_amount).toBe(500)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(2500)
+  })
+
+  it('leaves reverse charge on its own path for a non-registered company', async () => {
+    const { result, params } = await stage({ vatRegistered: false, args: { vat_treatment_override: 'reverse_charge' } })
+
+    expect(params.vat_treatment).toBe('reverse_charge')
+    expect(params.items[0]).toMatchObject({ line_total: 2000, vat_rate: 0, vat_amount: 0 })
+    expect(params.total).toBe(2000)
+    expect(result.preview.vat_registration).toBeUndefined()
+    expect((result.preview.payable_recomputed as { reason: string }).reason).toBe('reverse_charge')
+  })
+})
+
+describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 753539)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockResolveRate.mockReset()
+  })
+
+  // The invoice from feedback seq 753539 as registered on 2026-09-26: the lines
+  // come to 355 894.12 + 88 297.79 = 444 191.91 against a billed 444 192.00,
+  // and 2440 was credited with 444 191.91.
+  const themaxLines = [
+    { account: '5800', net: 24659.23, rate: 25 },
+    { account: '6550', net: 20000, rate: 25 },
+    { account: '4010', net: 30903, rate: 25 },
+    { account: '4010', net: 30175.83, rate: 25 },
+    { account: '4010', net: 21900.46, rate: 25 },
+    { account: '4010', net: 13536.61, rate: 25 },
+    { account: '4010', net: 201375.99, rate: 25 },
+    { account: '4010', net: 10640, rate: 25 },
+    { account: '4010', net: 2360, rate: 0 },
+    { account: '5710', net: 343, rate: 0 },
+  ]
+  const themax = {
+    supplier: { name: 'Grossisten AB' },
+    invoice: { invoiceNumber: '2026006', invoiceDate: '2026-09-25', dueDate: '2026-10-25', currency: 'SEK' },
+    totals: { subtotal: 355894.12, vat: 88297.79, total: 444192, roundingAmount: 0.09 },
+    lineItems: themaxLines.map((l, i) => ({
+      description: `Rad ${i + 1}`,
+      quantity: 1,
+      unitPrice: l.net,
+      lineTotal: l.net,
+      vatRate: l.rate,
+      accountSuggestion: l.account,
+    })),
+  }
+
+  async function stage(extracted: unknown, opts: { vatRegistered?: boolean } = {}) {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-ore',
+        status: 'received',
+        extracted_data: extracted,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-ore',
+      },
+      inserts,
+      ...(opts.vatRegistered !== undefined ? { vatRegistered: opts.vatRegistered } : {}),
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-ore' },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+    return { result, params: inserts[0]?.params as StagedParams }
+  }
+
+  it('stages a 0.09 zero-VAT 3740 line, so 2440 is credited with the billed 444 192.00', async () => {
+    const { result, params } = await stage(themax)
+
+    expect(result.staged).toBe(true)
+    expect(params.items).toHaveLength(11)
+    expect(params.items[10]).toEqual({
+      line_number: 11,
+      description: 'Öresavrundning',
+      quantity: 1,
+      unit: 'st',
+      unit_price: 0.09,
+      line_total: 0.09,
+      account_number: '3740',
+      vat_rate: 0,
+      vat_amount: 0,
+    })
+    expect(params.vat_amount).toBe(88297.79)
+    expect(params.subtotal).toBe(355894.21)
+    expect(params.total).toBe(444192)
+    expect(result.preview.ore_rounding).toMatchObject({ account_number: '3740', amount: 0.09 })
+
+    const lines = await registrationLines(params)
+    expect(lines.find((l) => l.account_number === '3740')?.debit_amount).toBe(0.09)
+    expect(lines.find((l) => l.account_number === '2641')?.debit_amount).toBe(88297.79)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(444192)
+  })
+
+  it('credits 3740 when the supplier rounded down', async () => {
+    const { params } = await stage({ ...themax, totals: { ...themax.totals, total: 444191.5 } })
+
+    expect(params.items[10]).toMatchObject({ account_number: '3740', line_total: -0.41, vat_rate: 0 })
+    expect(params.total).toBe(444191.5)
+    const lines = await registrationLines(params)
+    expect(lines.find((l) => l.account_number === '3740')?.credit_amount).toBe(0.41)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(444191.5)
+  })
+
+  it('does not absorb a gap over 0.50: that is not rounding', async () => {
+    const { result, params } = await stage({ ...themax, totals: { ...themax.totals, total: 444192.42 } })
+
+    expect(params.items).toHaveLength(10)
+    expect(params.items.some((i) => i.account_number === '3740')).toBe(false)
+    expect(params.subtotal).toBe(355894.12)
+    expect(result.preview.ore_rounding).toBeUndefined()
+  })
+
+  it('never touches a foreign-currency invoice', async () => {
+    mockResolveRate.mockResolvedValue({
+      ok: true,
+      rate: { currency: 'EUR', rate: 11.5, exchangeRate: 11.5, exchangeRateDate: '2026-09-25', source: 'fetched' },
+    })
+    const { result, params } = await stage({ ...themax, invoice: { ...themax.invoice, currency: 'EUR' } })
+
+    expect(params.currency).toBe('EUR')
+    expect(params.items).toHaveLength(10)
+    expect(params.items.some((i) => i.account_number === '3740')).toBe(false)
+    expect(params.total).toBe(444192)
+    expect(result.preview.ore_rounding).toBeUndefined()
+  })
+
+  it('carries the rounding on top of the folded lines for a non-registered company', async () => {
+    const { params } = await stage(themax, { vatRegistered: false })
+
+    expect(params.items[10]).toMatchObject({ account_number: '3740', line_total: 0.09, vat_rate: 0 })
+    expect(params.items.every((i) => i.vat_rate === 0 && i.vat_amount === 0)).toBe(true)
+    expect(params.vat_amount).toBe(0)
+    expect(params.total).toBe(444192)
+    const lines = await registrationLines(params)
+    expect(lines.find((l) => l.account_number === '2641')).toBeUndefined()
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(444192)
   })
 })

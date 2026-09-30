@@ -4,6 +4,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 const skvStatusMock = vi.fn()
 const fetchUnlinkedMock = vi.fn()
 const junctionMock = vi.fn()
+const alignMock = vi.fn()
 
 vi.mock('../skattekonto-reconciliation', () => ({
   getSkattekontoReconciliationStatus: (...args: unknown[]) => skvStatusMock(...args),
@@ -12,6 +13,7 @@ vi.mock('../bank-reconciliation', () => ({
   fetchUnlinkedGLLines: (...args: unknown[]) => fetchUnlinkedMock(...args),
   fetchJunctionLinkMap: (...args: unknown[]) => junctionMock(...args),
   scopeTransactionsToAccount: (q: unknown) => q,
+  alignLinkedTransactionsToWindow: (...args: unknown[]) => alignMock(...args),
 }))
 const coveringSetsMock = vi.fn()
 vi.mock('../covering-set-candidate', () => ({
@@ -34,6 +36,11 @@ describe('listAccountItems', () => {
     fetchUnlinkedMock.mockReset()
     junctionMock.mockReset()
     junctionMock.mockResolvedValue(new Map())
+    alignMock.mockReset()
+    alignMock.mockImplementation(async (o: { rows: unknown[]; junctionLinks: Map<string, string[]> }) => ({
+      rows: o.rows,
+      junctionLinks: o.junctionLinks,
+    }))
     coveringSetsMock.mockReset()
     coveringSetsMock.mockResolvedValue(new Map())
   })
@@ -109,6 +116,73 @@ describe('listAccountItems', () => {
     expect((coveringSetsMock.mock.calls[0][3] as Array<{ id: string }>).map((r) => r.id)).toEqual(['t-open'])
   })
 
+  it('shows the verifikat a 1:1 proposal points at, read in the same batch as the linked ones', async () => {
+    const row = {
+      description: null, merchant_name: null, currency: 'SEK', journal_entry_id: null, potential_journal_entry_id: null,
+      potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: null,
+    }
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+    enqueue({
+      data: [
+        // Linked, with a stale proposal pointer left behind (a multi-row
+        // bulk_book never clears it).
+        { ...row, id: 't-link', date: '2026-08-05', description: 'Lön', amount: -31200, journal_entry_id: 'e-1', reconciliation_method: 'manual', potential_journal_entry_id: 'e-stale' },
+        // Booked by hand a day after the bank debit; the matcher proposed it at 0.85.
+        { ...row, id: 't-prop', date: '2026-08-02', description: 'KORTKÖP KONTORSVAROR', amount: -1250, potential_journal_entry_id: 'e-2', potential_match_method: 'auto_date_range', potential_match_confidence: '0.85' },
+        { ...row, id: 't-gone', date: '2026-08-01', description: 'Okänd', amount: -40, potential_journal_entry_id: 'e-missing', potential_match_method: 'auto_fuzzy', potential_match_confidence: 0.75 },
+      ],
+    })
+    // The proposed verifikat is not linked yet, so the ledger side still lists it.
+    fetchUnlinkedMock.mockResolvedValue([
+      { line_id: 'l1', journal_entry_id: 'e-2', debit_amount: 0, credit_amount: 1250, line_description: null, entry_date: '2026-08-03', voucher_number: 12, voucher_series: 'A', entry_description: 'Kontorsvaror', source_type: 'manual' },
+    ])
+    enqueue({
+      data: [
+        { id: 'e-1', entry_date: '2026-08-05', voucher_series: 'A', voucher_number: 11, description: 'Lön augusti' },
+        { id: 'e-2', entry_date: '2026-08-03', voucher_series: 'A', voucher_number: 12, description: 'Kontorsvaror' },
+        { id: 'e-stale', entry_date: '2026-07-30', voucher_series: 'A', voucher_number: 9, description: 'Annat verifikat' },
+      ],
+    })
+
+    const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { limit: 50 })
+    const byId = Object.fromEntries((result?.items ?? []).map((i) => [i.item_id, i]))
+
+    // The verifikat's own label, text and date, not the bank date and an empty text.
+    expect(byId['t-prop']).toMatchObject({
+      bucket: 'proposed',
+      date: '2026-08-02',
+      proposal: {
+        journal_entry_id: 'e-2',
+        voucher_series: 'A',
+        voucher_number: 12,
+        entry_date: '2026-08-03',
+        description: 'Kontorsvaror',
+        confidence: 0.85,
+        reasons: ['auto_date_range'],
+      },
+    })
+    // A verifikat the read does not return keeps the fallback instead of failing the list.
+    expect(byId['t-gone'].proposal).toMatchObject({
+      journal_entry_id: 'e-missing',
+      voucher_series: null,
+      voucher_number: null,
+      entry_date: '2026-08-01',
+      description: '',
+    })
+    expect(byId['t-link'].linked_entry).toEqual({ entry_date: '2026-08-05', voucher_series: 'A', voucher_number: 11, description: 'Lön augusti' })
+    // Only live proposals are filled in: the stale pointer on the matched row
+    // keeps its fallback rather than showing another verifikat's label.
+    expect(byId['t-link']).toMatchObject({ bucket: 'matched', proposal: { journal_entry_id: 'e-stale', voucher_number: null, description: '' } })
+    // One journal_entries read serves the linked row and both live proposals.
+    const reads = findCalls('journal_entries', 'in')
+    expect(reads).toHaveLength(1)
+    expect([...(reads[0][1] as string[])].sort()).toEqual(['e-1', 'e-2', 'e-missing'])
+    // The API bucket is unchanged: Matcha manuellt, MCP and v1 still get the
+    // proposed verifikat as unmatched ledger, so a proposal can be overridden.
+    expect(byId['e-2']).toMatchObject({ bucket: 'unmatched_ledger', voucher_number: 12, amount: -1250 })
+  })
+
   it('moves a bank row a covering set explains into proposed, with every voucher on the proposal (#2293)', async () => {
     const openRow = (id: string, date: string, amount: number) => ({
       id, date, description: 'BGGIRERING 03447786', merchant_name: null, amount, currency: 'SEK', journal_entry_id: null,
@@ -128,7 +202,7 @@ describe('listAccountItems', () => {
         { journal_entry_id: 'e-58', voucher_number: 58, voucher_series: 'A', entry_date: '2026-07-31', description: 'Inbetalning 064', amount: 25750 },
       ],
     }
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
     enqueue({ data: [openRow('t-bg', '2026-07-31', 88250), openRow('t-lonely', '2026-07-30', -999)] })
     fetchUnlinkedMock.mockResolvedValue([])
@@ -140,6 +214,8 @@ describe('listAccountItems', () => {
     expect(byId['t-bg']).toMatchObject({ bucket: 'proposed', proposal: setProposal, actions: ['match', 'book', 'ignore'] })
     expect(byId['t-lonely']).toMatchObject({ bucket: 'unmatched_external', proposal: null })
     expect(result?.items.map((i) => i.item_id)).toEqual(['t-bg', 't-lonely'])
+    // A set proposal already carries its verifikat: no extra read for it.
+    expect(findCalls('journal_entries', 'in')).toEqual([])
   })
 
   it('keeps a set-explained row out of unmatched_external and skips the search when neither open bucket is wanted', async () => {
@@ -163,6 +239,42 @@ describe('listAccountItems', () => {
     const matched = await listAccountItems(other.supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'matched' })
     expect(matched?.items).toEqual([])
     expect(coveringSetsMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('lists a linked row in the window of its verifikat, like the status counts it', async () => {
+    const base = {
+      description: 'Insättning', merchant_name: null, currency: 'SEK', potential_journal_entry_id: null,
+      potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: 'manual',
+    }
+    const inWindow = { ...base, id: 't-in', date: '2026-08-05', amount: -5000, journal_entry_id: 'e-a' }
+    const before = { ...base, id: 't-pre', date: '2026-07-17', amount: 25000, journal_entry_id: 'e-6' }
+    alignMock.mockImplementation(async (o: { rows: unknown[]; junctionLinks: Map<string, string[]> }) => ({
+      rows: [...o.rows, before],
+      junctionLinks: o.junctionLinks,
+    }))
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+    enqueue({ data: [inWindow] })
+    const res = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, {
+      bucket: 'matched',
+      windowFrom: '2026-07-30',
+      windowTo: '2027-06-30',
+    })
+
+    expect(alignMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bankAccount: '1930',
+        from: '2026-07-30',
+        to: '2027-06-30',
+        readFrom: '2026-07-30',
+        readTo: '2027-06-30',
+        cashAccountId: CASH,
+        includeUnassigned: true,
+      }),
+    )
+    expect(res?.items.map((i) => i.item_id)).toEqual(['t-in', 't-pre'])
+    expect(res?.items[1]).toMatchObject({ bucket: 'matched', linked_journal_entry_id: 'e-6' })
   })
 
   it('returns null for an unknown cash account', async () => {

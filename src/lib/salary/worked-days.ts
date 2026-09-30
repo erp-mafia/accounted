@@ -5,8 +5,9 @@
  * the per-day register that drives base salary for hourly employees
  * (hourly_rate x sum(hours)) and feeds the shift-premium engine (OB) through
  * start_time / end_time. Consumed by the internal dashboard routes
- * (app/api/salary/employees/[id]/worked-hours) and the v1 REST route
- * (app/api/v1/companies/[companyId]/employees/[id]/worked-days).
+ * (app/api/salary/employees/[id]/worked-hours), the v1 REST route
+ * (app/api/v1/companies/[companyId]/employees/[id]/worked-days) and the MCP
+ * operations (lib/operations/salary-employee-setup.ts).
  *
  * One row per (employee, work_date): the unique index
  * idx_salary_worked_days_unique (migration 20260512120000). Re-marking a day
@@ -25,6 +26,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { z } from 'zod'
 import { assertRegisterDatesUnlocked, assertRegisterRangeUnlocked } from './register-locks'
 
 export type WorkedDaysResult<T> =
@@ -82,6 +84,54 @@ export function workedDaysRangeSpan(from: string, to: string): number | null {
   if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) return null
   return Math.round((end - start) / 86_400_000) + 1
 }
+
+// ──────────────────────────────────────────────────────────────────
+// API request contract. The v1 route and the MCP operations
+// (lib/operations/salary-employee-setup.ts) validate with these, so the two
+// doors accept exactly the same days. The dashboard forms keep their own
+// Swedish-worded schemas in lib/api/schemas.ts (UpsertWorkedDaySchema,
+// BatchUpsertWorkedDaysSchema, WorkedHoursRangeQuerySchema).
+// ──────────────────────────────────────────────────────────────────
+
+const apiIsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD date format')
+const apiTimeString = z
+  .string()
+  .regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Expected HH:MM or HH:MM:SS time format')
+
+/** An inclusive date range: the list, and the range delete. */
+export const ApiWorkedDaysRangeSchema = z
+  .object({
+    from: apiIsoDate.describe('YYYY-MM-DD. First day of the range (inclusive). Required.'),
+    to: apiIsoDate.describe('YYYY-MM-DD. Last day of the range (inclusive), not before from. Required.'),
+  })
+  .refine((v) => v.from <= v.to, { message: 'from must be <= to', path: ['from'] })
+
+/**
+ * One day of an API upsert. Same validators as UpsertWorkedDaySchema minus
+ * salary_run_employee_id: the run link is set by the dashboard, never by an
+ * API caller. hours is required: an external operator states the hours it
+ * registers, there is no "assume a full day" default on the API.
+ */
+export const ApiWorkedDaySchema = z
+  .object({
+    work_date: apiIsoDate,
+    hours: z.number().positive().max(24),
+    // Optional shift window. Feeds the shift-premium engine: without explicit
+    // times, the engine assumes a default 08:00-17:00 day shift. Either both
+    // fields are provided or neither.
+    start_time: apiTimeString.optional(),
+    end_time: apiTimeString.optional(),
+    notes: z.string().max(2000).optional(),
+  })
+  .refine(
+    (d) => (d.start_time == null && d.end_time == null) || (d.start_time != null && d.end_time != null),
+    { message: 'Provide both start_time and end_time, or neither.', path: ['start_time'] },
+  )
+
+/** The API upsert body: 1..92 explicit days. */
+export const ApiWorkedDaysUpsertSchema = z.object({
+  days: z.array(ApiWorkedDaySchema).min(1).max(WORKED_DAYS_RANGE_MAX_DAYS),
+})
 
 /**
  * Ownership check: the employee must belong to the company. Exported so the

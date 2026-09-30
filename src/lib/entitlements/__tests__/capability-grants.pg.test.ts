@@ -216,3 +216,87 @@ describe('trial grant seeding trigger (20260629120000, widened 20260818170000)',
     expect(await rpc(companyId, 'org_lookup')).toBe(false)
   })
 })
+
+// Migration 20260925081321: the capability gate reads its grant rows through
+// company_capability_grant_rows, because the SELECT policy above hides a
+// team's rows from a client company's users who are not on the team.
+describe('company_capability_grant_rows', () => {
+  async function byraClient(): Promise<{ userId: string; companyId: string; teamId: string }> {
+    const { userId, companyId } = await seedCompany()
+    await clearGrants(companyId)
+    const firmOwner = await insertAuthUser()
+    const teamId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.teams (id, name, created_by) VALUES ($1, 'Firm', $2)`,
+      [teamId, firmOwner],
+    )
+    await getPool().query(`UPDATE public.companies SET team_id = $1 WHERE id = $2`, [teamId, companyId])
+    // The client company's user is a company member only, never a team member.
+    await getPool().query(`DELETE FROM public.team_members WHERE team_id = $1 AND user_id = $2`, [
+      teamId,
+      userId,
+    ])
+    await getPool().query(`DELETE FROM public.capability_grants WHERE team_id = $1`, [teamId])
+    return { userId, companyId, teamId }
+  }
+
+  it("returns the team's grant to a company member outside the team, which the RLS read hides", async () => {
+    const { userId, companyId, teamId } = await byraClient()
+    await insertGrant({ teamId, key: 'ai', expiresAt: null })
+
+    const { direct, viaRpc } = await withUserContext(userId, async (client) => {
+      const d = await client.query(`SELECT id FROM public.capability_grants WHERE team_id = $1`, [teamId])
+      const r = await client.query<{ capability_key: string; team_id: string; source: string }>(
+        `SELECT * FROM public.company_capability_grant_rows($1, ARRAY['ai'], false)`,
+        [companyId],
+      )
+      return { direct: d.rowCount, viaRpc: r.rows }
+    })
+    expect(direct).toBe(0)
+    expect(viaRpc).toEqual([
+      expect.objectContaining({ capability_key: 'ai', team_id: teamId, source: 'manual' }),
+    ])
+  })
+
+  it('returns company and team rows, narrowed to the requested keys', async () => {
+    const { userId, companyId, teamId } = await byraClient()
+    await insertGrant({ companyId, key: 'ai', source: 'trial', expiresAt: future() })
+    await insertGrant({ teamId, key: 'bank_sync', expiresAt: null })
+    await insertGrant({ teamId, key: 'skatteverket', expiresAt: past() })
+
+    const keys = await withUserContext(userId, async (client) => {
+      const r = await client.query<{ capability_key: string }>(
+        `SELECT capability_key FROM public.company_capability_grant_rows($1, ARRAY['ai', 'skatteverket'], false)
+         ORDER BY capability_key`,
+        [companyId],
+      )
+      return r.rows.map((row) => row.capability_key)
+    })
+    // Expired rows come back too: the caller derives trial and grace state from them.
+    expect(keys).toEqual(['ai', 'skatteverket'])
+  })
+
+  it('returns only connector-sourced rows when p_connector_only is set', async () => {
+    const { companyId } = await byraClient()
+    await insertGrant({ companyId, key: 'bank_sync', source: 'trial', expiresAt: future() })
+    await insertGrant({ companyId, key: 'bank_sync', source: 'connector', expiresAt: future() })
+
+    const { rows } = await getPool().query<{ source: string }>(
+      `SELECT source FROM public.company_capability_grant_rows($1, ARRAY['bank_sync'], true)`,
+      [companyId],
+    )
+    expect(rows.map((r) => r.source)).toEqual(['connector'])
+  })
+
+  it('raises 42501 when a non-member asks about a company (authenticated ctx)', async () => {
+    const { companyId } = await byraClient()
+    const outsider = await insertAuthUser()
+    await expect(
+      withUserContext(outsider, async (client) => {
+        await client.query(`SELECT * FROM public.company_capability_grant_rows($1, ARRAY['ai'], false)`, [
+          companyId,
+        ])
+      }),
+    ).rejects.toThrow(/unauthorized/)
+  })
+})

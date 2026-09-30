@@ -2,8 +2,10 @@
  * POST /api/v1/companies/{companyId}/transactions/{id}/match-supplier-invoice
  *
  * Match a negative (expense) bank transaction to an open supplier invoice.
- * Mirrors the dashboard's internal route: same FX-difference handling,
- * same cash-method-FX rejection, same optimistic-lock interlock.
+ * Plans and books through the same functions as the dashboard route
+ * (planSupplierBankMatch, createSupplierBankMatchEntry), so the same payment
+ * gives the same verifikat and ledger update on both doors; same
+ * optimistic-lock interlock.
  */
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { z } from 'zod'
@@ -14,23 +16,19 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { MatchSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
-import {
-  createSupplierInvoicePaymentEntry,
-  createSupplierInvoiceCashEntry,
-} from '@/lib/bookkeeping/supplier-invoice-entries'
+import { createSupplierBankMatchEntry } from '@/lib/bookkeeping/supplier-bank-match-entry'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
-import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
+import { planSupplierBankMatch } from '@/lib/invoices/apply-supplier-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
-import type { SupplierInvoice, SupplierInvoiceItem, Transaction } from '@/types'
+import type { SupplierInvoice, Transaction } from '@/types'
 
 const MatchSIResponse = z.object({
   success: z.boolean(),
@@ -38,6 +36,7 @@ const MatchSIResponse = z.object({
   paid_amount: z.number(),
   remaining_amount: z.number(),
   journal_entry_id: z.string().uuid().nullable(),
+  bank_fee_sek: z.number(),
 })
 
 registerEndpoint({
@@ -46,14 +45,16 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/transactions/:id/match-supplier-invoice',
   summary: 'Match a negative bank transaction to a supplier invoice.',
   description:
-    'Confirms a supplier invoice payment match. Creates the payment journal entry (accrual: 2440 debit, credit on the transaction\'s own settlement account, 1930 when unlinked; cash-method: collapsed registration+payment), updates supplier_invoices, inserts a supplier_invoice_payments row, and links the transaction. Handles FX differences for cross-currency payments (7960 gain / 3960 loss).',
+    'Confirms a supplier invoice payment match. Creates the payment journal entry (accrual: 2440 debit, credit on the transaction\'s own settlement account, 1930 when unlinked; cash-method: collapsed registration+payment), updates supplier_invoices, inserts a supplier_invoice_payments row, and links the transaction. Handles FX differences for cross-currency payments (7960 gain / 3960 loss), a bank fee paid on top of the invoice (6570) and öresavrundning on a whole-krona SEK payment (3740). Same payment plan and verifikat as the dashboard match.',
   useWhen:
     'You have a bank payment and a known open supplier invoice. The transaction must be negative (expense) and unlinked.',
   doNotUseFor:
     'Categorizing a direct supplier expense without an invoice: use `:categorize`. Matching to a customer invoice: use `:match-invoice`. Bulk auto-match: `POST /reconciliation/bank/run`.',
   pitfalls: [
     'Cash-method companies can settle a foreign invoice in full (booked at the payment-date rate); only a PARTIAL cash-method payment across currencies is rejected (MATCH_SI_CASH_FX_UNSUPPORTED): pay in full, switch to accrual, or book manually.',
-    'Cash-method öresavrundning: a SEK bank row less than 1 kr off a never-booked SEK invoice (a whole-krona payment of an öre total) settles it in full. The payment account is credited with the bank amount and the residual is booked on 3740 (no VAT); paid_amount records the debt settled, not the cash moved. A difference of 1 kr or more is a partial and still returns SI_CASH_PARTIAL_UNSUPPORTED.',
+    'Öresavrundning (both accounting methods): a SEK bank row less than 1 kr off the remaining balance of a SEK invoice (a whole-krona payment of an öre total) settles it in full. The payment account is credited with the bank amount and the residual is booked on 3740 (no VAT); paid_amount records the debt settled, not the cash moved. A shortfall of 1 kr or more is a partial payment (on a never-booked cash-method invoice it returns SI_CASH_PARTIAL_UNSUPPORTED).',
+    'Bank fee on top: a same-currency row that pays more than the remaining balance settles the invoice in full; 2440 is cleared by the remaining balance only and the excess (up to 5 000 kr) is booked on 6570 and returned as bank_fee_sek (0 when there is none, and always 0 with custom lines, which book what they say). paid_amount never exceeds the invoice total. Check bank_fee_sek: a large one usually means the row pays another invoice too.',
+    'A same-currency excess above the fee cap returns 400 MATCH_SI_AMOUNT_EXCEEDS_REMAINING and books nothing: allocate the payment across several invoices with POST /transactions/{id}/match-batch. The check runs before any conflicting categorization is reversed. A cross-currency match is not capped: it settles the remaining balance and books the whole SEK difference as kursdifferens (7960/3960).',
     'Transaction must be negative (amount < 0). Positive returns MATCH_SI_NOT_EXPENSE.',
     'Supplier invoice must NOT be paid/credited already. paid/credited returns MATCH_SI_ALREADY_PAID; registered/approved/partially_paid/overdue are matchable.',
     'Idempotency-Key is mandatory.',
@@ -67,6 +68,7 @@ registerEndpoint({
         paid_amount: 5000,
         remaining_amount: 0,
         journal_entry_id: 'je_…',
+        bank_fee_sek: 0,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -178,52 +180,58 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
-    // Amount resolution runs BEFORE the storno below for the same reason the
-    // chart guard does: it is pure arithmetic that can reject the request, and
-    // a rejected request must leave no trace (reversing the transaction's
-    // existing categorization verifikat is irreversible).
-    const txAmountAbs = Math.abs(transaction.amount)
-    const paymentAmountInvoiceCurrency =
-      transaction.currency === invoice.currency ? txAmountAbs : invoice.remaining_amount
-    // SEK that actually left the bank, when known. A foreign transaction with
-    // no stored amount_sek is `null` here: the raw foreign amount must never
-    // stand in (treating 19 USD as 19 SEK books "19 kr" on a ~175 kr payment).
-    const bankSekStored =
-      transaction.currency === 'SEK'
-        ? txAmountAbs
-        : transaction.amount_sek != null
-          ? Math.abs(transaction.amount_sek)
-          : null
-    const invoiceFxRate = invoice.exchange_rate ?? null
-    // SEK the invoice was booked at for this payment portion (null if the
-    // invoice is foreign and carries no exchange_rate).
-    const bookedSek =
-      invoice.currency === 'SEK'
-        ? paymentAmountInvoiceCurrency
-        : invoiceFxRate && invoiceFxRate > 0
-          ? Math.round(paymentAmountInvoiceCurrency * invoiceFxRate * 100) / 100
-          : null
-    // Prefer the stored bank SEK; fall back to the invoice's booked SEK (right
-    // magnitude, FX diff 0). With NEITHER on file the SEK value is unknown and
-    // the old last resort (the raw foreign amount) violated the rule stated
-    // above, so refuse: same policy as the match_batch_allocate RPC
-    // (BATCH_FX_RATE_MISSING) and toSekOrThrow() in the entry generators.
-    // Byte-identical to the dashboard route so both surfaces agree.
-    const actualBankSek = bankSekStored ?? bookedSek
-    if (actualBankSek == null) {
-      return v1ErrorResponseFromCode('SI_FX_RATE_MISSING', txLog, {
+    // The payment plan runs BEFORE the storno below for the same reason the
+    // chart guard does: it can reject the request, and a rejected request must
+    // leave no trace (reversing the transaction's existing categorization
+    // verifikat is irreversible). It is the plan every supplier bank match
+    // books by (planSupplierBankMatch, shared with the dashboard route and its
+    // preview): the bank fee split (6570), the overshoot guard,
+    // öresavrundning (3740), the SEK and kursdifferens resolution and the
+    // kontantmetoden refusals. This door used to derive its own copy, which
+    // cleared the whole bank row off 2440 with no fee or öre line and no
+    // overshoot guard.
+    const { data: settings } = await ctx.supabase
+      .from('company_settings')
+      .select('accounting_method')
+      .eq('company_id', ctx.companyId!)
+      .single()
+    const planned = planSupplierBankMatch({
+      invoice,
+      transaction,
+      accountingMethod: settings?.accounting_method,
+    })
+    if (!planned.ok) {
+      return v1ErrorResponseFromCode(planned.code, txLog, {
         requestId: ctx.requestId,
-        details: {
-          transaction_currency: transaction.currency,
-          invoice_currency: invoice.currency,
-        },
+        details: planned.details,
       })
     }
-    const originalBookedSek = bookedSek ?? actualBankSek
-    const exchangeRateDifference =
-      Math.round((originalBookedSek - actualBankSek) * 100) / 100
-    const paymentAmountSek =
-      exchangeRateDifference !== 0 ? originalBookedSek : actualBankSek
+    const { plan } = planned
+
+    // A payment date outside an open period leaves the entry generators with
+    // nothing to book (they return null), and the invoice used to be marked
+    // paid with no verifikat. Refuse before any write, the storno below
+    // included, exactly as the dashboard route does.
+    const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, transaction.date)
+    if (!fiscalPeriodId) {
+      return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
+        requestId: ctx.requestId,
+        details: { payment_date: transaction.date },
+      })
+    }
+
+    // Custom lines must balance, checked before the storno below for the same
+    // reason as the plan: a refused request must not leave a reversal posted.
+    if (customLines) {
+      const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
+      const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
+      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+        return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', txLog, {
+          requestId: ctx.requestId,
+          details: { totalDebit, totalCredit },
+        })
+      }
+    }
 
     // Storno any conflicting auto-categorization JE before booking the
     // payment. Mirrors the match-invoice path. Without this, an earlier
@@ -270,105 +278,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('accounting_method')
-      .eq('company_id', ctx.companyId!)
-      .single()
-    const accountingMethod = settings?.accounting_method || 'accrual'
-
-    // Route on the supplier invoice's actual booking state. An invoice
-    // booked at receipt (registration_journal_entry_id set) must clear
-    // 2440 regardless of the company's current setting.
-    const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
-    const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
-
-    // Kontantmetoden öresavrundning (#2852): a whole-krona SEK bank row within
-    // the öre band of the remaining balance (1 234,00 or 1 235,00 on 1 234,44)
-    // settles the invoice in full; the cash builder credits the payment account
-    // with the bank amount and books the residual on 3740. Decided by the same
-    // planSupplierPayment rule the dashboard route uses, so the two doors agree.
-    // Scoped to the generated cash entry: this route's accrual clearing keeps
-    // its existing ledger math.
-    const isPureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
-    const cashOrePlan =
-      useCashEntry && isPureSek
-        ? planSupplierPayment(invoice, paymentAmountInvoiceCurrency, { absorbOreRounding: true })
-        : null
-    const cashOreSettled = cashOrePlan?.ok === true && cashOrePlan.plan.oreSettled
-    // Debt settled in the invoice's currency: the whole remaining balance when
-    // an öre residual is absorbed (the residual lives on 3740, not on the
-    // supplier ledger), else the payment amount.
-    const settledInvoiceCurrency = cashOreSettled
-      ? invoice.remaining_amount
-      : paymentAmountInvoiceCurrency
-
-    // Full settlement = the bank amount pays off the whole remaining balance.
-    // Cross-currency always settles the remaining (paymentAmountInvoiceCurrency
-    // is clamped to invoice.remaining_amount above).
-    const fullSettlement =
-      transaction.currency !== invoice.currency ||
-      txAmountAbs >= invoice.remaining_amount - 0.005 ||
-      cashOreSettled
-
-    // Under kontantmetoden the expense is recognised AT PAYMENT (payment-date
-    // rate), so a full foreign-currency settlement has no kursdifferens: the
-    // builder translates the whole entry to the actual bank SEK (settledBankSek)
-    // below, leaving 1930 equal to the bank line. Only a PARTIAL cash-method
-    // payment across rates can't be modelled cleanly (the builder books the
-    // full invoice), so that narrow case stays blocked.
-    if (useCashEntry && exchangeRateDifference !== 0 && !fullSettlement) {
-      return v1ErrorResponseFromCode('MATCH_SI_CASH_FX_UNSUPPORTED', txLog, {
-        requestId: ctx.requestId,
-        details: {
-          exchangeRateDifference,
-          invoiceCurrency: invoice.currency,
-          transactionCurrency: transaction.currency,
-        },
-      })
-    }
-
-    // Same-currency partials and part-paid completions are equally unbookable
-    // under kontantmetoden (createSupplierInvoiceCashEntry books the FULL
-    // invoice, so a partial bank amount would over-book the expense): reject
-    // them too, not only the FX case above. Mirrors the dashboard route.
-    const cashBlock = cashPartialBlockReason({
-      invoiceAlreadyBooked: siAlreadyBooked,
-      accountingMethod,
-      priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
-      paysRemainingInFull: fullSettlement,
-    })
-    if (cashBlock) {
-      return v1ErrorResponseFromCode('SI_CASH_PARTIAL_UNSUPPORTED', txLog, {
-        requestId: ctx.requestId,
-        details: {
-          reason: cashBlock,
-          remaining_amount: invoice.remaining_amount,
-        },
-      })
-    }
-
     // Strict-mode for the public API: abort before mutating state if the
     // payment JE can't be created. See the parallel comment in match-invoice.
     let journalEntryId: string | null = null
     try {
       if (customLines) {
-        const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-        const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', txLog, {
-            requestId: ctx.requestId,
-            details: { totalDebit, totalCredit },
-          })
-        }
-        const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, transaction.date)
-        if (!fiscalPeriodId) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
-            requestId: ctx.requestId,
-            details: { payment_date: transaction.date },
-          })
-        }
-        const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
+        const sourceType = plan.booking.kind === 'cash' ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
         const desc = invoice.supplier?.name
           ? `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}, ${invoice.supplier.name}`
           : `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}`
@@ -382,46 +297,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           lines: customLines,
         })
         if (je) journalEntryId = je.id
-      } else if (useCashEntry) {
-        const je = await createSupplierInvoiceCashEntry(
-          ctx.supabase,
-          ctx.companyId!,
-          ctx.userId,
-          invoice as SupplierInvoice,
-          (invoice.items || []) as SupplierInvoiceItem[],
-          transaction.date,
-          invoice.supplier?.supplier_type || 'swedish_business',
-          undefined, // supplierName (unchanged default)
-          // Settle from the transaction's own resolved cash account; the
-          // internal 1930 default only stands for unlinked transactions, via
-          // resolveSettlementAccount's own fallback (#1000).
-          paymentAccount,
-          // The SEK that left the bank. Foreign invoice: pins the settlement
-          // to the payment-date rate so the settlement account equals the bank
-          // movement; a no-op for same-rate settlements. Pure SEK: a sub-krona
-          // difference to the invoice total is booked on 3740 (öresavrundning).
-          (isPureSek || exchangeRateDifference !== 0) && fullSettlement
-            ? actualBankSek
-            : undefined,
-          transaction,
-        )
-        if (je) journalEntryId = je.id
       } else {
-        const je = await createSupplierInvoicePaymentEntry(
-          ctx.supabase,
-          ctx.companyId!,
-          ctx.userId,
-          invoice as SupplierInvoice,
-          paymentAmountSek,
-          transaction.date,
-          exchangeRateDifference !== 0 ? exchangeRateDifference : undefined,
-          undefined, // supplierName (unchanged default)
-          // Resolved settlement account for pure-SEK and FX matches alike:
-          // the internal 1930 default only stands for unlinked transactions,
-          // via resolveSettlementAccount's own fallback (#1000).
+        // The generator the plan names, with every input it carries (the 6570
+        // fee and the 3740 SEK clearing debt included), credited to the
+        // transaction's own resolved settlement account: the same call the
+        // dashboard route books with. The internal 1930 default only stands
+        // for unlinked transactions, via resolveSettlementAccount (#1000).
+        const je = await createSupplierBankMatchEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
+          invoice: invoice as SupplierInvoice,
+          booking: plan.booking,
           paymentAccount,
           transaction,
-        )
+        })
         if (je) journalEntryId = je.id
       }
     } catch (err) {
@@ -447,15 +334,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { reason: getErrorMessage(err, { context: 'supplier_invoice' }) },
       })
     }
+    // Fail closed, as the dashboard route does: a generator that booked
+    // nothing must never leave the invoice marked paid without its verifikat.
+    if (!journalEntryId) {
+      return v1ErrorResponseFromCode('MATCH_SI_RECORD_PAYMENT_FAILED', txLog, {
+        requestId: ctx.requestId,
+        details: { reason: 'no_journal_entry_created' },
+      })
+    }
 
-    const newRemaining = Math.max(
-      0,
-      Math.round((invoice.remaining_amount - settledInvoiceCurrency) * 100) / 100,
-    )
-    const newPaidAmount =
-      Math.round((invoice.paid_amount + settledInvoiceCurrency) * 100) / 100
-    const isFullyPaid = newRemaining <= 0
-    const newStatus = isFullyPaid ? 'paid' : 'partially_paid'
+    // Ledger update from the plan computed up front. An öre-absorbed or
+    // fee-split settlement reports remaining 0 / status paid: the residual
+    // lives on 3740 and the fee on 6570, not on the supplier ledger.
+    const { newRemaining, newPaidAmount, isFullyPaid, newStatus, settledAmount } = plan
     const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
     const { data: updatedRows, error: updateInvErr } = await ctx.supabase
@@ -501,7 +392,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         // The debt settled, including any 3740 adjustment (payment rows
         // reconstruct and reverse paid_amount). Actual cash stays on the
         // linked bank transaction and the payment account's journal line.
-        amount: settledInvoiceCurrency,
+        amount: settledAmount,
         currency: invoice.currency,
         journal_entry_id: journalEntryId,
         transaction_id: txId,
@@ -641,6 +532,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
         journal_entry_id: journalEntryId,
+        // No preview on this door: the caller learns here what went to 6570.
+        // Custom lines book what they say, so the plan's fee is not theirs.
+        bank_fee_sek: customLines ? 0 : plan.bankFeeSek,
       },
       { requestId: ctx.requestId },
     )

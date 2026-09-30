@@ -19,7 +19,7 @@ interface ContextPickerProps {
   /** Selected item id. */
   value: string | null
   onChange: (id: string) => void
-  /** Chip text, e.g. "Räkenskapsår 2026" or "Alla källor · 24 300 kr". */
+  /** Chip text, e.g. "Räkenskapsår 2026" or "Alla källor: 24 300 kr" (a colon before an amount: a middle dot there reads as a minus sign). */
   triggerLabel: string
   disabled?: boolean
   ariaLabel?: string

@@ -483,3 +483,134 @@ describe('jämkning on PATCH /api/salary/employees/[id]', () => {
     expect(body.error).not.toContain('JAMKNING')
   })
 })
+
+/**
+ * The update contract on the route the edit page calls (#3008): an explicit
+ * null clears a nullable column, an absent key leaves it unchanged. Before,
+ * the schema refused null and the form dropped emptied fields, so an emptied
+ * slutdatum came back after save.
+ */
+describe('clearing optional fields on PATCH /api/salary/employees/[id] (#3008)', () => {
+  const ENDED_ROW = {
+    ...EXISTING_ROW,
+    employment_start: '2024-01-15',
+    employment_end: '2026-06-30',
+    email: 'anna@example.test',
+    clearing_number: '6000',
+    bank_account_number: '12345678',
+    vaxa_stod_eligible: false,
+    vaxa_stod_start: null,
+  }
+
+  function useRow(existing: Record<string, unknown> | null) {
+    const mock = employeeSupabase(existing as Record<string, unknown>)
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
+    return mock.captured
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('401 when unauthenticated, and nothing is written', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+
+    const response = await PATCH(patchRequest({ employment_end: null }), params)
+
+    expect(response.status).toBe(401)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('200 and writes null when the slutdatum is cleared: the employment is ongoing again', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(patchRequest({ employment_end: null }), params)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    // Only the cleared key reaches the UPDATE: absent keys stay untouched.
+    expect(captured.updates).toEqual({ employment_end: null })
+    expect(body.data.employment_end).toBeNull()
+  })
+
+  it('200 and clears contact fields and both bank fields together', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(
+      patchRequest({ email: null, phone: null, clearing_number: null, bank_account_number: null }),
+      params,
+    )
+
+    expect(response.status).toBe(200)
+    expect(captured.updates).toEqual({ email: null, phone: null, clearing_number: null, bank_account_number: null })
+  })
+
+  it('400 for a malformed date, and nothing is written', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(patchRequest({ employment_end: '30-06-2026' }), params)
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 for null on a NOT NULL column (employment_start cannot be cleared)', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(patchRequest({ employment_start: null }), params)
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when clearing the monthly salary of a monthly employee (merged row)', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(patchRequest({ monthly_salary: null }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('Månadslön krävs')
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when clearing the Växa-stöd start while the stored flag stays on', async () => {
+    const captured = useRow({ ...ENDED_ROW, vaxa_stod_eligible: true, vaxa_stod_start: '2026-01-01' })
+
+    const response = await PATCH(patchRequest({ vaxa_stod_start: null }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('Växa-stöd')
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when clearing only one of the bank fields (both-or-neither)', async () => {
+    const captured = useRow({ ...ENDED_ROW })
+
+    const response = await PATCH(patchRequest({ bank_account_number: null }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('Kontonummer krävs')
+    expect(captured.updates).toBeNull()
+  })
+
+  it('404 when no employee row matches, and nothing is written', async () => {
+    const captured = useRow(null)
+
+    const response = await PATCH(patchRequest({ employment_end: null }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('Anställd hittades inte')
+    expect(captured.updates).toBeNull()
+  })
+})

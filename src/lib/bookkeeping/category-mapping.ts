@@ -1,5 +1,11 @@
 import type { TransactionCategory, MappingResult, VatJournalLine, Transaction, EntityType, VatTreatment } from '@/types'
-import { getVatRate, generateReverseChargeLines } from './vat-entries'
+import {
+  getVatRate,
+  generateReverseChargePurchaseLines,
+  costAccountReportsRcBasis,
+  DEFAULT_REVERSE_CHARGE_KIND,
+  type ReverseChargeKind,
+} from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
 import { roundOre } from '@/lib/money'
 import { byEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
@@ -253,6 +259,13 @@ export function getCategoryAccountMapping(
  * this, a 15.87 USD override validated against the USD gross but posted as
  * 15.87 kr: the entry balanced (the net line absorbed the difference), so
  * nothing downstream could detect the wrong 26xx figure.
+ *
+ * `reverseChargeKind` picks the basis account of a reverse-charge purchase
+ * (ruta 20 EU goods, 21 EU services, 22 non-EU services). A bank line says
+ * nothing reliable about the seller's country, so without an explicit kind the
+ * purchase books as EU services, the same default the mapping rules use. When
+ * the cost account is itself a basis account the pair is left out (an
+ * account_override onto one is reconciled in applyAccountOverride).
  */
 export function buildMappingResultFromCategory(
   category: TransactionCategory,
@@ -261,7 +274,8 @@ export function buildMappingResultFromCategory(
   entityType: EntityType,
   vatTreatment?: VatTreatment,
   vatAmountOverride?: number | null,
-  vatRegistered?: VatRegistration
+  vatRegistered?: VatRegistration,
+  reverseChargeKind?: ReverseChargeKind | null,
 ): MappingResult {
   const mapping = getCategoryAccountMapping(
     category, transaction.amount, isBusiness, entityType, vatTreatment, vatRegistered,
@@ -329,10 +343,15 @@ export function buildMappingResultFromCategory(
   if (isBusiness && treatment) {
     const vatRate = getVatRate(treatment)
     if (treatment === 'reverse_charge' && transaction.amount < 0) {
-      // EU reverse charge: fiktiv moms (offsetting entries), 25% of the SEK
-      // value: an EUR invoice's fiktiv moms posted off the EUR figure would
-      // understate 2614/2645 by the exchange rate.
-      const rcLines = generateReverseChargeLines(absSekAmount)
+      // Reverse charge: the complete set, fiktiv moms (2645/2614) AND the
+      // basis pair (45xx/4598) for ruta 20-22, 25% of the SEK value: an EUR
+      // invoice's fiktiv moms posted off the EUR figure would understate
+      // 2614/2645 by the exchange rate.
+      const rcLines = generateReverseChargePurchaseLines({
+        base: absSekAmount,
+        kind: reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND,
+        basisBase: costAccountReportsRcBasis(mapping.debitAccount) ? 0 : absSekAmount,
+      })
       for (const rcl of rcLines) {
         vatLines.push({
           account_number: rcl.account_number,

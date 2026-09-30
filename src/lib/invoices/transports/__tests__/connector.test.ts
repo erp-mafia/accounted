@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createConnectorPeppolTransport, CONNECTOR_PROVIDER } from '../connector'
-import { isPeppolTransportError, type PeppolTransportError } from '@/lib/invoices/peppol-transport'
+import { isPeppolTransportError, type PeppolTransport, type PeppolTransportError } from '@/lib/invoices/peppol-transport'
 
 const upstream = { baseUrl: 'https://app.gnubok.se/api/connect/peppol', key: 'gnubok_ck_test' }
 const participant = { scheme: '0007', identifier: '5561234567' }
@@ -18,6 +18,8 @@ describe('connector Peppol transport', () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ provider: 'qvalia', providerSubmissionId: 'int-1', idempotencyKey: 'k', tenantReference: 'c1', acceptedAt: 't' }))
     const transport = build(fetchMock as unknown as typeof fetch)
     expect(transport.provider).toBe(CONNECTOR_PROVIDER)
+    // The label the send writes on the delivery row with its first event.
+    expect(transport.tenantId).toBe('connector')
     const receipt = await transport.submit({
       idempotencyKey: 'k', tenantReference: 'c1', sender: participant, recipient: participant,
       documentTypeId: 'd', processId: 'p', filename: 'f.xml', contentType: 'application/xml', document: '<x/>', documentSha256: 'a'.repeat(64),
@@ -30,6 +32,29 @@ describe('connector Peppol transport', () => {
     const headers = init.headers as Record<string, string>
     expect(headers.Authorization).toBe('Bearer gnubok_ck_test')
     expect(headers['X-Connector-Company']).toBe('c1')
+  })
+
+  it('sends a resend\'s replacesSubmissionId in the body and carries a duplicate invoice number as its non-retryable code', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      error: 'Qvalia already holds an invoice with this number for this receiver',
+      code: 'PEPPOL_DUPLICATE_INVOICE_NUMBER',
+      retryable: false,
+      detail: 'Duplicate Invoice, F-1 request rejected!',
+    }, 409))
+    const transport = build(fetchMock as unknown as typeof fetch)
+    const error = await transport.submit({
+      idempotencyKey: 'k', tenantReference: 'c1', sender: participant, recipient: participant,
+      documentTypeId: 'd', processId: 'p', filename: 'f.xml', contentType: 'application/xml', document: '<x/>', documentSha256: 'a'.repeat(64),
+      replacesSubmissionId: 'int-failed',
+    }).catch((e: unknown) => e)
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(body.replacesSubmissionId).toBe('int-failed')
+    expect(error).toMatchObject({
+      code: 'PEPPOL_DUPLICATE_INVOICE_NUMBER',
+      retryable: false,
+      detail: 'Duplicate Invoice, F-1 request rejected!',
+    })
   })
 
   it('sends the tenant as the company header on registration and refuses without one', async () => {
@@ -75,7 +100,7 @@ describe('connector Peppol transport', () => {
 
   it('polls status and evidence with the connector provider stamped on and the owning company resolved', async () => {
     const event = {
-      provider: 'qvalia', providerTenantId: '5560000000', providerSubmissionId: 'int-1', providerEventId: 'e1', idempotencyKey: null,
+      provider: 'qvalia', providerTenantId: 'SE5595386219', providerSubmissionId: 'int-1', providerEventId: 'e1', idempotencyKey: null,
       eventCode: 'status_poll', normalizedStatus: 'transport_succeeded', isTerminal: false, detail: null, occurredAt: 't',
       rawPayload: {}, eventSha256: 'a'.repeat(64), verificationMethod: 'provider_poll',
     }
@@ -90,11 +115,35 @@ describe('connector Peppol transport', () => {
       fetch: fetchMock as unknown as typeof fetch,
       companyFor: async (id) => (id === 'int-1' ? 'company-7' : null),
     })
-    expect(await transport.pollDeliveryStatus!('int-1')).toEqual([{ ...event, provider: 'connector' }])
+    // The access point's own account number never reaches the instance: the
+    // event carries the label the send wrote on the delivery row.
+    expect(await transport.pollDeliveryStatus!('int-1')).toEqual([{ ...event, provider: 'connector', providerTenantId: 'connector' }])
     expect(await transport.retrieveEvidence('int-1')).toEqual([{ ...evidence, provider: 'connector' }])
     for (const call of fetchMock.mock.calls as Array<[string, RequestInit]>) {
       expect((call[1].headers as Record<string, string>)['X-Connector-Company']).toBe('company-7')
     }
+  })
+
+  it.each([
+    ['the access point account number', 'SE5595386219'],
+    ['no tenant at all', null],
+    ['a tenant label of its own', 'accounted-connect'],
+  ])('labels every polled event with the connector tenant whatever the service sent (%s)', async (_label, tenant) => {
+    const event = (status: string, id: string) => ({
+      provider: 'qvalia', providerTenantId: tenant, providerSubmissionId: 'int-1', providerEventId: id, idempotencyKey: null,
+      eventCode: 'status_poll', normalizedStatus: status, isTerminal: status === 'failed', detail: status, occurredAt: 't',
+      rawPayload: { accountRegNo: 'SE5595386219' }, eventSha256: 'c'.repeat(64), verificationMethod: 'provider_poll',
+    })
+    const transport = build(vi.fn().mockResolvedValue(jsonResponse([
+      event('transport_succeeded', 'e1'),
+      event('failed', 'e2'),
+    ])) as unknown as typeof fetch)
+    const events = await transport.pollDeliveryStatus!('int-1')
+    expect(events).toHaveLength(2)
+    for (const polled of events) {
+      expect(polled).toMatchObject({ provider: 'connector', providerTenantId: 'connector', providerSubmissionId: 'int-1' })
+    }
+    expect(events.map((e) => e.normalizedStatus)).toEqual(['transport_succeeded', 'failed'])
   })
 
   it('turns hosted refusals into PeppolTransportErrors carrying the retryable flag, the code and the bare detail', async () => {
@@ -138,6 +187,55 @@ describe('connector Peppol transport', () => {
     await expect(transport.verifyWebhook({ headers: new Headers(), rawBody: new Uint8Array() })).rejects.toSatisfy(
       (e: unknown) => isPeppolTransportError(e) && e.retryable === false,
     )
+  })
+})
+
+describe('per-operation timeouts', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Like fetch: nothing but the request's signal ends the wait. */
+  function hangingFetch() {
+    const signals: AbortSignal[] = []
+    const fetchImpl = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init.signal as AbortSignal
+      signals.push(signal)
+      signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')))
+    }))
+    return { fetchImpl, signals }
+  }
+
+  const submission = {
+    idempotencyKey: 'k', tenantReference: 'c1', sender: participant, recipient: participant,
+    documentTypeId: 'd', processId: 'p', filename: 'f.xml', contentType: 'application/xml' as const, document: '<x/>', documentSha256: 'a'.repeat(64),
+  }
+  const registration = {
+    participant, businessCard: { companyName: 'AB', countryCode: 'SE' }, documentTypes: [{ processId: 'p', documentTypeId: 'd' }], tenantReference: 'c1',
+  }
+
+  // The ladder: Qvalia call 20 s < Connect route 45 s < hosted submit 50 s < hosted route 90 s.
+  it.each<[string, number, (t: PeppolTransport) => Promise<unknown>]>([
+    ['lookup', 25_000, (t) => t.lookupRecipient(participant)],
+    ['submit', 50_000, (t) => t.submit(submission)],
+    ['register', 50_000, (t) => t.registerRecipient!(registration)],
+    ['unregister', 50_000, (t) => t.unregisterRecipient!(participant)],
+    ['status', 30_000, (t) => t.pollDeliveryStatus!('int-1')],
+    ['evidence', 30_000, (t) => t.retrieveEvidence('int-1')],
+    ['inbound list', 30_000, (t) => t.listInboundDocuments!({ documentType: 'Invoice' })],
+    ['inbound xml', 30_000, (t) => t.fetchInboundDocumentXml!('doc-1', 'Invoice')],
+  ])('gives up on %s after %i ms, as a retryable unreachable failure', async (_operation, timeoutMs, run) => {
+    vi.useFakeTimers()
+    const { fetchImpl, signals } = hangingFetch()
+    const outcome = run(build(fetchImpl as unknown as typeof fetch)).catch((e: unknown) => e)
+
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(timeoutMs - 1)
+    expect(signals[0].aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(signals[0].aborted).toBe(true)
+    expect(await outcome).toMatchObject({ retryable: true, code: 'CONNECTOR_UNREACHABLE' })
   })
 })
 

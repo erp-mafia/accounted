@@ -19,6 +19,7 @@ import type {
   ReconciliationItemBucket,
   ReconciliationStatus,
 } from '@/lib/reconciliation/schemas'
+import { dropProposedLedgerDuplicates } from '@/lib/reconciliation/overview-rows'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
 import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } from './SignoffDialog'
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
@@ -29,6 +30,14 @@ import { InfoTooltip } from '@/components/ui/info-tooltip'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+
+const SkattekontoMatchDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoMatchDialog').then(
+      (module) => module.SkattekontoMatchDialog,
+    ),
   { loading: DialogLoadingSkeleton },
 )
 
@@ -90,6 +99,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const [busy, setBusy] = useState<string | null>(null)
   const [unfolded, setUnfolded] = useState<Set<ReconciliationItemBucket>>(new Set())
   const [bookRow, setBookRow] = useState<ReconciliationItem | null>(null)
+  // Row the book dialog handed to the match flow (a ledger twin exists). Kept
+  // as the converted row so the match dialog's fetch effect sees a stable object.
+  const [matchRow, setMatchRow] = useState<SkattekontoTransactionWithSuggestion | null>(null)
   const [signoffOpen, setSignoffOpen] = useState(false)
   const [matcher, setMatcher] = useState<MatcherMatch[] | null>(null)
   const [bridgeOpen, setBridgeOpen] = useState(false)
@@ -139,7 +151,8 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const byBucket = useMemo(() => {
     const map = new Map<ReconciliationItemBucket, ReconciliationItem[]>()
     for (const b of BUCKET_ORDER) map.set(b, [])
-    for (const item of items?.items ?? []) map.get(item.bucket)?.push(item)
+    // A verifikat its proposals fully explain shows in its pair only, not again as missing on the other side.
+    for (const item of dropProposedLedgerDuplicates(items?.items ?? [])) map.get(item.bucket)?.push(item)
     return map
   }, [items])
 
@@ -199,14 +212,15 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         item.proposal.journal_entry_id,
       ]
       const data = await postJson(`${base}/links`, {
-        pairs: [{ external_ids: [item.item_id], journal_entry_ids: journalEntryIds }],
+        // A combined skattekonto proposal links every row of its group at once.
+        pairs: [{ external_ids: item.proposal.external_ids ?? [item.item_id], journal_entry_ids: journalEntryIds }],
       })
       if (data) {
         const skipped = data.skipped as Array<{ message: string }>
         if (skipped.length > 0) {
           toast({ title: t('toast_failed'), description: skipped[0].message, variant: 'destructive' })
         } else {
-          toast({ title: t('toast_matched', { applied: 1 }) })
+          toast({ title: t('toast_matched', { applied: (data.applied as unknown[] | undefined)?.length ?? 1 }) })
         }
         await refresh()
       }
@@ -252,8 +266,12 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         const results = (data.results ?? []) as SkattekontoBatchRowResult[]
         const ok = results.filter((r) => r.ok).length
         const failed = results.length - ok
+        // Rows whose event the ledger already holds were skipped, not lost:
+        // say so, and that they are linked rather than booked.
+        const twins = results.filter((r) => r.error_code === 'LEDGER_TWIN_EXISTS').length
         toast({
           title: failed > 0 ? t('toast_book_partial', { ok, failed }) : t('toast_booked', { count: ok }),
+          ...(twins > 0 ? { description: t('toast_book_twins', { count: twins }) } : {}),
           variant: failed > 0 && ok === 0 ? 'destructive' : undefined,
         })
         await refresh()
@@ -854,6 +872,19 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             setBookRow(null)
             void refresh()
           }}
+          onMatch={() => {
+            if (bookRow) setMatchRow(toDialogRow(bookRow))
+            setBookRow(null)
+          }}
+        />
+      )}
+
+      {isSkv && (
+        <SkattekontoMatchDialog
+          row={matchRow}
+          open={matchRow !== null}
+          onClose={() => setMatchRow(null)}
+          onMatched={() => void refresh()}
         />
       )}
 

@@ -121,6 +121,34 @@ describe('bank sync result persistence', () => {
       accounts_data: [expect.objectContaining({ accepted_history_days: 90, dedup_scope: 'fixed' }), expect.anything()] })
   })
 
+  // The sync paths store the picker advice on an ACTIVE row when the route
+  // guard refuses a drifted ledger (BANK_INGEST_ROUTE_UNRESOLVED). That write
+  // must not count as a configuration change (the picker's token would go
+  // stale and its save would be refused), and the next successful sync must
+  // clear it.
+  it('carries the route advice on an active row without touching configuration, and clears it on success', async () => {
+    await client.query(`UPDATE bank_connections SET accounts_data = $2 WHERE id = $1`,
+      [connectionId, JSON.stringify([{ ...account, ledger_account: '1931' }, { uid: 'disabled', enabled: false }])])
+    await client.query('SAVEPOINT route_refusal')
+    await expect(client.query('SELECT resolve_bank_ingest_route($1, $2, $3, $4)',
+      [owner.companyId, connectionId, account.uid, 'SEK'])).rejects.toMatchObject({
+      code: 'PT409', message: 'BANK_INGEST_ROUTE_UNRESOLVED',
+    })
+    await client.query('ROLLBACK TO SAVEPOINT route_refusal')
+
+    const token = async () => (await client.query('SELECT bank_configuration_token($1) AS token', [owner.companyId])).rows[0].token
+    const before = await token()
+    await client.query(`UPDATE bank_connections SET error_message = 'advice' WHERE id = $1 AND company_id = $2
+      AND status IN ('active', 'error') AND superseded_by IS NULL`, [connectionId, owner.companyId])
+    expect(await token()).toBe(before)
+    const stored = await client.query('SELECT status, error_message FROM bank_connections WHERE id = $1', [connectionId])
+    expect(stored.rows[0]).toEqual({ status: 'active', error_message: 'advice' })
+
+    expect(await persist()).toEqual({ applied: true, account_count: 1 })
+    const cleared = await client.query('SELECT status, error_message FROM bank_connections WHERE id = $1', [connectionId])
+    expect(cleared.rows[0]).toEqual({ status: 'active', error_message: null })
+  })
+
   it('does not let an old session failure expire a renewed connection', async () => {
     expect(await fail({ session: 'old-session' })).toBe(false)
     expect((await state()).status).toBe('active')

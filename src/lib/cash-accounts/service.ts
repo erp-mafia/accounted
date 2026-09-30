@@ -6,23 +6,15 @@ import { syncMappedAccounts } from '@/lib/import/account-sync'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
+import {
+  bankLedgerName,
+  defaultLedgerForCurrency,
+  holderAdoptableBy,
+  normalizeIban,
+  overflowLedgerSlots,
+} from '@/lib/cash-accounts/ledger-slots'
 
 const log = createLogger('cash-accounts')
-
-/**
- * Suggested BAS account per currency. Single source — the enable-banking
- * callback and the AccountPickerDialog both key off these.
- */
-export const CURRENCY_LEDGER_DEFAULTS: Record<string, string> = {
-  SEK: '1930',
-  EUR: '1932',
-  USD: '1933',
-  GBP: '1934',
-}
-
-export function defaultLedgerForCurrency(currency: string): string {
-  return CURRENCY_LEDGER_DEFAULTS[currency.toUpperCase()] ?? '1930'
-}
 
 /**
  * Canonical read/write surface for cash_accounts.
@@ -65,17 +57,8 @@ export interface UpsertFromPsd2Input {
   expected_session_id?: string
 }
 
-/**
- * Normalize an IBAN for comparison: ASPSPs format the same account both as
- * "SE45 5000 0000 0583 9825 7466" and "SE4550000000058398257466", and a plain
- * string compare would read those as two different accounts. Mirrors the
- * normalization the sync path already applies when deriving external_ids.
- */
-export function normalizeIban(iban: string | null | undefined): string | null {
-  if (!iban) return null
-  const normalized = iban.replace(/\s+/g, '').toUpperCase()
-  return normalized || null
-}
+// Lives with the slot rule, which compares IBANs and must stay client-safe.
+export { normalizeIban }
 
 export async function listForCompany(
   supabase: SupabaseClient,
@@ -779,12 +762,19 @@ export async function getRevokedConnectionIds(
  * that's exactly the collision this prevents.
  *
  * Rules:
- *   - The currency default (1930/1932/1933/1934) is available when no
- *     PSD2-backed row holds it. A manual holder (the seeded 1930 row) does
- *     not block it — upsertFromPsd2 promotes that row in place.
- *     Rows held by a REVOKED connection count as manual too: disconnecting a
- *     bank releases its ledger claims, so reconnecting the same bank gets its
- *     original slot back instead of overflowing to 1939.
+ *   - The currency default (1930/1932/1933/1934) is available when no row
+ *     holds it, or when its holder can be promoted in place to the incoming
+ *     account (holderAdoptableBy, the database's own rule): no live
+ *     connection syncs onto it, same currency, and no IBAN or the same one.
+ *     The seeded 1930 row (no IBAN) is taken over that way. Rows held by a
+ *     REVOKED connection count as manual too: disconnecting a bank releases
+ *     its ledger claims, so reconnecting the same bank gets its original
+ *     slot back instead of overflowing to 1939. A manual or revoked holder
+ *     with ANOTHER IBAN is a different bank account (a personal account left
+ *     from an earlier connection, say): the database refuses to promote it,
+ *     so the account overflows instead of failing the whole connection.
+ *     `options.iban` is the incoming account's IBAN; omitted, it counts as
+ *     an account without one, which never takes over a holder that has one.
  *   - Overflow walks the free-use 1931–1959 sub-account slots, skipping the
  *     four currency defaults (reserved as suggestions for their currencies)
  *     and any slot held by ANY existing row — promoting an unrelated manual
@@ -808,13 +798,13 @@ export async function findFreeLedgerAccount(
   companyId: string,
   currency: string,
   exclude: ReadonlySet<string> = new Set(),
-  options: { strictReads?: boolean } = {},
+  options: { strictReads?: boolean; iban?: string | null } = {},
 ): Promise<string | null> {
   const preferred = defaultLedgerForCurrency(currency)
 
   const { data: rows, error } = await supabase
     .from('cash_accounts')
-    .select('ledger_account, bank_connection_id')
+    .select('ledger_account, bank_connection_id, iban, currency')
     .eq('company_id', companyId)
 
   if (error) {
@@ -842,7 +832,12 @@ export async function findFreeLedgerAccount(
     ((chartRows ?? []) as Array<{ account_number: string }>).map(r => r.account_number),
   )
 
-  const typedRows = (rows ?? []) as Array<{ ledger_account: string; bank_connection_id: string | null }>
+  const typedRows = (rows ?? []) as Array<{
+    ledger_account: string
+    bank_connection_id: string | null
+    iban: string | null
+    currency: string
+  }>
   const revokedConnectionIds = await getRevokedConnectionIds(
     supabase,
     companyId,
@@ -850,38 +845,30 @@ export async function findFreeLedgerAccount(
     options,
   )
 
-  const anyTaken = new Set<string>()
-  const connectedTaken = new Set<string>()
-  for (const row of typedRows) {
-    anyTaken.add(row.ledger_account)
-    if (row.bank_connection_id !== null && !revokedConnectionIds.has(row.bank_connection_id)) {
-      connectedTaken.add(row.ledger_account)
+  const anyTaken = new Set(typedRows.map(r => r.ledger_account))
+  const holder = typedRows.find(r => r.ledger_account === preferred)
+  const preferredFree = !holder || holderAdoptableBy(
+    {
+      iban: holder.iban,
+      currency: holder.currency,
+      live: holder.bank_connection_id !== null && !revokedConnectionIds.has(holder.bank_connection_id),
+    },
+    { iban: options.iban, currency },
+  )
+
+  if (!exclude.has(preferred) && preferredFree) return preferred
+
+  // The onboarding preview hands out the same order (lib/onboarding-books/ledger.ts).
+  const slot = overflowLedgerSlots([...anyTaken, ...exclude], chartTaken)[0]
+  if (slot) {
+    if (chartTaken.has(slot)) {
+      log.warn('findFreeLedgerAccount fell back to a chart-occupied slot', {
+        companyId,
+        currency,
+        ledger: slot,
+      })
     }
-  }
-
-  if (!exclude.has(preferred) && !connectedTaken.has(preferred)) return preferred
-
-  const reserved = new Set(Object.values(CURRENCY_LEDGER_DEFAULTS))
-  const candidates: string[] = []
-  for (let n = 1931; n <= 1959; n++) {
-    const candidate = String(n)
-    if (reserved.has(candidate)) continue
-    if (exclude.has(candidate) || anyTaken.has(candidate)) continue
-    candidates.push(candidate)
-  }
-
-  // First pass: slots the chart has never heard of, so we can create them
-  // cleanly. Second pass: chart-occupied slots, the pre-fix behavior, only
-  // once nothing unnamed is left.
-  const unnamed = candidates.find(c => !chartTaken.has(c))
-  if (unnamed) return unnamed
-  if (candidates.length > 0) {
-    log.warn('findFreeLedgerAccount fell back to a chart-occupied slot', {
-      companyId,
-      currency,
-      ledger: candidates[0],
-    })
-    return candidates[0]
+    return slot
   }
 
   log.warn('findFreeLedgerAccount exhausted 1931–1959', { companyId, currency })
@@ -902,9 +889,19 @@ export async function allocatePsd2LedgerAccount(
   userId: string,
   // accountName is accepted for caller compatibility but no longer names the
   // chart account: see the BAS-style naming note in the function body (#1643).
-  input: { currency: string; accountName?: string | null; exclude?: ReadonlySet<string>; prepareOnly?: boolean },
+  input: {
+    currency: string
+    /** The account's IBAN: decides whether it may take over the row on its currency default. */
+    iban?: string | null
+    accountName?: string | null
+    exclude?: ReadonlySet<string>
+    prepareOnly?: boolean
+  },
 ): Promise<string | null> {
-  const ledger = await findFreeLedgerAccount(supabase, companyId, input.currency, input.exclude ?? new Set(), { strictReads: input.prepareOnly })
+  const ledger = await findFreeLedgerAccount(supabase, companyId, input.currency, input.exclude ?? new Set(), {
+    strictReads: input.prepareOnly,
+    iban: input.iban ?? null,
+  })
   if (!ledger) return null
   if (input.prepareOnly) return ledger
 
@@ -916,7 +913,7 @@ export async function allocatePsd2LedgerAccount(
   // chart account named after the company (issue #1643 problem 3). The bank's
   // display name still lands on cash_accounts.name via upsertFromPsd2, which
   // is what the pickers show; input.accountName is deliberately ignored here.
-  const name = getBASReference(ledger)?.account_name ?? `Bankkonto ${input.currency.toUpperCase()}`
+  const name = getBASReference(ledger)?.account_name ?? bankLedgerName(input.currency)
   const sync = await syncMappedAccounts(
     supabase,
     companyId,
@@ -1097,6 +1094,7 @@ export async function resolvePsd2LedgerAccount(
 
   const allocated = await allocatePsd2LedgerAccount(supabase, companyId, userId, {
     currency: input.currency,
+    iban: input.iban ?? null,
     accountName: input.accountName,
     exclude,
     prepareOnly: input.prepareOnly,

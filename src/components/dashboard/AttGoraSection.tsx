@@ -29,6 +29,7 @@ import {
   Landmark,
   ReceiptText,
   Scale,
+  Send,
   ShieldCheck,
   Stamp,
   FileQuestion,
@@ -143,12 +144,16 @@ function WorklistRow({ href, icon: Icon, label, detail, hint, count, badge, acti
       </div>
       <span className="ml-auto flex shrink-0 items-center gap-2.5 pt-px">
         {badge}
+        {/* The action sits before the count so every count lines up in one
+            column at the row's edge, with or without an action. -my-1.5
+            centres the h-8 button on the 20px text line without making
+            rows that carry one taller than rows that don't. */}
+        {action && <span className="relative z-10 -my-1.5 flex items-center">{action}</span>}
         {/* A plain count, not a chip: every row has one, and a chip on
             every row marks nothing (convention 5). */}
         {count !== undefined && (
-          <span className="min-w-[2ch] text-right text-xs tabular-nums text-muted-foreground">{count}</span>
+          <span className="min-w-[3ch] text-right text-xs tabular-nums text-muted-foreground">{count}</span>
         )}
-        {action && <span className="relative z-10 flex items-center">{action}</span>}
         <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
       </span>
     </div>
@@ -279,7 +284,8 @@ export default function AttGoraSection({
     counts.document_relevance > 0 ||
     counts.document_unclassified > 0 ||
     counts.document_field_review > 0 ||
-    counts.arkiv_finding > 0
+    counts.arkiv_finding > 0 ||
+    counts.peppol_delivery_failed > 0
   const bevakaRows =
     counts.overdue_invoice > 0 ||
     counts.deadline_action > 0 ||
@@ -298,8 +304,9 @@ export default function AttGoraSection({
     hasAi,
     extra: expiringBankConnections.length,
   })
-  // "Gör i Claude" on every row an agent can clear, once a client is
-  // connected. Off the live counts, so a confirmed match updates the prompt.
+  // The row's AI action, once a client is connected: today only
+  // Kvittojakten on "Verifikat utan underlag" (AiTaskAction renders nothing
+  // for the other categories).
   const aiAction = (category: AiTaskCategory, count: number) =>
     <AiTaskAction clients={aiClients} task={{ category, count }} />
 
@@ -543,7 +550,7 @@ export default function AttGoraSection({
                     )}
                     {counts.document_unclassified > 0 && (
                       <WorklistRow
-                        href="/arkiv"
+                        href="/arkiv/granska#typ"
                         icon={FileQuestion}
                         label={t('row_document_unclassified')}
                         count={counts.document_unclassified}
@@ -565,6 +572,15 @@ export default function AttGoraSection({
                         label={t('row_arkiv_finding')}
                         hint={t('row_arkiv_finding_detail')}
                         count={counts.arkiv_finding}
+                      />
+                    )}
+                    {counts.peppol_delivery_failed > 0 && (
+                      <WorklistRow
+                        href="/invoices"
+                        icon={Send}
+                        label={t('row_peppol_delivery_failed')}
+                        hint={t('row_peppol_delivery_failed_detail')}
+                        count={counts.peppol_delivery_failed}
                       />
                     )}
                   </div>

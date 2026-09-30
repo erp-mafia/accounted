@@ -6,6 +6,7 @@ import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import {
   countDeadlinesNeedingAction,
   countExpensePayoutsDue,
+  countFailedPeppolDeliveries,
   countInboxDocuments,
   countHeldDocuments,
   countUnclassifiedDocuments,
@@ -89,6 +90,7 @@ export async function getWorklistCounts(
     documentFieldReview,
     agreementPaymentMissed,
     arkivFinding,
+    peppolDeliveryFailed,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -115,6 +117,7 @@ export async function getWorklistCounts(
     brain ? countDocumentFieldReviews(supabase, companyId) : 0,
     brain ? countMissedAgreementPayments(supabase, companyId) : 0,
     brain ? countArkivFindings(supabase, companyId) : 0,
+    countFailedPeppolDeliveries(supabase, companyId),
   ])
 
   return {
@@ -136,6 +139,7 @@ export async function getWorklistCounts(
       document_field_review: documentFieldReview,
       agreement_payment_missed: agreementPaymentMissed,
       arkiv_finding: arkivFinding,
+      peppol_delivery_failed: peppolDeliveryFailed,
     },
     total:
       bookTransaction +
@@ -153,6 +157,7 @@ export async function getWorklistCounts(
       documentUnclassified +
       documentFieldReview +
       agreementPaymentMissed +
-      arkivFinding,
+      arkivFinding +
+      peppolDeliveryFailed,
   }
 }

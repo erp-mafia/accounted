@@ -30,7 +30,7 @@ export async function discoverCommunitySkills(root: string): Promise<DiscoveredA
     const body = SkillBodySchema.parse(await readFile(join(root, bodyPath), 'utf8'))
     atoms.push({ id: `community/${slug}`, tier: 'community', slug,
       title: z.string().min(1).max(120).parse(entry.title), description: z.string().min(1).max(500).parse(entry.description),
-      body, body_path: bodyPath, parent_atom_id: null, estimated_tokens: Math.ceil(body.length / 4),
+      body, body_path: bodyPath, parent_atom_id: null, audience: 'agent', estimated_tokens: Math.ceil(body.length / 4),
       sni_prefixes: [], trigger_signals: {}, frontmatter_version: 1, schema_version: 1,
       mcp_exposed: entry.mcp_exposed === true && entry.status === 'live', reviewed_at: reviewedAt,
     })

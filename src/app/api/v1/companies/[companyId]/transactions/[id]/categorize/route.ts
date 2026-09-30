@@ -30,6 +30,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { reconcileRcBasisWithCostAccount } from '@/lib/bookkeeping/account-override'
 import {
   getTemplateById,
   buildMappingResultFromTemplate,
@@ -38,6 +39,7 @@ import {
 import {
   upsertCounterpartyTemplate,
   buildMappingResultFromCounterpartyTemplate,
+  loadCounterpartyTemplateMatch,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
@@ -51,7 +53,6 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { eventBus } from '@/lib/events'
 import type {
-  CategorizationTemplate,
   EntityType,
   Transaction,
   TransactionCategory,
@@ -204,23 +205,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     let mappingResult
     if (body.counterparty_template_id && is_business) {
-      const { data: cpTemplate } = await ctx.supabase
-        .from('categorization_templates')
-        .select('*')
-        .eq('id', body.counterparty_template_id)
-        .eq('company_id', ctx.companyId!)
-        .eq('is_active', true)
-        .maybeSingle()
-      if (!cpTemplate) {
+      // Learned codes the registry no longer accepts are dropped on load; an
+      // explicit body.dimensions (applied below) is never filtered.
+      const match = await loadCounterpartyTemplateMatch(
+        ctx.supabase,
+        ctx.companyId!,
+        body.counterparty_template_id,
+      )
+      if (!match) {
         return v1ErrorResponseFromCode('NOT_FOUND', txLog, {
           requestId: ctx.requestId,
           details: { resource: 'counterparty_template' },
         })
-      }
-      const match = {
-        template: cpTemplate as CategorizationTemplate,
-        matchMethod: 'exact_alias' as const,
-        confidence: Number(cpTemplate.confidence),
       }
       mappingResult = buildMappingResultFromCounterpartyTemplate(
         match,
@@ -273,7 +269,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     ) {
       const { data: accountExists } = await ctx.supabase
         .from('chart_of_accounts')
-        .select('account_number, account_class')
+        .select('account_number, account_class, default_vat_treatment')
         .eq('company_id', ctx.companyId!)
         .eq('account_number', body.account_override)
         .eq('is_active', true)
@@ -300,6 +296,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       if (accountExists.account_class === 2 && !isMomsLineAccount) {
         mappingResult.vat_lines = []
       }
+      // A reverse-charge cost line moved onto an account that reports ruta
+      // 20-24 itself must not keep the category's basis pair (#2919).
+      mappingResult = reconcileRcBasisWithCostAccount(
+        mappingResult,
+        transaction.amount,
+        body.account_override,
+        accountExists.default_vat_treatment ?? null,
+      )
     }
 
     // Dimensions: an explicitly supplied bag tags the business lines of the

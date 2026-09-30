@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
+import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execution-budget'
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { fetchMigrationPage, hydrateSalesInvoices, hydrateSupplierInvoices, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
@@ -133,6 +134,11 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     && await hasPreNormalisationCreditNote(supabase, job, mapped.invoice, deadline)) {
     return { id: c.id, skip: 'creditNoteInOldShape' }
   }
+  // The supplier mapper holds its rows to the header whether or not VAT was
+  // established, and hands back none when they disagree: the same refusal as
+  // the check below, which a supplier invoice with no established VAT used to
+  // pass with the voucher's own 2440 row among its items.
+  if (mapped.rowsMismatch) return { id: c.id, error: 'MIGRATION_ROWS_MISMATCH' }
   // Bokio preview rows may be absent or lack a defensible VAT allocation.
   // Keep the invoice and let completion revisit it without fabricating rows.
   if (!mapped.items.length && !(c.resource === 'supplierInvoices' && (invoice as SupplierInvoiceDto).supplierEvidence)) {
@@ -352,6 +358,8 @@ async function followupBatch(supabase: SupabaseClient, job: ProviderMigrationJob
 }
 
 export function failureCode(error: unknown): string {
+  // The worker's own deadline is a deferral, never a provider failure.
+  if (error instanceof ExecutionBudgetExceeded) return 'MIGRATION_DEADLINE'
   // Consent resolution also throws structured HTTP failures, not just Errors.
   if (typeof error === 'object' && error !== null && !(error instanceof Error) && 'status' in error) {
     const status = Number(error.status)
@@ -362,6 +370,23 @@ export function failureCode(error: unknown): string {
   const message = error instanceof Error ? error.message : ''
   const known = message.match(/(?:MIGRATION|PROVIDER|PERSONNUMMER)_[A-Z_]+/)?.[0]
   return known ?? 'MIGRATION_RETRY'
+}
+
+/**
+ * Structured facts only. A raw message can quote the row a database error
+ * rejected, so it stays out of the log; the class, SQLSTATE or PostgREST
+ * code and HTTP status say which layer failed and how.
+ */
+function failureDetails(error: unknown): { errorName: string; dbCode?: string; httpStatus?: number } {
+  // The consent resolver throws plain objects with a status, not Errors.
+  const { code, statusCode, status } = (typeof error === 'object' && error !== null ? error : {}) as
+    { code?: unknown; statusCode?: unknown; status?: unknown }
+  const http = typeof statusCode === 'number' ? statusCode : typeof status === 'number' ? status : undefined
+  return {
+    errorName: error instanceof Error ? error.name : typeof error,
+    ...(typeof code === 'string' && /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(code) ? { dbCode: code } : {}),
+    ...(http !== undefined && Number.isInteger(http) && http >= 100 && http <= 599 ? { httpStatus: http } : {}),
+  }
 }
 
 /** Cron owns recovery. A browser nudge only reduces latency, including in local dev. */
@@ -383,6 +408,7 @@ export async function runProviderMigrationWorker(options: {
     if (!data?.id) break
     let job = data as ProviderMigrationJob
     jobs++
+    let started = Date.now()
     try {
       if (!job.consent_id) throw new Error('PROVIDER_AUTH_EXPIRED')
       const connection = await withinMigrationDeadline(resolveConsent(job.company_id, job.consent_id), deadline - 5000)
@@ -391,12 +417,17 @@ export async function runProviderMigrationWorker(options: {
         throw new Error('MIGRATION_SOURCE_IDENTITY_CHANGED')
       }
       while (Date.now() < deadline - 10_000 && job.state === 'running') {
-        const started = Date.now()
+        started = Date.now()
         log.info('migration phase started', { jobId: job.id, phase: job.phase, resource: job.resources[job.resource_index - 1], page: job.next_page })
         if (job.phase === 'discover') {
           const resource = job.resources[job.resource_index - 1]
-          const page = await withinMigrationDeadline(fetchMigrationPage(job.provider as ProviderName, connection.accessToken,
-            connection.providerCompanyId, resource, job.next_page), deadline - 5000)
+          // The budget scope reaches the provider client, its rate limiter and
+          // withRetry: at the deadline the request aborts and no retry starts.
+          // The outer race alone only stops waiting, and left up to three 60 s
+          // attempts running on in a long-lived (self-hosted) process.
+          const page = await withinMigrationDeadline(withExecutionDeadline(deadline - 5000, 'migration-list',
+            () => fetchMigrationPage(job.provider as ProviderName, connection.accessToken,
+              connection.providerCompanyId, resource, job.next_page)), deadline - 5000)
           const records = page.items.map((dto, i) => ({ source_id: dto.id || `missing:${job.next_page}:${i}`,
             ...sealMigrationPayload(Buffer.byteLength(JSON.stringify(dto)) > MAX_BATCH_BYTES / 2
               ? { id: dto.id, migrationError: 'MIGRATION_INVOICE_TOO_LARGE' } : dto) }))
@@ -439,18 +470,24 @@ export async function runProviderMigrationWorker(options: {
       }
       if (job.state === 'running') await migrationRpc(supabase, job, 'release_provider_migration_job', {}, deadline)
     } catch (error) {
+      const failedAt = Date.now()
       const code = failureCode(error)
-      const attention = ['PROVIDER_AUTH_EXPIRED','PROVIDER_LICENSE_MISSING','PROVIDER_API_MODULE_INACTIVE',
-        'MIGRATION_WRITE_FORBIDDEN','MIGRATION_SOURCE_IDENTITY_CHANGED','PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED'].includes(code) || job.failures >= 4
+      const deferred = code === 'MIGRATION_DEADLINE'
+      const attention = !deferred && (['PROVIDER_AUTH_EXPIRED','PROVIDER_LICENSE_MISSING','PROVIDER_API_MODULE_INACTIVE',
+        'MIGRATION_WRITE_FORBIDDEN','MIGRATION_SOURCE_IDENTITY_CHANGED','PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED'].includes(code) || job.failures >= 4)
       await migrationRpc(supabase, job, 'release_provider_migration_job', {
-        p_error_code: code === 'MIGRATION_DEADLINE' ? null : code,
-        p_retry_seconds: code === 'MIGRATION_DEADLINE' ? 0 : attention ? -1 : migrationRetrySeconds(job.failures + 1),
+        p_error_code: deferred ? null : code,
+        p_retry_seconds: deferred ? 0 : attention ? -1 : migrationRetrySeconds(job.failures + 1),
       }, deadline).catch(releaseError => {
         // An unreachable database must not hold the invocation open. The
         // lease expires and the next worker replays any uncertain commit.
         log.warn('migration release deferred to lease expiry', { jobId: job.id, code: failureCode(releaseError) })
       })
-      log.warn('migration yielded', { jobId: job.id, code, needsAttention: attention })
+      // The code alone hid a 15 s timeout behind MIGRATION_RETRY for hours:
+      // name the step and the error so the next one reads itself.
+      log.warn('migration yielded', { jobId: job.id, code, needsAttention: attention, phase: job.phase,
+        resource: job.resources[job.resource_index - 1], page: job.next_page, elapsedMs: failedAt - started,
+        ...failureDetails(error) })
       break
     }
     if (options.jobId) break

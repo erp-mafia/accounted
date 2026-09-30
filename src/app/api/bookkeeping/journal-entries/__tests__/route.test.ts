@@ -167,6 +167,46 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
+  it('keeps a pure storno visible under collapse_corrections and folds only corrected groups (#3149)', async () => {
+    // The list builder is created before the corrections prefetch, and the
+    // queued mock binds a result at from() time: list result first.
+    enqueue({ data: [], error: null, count: 0 })
+    enqueue({ data: [{ correction_of_id: 'orig-1' }], error: null })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', include_related: 'false', collapse_corrections: 'true' },
+    })
+    const response = await GET(request, {} as never)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    // No blanket storno filter: a storno that no correction replaced is the
+    // only row carrying its voucher number and must stay in the series.
+    expect(findCalls('journal_entries', 'neq').map((c) => c[0])).not.toContain('source_type')
+    // The corrected original folds, and so does its storno: a storno drops
+    // only when reverses_id points at a corrected original.
+    expect(findCalls('journal_entries', 'not')).toContainEqual(['id', 'in', '(orig-1)'])
+    expect(findCalls('journal_entries', 'or').map((c) => c[0])).toContain(
+      'source_type.neq.storno,reverses_id.is.null,reverses_id.not.in.(orig-1)',
+    )
+  })
+
+  it('applies no collapse filter when the company has no posted correction', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', include_related: 'false', collapse_corrections: 'true' },
+    })
+    const response = await GET(request, {} as never)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(findCalls('journal_entries', 'neq').map((c) => c[0])).not.toContain('source_type')
+    expect(findCalls('journal_entries', 'or')).toEqual([])
+    expect(findCalls('journal_entries', 'not').filter((c) => c[0] === 'id')).toEqual([])
+  })
+
   it('matches a voucher label like "A209" on series+number as well as description', async () => {
     enqueue({ data: [], error: null, count: 0 })
 
@@ -652,5 +692,92 @@ describe('POST /api/bookkeeping/journal-entries', () => {
     expect(status).toBe(400)
     // Untyped engine errors map to the Swedish context fallback (issue #337).
     expect(body.error).toBe('Kunde inte hantera verifikationen. Försök igen.')
+  })
+})
+
+/**
+ * The dashboard route accepts only the source types the dashboard's own forms
+ * author ('manual', and 'vat_settlement' for the reviewed momsredovisning
+ * proposal and VAT templates). An engine-owned label would let a business
+ * voucher claim that type's dimension-policy exemption ('system' skips every
+ * rule, 'accrual' skips registry validation) and show a false source.
+ */
+describe('POST /api/bookkeeping/journal-entries: source_type allowlist', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const emptyParams = { params: Promise.resolve({}) }
+  const baseBody = {
+    fiscal_period_id: VALID_UUID,
+    entry_date: '2024-06-15',
+    description: 'Test entry',
+    lines: [
+      { account_number: '6570', debit_amount: 100, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+    ],
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  })
+
+  it.each([
+    'system',
+    'accrual',
+    'storno',
+    'correction',
+    'year_end',
+    'import',
+    'opening_balance',
+    'credit_note',
+    'invoice_paid',
+  ])('rejects the engine-owned source_type %s with 400 before the engine runs', async (sourceType) => {
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      method: 'POST',
+      body: { ...baseBody, source_type: sourceType },
+    })
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: string; errors: Array<{ field: string }> }>(response)
+
+    expect(status).toBe(400)
+    expect(body.errors.map((e) => e.field)).toEqual(['source_type'])
+    expect(body.error).toContain('"manual" eller "vat_settlement"')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('books the reviewed VAT settlement with source_type vat_settlement', async () => {
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry())
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      method: 'POST',
+      body: { ...baseBody, source_type: 'vat_settlement' },
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ source_type: 'vat_settlement' })
+    )
+  })
+
+  it('defaults an omitted source_type to manual', async () => {
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry())
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      method: 'POST',
+      body: baseBody,
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ source_type: 'manual' })
+    )
   })
 })

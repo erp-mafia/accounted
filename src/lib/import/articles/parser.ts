@@ -148,6 +148,7 @@ export function parseArticlesFile(
   let droppedAccountCount = 0
   let droppedCurrencyCount = 0
   let droppedHouseworkCount = 0
+  let droppedGoodsHouseworkCount = 0
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i]
@@ -194,8 +195,16 @@ export function parseArticlesFile(
     // ('0'/'1'/'Ja') mapped by the keyword detector must not land as a value
     // the invoice editor can never interpret.
     const houseworkRaw = cell(row, columns.housework_type_col)
-    const houseworkType = normalizeHouseworkType(houseworkRaw)
+    let houseworkType = normalizeHouseworkType(houseworkRaw)
     if (houseworkRaw !== null && houseworkType === null) droppedHouseworkCount++
+    // ROT/RUT is computed on labor only (IL 67 kap. 11-19 §§): material never
+    // carries the reduction, so a goods row keeps no housework flag. The
+    // article form hides the field for goods, so a stored flag would be one
+    // the user can neither see nor clear.
+    if (houseworkType !== null && type === 'vara') {
+      houseworkType = null
+      droppedGoodsHouseworkCount++
+    }
     const notes = cell(row, columns.notes_col)
 
     const validationErrors: string[] = []
@@ -235,6 +244,10 @@ export function parseArticlesFile(
   if (droppedHouseworkCount > 0) {
     warnings.push(`${droppedHouseworkCount} rad${droppedHouseworkCount === 1 ? '' : 'er'} hade ett ROT/RUT-värde som inte är en arbetstyp (t.ex. 0/1/Ja) och som ignorerades: sätt arbetstyp på artikeln efteråt.`)
     notices.push(makeNotice('articles_housework_dropped', 'notice', { count: droppedHouseworkCount }))
+  }
+  if (droppedGoodsHouseworkCount > 0) {
+    warnings.push(`${droppedGoodsHouseworkCount} ${droppedGoodsHouseworkCount === 1 ? 'vara' : 'varor'} hade ett ROT/RUT-värde som ignorerades: ROT och RUT gäller bara arbetskostnad. Är artikeln arbete, ändra typen till tjänst och sätt arbetstyp.`)
+    notices.push(makeNotice('articles_housework_on_goods_dropped', 'notice', { count: droppedGoodsHouseworkCount }))
   }
   if (droppedCurrencyCount > 0) {
     warnings.push(`${droppedCurrencyCount} rad${droppedCurrencyCount === 1 ? '' : 'er'} hade en ogiltig valutakod (måste vara tre bokstäver, t.ex. EUR) som ignorerades: priset importeras som SEK.`)

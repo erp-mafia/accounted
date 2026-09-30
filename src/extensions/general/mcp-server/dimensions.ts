@@ -4,8 +4,9 @@
  * Two responsibilities, shared by the dimension tools and the dims-bag write
  * tools (gnubok_create_voucher / gnubok_correct_entry):
  *
- *   1. Registry access: ensure_company_dimensions + the same two-query fetch
- *      the dashboard GET /api/dimensions uses, returning the identical shape.
+ *   1. Registry access: the registry read the dashboard GET /api/dimensions
+ *      and the v1 list use (lib/dimensions/registry-service.ts), so an agent
+ *      never resolves against a shorter registry than a person sees.
  *
  *   2. Resolve-don't-select: an incoming dimension value may be an object
  *      code ("KS01") OR a natural-language name ("Villa Almgren tak"). The
@@ -31,6 +32,12 @@ import {
   normalizeLineDimensions,
   type LineDimensions,
 } from '@/lib/bookkeeping/dimension-resolver'
+import { listDimensions } from '@/lib/dimensions/registry-service'
+import { dbError } from '@/lib/errors/db-error'
+import { createLogger } from '@/lib/logger'
+import { throwOutcomeFailure } from '@/lib/operations/errors'
+
+const log = createLogger('mcp-dimensions')
 
 // ── Registry shapes (mirror GET /api/dimensions exactly) ─────────────────────
 
@@ -47,6 +54,8 @@ export interface DimensionRegistryEntry {
   id: string
   sie_dim_no: number
   name: string
+  /** The parent dimension's number for a sub-dimension (#UNDERDIM), else null. */
+  parent_sie_dim_no: number | null
   resets_annually: boolean
   is_system: boolean
   is_active: boolean
@@ -69,47 +78,25 @@ export async function ensureCompanyDimensions(
 }
 
 /**
- * Fetch the full registry incl. values: the same two queries and the same
- * nested shape as the dashboard GET /api/dimensions, so agents and the
- * register UI see one consistent contract.
+ * The full registry incl. every value, seeded first (the system dims 1 and 6
+ * always exist). This is listDimensions, the one registry read behind the
+ * dashboard and v1: values are paged past PostgREST's 1000-row cap, which a
+ * separate copy here once missed, so a code on page two was "okänt" to every
+ * agent booking while the register page listed it.
  */
 export async function fetchDimensionRegistry(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<DimensionRegistryEntry[]> {
-  const { data: dims, error: dimsError } = await supabase
-    .from('dimensions')
-    .select('id, sie_dim_no, name, resets_annually, is_system, is_active, sort_order')
-    .eq('company_id', companyId)
-    .order('sort_order', { ascending: true })
-    .order('sie_dim_no', { ascending: true })
-  if (dimsError) throw new Error(`Failed to list dimensions: ${dimsError.message}`)
-
-  const { data: values, error: valuesError } = await supabase
-    .from('dimension_values')
-    .select('id, dimension_id, code, name, is_active, start_date, end_date')
-    .eq('company_id', companyId)
-    .order('code', { ascending: true })
-  if (valuesError) throw new Error(`Failed to list dimension values: ${valuesError.message}`)
-
-  const valuesByDimension = new Map<string, DimensionValueEntry[]>()
-  for (const v of (values ?? []) as Array<DimensionValueEntry & { dimension_id: string }>) {
-    const bucket = valuesByDimension.get(v.dimension_id) ?? []
-    bucket.push({
-      id: v.id,
-      code: v.code,
-      name: v.name,
-      is_active: v.is_active,
-      start_date: v.start_date,
-      end_date: v.end_date,
-    })
-    valuesByDimension.set(v.dimension_id, bucket)
+  const outcome = await listDimensions({ supabase, companyId, log })
+  if (!outcome.ok) {
+    // A database failure keeps its SQLSTATE, so a statement timeout is still
+    // answered as retryable.
+    if (outcome.error instanceof Error) throw outcome.error
+    if (outcome.error) throw dbError(outcome.error, 'Failed to read the dimension registry')
+    throwOutcomeFailure(outcome)
   }
-
-  return ((dims ?? []) as Array<Omit<DimensionRegistryEntry, 'values'>>).map((d) => ({
-    ...d,
-    values: valuesByDimension.get(d.id) ?? [],
-  }))
+  return outcome.dryRun ? [] : outcome.data.dimensions
 }
 
 // ── Input parsing ────────────────────────────────────────────────────────────
@@ -318,7 +305,8 @@ export interface ResolveBagsResult {
  *
  * Query budget (validation contract): zero queries when no line carries a
  * bag; one company_settings read when dimensions are disabled (free-text
- * passthrough); ensure-RPC + two registry reads when enabled. Never per-line.
+ * passthrough); ensure-RPC + the registry read (values paged per 1000) when
+ * enabled. Never per-line.
  */
 export async function resolveDimensionBags(
   supabase: SupabaseClient,
@@ -358,7 +346,7 @@ export async function resolveDimensionBags(
     return { bags, resolutions: [] }
   }
 
-  await ensureCompanyDimensions(supabase, companyId)
+  // Seeds the system dims and reads every value (paged), like the register.
   const registry = await fetchDimensionRegistry(supabase, companyId)
   const byDimNo = new Map(registry.map((d) => [d.sie_dim_no, d]))
 

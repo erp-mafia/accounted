@@ -13,6 +13,7 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
+import { huvudbokDrilldownHref, parseDrilldownParams } from '@/lib/reports/report-drilldown'
 import type { FiscalPeriod } from '@/types'
 
 const TrialBalanceView = dynamic(() => import('./lazy-views/TrialBalanceView'), { loading: ReportBodyLoading })
@@ -47,13 +48,27 @@ const BokslutsbilagorView = dynamic(() =>
   import('./BokslutsbilagorView').then((module) => ({ default: module.BokslutsbilagorView })),
   { loading: ReportBodyLoading },
 )
+const SystemdokumentationView = dynamic(() =>
+  import('./SystemdokumentationView').then((module) => ({ default: module.SystemdokumentationView })),
+  { loading: ReportBodyLoading },
+)
+const SemesterskuldView = dynamic(() =>
+  import('./SemesterskuldView').then((module) => ({ default: module.SemesterskuldView })),
+  { loading: ReportBodyLoading },
+)
+const LonejournalView = dynamic(() =>
+  import('./LonejournalView').then((module) => ({ default: module.LonejournalView })),
+  { loading: ReportBodyLoading },
+)
 
 /**
  * The focused single-report experience at /reports/[slug]. Carries one report:
  * a back link to the library, the shared fiscal-year selector (restored from
  * localStorage so it matches the year picked on the landing), the report's
  * optional date-range control, and the report body. Drilling into an account
- * navigates to /reports/huvudbok?account=…: drill state lives in the URL.
+ * navigates to /reports/huvudbok?account=… with the report's window and
+ * dimension filter: drill state lives in the URL, and the huvudbok opens on
+ * it.
  */
 function FocusedReportInner({
   slug,
@@ -72,7 +87,13 @@ function FocusedReportInner({
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [selectedPeriodBounds, setSelectedPeriodBounds] = useState<{ start: string; end: string } | null>(null)
   const [dateRange, setDateRange] = useState<DateRangeValue>({})
-  const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(null)
+  // A drill-down arrives with the clicked report's window and dimension
+  // filter in the URL (lib/reports/report-drilldown.ts). Read once: after
+  // that the page's own controls own the state.
+  const [drilldown] = useState(() => parseDrilldownParams(searchParams))
+  const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(() =>
+    DIMENSION_FILTER_SLUGS.has(slug) ? drilldown.dimension : null,
+  )
   const [isReady, setIsReady] = useState(false)
 
   const report = getReport(slug)
@@ -93,8 +114,17 @@ function FocusedReportInner({
 
   // Drilling from a report into the general ledger is a route change, so the
   // account lands in the URL and the browser back button returns to the report.
+  // The window and the dimension filter ride along: they are what the clicked
+  // amount covers. The window is sent with both bounds even for the whole
+  // year, so the ledger does not fall back to its own remembered preset.
   const navigateToAccount = (accountNumber: string) => {
-    router.push(`/reports/huvudbok?account=${encodeURIComponent(accountNumber)}`)
+    router.push(
+      huvudbokDrilldownHref(accountNumber, {
+        fromDate: dateRange.fromDate ?? selectedPeriodBounds?.start,
+        toDate: dateRange.toDate ?? selectedPeriodBounds?.end,
+        dimension: showDim ? dimensionFilter : null,
+      }),
+    )
   }
 
   return (
@@ -143,6 +173,7 @@ function FocusedReportInner({
               periodEnd={selectedPeriodBounds.end}
               value={dateRange}
               onChange={setDateRange}
+              initialValue={drilldown.range}
             />
           )}
           {showDim && <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />}
@@ -230,6 +261,12 @@ function FocusedView({
       return <BehandlingshistorikView periodId={periodId} dateRange={dateRange} />
     case 'bokslutsbilagor':
       return <BokslutsbilagorView key={periodId} periodId={periodId} />
+    case 'systemdokumentation':
+      return <SystemdokumentationView key={periodId} periodId={periodId} />
+    case 'semesterskuld':
+      return <SemesterskuldView key={periodId} periodId={periodId} />
+    case 'lonejournal':
+      return <LonejournalView />
     default:
       return null
   }

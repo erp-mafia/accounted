@@ -69,10 +69,11 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
 
     const request = createMockRequest('/api/supplier-invoices/inv-1/uncredit', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(404)
-    expect(body.error).toBe('Not found')
+    // Failures now answer the structured envelope (shared service, lib/supplier-invoices/manage.ts).
+    expect(body.error.code).toBe('SI_NOT_FOUND')
   })
 
   it('idempotently returns 200 when invoice is not credited', async () => {
@@ -265,10 +266,12 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
 
     const request = createMockRequest('/api/supplier-invoices/inv-1/uncredit', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toMatch(/låst|stängd/i)
+    // Structured envelope now; the Swedish sentence rides in error.message.
+    expect(body.error.code).toBe('SI_UNCREDIT_FAILED')
+    expect(body.error.message).toMatch(/låst|stängd/i)
   })
 
   it('restores original even when no active credit row is found (credit already reversed)', async () => {

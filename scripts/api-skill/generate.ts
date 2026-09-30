@@ -50,7 +50,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'core.md',
     title: 'Core',
-    members: ['health', 'companies', 'operations', 'settings'],
+    members: ['health', 'companies', 'operations', 'settings', 'peppol'],
     blurb:
       'Connectivity, company discovery, async-operation polling, and company settings. ' +
       'Every session starts with GET /companies to resolve the companyId that all other URLs need.',
@@ -67,7 +67,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'periods.md',
     title: 'Periods and registers',
-    members: ['fiscal-periods', 'accounts', 'compliance', 'dimensions', 'skatteverket'],
+    members: ['fiscal-periods', 'accounts', 'compliance', 'dimensions', 'skatteverket', 'skattekonto'],
     blurb:
       'Fiscal periods and their lock/close/year-end lifecycle (async operations), the BAS ' +
       'chart of accounts, cost-center/project dimensions, the compliance pre-flight check, ' +
@@ -93,10 +93,11 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'suppliers.md',
     title: 'Suppliers (AP)',
-    members: ['suppliers', 'supplier-invoices'],
+    members: ['suppliers', 'supplier-invoices', 'supplier-payment-batches', 'expense-claims'],
     blurb:
-      'Accounts payable: supplier register and received supplier invoices ' +
-      '(register -> approve -> mark-paid, or credit).',
+      'Accounts payable: supplier register, received supplier invoices ' +
+      '(register -> approve -> book if deferred -> pay via a supplier payment file ' +
+      'or mark-paid, or credit), and expense claims (utlägg) with their payouts.',
   },
   {
     file: 'documents.md',
@@ -137,10 +138,14 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'reports.md',
     title: 'Reports',
-    members: ['reports'],
+    members: ['reports', 'audit-trail', 'vat'],
     blurb:
       'Read-only statutory and management reports: trial balance, balance sheet, income statement, ' +
-      'general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export.',
+      'general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Only ' +
+      'income-statement, general-ledger, monthly-breakdown and kpi take the dim_no + dim_code filter; ' +
+      'every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered ' +
+      'report. Any other query parameter a report does not list is not applied and is named in the ' +
+      'X-Ignored-Query-Params response header.',
   },
   {
     file: 'assets.md',
@@ -158,6 +163,16 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
     members: ['webhooks', 'webhook-deliveries'],
     blurb:
       'HMAC-signed event subscriptions with delivery logs, test pings, retries, and secret rotation.',
+  },
+  {
+    file: 'portfolio.md',
+    title: 'Portfolio',
+    members: ['portfolio'],
+    blurb:
+      'Cross-company reads for keys that reach more than one company (consultants, byrå team ' +
+      'members, multi-company owners): one call over a membership-checked company scope instead ' +
+      'of one call per company. The scope is capped at 25 companies per call; the response names ' +
+      'the ids beyond the cap so the next call can list them explicitly.',
   },
 ]
 

@@ -654,7 +654,7 @@ export default function ArsredovisningPage() {
               includeAllOption={false}
               hideFuturePeriods
             />
-            <Button variant="outline" asChild>
+            <Button size="sm" variant="outline" asChild>
               <Link href={`/bookkeeping/year-end?period=${periodId}`}>
                 <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
               </Link>

@@ -30,7 +30,8 @@ const buttonVariants = cva(
         success:
           "bg-success text-success-foreground hover:bg-success/90 active:bg-success/90",
       },
-      // One height per job (design.md, "Buttons"): sm is the shared h-8
+      // One height per job (design.md, "Buttons"), one text size for all
+      // (13px, the same as ToolbarSearch and the pickers): sm is the shared h-8
       // toolbar height, so a button lines up with ToolbarSearch,
       // SegmentedControl and the context pickers beside it; lg is for auth
       // and touch-critical actions. Never override the height per call site.
@@ -38,7 +39,7 @@ const buttonVariants = cva(
       // so no call site needs a min-h-11 patch.
       size: {
         default: "h-9 px-4 text-[13px]",
-        sm: "h-8 px-3.5 text-xs",
+        sm: "h-8 px-3.5 text-[13px]",
         lg: "h-11 px-6 text-[13px]",
         icon: "h-10 w-10",
         "icon-sm": "h-8 w-8 pointer-coarse:min-w-10",

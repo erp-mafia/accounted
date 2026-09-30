@@ -5,9 +5,12 @@ import { SKATTEKONTO_ACCOUNT } from './manual-verifikat-prefill'
 /**
  * Link semantics for a skattekonto row (core).
  *
- * A link pairs ONE SKV-posted row with ONE verifikat whose 1630 movement
- * equals the row's amount on the expected side (positive belopp = money
- * into the skattekonto = debit 1630). It writes nothing to the verifikat:
+ * A link pairs SKV-posted rows with ONE verifikat whose 1630 movement the
+ * rows settle on the expected side (positive belopp = money into the
+ * skattekonto = debit 1630). Several rows may share one verifikat (one
+ * combined AGI line for avdragen skatt + arbetsgivaravgift, or a payment and
+ * a debit booked in the same voucher); see groupSettlesEntry for the rule.
+ * It writes nothing to the verifikat:
  * `skattekonto_transactions.journal_entry_id` is the only thing that changes,
  * so linking and unlinking are allowed in locked periods and need no storno.
  *
@@ -82,10 +85,106 @@ export function entrySettlesAmount(
   return { ok: false, via: null }
 }
 
+export type SkattekontoSettleVia = 'line' | 'entry_total' | 'lines'
+
+/** Upper bounds for the exact line assignment; beyond them it is not attempted. */
+const MAX_ASSIGN_EVENTS = 12
+const MAX_ASSIGN_LINES = 20
+
+function toOre(value: number | string | null | undefined): number {
+  return Math.round(Number(value || 0) * 100)
+}
+
+/**
+ * Can the events be split into groups so that every group sums EXACTLY to a
+ * distinct 1630 line of the entry, every event is used, every 1630 line is
+ * used, and each event sits on its line's side? Full coverage keeps the
+ * reconciliation identity intact: the linked rows then sum to the entry's
+ * 1630 net, which is what a live link removes from the bridge.
+ */
+function assignsToLines(
+  lines: EntryForLink['lines'],
+  belopps: number[],
+): boolean {
+  const lineOre = (lines ?? [])
+    .filter((l) => l.account_number === SKATTEKONTO_ACCOUNT)
+    .map((l) => toOre(l.debit_amount) - toOre(l.credit_amount))
+    .filter((v) => v !== 0)
+  const events = belopps.map((b) => toOre(b))
+  if (lineOre.length === 0 || events.length === 0) return false
+  if (events.length > MAX_ASSIGN_EVENTS || lineOre.length > MAX_ASSIGN_LINES) return false
+  if (events.some((e) => e === 0)) return false
+  if (events.length < lineOre.length) return false
+  const total = events.reduce((s, e) => s + e, 0)
+  if (total !== lineOre.reduce((s, v) => s + v, 0)) return false
+
+  // Largest first prunes fastest; remaining capacity shrinks toward 0.
+  const sorted = [...events].sort((a, b) => Math.abs(b) - Math.abs(a))
+  const remaining = [...lineOre]
+  const place = (i: number): boolean => {
+    if (i === sorted.length) return remaining.every((r) => r === 0)
+    const e = sorted[i]
+    const tried = new Set<number>()
+    for (let j = 0; j < remaining.length; j++) {
+      const r = remaining[j]
+      if (r === 0 || Math.sign(r) !== Math.sign(e) || Math.abs(e) > Math.abs(r)) continue
+      if (tried.has(r)) continue // identical capacity: same subtree
+      tried.add(r)
+      remaining[j] = r - e
+      if (place(i + 1)) return true
+      remaining[j] = r
+    }
+    return false
+  }
+  return place(0)
+}
+
+/**
+ * Do these SKV rows, together, settle this entry's 1630 movement?
+ *
+ *   * one row: entrySettlesAmount (a single line, or the entry's net).
+ *   * several rows, non-zero sum: the SUM settles the entry the same way (one
+ *     combined 1630 line for avdragen skatt + arbetsgivaravgift, crm#128).
+ *   * otherwise (for example a net-zero pair, crm#104: a payment into the
+ *     skattekonto and the debit it paid, booked in one voucher): every row
+ *     maps onto its own 1630 line(s) exactly, covering all of them.
+ *
+ * Exact öre only; there is no tolerance. `via` says which rule held.
+ */
+export function groupSettlesEntry(
+  lines: EntryForLink['lines'],
+  belopps: number[],
+): { ok: boolean; via: SkattekontoSettleVia | null } {
+  if (belopps.length === 0) return { ok: false, via: null }
+  if (belopps.length === 1) return entrySettlesAmount(lines, belopps[0])
+  const sum = roundOre(belopps.reduce((s, b) => s + Number(b), 0))
+  if (sum !== 0) {
+    const bySum = entrySettlesAmount(lines, sum)
+    if (bySum.ok) return bySum
+  }
+  if (assignsToLines(lines, belopps)) return { ok: true, via: 'lines' }
+  return { ok: false, via: null }
+}
+
+/** Rows already linked to an entry, with the amounts the group check needs. */
+async function fetchLinkedRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  journalEntryId: string,
+): Promise<Array<{ id: string; belopp_skatteverket: number | string }>> {
+  const { data } = await supabase
+    .from('skattekonto_transactions')
+    .select('id, belopp_skatteverket')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', journalEntryId)
+  if (Array.isArray(data)) return data as Array<{ id: string; belopp_skatteverket: number | string }>
+  return data ? [data as { id: string; belopp_skatteverket: number | string }] : []
+}
+
 export interface LinkSkattekontoRowResult {
   skattekonto_transaction_id: string
   journal_entry_id: string
-  via: 'line' | 'entry_total'
+  via: SkattekontoSettleVia
 }
 
 /**
@@ -130,22 +229,22 @@ export async function linkSkattekontoRow(
   if (entry.status === 'reversed') {
     throw new SkattekontoLinkError('Verifikatet är makulerat och kan inte kopplas.', 'INVALID_CANDIDATE')
   }
-  const settles = entrySettlesAmount(entry.lines, Number(row.belopp_skatteverket))
+  // Rows already on this verifikat join the check: a second event may share
+  // it when the whole group still settles the 1630 movement (crm#104,
+  // crm#128). Otherwise the verifikat is taken.
+  const linkedRows = await fetchLinkedRows(supabase, companyId, journalEntryId)
+  const settles = groupSettlesEntry(entry.lines, [
+    ...linkedRows.map((r) => Number(r.belopp_skatteverket)),
+    Number(row.belopp_skatteverket),
+  ])
   if (!settles.ok || !settles.via) {
+    if (linkedRows.length > 0) {
+      throw new SkattekontoLinkError(
+        'Verifikatet är redan kopplat till en annan skattekonto-transaktion.',
+        'ENTRY_ALREADY_LINKED',
+      )
+    }
     throw new SkattekontoLinkError('Verifikatet saknar en matchande rad på 1630.', 'INVALID_CANDIDATE')
-  }
-
-  const { data: alreadyLinked } = await supabase
-    .from('skattekonto_transactions')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('journal_entry_id', journalEntryId)
-    .maybeSingle()
-  if (alreadyLinked) {
-    throw new SkattekontoLinkError(
-      'Verifikatet är redan kopplat till en annan skattekonto-transaktion.',
-      'ENTRY_ALREADY_LINKED',
-    )
   }
 
   const { data: updated, error: updateError } = await supabase
@@ -241,15 +340,16 @@ export async function setSkattekontoRowIgnored(
 
 export interface LinkSkattekontoRowsResult {
   journal_entry_id: string
-  via: 'line' | 'entry_total'
+  via: SkattekontoSettleVia
   skattekonto_transaction_ids: string[]
 }
 
 /**
  * Link SEVERAL open SKV rows to ONE verifikat: the N:1 worksheet selection
  * (one AGI verifikat settling the avdragen skatt + arbetsgivaravgift rows,
- * one payment verifikat covering a row pair). The verifikat's 1630 side must
- * settle the SUM of the rows; each row then gets the same guarded pointer as
+ * one payment verifikat covering a row pair, a payment and a debit booked in
+ * one voucher). The rows, together with any rows already on the verifikat,
+ * must settle its 1630 side (groupSettlesEntry); each row then gets the same guarded pointer as
  * the single link. The write is ONE guarded UPDATE over the whole group: a
  * concurrent link shrinks the hit set, and a partial hit is rolled back and
  * reported as LINK_RACE, so a group is never left half-linked.
@@ -284,14 +384,6 @@ export async function linkSkattekontoRows(
     throw new SkattekontoLinkError('En kommande händelse kan inte kopplas ännu.', 'INVALID_CANDIDATE')
   }
 
-  const sum = roundOre(typed.reduce((s, r) => s + Number(r.belopp_skatteverket), 0))
-  if (sum === 0) {
-    throw new SkattekontoLinkError(
-      'De valda händelserna nettar till 0 och kan inte kopplas mot ett verifikat.',
-      'INVALID_CANDIDATE',
-    )
-  }
-
   const { data: entry, error: entryError } = await supabase
     .from('journal_entries')
     .select('id, status, lines:journal_entry_lines ( account_number, debit_amount, credit_amount )')
@@ -304,24 +396,25 @@ export async function linkSkattekontoRows(
   if (entry.status === 'reversed') {
     throw new SkattekontoLinkError('Verifikatet är makulerat och kan inte kopplas.', 'INVALID_CANDIDATE')
   }
-  const settles = entrySettlesAmount(entry.lines, sum)
+
+  const groupSet = new Set(ids)
+  const outside = (await fetchLinkedRows(supabase, companyId, journalEntryId)).filter(
+    (r) => !groupSet.has(r.id),
+  )
+  const settles = groupSettlesEntry(entry.lines, [
+    ...outside.map((r) => Number(r.belopp_skatteverket)),
+    ...typed.map((r) => Number(r.belopp_skatteverket)),
+  ])
   if (!settles.ok || !settles.via) {
+    if (outside.length > 0) {
+      throw new SkattekontoLinkError(
+        'Verifikatet är redan kopplat till en annan skattekonto-transaktion.',
+        'ENTRY_ALREADY_LINKED',
+      )
+    }
     throw new SkattekontoLinkError(
       'Verifikatets rader på 1630 motsvarar inte summan av de valda händelserna.',
       'INVALID_CANDIDATE',
-    )
-  }
-
-  const groupSet = new Set(ids)
-  const { data: linkedRows } = await supabase
-    .from('skattekonto_transactions')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('journal_entry_id', journalEntryId)
-  if ((linkedRows ?? []).some((r) => !groupSet.has((r as { id: string }).id))) {
-    throw new SkattekontoLinkError(
-      'Verifikatet är redan kopplat till en annan skattekonto-transaktion.',
-      'ENTRY_ALREADY_LINKED',
     )
   }
 

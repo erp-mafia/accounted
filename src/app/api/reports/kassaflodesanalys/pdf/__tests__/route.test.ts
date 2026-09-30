@@ -75,11 +75,14 @@ function makeReport() {
       delta_varulager: 0,
       delta_kortfristiga_skulder: 3000,
       skatt_betald: -25000,
+      koncernbidrag: 0,
+      ovriga_poster: 0,
       total: 113000,
     },
     investerings: {
       forvarv_anlaggningar: -40000,
       avyttring_anlaggningar: 0,
+      kortfristiga_placeringar: 0,
       total: -40000,
     },
     finansierings: {
@@ -90,6 +93,7 @@ function makeReport() {
       total: -30000,
     },
     total_cash_flow: 43000,
+    unclassified_accounts: [],
     reconciliation: {
       opening_cash_1xxx: 100000,
       closing_cash_1xxx: 143000,

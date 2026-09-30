@@ -1,11 +1,12 @@
-import { randomBytes } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
+import { requestCspNonce } from '@/lib/security/csp'
 import { NextResponse, after } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { createSession, extractBban, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
-import { isMirrorCardAccount } from '@/extensions/general/enable-banking/lib/mirror-card-account'
+import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
+import { resolveAccountCurrency } from '@/extensions/general/enable-banking/lib/account-currency'
 import { eventBus } from '@/lib/events/bus'
 import {
   resolvePsd2LedgerAccount,
@@ -384,10 +385,11 @@ export async function GET(request: Request) {
   }
 
   // Per-request CSP nonce for the two inline scripts on the finalize page
-  // (ASVS V3.3): mirrors the mcp-oauth consent page. The global next.config
-  // CSP also applies; the intersection means inline scripts on THIS response
-  // must carry the nonce.
-  const cspNonce = randomBytes(16).toString('base64')
+  // (ASVS V3.3): mirrors the mcp-oauth consent page. It is the proxy's nonce
+  // for this request, so the scripts run under the proxy's CSP header as well
+  // as under the one set below (a self-hosted `next start` delivers only the
+  // proxy's).
+  const cspNonce = requestCspNonce(request.headers)
   const csp = [
     "default-src 'none'",
     `script-src 'nonce-${cspNonce}'`,
@@ -493,15 +495,28 @@ async function persistBankSession(
   // user deselects never have their balance pulled.
   const priorAccounts = pendingConnection.accounts_data ?? []
   const priorByNewUid = new Map<string, StoredAccount>()
+  // One currency rule for everything compared or stored below
+  // (lib/account-currency.ts): an account reported as 'XXX' is stored under a
+  // real currency. A prior still stored as 'XXX' compares as what it resolves
+  // to, so finalize_bank_callback refuses the stale row until it is repaired
+  // instead of this code missing the pair and re-keying a no-IBAN account's
+  // dedup scope (a re-import of its history).
+  const currencyOf = (row: { currency?: string | null }) => resolveAccountCurrency(row.currency)
+  const ibanCompatible = (a?: string | null, b?: string | null) =>
+    !normalizeIban(a) || !normalizeIban(b) || normalizeIban(a) === normalizeIban(b)
   const compatible = (prior: { currency: string; iban?: string | null }, current: { currency: string; iban?: string | null }) =>
-    prior.currency.toUpperCase() === current.currency.toUpperCase() &&
-    (!normalizeIban(prior.iban) || !normalizeIban(current.iban) || normalizeIban(prior.iban) === normalizeIban(current.iban))
+    currencyOf(prior) === currencyOf(current) && ibanCompatible(prior.iban, current.iban)
   const accountsMetadata: StoredAccount[] = accounts.map((account: AccountInfo) => {
     const iban = normalizeIban(account.account_id?.iban)
-    const currency = account.currency.toUpperCase()
+    // An unknown reported currency keeps the one this physical account
+    // already has here: the same uid, else the only prior with its IBAN.
+    const sameIban = iban ? priorAccounts.filter(p => normalizeIban(p.iban) === iban) : []
+    const known = priorAccounts.find(p => p.uid === account.uid && ibanCompatible(p.iban, iban))
+      ?? (sameIban.length === 1 ? sameIban[0] : undefined)
+    const currency = resolveAccountCurrency(account.currency, [known?.currency])
     let prior = priorAccounts.find(p => p.uid === account.uid && compatible(p, { currency, iban }))
     if (!prior && iban) {
-      const matches = priorAccounts.filter(p => p.currency.toUpperCase() === currency && normalizeIban(p.iban) === iban)
+      const matches = priorAccounts.filter(p => currencyOf(p) === currency && normalizeIban(p.iban) === iban)
       if (matches.length > 1) throw new Error('Bank callback identity ambiguous')
       prior = matches[0]
     }
@@ -518,7 +533,7 @@ async function persistBankSession(
   const matchedPriorUids = new Set([...priorByNewUid.values()].map(p => p.uid))
   for (const account of accountsMetadata) {
     if (priorByNewUid.has(account.uid) || normalizeIban(account.iban)) continue
-    const old = priorAccounts.filter(p => !matchedPriorUids.has(p.uid) && p.currency.toUpperCase() === account.currency)
+    const old = priorAccounts.filter(p => !matchedPriorUids.has(p.uid) && currencyOf(p) === account.currency)
     const fresh = accountsMetadata.filter(a => !priorByNewUid.has(a.uid) && a.currency === account.currency)
     if (old.length !== 1 || fresh.length !== 1 || normalizeIban(old[0].iban)) continue
     const prior = old[0]
@@ -584,10 +599,9 @@ async function persistBankSession(
           claimedCount += 1
         }
       }
-      // Preserve the explanation while it stays disabled. Existing own
-      // mirrors are re-keyed later; an unmirrored card stays unmirrored.
+      // Existing own mirrors are re-keyed later; an unmirrored card stays
+      // unmirrored.
       if (account.enabled === false && isMirrorCardAccount(account)) {
-        account.mirror_card_account = true
         guardDisabledUids.add(account.uid)
       }
       continue
@@ -596,13 +610,12 @@ async function persistBankSession(
     if (isMirrorCardAccount(account)) {
       // Known card sub-account that only mirrors the main account (Svea's
       // BOKIO_Debit_Business, issue #2565): every purchase already arrives on
-      // the main account, and this one adds an opposite-sign, description-
-      // less twin per purchase that can be neither booked nor deleted. Off by
-      // default, flagged so the picker says why; the user can still turn it
-      // on. Checked before the IBAN-keyed guards below, which a no-IBAN
-      // account would fall through anyway.
+      // the main account, and this one adds an opposite-sign twin per
+      // purchase that can be neither booked nor deleted. Always off: the
+      // selection save never switches it on and the pickers show it as a
+      // muted line, not a choice. Checked before the IBAN-keyed guards below,
+      // which a no-IBAN account would fall through anyway.
       account.enabled = false
-      account.mirror_card_account = true
       guardDisabledUids.add(account.uid)
       continue
     }

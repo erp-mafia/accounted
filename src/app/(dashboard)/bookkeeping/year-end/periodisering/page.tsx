@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { ArrowLeft, ArrowRight, Lock, Plus, Trash2 } from 'lucide-react'
@@ -73,6 +74,8 @@ interface ManualEntry {
   /** Editable accounts (pre-filled from template). */
   primaryAccount: string
   secondaryAccount: string
+  /** Kostnadsställe/projekt for the result leg (the secondary account). */
+  dimensions?: Record<string, string>
 }
 
 function uid() {
@@ -278,6 +281,8 @@ export default function PeriodiseringWizardPage() {
         if (!m.description.trim()) continue
         const tpl = PERIODISERING_TEMPLATES.find((t) => t.kind === m.templateKind)
         if (!tpl) continue
+        // The route puts the bag on the result leg (the secondary account).
+        const dims = m.dimensions && Object.keys(m.dimensions).length > 0 ? { dimensions: m.dimensions } : {}
         switch (tpl.side) {
           case 'prepaid':
             items.push({
@@ -286,6 +291,7 @@ export default function PeriodiseringWizardPage() {
               expense_account: m.secondaryAccount,
               prepaid_account: m.primaryAccount,
               description: m.description,
+              ...dims,
             })
             break
           case 'accrued':
@@ -295,6 +301,7 @@ export default function PeriodiseringWizardPage() {
               expense_account: m.secondaryAccount,
               accrued_account: m.primaryAccount,
               description: m.description,
+              ...dims,
             })
             break
           case 'deferred_revenue':
@@ -304,6 +311,7 @@ export default function PeriodiseringWizardPage() {
               revenue_account: m.secondaryAccount,
               deferred_account: m.primaryAccount,
               description: m.description,
+              ...dims,
             })
             break
           case 'accrued_interest':
@@ -313,6 +321,7 @@ export default function PeriodiseringWizardPage() {
               expense_account: m.secondaryAccount,
               accrued_account: m.primaryAccount,
               description: m.description,
+              ...dims,
             })
             break
           case 'accrued_utility':
@@ -322,6 +331,7 @@ export default function PeriodiseringWizardPage() {
               expense_account: m.secondaryAccount,
               accrued_account: m.primaryAccount,
               description: m.description,
+              ...dims,
             })
             break
         }
@@ -378,7 +388,7 @@ export default function PeriodiseringWizardPage() {
       <PageHeader
         title={closingYear ? `Periodisering: Bokslut ${closingYear}` : 'Periodisering'}
         action={
-          <Button variant="outline" asChild>
+          <Button size="sm" variant="outline" asChild>
             <Link href="/bookkeeping/year-end">
               <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
             </Link>
@@ -838,6 +848,10 @@ function ManualEntryEditor({
   onChange: (patch: Partial<ManualEntry>) => void
   onRemove: () => void
 }) {
+  // Kostnadsställe/projekt for the result leg, shown only when the company
+  // uses dimensions (read before the early return: hooks run every render).
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const template = PERIODISERING_TEMPLATES.find((t) => t.kind === entry.templateKind)
   if (!template) return null
   const primaryLabel =
@@ -894,6 +908,21 @@ function ManualEntryEditor({
             className="h-8"
           />
         </div>
+        {dimensionsEnabled && (
+          <div className="col-span-2">
+            <LineDimensionFields
+              dimensions={entry.dimensions}
+              onChange={(dimNo, code) => {
+                const next = { ...(entry.dimensions ?? {}) }
+                const trimmed = code?.trim()
+                if (trimmed) next[dimNo] = trimmed
+                else delete next[dimNo]
+                onChange({ dimensions: next })
+              }}
+              inputClassName="h-8"
+            />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -975,12 +1004,18 @@ function ReviewStep({
           ))}
           {validManual.map((m) => {
             const tpl = PERIODISERING_TEMPLATES.find((t) => t.kind === m.templateKind)
+            // The tags the result leg will carry, e.g. "KS01 · P001".
+            const dims = Object.entries(m.dimensions ?? {})
+              .filter(([, v]) => v)
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([, v]) => v)
+              .join(' · ')
             return (
               <ReviewLine
                 key={m.id}
                 label={`${tpl?.name ?? 'Periodisering'}: ${m.description}`}
                 amount={parseFloat(m.amount)}
-                note={tpl?.name}
+                note={[tpl?.name, dims].filter(Boolean).join(' · ')}
               />
             )
           })}

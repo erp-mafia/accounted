@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
+import { isAgentsPageEnabled } from '@/lib/agent-skills/flag'
 import { DashboardRouteShell } from '@/components/dashboard/DashboardRouteShell'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
@@ -71,12 +72,8 @@ const MAIN_PANEL_CLASS =
 
 export default async function DashboardLayout({
   children,
-  settingsModal,
 }: {
   children: React.ReactNode
-  // `@settingsModal` parallel slot: renders the routed settings modal over the
-  // current page on in-app navigation to /settings/*; null otherwise.
-  settingsModal: React.ReactNode
 }) {
   const { supabase, user } = await getDashboardAuthContext()
 
@@ -244,7 +241,6 @@ export default async function DashboardLayout({
                 {children}
               </MainContainer>
             </main>
-            {settingsModal}
             <SettingsHotkey />
           <Suspense fallback={null}>
             <SupportDialogHost />
@@ -307,9 +303,11 @@ export default async function DashboardLayout({
       .select('*')
       .eq('company_id', companyId)
       .order('period_start', { ascending: false }),
+    // The embed carries each account's bank for the Konto label; same select
+    // as fetchCashAccounts (lib/cash-accounts/labels.ts CashAccountWithBank).
     supabase
       .from('cash_accounts')
-      .select('*')
+      .select('*, bank_connection:bank_connections(bank_name, status)')
       .eq('company_id', companyId)
       .order('is_primary', { ascending: false })
       .order('ledger_account', { ascending: true }),
@@ -403,7 +401,6 @@ export default async function DashboardLayout({
                 {children}
               </MainContainer>
             </main>
-            {settingsModal}
             <SettingsHotkey />
           </div>
         </AgentSheetProvider>
@@ -593,6 +590,7 @@ export default async function DashboardLayout({
             hasMileage={hasMileage}
             hasExpenseClaims={hasExpenseClaims}
             arkivEnabled={isArkivSectionEnabled(companyId)}
+            agentsEnabled={isAgentsPageEnabled(companyId)}
             isSandbox={isSandbox}
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
@@ -628,7 +626,6 @@ export default async function DashboardLayout({
           )}
           <LazyCommandPalette />
           <SettingsHotkey />
-          {settingsModal}
         </div>
         {/* Outside #dash-shell on purpose: non-modal dialogs (booking,
             invoice) set `inert` on the shell while open, and the assistant

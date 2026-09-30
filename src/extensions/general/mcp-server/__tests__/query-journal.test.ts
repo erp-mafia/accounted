@@ -1106,3 +1106,69 @@ describe('gnubok_query_journal: status default and balance integrity', () => {
     ).rejects.toThrow(/status must be/)
   })
 })
+
+// Hosts do not enforce inputSchema types, and the entry filter used to apply
+// the voucher range only to a number: "12" or "A12" skipped the filter while
+// applied_filters still echoed it, so the whole journal came back labelled
+// as voucher 12.
+describe('gnubok_query_journal: voucher number arguments', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_query_journal')!
+  const voucherFilters = (queries: FakeQuery[]) =>
+    queries
+      .filter((q) => q.table === 'journal_entries')
+      .flatMap((q) => q.filters.filter((f) => f.column === 'voucher_number'))
+
+  const rows = [
+    makeLineRow({ id: 'l1', voucher_number: 11 }),
+    makeLineRow({ id: 'l2', voucher_number: 12 }),
+    makeLineRow({ id: 'l3', voucher_number: 13 }),
+  ]
+
+  it('reads a digit string as its number, filters on it and echoes the number', async () => {
+    const { supabase, queries } = makeTwoStepTextMock(rows)
+    const result = (await tool().execute(
+      { voucher_number_from: '12', voucher_number_to: ' 12 ' },
+      'company-1', 'user-1', supabase,
+    )) as {
+      lines: Array<{ line_id: string }>
+      applied_filters: { voucher_number_from: unknown; voucher_number_to: unknown }
+    }
+
+    expect(voucherFilters(queries)).toContainEqual({ op: 'gte', column: 'voucher_number', value: 12 })
+    expect(voucherFilters(queries)).toContainEqual({ op: 'lte', column: 'voucher_number', value: 12 })
+    expect(result.lines.map((l) => l.line_id)).toEqual(['l2'])
+    expect(result.applied_filters.voucher_number_from).toBe(12)
+    expect(result.applied_filters.voucher_number_to).toBe(12)
+  })
+
+  it('keeps a numeric bound working as before', async () => {
+    const { supabase, queries } = makeTwoStepTextMock(rows)
+    await tool().execute({ voucher_number_from: 13 }, 'company-1', 'user-1', supabase)
+    expect(voucherFilters(queries)).toContainEqual({ op: 'gte', column: 'voucher_number', value: 13 })
+  })
+
+  it('treats null as no bound', async () => {
+    const { supabase, queries } = makeTwoStepTextMock(rows)
+    const result = (await tool().execute(
+      { voucher_number_from: null },
+      'company-1', 'user-1', supabase,
+    )) as { applied_filters: { voucher_number_from: unknown } }
+    expect(voucherFilters(queries)).toEqual([])
+    expect(result.applied_filters.voucher_number_from).toBeNull()
+  })
+
+  it('refuses any other non-number as a permanent VALIDATION_ERROR before querying', async () => {
+    for (const value of ['A12', 'twelve', '', true, { n: 12 }, [12]]) {
+      const { supabase, queries } = makeTwoStepTextMock(rows)
+      const err = await tool()
+        .execute({ voucher_number_to: value }, 'company-1', 'user-1', supabase)
+        .then(() => null, (e: unknown) => e)
+      expect(err, JSON.stringify(value)).toBeInstanceOf(Error)
+      expect((err as Error).message).toMatch(/voucher_number_to must be a voucher number like 12/)
+      const structured = getStructuredError(err)
+      expect(structured.code).toBe('VALIDATION_ERROR')
+      expect(structured.retryable).toBe(false)
+      expect(queries).toEqual([])
+    }
+  })
+})

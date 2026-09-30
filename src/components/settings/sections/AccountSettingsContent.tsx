@@ -5,14 +5,11 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Sun, Moon, Monitor, LogOut, ExternalLink } from 'lucide-react'
+import { Sun, Moon, Monitor, ExternalLink } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { createClient } from '@/lib/supabase/client'
-import { SecuritySettings } from '@/components/settings/SecuritySettings'
-import { EmailDigestToggle } from '@/components/settings/EmailDigestToggle'
 import { InstallAppSection } from '@/components/settings/InstallAppSection'
 import { CalendarFeedSettings } from '@/components/settings/CalendarFeedSettings'
-import { AccountDangerZone } from '@/components/settings/AccountDangerZone'
 import {
   SettingsGroup,
   SettingsInput,
@@ -22,8 +19,6 @@ import {
   SettingsSeg,
 } from '@/components/settings/SettingsRows'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import { useSettings } from '@/components/settings/useSettings'
-import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useToast } from '@/components/ui/use-toast'
 import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
@@ -38,7 +33,6 @@ export function AccountSettingsContent() {
   const { palette, setPalette } = usePalette()
   const [mounted, setMounted] = useState(false)
   const hasCalendarExtension = ENABLED_EXTENSION_IDS.has('calendar')
-  const { settings } = useSettings()
   const { toast } = useToast()
   const activeLocale = useLocale() as Locale
   const tCommon = useTranslations('common')
@@ -146,12 +140,6 @@ export function AccountSettingsContent() {
     } finally {
       setSavingEmail(false)
     }
-  }
-
-  async function handleLogout() {
-    resetAnalyticsIdentity()
-    await supabase.auth.signOut()
-    router.push('/login')
   }
 
   async function handleLocaleChange(next: Locale) {
@@ -333,12 +321,6 @@ export function AccountSettingsContent() {
         <InstallAppSection />
       </SettingsGroup>
 
-      {/* Security: BankID, password, 2FA (renders its own group) */}
-      <SecuritySettings />
-
-      {/* Notifications: daily "nytt att bokfora" email digest opt-in */}
-      <EmailDigestToggle />
-
       {/* Calendar feed (extension-gated) */}
       {hasCalendarExtension && <CalendarFeedSettings />}
 
@@ -366,20 +348,6 @@ export function AccountSettingsContent() {
         </SettingsRow>
       </SettingsGroup>
 
-      {/* Sign out */}
-      <SettingsGroup>
-        <SettingsRow label={tCommon('logout')} help={tCommon('logout_description')}>
-          <SettingsRowEnd>
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              <LogOut className="mr-2 h-3.5 w-3.5" />
-              {tCommon('logout')}
-            </Button>
-          </SettingsRowEnd>
-        </SettingsRow>
-      </SettingsGroup>
-
-      {/* Delete account: only for non-sandbox */}
-      {!settings?.is_sandbox && <AccountDangerZone />}
     </div>
   )
 }

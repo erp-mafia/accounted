@@ -27,7 +27,7 @@ const mockIsScbConfigured = vi.mocked(isScbConfigured)
 
 function buildSupabase(user: { id: string } | null) {
   return {
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user } }) },
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   }
 }
 

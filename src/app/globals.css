@@ -15,6 +15,9 @@
   /* Sidebar column width (frame layout): the dashboard sidebar (SidebarV2)
      and the panel's left offset both read it, so they stay in lockstep. */
   --nav-w: 220px;
+  /* Settings: width of the one control column every settings row shares
+     (components/settings/SettingsRows.tsx), so fields and switches align. */
+  --settings-control-w: 400px;
 
   /* Height the mobile bottom nav (DashboardNav) reserves at the viewport
      bottom: its 4rem tab row plus the device safe-area inset. The nav sizes

@@ -54,7 +54,10 @@ export interface ProviderSieData {
   mappings: ProviderMapping[]
   mappingStats: { total: number; mapped: number; unmapped: number }
   rawContent: string[]
-  fileStatuses?: { fiscalYear: number }[]
+  /** Index-aligned with rawContent. previousImport: a completed import already holds that year. */
+  fileStatuses?: { fiscalYear: number; previousImport?: { id: string; importedAt: string | null } | null }[]
+  /** Selected years the provider did not hand over. */
+  failedYears?: { year: number; error: string }[]
   allImported: boolean
 }
 

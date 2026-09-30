@@ -77,6 +77,7 @@ function makeDim(overrides: Partial<DimensionRegistryEntry> = {}): DimensionRegi
     id: 'dim-6',
     sie_dim_no: 6,
     name: 'Projekt',
+    parent_sie_dim_no: null,
     resets_annually: false,
     is_system: true,
     is_active: true,
@@ -152,6 +153,51 @@ describe('gnubok_list_dimensions', () => {
       listDimensions.execute({}, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/rls denied/)
   })
+
+  it('reads every value past the first 1000 and names the parent of a sub-dimension', async () => {
+    // Regression: the MCP copy of the registry read had no .range() paging,
+    // so PostgREST stopped at 1000 values while the register page (and v1)
+    // listed them all. Five companies have more than 1000.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // ensure rpc
+    enqueue({
+      data: [
+        { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', parent_sie_dim_no: null, resets_annually: false, is_system: true, is_active: true, sort_order: 20 },
+        { id: 'dim-20', sie_dim_no: 20, name: 'Etapp', parent_sie_dim_no: 6, resets_annually: false, is_system: false, is_active: true, sort_order: 100 },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: Array.from({ length: 1000 }, (_, i) => ({
+        id: `v${i}`, dimension_id: 'dim-6', code: `P${String(i).padStart(4, '0')}`, name: `Projekt ${i}`, is_active: true, start_date: null, end_date: null,
+      })),
+      error: null,
+    })
+    enqueue({
+      data: [{ id: 'v-late', dimension_id: 'dim-20', code: 'E1', name: 'Etapp 1', is_active: true, start_date: null, end_date: null }],
+      error: null,
+    })
+
+    const result = (await listDimensions.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      dimensions: Array<Record<string, unknown> & { values: Array<{ code: string; dimension_value_id: string }> }>
+    }
+
+    expect(result.dimensions[0].values).toHaveLength(1000)
+    expect(result.dimensions[1].values.map((v) => v.code)).toEqual(['E1'])
+    expect(result.dimensions[1].values[0].dimension_value_id).toBe('v-late')
+    expect(findCalls('dimension_values', 'range')).toEqual([[0, 999], [1000, 1999]])
+    // parent_sie_dim_no rides only on a sub-dimension.
+    expect(result.dimensions[1].parent_sie_dim_no).toBe(6)
+    expect(result.dimensions[0]).not.toHaveProperty('parent_sie_dim_no')
+  })
+
+  it('declares parent_sie_dim_no and keeps its item schemas open', () => {
+    const items = (listDimensions.outputSchema as {
+      properties: { dimensions: { items: { properties: Record<string, unknown>; additionalProperties?: boolean; } } }
+    }).properties.dimensions.items
+    expect(items.properties.parent_sie_dim_no).toBeDefined()
+    expect(items.additionalProperties).toBeUndefined()
+  })
 })
 
 // ── gnubok_list_dimension_values ─────────────────────────────────────────────
@@ -211,6 +257,69 @@ describe('gnubok_list_dimension_values', () => {
 
     expect(result.values[0].code).toBe('P001')
     expect(result.values[0].confidence).toBeGreaterThan(0.5)
+  })
+
+  it('pages the listing with offset and says where the next page starts', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // ensure rpc
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false, is_active: true }, error: null })
+    enqueue({
+      data: ['P001', 'P002', 'P003', 'P004', 'P005'].map((code, i) => ({
+        id: `v${i}`, code, name: `Projekt ${code}`, is_active: true, start_date: null, end_date: null,
+      })),
+      error: null,
+    })
+
+    const result = (await listDimensionValues.execute(
+      { sie_dim_no: 6, limit: 2, offset: 2 },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { values: Array<{ code: string }>; count: number; total_count: number; has_more: boolean; next_offset?: number }
+
+    expect(result.values.map((v) => v.code)).toEqual(['P003', 'P004'])
+    expect(result).toMatchObject({ count: 2, total_count: 5, has_more: true, next_offset: 4 })
+  })
+
+  it('omits next_offset on the last page', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // ensure rpc
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false, is_active: true }, error: null })
+    enqueue({
+      data: [{ id: 'v1', code: 'P001', name: 'Villa', is_active: true, start_date: null, end_date: null }],
+      error: null,
+    })
+
+    const result = (await listDimensionValues.execute({ sie_dim_no: 6 }, 'company-1', 'user-1', supabase as never)) as Record<string, unknown>
+
+    expect(result).toMatchObject({ count: 1, total_count: 1, has_more: false })
+    expect(result).not.toHaveProperty('next_offset')
+  })
+
+  it('finds a value past row 1000: the fuzzy search ranks the whole dimension', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // ensure rpc
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false, is_active: true }, error: null })
+    enqueue({
+      data: Array.from({ length: 1000 }, (_, i) => ({
+        id: `v${i}`, code: `P${String(i).padStart(4, '0')}`, name: `Löpande projekt ${i}`, is_active: true, start_date: null, end_date: null,
+      })),
+      error: null,
+    })
+    enqueue({
+      data: [{ id: 'v-late', code: 'Z9', name: 'Zinkgruvan ombyggnad', is_active: true, start_date: null, end_date: null }],
+      error: null,
+    })
+
+    const result = (await listDimensionValues.execute(
+      { sie_dim_no: 6, query: 'zinkgruvan' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { values: Array<{ code: string; dimension_value_id: string }> }
+
+    expect(result.values[0]).toMatchObject({ code: 'Z9', dimension_value_id: 'v-late' })
+    expect(findCalls('dimension_values', 'range')).toEqual([[0, 999], [1000, 1999]])
   })
 })
 
@@ -447,6 +556,34 @@ describe('resolveDimensionBags', () => {
     await expect(
       resolveDimensionBags(supabase as never, 'company-1', [{ '12': 'X' }]),
     ).rejects.toThrow(/Okänd dimension 12/)
+  })
+
+  it('resolves a code that sits past the first 1000 registry values', async () => {
+    // Regression: the unpaged registry read stopped at 1000 values, so a
+    // legitimate code on page two answered "Okänt projekt" to every
+    // dims-bag write (create_voucher, categorize, bulk_book, retag).
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: null, error: null }) // ensure rpc
+    enqueue({
+      data: [{ id: 'dim-6', sie_dim_no: 6, name: 'Projekt', parent_sie_dim_no: null, resets_annually: false, is_system: true, is_active: true, sort_order: 20 }],
+      error: null,
+    })
+    enqueue({
+      data: Array.from({ length: 1000 }, (_, i) => ({
+        id: `v${i}`, dimension_id: 'dim-6', code: `P${String(i).padStart(4, '0')}`, name: `Projekt ${i}`, is_active: true, start_date: null, end_date: null,
+      })),
+      error: null,
+    })
+    enqueue({
+      data: [{ id: 'v-late', dimension_id: 'dim-6', code: 'P1000', name: 'Projekt 1000', is_active: true, start_date: null, end_date: null }],
+      error: null,
+    })
+
+    const result = await resolveDimensionBags(supabase as never, 'company-1', [{ '6': 'P1000' }])
+
+    expect(result.bags).toEqual([{ '6': 'P1000' }])
+    expect(result.resolutions).toEqual([])
   })
 })
 
@@ -731,7 +868,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     })
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
-    enqueue({ data: { ledger_account: '1931' }, error: null }) // resolveSettlementAccount: explicit cash_account_id lookup
+    enqueue({ data: { ledger_account: '1931', currency: 'SEK' }, error: null }) // resolveSettlementAccount: explicit cash_account_id lookup
     enqueue({ data: tx, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
@@ -851,6 +988,12 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
     enqueue({ data: null, error: null })
     enqueue({ data: REGISTRY_ROWS, error: null })
     enqueue({ data: VALUE_ROWS, error: null })
+    // enforceBulkBookDimensionPolicy: rules (none) → validateEntryDimensions
+    // (settings → dimensions → dimension_values)
+    enqueue({ data: [], error: null })
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: REGISTRY_ROWS, error: null })
+    enqueue({ data: VALUE_ROWS, error: null })
     // transactions fetch
     enqueue({
       data: [{ id: 'tx-1', amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }],
@@ -967,6 +1110,11 @@ describe('gnubok_bulk_book_transactions: approval-queue title', () => {
     enqueue({ data: null, error: null })
     enqueue({ data: REGISTRY_ROWS, error: null })
     enqueue({ data: VALUE_ROWS, error: null })
+    // enforceBulkBookDimensionPolicy: rules (none), then registry validation.
+    enqueue({ data: [], error: null })
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: REGISTRY_ROWS, error: null })
+    enqueue({ data: VALUE_ROWS, error: null })
     enqueue({
       data: [
         { id: 'tx-1', amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
@@ -1011,5 +1159,76 @@ describe('gnubok_bulk_book_transactions: approval-queue title', () => {
     expect(title).toContain('2026-05-12')
     expect(title).toContain('NORDNET UTTAG')
     expect(title).toContain('(+1 till)')
+  })
+})
+
+/**
+ * The staging door runs the same dimension policy as the dashboard and v1
+ * bulk-book doors (enforceBulkBookDimensionPolicy): account rules applied and
+ * asserted, registry validation. The staged lines, and so the approval card,
+ * carry exactly what the executor posts.
+ */
+describe('gnubok_bulk_book_transactions: dimension policy at stage', () => {
+  const untaggedEntry = {
+    description: 'Samlingsverifikation material',
+    lines: [
+      { account_number: '4010', debit_amount: 400, credit_amount: 0, currency: 'SEK' },
+      { account_number: '1930', debit_amount: 0, credit_amount: 400, currency: 'SEK' },
+    ],
+  }
+  const ruleRow = (overrides: Record<string, unknown>) => ({
+    account_number: '4010',
+    rule_type: 'default',
+    dimensions: { sie_dim_no: 6, name: 'Projekt' },
+    dimension_values: { code: 'P001' },
+    ...overrides,
+  })
+
+  it('refuses to stage when a required rule is unsatisfied', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const inserts = captureInserts(supabase)
+    // Untagged lines: the resolver makes no query; the policy reads the rules.
+    enqueue({ data: [ruleRow({ rule_type: 'required', dimension_values: null })], error: null })
+
+    await expect(
+      bulkBookTransactions.execute(
+        { tx_ids: ['tx-1'], new_entry: untaggedEntry },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+    ).rejects.toMatchObject({ code: 'MANDATORY_DIMENSION_MISSING' })
+    expect(inserts.find((i) => i.table === 'pending_operations')).toBeUndefined()
+  })
+
+  it('stages the tag a default rule applies, so the approval matches the commit', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const inserts = captureInserts(supabase)
+    enqueue({ data: [ruleRow({})], error: null }) // account_dimension_rules
+    enqueue({ data: { dimensions_enabled: true }, error: null }) // registry validation: settings
+    enqueue({ data: REGISTRY_ROWS, error: null })
+    enqueue({ data: VALUE_ROWS, error: null })
+    enqueue({
+      data: [{ id: 'tx-1', amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // chart_of_accounts names
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-bulk-rule' }, error: null }) // pending_operations insert
+
+    const result = (await bulkBookTransactions.execute(
+      { tx_ids: ['tx-1'], new_entry: untaggedEntry },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const params = inserts.find((i) => i.table === 'pending_operations')!.payload.params as {
+      new_entry: { lines: Array<{ account_number: string; dimensions?: Record<string, string> }> }
+    }
+    expect(params.new_entry.lines[0].dimensions).toEqual({ '6': 'P001' })
+    expect(params.new_entry.lines[1].dimensions).toBeUndefined()
   })
 })

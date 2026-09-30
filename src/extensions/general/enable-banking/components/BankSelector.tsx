@@ -1,9 +1,11 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { ChevronRight, Landmark, Loader2, Search } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
+import { bankMatchesQuery, searchAliasHint } from '@/lib/bank-sync/bank-search'
 import { cn } from '@/lib/utils'
 import { matchBankByName } from '../lib/bank-match'
 
@@ -124,6 +126,7 @@ export function BankSelector({
   connectingBankName = null,
   className,
 }: BankSelectorProps) {
+  const t = useTranslations('settings_banking')
   const [banks, setBanks] = useState<Bank[]>([])
   const [isSandbox, setIsSandbox] = useState(true)
   const [isLoading, setIsLoading] = useState(true)
@@ -198,9 +201,8 @@ export function BankSelector({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- onPsuTypeDetected is a stable setter, only run on mount
   }, [onPsuTypeDetected])
 
-  const filteredBanks = banks.filter((bank) =>
-    bank.name.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const filteredBanks = banks.filter((bank) => bankMatchesQuery(bank, searchQuery))
+  const aliasHint = searchAliasHint(filteredBanks, searchQuery)
 
   const showPopular = !isSandbox && !searchQuery
   const popularBanks = showPopular
@@ -295,6 +297,13 @@ export function BankSelector({
                 </section>
               )}
             </div>
+          )}
+          {/* A row found through a brand name ("Bokio") is named after the
+              bank that holds the account: one muted line says why. */}
+          {aliasHint && (
+            <p className="px-1 text-[12.5px] leading-relaxed text-muted-foreground">
+              {t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}
+            </p>
           )}
         </>
       )}

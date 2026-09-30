@@ -129,6 +129,12 @@ describe('matcher finds the gap templates from bank text', () => {
     expect(top('TILLVÄXTVERKET PROJEKTBIDRAG', 50000)).toBe('grant_received')
   })
 
+  it('routes a gym to Friskvård, but not a massage, which its own rule puts at 25 % against the 6 % it books (PostHog PH 118)', () => {
+    expect(top('NORDIC WELLNESS GBG', -499)).toBe('personnel_wellness')
+    const massage = makeTransaction({ description: 'IDROTTSMASSAGE STHLM', original_description: 'IDROTTSMASSAGE STHLM', merchant_name: null, amount: -1000 })
+    expect(findMatchingTemplates(massage).map((m) => m.template.id)).not.toContain('personnel_wellness')
+  })
+
   it('leaves the default fixture (a grocery store) without a refreshments match', () => {
     // Grocery names are deliberately not keywords: for an enskild firma an
     // ICA row is more often private than personalfika.

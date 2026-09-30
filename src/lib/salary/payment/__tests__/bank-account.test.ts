@@ -23,7 +23,6 @@ describe('resolveDomesticBankAccount', () => {
       ok: true,
       clearing4: '6000',
       accountDigits: '1234567',
-      fitsBgLb: true,
     })
   })
 
@@ -32,16 +31,14 @@ describe('resolveDomesticBankAccount', () => {
       ok: true,
       clearing4: '8327',
       accountDigits: '1123456789',
-      fitsBgLb: true,
     })
   })
 
-  it('resolves a 5-digit clearing with a 10-digit account, and says it does not fit the LB field', () => {
+  it('resolves a 5-digit clearing with a 10-digit account into 11 account digits', () => {
     expect(resolveDomesticBankAccount('83279', '1234567890')).toEqual({
       ok: true,
       clearing4: '8327',
       accountDigits: '91234567890',
-      fitsBgLb: false,
     })
   })
 
@@ -50,7 +47,6 @@ describe('resolveDomesticBankAccount', () => {
       ok: true,
       clearing4: '1708',
       accountDigits: '2042825',
-      fitsBgLb: true,
     })
   })
 
@@ -73,7 +69,6 @@ describe('resolveDomesticBankAccount', () => {
       ok: true,
       clearing4: '8327',
       accountDigits: '1123456789',
-      fitsBgLb: true,
     })
   })
 
@@ -96,20 +91,19 @@ describe('resolveDomesticBankAccount', () => {
 })
 
 describe('payeeAccountProblem', () => {
-  it('is null when the format carries the account', () => {
-    expect(payeeAccountProblem('6000', '1234567', 'bg_lb')).toBeNull()
-    expect(payeeAccountProblem('6000', '1234567', 'pain001')).toBeNull()
-    expect(payeeAccountProblem('83279', '1234567890', 'pain001')).toBeNull()
+  it('is null for a pair that names a payable account', () => {
+    expect(payeeAccountProblem('6000', '1234567')).toBeNull()
+    expect(payeeAccountProblem('83279', '1234567890')).toBeNull()
   })
 
-  it('names the LB field width for a 5-digit clearing with a 10-digit account', () => {
-    expect(payeeAccountProblem('83279', '1234567890', 'bg_lb')).toBe('bg_lb_account_too_long')
+  it('carries a 5-digit clearing with a 10-digit account: the LB account field (TK40) is 12 wide (crm#174)', () => {
+    expect(payeeAccountProblem('83279', '1234567890')).toBeNull()
+    expect(payeeAccountProblem('8327-9', '9612345678')).toBeNull()
   })
 
-  it('reports an unresolvable pair the same way for every format', () => {
-    expect(payeeAccountProblem('3300', '19850101234', 'bg_lb')).toBe('account_format')
-    expect(payeeAccountProblem('3300', '19850101234', 'pain001')).toBe('account_format')
-    expect(payeeAccountProblem('123', '1234567', 'pain001')).toBe('clearing_format')
+  it('reports an unresolvable pair the same way every generator does', () => {
+    expect(payeeAccountProblem('3300', '19850101234')).toBe('account_format')
+    expect(payeeAccountProblem('123', '1234567')).toBe('clearing_format')
   })
 })
 
@@ -117,31 +111,30 @@ describe('PayeeAccountError', () => {
   it('names the payee and the fix, and never the clearing or account number', () => {
     let caught: unknown
     try {
-      payeeAccountParts('Sara Svensson', '83279', '9612345678', 'bg_lb')
+      payeeAccountParts('Lena Lund', '5037', '96123456789')
     } catch (err) {
       caught = err
     }
     expect(caught).toBeInstanceOf(PayeeAccountError)
     const error = caught as PayeeAccountError
-    expect(error.payeeName).toBe('Sara Svensson')
-    expect(error.problem).toBe('bg_lb_account_too_long')
-    expect(error.message).toContain('Sara Svensson')
-    expect(error.message).toContain('pain.001')
+    expect(error.payeeName).toBe('Lena Lund')
+    expect(error.problem).toBe('account_format')
+    expect(error.message).toContain('Lena Lund')
+    expect(error.message).toContain('Rätta bankuppgifterna')
     // 'ISO 20022' is the only digit run allowed in the text.
     expect(error.message.replace('ISO 20022', '')).not.toMatch(/\d{4,}/)
   })
 
-  it('returns the routing parts when the format carries the account', () => {
-    expect(payeeAccountParts('Sara Svensson', '83279', '9612345678', 'pain001')).toEqual({
+  it('returns the routing parts for a payable pair, including a 5-digit clearing with a 10-digit account', () => {
+    expect(payeeAccountParts('Sara Svensson', '83279', '9612345678')).toEqual({
       clearing4: '8327',
       accountDigits: '99612345678',
-      fitsBgLb: false,
     })
   })
 })
 
 describe('PayeeAccountError through getErrorMessage (the GENERATOR_FAILED backstop)', () => {
-  it.each(['clearing_format', 'account_format', 'bg_lb_account_too_long'] as const)(
+  it.each(['clearing_format', 'account_format'] as const)(
     'keeps the named Swedish text for %s',
     (problem) => {
       const error = new PayeeAccountError('Sara Svensson', problem)
@@ -153,17 +146,17 @@ describe('PayeeAccountError through getErrorMessage (the GENERATOR_FAILED backst
 describe('describePayeeAccountProblems', () => {
   it('groups payees by problem into one sentence each', () => {
     const text = describePayeeAccountProblems([
-      { name: 'Anna Ek', problem: 'bg_lb_account_too_long' },
+      { name: 'Anna Ek', problem: 'clearing_format' },
       { name: 'Bo Ek', problem: 'account_format' },
-      { name: 'Cia Ek', problem: 'bg_lb_account_too_long' },
+      { name: 'Cia Ek', problem: 'clearing_format' },
     ])
-    expect(text).toContain('Anna Ek, Cia Ek: kontonumret ryms inte i Bankgirot LB-filen')
+    expect(text).toContain('Anna Ek, Cia Ek: clearingnumret är ogiltigt')
     expect(text).toContain('Bo Ek: kontonumret är ogiltigt')
   })
 })
 
 describe('employeeBankDetailsRemark', () => {
-  it('is null for a payable pair, including the one the LB field cannot hold', () => {
+  it('is null for a payable pair, including a 5-digit clearing with a 10-digit account', () => {
     expect(employeeBankDetailsRemark('Anna Ek', '6000', '1234567')).toBeNull()
     expect(employeeBankDetailsRemark('Sara Svensson', '8327-9', '9612345678')).toBeNull()
   })

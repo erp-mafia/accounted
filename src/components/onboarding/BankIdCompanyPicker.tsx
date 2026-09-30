@@ -25,7 +25,6 @@ import '@/components/onboarding/journey/journey.css'
 
 interface BankIdCompanyPickerProps {
   firstName: string | null
-  teamId: string
   /** Active engagements not yet in Accounted, in CompanyRoles order. */
   roles: EnrichmentCompanyRole[]
   enrichmentStale: boolean

@@ -55,6 +55,7 @@ import {
   createInvoicePaymentJournalEntry as mockedPayment,
   createInvoiceCashEntry as mockedCash,
 } from '@/lib/bookkeeping/invoice-entries'
+import { createJournalEntry as mockedCreateJournalEntry } from '@/lib/bookkeeping/engine'
 import { POST as markPaid } from '../route'
 import { eventBus } from '@/lib/events'
 
@@ -1055,5 +1056,107 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(res.status).toBe(200)
     const update = calls.find((c) => c.table === 'invoices' && c.method === 'update')
     expect(update!.args[0]).toMatchObject({ status: 'paid', paid_amount: 1000, remaining_amount: 0 })
+  })
+})
+
+describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid: custom line dimensions', () => {
+  function supabaseForPartial() {
+    return makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: SENT_INVOICE, error: null },
+        {
+          data: { ...SENT_INVOICE, status: 'partially_paid', remaining_amount: 7500, paid_amount: 5000 },
+          error: null,
+        },
+      ],
+      company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+      invoice_payments: { data: { id: 'ip-1' }, error: null },
+      transactions: { data: [], error: null },
+    })
+  }
+
+  it('keeps each custom line its own dimensions, as the dashboard mark-paid does', async () => {
+    mockServiceClient.mockReturnValue(supabaseForPartial())
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        {
+          payment_date: '2026-05-12',
+          lines: [
+            { account_number: '1930', debit_amount: 5000, credit_amount: 0, dimensions: { '6': 'P1' } },
+            {
+              account_number: '1510',
+              debit_amount: 0,
+              credit_amount: 5000,
+              line_description: 'Delbetalning',
+              dimensions: { '6': 'P1', '1': 'KS1' },
+            },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const createEntry = mockedCreateJournalEntry as ReturnType<typeof vi.fn>
+    expect(createEntry).toHaveBeenCalledTimes(1)
+    const input = createEntry.mock.calls[0][3] as {
+      source_type: string
+      lines: Array<{ account_number: string; dimensions?: Record<string, string> }>
+    }
+    expect(input.source_type).toBe('invoice_paid')
+    expect(input.lines.map((l) => [l.account_number, l.dimensions])).toEqual([
+      ['1930', { '6': 'P1' }],
+      ['1510', { '6': 'P1', '1': 'KS1' }],
+    ])
+  })
+
+  it('leaves untagged custom lines untagged', async () => {
+    mockServiceClient.mockReturnValue(supabaseForPartial())
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        {
+          payment_date: '2026-05-12',
+          lines: [
+            { account_number: '1930', debit_amount: 5000, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: 5000 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const input = (mockedCreateJournalEntry as ReturnType<typeof vi.fn>).mock.calls[0][3] as {
+      lines: Array<{ dimensions?: Record<string, string> }>
+    }
+    for (const line of input.lines) expect(line.dimensions).toBeUndefined()
+  })
+
+  it('returns 400 for a custom line whose dimension bag is invalid, booking nothing', async () => {
+    mockServiceClient.mockReturnValue(supabaseForPartial())
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        {
+          payment_date: '2026-05-12',
+          lines: [
+            { account_number: '1930', debit_amount: 5000, credit_amount: 0, dimensions: { projekt: 'P1' } },
+            { account_number: '1510', debit_amount: 0, credit_amount: 5000 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(mockedCreateJournalEntry).not.toHaveBeenCalled()
   })
 })

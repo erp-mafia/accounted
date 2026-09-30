@@ -1,5 +1,14 @@
 # BAS Account Mapping & Anläggningsregister
 
+<!-- toc -->
+**Contents**
+
+- [BAS Account Structure for Fixed Assets](#bas-account-structure-for-fixed-assets)
+- [Anläggningsregister (Fixed Asset Register)](#anläggningsregister-fixed-asset-register)
+- [Förbrukningsinventarier](#förbrukningsinventarier)
+
+<!-- /toc -->
+
 ## BAS Account Structure for Fixed Assets
 
 Pattern: xx0 = asset, xx8 = accumulated impairment (nedskrivning), xx9 = accumulated depreciation.
@@ -7,6 +16,12 @@ Pattern: xx0 = asset, xx8 = accumulated impairment (nedskrivning), xx9 = accumul
 Kontogrupp 12 is the exception after BAS 2026: 1212/1214/1216/1217 and
 1222/1224/1226/1227 are asset accounts that all accumulate on the group's
 single xx9 (1219 and 1229 respectively).
+
+Other BAS 2026 changes relevant here: group 10 gains **1090 Övriga immateriella
+anläggningstillgångar** (1092 tomträtter, 1098/1099), matching the new K2
+balance-sheet post; 1292 = djur som anläggningstillgång; impairment is
+7731/7732/7733 with reversals 7781/7782/7783; 7836 leasade tillgångar and 7839
+övriga remain.
 
 ### Intangible Assets (Kontogrupp 10)
 
@@ -163,7 +178,7 @@ BFL 5 kap. 4 § requires subsidiary accounting (sidoordnad bokföring) for fixed
 - **K3 (punkt 4.8):** Must record information per component
 - **Grouping (punkt 4.9):** Similar low-value assets acquired simultaneously may be grouped as one entry
 - **Disposals (punkt 4.7):** Must note date and proceeds of disposals/scrappings
-- **Theft-attractive items (punkt 4.11):** Items expensed as förbrukningsinventarier but stöldbegärliga should still be tracked
+- **Directly expensed assets (punkt 4.11):** Assets expensed directly in accordance with god redovisningssed (e.g. förbrukningsinventarier) need not be entered in the anläggningsregister. Tracking stöldbegärliga items separately is an internal-control choice, not a BFNAR requirement.
 
 ### Note Disclosure (ÅRL 5 kap. 8 §, 25 §)
 
@@ -187,6 +202,7 @@ Immediate expensing permitted for:
 | 2024 | 57,300 kr | **28,650 kr** |
 | 2025 | 58,800 kr | **29,400 kr** |
 | 2026 | 59,200 kr | **29,600 kr** |
+| 2027 | 59,600 kr | **29,800 kr** (calculated by SCB, not yet formally set) |
 
 Measured excluding deductible VAT.
 

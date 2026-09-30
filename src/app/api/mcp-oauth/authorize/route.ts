@@ -3,8 +3,14 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { createAuthCode } from '@/lib/auth/oauth-codes'
-import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { mfaStepUpApplies, shouldEnforceMfa } from '@/lib/auth/mfa'
 import { getActiveCompanyId } from '@/lib/company/context'
+import {
+  listUserCompaniesForPicker,
+  parseCompanyAccessChoices,
+  resolveCompanySelection,
+  type PickerCompany,
+} from '@/lib/company/company-picker'
 import { getBranding } from '@/lib/branding/service'
 import {
   capScopesForRole,
@@ -13,6 +19,7 @@ import {
   type RedirectUriResolution,
 } from '@/lib/auth/oauth-allowlist'
 import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
+import { requestCspNonce } from '@/lib/security/csp'
 import {
   ALL_SCOPES,
   API_KEY_SCOPES,
@@ -53,18 +60,17 @@ type ScopeParseResult =
  *     unknown: refusing the request is safer than silently dropping it back
  *     to defaults the caller didn't ask for (V10.2.6).
  *
- * The bare `mcp` marker is treated as "no granular scopes" and accepted for
- * backwards compatibility with Claude's connector: it falls through to
- * `undefined` so the read-only defaults apply.
+ * Marker scopes carry no granular request and are dropped before parsing:
+ * `mcp`, the one scope discovery advertises (Claude sends it bare), and
+ * `offline_access`, which Gemini adds to ask for a refresh token (every
+ * grant gets one anyway). A request of markers only is the same as no scope.
  */
+const MARKER_SCOPES: ReadonlySet<string> = new Set(['mcp', 'offline_access'])
+
 function parseRequestedScopes(scopeParam: string | null): ScopeParseResult {
   if (!scopeParam) return { kind: 'ok', scopes: undefined }
-  const requested = scopeParam.split(/\s+/).filter(Boolean)
+  const requested = scopeParam.split(/\s+/).filter((s) => s && !MARKER_SCOPES.has(s))
   if (requested.length === 0) return { kind: 'ok', scopes: undefined }
-  // The coarse-grained `mcp` marker is treated as "no granular request" so
-  // we can keep Claude's existing flow working unchanged.
-  const onlyMcp = requested.length === 1 && requested[0] === 'mcp'
-  if (onlyMcp) return { kind: 'ok', scopes: undefined }
   const valid = requested.filter((s): s is ApiKeyScope => s in API_KEY_SCOPES)
   if (valid.length === 0) {
     return {
@@ -121,22 +127,26 @@ function buildLoginRedirect(request: Request): Response {
  * MFA on every subsequent call: so the consent session itself must be AAL2.
  * The middleware MFA gate deliberately exempts /api/mcp-oauth/* (the token
  * endpoint is Bearer-only), which makes this route responsible for its own
- * step-up. Returns null when the session is AAL2 (or MFA isn't required),
- * otherwise a redirect to /mfa/verify (factor enrolled, session still AAL1)
- * or /mfa/enroll (no factor at all) that returns to this authorize URL.
+ * step-up. Returns null when the session is AAL2, or when the user has no
+ * verified factor and enrolment is not forced; otherwise a redirect to
+ * /mfa/verify (factor enrolled, session still AAL1) or /mfa/enroll (no factor
+ * while NEXT_PUBLIC_REQUIRE_MFA forces enrolment) that returns to this
+ * authorize URL. A user with a factor is stepped up whatever the flag says
+ * (mfaStepUpApplies): the key this consent mints must never come out of a
+ * password-only session of an enrolled account.
  *
  * The enrollment leg matters for accounts created inside the OAuth popup
  * (issue #1814): the middleware only forces enrollment once a company exists,
  * so a brand-new password account would otherwise consent at AAL1 and mint an
  * MFA-exempt key for an account with no second factor. BankID-linked accounts
- * are exempt via shouldEnforceMfa, same as everywhere else.
+ * are exempt, same as everywhere else.
  */
 async function requireAal2(
   supabase: SupabaseClient,
   user: User,
   request: Request,
 ): Promise<Response | null> {
-  if (!shouldEnforceMfa(user)) return null
+  if (!mfaStepUpApplies(user)) return null
   const url = new URL(request.url)
   const returnTo = `${url.pathname}${url.search}`
   const stepUp = (page: '/mfa/verify' | '/mfa/enroll') =>
@@ -151,14 +161,22 @@ async function requireAal2(
   if (aal.currentLevel === 'aal2') return null
   if (aal.nextLevel === 'aal2') return stepUp('/mfa/verify')
 
-  // nextLevel below aal2 should mean no verified factor exists. If one does
-  // exist anyway (inconsistent answer), step up rather than enroll a second
-  // factor. Otherwise enroll: mirrors the middleware gate (lib/supabase/
-  // middleware.ts), which skips zero-company users and so never ran for an
-  // account created inside the popup.
-  const { data: factors } = await supabase.auth.mfa.listFactors()
-  const hasVerifiedFactor = factors?.totp?.some((f) => f.status === 'verified') ?? false
-  return stepUp(hasVerifiedFactor ? '/mfa/verify' : '/mfa/enroll')
+  // nextLevel below aal2 should mean no verified factor exists, but nextLevel
+  // is computed from the cookie's copy of the factor list, which whoever
+  // holds the password can edit. So "no factor" is confirmed with the auth
+  // server before consent may pass at AAL1, and an unanswered lookup fails
+  // closed to the verify page. A factor found there means step up, never
+  // enroll a second one. Without one, enrol only while enrolment is forced:
+  // mirrors the middleware gate (lib/supabase/middleware.ts), which skips
+  // zero-company users and so never ran for an account created inside the
+  // popup.
+  const { data: factors, error: factorsError } = await supabase.auth.mfa.listFactors()
+  if (factorsError || !factors) return stepUp('/mfa/verify')
+  const hasVerifiedFactor = [...(factors.all ?? []), ...(factors.totp ?? [])].some(
+    (f) => f.status === 'verified',
+  )
+  if (hasVerifiedFactor) return stepUp('/mfa/verify')
+  return shouldEnforceMfa(user) ? stepUp('/mfa/enroll') : null
 }
 
 function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Response {
@@ -271,6 +289,27 @@ export async function GET(request: Request) {
     role = lookup.role
   }
 
+  // Every non-archived company the user belongs to, active first. With two
+  // or more the page renders a company picker (every company pre-set to read
+  // and write, so one-click consent stays one click); with one the page is
+  // unchanged. A failed listing
+  // is a hard stop: rendering the single-company page would mint an
+  // unrestricted key without showing the user what it reaches.
+  let pickerCompanies: PickerCompany[] = []
+  if (companyId) {
+    try {
+      pickerCompanies = await listUserCompaniesForPicker(supabase, user.id, {
+        activeCompanyId: companyId,
+      })
+    } catch {
+      return NextResponse.json(
+        { error: 'server_error', error_description: 'Could not resolve your companies' },
+        { status: 500 }
+      )
+    }
+  }
+  const showCompanyPicker = pickerCompanies.length >= 2
+
   const appNameLower = escapeHtml(getBranding().appName.toLowerCase())
 
   // Client identity and the host the browser will be sent to after consent.
@@ -287,11 +326,22 @@ export async function GET(request: Request) {
         <span class="fact-value fact-host">${escapeHtml(redirectHost)}</span>
       </div>`
 
-  const accountRowHtml = companyName
-    ? `<span class="fact-label">Företag</span>
-        <span class="fact-value">${escapeHtml(companyName)}</span>`
-    : `<span class="fact-label">Konto</span>
-        <span class="fact-value">${escapeHtml(user.email ?? '')}</span>`
+  // With the picker on the page the company block below replaces this row:
+  // two "Företag" labels for the same choice would read as a contradiction.
+  const accountRowHtml = showCompanyPicker
+    ? ''
+    : companyName
+      ? `<div class="fact">
+        <span class="fact-label">Företag</span>
+        <span class="fact-value">${escapeHtml(companyName)}</span>
+      </div>`
+      : `<div class="fact">
+        <span class="fact-label">Konto</span>
+        <span class="fact-value">${escapeHtml(user.email ?? '')}</span>
+      </div>`
+  const companyPickerHtml = showCompanyPicker
+    ? renderCompanyPicker(pickerCompanies, companyId)
+    : ''
   const noCompanyNoteHtml = companyId
     ? ''
     : `<p class="note">Du har inget företag i ${appNameLower} ännu. Du kan ansluta ändå: skapa företaget i appen så använder anslutningen det automatiskt, utan att du behöver ansluta på nytt.</p>`
@@ -300,8 +350,10 @@ export async function GET(request: Request) {
   // makes the inline block executable while keeping the rest of the page
   // immune to script injection: without this the consent page is
   // incompatible with a strict CSP and counts as unsafe-inline (ASVS V3.3,
-  // SOC 2 CC6.1). The nonce is regenerated per response.
-  const cspNonce = crypto.randomBytes(16).toString('base64')
+  // SOC 2 CC6.1). Fresh per request: the proxy's own nonce for this request,
+  // so the script runs under the proxy's CSP header as well as under the one
+  // set below (a self-hosted `next start` delivers only the proxy's).
+  const cspNonce = requestCspNonce(request.headers)
 
   // Bind the requested scope to the consent display. The HMAC signature is
   // verified on POST so a tampered form submission cannot widen the grant
@@ -721,6 +773,75 @@ export async function GET(request: Request) {
       border-color: var(--primary);
     }
     .allow:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+    .allow:disabled {
+      background: var(--fg-faint);
+      border-color: var(--fg-faint);
+      cursor: not-allowed;
+    }
+    .companies {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 0.875rem 0.5rem;
+      margin-bottom: 1rem;
+      background: var(--surface);
+    }
+    .companies .scopes-header {
+      margin-bottom: 0.375rem;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .companies .scopes-controls button { white-space: nowrap; }
+    .companies-help {
+      font-size: 0.75rem;
+      color: var(--fg-muted);
+      line-height: 1.5;
+      padding: 0.25rem 0 0.375rem;
+    }
+    .company-tag {
+      font-size: 0.6875rem;
+      color: var(--fg-faint);
+      margin-left: 0.375rem;
+    }
+    .company-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.375rem 0.5rem;
+      margin: 0 -0.5rem;
+      border-radius: 6px;
+    }
+    .company-row label {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: baseline;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--fg);
+    }
+    .company-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .company-row .company-tag { flex-shrink: 0; }
+    .company-access {
+      flex-shrink: 0;
+      font-family: inherit;
+      font-size: 0.75rem;
+      color: var(--fg);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.3125rem 0.5rem;
+      cursor: pointer;
+    }
+    .company-access:hover { border-color: var(--border-strong); }
+    .company-access:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+    }
     .deny {
       background: var(--surface);
       color: var(--fg);
@@ -752,9 +873,7 @@ export async function GET(request: Request) {
 
     <div class="facts">
       ${clientRowsHtml}
-      <div class="fact">
-        ${accountRowHtml}
-      </div>
+      ${accountRowHtml}
     </div>
     ${noCompanyNoteHtml}
     ${roleNoteHtml}
@@ -762,6 +881,7 @@ export async function GET(request: Request) {
     <form method="POST" action="${escapeHtml(url.pathname + url.search)}" id="consent-form">
       <input type="hidden" name="scope_binding" value="${escapeHtml(scopeBindingValue)}">
       <input type="hidden" name="scope_binding_sig" value="${escapeHtml(scopeBindingSignature)}">
+      ${companyPickerHtml}
 
       <details class="scopes-details">
         <summary>
@@ -791,7 +911,7 @@ export async function GET(request: Request) {
 
       <div class="actions">
         <button type="submit" name="consent" value="deny" class="deny">Neka</button>
-        <button type="submit" name="consent" value="allow" class="allow">Tillåt åtkomst</button>
+        <button type="submit" name="consent" value="allow" class="allow" id="allow-button">Tillåt åtkomst</button>
       </div>
     </form>
 
@@ -814,6 +934,31 @@ export async function GET(request: Request) {
       document.getElementById('select-none').addEventListener('click', function() {
         setAll(function() { return false; });
       });
+      // Company picker (multi-company users only): the server refuses a
+      // consent where every company is "Ingen åtkomst", so keep the Allow
+      // button in step with the choices. The two shortcut buttons set every
+      // row at once.
+      var companySelects = form.querySelectorAll('select[name="company_access"]');
+      var allowButton = document.getElementById('allow-button');
+      if (companySelects.length && allowButton) {
+        var syncAllow = function() {
+          var any = false;
+          companySelects.forEach(function(s) { if (!/:none$/.test(s.value)) any = true; });
+          allowButton.disabled = !any;
+        };
+        var setAllCompanies = function(level) {
+          companySelects.forEach(function(s) {
+            s.value = s.getAttribute('data-company') + ':' + level;
+          });
+          syncAllow();
+        };
+        companySelects.forEach(function(s) { s.addEventListener('change', syncAllow); });
+        var allWrite = document.getElementById('companies-all-write');
+        if (allWrite) allWrite.addEventListener('click', function() { setAllCompanies('write'); });
+        var allRead = document.getElementById('companies-all-read');
+        if (allRead) allRead.addEventListener('click', function() { setAllCompanies('read'); });
+        syncAllow();
+      }
     })();
   </script>
 </body>
@@ -905,7 +1050,55 @@ export async function POST(request: Request) {
   // uncapped and the token endpoint mints the key unbound. The role caps the
   // grant below and is re-checked at /token against the same company, which
   // travels in the code payload.
-  const companyId = await getActiveCompanyId(supabase, user.id)
+  const activeCompanyId = await getActiveCompanyId(supabase, user.id)
+
+  // Company allowlist (multi-company users). The form's `companies` values
+  // are never trusted: they are intersected with the live memberships, and
+  // the picker order (active first) decides the default. Keeping every
+  // company ticked means an unrestricted key (companyIds null) that follows
+  // future memberships; a strict subset travels in the code payload. The
+  // default company must sit inside the selection, so an unticked active
+  // company hands the default to the first ticked one, and the role cap
+  // below is computed against that default.
+  let companyId = activeCompanyId
+  let companyIds: string[] | null = null
+  let readOnlyCompanyIds: string[] | null = null
+  if (activeCompanyId) {
+    let memberships: PickerCompany[]
+    try {
+      memberships = await listUserCompaniesForPicker(supabase, user.id, { activeCompanyId })
+    } catch {
+      return errorRedirect(
+        request,
+        redirectUri,
+        state,
+        'server_error',
+        'Could not resolve your companies'
+      )
+    }
+    if (memberships.length >= 2) {
+      // One `company_access=<id>:<write|read|none>` per company row. A
+      // company chosen as read-only makes the key restricted (the level lives
+      // on its allowlist row) even when every company is selected.
+      const choices = parseCompanyAccessChoices(formData.getAll('company_access'))
+      const selection = resolveCompanySelection(
+        choices.companyIds,
+        memberships,
+        activeCompanyId,
+        choices.readOnlyCompanyIds,
+      )
+      if (!selection) {
+        return NextResponse.json(
+          { error: 'invalid_request', error_description: 'Select at least one company' },
+          { status: 400 }
+        )
+      }
+      companyId = selection.defaultCompanyId
+      companyIds = selection.companyIds
+      readOnlyCompanyIds = selection.readOnlyCompanyIds
+    }
+  }
+
   let role: string | null = null
   if (companyId) {
     const lookup = await lookupCompanyRole(supabase, user.id, companyId)
@@ -964,7 +1157,7 @@ export async function POST(request: Request) {
   //          (RFC 6749 §3.3 strict). A client that asked for only read scopes
   //          can never end up with write grants, even if the user tampered
   //          with the form (least-privilege, SOC 2 CC6.3, NIST AC-6).
-  //        • If the client passed no scope (or only the `mcp` marker), the
+  //        • If the client passed no scope (or only marker scopes), the
   //          ceiling = ALL_SCOPES. The resource owner has full discretion at
   //          consent time, which RFC 6749 §3.3 permits ("based on … the
   //          resource owner's instructions"). The silent fallback when the
@@ -999,6 +1192,8 @@ export async function POST(request: Request) {
     redirectUri,
     scopes: grantedScopes,
     companyId,
+    companyIds,
+    readOnlyCompanyIds,
   })
 
   // Redirect to callback with the code
@@ -1057,6 +1252,51 @@ function renderScopeCheckboxes(
   return groups.join('')
 }
 
+/**
+ * Company picker for a user with two or more companies: one row per company
+ * with what the connection may do there. Every row starts at "Läsa och
+ * skriva" (one-click consent stays one click, and leaving every row there
+ * keeps the key unrestricted); the active company is first and tagged, and
+ * so is a company where the user is a viewer (the role caps the connection
+ * there whatever is chosen). Each select posts
+ * `company_access=<id>:<write|read|none>`. The POST handler parses those
+ * values and intersects them with the live memberships, so the ids here are
+ * a display convenience, never a trust boundary.
+ */
+function renderCompanyPicker(companies: PickerCompany[], activeCompanyId: string | null): string {
+  const rows = companies
+    .map((company, index) => {
+      const id = `company-access-${index}`
+      const value = escapeHtml(company.company_id)
+      const tags = [
+        company.company_id === activeCompanyId ? 'aktivt' : null,
+        company.role === 'viewer' ? 'du är läsare' : null,
+      ].filter((tag): tag is string => tag !== null)
+      const tagHtml = tags.length > 0 ? `<span class="company-tag">(${tags.join(', ')})</span>` : ''
+      return `
+    <div class="company-row">
+      <label for="${id}"><span class="company-name">${escapeHtml(company.name)}</span>${tagHtml}</label>
+      <select id="${id}" name="company_access" class="company-access" data-company="${value}">
+        <option value="${value}:write" selected>Läsa och skriva</option>
+        <option value="${value}:read">Bara läsa</option>
+        <option value="${value}:none">Ingen åtkomst</option>
+      </select>
+    </div>`
+    })
+    .join('')
+  return `
+      <div class="companies">
+        <div class="scopes-header">
+          <span class="scopes-title">Företag</span>
+          <div class="scopes-controls">
+            <button type="button" id="companies-all-write">Alla: läsa och skriva</button>
+            <button type="button" id="companies-all-read">Alla: bara läsa</button>
+          </div>
+        </div>${rows}
+        <p class="companies-help">Bara läsa stoppar alla ändringar i företaget, oavsett behörigheterna nedan, och din roll i varje företag gäller alltid. Lämnar du alla på Läsa och skriva följer anslutningen även företag du blir medlem i senare.</p>
+      </div>`
+}
+
 function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'): string {
   const meta = API_KEY_SCOPES[scope]
   const id = `scope-${scope.replace(/[^a-z0-9]/gi, '-')}`
@@ -1100,6 +1340,8 @@ function describeClient(
         return { name: 'ChatGPT (OpenAI)', tag: 'Verifierad', verified: true }
       case 'grok':
         return { name: 'Grok (xAI)', tag: 'Verifierad', verified: true }
+      case 'gemini':
+        return { name: 'Gemini (Google)', tag: 'Verifierad', verified: true }
       case 'cursor':
         return { name: 'Cursor (Anysphere)', tag: 'Verifierad', verified: true }
       case 'cursor_deeplink':

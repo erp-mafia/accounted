@@ -66,6 +66,26 @@ describe('listArchiveHistory', () => {
     expect(findCalls('processing_history', 'in')[0]).toEqual(['event_type', ['DocumentDuplicateSkipped', 'ChannelQuestionAsked', 'ChannelQuestionAnswered', 'TransactionDocumentReplaced']])
   })
 
+  it('names a removed document from the audit row and lists one removal per document, not one per stored version', async () => {
+    enqueue({
+      data: [
+        { id: 'r2', action: 'DELETE', record_id: 'd9', user_id: 'u1', actor_type: 'user', actor_label: null, old_state: { file_name: 'TEST-kvitto.pdf', mime_type: 'application/pdf' }, new_state: null, created_at: '2026-09-24T16:06:02Z' },
+        { id: 'r1', action: 'DELETE', record_id: 'd9', user_id: 'u1', actor_type: 'user', actor_label: null, old_state: { file_name: 'TEST-kvitto.pdf', mime_type: 'application/pdf' }, new_state: null, created_at: '2026-09-24T16:06:01Z' },
+        { id: 'r0', action: 'INSERT', record_id: 'd9', user_id: 'u1', actor_type: 'user', actor_label: null, old_state: null, new_state: { file_name: 'TEST-kvitto.pdf' }, created_at: '2026-09-24T15:34:00Z' },
+      ],
+    })
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'x9', document_id: 'd9', kind: 'extract', started_at: '2026-09-24T15:35:00Z' }] })
+    enqueue({ data: [] })
+    enqueue({ data: [] }) // the document row is gone
+    const events = await listArchiveHistory(supabase, 'co-1', 50)
+    expect(events.map((e) => [e.kind, e.document?.file_name])).toEqual([
+      ['deleted', 'TEST-kvitto.pdf'],
+      ['extracted', 'TEST-kvitto.pdf'],
+      ['ingested', 'TEST-kvitto.pdf'],
+    ])
+  })
+
   it('throws with the failing read', async () => {
     enqueue({ error: { message: 'timeout' } })
     enqueue({ data: [] })

@@ -94,7 +94,9 @@ import {
   createDocumentSignedUrl,
   _resetBucketVerified,
   validateDocumentFile,
+  declaredDocumentType,
   MAX_DOCUMENT_SIZE,
+  isArchivedForOwnJournalEntry,
 } from '../document-service'
 
 // A minimal valid PDF byte sequence (header + EOF): passes magic-byte check.
@@ -198,6 +200,21 @@ describe('receipt image upload metadata', () => {
     for (const type of [undefined, '', 'application/octet-stream', 'image/gif', 'image/svg+xml']) {
       expect(validateDocumentFile({ size: 100, type })).not.toBeNull()
     }
+    // The iPhone default is a document like any other picture.
+    expect(validateDocumentFile({ size: 100, type: 'image/heic' })).toBeNull()
+    expect(validateDocumentFile({ size: 100, type: 'image/heif' })).toBeNull()
+  })
+
+  it('takes the type from the extension when the browser declared none, and never overrides a declared one', () => {
+    expect(declaredDocumentType({ name: 'IMG_7484.heic', type: '' })).toBe('image/heic')
+    expect(declaredDocumentType({ name: 'IMG_7484.HEIF', type: null })).toBe('image/heif')
+    expect(declaredDocumentType({ name: 'kvitto.pdf', type: undefined })).toBe('application/pdf')
+    expect(declaredDocumentType({ name: 'kvitto.pdf', type: 'image/jpeg' })).toBe('image/jpeg')
+    expect(declaredDocumentType({ name: 'okänd.xyz', type: '' })).toBe('')
+    // The generic type a browser sends for a file it does not know is no declaration either.
+    expect(declaredDocumentType({ name: 'IMG_7484.heic', type: 'application/octet-stream' })).toBe('image/heic')
+    expect(declaredDocumentType({ name: 'okänd.xyz', type: 'application/octet-stream' })).toBe('application/octet-stream')
+    expect(declaredDocumentType({ name: null, type: '' })).toBe('')
   })
 
   it.each(pairs)('completes and retries $actual declared $declared with canonical Storage metadata', async ({ actual, declared }) => {
@@ -828,6 +845,16 @@ describe('uploadDocument', () => {
     })
     expect(otherVoucher.id).not.toBe(documents[0].id)
     expect(rows.size).toBe(2)
+
+    // A re-run of a verifikat-scoped import recognises exactly the rows it
+    // archived itself: same company, same verifikat, same content.
+    const archived = rows.get(documents[0].id)!
+    expect(await isArchivedForOwnJournalEntry('company-1', archived)).toBe(true)
+    expect(await isArchivedForOwnJournalEntry('company-1', rows.get(otherVoucher.id)!)).toBe(true)
+    expect(await isArchivedForOwnJournalEntry('company-2', archived)).toBe(false)
+    expect(await isArchivedForOwnJournalEntry('company-1', { ...archived, journal_entry_id: 'je-2' })).toBe(false)
+    expect(await isArchivedForOwnJournalEntry('company-1', { ...archived, id: crypto.randomUUID() })).toBe(false)
+    expect(await isArchivedForOwnJournalEntry('company-1', { ...archived, journal_entry_id: null })).toBe(false)
   })
 
   it('does not treat a non-unique insert error as an idempotent winner', async () => {
@@ -1539,7 +1566,7 @@ describe('deleteDocument', () => {
     const result = await deleteDocument(supabase as never, company, 'doc-1')
 
     expect(result.ok).toBe(true)
-    expect(serviceRemove).toHaveBeenCalledWith([legacy, `documents/${company}/user-1/1_a.pdf`])
+    expect(serviceRemove).toHaveBeenCalledWith([legacy, `documents/${company}/user-1/1_a.pdf`, `previews/${company}/doc-1-v1.jpg`])
     // The documents bucket is WORM (no DELETE policy on storage.objects): a
     // caller-bound remove() is silently blocked by RLS and reports success
     // without deleting, so it must never be used for the removal.

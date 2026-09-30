@@ -67,3 +67,37 @@ export function dimensionFilterDisclosure(dimensions?: Record<string, string>): 
     .map(([dimNo, code]) => `dimension ${dimNo}: ${code}`)
   return `Filtrerad (${parts.join(', ')}), ej fullständig rapport`
 }
+
+export interface DimensionFilterPartialView {
+  /** Always false: the figures cover the tagged lines only. */
+  complete: false
+  /** The text the filtered exports print (dimensionFilterDisclosure). */
+  disclosure: string
+  /** On reports that carry opening balances: IB is left out under a filter. */
+  opening_balances_included?: false
+  /** On reports with a debit = credit check: it says nothing under a filter. */
+  is_balanced_meaningful?: false
+}
+
+/**
+ * Partial-view disclosure for a dimension-filtered report answered as JSON
+ * (v1 REST, MCP). The dashboard marks a filtered report with its chip and the
+ * exports print dimensionFilterDisclosure(); a machine reader has neither,
+ * so the body must say that the figures are not the complete report.
+ * `dropsOpeningBalances`: the report normally carries IB, which is
+ * company-wide and cannot be scoped to a dimension, so it is left out.
+ * `balanceCheck`: the report's is_balanced is meaningless under a filter,
+ * because tagged lines need not balance (a project's costs carry the tag,
+ * the bank line that paid them does not).
+ */
+export function dimensionFilterPartialView(
+  dimensions: Record<string, string>,
+  options: { dropsOpeningBalances?: boolean; balanceCheck?: boolean } = {},
+): DimensionFilterPartialView {
+  return {
+    complete: false,
+    disclosure: dimensionFilterDisclosure(dimensions) ?? '',
+    ...(options.dropsOpeningBalances ? { opening_balances_included: false as const } : {}),
+    ...(options.balanceCheck ? { is_balanced_meaningful: false as const } : {}),
+  }
+}

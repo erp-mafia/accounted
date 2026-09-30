@@ -255,6 +255,25 @@ describe('GET /api/reports/kpi', () => {
     expect(mockMonthlyBreakdown).not.toHaveBeenCalled()
   })
 
+  it('reads the same account overrides, as-of receivables and period payments as the MCP tool', async () => {
+    enqueue({ data: makePeriod() }) // fiscal_periods
+    enqueue({ data: aggPayload() }) // rpc get_kpi_report_aggregates
+    enqueue({ data: [] }) // rpc compute_prior_opening_balances
+    enqueue({ data: CHART }) // chart_of_accounts
+    enqueue({ data: { value: { accountOverrides: { cashPosition: ['1940'] } } } }) // prefs
+    enqueue({ data: PAID_INVOICES }) // invoices
+    enqueue({ data: [] }) // supplier_invoices
+
+    const res = await GET(kpiRequest(), noParams)
+    const { status, body } = await parseJsonResponse<{ data: KPIReport }>(res)
+
+    expect(status).toBe(200)
+    // Override points at 1940, which carries no balance: 1930's 12500 is excluded.
+    expect(body.data.cashPosition).toBe(0)
+    // The period (2026-01-01..03-31) has ended: receivables as they stood then.
+    expect(mockARLedger).toHaveBeenCalledWith(supabase, 'company-1', '2026-03-31')
+  })
+
   it('skips the prior-balance RPC when the period has an opening balance entry', async () => {
     enqueue({ data: makePeriod({ opening_balance_entry_id: 'ob-1' }) }) // fiscal_periods
     enqueue({

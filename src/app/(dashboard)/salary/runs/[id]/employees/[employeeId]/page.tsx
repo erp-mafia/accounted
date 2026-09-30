@@ -334,7 +334,7 @@ export default function SalaryRunEmployeeDetailPage({
         </div>
         {run.status === 'draft' && (
           <div className="page-header-action flex shrink-0 items-center gap-2">
-            <Button onClick={handleCalculate} loading={calculating}>
+            <Button size="sm" onClick={handleCalculate} loading={calculating}>
               {!calculating && <Calculator className="mr-2 h-4 w-4" />}
               {t('calculate')}
             </Button>

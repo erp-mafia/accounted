@@ -703,3 +703,33 @@ describe('SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS', () => {
       .toContain('1000-8999')
   })
 })
+
+describe('getErrorMessage: PT409 database refusals', () => {
+  it('names a registered refusal from a raw PostgREST error in either locale', () => {
+    const err = { code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY' }
+    expect(getErrorMessage(err)).toBe(getErrorEntry('CASH_ACCOUNT_OPERATION_BUSY')!.message_sv)
+    expect(getErrorMessage(err, { locale: 'en' })).toBe(getErrorEntry('CASH_ACCOUNT_OPERATION_BUSY')!.message_en)
+  })
+
+  it('names a registered refusal from a forwarded envelope', () => {
+    expect(getErrorMessage({ error: { code: 'PT409', message: 'BANK_BOOKING_SETTLEMENT_CHANGED' } }))
+      .toBe(getErrorEntry('BANK_BOOKING_SETTLEMENT_CHANGED')!.message_sv)
+  })
+
+  it('names a refusal carried by a thrown BookkeepingDatabaseError', () => {
+    expect(getErrorMessage(new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_SETTLEMENT_CHANGED', 'PT409')))
+      .toBe(getErrorEntry('BANK_BOOKING_SETTLEMENT_CHANGED')!.message_sv)
+  })
+
+  it('tells the user to save the account picker again when the bank route cannot be resolved', () => {
+    const err = { code: 'PT409', message: 'BANK_INGEST_ROUTE_UNRESOLVED' }
+    expect(getErrorMessage(err)).toBe(getErrorEntry('BANK_INGEST_ROUTE_UNRESOLVED')!.message_sv)
+    expect(getErrorMessage(err)).toContain('Välj konton')
+    expect(getErrorMessage(err, { locale: 'en' })).toBe(getErrorEntry('BANK_INGEST_ROUTE_UNRESOLVED')!.message_en)
+  })
+
+  it('keeps the generic conflict for an unregistered name, never echoing it', () => {
+    const message = getErrorMessage({ code: 'PT409', message: 'SOME_UNREGISTERED_REFUSAL' })
+    expect(message).toBe('En konflikt uppstod. Ladda om sidan och försök igen.')
+  })
+})

@@ -99,12 +99,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 -G nodejs nextjs
 
-# /app at runtime is split across the read-only image layer and tmpfs mounts:
+# /app at runtime is split across the read-only image layer and writable mounts
+# (docker-compose.yml):
 #   /app/server.js, /app/node_modules/, /app/package.json   : image (read-only)
-#   /app/.next/                                              : tmpfs (writable)
+#   /app/.next/                                              : named volume (writable)
 #   /app/public/                                             : tmpfs (writable)
-# The entrypoint runs UNPRIVILEGED as nextjs: it copies the templates from
-# /opt/gnubok-template/ into the nextjs-owned tmpfs mounts, substitutes the
+# The entrypoint runs UNPRIVILEGED as nextjs: it empties the nextjs-owned mounts,
+# copies the templates from /opt/gnubok-template/ into them, substitutes the
 # NEXT_PUBLIC_* placeholders, then drops the write bits. Because it never needs
 # to chown or setuid, the container runs under docker-compose's `cap_drop: ALL`
 # + `read_only: true` with no added capabilities.
@@ -112,16 +113,21 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/server.js ./serv
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/package.json ./package.json
 
-# Baked-in templates for runtime population of the tmpfs mounts.
+# Baked-in templates for runtime population of the writable mounts.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/.next /opt/gnubok-template/.next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static /opt/gnubok-template/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public /opt/gnubok-template/public
 
-# Pre-create the tmpfs mount points (empty in the image layer; the entrypoint
-# fills them at startup). Owned by nextjs so the unprivileged entrypoint can
-# write into the tmpfs mounted over them.
+# Pre-create the mount points (empty in the image layer; the entrypoint fills
+# them at startup). Owned by nextjs so the unprivileged entrypoint can write
+# into what is mounted over them. Docker seeds a new named volume with the
+# owner and mode of the directory it covers, so /app/.next's nextjs:nodejs and
+# 750 here are what the next_runtime volume starts with: readable by nodejs
+# group members only, like the uid=1001,mode=750 tmpfs it replaced. The
+# entrypoint re-applies 750 at every start, for volumes an older image created.
 RUN mkdir -p /app/.next/cache /app/public && \
-    chown nextjs:nodejs /app /app/.next /app/.next/cache /app/public
+    chown nextjs:nodejs /app /app/.next /app/.next/cache /app/public && \
+    chmod 750 /app/.next
 
 COPY --chmod=755 --chown=nextjs:nodejs docker/docker-entrypoint.sh ./docker-entrypoint.sh
 

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { loadCatalogSkill, loadSkillCatalog } from '@/lib/agent-skills/catalog'
+import { attachCommunityMeta } from '@/lib/agent-skills/community'
 import { CreateCompanySkillSchema } from '@/lib/agent-skills/validation'
 import { ensureInitialized } from '@/lib/init'
 
@@ -10,7 +11,7 @@ ensureInitialized()
 
 const QuerySchema = z.object({ slug: z.string().min(1).max(250).optional() }).strict()
 
-export const GET = withRouteContext('skills.list', async (request, { supabase, companyId }) => {
+export const GET = withRouteContext('skills.list', async (request, { supabase, companyId, user }) => {
   const query = validateQuery(request, QuerySchema)
   if (!query.success) return query.response
   if (query.data.slug) {
@@ -18,7 +19,7 @@ export const GET = withRouteContext('skills.list', async (request, { supabase, c
     if (!skill) return NextResponse.json({ error: { code: 'NOT_FOUND', message: 'Skillen hittades inte.', message_en: 'Skill not found.' } }, { status: 404 })
     return NextResponse.json({ data: skill }, { headers: { 'Cache-Control': 'private, no-store' } })
   }
-  const skills = await loadSkillCatalog(supabase, companyId)
+  const skills = await attachCommunityMeta(supabase, await loadSkillCatalog(supabase, companyId), user.id)
   return NextResponse.json({ data: skills.map(({ body: _body, ...skill }) => skill) }, { headers: { 'Cache-Control': 'private, no-store' } })
 })
 
@@ -48,6 +49,7 @@ export const POST = withRouteContext('skills.create', async (request, { supabase
     name: input.kind === 'own' ? input.name : null,
     description: input.kind === 'own' ? input.description : null,
     body: input.kind === 'own' ? input.body : null,
+    ...(input.kind === 'own' ? { kind: input.item_kind } : {}),
   }).select('id').single()
   if (error?.code === '23505') return NextResponse.json({ error: { code: 'CONFLICT', message: 'Skillen är redan tillagd.', message_en: 'Skill already added.' } }, { status: 409 })
   if (error) throw error

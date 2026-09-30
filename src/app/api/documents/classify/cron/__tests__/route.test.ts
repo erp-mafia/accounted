@@ -7,6 +7,7 @@ const from = vi.fn()
 vi.mock('@/lib/auth/cron', () => ({ verifyCronSecret: vi.fn(() => null) }))
 vi.mock('@/lib/supabase/service-client', () => ({ createServiceRoleClient: vi.fn(() => ({ from })) }))
 vi.mock('@/lib/documents/classify/classify', () => ({ classifyUnclassifiedDocuments: vi.fn() }))
+vi.mock('@/lib/documents/classify/stale', () => ({ requeueStaleVerdicts: vi.fn(async () => ({ candidates: 0, queued: 0, skipped: 0 })) }))
 
 import { GET } from '../route'
 import { verifyCronSecret } from '@/lib/auth/cron'

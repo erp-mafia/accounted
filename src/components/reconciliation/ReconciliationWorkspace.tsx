@@ -1,5 +1,4 @@
 'use client'
-import { HandoffButton } from '@/components/ai-handoff/HandoffButton'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
@@ -132,11 +131,6 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
       }
       action={
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <HandoffButton disabled={!window} task={{ kind: 'month-close', scope: {
-            ...(periodId ? { fiscal_period_id: periodId } : {}),
-            ...(window ? { date_from: window.from, date_to: window.to } : {}),
-            ...(flowAccount ? { account_key: flowAccount.account_key } : {}),
-          } }} />
           {flowAccount && (
             <button type="button" onClick={closeFlow} className={cn(QUIET_LINK_CLASS, 'mr-1')}>
               {t('v2_close')}
@@ -213,7 +207,7 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
           actionLabel={t('empty_connect_bank')}
           actionHref="/settings/banking"
           secondaryActionLabel={t('empty_connect_skv')}
-          secondaryActionHref="/settings/tax"
+          secondaryActionHref="/settings/skatteverket"
         />
       </div>
     )

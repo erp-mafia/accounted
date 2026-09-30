@@ -78,6 +78,14 @@ const K2_COMPANY = { data: { accounting_framework: 'k2', entity_type: 'aktiebola
 
 const noopSupabase = { from: vi.fn() } as never
 
+// Keys of a returned asset that its item schema does not declare. The schema is
+// open, so nothing else notices a key assetView() adds; strict clients refused
+// every call while three keys were missing here (feedback seq 788784).
+function undeclaredKeys(row: Record<string, unknown>, itemSchema: unknown): string[] {
+  const declared = (itemSchema as { properties: Record<string, unknown> }).properties
+  return Object.keys(row).filter((key) => !(key in declared))
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
 })
@@ -144,6 +152,8 @@ describe('gnubok_list_assets', () => {
       has_posted_depreciation: true,
     })
     expect(result.assets[0]).not.toHaveProperty('id')
+    const itemSchema = (listTool.outputSchema as { properties: { assets: { items: unknown } } }).properties.assets.items
+    expect(undeclaredKeys(result.assets[0], itemSchema)).toEqual([])
   })
 })
 
@@ -174,6 +184,8 @@ describe('gnubok_get_asset', () => {
       depreciation_schedule: Array<Record<string, unknown>>
     }
     expect(result.asset).toMatchObject({ asset_id: ASSET_ID, has_posted_depreciation: true })
+    const itemSchema = (getTool.outputSchema as { properties: { asset: unknown } }).properties.asset
+    expect(undeclaredKeys(result.asset, itemSchema)).toEqual([])
     expect(result.depreciation_schedule).toEqual([
       { fiscal_period_id: PERIOD_ID, planned_depreciation: 8888.89, journal_entry_id: 'je-1' },
       { fiscal_period_id: 'p-2027', planned_depreciation: 10666.67, journal_entry_id: null },

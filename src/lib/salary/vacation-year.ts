@@ -40,3 +40,16 @@ export function getClosableYearStart(asOfIso: string, basis: VacationYearBasis):
   const month = currentStart.slice(5, 7)
   return `${year - 1}-${month}-01`
 }
+
+/** The vacation year containing `asOfIso`, as inclusive first and last day
+ * (YYYY-MM-DD): the dates a user reads, not the half-open bounds the ledger
+ * queries with. */
+export function getCurrentVacationYear(
+  asOfIso: string,
+  basis: VacationYearBasis,
+): { start: string; end: string } {
+  const { start, end } = getVacationYearBounds(getVacationYearStart(asOfIso, basis))
+  // Day 0 of the exclusive end month is the last day of the month before it.
+  const lastDay = new Date(Date.UTC(Number(end.slice(0, 4)), Number(end.slice(5, 7)) - 1, 0))
+  return { start, end: lastDay.toISOString().slice(0, 10) }
+}

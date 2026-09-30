@@ -1,6 +1,7 @@
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
+import { createLogger } from '@/lib/logger'
 // Not lib/company/context: that module imports next/headers for the legacy
 // company cookie, and this file is reachable from bundles where that import
 // is a build error.
@@ -17,7 +18,6 @@ export {
   ALL_SCOPES,
   DEFAULT_SCOPES,
   DEFAULT_OAUTH_SCOPES,
-  PUBLIC_OAUTH_METADATA_SCOPES,
   STAGING_SCOPES,
   findStageApproveConflict,
   SCOPE_GROUPS,
@@ -173,6 +173,26 @@ export async function validateApiKey(
        * block every commit for the key.
        */
       unattendedCommitLimit: number | null
+      /**
+       * Per-key company allowlist (api_key_companies, migration
+       * 20260928112721): null when the key has no rows, meaning every
+       * non-archived company the user belongs to is reachable (and future
+       * memberships follow); else the listed company ids, which every door
+       * intersects with live membership on each call. The allowlist can only
+       * narrow reach, never widen it. null also when the deployed DB has not
+       * run the migration yet.
+       */
+      allowedCompanyIds: string[] | null
+      /**
+       * Companies in the allowlist where the key may only read
+       * (api_key_companies.access = 'read', migration 20260928112724): every
+       * scope that is not `:read` is refused there, whatever the key's
+       * scopes say. null when there are none, which is always the case for
+       * an unrestricted key and when the deployed DB has not run the
+       * migration (no read-only rows can exist then). Always a subset of
+       * `allowedCompanyIds`.
+       */
+      readOnlyCompanyIds: string[] | null
     }
   | { error: string; status: number }
 > {
@@ -204,6 +224,27 @@ export async function validateApiKey(
     return { error: 'Rate limit exceeded', status: 429 }
   }
 
+  // Fail closed on an allowlist the row carries but that parses to nothing:
+  // checked before the late binding below so a refused key writes nothing.
+  const allowedCompanyIds = parseAllowedCompanyIds(row.allowed_company_ids)
+  if (allowedCompanyIds === 'invalid') {
+    createLogger('auth/api-keys').error('refusing key with an unreadable company allowlist', {
+      apiKeyId: row.api_key_id,
+    })
+    return { error: 'Invalid API key', status: 401 }
+  }
+
+  // Same fail-closed rule for the read-only subset: a value that is present
+  // but unreadable, or that names a company outside the allowlist, refuses
+  // the key rather than letting it write where the user chose read.
+  const readOnlyCompanyIds = parseReadOnlyCompanyIds(row.read_only_company_ids, allowedCompanyIds)
+  if (readOnlyCompanyIds === 'invalid') {
+    createLogger('auth/api-keys').error('refusing key with an unreadable read-only company list', {
+      apiKeyId: row.api_key_id,
+    })
+    return { error: 'Invalid API key', status: 401 }
+  }
+
   const companyId: string | null =
     row.company_id ?? (await bindUnboundKey(supabase, row.user_id, row.api_key_id))
 
@@ -224,7 +265,50 @@ export async function validateApiKey(
     // month-end because a defence-in-depth read blipped would be far worse
     // than not enforcing.
     unattendedCommitLimit: parseUnattendedCommitLimit(row.unattended_commit_limit),
+    allowedCompanyIds,
+    readOnlyCompanyIds,
   }
+}
+
+/**
+ * The key's company allowlist, null for an unrestricted key, or 'invalid'.
+ *
+ * The RPC returns NULL for a key without allowlist rows and never an empty
+ * array (array_agg over zero rows is NULL), so only an absent value (a DB
+ * that has not run the migration) or null reads as "no allowlist": the
+ * allowlist narrows a key that is already bounded by live membership, so its
+ * absence is today's behaviour. A value that IS present but yields no
+ * company id (not an array, an empty array, no non-empty strings) is
+ * 'invalid' and the key is refused: reading it as null would turn a
+ * restricted key into one that reaches every company.
+ */
+function parseAllowedCompanyIds(value: unknown): string[] | null | 'invalid' {
+  if (value === undefined || value === null) return null
+  if (!Array.isArray(value)) return 'invalid'
+  const ids = value.filter((id): id is string => typeof id === 'string' && id.length > 0)
+  return ids.length > 0 ? ids : 'invalid'
+}
+
+/**
+ * The key's read-only companies, null when there are none, or 'invalid'.
+ *
+ * Like the allowlist, the RPC returns NULL rather than an empty array, and
+ * an absent value means a DB without the column, where no read-only row can
+ * exist. A present value must be a non-empty list of company ids that all
+ * sit inside the allowlist (the database guarantees both); anything else is
+ * 'invalid' and refuses the key, because reading a broken list as "none"
+ * would let the key write where the user chose read.
+ */
+function parseReadOnlyCompanyIds(
+  value: unknown,
+  allowedCompanyIds: string[] | null,
+): string[] | null | 'invalid' {
+  if (value === undefined || value === null) return null
+  if (!Array.isArray(value) || allowedCompanyIds === null) return 'invalid'
+  const ids = value.filter((id): id is string => typeof id === 'string' && id.length > 0)
+  if (ids.length === 0) return 'invalid'
+  const allowed = new Set(allowedCompanyIds.map((id) => id.toLowerCase()))
+  return ids.every((id) => allowed.has(id.toLowerCase())) ? ids : 'invalid'
 }
 
 /**

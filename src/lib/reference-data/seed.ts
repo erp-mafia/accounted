@@ -14,12 +14,13 @@
  */
 
 import { unstable_serialize } from 'swr'
-import type { CashAccount, CompanySettings, FiscalPeriod } from '@/types'
+import type { CompanySettings, FiscalPeriod } from '@/types'
+import type { CashAccountWithBank } from '@/lib/cash-accounts/labels'
 import { refKeys } from './keys'
 
 export interface ReferenceSeed {
   fiscalPeriods: FiscalPeriod[]
-  cashAccounts: CashAccount[]
+  cashAccounts: CashAccountWithBank[]
   /** `undefined` = not fetched (do not seed); `null` = no settings row yet. */
   settings?: CompanySettings | null
 }

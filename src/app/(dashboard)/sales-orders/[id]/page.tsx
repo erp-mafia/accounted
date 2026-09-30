@@ -240,7 +240,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
 
         <div className="page-header-action flex shrink-0 flex-wrap items-center justify-end gap-2">
           {canEdit && (
-            <Button variant="outline" asChild={canWrite} disabled={!canWrite} title={lockTitle}>
+            <Button size="sm" variant="outline" asChild={canWrite} disabled={!canWrite} title={lockTitle}>
               {canWrite ? (
                 <Link href={`/sales-orders/${order.id}/edit`}>
                   <Pencil className="mr-2 h-4 w-4" />
@@ -255,7 +255,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
             </Button>
           )}
           {canDeliver && (
-            <Button
+            <Button size="sm"
               variant={canInvoice ? 'outline' : 'default'}
               onClick={() => setIsDeliveryOpen(true)}
               disabled={!canWrite}
@@ -266,19 +266,19 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
             </Button>
           )}
           {canInvoice && (
-            <Button onClick={() => setIsInvoiceOpen(true)} disabled={!canWrite} title={lockTitle}>
+            <Button size="sm" onClick={() => setIsInvoiceOpen(true)} disabled={!canWrite} title={lockTitle}>
               {canWrite ? <ReceiptText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
               {t('action_create_invoice')}
             </Button>
           )}
           {canConfirm && (
-            <Button onClick={() => setPendingTransition('confirm')} disabled={!canWrite} title={lockTitle}>
+            <Button size="sm" onClick={() => setPendingTransition('confirm')} disabled={!canWrite} title={lockTitle}>
               {canWrite ? <Check className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
               {t('action_confirm')}
             </Button>
           )}
           {canReopen && (
-            <Button onClick={() => setPendingTransition('reopen')} disabled={!canWrite} title={lockTitle}>
+            <Button size="sm" onClick={() => setPendingTransition('reopen')} disabled={!canWrite} title={lockTitle}>
               {canWrite ? <ClipboardList className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
               {t('action_reopen')}
             </Button>

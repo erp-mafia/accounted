@@ -25,7 +25,7 @@ const notice: Notice = {
   severity: 'error',
   messageKey: 'skv_disconnected',
   actionKey: 'skv_disconnected_action',
-  actionHref: '/settings/tax',
+  actionHref: '/settings/skatteverket',
 }
 
 describe('GET /api/notices', () => {

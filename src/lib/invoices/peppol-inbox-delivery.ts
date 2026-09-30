@@ -1,9 +1,10 @@
 /**
  * Hand a routed inbound Peppol document to the supplier-invoice inbox.
  *
- * Core archives the underlag through uploadDocument() and inserts the inbox
- * row directly, with the extraction already filled in from the structured
- * UBL, so no AI pass runs and the reviewer sees exactly what the sender wrote.
+ * Follows the mail-hunt precedent (lib/receipt-hunt/ingest.ts): core archives
+ * the underlag through uploadDocument() and inserts the inbox row directly,
+ * with the extraction already filled in from the structured UBL, so no AI
+ * pass runs and the reviewer sees exactly what the sender wrote.
  *
  * What is archived:
  * - the exact received XML, always, as a WORM document (upload_source
@@ -91,7 +92,9 @@ export function peppolDocumentToExtraction(document: PeppolInboundDocument): Inv
   const total = document.totals.payable ?? document.totals.taxInclusive
 
   return {
-    documentKind: 'supplier_invoice',
+    // A UBL CreditNote says what it is: the inbox routes it to crediting the
+    // invoice in cac:BillingReference, never to a new payable (issue #2980).
+    documentKind: document.documentType === 'CreditNote' ? 'credit_note' : 'supplier_invoice',
     legibility: 'good',
     supplier: {
       name: supplier.name,
@@ -109,6 +112,11 @@ export function peppolDocumentToExtraction(document: PeppolInboundDocument): Inv
       dueDate: document.dueDate,
       paymentReference,
       currency: document.currency ?? 'SEK',
+      // One referenced invoice is the one credited; several (one credit
+      // note for many invoices) leave the choice to a person.
+      ...(document.documentType === 'CreditNote'
+        ? { creditedInvoiceNumber: document.billingReferences.length === 1 ? document.billingReferences[0] : null }
+        : {}),
     },
     lineItems: document.lines.map((line) => lineToExtracted(line, sign)),
     totals: {

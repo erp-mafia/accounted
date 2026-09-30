@@ -27,6 +27,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { Plus, Trash2 } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { withLineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
@@ -270,7 +271,9 @@ export default function PaymentBookingDialog({
   }
 
   const addLine = () => {
-    setLines((prev) => [...prev, { ...BLANK_LINE }])
+    // A row the user adds belongs to the same payment: it starts with the
+    // invoice's bag, like the proposed rows.
+    setLines((prev) => [...prev, { ...BLANK_LINE, ...withLineDimensions(invoice.default_dimensions) }])
   }
 
   const removeLine = (index: number) => {

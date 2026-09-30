@@ -39,15 +39,21 @@ import type {
 } from '@/types'
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-entries'
 import {
-  generateReverseChargeBasisLines,
-  generateReverseChargeLines,
+  generateReverseChargePurchaseLines,
   isReverseChargeBasisAccount,
   resolveReverseChargeRate,
+  reverseChargeKindForSupplierType,
 } from '@/lib/bookkeeping/vat-entries'
 import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { invoiceCustomerOutstanding, invoiceCustomerShare } from '@/lib/invoices/customer-share'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
+import {
+  fetchCreditedAfter,
+  fetchPaymentsAsOf,
+  resolveOutstandingAsOf,
+  type PaymentsAsOf,
+} from '@/lib/reports/reskontra-payments'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 const log = createLogger('kontantmetod-cutoff')
@@ -104,6 +110,11 @@ export interface CutoffReceivable {
   /** Human reference for the line description. */
   reference: string
   vatTreatment: VatTreatment
+  /**
+   * The invoice's delivery_country (#2906): goods delivered abroad book the
+   * goods accounts (3105 / 3108), like the invoice's own verifikat.
+   */
+  goodsDeliveryCountry?: string | null
   /** Outstanding INCLUDING moms at period end. */
   outstanding: number
   /** The moms share of `outstanding`. */
@@ -264,9 +275,10 @@ export function buildCutoffLines(
   const payableLines: CreateJournalEntryLineInput[] = []
 
   // ---- Fordringar -------------------------------------------------------
-  // Group by VAT treatment: the revenue account and the vilande moms account
-  // both follow from it.
-  const revenueByTreatment = new Map<VatTreatment, number>()
+  // Group revenue by the account the treatment books to (goods delivered
+  // abroad split from services, #2906) and moms by treatment: the vilande
+  // moms account follows from the treatment alone.
+  const revenueByAccount = new Map<string, number>()
   const outputVatByTreatment = new Map<VatTreatment, number>()
   let receivableOre = 0
 
@@ -279,7 +291,8 @@ export function buildCutoffLines(
     const netOre = outstandingOre - vatOre
 
     receivableOre += outstandingOre
-    revenueByTreatment.set(row.vatTreatment, (revenueByTreatment.get(row.vatTreatment) ?? 0) + netOre)
+    const revenueAccount = getRevenueAccount(row.vatTreatment, entityType, row.goodsDeliveryCountry ?? null)
+    revenueByAccount.set(revenueAccount, (revenueByAccount.get(revenueAccount) ?? 0) + netOre)
     if (vatOre !== 0) {
       outputVatByTreatment.set(
         row.vatTreatment,
@@ -296,10 +309,10 @@ export function buildCutoffLines(
       'Kundfordringar vid räkenskapsårets utgång (kontantmetoden)',
     ))
 
-    for (const [treatment, netOre] of revenueByTreatment) {
+    for (const [revenueAccount, netOre] of revenueByAccount) {
       if (netOre === 0) continue
       receivableLines.push(signedLine(
-        getRevenueAccount(treatment, entityType),
+        revenueAccount,
         'credit',
         netOre,
         'Obetalda kundfakturor vid bokslut',
@@ -425,15 +438,12 @@ export function buildCutoffLines(
       const base = toKronor(Math.abs(group.baseOre))
       const nonBasisBase = toKronor(Math.abs(group.nonBasisBaseOre))
       appendReverseChargeLines(
-        generateReverseChargeLines(
+        generateReverseChargePurchaseLines({
           base,
-          group.rate,
-          group.supplierType === 'swedish_business',
-        ),
-        sign,
-      )
-      appendReverseChargeLines(
-        generateReverseChargeBasisLines(nonBasisBase, group.rate, group.supplierType),
+          rate: group.rate,
+          kind: reverseChargeKindForSupplierType(group.supplierType),
+          basisBase: nonBasisBase,
+        }),
         sign,
       )
     }
@@ -640,6 +650,31 @@ export interface CutoffCollection {
    * Excluded and refused on the same footing as a missing treatment.
    */
   strayVatOnZeroRate: string[]
+  /**
+   * Customer and supplier invoices whose period-end state is an assumption,
+   * not evidence: settled (wholly or in part) with neither a payment row nor
+   * paid_at, so the reskontra's as-of rule takes today's state as the state
+   * at period end. Typically history a provider migration imported already
+   * paid. Never refused (the assumption is the reskontra's own rule), but
+   * always disclosed: an invoice among them that was paid after period end
+   * was a fordran or skuld on the day and is missing from the cut-off.
+   */
+  undatedSettlements: string[]
+}
+
+/**
+ * The disclosure for `undatedSettlements`, one wording for the readiness
+ * warning and the staged cut-off. Null when nothing was assumed.
+ */
+export function undatedSettlementsNote(count: number, periodEnd: string): string | null {
+  if (count <= 0) return null
+  const subject = count === 1 ? '1 faktura saknar' : `${count} fakturor saknar`
+  const assumption = count === 1 ? 'att den hade' : 'att de hade'
+  const check = count === 1 ? 'att den inte betalades' : 'att ingen av dem betalades'
+  return (
+    `${subject} betalningsdatum: kontantmetodens bokslutsavgränsning antar ${assumption} ` +
+    `samma betalstatus per ${periodEnd} som i dag. Kontrollera mot banken ${check} efter ${periodEnd}.`
+  )
 }
 
 export interface KontantmetodCutoffAssessment {
@@ -659,6 +694,7 @@ export function sortedCutoffCollection(collection: CutoffCollection): CutoffColl
       .sort((a, b) => a.id.localeCompare(b.id)),
     unknownVatTreatment: [...collection.unknownVatTreatment].sort(),
     strayVatOnZeroRate: [...collection.strayVatOnZeroRate].sort(),
+    undatedSettlements: [...collection.undatedSettlements].sort(),
   }
 }
 
@@ -745,6 +781,18 @@ function resolveHeaderSek(
  * fordran on 31 December and must be part of the cut-off. Reading
  * remaining_amount would silently shrink the cut-off every day the user
  * delays running the bokslut.
+ *
+ * The date comes from the reskontra's own as-of rule (resolveOutstandingAsOf
+ * in lib/reports/reskontra-payments.ts, behind the kund- and
+ * leverantörsreskontra's backdated view): payment rows first, then paid_at,
+ * and only when neither exists the invoice's live state. Today's settlement
+ * paths all write a payment row, so the last rule reaches only history
+ * settled outside them: above all invoices a provider migration imported
+ * already paid (Fortnox sends no payment date), and settlements from before
+ * the payment tables carried every one. Counting those as unpaid booked the
+ * migrated history a second time as year-end fordringar (feedback seq
+ * 798354); taking their state as it stands is an assumption, so each one is
+ * listed in `undatedSettlements`.
  */
 export async function collectKontantmetodCutoff(
   supabase: SupabaseClient,
@@ -759,7 +807,7 @@ export async function collectKontantmetodCutoff(
       fetchAllRows<Record<string, unknown>>(
         ({ from, to }) => supabase
           .from('invoices')
-          .select('id, invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, vat_treatment, credited_invoice_id, document_type, currency, exchange_rate, deduction_total')
+          .select('id, invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, vat_treatment, delivery_country, credited_invoice_id, document_type, currency, exchange_rate, deduction_total, paid_amount, paid_at')
           .eq('company_id', companyId)
           .lte('invoice_date', periodEnd)
           .in('status', ['sent', 'overdue', 'partially_paid', 'paid', 'credited'])
@@ -770,7 +818,7 @@ export async function collectKontantmetodCutoff(
       fetchAllRows<Record<string, unknown>>(
         ({ from, to }) => supabase
           .from('supplier_invoices')
-          .select('id, supplier_invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, reverse_charge, is_credit_note, credited_invoice_id, currency, exchange_rate, supplier:suppliers(supplier_type), items:supplier_invoice_items(account_number, line_total, vat_rate, reverse_charge_rate)')
+          .select('id, supplier_invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, reverse_charge, is_credit_note, credited_invoice_id, currency, exchange_rate, remaining_amount, paid_at, supplier:suppliers(supplier_type), items:supplier_invoice_items(account_number, line_total, vat_rate, reverse_charge_rate)')
           .eq('company_id', companyId)
           .lte('invoice_date', periodEnd)
           .in('status', ['registered', 'approved', 'partially_paid', 'paid', 'credited'])
@@ -787,30 +835,21 @@ export async function collectKontantmetodCutoff(
   }
 
   // Payments ON OR BEFORE period end reduce the outstanding balance; later
-  // ones must not. Amount is stored in the invoice's own currency.
-  let invoicePayments: Array<Record<string, unknown>>
-  let supplierPayments: Array<Record<string, unknown>>
+  // ones must not. Every row is read, including later ones: a row dated after
+  // period end still proves the invoice was open on the day, which is what
+  // tells it apart from one with no payment history at all. Amounts are in
+  // the invoice's own currency.
+  let invoicePayments: PaymentsAsOf
+  let supplierPayments: PaymentsAsOf
   try {
     [invoicePayments, supplierPayments] = await Promise.all([
-      fetchAllRows<Record<string, unknown>>(
-        ({ from, to }) => supabase
-          .from('invoice_payments')
-          .select('id, invoice_id, amount, payment_date')
-          .eq('company_id', companyId)
-          .lte('payment_date', periodEnd)
-          .order('id', { ascending: true })
-          .range(from, to),
-        { dedupeBy: (row) => row.id as string },
-      ),
-      fetchAllRows<Record<string, unknown>>(
-        ({ from, to }) => supabase
-          .from('supplier_invoice_payments')
-          .select('id, supplier_invoice_id, amount, payment_date')
-          .eq('company_id', companyId)
-          .lte('payment_date', periodEnd)
-          .order('id', { ascending: true })
-          .range(from, to),
-        { dedupeBy: (row) => row.id as string },
+      fetchPaymentsAsOf(supabase, 'invoice_payments', 'invoice_id', companyId, periodEnd),
+      fetchPaymentsAsOf(
+        supabase,
+        'supplier_invoice_payments',
+        'supplier_invoice_id',
+        companyId,
+        periodEnd,
       ),
     ])
   } catch (err) {
@@ -820,20 +859,29 @@ export async function collectKontantmetodCutoff(
     )
   }
 
-  const paidByInvoice = new Map<string, number>()
-  for (const row of invoicePayments) {
-    const id = row.invoice_id as string
-    paidByInvoice.set(id, (paidByInvoice.get(id) ?? 0) + Number(row.amount ?? 0))
-  }
-  const paidBySupplierInvoice = new Map<string, number>()
-  for (const row of supplierPayments) {
-    const id = row.supplier_invoice_id as string
-    paidBySupplierInvoice.set(id, (paidBySupplierInvoice.get(id) ?? 0) + Number(row.amount ?? 0))
+  // A kreditfaktura dated after period end settled its original only then, so
+  // on the day the original was still open. The live state below may already
+  // carry that credit (Kreditera zeroes a supplier original's
+  // remaining_amount, a migrated original holds the provider's netted
+  // balance), which would otherwise read as a settlement at period end.
+  try {
+    const [customerCredited, supplierCredited] = await Promise.all([
+      fetchCreditedAfter(supabase, 'invoices', companyId, periodEnd),
+      fetchCreditedAfter(supabase, 'supplier_invoices', companyId, periodEnd),
+    ])
+    invoicePayments = { ...invoicePayments, creditedAfter: customerCredited }
+    supplierPayments = { ...supplierPayments, creditedAfter: supplierCredited }
+  } catch (err) {
+    throw new Error(
+      'Kontantmetodens bokslutsavgränsning kunde inte läsa kreditfakturor: ' +
+        (err instanceof Error ? err.message : 'okänt fel'),
+    )
   }
 
   const receivables: CutoffReceivable[] = []
   const unknownVatTreatment: string[] = []
   const strayVatOnZeroRate: string[] = []
+  const undatedSettlements: string[] = []
   for (const row of invoices) {
     // Credit notes reduce the receivable through their own negative totals;
     // they are already part of the invoice set, so no special casing beyond
@@ -844,7 +892,7 @@ export async function collectKontantmetodCutoff(
     const totalOwn = Number(row.total ?? 0)
     const total = resolveHeaderSek(row, 'total', 'total_sek')
     const vat = resolveHeaderSek(row, 'vat_amount', 'vat_amount_sek')
-    const paid = paidByInvoice.get(row.id as string) ?? 0
+    const reference = (row.invoice_number as string) ?? ''
 
     // ROT/RUT (fakturamodellen): the customer owes the total minus the
     // skattereduktion. The deduction is a fordran on Skatteverket carried on
@@ -854,12 +902,34 @@ export async function collectKontantmetodCutoff(
     // against the gross total left exactly deduction_total "open" on a fully
     // paid invoice and booked it as a phantom 1510 fordran with phantom
     // vilande moms (#2248). The share has ONE definition
-    // (lib/invoices/customer-share.ts, twin of the DB guard); only the as-of
-    // payment sum and the floor below belong to the cut-off.
+    // (lib/invoices/customer-share.ts, twin of the DB guard), the as-of
+    // reconstruction is the reskontra's; only the floor below belongs to the
+    // cut-off.
     const shareInput = { total: totalOwn, deduction_total: Number(row.deduction_total ?? 0) }
     const hasDeduction = Math.abs(shareInput.deduction_total) > 0
     const customerShareOwn = invoiceCustomerShare(shareInput)
-    let outstandingOwn = invoiceCustomerOutstanding(shareInput, paid)
+    // The live outstanding the kundreskontra reads (total - paid_amount),
+    // measured against the customer share like the payment rows. One
+    // exception: a credit note resting at 'credited' is the migration's inert
+    // copy of a kreditfaktura the provider already netted into the balance of
+    // the invoice it credits, whose paid_amount therefore carries it. Counting
+    // it again would book the credit twice (the reporting company's own
+    // kreditfaktura in feedback seq 798354). A credit note issued here rests
+    // at 'sent' and keeps offsetting its original.
+    const liveOwn = totalOwn < 0 && row.status === 'credited'
+      ? 0
+      : invoiceCustomerOutstanding(shareInput, Number(row.paid_amount ?? 0))
+    const asOf = resolveOutstandingAsOf(
+      { id: row.id as string, paid_at: (row.paid_at as string | null) ?? null },
+      customerShareOwn,
+      liveOwn,
+      invoicePayments,
+      periodEnd,
+    )
+    let outstandingOwn = asOf.outstanding
+    if (asOf.basis === 'assumed' && Math.abs(outstandingOwn - customerShareOwn) >= ORE_TOLERANCE) {
+      undatedSettlements.push(reference || (row.id as string))
+    }
     if (hasDeduction) {
       // Floored at zero on the invoice's own side, the guard's GREATEST(0, ...)
       // made sign-aware so a credit note keeps its sign: an öre of
@@ -876,7 +946,6 @@ export async function collectKontantmetodCutoff(
     // account; the moms impact is deferred but the year-end fordran
     // composition would be wrong on the balance sheet. Collect and refuse.
     const treatment = row.vat_treatment as VatTreatment | null
-    const reference = (row.invoice_number as string) ?? ''
     if (!treatment) {
       unknownVatTreatment.push(reference || (row.id as string))
       continue
@@ -903,6 +972,7 @@ export async function collectKontantmetodCutoff(
       id: row.id as string,
       reference,
       vatTreatment: treatment,
+      goodsDeliveryCountry: (row.delivery_country as string | null) ?? null,
       outstanding,
       vat: scaledVat,
     })
@@ -911,11 +981,29 @@ export async function collectKontantmetodCutoff(
   const payables: CutoffPayable[] = []
   for (const row of supplierInvoices) {
     const sign = row.is_credit_note ? -1 : 1
-    const totalOwn = Math.abs(Number(row.total ?? 0)) * sign
+    const totalAbs = Math.abs(Number(row.total ?? 0))
+    const totalOwn = totalAbs * sign
     const total = Math.abs(resolveHeaderSek(row, 'total', 'total_sek')) * sign
     const vat = Math.abs(resolveHeaderSek(row, 'vat_amount', 'vat_amount_sek')) * sign
-    const paid = paidBySupplierInvoice.get(row.id as string) ?? 0
-    const outstandingOwn = roundOre(totalOwn - (paid * sign))
+    const reference = (row.supplier_invoice_number as string) ?? ''
+    // The live outstanding the leverantörsreskontra reads: the maintained
+    // remaining_amount, a magnitude like the payment rows. Unlike the customer
+    // side, both credit paths apply a kreditfaktura there (Kreditera zeroes
+    // the original, a migrated original carries the provider's netted
+    // balance) and both leave the credit note itself at 0, so a credit is
+    // counted once whichever path wrote it. A credit dated after period end
+    // is not taken from here: the as-of rule reopens its original in full.
+    const asOf = resolveOutstandingAsOf(
+      { id: row.id as string, paid_at: (row.paid_at as string | null) ?? null },
+      totalAbs,
+      Number(row.remaining_amount ?? 0),
+      supplierPayments,
+      periodEnd,
+    )
+    if (asOf.basis === 'assumed' && Math.abs(asOf.outstanding - totalAbs) >= ORE_TOLERANCE) {
+      undatedSettlements.push(reference || (row.id as string))
+    }
+    const outstandingOwn = roundOre(asOf.outstanding * sign)
     const outstanding = totalOwn === 0 ? 0 : roundOre(total * (outstandingOwn / totalOwn))
     if (Math.abs(outstanding) < ORE_TOLERANCE) continue
 
@@ -957,7 +1045,7 @@ export async function collectKontantmetodCutoff(
     }
     payables.push({
       id: row.id as string,
-      reference: (row.supplier_invoice_number as string) ?? '',
+      reference,
       outstanding,
       vat: roundOre(vat * ratio),
       reverseCharge: Boolean(row.reverse_charge),
@@ -977,6 +1065,7 @@ export async function collectKontantmetodCutoff(
     periodEnd,
     receivables: receivables.length,
     payables: payables.length,
+    undatedSettlements: undatedSettlements.length,
   })
 
   if (unknownVatTreatment.length > 0) {
@@ -992,7 +1081,7 @@ export async function collectKontantmetodCutoff(
     })
   }
 
-  return { receivables, payables, unknownVatTreatment, strayVatOnZeroRate }
+  return { receivables, payables, unknownVatTreatment, strayVatOnZeroRate, undatedSettlements }
 }
 
 export async function assessKontantmetodCutoff(

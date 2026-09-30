@@ -536,12 +536,12 @@ export default function SupplierInvoicesPage() {
           <HelpPopover>{t('help_body')}</HelpPopover>
         </span>
         {canWrite ? (
-          <Button onClick={openNewInvoice}>
+          <Button size="sm" onClick={openNewInvoice}>
             <Plus className="mr-2 h-4 w-4" />
             {t('register_invoice')}
           </Button>
         ) : (
-          <Button disabled title={t('viewer_disabled_tooltip')}>
+          <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
             <Lock className="mr-2 h-4 w-4" />
             {t('register_invoice')}
           </Button>

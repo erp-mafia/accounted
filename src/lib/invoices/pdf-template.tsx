@@ -620,8 +620,8 @@ function createStyles(branding?: InvoiceBranding) {
     paymentValue: {
       flex: 1,
     },
-    // One shape for every notice below the totals (proforma / quote notice,
-    // statutory VAT notice, free-text notes): the same border, radius,
+    // One shape for every notice box (proforma / quote notice, statutory
+    // VAT notice, free-text notes above the totals): the same border, radius,
     // padding and spacing, in a neutral palette that does not fight the
     // brand colour. Per-notice colours made the stack look patchy.
     noticeBox: {
@@ -1244,6 +1244,14 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           </View>
         </View>
 
+        {/* Notes: directly under the line items they annotate and above the
+            totals, the placement Swedish invoice readers expect. */}
+        {invoice.notes && (
+          <View style={styles.noticeBox} wrap={!fitsOnOnePage(invoice.notes, FULL_WIDTH_BOX_PT)}>
+            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{invoice.notes}</Text>
+          </View>
+        )}
+
         {/* Totals - hidden for delivery notes */}
         {!isDeliveryNote && (
           <View style={styles.totalsSection} wrap={false}>
@@ -1568,13 +1576,6 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               </View>
             )}
           </>
-        )}
-
-        {/* Notes */}
-        {invoice.notes && (
-          <View style={styles.noticeBox} wrap={!fitsOnOnePage(invoice.notes, FULL_WIDTH_BOX_PT)}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{invoice.notes}</Text>
-          </View>
         )}
 
         {/* Late fee & credit terms: payment terms, so never on a quote */}

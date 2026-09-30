@@ -58,22 +58,27 @@ BAS uses a 4-digit account numbering system organized into 8 classes:
 - **31xx-34xx**: Further breakdown of sales by type
 - **35xx**: Fakturerade kostnader
 - **36xx**: Rörelsens sidointäkter
-- **37xx**: Intäktskorrigeringar (rabatter, returer, kursvinster)
+- **37xx**: Intäktskorrigeringar (rabatter, returer)
 - **38xx**: Aktiverat arbete för egen räkning
-- **39xx**: Övriga rörelseintäkter
+- **39xx**: Övriga rörelseintäkter (BAS 3960 = Valutakursvinster på fordringar och skulder av rörelsekaraktär)
 
 ### Klass 4: Material och varor
-- **40xx**: Inköp av varor och material
-- **41xx-43xx**: Inköp by category
-- **44xx**: Förändring av varulager
-- **45xx**: Övriga inköpskostnader (frakt, tull)
-- **46xx**: Legoarbeten och underentreprenader
-- **47xx-49xx**: Reduktioner, rabatter
+BAS 2026 splits class 4 between handelsvaror and råvaror och förnödenheter:
+- **40xx**: Inköp av handelsvaror (BAS 4010 = Inköp av handelsvaror i Sverige)
+- **42xx**: Sålda handelsvaror VMB
+- **43xx**: Inköp av råvaror och material i Sverige
+- **44xx**: Inköp av råvaror och material, tjänster m.m. i Sverige, omvänd betalningsskyldighet
+- **45xx**: Inköp av råvaror och material, tjänster m.m. från utlandet (EU-förvärv, import)
+- **46xx**: Inköp av tjänster, underentreprenader och legoarbeten i Sverige
+- **47xx**: Reduktion av inköpspriser
+- **48xx**: Andra produktionskostnader (energi, drivmedel, resor, hyra av utrustning)
+- **49xx**: Förändring av lager, produkter i arbete och pågående arbeten
 
 ### Klass 5-6: Övriga externa kostnader
 - **50xx**: Lokalkostnader (hyra, el, värme)
 - **51xx**: Fastighetskostnader
 - **52xx**: Hyra av anläggningstillgångar
+- **53xx**: Energikostnader för drift (ej råvaror och förnödenheter)
 - **54xx**: Förbrukningsinventarier
 - **55xx**: Reparation och underhåll
 - **56xx**: Transportkostnader
@@ -86,20 +91,20 @@ BAS uses a 4-digit account numbering system organized into 8 classes:
 - **63xx**: Företagsförsäkringar
 - **64xx**: Förvaltningskostnader
 - **65xx**: Övriga externa tjänster
+- **67xx**: Särskilt för ideella föreningar och stiftelser
 - **68xx**: Inhyrd personal
 - **69xx**: Övriga externa kostnader
 
 ### Klass 7: Personal, avskrivningar
 - **70xx**: Löner till kollektivanställda
-- **71xx**: Fri lön?
-- **72xx**: Löner till tjänstemän och företagsledare
+- **72xx**: Löner till tjänstemän och företagsledare (BAS 7210 = Löner tjänstemän)
 - **73xx**: Kostnadsersättningar (traktamenten, bilersättning)
 - **74xx**: Pensionskostnader
-- **75xx**: Sociala avgifter (arbetsgivaravgifter)
+- **75xx**: Sociala avgifter (BAS 7510 = Arbetsgivaravgifter)
 - **76xx**: Övriga personalkostnader (utbildning, friskvård)
-- **77xx**: Avskrivningar
-- **78xx**: Nedskrivningar
-- **79xx**: Poster av engångskaraktär
+- **77xx**: Nedskrivningar och återföring av nedskrivningar
+- **78xx**: Avskrivningar enligt plan (BAS 7832 = Avskrivningar på inventarier, verktyg och installationer)
+- **79xx**: Övriga rörelsekostnader
 
 ### Klass 8: Finansiella poster, bokslutsdispositioner
 - **80xx**: Resultat från andelar i koncernföretag
@@ -107,8 +112,7 @@ BAS uses a 4-digit account numbering system organized into 8 classes:
 - **82xx**: Resultat från övriga värdepapper
 - **83xx**: Ränteintäkter
 - **84xx**: Räntekostnader
-- **85xx-86xx**: Övriga finansiella poster
-- **87xx**: Extraordinära poster
+- **85xx-87xx**: Not used (no kontogrupper defined in BAS)
 - **88xx**: Bokslutsdispositioner (överavskrivningar, periodiseringsfonder)
 - **89xx**: Skatter (inkomstskatt, årets skatt)
 - **8999**: Årets resultat
@@ -131,9 +135,12 @@ Most small AB/enskild firma need these accounts at minimum:
 - 2091 Balanserad vinst/förlust
 - 2099 Årets resultat
 - 2440 Leverantörsskulder
-- 2610 Utgående moms 25%
-- 2611 Utgående moms 12%
-- 2612 Utgående moms 6%
+- 2610 Utgående moms 25 % (gruppkonto)
+- 2611 Utgående moms 25 % försäljning inom Sverige
+- 2620 Utgående moms 12 % (gruppkonto)
+- 2621 Utgående moms 12 % försäljning inom Sverige
+- 2630 Utgående moms 6 % (gruppkonto)
+- 2631 Utgående moms 6 % försäljning inom Sverige
 - 2640 Ingående moms
 - 2650 Redovisningskonto för moms
 - 2710 Personalskatt
@@ -146,7 +153,7 @@ Most small AB/enskild firma need these accounts at minimum:
 - 3740 Öres- och kronutjämning
 
 **Kostnader:**
-- 4010 Inköp varor/material
+- 4010 Inköp av handelsvaror i Sverige (BAS 2026; råvaror och material: 4310)
 - 5010 Lokalhyra
 - 5410 Förbrukningsinventarier
 - 6110 Kontorsmaterial
@@ -158,7 +165,7 @@ Most small AB/enskild firma need these accounts at minimum:
 - 6570 Bankkostnader
 - 7010 or 7210 Löner
 - 7510 Arbetsgivaravgifter
-- 7832 Avskrivning inventarier
+- 7832 Avskrivningar på inventarier, verktyg och installationer
 
 **Finansiellt:**
 - 8310 Ränteintäkter
@@ -167,25 +174,31 @@ Most small AB/enskild firma need these accounts at minimum:
 
 ## 4. Moms accounts
 
-Standard moms account structure in BAS:
+Standard moms account structure in BAS 2024 (per bas.se):
 
-| Konto | Beskrivning |
-|---|---|
-| 2610 | Utgående moms 25% |
-| 2611 | Utgående moms 12% |
-| 2612 | Utgående moms 6% |
-| 2614 | Utgående moms omvänd skattskyldighet |
-| 2615 | Utgående moms import |
-| 2640 | Ingående moms |
-| 2645 | Beräknad ingående moms vid förvärv EU |
-| 2650 | Redovisningskonto för moms |
+| Konto | Beskrivning | Sats |
+|---|---|---|
+| 2610 | Utgående moms (gruppkonto / 25 %) | 25 % |
+| 2611 | Utgående moms 25 % försäljning inom Sverige | 25 % |
+| 2612 | Utgående moms 25 % egna uttag | 25 % |
+| 2614 | Utgående moms 25 % omvänd skattskyldighet | 25 % (reverse) |
+| 2615 | Utgående moms 25 % import | 25 % (import) |
+| 2620 | Utgående moms (gruppkonto / 12 %) | 12 % |
+| 2621 | Utgående moms 12 % försäljning inom Sverige | 12 % |
+| 2624 | Utgående moms 12 % omvänd skattskyldighet | 12 % (reverse) |
+| 2630 | Utgående moms (gruppkonto / 6 %) | 6 % |
+| 2631 | Utgående moms 6 % försäljning inom Sverige | 6 % |
+| 2634 | Utgående moms 6 % omvänd skattskyldighet | 6 % (reverse) |
+| 2640 | Ingående moms | (avdrag) |
+| 2645 | Beräknad ingående moms vid förvärv EU | (avdrag) |
+| 2650 | Redovisningskonto för moms | (avstämning) |
 
 Workflow:
-1. During the period: book utgående on 2610/2611/2612 and ingående on 2640
-2. At declaration: netta 2610+2611+2612-2640 against 2650
+1. During the period: utgående bokförs på 2611 (25 %) / 2621 (12 %) / 2631 (6 %); ingående på 2640
+2. At declaration: netta 2611+2621+2631-2640 against 2650
 3. Payment to/from Skatteverket: 2650 <-> 1630 (skattekonto)
 
-**From 1 Apr 2026**: livsmedel output VAT moves from 2621 (12%) to 2631 (6%). Your system must handle the transition correctly based on leveransdatum.
+**From 1 Apr 2026**: livsmedel-momsen sänks från 12 % till 6 %: försäljning av livsmedel flyttas från **2621 (12 %)** till **2631 (6 %)** (intäkt 3002 → 3003; EU-förvärv 2624 → 2634 och 4516 → 4517; import 2625 → 2635). Systemet måste hantera övergången baserat på leveransdatum.
 
 ## 5. Mapping rules and principles
 
@@ -201,7 +214,7 @@ Workflow:
 **Kundfaktura:**
 - Debit 1510 (kundfordringar) full amount inkl moms
 - Credit 30xx (intäkt) exkl moms
-- Credit 2610/2611/2612 (utgående moms)
+- Credit 2611 (25 %) / 2621 (12 %) / 2631 (6 %) (utgående moms)
 
 **Leverantörsfaktura:**
 - Debit 4xxx/5xxx/6xxx (kostnad) exkl moms
@@ -217,9 +230,9 @@ Then separately:
 - Credit 2730 (arbetsgivaravgifter skuld)
 
 **Momsredovisning (monthly/quarterly):**
-- Debit 2610 (tömma utgående 25%)
-- Debit 2611 (tömma utgående 12%)
-- Debit 2612 (tömma utgående 6%)
+- Debit 2611 (tömma utgående 25 %)
+- Debit 2621 (tömma utgående 12 %)
+- Debit 2631 (tömma utgående 6 %)
 - Credit 2640 (tömma ingående)
 - Credit/Debit 2650 (netto: skuld if credit, fordran if debit)
 
@@ -230,4 +243,4 @@ Then separately:
 - The first digit determines the class
 - The second digit typically groups related accounts
 - Stay consistent with BAS standard numbering. Don't invent custom numbers where BAS already has a standard account
-- BAS publishes yearly updates. The structure is very stable but new accounts are added occasionally
+- BAS publishes yearly updates. Most years the changes are small, but BAS 2026 was a major restructure: 114 new and 107 renamed accounts, class 4 split between handelsvaror and råvaror och förnödenheter, and maskiner vs inventarier separated in 12xx, 77xx and 78xx (e.g. 7833-7835 removed). Map accounts per BAS year

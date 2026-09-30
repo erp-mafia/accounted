@@ -7,6 +7,7 @@ import {
   buildMappingResultFromCategory,
 } from '../category-mapping'
 import { BAS_REFERENCE } from '../bas-data'
+import { buildTransactionEntryLines } from '../transaction-entries'
 import { makeTransaction } from '@/tests/helpers'
 import type { TransactionCategory, VatTreatment } from '@/types'
 
@@ -111,8 +112,6 @@ describe('buildMappingResultFromCategory', () => {
       const tx = makeTransaction({ amount: -1000 })
       const result = buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma', 'reverse_charge')
 
-      expect(result.vat_lines).toHaveLength(2)
-
       const debitLine = result.vat_lines.find((l) => l.account_number === '2645')
       expect(debitLine).toBeDefined()
       expect(debitLine!.debit_amount).toBe(250)
@@ -122,6 +121,67 @@ describe('buildMappingResultFromCategory', () => {
       expect(creditLine).toBeDefined()
       expect(creditLine!.debit_amount).toBe(0)
       expect(creditLine!.credit_amount).toBe(250)
+    })
+
+    // #2919: the category path used to post only the fiktiv pair, leaving
+    // momsdeklaration rutor 20-24 empty next to ruta 30 (SKV felkod FK004).
+    it('emits the basis pair beside the fiktiv pair, and the verifikat balances', () => {
+      const tx = makeTransaction({ amount: -250, description: 'GOOGLE PLAY' })
+      const result = buildMappingResultFromCategory('expense_software', tx, true, 'aktiebolag', 'reverse_charge')
+
+      expect(result.vat_lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['2645', 62.5, 0],
+        ['2614', 0, 62.5],
+        ['4535', 250, 0],
+        ['4598', 0, 250],
+      ])
+
+      const lines = buildTransactionEntryLines(tx, result)
+      const debit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+      const credit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+      expect(Math.round(debit * 100) / 100).toBe(Math.round(credit * 100) / 100)
+      // The cost line keeps the full amount: reverse charge adds no deduction.
+      expect(lines.find((l) => l.account_number === '5420')?.debit_amount).toBe(250)
+      expect(lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(250)
+    })
+
+    it('plain reverse_charge books the EU-services basis (4535, ruta 21) by default', () => {
+      const tx = makeTransaction({ amount: -1000 })
+      const plain = buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma', 'reverse_charge')
+      const explicit = buildMappingResultFromCategory(
+        'expense_software', tx, true, 'enskild_firma', 'reverse_charge', null, null, 'eu_services',
+      )
+      expect(plain.vat_lines).toEqual(explicit.vat_lines)
+      expect(plain.vat_lines.find((l) => l.account_number === '4535')?.debit_amount).toBe(1000)
+    })
+
+    it.each([
+      ['non_eu_services', '4531'],
+      ['eu_goods', '4515'],
+      ['eu_services', '4535'],
+    ] as const)('an explicit %s kind puts the basis on %s', (kind, basisAccount) => {
+      const tx = makeTransaction({ amount: -1000 })
+      const result = buildMappingResultFromCategory(
+        'expense_software', tx, true, 'enskild_firma', 'reverse_charge', null, null, kind,
+      )
+      expect(result.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', basisAccount, '4598'])
+      expect(result.vat_lines.find((l) => l.account_number === basisAccount)?.debit_amount).toBe(1000)
+      expect(result.vat_lines.find((l) => l.account_number === '4598')?.credit_amount).toBe(1000)
+    })
+
+    it('takes the basis in SEK for a foreign-currency purchase', () => {
+      const tx = makeTransaction({ amount: -100, currency: 'EUR', amount_sek: -1150, exchange_rate: 11.5 })
+      const result = buildMappingResultFromCategory('expense_software', tx, true, 'aktiebolag', 'reverse_charge')
+      expect(result.vat_lines.find((l) => l.account_number === '2614')?.credit_amount).toBe(287.5)
+      expect(result.vat_lines.find((l) => l.account_number === '4535')?.debit_amount).toBe(1150)
+      expect(result.vat_lines.find((l) => l.account_number === '4598')?.credit_amount).toBe(1150)
+    })
+
+    it('never adds a basis pair for a refund (money in) or for income', () => {
+      const refund = buildMappingResultFromCategory(
+        'expense_software', makeTransaction({ amount: 1000 }), true, 'enskild_firma', 'reverse_charge',
+      )
+      expect(refund.vat_lines.some((l) => l.account_number === '4598')).toBe(false)
     })
 
     it('does not generate regular input VAT (2641) for reverse charge', () => {

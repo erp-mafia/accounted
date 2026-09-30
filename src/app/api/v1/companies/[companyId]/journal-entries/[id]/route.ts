@@ -3,6 +3,9 @@
  *
  * Returns the full verifikation including lines, source links
  * (reverses_id, reversed_by_id, correction_of_id), and dimensions.
+ *
+ * PATCH edits a DRAFT in place (operation journal-entries.update-draft,
+ * contract and rules in src/lib/operations/journal-entries.ts).
  */
 
 import { z } from 'zod'
@@ -14,9 +17,13 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { cancelDraftEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { journalEntriesUpdateDraft } from '@/lib/operations/journal-entries'
 
+// `dimensions` is the line's whole SIE tag bag; cost_center/project only
+// mirror keys '1'/'6', so a read without the bag hid dims 2, 7-9 and 20+.
 const JE_LINE_COLUMNS =
-  'id, account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, cost_center, project, sort_order'
+  'id, account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, dimensions, cost_center, project, sort_order'
 const JE_DETAIL_COLUMNS =
   'id, fiscal_period_id, voucher_series, voucher_number, entry_date, description, status, source_type, source_id, notes, reverses_id, reversed_by_id, correction_of_id, created_at, updated_at'
 
@@ -30,8 +37,11 @@ const JournalEntryLine = z.object({
   amount_in_currency: z.number().nullable(),
   exchange_rate: z.number().nullable(),
   tax_code: z.string().nullable(),
-  cost_center: z.string().nullable(),
-  project: z.string().nullable(),
+  dimensions: z
+    .record(z.string(), z.string())
+    .describe('SIE dimension tags, {"<dim_no>": "<code>"}: "1" kostnadsställe, "6" projekt, 20+ custom. {} when untagged.'),
+  cost_center: z.string().nullable().describe('Mirror of dimensions["1"].'),
+  project: z.string().nullable().describe('Mirror of dimensions["6"].'),
   sort_order: z.number().int(),
 })
 
@@ -78,8 +88,8 @@ registerEndpoint({
         entry_date: '2026-05-12',
         status: 'posted',
         lines: [
-          { account_number: '6570', debit_amount: 50, credit_amount: 0, sort_order: 0 },
-          { account_number: '1930', debit_amount: 0, credit_amount: 50, sort_order: 1 },
+          { account_number: '6570', debit_amount: 50, credit_amount: 0, dimensions: { '6': 'P001', '20': 'SYD' }, cost_center: null, project: 'P001', sort_order: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 50, dimensions: {}, cost_center: null, project: null, sort_order: 1 },
         ],
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -259,3 +269,5 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
     }
   },
 )
+
+export const PATCH = v1OperationHandler(journalEntriesUpdateDraft)

@@ -79,3 +79,80 @@ export async function sumAccountBalance(
   }
   return roundOre(sum)
 }
+
+export interface OpeningBalanceFloor {
+  /** The IB date: the first day of the fiscal year it opens. */
+  date: string
+  /** Net debit - credit of the IB lines on the account. */
+  amount: number
+  /** The IB verifikat (normally one; same-date duplicates are all counted). */
+  entryIds: string[]
+}
+
+interface OpeningBalanceLineRow {
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+  journal_entries?: { id: string; entry_date: string; status: string; source_type: string | null }
+}
+
+/**
+ * The latest ingående balans (IB) on one account dated on or before cutoffDate.
+ *
+ * An IB restates everything booked before it: year-end rollover, SIE import
+ * and set_opening_balances each post one opening_balance verifikat on the
+ * fiscal year's first day, and the prior years' detail stays in the ledger.
+ * A balance that sums across the IB counts those years twice, so balance
+ * readers floor at it (the bank engine does the same, issue #751).
+ *
+ * Only a POSTED opening_balance entry dated on the first day of a fiscal year
+ * counts. A stornerad IB is nulled by its storno, and prod holds ordinary
+ * payments that an import labelled opening_balance in mid-year: flooring at
+ * one of those would drop months of real movement.
+ *
+ * Returns null when the account has no IB. Throws on a read failure: the
+ * floor decides what the balance is, so a caller must not guess it.
+ */
+export async function findOpeningBalanceFloor(
+  supabase: SupabaseClient,
+  companyId: string,
+  accountNumber: string,
+  cutoffDate: string,
+): Promise<OpeningBalanceFloor | null> {
+  const lines = await fetchEntryLines<OpeningBalanceLineRow>({
+    supabase,
+    entryColumns: 'id, entry_date, status, source_type',
+    lineColumns: 'debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .eq('status', 'posted')
+        .eq('source_type', 'opening_balance')
+        .lte('entry_date', cutoffDate),
+    filterLines: (q: EntryLinesQuery) => q.eq('account_number', accountNumber),
+  })
+  const candidates = lines.flatMap((l) => {
+    const entry = l.journal_entries
+    return entry && entry.status === 'posted' && entry.source_type === 'opening_balance' ? [{ entry, line: l }] : []
+  })
+  if (candidates.length === 0) return null
+
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('period_start')
+    .eq('company_id', companyId)
+    .in('period_start', Array.from(new Set(candidates.map((c) => c.entry.entry_date))))
+  if (error) throw new Error(`Kunde inte läsa räkenskapsår: ${error.message}`)
+  const yearStarts = new Set(((data ?? []) as Array<{ period_start: string }>).map((p) => p.period_start))
+
+  const ib = candidates.filter((c) => yearStarts.has(c.entry.entry_date))
+  if (ib.length === 0) return null
+  const date = ib.reduce((latest, c) => (c.entry.entry_date > latest ? c.entry.entry_date : latest), ib[0].entry.entry_date)
+  let amount = 0
+  const entryIds = new Set<string>()
+  for (const { entry, line } of ib) {
+    if (entry.entry_date !== date) continue
+    amount += Number(line.debit_amount || 0) - Number(line.credit_amount || 0)
+    entryIds.add(entry.id)
+  }
+  return { date, amount: roundOre(amount), entryIds: Array.from(entryIds) }
+}

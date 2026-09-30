@@ -56,9 +56,13 @@ export type ClosingEntryMode =
    */
   | 'include'
   /**
-   * Drop only fiscal_periods.closing_entry_id. Correct for statutory annual
-   * reports: skatt, avskrivningar and bokslutsdispositioner also carry
-   * source_type 'year_end' and belong on the form.
+   * Drop only the entries that moved the year's result into equity, as
+   * resolved by the result_closing_entry_ids SQL function: the linked
+   * fiscal_periods.closing_entry_id plus any resultatavslut booked in a
+   * previous system or by hand (last day, result accounts against
+   * 2099/2019/2069 only). Correct for statutory annual reports: skatt,
+   * avskrivningar and bokslutsdispositioner also carry source_type
+   * 'year_end' and belong on the form.
    */
   | 'exclude-final'
   /**
@@ -149,40 +153,94 @@ async function fetchActivityViaRpc(scope: ActivityScope): Promise<PeriodActivity
 }
 
 /**
- * The pre-#2470 implementation, verbatim: the shared two-step entry-lines
- * fetch (entries first, then lines chunked by entry id, both paginated),
- * once for the roll-forward slice and once for the period, summed in JS.
- * Selected by REPORTS_TB_RPC=off only; deleted with the flag.
+ * The company's reversed year_end entries: the roots whose storno and
+ * correction chain 'exclude-all-year-end' drops with them. Company-wide on
+ * purpose, like the RPC's ye_reversed: a storno in this period can reverse a
+ * year-end entry of another period.
+ */
+export async function fetchReversedYearEndEntryIds(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<string[]> {
+  const rows = await fetchAllRows<{ id: string }>(({ from, to }) =>
+    supabase
+      .from('journal_entries')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('source_type', 'year_end')
+      .eq('status', 'reversed')
+      .order('id', { ascending: true })
+      .range(from, to)
+  )
+  return rows.map((r) => r.id)
+}
+
+/**
+ * 'exclude-all-year-end' as filters on a journal_entries query: every
+ * source_type 'year_end' entry, and every entry that reverses or corrects
+ * one of `reversedYearEndIds` (fetchReversedYearEndEntryIds). It is the JS
+ * twin of the RPC's 'exclude-all-year-end' branch (get_trial_balance_
+ * aggregates, migration 20260924202408). The entry-lines path below and the
+ * dimension P&L's tagged-line pass (dimension-pnl.ts) both apply it from
+ * here, so the rule has exactly two definitions, this one and the RPC's,
+ * and they change together.
+ */
+export function excludeYearEndChain(
+  query: EntryLinesQuery,
+  reversedYearEndIds: readonly string[],
+): EntryLinesQuery {
+  let q = query.neq('source_type', 'year_end')
+  if (reversedYearEndIds.length > 0) {
+    const idList = `(${reversedYearEndIds.join(',')})`
+    q = q.or(`reverses_id.is.null,reverses_id.not.in.${idList}`)
+    q = q.or(`correction_of_id.is.null,correction_of_id.not.in.${idList}`)
+  }
+  return q
+}
+
+/**
+ * The entries 'exclude-final' drops, from the one SQL definition the RPC
+ * path uses too (result_closing_entry_ids). Posted entries only, so a
+ * reversed closing stays together with its storno.
+ */
+async function fetchResultClosingEntryIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<string[]> {
+  const { data, error } = await supabase.rpc('result_closing_entry_ids', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+  })
+  if (error) {
+    throw dbError(error, 'result_closing_entry_ids failed')
+  }
+  return Array.isArray(data) ? (data as string[]) : []
+}
+
+/**
+ * The pre-#2470 implementation: the shared two-step entry-lines fetch
+ * (entries first, then lines chunked by entry id, both paginated), once for
+ * the roll-forward slice and once for the period, summed in JS. Verbatim
+ * except that 'exclude-final' reads its set from result_closing_entry_ids.
+ * Selected by REPORTS_TB_RPC=off only; deleted with the flag (the year-end
+ * helpers above stay: the dimension P&L applies them too).
  */
 async function fetchActivityViaEntryLines(
   scope: ActivityScope,
-  period: { period_start: string; closing_entry_id: string | null } | null,
+  period: { period_start: string } | null,
   yearEndEntryIds: string[],
 ): Promise<PeriodActivity> {
   const { supabase, companyId, fiscalPeriodId, obEntryId, dimensionFilter } = scope
   const excludeAllYearEndEntries = scope.closingEntry === 'exclude-all-year-end'
   const excludeFinalOnly = scope.closingEntry === 'exclude-final'
 
-  const excludeYearEndChain = (query: EntryLinesQuery): EntryLinesQuery => {
-    let q = query.neq('source_type', 'year_end')
-    if (yearEndEntryIds.length > 0) {
-      const idList = `(${yearEndEntryIds.join(',')})`
-      q = q.or(`reverses_id.is.null,reverses_id.not.in.${idList}`)
-      q = q.or(`correction_of_id.is.null,correction_of_id.not.in.${idList}`)
-    }
-    return q
-  }
-
-  const closingEntryId = excludeFinalOnly
-    ? period?.closing_entry_id ?? null
-    : null
-  // The base query already admits only posted and reversed entries. Exclude a
-  // posted final closing entry, but retain a reversed one together with its
-  // storno so the two continue to net to zero. Draft entries never enter the
-  // base query.
+  const closingEntryIds = excludeFinalOnly
+    ? await fetchResultClosingEntryIds(supabase, companyId, fiscalPeriodId)
+    : []
   const excludeClosingEntry = (query: EntryLinesQuery): EntryLinesQuery =>
-    closingEntryId
-      ? query.or(`id.neq.${closingEntryId},status.neq.posted`)
+    closingEntryIds.length > 0
+      ? query.not('id', 'in', `(${closingEntryIds.join(',')})`)
       : query
 
   // When the caller requests a sub-range starting after period_start, the
@@ -221,7 +279,7 @@ async function fetchActivityViaEntryLines(
             }
 
             if (excludeAllYearEndEntries) {
-              query = excludeYearEndChain(query)
+              query = excludeYearEndChain(query, yearEndEntryIds)
             }
             if (excludeFinalOnly) {
               query = excludeClosingEntry(query)
@@ -269,7 +327,7 @@ async function fetchActivityViaEntryLines(
         }
 
         if (excludeAllYearEndEntries) {
-          query = excludeYearEndChain(query)
+          query = excludeYearEndChain(query, yearEndEntryIds)
         }
         if (excludeFinalOnly) {
           query = excludeClosingEntry(query)
@@ -327,7 +385,7 @@ export async function generateTrialBalance(
   // for reports that turn out empty or fail the closed-period guard below;
   // that occasional extra read-only query is the price of a short critical
   // path, and the returned data is unchanged.
-  const [periodResult, yearEndIdRows, accounts] = await Promise.all([
+  const [periodResult, yearEndIds, accounts] = await Promise.all([
     supabase
       .from('fiscal_periods')
       .select('period_start, period_end, opening_balance_entry_id, closing_entry_id, is_closed, closed_externally')
@@ -335,17 +393,8 @@ export async function generateTrialBalance(
       .eq('company_id', companyId)
       .single(),
     !viaRpc && excludeAllYearEndEntries
-      ? fetchAllRows<{ id: string }>(({ from, to }) =>
-          supabase
-            .from('journal_entries')
-            .select('id')
-            .eq('company_id', companyId)
-            .eq('source_type', 'year_end')
-            .eq('status', 'reversed')
-            .order('id', { ascending: true })
-            .range(from, to)
-        )
-      : Promise.resolve([] as Array<{ id: string }>),
+      ? fetchReversedYearEndEntryIds(supabase, companyId)
+      : Promise.resolve([] as string[]),
     // Account names for row labelling.
     fetchAllRows<{
       account_number: string
@@ -363,14 +412,14 @@ export async function generateTrialBalance(
   const { data: period } = periodResult
 
   // Existing operational reports intentionally exclude every year_end entry.
-  // Statutory annual reports must exclude only the linked final closing entry:
-  // tax, depreciation, and appropriations also use source_type year_end. A
-  // closed period without the link is ambiguous, so fail instead of silently
-  // understating the statutory report. A period klarmarkerad as closed in a
-  // previous system (closed_externally) is the one unambiguous case: its
-  // closing verifikat never existed in these books, so there is nothing to
-  // strip and the balances as booked are the pre-closing balances. The RPC
-  // repeats this guard; it stays here so no journal read is issued at all.
+  // Statutory annual reports must exclude only the result transfer into
+  // equity: tax, depreciation, and appropriations also use source_type
+  // year_end. A closed period without the link is ambiguous, so fail instead
+  // of silently understating the statutory report. A period klarmarkerad as
+  // closed in a previous system (closed_externally) is exempt: its
+  // resultatavslut, when the imported file carried one, is recognised by
+  // shape in result_closing_entry_ids. The RPC repeats this guard; it stays
+  // here so no journal read is issued at all.
   if (
     excludeFinalOnly
     && period?.is_closed === true
@@ -408,7 +457,7 @@ export async function generateTrialBalance(
       : fetchActivityViaEntryLines(
           scope,
           period,
-          yearEndIdRows.map((r) => r.id),
+          yearEndIds,
         ),
   ])
 

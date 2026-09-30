@@ -122,7 +122,7 @@ describe('private skill discovery through the dispatcher', () => {
     const row = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Private workflow', description: 'Company-specific instructions', body: 'Private instructions.', share_status: 'private', atom_id: null, company_id: 'company-1', team_id: null }
     const db = makeSupabaseWithEmptyAtomRegistry([], {}, null, [row])
     vi.mocked(createServiceClientNoCookies).mockReturnValueOnce(db as never)
-    vi.mocked(validateApiKey).mockResolvedValueOnce({ userId: 'user-1', companyId: 'company-1', scopes: allowed ? ['agent:read'] : [], mode: 'live', unattendedCommitLimit: null })
+    vi.mocked(validateApiKey).mockResolvedValueOnce({ userId: 'user-1', companyId: 'company-1', scopes: allowed ? ['agent:read'] : [], mode: 'live', unattendedCommitLimit: null, allowedCompanyIds: null, readOnlyCompanyIds: null })
     const result = await parseResult(await handleMcpRequest(mcpRequest('tools/call', { name: 'accounted_list_skills', arguments: {} })))
     expect(result.isError).not.toBe(true)
     const skills = JSON.parse(result.content[0].text).skills as { slug: string }[]
@@ -197,9 +197,9 @@ describe('Skills registry', () => {
       // Legal: the v1 :send/:mark-sent descriptions say the agent verb is missing, not the capability.
       expect('a v1 or MCP Peppol send action is not yet available').not.toMatch(pattern)
     }
-    // No MCP tool or v1 action sends via Peppol yet: no text may hand an agent a Peppol send verb.
-    expect(allBodies).not.toMatch(/gnubok_send_invoice[^.\n]*Peppol/i)
-    expect(allBodies).not.toMatch(/gnubok_send_peppol|gnubok_peppol_send/i)
+    // The agent verb exists since the operation registry's wave 4: the texts name the right tool
+    // (gnubok_send_invoice_peppol), never an invented one.
+    expect(allBodies).not.toMatch(/gnubok_send_peppol\b|gnubok_peppol_send/i)
 
     const truthfulSkills = ['invoicing-rules', 'customer-onboarding'].map((slug) => {
       const skill = skills.find((candidate) => candidate.slug === slug)
@@ -220,16 +220,19 @@ describe('Skills registry', () => {
       expect(text).toContain('Inställningar > Fakturering (Settings > Invoicing)')
       expect(text).toMatch(/send cap/i)
       // The restrictions agents must not over-promise past (lib/invoices/peppol-bis-billing.ts).
-      expect(text).toMatch(/aktiebolag/i)
+      // Every legal form with an organisationsnummer sends; only enskild firma, whose org number
+      // is the owner's personnummer, waits for GLN (founder decision 2026-09-29).
+      expect(text).toMatch(/organisationsnummer/i)
       expect(text).toMatch(/enskild firma/i)
+      expect(text).not.toMatch(/aktiebolag senders|must be an aktiebolag/i)
       expect(text).toMatch(/standard invoices only|no credit notes/i)
       expect(text).toMatch(/SEK/)
       expect(text).toMatch(/6, 12 or 25 %/)
       expect(text).toMatch(/no reverse charge/i)
       expect(text).toMatch(/no ROT\/RUT deductions/i)
       expect(text).toMatch(/Er referens/)
-      // No agent-callable send verb yet.
-      expect(text).toMatch(/no MCP tool[^.\n]*Peppol|MCP tool[^.\n]*not (?:yet )?available/i)
+      // The agent-callable send verb, staged for a person to approve.
+      expect(text).toContain('gnubok_send_invoice_peppol')
       // A successful dashboard send issues the invoice; mark-sent is only the issuance-failure recovery.
       expect(text).toMatch(/successful dashboard Peppol send issues the invoice itself/i)
       expect(text).toMatch(/could not be marked as sent/i)
@@ -264,10 +267,10 @@ describe('Skills registry', () => {
       }
       // The pre-#546 framing listed Peppol as an external channel next to postal mail.
       expect(text).not.toMatch(/\(Peppol, postal/)
-      expect(text).toMatch(/a v1 or MCP Peppol send action is not yet available/)
+      expect(text).toMatch(/send-peppol/)
       expect(text).toMatch(/per-company access grant/)
       expect(text).toContain('Inställningar > Fakturering (Settings > Invoicing)')
-      expect(text).toMatch(/aktiebolag senders, standard invoices only/)
+      expect(text).toMatch(/senders whose org number is not a personnummer \(every legal form except enskild firma\), standard invoices only/)
       expect(text).toMatch(/buyers whose org number is not a personnummer/)
       expect(text).toMatch(/could not be marked as sent/)
     }
@@ -420,6 +423,23 @@ describe('gnubok_list_skills tool', () => {
     }
     expect(result.count).toBe(1)
     expect(result.skills[0].slug).toBe('vertical/konsult-it')
+  })
+
+  it('says whether each own item is a workflow, knowledge or an analysis, and marks Accounted analyses', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const own = (n: number, kind?: 'workflow' | 'rules' | 'analysis') => ({
+      id: `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa${n}`, name: `Own ${n}`, description: 'd', body: 'Steps.', share_status: 'private',
+      atom_id: null, company_id: 'company-1', team_id: null, ...(kind ? { kind } : {}),
+    })
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], {}, null, [own(1, 'workflow'), own(2, 'rules'), own(3, 'analysis'), own(4)])
+    const result = (await tool.execute({ include_all: true, __keyScopes: ['agent:read'] }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ slug: string; tier: string; item_kind?: string }>
+    }
+    const kindOf = (slug: string) => result.skills.find((s) => s.slug === slug)?.item_kind
+    expect([1, 2, 3, 4].map((n) => kindOf(`own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa${n}`))).toEqual(['workflow', 'rules', 'analysis', 'workflow'])
+    expect(kindOf('analys-kassaprognos')).toBe('analysis')
+    // A curated workflow has no kind to tell apart, so it carries none.
+    expect(result.skills.find((s) => s.slug === 'month-end-close')).not.toHaveProperty('item_kind')
   })
 })
 
@@ -585,7 +605,7 @@ describe('gnubok_create_skill tool', () => {
     const result = await tool().execute(args, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
     expect(result).toEqual({ company_skill_id: 'skill-1', slug: 'own/skill-1' })
     const row = (insert.mock.calls[0] as unknown[])[0] as Record<string, string | null>
-    expect(row).toMatchObject({ company_id: 'company-1', team_id: null, created_by: 'user-1', atom_id: null, name: 'Månadens fakturor', draft: true })
+    expect(row).toMatchObject({ company_id: 'company-1', team_id: null, created_by: 'user-1', atom_id: null, kind: 'workflow', name: 'Månadens fakturor', draft: true })
     expect(row.body).toContain('1. Hämta fakturorna.\n2. Kolla momsen.')
     expect(row.body).toContain('- Inget bokförs, skickas eller lämnas in utan att användaren godkänt det i Accounted.')
   })
@@ -602,8 +622,27 @@ describe('gnubok_create_skill tool', () => {
     expect(insert).not.toHaveBeenCalled()
   })
 
+  it('saves knowledge and an analysis as text, with their kind', async () => {
+    for (const kind of ['rules', 'analysis'] as const) {
+      const { supabase, insert } = insertMock()
+      await tool().execute({ kind, name: 'Kundluncher', description: 'Hur vi bokför luncher med kunder.', text: 'Bokas på 6072.\n\nSkriv deltagarna i texten.' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      const row = (insert.mock.calls[0] as unknown[])[0] as Record<string, string | boolean | null>
+      expect(row).toMatchObject({ kind, name: 'Kundluncher', draft: true })
+      expect(row.body).toBe('# Kundluncher\n\nHur vi bokför luncher med kunder.\n\nBokas på 6072.\n\nSkriv deltagarna i texten.\n')
+    }
+  })
+
+  it('rejects knowledge without text, and unknown fields, and writes nothing', async () => {
+    const { supabase, insert } = insertMock()
+    await expect(tool().execute({ kind: 'rules', name: 'Tom', description: 'Inget här.' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })).rejects.toThrow()
+    await expect(tool().execute({ ...args, extra: true }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })).rejects.toThrow()
+    expect(insert).not.toHaveBeenCalled()
+  })
+
   it('is loadable as the create-skill workflow', async () => {
-    expect((await findSkill('create-skill'))?.body).toContain('gnubok_create_skill')
+    const body = (await findSkill('create-skill'))?.body
+    expect(body).toContain('gnubok_create_skill')
+    expect(body).toContain('`kind`')
   })
 })
 

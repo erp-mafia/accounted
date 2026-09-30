@@ -9,8 +9,8 @@ import { formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import {
   resolveReverseChargeRate,
   isReverseChargeBasisAccount,
-  generateReverseChargeBasisLines,
-  generateReverseChargeLines,
+  generateReverseChargePurchaseLines,
+  reverseChargeKindForSupplierType,
 } from '@/lib/bookkeeping/vat-entries'
 import { generateSlpLines, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
@@ -147,7 +147,6 @@ function buildJournalPreview(
     // verifikat. ML 16 kap requires both sides reported; silent netting is
     // prohibited (Skatteverket felkod FK004). Driving off the resolved rate (not
     // item.vat_rate) is what makes a 0%-rate RC line book its VAT at all.
-    const isDomesticRC = supplierType === 'swedish_business'
     const rcSupplierType: 'eu_business' | 'non_eu_business' | 'swedish_business' =
       supplierType === 'non_eu_business' || supplierType === 'swedish_business'
         ? supplierType
@@ -174,24 +173,18 @@ function buildJournalPreview(
       // Same generator the engine calls, so the account pair AND the
       // "Fiktiv in-/utgående moms" wording come from one place instead of
       // being re-derived here (they used to render as bare account numbers).
-      for (const rcLine of generateReverseChargeLines(netAmount, rate, isDomesticRC)) {
+      for (const rcLine of generateReverseChargePurchaseLines({
+        base: netAmount,
+        rate,
+        kind: reverseChargeKindForSupplierType(rcSupplierType),
+        basisBase: nonBasisBaseByRate.get(rate) || 0,
+      })) {
         lines.push({
           account_number: rcLine.account_number,
           description: rcLine.line_description ?? rcLine.account_number,
           debit: rcLine.debit_amount,
           credit: rcLine.credit_amount,
         })
-      }
-      const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
-      if (nonBasisBase > 0) {
-        for (const bl of generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)) {
-          lines.push({
-            account_number: bl.account_number,
-            description: bl.line_description ?? bl.account_number,
-            debit: bl.debit_amount,
-            credit: bl.credit_amount,
-          })
-        }
       }
     }
 

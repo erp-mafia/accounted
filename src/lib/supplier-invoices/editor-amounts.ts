@@ -1,6 +1,6 @@
 import { roundOre } from '@/lib/money'
 import { supplierInvoiceDisplayFigures } from './display-figures'
-import { isSupplierInvoiceRoundingItem } from './rounding-item'
+import { isSupplierInvoiceRoundingItem, supplierInvoiceRoundingItem } from './rounding-item'
 
 interface AmountItem {
   amount: number
@@ -34,12 +34,7 @@ export function supplierInvoiceEditorAmounts(
   const total = roundOre(subtotal + (reverseCharge ? 0 : totalVat))
   const figures = supplierInvoiceDisplayFigures({ total, currency, ore_rounding: oreRounding })
   const roundingItem = figures.rounding.applies
-    ? {
-        description: 'Öresavrundning',
-        account_number: '3740',
-        amount: figures.rounding.roundingDelta,
-        vat_rate: 0,
-      }
+    ? supplierInvoiceRoundingItem(figures.rounding.roundingDelta, currency)
     : null
   return { itemTotals, subtotal, totalVat, total, figures, roundingItem }
 }

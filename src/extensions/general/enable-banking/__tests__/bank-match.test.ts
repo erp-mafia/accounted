@@ -15,6 +15,7 @@ const BANKS = [
   { name: 'Länsförsäkringar Bank' },
   { name: 'Länsförsäkringar Skåne' },
   { name: 'ICA Banken' },
+  { name: 'Svea Bank' },
 ]
 
 describe('matchBankByName', () => {
@@ -35,6 +36,18 @@ describe('matchBankByName', () => {
 
   it('returns null for an ambiguous name instead of guessing an institution', () => {
     expect(matchBankByName(BANKS, 'länsförsäkringar')).toBeNull()
+  })
+
+  it('resolves a brand held at another bank: ?bank=Bokio starts the Svea Bank consent', () => {
+    expect(matchBankByName(BANKS, 'Bokio')?.name).toBe('Svea Bank')
+    expect(matchBankByName(BANKS, 'bokio företagskonto')?.name).toBe('Svea Bank')
+    expect(matchBankByName(BANKS, 'svea')?.name).toBe('Svea Bank')
+  })
+
+  it('does not auto-start a consent from a partial alias or an unlisted or doubled alias bank', () => {
+    expect(matchBankByName(BANKS, 'bok')).toBeNull()
+    expect(matchBankByName(BANKS.filter((b) => b.name !== 'Svea Bank'), 'Bokio')).toBeNull()
+    expect(matchBankByName([...BANKS, { name: 'SVEA BANK' }], 'Bokio')).toBeNull()
   })
 
   it('returns null for unknown or empty input', () => {

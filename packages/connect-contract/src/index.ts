@@ -20,7 +20,7 @@ import { z } from 'zod'
  * breaking change is a new operation or family name, never a changed one.
  */
 
-export const CONTRACT_VERSION = '2026-09-10'
+export const CONTRACT_VERSION = '2026-09-29'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -108,13 +108,21 @@ export const CONNECTOR_ERROR_CODES = [
   'CONNECTOR_LEDGER_FAILED',
   'CONNECTOR_UPSTREAM_ERROR',
   'CONNECTOR_UPSTREAM_UNCONFIGURED',
+  // The access point answered in a shape the service does not understand; not retryable.
+  'CONNECTOR_UPSTREAM_SHAPE',
   'CONNECTOR_PEPPOL_PARTICIPANT_TAKEN',
   'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED',
   'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE',
   'CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS',
   'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED',
+  // A resend (replacesSubmissionId) of a submission the access point has not
+  // reported as failed: nothing is sent, so a delivered invoice is never sent twice.
+  'CONNECTOR_PEPPOL_RESEND_NOT_FAILED',
   'PEPPOL_RECEIVING_UNSUPPORTED',
   'PEPPOL_REGISTRATION_CAP_REACHED',
+  // The access point already holds an invoice with this number for this
+  // receiver; resend only with replacesSubmissionId.
+  'PEPPOL_DUPLICATE_INVOICE_NUMBER',
 ] as const
 export type ConnectorErrorCode = (typeof CONNECTOR_ERROR_CODES)[number]
 
@@ -300,6 +308,12 @@ export const peppolSubmissionSchema = z.object({
   contentType: z.literal('application/xml'),
   document: z.string().min(1).max(PEPPOL_MAX_DOCUMENT_CHARS),
   documentSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  /**
+   * Resend after a failed delivery: the service submits with the access
+   * point's overwrite and returns a NEW submission id. Only a submission
+   * owned by the same key and company.
+   */
+  replacesSubmissionId: z.string().min(1).max(128).optional(),
 })
 export type PeppolSubmission = z.infer<typeof peppolSubmissionSchema>
 
@@ -382,9 +396,11 @@ export const peppolInboundListRequestSchema = z.object({
   /**
    * Listing cursor: the newest `receivedAt` the caller has already archived
    * for this document type. A service that supports it lists only documents
-   * received after that instant; one that does not ignores the field (object
-   * schemas strip unknown keys), so the caller must still dedupe by
-   * providerDocumentId.
+   * received after that instant, OLDEST first, so a caller walking the
+   * cursor never skips a burst larger than one page; when the field is
+   * omitted, listing starts from the oldest archived document. A service
+   * that does not support it ignores the field (object schemas strip unknown
+   * keys), so the caller must still dedupe by providerDocumentId.
    */
   receivedAfter: z.iso.datetime({ offset: true }).optional(),
 })

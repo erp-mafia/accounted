@@ -813,3 +813,203 @@ describe('DELETE /api/v1/companies/:companyId/invoices/:id', () => {
     expect(body.error.details.quote_status).toBe('accepted')
   })
 })
+
+// ──────────────────────────────────────────────────────────────────
+// Per-invoice VAT treatment on a draft (#2906)
+// ──────────────────────────────────────────────────────────────────
+
+describe('PATCH /api/v1/companies/:companyId/invoices/:id: per-invoice VAT treatment (#2906)', () => {
+  const SWEDISH_BUYER = {
+    id: CUSTOMER_ID,
+    customer_type: 'swedish_business',
+    vat_number: 'SE556677889901',
+    vat_number_validated: true,
+    country: 'SE',
+  }
+  // What the draft's lines look like when read back for a header-only rebuild.
+  const storedLine = (vatRate: number) => ({
+    line_type: 'product',
+    description: 'Pallställ',
+    quantity: 2,
+    unit: 'st',
+    unit_price: 5000,
+    discount_percent: 0,
+    vat_rate: vatRate,
+    article_id: null,
+    revenue_account: null,
+    sales_order_item_id: null,
+    deduction_type: null,
+    labor_hours: null,
+    work_type: null,
+    housing_designation: null,
+    apartment_number: null,
+    brf_org_number: null,
+    accrual_period_start: null,
+    accrual_period_end: null,
+    accrual_balance_account: null,
+    dimensions: {},
+  })
+
+  it('re-decides the current lines when only vat_treatment + delivery_country are sent (dry run)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: { ...DRAFT_INVOICE, vat_amount: 0, total: 10000, invoice_marking: 'PO-77' }, error: null }, // pre-flight
+          { data: INTERNAL_COLUMNS, error: null }, // internal-only columns
+        ],
+        invoice_items: { data: [storedLine(0)], error: null },
+        customers: { data: SWEDISH_BUYER, error: null },
+        company_settings: { data: { vat_registered: true }, error: null },
+      }),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ vat_treatment: 'export', delivery_country: 'no' }, { dryRun: true }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview).toMatchObject({
+      vat_treatment: 'export',
+      moms_ruta: '36',
+      vat_treatment_override: 'export',
+      delivery_country: 'NO',
+      subtotal: 10000,
+      vat_amount: 0,
+      total: 10000,
+      // A header the caller did not send survives the rebuild.
+      invoice_marking: 'PO-77',
+    })
+    expect(body.data.preview.items[0]).toMatchObject({ vat_rate: 0, vat_amount: 0 })
+    expect(body.meta.warnings).toBeUndefined()
+  })
+
+  it('refuses to turn a draft whose lines carry 25 % into a goods export without new lines', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null },
+          { data: INTERNAL_COLUMNS, error: null },
+        ],
+        invoice_items: { data: [storedLine(25)], error: null },
+        customers: { data: SWEDISH_BUYER, error: null },
+        company_settings: { data: { vat_registered: true }, error: null },
+      }),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ vat_treatment: 'export', delivery_country: 'NO' }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CREATE_VAT_RULE_VIOLATION')
+    expect(body.error.details).toMatchObject({ attempted_rate: 25, allowed_rates: [0] })
+  })
+
+  it('refuses an export to an EU country (400 INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH)', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: [
+            { data: DRAFT_INVOICE, error: null },
+            { data: INTERNAL_COLUMNS, error: null },
+          ],
+          invoice_items: { data: [storedLine(0)], error: null },
+          customers: { data: SWEDISH_BUYER, error: null },
+          company_settings: { data: { vat_registered: true }, error: null },
+        },
+        captures,
+      ),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ vat_treatment: 'export', delivery_country: 'DE' }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH')
+    expect(body.error.details).toMatchObject({ vat_treatment: 'export', delivery_country: 'DE', required: 'outside_eu' })
+    expect(captures.filter((c) => c.op !== 'delete' && c.table === 'invoices')).toEqual([])
+  })
+
+  it('rejects a delivery_country that is not an ISO alpha-2 code (400 VALIDATION_ERROR)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ vat_treatment: 'export', delivery_country: 'Norway' }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns 404 for an invoice outside the company', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: null, error: null },
+      }),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ vat_treatment: 'export', delivery_country: 'NO' }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(404)
+  })
+
+  it('keeps a stated export when a later edit replaces only the items', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: [
+            { data: DRAFT_INVOICE, error: null }, // pre-flight
+            { data: { ...INTERNAL_COLUMNS, vat_treatment_override: 'export', delivery_country: 'NO' }, error: null },
+            { data: DRAFT_INVOICE, error: null }, // update
+            { data: { ...DRAFT_INVOICE, items: [] }, error: null }, // refetch with items
+          ],
+          customers: { data: SWEDISH_BUYER, error: null },
+          company_settings: { data: { vat_registered: true }, error: null },
+          invoice_items: { data: [], error: null },
+        },
+        captures,
+      ),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ items: ITEMS_WITHOUT_RATE }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const invoiceUpdate = captures.find((c) => c.table === 'invoices' && c.op === 'update')?.payload
+    expect(invoiceUpdate).toMatchObject({
+      vat_treatment: 'export',
+      moms_ruta: '36',
+      vat_amount: 0,
+      vat_treatment_override: 'export',
+      delivery_country: 'NO',
+    })
+    const itemInsert = captures.find((c) => c.table === 'invoice_items' && c.op === 'insert')?.payload as Array<{
+      vat_rate: number
+    }>
+    expect(itemInsert[0].vat_rate).toBe(0)
+  })
+})

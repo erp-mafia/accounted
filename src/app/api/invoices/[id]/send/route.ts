@@ -13,9 +13,13 @@ import {
   generateInvoiceEmailText,
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
-import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
-import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
-import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
+import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import {
+  archiveIssuedInvoicePdf,
+  markInvoiceSentAndBook,
+  restoreUnbookedDraft,
+  type IssuableInvoice,
+} from '@/lib/invoices/issue-and-book-invoice'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
@@ -45,7 +49,7 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -359,9 +363,9 @@ export const POST = withRouteContext(
 
     // Final render with the assigned number: this is the buffer attached to
     // the email and later archived as underlag. Override status to 'sent' on
-    // the in-memory copy: the DB flip happens after email delivery (line
-    // ~185), but if we render with the stale 'draft' status the customer
-    // receives a PDF stamped "UTKAST".
+    // the in-memory copy: the DB flip happens when the invoice is issued,
+    // right before the email, but if we render with the stale 'draft' status
+    // the customer receives a PDF stamped "UTKAST".
     const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
@@ -412,8 +416,8 @@ export const POST = withRouteContext(
       })
     }
 
-    let statusFlipped = isCreditDeliveryRetry
-    let creditJournalEntryId: string | null = null
+    const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
+    let issuedJournalEntryId: string | null = null
 
     // Credit notes must be fully issued and booked before delivery. The CAS is
     // the single-winner lock; the idempotent issue service can repair any
@@ -441,7 +445,6 @@ export const POST = withRouteContext(
             details: { currentStatus: 'sent' },
           })
         }
-        statusFlipped = true
       }
 
       const issueResult = await issueCreditNote({
@@ -454,7 +457,7 @@ export const POST = withRouteContext(
         accountingMethod: ((company as Record<string, unknown>).accounting_method || 'accrual') as AccountingMethod,
         log: opLog,
       })
-      creditJournalEntryId = issueResult.journalEntryId
+      issuedJournalEntryId = issueResult.journalEntryId
 
       if (!issueResult.complete) {
         if (issueResult.journalEntryRequired && !issueResult.journalEntryId) {
@@ -477,6 +480,80 @@ export const POST = withRouteContext(
           },
         )
       }
+    }
+
+    // Invoices are issued the same way before delivery: status sent and the
+    // revenue verifikat through markInvoiceSentAndBook, the one issue step
+    // mark-sent, bulk Bokför and the recurring auto-send share. A verifikat
+    // the engine refuses (a required dimension, an archived dimension value,
+    // a locked period) stops the send here with the invoice back as a draft,
+    // so the customer never holds an invoice the ledger does not have. The
+    // compare-and-set inside is the single-winner lock: a concurrent send
+    // stops here too instead of emailing the customer a second time.
+    if (!isCreditNote) {
+      const issued = await markInvoiceSentAndBook({
+        supabase,
+        companyId: companyId!,
+        userId: user.id,
+        invoice: invoice as IssuableInvoice,
+        settings: company as CompanySettings,
+        log: opLog,
+        customLines,
+      })
+      if (!issued.ok) {
+        if (issued.errorCode === 'INVOICE_MARK_SENT_RACE') {
+          return errorResponseFromCode('INVOICE_ALREADY_SENT', opLog, {
+            requestId,
+            details: { currentStatus: 'sent' },
+          })
+        }
+        if (isBookkeepingError(issued.bookingError)) {
+          // The engine's own refusal names what to fix (the account and the
+          // dimension it requires, or the archived value).
+          return errorResponse(issued.bookingError, opLog, { requestId })
+        }
+        return errorResponseFromCode(issued.errorCode, opLog, {
+          requestId,
+          ...(issued.reason ? { details: { reason: issued.reason } } : {}),
+        })
+      }
+      issuedJournalEntryId = issued.journalEntryId
+      partialFailures.push(...issued.partialFailures)
+    }
+
+    // An invoice (not a credit note: those keep their delivery retry) that
+    // was issued but whose email did not go out. With nothing booked
+    // (kontantmetoden, deferred booking, a proforma) nothing irreversible
+    // happened: the draft is put back and the send can be retried as
+    // before. With a posted verifikat, which is never undone, the invoice
+    // stays issued: it is finished the way mark-sent finishes one (underlag
+    // archived on its verifikat) and the caller is told to deliver it by hand.
+    const issuedButNotDelivered = async (whenNothingBooked: () => NextResponse) => {
+      if (!issuedJournalEntryId && (await restoreUnbookedDraft(supabase, companyId!, id, opLog))) {
+        return whenNothingBooked()
+      }
+      const archiveFailure = isRealInvoice
+        ? await archiveIssuedInvoicePdf({
+            supabase,
+            companyId: companyId!,
+            userId: user.id,
+            invoice: invoice as IssuableInvoice,
+            settings: company as CompanySettings,
+            journalEntryId: issuedJournalEntryId,
+            log: opLog,
+          })
+        : null
+      await eventBus.emit({
+        type: 'invoice.sent',
+        payload: { invoice: { ...(invoice as Invoice), status: 'sent' }, companyId: companyId!, userId: user.id },
+      })
+      return errorResponseFromCode('INVOICE_SEND_ISSUED_NOT_DELIVERED', opLog, {
+        requestId,
+        details: {
+          journal_entry_id: issuedJournalEntryId,
+          ...(archiveFailure ? { failure_steps: [archiveFailure.step] } : {}),
+        },
+      })
     }
 
     const subject = generateInvoiceEmailSubject(emailData)
@@ -506,10 +583,12 @@ export const POST = withRouteContext(
       })
     } catch (err) {
       opLog.error('failed to persist invoice delivery snapshot before send', err as Error)
-      return errorResponseFromCode('INVOICE_SEND_SNAPSHOT_FAILED', opLog, {
-        requestId,
-        details: { retryable: err instanceof InvoiceDeliverySnapshotError },
-      })
+      const snapshotFailed = () =>
+        errorResponseFromCode('INVOICE_SEND_SNAPSHOT_FAILED', opLog, {
+          requestId,
+          details: { retryable: err instanceof InvoiceDeliverySnapshotError },
+        })
+      return isCreditNote ? snapshotFailed() : issuedButNotDelivered(snapshotFailed)
     }
 
     if (!result.success) {
@@ -521,10 +600,12 @@ export const POST = withRouteContext(
         })
       }
       opLog.error('email provider failed to send invoice', new Error(result.error || 'Unknown'))
-      return errorResponseFromCode('INVOICE_SEND_PROVIDER_FAILED', opLog, {
-        requestId,
-        details: { retryable: true },
-      })
+      const providerFailed = () =>
+        errorResponseFromCode('INVOICE_SEND_PROVIDER_FAILED', opLog, {
+          requestId,
+          details: { retryable: true },
+        })
+      return isCreditNote ? providerFailed() : issuedButNotDelivered(providerFailed)
     }
 
     if (result.trackingWarning) {
@@ -542,129 +623,13 @@ export const POST = withRouteContext(
     // follow-up steps degrade the response to PARTIAL: the user gets a
     // success toast with a sub-warning, and the audit trail records exactly
     // which sub-step broke.
-    // Optimistic-locked flip (draft → sent). Two concurrent sends can both
-    // pass the draft guard above and both email the customer, but only the
-    // request that wins this compare-and-set runs the bookkeeping steps
-    // below: the loser would otherwise post a duplicate revenue verifikat
-    // and archive the PDF twice. PostgREST returns no error for a 0-row
-    // update, so the row count via .select('id') is the actual lock signal.
-    // A genuine update error also skips the follow-ups: the row is still
-    // 'draft', so a later retry re-runs the whole pipeline and ends with
-    // exactly one journal entry (at the cost of a duplicate email).
-    if (!isCreditNote) {
-      const { data: flipRows, error: updateError } = await supabase
-        .from('invoices')
-        .update({ status: 'sent' })
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .eq('status', 'draft')
-        .select('id')
-
-      if (updateError) {
-        opLog.warn('failed to update invoice status to sent', updateError)
-        partialFailures.push({
-          step: 'status_update',
-          reason: 'Fakturans status kunde inte uppdateras till skickad.',
-        })
-      } else if (!flipRows || flipRows.length === 0) {
-        opLog.warn('invoice already flipped to sent by a concurrent request; skipping bookkeeping follow-ups')
-        partialFailures.push({
-          step: 'status_update',
-          reason: 'Fakturan skickades samtidigt av en annan begäran; bokföringen hanterades där.',
-        })
-      } else {
-        statusFlipped = true
-      }
-    }
-
-    const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
-    let createdJournalEntryId: string | undefined = creditJournalEntryId ?? undefined
-
-    // #967: deferred companies send WITHOUT booking; ekonomi books later via
-    // POST /api/invoices/[id]/book. The invoice then legitimately sits at
-    // journal_entry_id = NULL until then, like under kontantmetoden.
-    if (
-      customLines &&
-      !isCreditNote &&
-      (!isRealInvoice || !booksInvoicesOnIssue(company as CompanySettings))
-    ) {
-      opLog.warn('send: custom lines ignored (not on accrual book-at-issue path)', {
-        lineCount: customLines.length,
-      })
-    }
-
-    if (statusFlipped && !isCreditNote && isRealInvoice && booksInvoicesOnIssue(company as CompanySettings)) {
-      try {
-        if (customLines) {
-          // Audit trail: distinguish user-edited bookings from generated ones.
-          opLog.info('send: booking user-edited custom lines', {
-            userId: user.id,
-            lineCount: customLines.length,
-          })
-        }
-        const journalEntry = customLines
-          ? await createInvoiceJournalEntry(
-              supabase,
-              companyId!,
-              user.id,
-              invoice as Invoice,
-              (company as CompanySettings).entity_type,
-              undefined,
-              { customLines },
-            )
-          : await createInvoiceJournalEntry(
-              supabase,
-              companyId!,
-              user.id,
-              invoice as Invoice,
-              (company as CompanySettings).entity_type,
-            )
-        if (journalEntry) {
-          createdJournalEntryId = journalEntry.id
-          await supabase
-            .from('invoices')
-            .update({ journal_entry_id: journalEntry.id })
-            .eq('id', id)
-
-          // Periodiserade lines: create their schedules + catch-up
-          // dissolutions now that the revenue entry exists. Failures degrade
-          // to PARTIAL: the entry is committed and must not be rolled back.
-          // Skipped for user-edited lines: the generated 29xx deferral may
-          // not exist in what was booked; edited lines book as reviewed.
-          if (!customLines) {
-            const accrual = await createSchedulesForCustomerInvoice(
-              supabase,
-              companyId!,
-              user.id,
-              invoice as Invoice,
-              items,
-              journalEntry.id,
-              (company as CompanySettings).entity_type,
-            )
-            if (accrual.failed > 0) {
-              partialFailures.push({
-                step: 'accrual_schedules',
-                reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
-              })
-            }
-          }
-        }
-      } catch (err) {
-        opLog.error('failed to create invoice journal entry on send', err as Error)
-        partialFailures.push({
-          step: 'journal_entry',
-          reason: 'Fakturans verifikat kunde inte skapas.',
-        })
-      }
-    }
-
-    if (statusFlipped && isRealInvoice && createdJournalEntryId) {
+    if (isRealInvoice && issuedJournalEntryId) {
       try {
         await linkToJournalEntry(
           supabase,
           companyId!,
           result.documentId,
-          createdJournalEntryId,
+          issuedJournalEntryId,
         )
       } catch (err) {
         opLog.error('failed to link archived invoice PDF to journal entry', err as Error)
@@ -675,13 +640,10 @@ export const POST = withRouteContext(
       }
     }
 
-    // Gated like the steps above: on a lost race the winning request emits
-    // it; on a flip error the row is still 'draft', so emitting would
-    // contradict DB state and the retry emits it instead.
-    if (statusFlipped && !isCreditNote) {
+    if (!isCreditNote) {
       await eventBus.emit({
         type: 'invoice.sent',
-        payload: { invoice: invoice as Invoice, companyId: companyId!, userId: user.id },
+        payload: { invoice: { ...(invoice as Invoice), status: 'sent' }, companyId: companyId!, userId: user.id },
       })
     }
 

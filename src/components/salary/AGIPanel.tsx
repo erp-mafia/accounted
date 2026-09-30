@@ -1073,14 +1073,14 @@ export function AGIPanel(props: AGIPanelProps) {
             kvittens scope only breaks the final receipt fetch and may not be
             grantable yet, so its notice is softer and dismissible. */}
         {attn === 'scope' && (
-          <AttnLine action={{ label: t('open_settings'), href: '/settings/tax' }}>
+          <AttnLine action={{ label: t('open_settings'), href: '/settings/skatteverket' }}>
             {t('missing_scope_title')}. {t('missing_scope_description')}
           </AttnLine>
         )}
         {missingAgdScope && !readOnly && attn !== 'scope' && (
           <p className="text-xs text-muted-foreground">
             {t('missing_scope_title')}. {t('missing_scope_description')}{' '}
-            <a href="/settings/tax" className="underline underline-offset-2 hover:text-foreground">
+            <a href="/settings/skatteverket" className="underline underline-offset-2 hover:text-foreground">
               {t('open_settings')}
             </a>
           </p>
@@ -1089,7 +1089,7 @@ export function AGIPanel(props: AGIPanelProps) {
           <p className="text-xs text-muted-foreground">
             <span className="text-foreground">{t('kvittens_scope_title')}.</span>{' '}
             {t('kvittens_scope_description')}{' '}
-            <a href="/settings/tax" className="underline underline-offset-2 hover:text-foreground">
+            <a href="/settings/skatteverket" className="underline underline-offset-2 hover:text-foreground">
               {t('open_settings')}
             </a>{' '}
             <button

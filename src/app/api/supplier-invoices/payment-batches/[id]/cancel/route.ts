@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { cancelPaymentBatch } from '@/lib/payments/batch-operations'
 
 /**
  * Cancel a payment batch. Compare-and-set on status='created' so two racing
@@ -8,40 +9,17 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
  *
  * Cancelling only changes what Accounted will re-serve: a file already
  * uploaded to the bank is not recalled by this. The confirm dialog says so.
+ * Rules in lib/payments/batch-operations.ts (shared with v1 and MCP).
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.payment_batch.cancel',
   async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
 
-    const { data: cancelled } = await supabase
-      .from('supplier_payment_batches')
-      .update({
-        status: 'cancelled',
-        cancelled_at: new Date().toISOString(),
-        cancelled_by: user.id,
-      })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .eq('status', 'created')
-      .select('id, status, cancelled_at')
-      .single()
-
-    if (cancelled) {
-      return NextResponse.json({ data: cancelled })
-    }
-
-    const { data: existing } = await supabase
-      .from('supplier_payment_batches')
-      .select('id, status')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single()
-
-    if (!existing) {
-      return errorResponseFromCode('SI_BATCH_NOT_FOUND', log, { requestId })
-    }
-    return errorResponseFromCode('SI_BATCH_ALREADY_CANCELLED', log, { requestId })
+    const outcome = await cancelPaymentBatch({ supabase, companyId, userId: user.id, log }, id, { dryRun: false })
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) throw new Error('unreachable: cancel ran without a dry run')
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

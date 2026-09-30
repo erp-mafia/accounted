@@ -1,3 +1,7 @@
+---
+audience: developer
+---
+
 # Swedish E-Invoicing Market, Providers and Pricing
 
 This reference covers (a) which Access Points and service providers operate in Sweden, (b) how the dominant Swedish accounting platforms (Fortnox, Visma, Bokio, SpeedLedger, Björn Lundén, Hogia) wire their Peppol layers, almost all white-label, (c) per-document pricing benchmarks, (d) the post-2022 industry consolidation pattern.

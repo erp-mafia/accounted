@@ -8,6 +8,7 @@
 import type { PayslipData, PayslipLineItem } from '@/lib/salary/pdf/payslip-template'
 import { hasCustomDeviationWindow, runDeviationWindow } from '@/lib/salary/deviation-period'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
+import { VAXA_STOD_REFUND_STEP_LABEL } from '@/lib/salary/vaxa-stod'
 
 const EMPLOYMENT_LABELS: Record<string, string> = {
   employee: 'Anställd',
@@ -69,11 +70,13 @@ export function buildPayslipData(params: {
   }
 
   // Engine-computed breakdown rows stay for transparency; manual override
-  // rows are appended so the breakdown matches the displayed totals.
+  // rows are appended so the breakdown matches the displayed totals. The
+  // växa-stöd refund note is left out: it tells the employer to apply to
+  // Skatteverket and changes nothing on the employee's pay.
   const breakdown = sre.calculation_breakdown as {
     steps?: Array<{ label: string; formula: string; output: number }>
   } | null
-  const baseSteps = breakdown?.steps ?? []
+  const baseSteps = (breakdown?.steps ?? []).filter((step) => step.label !== VAXA_STOD_REFUND_STEP_LABEL)
   const overrideSteps: Array<{ label: string; formula: string; output: number }> = []
   const reason = (sre.override_reason as string | null) || 'manuell justering'
   if (sre.tax_withheld_override !== null && sre.tax_withheld_override !== undefined) {

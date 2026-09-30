@@ -29,6 +29,7 @@ const collection = {
   payables: [],
   unknownVatTreatment: [],
   strayVatOnZeroRate: [],
+  undatedSettlements: [] as string[],
 }
 
 function makePendingOp(overrides: Partial<PendingOperation> = {}): PendingOperation {
@@ -159,6 +160,26 @@ describe('commitPendingOperation: post_kontantmetod_cutoff', () => {
     )
     expect(result).toMatchObject({ status: 'rejected', http_status: 409 })
     expect(result.error).toMatch(/ändrats sedan förhandsgranskningen/i)
+    expect(postKontantmetodCutoff).not.toHaveBeenCalled()
+  })
+
+  // The approver was told which invoices rest on the undated-settlement
+  // assumption. Identical lines on a different assumption are a different
+  // preview, so the frozen approval no longer covers them.
+  it('rejects when the invoices resting on the undated assumption changed after staging', async () => {
+    vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce({
+      collection: { ...collection, undatedSettlements: ['F-9'] },
+      lines: buildCutoffLines(collection.receivables, collection.payables, 'aktiebolag'),
+      postings: {
+        complete: false, hasAny: false, receivableEntryId: null,
+        receivableReversalId: null, payableEntryId: null, payableReversalId: null,
+        missing: ['receivable', 'receivable_reversal'], duplicates: [],
+      },
+    })
+    const result = await commitPendingOperation(
+      makeSupabase() as never, 'user-1', 'company-1', makePendingOp(),
+    )
+    expect(result).toMatchObject({ status: 'rejected', http_status: 409 })
     expect(postKontantmetodCutoff).not.toHaveBeenCalled()
   })
 

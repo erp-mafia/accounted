@@ -60,6 +60,17 @@ Any business can request a shorter period (26 kap. 13 § 1st para, point 1 SFL).
 
 Faktureringsmetoden (accrual) required for omsättning > 3 million SEK. Bokslutsmetoden (cash) available for ≤ 3M SEK; VAT recognized on payment except at year-end.
 
+### Registration controls (from 1 July 2026)
+
+Prop. 2025/26:128 (Lag 2026:707), in force 1 July 2026. Skatteverket may:
+
+- Order information on företrädare and ägare, and require personal appearance with ID check (SFL 7 kap. 6-8 §§)
+- Refuse or cancel a VAT registration where there is a påtaglig risk that it is used (almost) exclusively for VAT fraud (SFL 7 kap. 10-11 §§)
+- Show a VAT number as invalid in VIES, even before the registrant has been heard (SFL 7 kap. 12 §)
+- Withhold crediting of a significant överskjutande ingående moms while a control is ongoing, for up to two years (SFL 63 a kap.)
+
+Check buyer VAT numbers in VIES at the time of supply.
+
 ---
 
 ## 2. EU VAT Rules in Sweden
@@ -86,7 +97,7 @@ Standard journal entry (EU consulting at 25%): Debit cost account + 2645, credit
 
 ### 2.2 Trade in services within EU
 
-**Huvudregeln** (ML 6 kap. 34 §, Article 44 VAT Directive): B2B services taxed where buyer established.
+**Huvudregeln** (ML 6 kap. 33 §, Article 44 VAT Directive): B2B services taxed where buyer established.
 
 Swedish seller: Invoice without VAT, reference "reverse charge," include buyer VAT number. Report in Ruta 39 + periodisk sammanställning.
 
@@ -110,6 +121,8 @@ B2C: Generally taxed where seller established. Exception: electronic services, t
 
 Aggregate threshold for B2C distance sales across all EU: EUR 10,000 (≈ SEK 99,680). Above this, destination-country VAT applies. OSS via Skatteverket for quarterly declarations. BAS 2670 handles OSS output VAT. OSS transactions NOT on standard momsdeklaration.
 
+**ViDA (Directive (EU) 2025/516):** from 1 July 2028, single VAT registration (wider OSS use). Platforms become deemed suppliers of short-term accommodation and road passenger transport from 1 July 2028 at the earliest and 1 January 2030 at the latest, depending on the member state.
+
 ### 2.5 Import and export VAT
 
 Since 1 January 2015, VAT-registered businesses report import VAT in momsdeklaration to Skatteverket (not Tullverket). Only customs duties to Tullverket.
@@ -122,7 +135,9 @@ Exports outside EU: 0% moms, full avdragsrätt retained. Ruta 36, BAS 3105. Proo
 
 ### 2.6 Periodisk sammanställning (EC Sales List)
 
-Required for VAT-registered businesses selling goods/services to VAT-registered EU buyers. Monthly for goods (or goods + services), quarterly for services-only. Electronic deadline: 25th of month after period; paper: 20th (35 kap. 9 § SFL). Late filing penalty: SEK 1,250 per report (52 kap. 10 § SFL). No extension available. Amounts must match Ruta 35 + 38 (goods) and Ruta 39 (services).
+Required for VAT-registered businesses selling goods/services to VAT-registered EU buyers. Monthly for goods (or goods + services), quarterly for services-only (35 kap. 3 § SFL). Goods may be reported quarterly on request if goods supplies do not exceed SEK 500,000 excl. moms in the current quarter or any of the four preceding quarters (35 kap. 4 § SFL). Electronic deadline: 25th of month after period; paper: 20th (35 kap. 9 § SFL). Late filing penalty: SEK 1,250 per report (48 kap. 6 § SFL). No extension available. Amounts must match Ruta 35 + 38 (goods) and Ruta 39 (services).
+
+From 1 July 2030, ViDA replaces the periodisk sammanställning with mandatory e-invoicing and transaction-based digital reporting for intra-EU B2B supplies (Directive (EU) 2025/516).
 
 ---
 
@@ -142,7 +157,7 @@ Max beskattningsunderlag: 300 SEK excl. moms per person per occasion.
 | Events/entertainment | Max base 180 SEK/person |
 | Representationsgåvor | Max base 300 SEK/person |
 
-**April 2026 change:** Food VAT drops from 12% to 6%, reducing food-only schablon to ~18 SEK (or 33 SEK per updated Skatteverket guidance).
+**April 2026 change:** Food (livsmedel) VAT is 6% from 1 April 2026 to 31 December 2027. Restaurant and catering services stay at 12%, so the 36 SEK and 46 SEK limits above still apply to restaurant meals. When the food itself is at 6% (e.g. bought in a store or as takeaway): food only max 300 × 6% = 18 SEK; food + alcohol costing more than 300 SEK excl. moms per person, schablon 33 SEK.
 
 Dual-track: A 500 SEK/person dinner is NOT deductible for income tax but VAT IS deductible on first 300 SEK base.
 
@@ -189,9 +204,9 @@ If shared purchase used > 95% in taxable part: full input VAT deduction permitte
 
 Proportion recalculated annually based on actual turnover with year-end adjustments.
 
-### Proposed changes effective 1 January 2027
+### Proposed changes from 1 January 2027 (not enacted)
 
-Omsättningsmetoden as explicit statutory default. Area-based method (ytbaserad) for building costs. Per-verksamhetsgren calculation.
+Lagrådsremiss *Ändrade regler om fördelning av avdrag för mervärdesskatt* (11 June 2026); no proposition had been submitted as of September 2026. Proposed: omsättningsmetoden as explicit statutory main rule. Area-based method (ytbaserad) for building costs. Per-verksamhetsgren calculation. Some taxable turnover excluded for certain financial activities.
 
 ---
 
@@ -224,7 +239,7 @@ Example: Warehouse renovated Year 1, 500,000 SEK ingående moms fully deducted, 
 
 ### EU law: C-787/18 (Sögård Fastigheter)
 
-Swedish rules on transferring jämkningsskyldighet to property buyers incompatible with EU law. Skatteverket confirmed transfer rules no longer applied. Legislative reform: SOU 2026:24 (26 March 2026), lagrådsremiss 1 April 2026.
+Swedish rules on transferring jämkningsskyldighet to property buyers incompatible with EU law. Skatteverket confirmed transfer rules no longer applied. Legislative reform: SOU 2026:24 (26 March 2026), out for consultation until 27 October 2026; no lagrådsremiss yet.
 
 ### BAS accounts
 
@@ -416,7 +431,7 @@ Complete mapping for SKV 4700.
 
 ### Rate misclassification
 
-Wrong VAT rate is the most common SME error. Confusion points: restaurant vs. takeaway food (both 12% but alcohol triggers 25% splitting), digital products (e-books 6% vs. SaaS 25%), mixed hotel packages, repair services (reduced rates only for specific categories: bicycles, shoes, leather goods, clothing, household linen).
+Wrong VAT rate is the most common SME error. Confusion points: restaurant vs. takeaway food (restaurant/catering 12%; takeaway food 6% from 1 April 2026 to 31 December 2027; spirits, wine and starköl always 25%), digital products (e-books 6% vs. SaaS 25%), mixed hotel packages, repair services (12% only for specific categories: bicycles, shoes, leather goods, clothing, household linen).
 
 **July 2026 change: danstillställningar.** From 2026-07-01, tillträde till danstillställningar (dance events: dansband evenings, club nights with dance character, dance courses with tillställning character) drops from 25% to 6%, aligning dance admission with other cultural events (riksdagen 2025/26:SkU25; Skatteverket "Nya lagar från halvårsskiftet 2026"). Tickets sold and paid before 2026-07-01 keep 25% even if the event is later: the prepayment follows the rate at payment. Watch the split at mixed venues: admission is 6%, but alcohol sales stay 25% and food/serving follows its own rate, so the entrance fee must be separated from serving revenue, same pattern as concert venues.
 
@@ -464,14 +479,14 @@ Replaced ML (1994:200) on 1 July 2023. Key terminology: "omsättning" → "lever
 | Chapter | Subject | Key sections |
 |------|------|------|
 | 5 kap. | Beskattningsbara transaktioner | §§22-25 (intra-EU) |
-| 6 kap. | Plats för transaktioner | §34 (B2B main rule), §35 (B2C) |
+| 6 kap. | Plats för transaktioner | §33 (B2B main rule), §35 (B2C) |
 | 7 kap. | Beskattningsgrundande händelse | §§4-6 |
-| 9 kap. | Skattesatser | §2 (25%), §§3-7 (12%), §§8-15 (6%) |
+| 9 kap. | Skattesatser | §2 (25%), §§3-7 (12%; §7 repairs), §§8-19 (6%; §14 dance events from 2026-07-01; food moved from §3 to §19 for 2026-04-01 to 2027-12-31) |
 | 10 kap. | Undantag | Healthcare, education, financial, property |
 | 12 kap. | Frivillig beskattning | Commercial property rental |
-| 13 kap. | Avdrag för ingående skatt | §6 (main), §18 (cars), §§24-25 (representation), §29 (mixed), §30 (95% rules) |
+| 13 kap. | Avdrag för ingående skatt | §6 (main), §§20-23 (cars), §§24-25 (representation), §29 (mixed), §30 (95% rules) |
 | 15 kap. | Justering av avdrag | Jämkning; §10 (periods) |
-| 16 kap. | Betalningsskyldig | §§6-22 (reverse charge) |
+| 16 kap. | Betalningsskyldig | §§6-16 (reverse charge), §17 (intra-EU acquisitions), §§18-22 (import) |
 | 18 kap. | Liten årsomsättning | Small business (120,000 SEK from 2025) |
 | 22 kap. | OSS/IOSS | One Stop Shop |
 
@@ -479,12 +494,13 @@ Replaced ML (1994:200) on 1 July 2023. Key terminology: "omsättning" → "lever
 
 | Chapter | Subject |
 |------|------|
-| 7 kap. | Registration (§1 who must register, §4 notification) |
+| 7 kap. | Registration (§1 who must register, §4 notification, §§10-12 refusal/deregistration/VIES invalid from 2026-07-01) |
 | 26 kap. | Skattedeklaration (§§10-11 periods, §13 voluntary changes/24mo lock-in, §§15-16 timing, §26 deadline 12th, §30 large entity 26th, §§33-33b annual) |
-| 35 kap. | Periodisk sammanställning (§9 deadline) |
+| 35 kap. | Periodisk sammanställning (§§3-4 periods, §9 deadline) |
 | 48 kap. | Förseningsavgift |
 | 49 kap. | Skattetillägg (§4: 20%, §11: 2% period errors) |
 | 62 kap. | Payment deadlines (§3) |
+| 63 a kap. | Withheld crediting of överskjutande ingående moms (from 2026-07-01) |
 
 ### Key Skatteverket ställningstaganden
 

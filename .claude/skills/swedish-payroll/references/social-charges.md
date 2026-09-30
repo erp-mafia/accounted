@@ -20,9 +20,9 @@ Total: 31.42% (unchanged since 2009). Calculated on full gross with no cap.
 Check each employee's birth year against calendar year:
 
 - Born 1937 or earlier: 0% (no avgifter)
-- Turned 66 at year's start (born ≤1958 for 2024, ≤1959 for 2025; threshold rises to 67 in 2026): only ålderspensionsavgift = 10.21%
-- Youth discount: abolished January 1, 2024
-- New temporary reduction (Apr 1, 2026 to Sep 30, 2027): 20.81% on salary up to 25,000 SEK/month per individual per calendar month. Eligibility: at årets ingång (1 Jan) the employee must have **turned 18 but NOT turned 23**: i.e. ages 18-22 at year start (born 2003-2007 for tax year 2026, 2004-2008 for 2027). Statutory wording: *"personer som vid årets ingång har fyllt 18 men inte 23 år"* (Prop. 2025/26:66 / Lag om särskild beräkning av arbetsgivaravgifter och allmän löneavgift för personer som vid årets ingång har fyllt 18 men inte 23 år). The Riksdag betänkande title "19-23-åringar" describes the during-year age and is NOT the eligibility test: Skatteverket's AGI validator rejects 23-year-olds at year start.
+- Pensionärsåldersgränsen (riktåldern) was 66 in 2024-2025 and rises to 67 from 2026. The reduced rate (only ålderspensionsavgift 10.21%) applies if the person reached the riktålder at year's start. For 2025: born 1938-1958. For 2026: born 1938-1958 (same cohort, since the threshold rose by 1 year alongside the calendar year).
+- Youth discount: the earlier temporary reduction for 19-23-year-olds (2021-2023) has expired.
+- New temporary reduction (Apr 1, 2026 to Sep 30, 2027): only ålderspensionsavgift plus half of the other avgifter, 20.81% in total, on salary up to 25,000 SEK/month per individual per calendar month (Lag 2026:100); the part above 25,000 SEK/month is charged at 31.42%. Eligibility: at årets ingång (1 Jan) the employee must have **turned 18 but NOT turned 23**: i.e. ages 18-22 at year start (born 2003-2007 for tax year 2026, 2004-2008 for 2027). Statutory wording: *"personer som vid årets ingång har fyllt 18 men inte 23 år"* (Prop. 2025/26:66 / Lag om särskild beräkning av arbetsgivaravgifter och allmän löneavgift för personer som vid årets ingång har fyllt 18 men inte 23 år). The Riksdag betänkande title "19-23-åringar" describes the during-year age and is NOT the eligibility test: Skatteverket's AGI validator rejects 23-year-olds at year start.
 
 No avgifter required if total annual compensation from a single employer < 1,000 SEK.
 
@@ -40,18 +40,18 @@ Passive businesses pay särskild löneskatt at 24.26% instead.
 
 ## Key thresholds
 
-| Parameter | 2024 | 2025 |
+| Parameter | 2025 | 2026 |
 |---|---|---|
-| Prisbasbelopp (PBB) | 57,300 | 58,800 |
-| Inkomstbasbelopp (IBB) | 76,200 | 80,600 |
-| Max PGI (7.5 × IBB) | 571,500 | 604,500 |
-| Effective pension ceiling (8.07 × IBB) | 614,934 | 650,442 |
-| SGI ceiling (10 × PBB) | 573,000 | 588,000 |
+| Prisbasbelopp (PBB) | 58,800 | 59,200 |
+| Inkomstbasbelopp (IBB) | 80,600 | 83,400 |
+| Max PGI (7.5 × IBB) | 604,500 | 625,500 |
+| Effective pension ceiling (8.07 × IBB) | 650,442 | 673,038 |
+| SGI ceiling (10 × PBB) | 588,000 | 592,000 |
 
 ## Special reductions
 
 ### Växa-stöd (first-employee discount)
-Only 10.21% on wages up to 25,000 SEK/month (35,000 from 2025) for up to 24 months. Applies to enskild firma or AB hiring their first employee.
+Only 10.21% on wages up to 35,000 SEK/month for employments started after 2024-04-30 (cap applies from 2025; 25,000 SEK/month for employments started earlier), for up to 24 consecutive calendar months. Covers up to 2 employees. Applies to enskild firma, handelsbolag or AB with no employees (or only one) since 2024-01-01. Subject to the de minimis ceiling for stöd av mindre betydelse (300,000 EUR over three years). From the January 2026 reporting period, växa-stöd is no longer deducted in the AGI: the employer pays full avgifter and applies to Skatteverket for återbetalning (e-tjänst), no later than one year after the calendar month the application concerns. Approved amounts are credited to the skattekonto.
 
 ### Forskningsavdrag (R&D)
 20% total reduction on qualifying R&D salaries, max 3 MSEK per group per month. Requires systematic research or development work.

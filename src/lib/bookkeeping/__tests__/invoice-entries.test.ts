@@ -31,7 +31,6 @@ vi.mock('../vat-entries', () => ({
       line_description: `Utgående moms`,
     }]
   }),
-  generateReverseChargeLines: vi.fn().mockReturnValue([]),
 }))
 
 const { createJournalEntry } = await import('../engine')

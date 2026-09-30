@@ -123,8 +123,48 @@ describe('gnubok_get_trial_balance: dimensions filter', () => {
     })
     expect(result).not.toHaveProperty('dimension_filter')
     expect(result).not.toHaveProperty('dimension_resolutions')
+    expect(result).not.toHaveProperty('partial_view')
     // Zero registry queries when nothing is tagged.
     expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('discloses a filtered saldobalans as a partial view: no IB, and is_balanced says nothing', async () => {
+    // A project's costs carry the tag, the bank line that paid them does
+    // not: the filtered rows are one-sided and IB is company-wide, so the
+    // answer must not read as the company's saldobalans or as an integrity
+    // failure.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD_ROW, error: null }) // period info
+    enqueue({ data: { dimensions_enabled: false }, error: null }) // company_settings: free-text passthrough
+    mockTrialBalance.mockResolvedValueOnce({
+      rows: [
+        { account_number: '5010', account_name: 'Lokalhyra', period_debit: 8000, period_credit: 0, closing_debit: 8000, closing_credit: 0 },
+      ],
+      totalDebit: 8000,
+      totalCredit: 0,
+    } as never)
+
+    const result = (await trialBalance.execute(
+      { period_id: 'fp-1', dimensions: { '6': 'P001' } },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { is_balanced: boolean; partial_view?: Record<string, unknown> }
+
+    expect(result.is_balanced).toBe(false)
+    expect(result.partial_view).toEqual({
+      complete: false,
+      disclosure: 'Filtrerad (dimension 6: P001), ej fullständig rapport',
+      opening_balances_included: false,
+      is_balanced_meaningful: false,
+    })
+  })
+
+  it('declares partial_view in its output schema without requiring it, and says so in the description', () => {
+    const schema = trialBalance.outputSchema as { properties?: Record<string, unknown>; required?: string[] }
+    expect(schema.properties?.partial_view).toBeDefined()
+    expect(schema.required ?? []).not.toContain('partial_view')
+    expect(trialBalance.description).toMatch(/partial_view/)
   })
 
   it('lets DimensionResolutionError propagate with the create-first hint', async () => {
