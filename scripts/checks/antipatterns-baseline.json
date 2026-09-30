@@ -218,7 +218,7 @@
     ]
   },
   "basAccountLiteral": {
-    "count": 1580,
+    "count": 1586,
     "files": {
       "app/(dashboard)/assets/[id]/dispose/page.tsx": 1,
       "app/(dashboard)/bookkeeping/year-end/periodisering/page.tsx": 13,
@@ -431,6 +431,7 @@
       "lib/supplier-invoices/create.ts": 1,
       "lib/tax/deadline-config.ts": 1,
       "lib/transactions/category-suggestions.ts": 16,
+      "lib/transactions/invoice-match-suggestion.ts": 6,
       "lib/transactions/propose.ts": 1,
       "lib/transactions/underlag-read.ts": 1,
       "lib/vat/account-vat-box.ts": 2,
