@@ -52,8 +52,12 @@ export const SE_PACK_TERRITORY = [
   // The BAS chart, its SRU mapping, and the generated account-number list.
   'lib/bookkeeping/bas-data/',
   'lib/bookkeeping/bas-account-numbers.ts',
-  // The SE legal-form profiles: equity, settlement and closing accounts per form.
-  'lib/company/forms/',
+  // The SE legal-form profiles: equity, settlement and closing accounts per
+  // form. Only the se-* profiles: the registry beside them (forms/index.ts,
+  // forms/types.ts) is the jurisdiction-agnostic seam and stays BAS-free.
+  'lib/company/forms/se-aktiebolag.ts',
+  'lib/company/forms/se-enskild-firma.ts',
+  'lib/company/forms/se-ideell-forening.ts',
   // Swedish year-end: årsredovisning and iXBRL, periodiseringsfond, bolagsskatt, EF.
   'lib/bokslut/',
   // Income tax returns and their SRU files.
@@ -86,30 +90,41 @@ export const KERNEL_FILES = ['lib/bookkeeping/engine.ts', 'lib/core/']
 
 /**
  * What the kernel may import without it counting: the kernel itself, the
- * legal-form profile registry (keyed by jurisdiction and form, so it IS the
- * seam), and shared infrastructure with no business logic. A module root
- * matches itself and everything under it ('lib/events' covers
- * lib/events/types). External packages and node: builtins are not counted.
+ * legal-form seam, and shared infrastructure with no business logic. An entry
+ * ending in '/' is a directory and covers its index and everything under it;
+ * anything else is one module ('lib/events' is lib/events/index.ts only).
+ * External packages and node: builtins are not counted.
+ *
+ * Keep it narrow. A directory that mixes infrastructure with features is
+ * listed module by module: lib/company holds company creation, onboarding and
+ * TIC refresh beside the legal-form seam, lib/auth holds BankID and OAuth
+ * beside the cookieless service client, and lib/events/handlers holds feature
+ * handlers. lib/currency (the Riksbank rate provider) and lib/dimensions
+ * (tagging services) are features and are not listed at all.
  */
 export const KERNEL_INNER_MODULES = [
-  'lib/bookkeeping',
-  'lib/core',
-  'lib/company',
-  'lib/auth',
+  // The kernel itself.
+  'lib/bookkeeping/',
+  'lib/core/',
+  // The legal-form seam: the form as a type, and the per-jurisdiction profiles.
+  'lib/company/entity-type',
+  'lib/company/forms/',
+  // Shared infrastructure.
+  'lib/auth/api-keys', // createServiceClientNoCookies
   'lib/concurrency',
-  'lib/currency',
-  'lib/dates',
-  'lib/dimensions',
-  'lib/env',
-  'lib/errors',
+  'lib/dates/',
+  'lib/env/',
+  'lib/errors/',
   'lib/events',
-  'lib/invariants',
+  'lib/events/bus',
+  'lib/events/types',
+  'lib/invariants/', // the shared format contracts hand-rolled-invariant points at
   'lib/logger',
   'lib/money',
-  'lib/observability',
-  'lib/supabase',
+  'lib/observability/',
+  'lib/supabase/',
   'lib/utils',
-  'types',
+  'types/',
 ]
 
 const SCAN_DIRS = ['lib', 'app', 'components', 'extensions']
@@ -123,7 +138,15 @@ const isTestFile = (relPath) =>
 export const isUnder = (relPath, paths) =>
   paths.some((p) => (p.endsWith('/') ? relPath.startsWith(p) : relPath === p))
 
-const isCommentLine = (text) => /^\s*(?:\/\/|\/\*|\*|\{\s*\/\*)/.test(text)
+// A line comment, a doc-comment continuation, or a block comment ('/* */' or
+// JSX '{/* */}') with no code after it on the line: '/* x */ f('2650')' is code.
+const isCommentLine = (text) => {
+  if (/^\s*(?:\/\/|\*)/.test(text)) return true
+  const open = /^\s*\{?\s*\/\*/.exec(text)
+  if (!open) return false
+  const close = text.indexOf('*/', open[0].length)
+  return close === -1 || /^\s*\}?\s*$/.test(text.slice(close + 2))
+}
 
 // 1. basAccountLiteral ------------------------------------------------------
 
@@ -147,9 +170,24 @@ const SLICE_PREFIX_RES = [
 // a digit-prefix check counts unless its receiver is named for one of the
 // other digit series this codebase handles: organisation and personal
 // numbers, phone and clearing numbers, OCR and giro references, SQLSTATE and
-// other codes, years and dates.
-export const NON_ACCOUNT_RECEIVER_RE =
-  /digit|org|person|pnr|phone|mobile|clearing|ocr|iban|bic|giro|zip|postal|year|date|period|version|status|code|canonical|sqlstate/i
+// other codes, years and dates. Names are judged by their camelCase and
+// snake_case word segments, so 'candidate' and 'updated' are not dates, and a
+// segment naming an account ('accountCode', 'basCode') always counts.
+const NON_ACCOUNT_SEGMENT_RE =
+  /^(?:digit|org|person|pnr|phone|mobile|clearing|ocr|iban|bic|giro|zip|postal|year|date|period|version|status|code|canonical|sql)|giro$/
+const ACCOUNT_SEGMENT_RE = /^(?:acc|accs|acct|accts|bas|account\w*|konto\w*)$/
+
+/** True when a prefix check's receiver is named for a digit series that is not an account. */
+export function isNonAccountReceiver(name) {
+  const segments = name
+    .replace(/([a-z\d])([A-Z])/g, '$1_$2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[_$]+/)
+    .filter(Boolean)
+  if (segments.some((s) => ACCOUNT_SEGMENT_RE.test(s))) return false
+  return segments.some((s) => NON_ACCOUNT_SEGMENT_RE.test(s))
+}
 
 // A regex literal that starts with ^ and then an account class digit, a class
 // of account digits, or a group whose first alternative does: /^19\d{2}$/,
@@ -221,7 +259,7 @@ export function findBasAccountWeldsInSource(source) {
     if (at.comment) return
     if (receiverAt !== undefined) {
       const name = receiverName(source.slice(at.lineStart, receiverAt))
-      if (NON_ACCOUNT_RECEIVER_RE.test(name)) return
+      if (isNonAccountReceiver(name)) return
     }
     found.push({ index: m.index, line: at.line, kind, match })
   }
@@ -275,15 +313,19 @@ function resolveModule(specifier, relPath) {
   return mod.replace(/\.(?:ts|tsx|js|mjs)$/, '').replace(/\/index$/, '')
 }
 
-const isInnerModule = (mod) =>
-  KERNEL_INNER_MODULES.some((root) => mod === root || mod.startsWith(`${root}/`))
+/** True when a src-relative module path is inside KERNEL_INNER_MODULES. */
+export const isInnerModule = (mod) =>
+  KERNEL_INNER_MODULES.some((entry) =>
+    entry.endsWith('/') ? mod === entry.slice(0, -1) || mod.startsWith(entry) : mod === entry,
+  )
 
 /** True when relPath is part of the ledger kernel. */
 export const isKernelFile = (relPath) => !isTestFile(relPath) && isUnder(relPath, KERNEL_FILES)
 
 /**
  * The outer modules a kernel file imports (static imports, type imports,
- * re-exports and dynamic import()), as sorted src-relative paths.
+ * re-exports, dynamic import(), type-position import('x').T and
+ * import x = require('x')), as sorted src-relative paths.
  */
 export function findKernelImportsInSource(source, relPath) {
   const sf = ts.createSourceFile(relPath, source, ts.ScriptTarget.Latest, false)
@@ -302,6 +344,18 @@ export function findKernelImportsInSource(source, relPath) {
       ts.isStringLiteralLike(node.arguments[0])
     ) {
       specifiers.push(node.arguments[0].text)
+    } else if (
+      ts.isImportTypeNode(node) &&
+      ts.isLiteralTypeNode(node.argument) &&
+      ts.isStringLiteral(node.argument.literal)
+    ) {
+      specifiers.push(node.argument.literal.text)
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      ts.isStringLiteral(node.moduleReference.expression)
+    ) {
+      specifiers.push(node.moduleReference.expression.text)
     }
     ts.forEachChild(node, visit)
   }

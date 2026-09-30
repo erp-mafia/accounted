@@ -1231,24 +1231,31 @@ if (isUpdate) {
     },
   }
   // The jurisdiction-weld ratchets may only be raised with a DECISIONS.md
-  // line: say so loudly when this re-baseline raises any of them.
+  // line: say so loudly when this re-baseline raises any of them. A ratchet
+  // the previous baseline did not have yet is being introduced, not raised.
   const previous = fs.existsSync(BASELINE_PATH) ? JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')) : {}
   const raised = [
-    ...compareFileCounts(previous.basAccountLiteral?.files ?? {}, basLiteralCounts).grown.map(
-      (g) => `bas-account-literal ${g.file}: ${g.baseline} -> ${g.current}`,
-    ),
-    ...compareFileCounts(previous.sekLiteral?.files ?? {}, sekLiteralCounts).grown.map(
-      (g) => `sek-literal ${g.file}: ${g.baseline} -> ${g.current}`,
-    ),
-    ...compareFileEdges(previous.kernelImports?.files ?? {}, kernelImportEdges).added.map(
-      (e) => `kernel-import ${e.file} -> ${e.module}`,
-    ),
+    ...(previous.basAccountLiteral
+      ? compareFileCounts(previous.basAccountLiteral.files ?? {}, basLiteralCounts).grown.map(
+          (g) => `bas-account-literal ${g.file}: ${g.baseline} -> ${g.current}`,
+        )
+      : []),
+    ...(previous.sekLiteral
+      ? compareFileCounts(previous.sekLiteral.files ?? {}, sekLiteralCounts).grown.map(
+          (g) => `sek-literal ${g.file}: ${g.baseline} -> ${g.current}`,
+        )
+      : []),
+    ...(previous.kernelImports
+      ? compareFileEdges(previous.kernelImports.files ?? {}, kernelImportEdges).added.map(
+          (e) => `kernel-import ${e.file} -> ${e.module}`,
+        )
+      : []),
   ]
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
   console.log(
     `Baseline written: ${current.rawRouteAuth.length} raw-route-auth files, ${current.naiveOreRound} naive-ore-round occurrences.`,
   )
-  if (previous.basAccountLiteral && raised.length) {
+  if (raised.length) {
     console.log(
       `\n! This re-baseline RAISES ${raised.length} jurisdiction-weld baseline ${raised.length === 1 ? 'entry' : 'entries'}. A pure move or\n` +
         '  rename is fine; anything else needs a DECISIONS.md line saying why, in the same PR:',
@@ -1783,7 +1790,8 @@ if (baseline.kernelImports && kernelImportRatchet.added.length) {
     '  → the kernel is what every jurisdiction pack shares, so it must not reach up into features.\n' +
       '    Invert the dependency (the caller passes the value or a callback in), or move the shared\n' +
       '    primitive down into lib/core or lib/bookkeeping. Shared infrastructure without business\n' +
-      '    logic may be added to KERNEL_INNER_MODULES in scripts/checks/jurisdiction-welds.mjs.\n' +
+      '    logic may be added to KERNEL_INNER_MODULES in scripts/checks/jurisdiction-welds.mjs, one\n' +
+      '    module at a time when its directory also holds features.\n' +
       NEVER_RAISE,
   )
 }

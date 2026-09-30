@@ -18,6 +18,8 @@ import {
   findSekComparisonsInSource,
   findKernelImportsInSource,
   findJurisdictionWelds,
+  isInnerModule,
+  isNonAccountReceiver,
   countByFile,
   compareFileCounts,
   compareFileEdges,
@@ -67,6 +69,19 @@ describe('bas-account-literal: shapes counted', () => {
     expect(bas(`z.string().regex(/^19[2-9]\\d$/, 'Bankkonton')`)).toEqual(['prefix-regex'])
   })
 
+  it('judges a receiver by its word segments, so account-named and date-lookalike names count', () => {
+    expect(bas(`if (accountCode.startsWith('19')) {}`)).toEqual(['prefix-startsWith'])
+    expect(bas(`if (basCode.startsWith('3')) {}`)).toEqual(['prefix-startsWith'])
+    expect(bas(`if (updatedAccount.startsWith('26')) {}`)).toEqual(['prefix-startsWith'])
+    expect(bas(`if (candidate.startsWith('19')) {}`)).toEqual(['prefix-startsWith'])
+    expect(bas(`if (updated.slice(0, 2) === '26') {}`)).toEqual(['prefix-slice'])
+  })
+
+  it('counts code that follows a block comment closed on the same line', () => {
+    expect(bas(`/* bank */ const bank = '1930'`)).toEqual(['literal'])
+    expect(bas(`{/* note */} {acc.startsWith('26') && <Vat />}`)).toEqual(['prefix-startsWith'])
+  })
+
   it('reports the line numbers of a multi-line source', () => {
     const source = [
       `import { RESULT_ACCOUNT } from '@/lib/core/bookkeeping/result-appropriation-service'`,
@@ -93,6 +108,17 @@ describe('bas-account-literal: shapes left alone', () => {
     expect(bas(`errCode.startsWith('42')`)).toEqual([])
     expect(bas(`if (phone.startsWith('46')) {}`)).toEqual([])
     expect(bas(`if (account.startsWith('0')) {}`)).toEqual([])
+    expect(bas(`if (sqlState.startsWith('42')) {}`)).toEqual([])
+    expect(bas(`if (bankgiroNumber.startsWith('5')) {}`)).toEqual([])
+    expect(bas(`if (ORG_NR.startsWith('5')) {}`)).toEqual([])
+    expect(bas(`if (fiscalYear.startsWith('2')) {}`)).toEqual([])
+  })
+
+  it('isNonAccountReceiver splits camelCase and snake_case names into segments', () => {
+    for (const name of ['digits', 'errCode', 'canonical', 'personnummer', 'isoDate', 'plusgiro', 'SQLSTATE'])
+      expect(isNonAccountReceiver(name), name).toBe(true)
+    for (const name of ['a', 'value', 'candidate', 'updated', 'accountCode', 'account_code', 'basCode', 'kontonr'])
+      expect(isNonAccountReceiver(name), name).toBe(false)
   })
 
   it('ignores regexes for longer numbers, years and non-account classes', () => {
@@ -110,6 +136,8 @@ describe('bas-account-literal: shapes left alone', () => {
     expect(bas(`// Bank is '1930' and VAT settles on '2650'`)).toEqual([])
     expect(bas(` * starts with /^19\\d{2}$/ and account.startsWith('19')`)).toEqual([])
     expect(bas(`{/* '1930' */}`)).toEqual([])
+    expect(bas(`/* '1930' is the bank account`)).toEqual([])
+    expect(bas(`  /* bank '1930' */  `)).toEqual([])
   })
 })
 
@@ -150,7 +178,7 @@ describe('kernel-import', () => {
     ])
   })
 
-  it('leaves the kernel, the form registry, shared infrastructure and packages alone', () => {
+  it('leaves the kernel, the legal-form seam, shared infrastructure and packages alone', () => {
     const source = [
       `import { x } from './period-service'`,
       `import { createJournalEntry } from '@/lib/bookkeeping/engine'`,
@@ -163,6 +191,61 @@ describe('kernel-import', () => {
       `import { createHash } from 'node:crypto'`,
     ].join('\n')
     expect(findKernelImportsInSource(source, 'lib/core/bookkeeping/x.ts')).toEqual([])
+  })
+
+  it('counts the features that share a directory with the seam or with infrastructure', () => {
+    const source = [
+      `import { createCompany } from '@/lib/company/create-company'`,
+      `import { parseOnboardingInput } from '../../company/onboarding-input'`,
+      `import { fetchRiksbankRate } from '@/lib/currency/riksbanken'`,
+      `import { startBankId } from '@/lib/auth/bankid'`,
+      `import { importExisting } from '@/lib/dimensions/import-existing'`,
+      `import { handler } from '@/lib/events/handlers/document-read-handler'`,
+    ].join('\n')
+    expect(findKernelImportsInSource(source, 'lib/core/bookkeeping/x.ts')).toEqual([
+      'lib/auth/bankid',
+      'lib/company/create-company',
+      'lib/company/onboarding-input',
+      'lib/currency/riksbanken',
+      'lib/dimensions/import-existing',
+      'lib/events/handlers/document-read-handler',
+    ])
+  })
+
+  it('leaves the seam and the listed infrastructure modules alone', () => {
+    const source = [
+      `import { getLegalFormProfile } from '@/lib/company/forms'`,
+      `import { AB_PROFILE } from '@/lib/company/forms/se-aktiebolag'`,
+      `import { createServiceClientNoCookies } from '@/lib/auth/api-keys'`,
+      `import { eventBus } from '@/lib/events/bus'`,
+      `import { fetchAllRows } from '@/lib/supabase/fetch-all'`,
+      `import { fiscalYearSchema } from '@/lib/invariants/zod'`,
+      `import type { SkvThing } from '@/types/skatteverket'`,
+    ].join('\n')
+    expect(findKernelImportsInSource(source, 'lib/core/bookkeeping/x.ts')).toEqual([])
+  })
+
+  it('counts type-position import() and import = require()', () => {
+    const source = [
+      `type Share = import('@/lib/invoices/customer-share').CustomerShare`,
+      `import rounding = require('@/lib/bokslut/rounding')`,
+    ].join('\n')
+    expect(findKernelImportsInSource(source, 'lib/core/bookkeeping/x.ts')).toEqual([
+      'lib/bokslut/rounding',
+      'lib/invoices/customer-share',
+    ])
+  })
+
+  it('isInnerModule: a trailing slash covers a directory, anything else one module', () => {
+    expect(isInnerModule('lib/core')).toBe(true)
+    expect(isInnerModule('lib/core/bookkeeping/period-service')).toBe(true)
+    expect(isInnerModule('types')).toBe(true)
+    expect(isInnerModule('lib/events')).toBe(true)
+    expect(isInnerModule('lib/company/entity-type')).toBe(true)
+    expect(isInnerModule('lib/company/entity-type/extra')).toBe(false)
+    expect(isInnerModule('lib/company')).toBe(false)
+    expect(isInnerModule('lib/money-extra')).toBe(false)
+    expect(isInnerModule('lib/core-extra')).toBe(false)
   })
 })
 
@@ -200,7 +283,7 @@ describe('ratchet comparison', () => {
 })
 
 describe('end to end over a tree', () => {
-  it('skips tests, exempts SE pack territory for BAS and conversion code for SEK, and scans only the kernel for imports', () => {
+  it('skips tests, exempts SE pack territory (not the form registry) for BAS and conversion code for SEK, and scans only the kernel for imports', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jurisdiction-welds-'))
     tempDirs.push(root)
     const write = (rel: string, body: string) => {
@@ -212,6 +295,8 @@ describe('end to end over a tree', () => {
     write('components/y.tsx', `if (acc.startsWith('26')) {}\n`)
     write('lib/reports/ink2/engine.ts', `const r = '7201'\nif (c === 'SEK') {}\n`)
     write('lib/bokslut/tax.ts', `const tax = '8910'\n`)
+    write('lib/company/forms/se-aktiebolag.ts', `const equity = '2081'\n`)
+    write('lib/company/forms/index.ts', `const equity = '2081'\n`)
     write('lib/currency/rates.ts', `if (c === 'SEK') return 1\nconst bank = '1930'\n`)
     write('lib/invoices/__tests__/x.test.ts', `const bank = '1930'\nif (c === 'SEK') {}\n`)
     write('lib/invoices/y.test.ts', `const bank = '1930'\n`)
@@ -222,6 +307,7 @@ describe('end to end over a tree', () => {
     const welds = findJurisdictionWelds(root)
     expect(welds.basAccountLiteral).toEqual([
       { file: 'components/y.tsx', line: 1, kind: 'prefix-startsWith', match: `.startsWith('26')` },
+      { file: 'lib/company/forms/index.ts', line: 1, kind: 'literal', match: `'2081'` },
       { file: 'lib/currency/rates.ts', line: 2, kind: 'literal', match: `'1930'` },
       { file: 'lib/invoices/x.ts', line: 2, kind: 'literal', match: `'1930'` },
     ])
@@ -240,8 +326,11 @@ describe('the named lists point at code that exists', () => {
     expect(fs.existsSync(path.join(SRC, entry))).toBe(true)
   })
 
-  it.each(KERNEL_INNER_MODULES)('kernel inner module %s', (mod) => {
-    const candidates = [mod, `${mod}.ts`, `${mod}/index.ts`]
+  it.each(KERNEL_INNER_MODULES)('kernel inner module %s', (entry) => {
+    // A directory entry must be a directory; a module entry must be one file
+    // (or a directory's index), or it would silently cover nothing.
+    const candidates = entry.endsWith('/') ? [entry] : [`${entry}.ts`, `${entry}/index.ts`]
     expect(candidates.some((c) => fs.existsSync(path.join(SRC, c)))).toBe(true)
+    if (entry.endsWith('/')) expect(fs.statSync(path.join(SRC, entry)).isDirectory()).toBe(true)
   })
 })
