@@ -10,6 +10,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
 import { SupportLink } from '@/components/ui/support-link'
+import NewClientCompanyDialog from '@/components/dashboard/NewClientCompanyDialog'
 import {
   Check,
   ChevronsUpDown,
@@ -87,14 +88,16 @@ export default function UserMenu({
   cockpitMode = false,
   onLogout,
 }: UserMenuProps) {
-  const { company, companies, isSandbox: companyCtxSandbox, foreignCompanies = [] } = useCompany()
+  const { company, companies, isSandbox: companyCtxSandbox, foreignCompanies = [], byraTeam } = useCompany()
   const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
   const tSwitcher = useTranslations('company_switcher')
+  const tClients = useTranslations('clients')
   const { toast } = useToast()
 
   const [open, setOpen] = useState(false)
   const [companiesOpen, setCompaniesOpen] = useState(false)
+  const [clientDialogOpen, setClientDialogOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [isPending, setIsPending] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -103,6 +106,10 @@ export default function UserMenu({
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 232 })
 
   const sandbox = isSandbox || companyCtxSandbox
+  // Byrå owner/admin get the client path next to "Lägg till företag", which
+  // attaches to the user's personal team (WL-08): the explicit entry is how
+  // a client lands in the byrå instead.
+  const canCreateClient = byraTeam?.role === 'owner' || byraTeam?.role === 'admin'
 
   const updatePosition = useCallback(() => {
     if (!triggerRef.current || !menuRef.current) return
@@ -357,6 +364,19 @@ export default function UserMenu({
                   )}
                   {!sandbox && (
                     <div className="border-t border-border px-1 pt-1">
+                      {canCreateClient && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            close()
+                            setClientDialogOpen(true)
+                          }}
+                          className={menuRow}
+                        >
+                          <Plus className="h-4 w-4 flex-shrink-0" />
+                          {tClients('new_client_company')}
+                        </button>
+                      )}
                       <Link href="/select-company?choose=1" onClick={close} className={menuRow}>
                         <Plus className="h-4 w-4 flex-shrink-0" />
                         {tSwitcher('add_company')}
@@ -425,6 +445,10 @@ export default function UserMenu({
           </div>,
           document.body,
         )}
+
+      {canCreateClient && (
+        <NewClientCompanyDialog open={clientDialogOpen} onOpenChange={setClientDialogOpen} />
+      )}
     </>
   )
 }
