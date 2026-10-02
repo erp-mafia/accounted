@@ -22,10 +22,6 @@ export interface EmailTextOverride {
 interface EditorEmailPreviewProps {
   /** The preview-email request body; null while the tab is not shown. */
   requestBody: string | null
-  /** Why no email goes out (manual channel, no address, no plan); null = it does. */
-  unavailableReason: string | null
-  /** Offered when email is possible but the user picked another channel. */
-  onUseEmail: (() => void) | null
   /** This send's own subject and message; null = the company's or the stock texts. */
   override: EmailTextOverride | null
   onOverrideChange: (override: EmailTextOverride | null) => void
@@ -47,8 +43,6 @@ const LABEL_CLASS = 'text-muted-foreground'
  */
 export function EditorEmailPreview({
   requestBody,
-  unavailableReason,
-  onUseEmail,
   override,
   onOverrideChange,
   canAddCopies,
@@ -57,21 +51,10 @@ export function EditorEmailPreview({
   extraCcError,
 }: EditorEmailPreviewProps) {
   const t = useTranslations('invoice_editor_shell')
-  const { preview, loading, error } = useInvoiceEmailPreview(unavailableReason ? null : requestBody)
+  // Mounted only while email goes out: the pane disables the Mejl tab, with
+  // the reason, whenever it does not (EditorPreviewPane emailDisabledReason).
+  const { preview, loading, error } = useInvoiceEmailPreview(requestBody)
   const [copiesOpen, setCopiesOpen] = useState(extraCcText.trim().length > 0)
-
-  if (unavailableReason) {
-    return (
-      <div className="rounded-lg border border-border bg-background px-6 py-6 text-[13px]">
-        <p className="text-muted-foreground">{unavailableReason}</p>
-        {onUseEmail && (
-          <button type="button" className={cn(QUIET_LINK_CLASS, 'mt-2')} onClick={onUseEmail}>
-            {t('email_use_email')}
-          </button>
-        )}
-      </div>
-    )
-  }
 
   if (!preview) {
     return (

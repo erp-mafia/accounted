@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   emailBlockReason,
+  emailPreviewBlock,
   resolveChannelOptions,
   resolveDefaultChannel,
   resolveEffectiveChannel,
@@ -92,5 +93,24 @@ describe('resolveEffectiveChannel', () => {
 
   it('drops a Peppol pick that is no longer offered', () => {
     expect(resolveEffectiveChannel('peppol', ctx({ peppolReady: false }))).toBe('email')
+  })
+})
+
+describe('emailPreviewBlock', () => {
+  it('leaves the Mejl tab on while the email goes out', () => {
+    expect(emailPreviewBlock('email', resolveChannelOptions(ctx()))).toBeNull()
+  })
+
+  it('says why email cannot go out: a customer without an address, the plan, a följesedel', () => {
+    expect(emailPreviewBlock('manual', resolveChannelOptions(ctx({ customerEmail: null })))).toBe('no_customer_email')
+    expect(emailPreviewBlock('manual', resolveChannelOptions(ctx({ canEmail: false })))).toBe('no_email_plan')
+    expect(emailPreviewBlock('manual', resolveChannelOptions(ctx({ documentType: 'delivery_note' })))).toBe(
+      'not_emailable',
+    )
+  })
+
+  it('names the picked channel when email was possible but not chosen', () => {
+    expect(emailPreviewBlock('manual', resolveChannelOptions(ctx()))).toBe('manual')
+    expect(emailPreviewBlock('peppol', resolveChannelOptions(ctx({ peppolReady: true })))).toBe('peppol')
   })
 })

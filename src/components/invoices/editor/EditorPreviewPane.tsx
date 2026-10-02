@@ -28,6 +28,12 @@ interface EditorPreviewPaneProps {
   preliminaryNumber: string | null
   /** The Mejl tab's content (EditorEmailPreview), mounted only while the tab is open. */
   renderEmail: () => ReactNode
+  /**
+   * Why no email goes out with this send (a customer without an address, the
+   * manual channel, ...): the Mejl tab is disabled with this as its reason.
+   * Null while the email goes out.
+   */
+  emailDisabledReason: string | null
   statusLine: ReactNode
 }
 
@@ -63,10 +69,14 @@ export function EditorPreviewPane({
   pdf,
   preliminaryNumber,
   renderEmail,
+  emailDisabledReason,
   statusLine,
 }: EditorPreviewPaneProps) {
   const t = useTranslations('invoice_editor_shell')
-  const [tab, setTab] = useState<PreviewTab>('document')
+  const [chosenTab, setTab] = useState<PreviewTab>('document')
+  // A send that stops emailing (customer switched, channel changed) takes
+  // the pane back to the document.
+  const tab: PreviewTab = emailDisabledReason ? 'document' : chosenTab
   const [zoom, setZoom] = useState<Zoom>('page')
 
   // Double-buffered: a new render loads in a hidden <object> over the shown
@@ -94,7 +104,7 @@ export function EditorPreviewPane({
           onChange={setTab}
           options={[
             { value: 'document', label: documentLabel },
-            { value: 'email', label: t('tab_email') },
+            { value: 'email', label: t('tab_email'), disabledReason: emailDisabledReason ?? undefined },
           ]}
         />
         {tab === 'document' && pdf.pageCount !== null && (

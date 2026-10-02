@@ -89,3 +89,17 @@ export function resolveEffectiveChannel(
   }
   return resolveDefaultChannel(ctx)
 }
+
+/**
+ * Why the Mejl tab is off, or null when the email goes out. Email cannot be
+ * sent (följesedel, sandbox, plan, a customer without an address): that
+ * reason. It can, but the user picked another channel ("Jag skickar själv",
+ * Peppol): that channel, since no email goes out with it either.
+ */
+export function emailPreviewBlock(
+  channel: EditorChannel,
+  options: readonly ChannelOption[],
+): EmailBlockReason | Exclude<EditorChannel, 'email'> | null {
+  if (channel === 'email') return null
+  return options.find((option) => option.channel === 'email')?.reason ?? channel
+}

@@ -23,6 +23,7 @@ import { SendConfirmDialog, type ConfirmVoucher } from './SendConfirmDialog'
 import { useInvoicePdfPreview } from './use-editor-previews'
 import { buildSummaryVatLines } from '@/lib/invoices/editor/summary-vat'
 import {
+  emailPreviewBlock,
   resolveChannelOptions,
   resolveEffectiveChannel,
   type ChannelContext,
@@ -158,7 +159,16 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   }
   const channelOptions = resolveChannelOptions(channelContext)
   const channel = resolveEffectiveChannel(channelChoice, channelContext)
-  const emailBlock = channelOptions.find((option) => option.channel === 'email')?.reason ?? null
+  // The Mejl tab is off, with the reason, whenever this send emails nothing.
+  const emailTabBlock = emailPreviewBlock(channel, channelOptions)
+  const emailDisabledReason =
+    emailTabBlock === null
+      ? null
+      : emailTabBlock === 'manual'
+        ? tShell('email_unavailable_manual')
+        : emailTabBlock === 'peppol'
+          ? tShell('email_unavailable_peppol')
+          : tShell(EMAIL_BLOCK_KEYS[emailTabBlock])
   const primaryLabel = tShell(resolveSendLabel({ documentType: 'invoice', channel, booksOnIssue: books }))
 
   const extraCc = parseInvoiceRecipientText(extraCcText)
@@ -459,17 +469,10 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
             pdf={pdf}
             preliminaryNumber={null}
             statusLine={renderStatusLine()}
+            emailDisabledReason={emailDisabledReason}
             renderEmail={() => (
               <EditorEmailPreview
                 requestBody={emailRequestBody}
-                unavailableReason={
-                  channel === 'email'
-                    ? null
-                    : emailBlock
-                      ? tShell(EMAIL_BLOCK_KEYS[emailBlock])
-                      : tShell('email_unavailable_manual')
-                }
-                onUseEmail={channel !== 'email' && !emailBlock ? () => setChannelChoice('email') : null}
                 override={emailOverride}
                 onOverrideChange={setEmailOverride}
                 canAddCopies={isCompanyAdmin}

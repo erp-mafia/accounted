@@ -121,6 +121,7 @@ import { EditorStatusLine } from '@/components/invoices/editor/EditorStatusLine'
 import { SendConfirmDialog, type ConfirmVoucher } from '@/components/invoices/editor/SendConfirmDialog'
 import { useInvoicePdfPreview } from '@/components/invoices/editor/use-editor-previews'
 import {
+  emailPreviewBlock,
   resolveChannelOptions,
   resolveEffectiveChannel,
   type ChannelContext,
@@ -2671,7 +2672,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }
   const channelOptions = resolveChannelOptions(channelContext)
   const channel = resolveEffectiveChannel(channelChoice, channelContext)
-  const emailBlock = channelOptions.find((option) => option.channel === 'email')?.reason ?? null
+  // The Mejl tab is off, with the reason, whenever this send emails nothing.
+  const emailTabBlock = emailPreviewBlock(channel, channelOptions)
+  const emailDisabledReason =
+    emailTabBlock === null
+      ? null
+      : emailTabBlock === 'manual'
+        ? tShell('email_unavailable_manual')
+        : emailTabBlock === 'peppol'
+          ? tShell('email_unavailable_peppol')
+          : tShell(EMAIL_BLOCK_KEYS[emailTabBlock])
   const editorMode = isEditMode ? 'edit' : 'create'
   const primaryContext = { mode: editorMode, isSelfBilled, documentType: watchDocumentType, channel, booksOnIssue } as const
   const primaryAction = resolvePrimaryAction(primaryContext)
@@ -3222,17 +3232,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             pdf={pdf}
             preliminaryNumber={preliminaryNumber}
             statusLine={renderStatusLine()}
+            emailDisabledReason={emailDisabledReason}
             renderEmail={() => (
               <EditorEmailPreview
                 requestBody={emailRequestBody}
-                unavailableReason={
-                  channel === 'email'
-                    ? null
-                    : emailBlock
-                      ? tShell(EMAIL_BLOCK_KEYS[emailBlock])
-                      : tShell('email_unavailable_manual')
-                }
-                onUseEmail={channel !== 'email' && !emailBlock ? () => setChannelChoice('email') : null}
                 override={emailOverride}
                 onOverrideChange={setEmailOverride}
                 canAddCopies={isCompanyAdmin}
