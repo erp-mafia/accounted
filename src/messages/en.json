@@ -6658,6 +6658,7 @@
     "ext_arcim_job_warning_vat": "Missing source VAT information",
     "ext_arcim_job_warning_fx": "Exchange rate unavailable",
     "ext_arcim_job_warning_rows": "Rows that do not match the invoice amount",
+    "ext_arcim_job_warning_rows_account": "Rows without an account",
     "ext_arcim_job_warning_count": "{count} invoices need review",
     "ext_arcim_job_running": "Import in progress",
     "ext_arcim_job_attention": "Import needs attention",

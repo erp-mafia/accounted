@@ -4726,6 +4726,19 @@ async function commitCreateSupplierInvoiceFromInbox(
     return { error: 'exchange_rate must be a finite number when provided', status: 400 }
   }
 
+  // Every item carries its own account, under the rule the create routes
+  // hold (CreateSupplierInvoiceItemSchema: four digits). Staging resolves
+  // and checks it, so a miss here is a stale or tampered op: refuse it
+  // before an ankomstnummer is drawn instead of guessing one.
+  if (rawItems.some((item) => typeof item.account_number !== 'string' || !ACCOUNT_NUMBER_RE.test(item.account_number))) {
+    const entry = getErrorEntry('SI_CREATE_ITEM_ACCOUNT_MISSING')
+    return {
+      error: entry?.message_sv ?? 'En eller flera fakturarader saknar konto.',
+      errorCode: 'SI_CREATE_ITEM_ACCOUNT_MISSING',
+      status: entry?.httpStatus ?? 400,
+    }
+  }
+
   // Särskild löneskatt (SLP): staged params must respect the same rule the
   // create routes enforce; the 7533/2514 pair is only lawful on 741x pension
   // premiums, so a flag on any other account is tampered or mis-staged.
@@ -4872,7 +4885,7 @@ async function commitCreateSupplierInvoiceFromInbox(
       unit: (item.unit as string | undefined) ?? 'st',
       unit_price: typeof item.unit_price === 'number' && Number.isFinite(item.unit_price) ? item.unit_price : 0,
       line_total: typeof item.line_total === 'number' && Number.isFinite(item.line_total) ? item.line_total : 0,
-      account_number: String(item.account_number ?? '4000'),
+      account_number: item.account_number as string,
       vat_code: null,
       vat_rate: vatRate,
       vat_amount: vatAmt,

@@ -4347,6 +4347,18 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ogiltig kombination av fakturafält. Kontrollera formuläret och försök igen.',
     message_en: 'Invalid combination of supplier invoice fields.',
   },
+  SI_CREATE_ITEM_ACCOUNT_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'En eller flera fakturarader saknar konto. Ange konto för varje rad, eller sätt ett standardkonto för kostnader på leverantören.',
+    message_en:
+      'One or more invoice lines have no account. Set an account for each line, or set a default expense account on the supplier.',
+    remediation: {
+      description:
+        'Choose a BAS account for each line from the underlag and stage again with line_overrides[].account_number. No account is ever guessed.',
+      tool: 'gnubok_create_supplier_invoice_from_inbox',
+    },
+  },
   SI_CREATE_NO_FISCAL_PERIOD: {
     httpStatus: 400,
     message_sv:

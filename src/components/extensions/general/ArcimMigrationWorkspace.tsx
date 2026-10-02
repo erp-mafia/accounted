@@ -2340,6 +2340,7 @@ function ResultStep({
       ['vat', (results.salesInvoices?.vatUnresolved ?? 0) + (results.supplierInvoices?.vatUnresolved ?? 0)],
       ['fx', (results.salesInvoices?.fxUnresolved ?? 0) + (results.supplierInvoices?.fxUnresolved ?? 0)],
       ['rows', results.supplierInvoices?.rowsMismatch ?? 0],
+      ['rows_account', results.supplierInvoices?.rowsUnaccounted ?? 0],
     ] as const) {
       if (count > 0) entityLines.push({ label: t(`ext_arcim_job_warning_${key}`),
         value: t('ext_arcim_job_warning_count', { count }), failed: false })

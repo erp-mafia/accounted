@@ -15651,7 +15651,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_supplier_invoice_from_inbox',
     keywords: ['leverantörsfaktura', 'inkorg', 'underlag'],
     title: 'Create Supplier Invoice from Inbox',
-    description: "Atomic: turn an OCR'd inbox item into a staged supplier invoice. Resolves supplier, builds lines from extracted_data, applies VAT + FX + dimension tags, attaches the document. Honors dry_run. Unresolved supplier or a credit note → staged:false + next.",
+    description: "Atomic: turn an OCR'd inbox item into a staged supplier invoice. Resolves supplier, builds lines from extracted_data, applies VAT + FX + dimension tags, attaches the document. Honors dry_run. Unresolved supplier, a line with no account, or a credit note → staged:false + next.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16033,6 +16033,55 @@ export const tools: McpTool[] = [
         rawLineOverrides.map((o, i) => [o.line_number, parseDimensionsArg(o.dimensions, `line_overrides[${i}].dimensions`)]),
       )
 
+      // Every line's account comes from line_overrides, an agent-supplied
+      // accountSuggestion or the supplier's default_expense_account, and is
+      // held to the rule CreateSupplierInvoiceItemSchema holds the routes to.
+      // Nothing is guessed: the AI extraction and Peppol never suggest an
+      // account, so the old '4000' fallback booked every line of a supplier
+      // without a default to Inköp av varor. A line left without an account
+      // stops the staging the way an unresolved supplier does.
+      const lineAccounts = lineItemsExt.map((li, idx) =>
+        lineOverrideMap.get(idx + 1) ?? (li.accountSuggestion as string | null | undefined) ?? supplierDefaultExpenseAccount,
+      )
+      const unaccountedLines = lineItemsExt.flatMap((li, idx) => {
+        const account = lineAccounts[idx]
+        if (typeof account === 'string' && ACCOUNT_NUMBER_RE.test(account)) return []
+        return [{
+          line_number: idx + 1,
+          description: (li.description as string | undefined) ?? null,
+          line_total: Number(li.line_total ?? li.lineTotal ?? li.amount) || 0,
+          ...(account ? { invalid_account: account } : {}),
+        }]
+      })
+      if (unaccountedLines.length > 0) {
+        const entry = getErrorEntry('SI_CREATE_ITEM_ACCOUNT_MISSING')
+        return {
+          staged: false,
+          risk_level: getRiskLevel('create_supplier_invoice_from_inbox'),
+          actor: actor ?? { type: 'user' },
+          message:
+            `${entry?.message_sv ?? 'En eller flera fakturarader saknar konto.'} `
+            + `Nothing was staged: line(s) ${unaccountedLines.map((l) => l.line_number).join(', ')} have no valid account.`
+            + (supplierDefaultExpenseAccount ? '' : ' The supplier has no default_expense_account.'),
+          preview: {
+            supplier_id: supplierId,
+            supplier_resolution: supplierResolution,
+            supplier_default_expense_account: supplierDefaultExpenseAccount,
+            unaccounted_lines: unaccountedLines,
+          },
+          next: {
+            description:
+              'Choose a BAS account for each line in preview.unaccounted_lines from the underlag, then retry with the same arguments plus line_overrides[].account_number. A default expense account on the supplier fills its lines from then on.',
+            tool: 'gnubok_create_supplier_invoice_from_inbox',
+            args: {
+              inbox_item_id: inboxItemId,
+              ...(supplierIdOverride ? { supplier_id_override: supplierIdOverride } : {}),
+              line_overrides: unaccountedLines.map((l) => ({ line_number: l.line_number })),
+            },
+          },
+        }
+      }
+
       // Resolve-don't-select: parse the invoice-level default bag + each line's
       // own bag, then resolve codes AND natural-language names against the
       // registry in ONE pass (zero queries when nothing is tagged; free-text
@@ -16048,7 +16097,8 @@ export const tools: McpTool[] = [
       const resolvedDefaultDimensions = resolvedDimBags[0]
 
       // Translate extracted line items into the supplier_invoice_items shape.
-      // Priority: line_overrides → per-line accountSuggestion → supplier.default_expense_account → 4000.
+      // Accounts were resolved above: line_overrides, then accountSuggestion,
+      // then supplier.default_expense_account.
       const extractedLineItems = lineItemsExt.map((li, idx) => {
         const lineNumber = idx + 1
         const dimensions = resolvedDimBags[idx + 1]
@@ -16067,7 +16117,7 @@ export const tools: McpTool[] = [
         const vatAmount = rawVatAmount == null
           ? roundOre(lineTotal * vatRate)
           : Number(rawVatAmount) || 0
-        const accountNumber = lineOverrideMap.get(lineNumber) ?? (li.accountSuggestion as string | null) ?? supplierDefaultExpenseAccount ?? '4000'
+        const accountNumber = lineAccounts[idx] as string
         // Särskild löneskatt: same guard the create routes and the executor
         // enforce (SI_CREATE_SLP_INVALID_ACCOUNT). Reject at staging time on
         // the RESOLVED account so the agent learns immediately, instead of a

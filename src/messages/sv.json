@@ -6658,6 +6658,7 @@
     "ext_arcim_job_warning_vat": "Momsuppgifter saknas i källdatan",
     "ext_arcim_job_warning_fx": "Valutakurs saknas",
     "ext_arcim_job_warning_rows": "Rader som inte stämmer med fakturabeloppet",
+    "ext_arcim_job_warning_rows_account": "Rader utan konto",
     "ext_arcim_job_warning_count": "{count} fakturor behöver granskas",
     "ext_arcim_job_running": "Importen pågår",
     "ext_arcim_job_attention": "Importen behöver ses över",

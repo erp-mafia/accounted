@@ -11,6 +11,7 @@ import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-
 import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { orgNumberKey } from '@/lib/invariants/org-number'
+import { isAccountNumber } from '@/lib/invariants/account-number'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import { CURRENCIES, type Currency, type CustomerType, type ExchangeRate, type SupplierType, type VatTreatment } from '@/types'
 import { CREDIT_NOTE_TYPE_CODE } from '@/lib/providers/dto'
@@ -609,6 +610,14 @@ export interface MappedInvoice {
    * the job worker refuses the record the way it refuses any row mismatch.
    */
   rowsMismatch?: boolean
+  /**
+   * Set by mapSupplierInvoice only: a provider row carried no account, so
+   * `items` is empty and the invoice imports as a header; no account is
+   * guessed. The orchestrator counts it. The job worker keeps a Bokio
+   * invoice row-less (as it keeps one with withheld rows) and refuses any
+   * other with MIGRATION_SOURCE_LINES_MISSING.
+   */
+  rowsUnaccounted?: boolean
 }
 
 // ── Public mappers ──────────────────────────────────────────────────
@@ -1263,12 +1272,19 @@ export function mapSupplierInvoice(
   const rowsFilteredAway = !rowsWithheld && dto.lines.length > 0 && amounts.lines.length === 0 && total !== 0
   const rowsMismatch = rowsFilteredAway
     || (mappedItems.length > 0 && rowsContradictHeader(mappedItems, subtotal, vatAmount))
-  const items = rowsMismatch ? [] : mappedItems
+  // A row without an account of its own is never given one: Bokio's invoice
+  // lines carry none and Briox, Fortnox and Visma may omit it, and the old
+  // '4000' fallback booked every such row to Inköp av varor. The invoice
+  // imports as a header instead, reported the way a mismatched row set is.
+  const rowsUnaccounted = !rowsMismatch
+    && mappedItems.some((item) => !isAccountNumber(item.account_number as string | null))
+  const items = rowsMismatch || rowsUnaccounted ? [] : mappedItems
 
   return {
     invoice,
     items,
     rowsMismatch,
+    rowsUnaccounted,
     fxUnresolved: fx.unresolved,
     vatUnresolved: vat.unresolved,
     // supplier_invoices carries is_credit_note, so the row reads as a
@@ -1308,7 +1324,8 @@ function mapSupplierInvoiceLine(
     unit: line.unitCode || 'st',
     unit_price: round2(line.unitPrice?.value ?? line.lineExtensionAmount.value),
     line_total: lineTotal,
-    account_number: line.accountNumber || '4000', // Default to purchases
+    // Never defaulted: mapSupplierInvoice drops a row set with a row lacking one.
+    account_number: line.accountNumber || null,
     // supplier_invoice_items stores decimal fractions (0.25 = 25 %), unlike
     // customer invoice_items which store percent.
     vat_rate: normalizeVatRateToFraction(percent),

@@ -228,6 +228,7 @@ describe('mapSupplierInvoice: VAT', () => {
         taxTotal: { taxAmount: { value: 250, currencyCode: 'SEK' } },
         lines: [{
           id: '1',
+          accountNumber: '4010',
           lineExtensionAmount: { value: 1000, currencyCode: 'SEK' },
           taxPercent: 25,
         }],
@@ -247,6 +248,7 @@ describe('mapSupplierInvoice: VAT', () => {
         legalMonetaryTotal: { payableAmount: { value: 119, currencyCode: 'EUR' } },
         lines: [{
           id: '1',
+          accountNumber: '4010',
           lineExtensionAmount: { value: 100, currencyCode: 'EUR' },
           taxPercent: 19,
         }],

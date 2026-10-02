@@ -112,7 +112,7 @@ function makeMock(opts: {
               Promise.resolve(
                 'supplierRecord' in opts
                   ? { data: opts.supplierRecord, error: opts.supplierRecord ? null : { message: 'not found' } }
-                  : { data: { id: 'resolved-supplier', default_expense_account: null }, error: null },
+                  : { data: { id: 'resolved-supplier', default_expense_account: '6540' }, error: null },
               )
           }
           if (prop === 'then') {
@@ -298,7 +298,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
           vat_number: 'IE6364992H',
         },
       ],
-      supplierRecord: { id: 'adobe-supplier', default_expense_account: null },
+      supplierRecord: { id: 'adobe-supplier', default_expense_account: '6540' },
     })
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
     const result = (await tool.execute(
@@ -694,7 +694,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
       inbox: {
         id: 'inbox-slp-1',
         status: 'received',
-        extracted_data: baseExtracted, // line resolves to supplier default / 4000
+        extracted_data: baseExtracted, // line resolves to the supplier default 6540
         matched_supplier_id: 'supplier-1',
         created_supplier_invoice_id: null,
         document_id: 'doc-slp-1',
@@ -995,7 +995,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: due date default and total 
   it('uses the supplier payment terms when the supplier has them', async () => {
     const supabase = makeMock({
       inbox: inboxFor(bankFee),
-      supplierRecord: { id: 'supplier-seb', default_expense_account: null, default_payment_terms: 14 },
+      supplierRecord: { id: 'supplier-seb', default_expense_account: '6570', default_payment_terms: 14 },
     })
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
     const result = (await tool.execute(
@@ -1585,5 +1585,133 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
     const lines = await registrationLines(params)
     expect(lines.find((l) => l.account_number === '2641')).toBeUndefined()
     expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(444192)
+  })
+})
+
+describe('gnubok_create_supplier_invoice_from_inbox: a line is never given a guessed account', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // The real AI extraction and Peppol always carry accountSuggestion null, so
+  // a supplier without default_expense_account and a call without
+  // line_overrides used to stage every line on 4000.
+  const aiExtracted = {
+    ...baseExtracted,
+    lineItems: [
+      { description: 'Konsulttimmar', quantity: 10, unitPrice: 100, lineTotal: 1000, vatRate: 25, accountSuggestion: null },
+    ],
+  }
+  const inbox = (extracted: Record<string, unknown>) => ({
+    id: 'inbox-noacc',
+    status: 'received',
+    extracted_data: extracted,
+    matched_supplier_id: 'supplier-nodefault',
+    created_supplier_invoice_id: null,
+    document_id: 'doc-noacc',
+  })
+  const tool = () => tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+
+  it('stages nothing when a line resolves to no account, and says which line and how to fix it', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: inbox(aiExtracted),
+      supplierRecord: { id: 'supplier-nodefault', default_expense_account: null },
+      inserts,
+    })
+
+    const result = (await tool().execute({ inbox_item_id: 'inbox-noacc' }, 'company-1', 'user-1', supabase)) as {
+      staged: boolean
+      message: string
+      preview: { supplier_id: string; unaccounted_lines: Array<Record<string, unknown>> }
+      next: { tool: string; args: Record<string, unknown> }
+    }
+
+    expect(result.staged).toBe(false)
+    expect(inserts).toHaveLength(0)
+    expect(result.message).toContain('saknar konto')
+    expect(result.message).toContain('default_expense_account')
+    expect(result.preview.supplier_id).toBe('supplier-nodefault')
+    expect(result.preview.unaccounted_lines).toEqual([
+      { line_number: 1, description: 'Konsulttimmar', line_total: 1000 },
+    ])
+    expect(result.next.tool).toBe('gnubok_create_supplier_invoice_from_inbox')
+    expect(result.next.args).toEqual({ inbox_item_id: 'inbox-noacc', line_overrides: [{ line_number: 1 }] })
+    expect(JSON.stringify(result)).not.toContain('4000')
+  })
+
+  it('refuses on a dry run too, so the preview never shows a guessed account', async () => {
+    const supabase = makeMock({
+      inbox: inbox(aiExtracted),
+      supplierRecord: { id: 'supplier-nodefault', default_expense_account: null },
+    })
+    const result = (await tool().execute({ inbox_item_id: 'inbox-noacc', dry_run: true }, 'company-1', 'user-1', supabase)) as {
+      staged: boolean
+      preview: { unaccounted_lines?: unknown[]; items_preview?: unknown[] }
+    }
+    expect(result.staged).toBe(false)
+    expect(result.preview.unaccounted_lines).toHaveLength(1)
+    expect(result.preview.items_preview).toBeUndefined()
+  })
+
+  it('names only the lines that lack an account', async () => {
+    const supabase = makeMock({
+      inbox: inbox({
+        ...aiExtracted,
+        lineItems: [
+          { description: 'Licens', quantity: 1, unitPrice: 400, lineTotal: 400, vatRate: 25, accountSuggestion: '6540' },
+          { description: 'Frakt', quantity: 1, unitPrice: 600, lineTotal: 600, vatRate: 25, accountSuggestion: null },
+        ],
+      }),
+      supplierRecord: { id: 'supplier-nodefault', default_expense_account: null },
+    })
+    const result = (await tool().execute({ inbox_item_id: 'inbox-noacc' }, 'company-1', 'user-1', supabase)) as {
+      staged: boolean
+      preview: { unaccounted_lines: Array<{ line_number: number }> }
+    }
+    expect(result.staged).toBe(false)
+    expect(result.preview.unaccounted_lines.map((l) => l.line_number)).toEqual([2])
+  })
+
+  it('refuses an override that is not a four-digit account instead of staging it', async () => {
+    const supabase = makeMock({
+      inbox: inbox(aiExtracted),
+      supplierRecord: { id: 'supplier-nodefault', default_expense_account: null },
+    })
+    const result = (await tool().execute(
+      { inbox_item_id: 'inbox-noacc', line_overrides: [{ line_number: 1, account_number: '65400' }] },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean; preview: { unaccounted_lines: Array<Record<string, unknown>> } }
+    expect(result.staged).toBe(false)
+    expect(result.preview.unaccounted_lines[0]).toMatchObject({ line_number: 1, invalid_account: '65400' })
+  })
+
+  it('stages once line_overrides supplies the account', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: inbox(aiExtracted),
+      supplierRecord: { id: 'supplier-nodefault', default_expense_account: null },
+      inserts,
+    })
+    const result = (await tool().execute(
+      { inbox_item_id: 'inbox-noacc', line_overrides: [{ line_number: 1, account_number: '6550' }] },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean }
+    expect(result.staged).toBe(true)
+    const params = inserts[0].params as { items: Array<{ account_number: string }> }
+    expect(params.items[0].account_number).toBe('6550')
+  })
+
+  it('takes the supplier default when the line has no account of its own', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: inbox(aiExtracted),
+      supplierRecord: { id: 'supplier-nodefault', default_expense_account: '5410' },
+      inserts,
+    })
+    const result = (await tool().execute({ inbox_item_id: 'inbox-noacc' }, 'company-1', 'user-1', supabase)) as { staged: boolean }
+    expect(result.staged).toBe(true)
+    const params = inserts[0].params as { items: Array<{ account_number: string }> }
+    expect(params.items[0].account_number).toBe('5410')
   })
 })

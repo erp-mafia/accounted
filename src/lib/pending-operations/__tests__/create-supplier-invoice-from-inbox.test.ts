@@ -1391,3 +1391,40 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox carries a s
     expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(444192)
   })
 })
+
+describe('commitPendingOperation: create_supplier_invoice_from_inbox never guesses an item account', () => {
+  // Staging resolves every line's account and refuses a line without one, so
+  // an item without a valid account here is a stale or tampered op. The
+  // executor used to book it to 4000; it refuses it before an ankomstnummer
+  // is drawn, under the rule the create routes hold (four digits).
+  it.each([
+    ['missing', undefined],
+    ['null', null],
+    ['empty', ''],
+    ['not four digits', '65400'],
+    ['a number, not a string', 6530],
+  ])('refuses an item whose account is %s, and registers nothing', async (_label, account) => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // dispatcher CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const base = makePendingOp()
+    const [item] = (base.params as { items: Array<Record<string, unknown>> }).items
+    const { account_number: _drop, ...withoutAccount } = item
+    const items = [account === undefined ? withoutAccount : { ...item, account_number: account }]
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { ...base.params, items } }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.code).toBe('SI_CREATE_ITEM_ACCOUNT_MISSING')
+    expect(result.error).toMatch(/saknar konto/)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+    expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+})

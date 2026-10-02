@@ -139,8 +139,10 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   // the check below, which a supplier invoice with no established VAT used to
   // pass with the voucher's own 2440 row among its items.
   if (mapped.rowsMismatch) return { id: c.id, error: 'MIGRATION_ROWS_MISMATCH' }
-  // Bokio preview rows may be absent or lack a defensible VAT allocation.
-  // Keep the invoice and let completion revisit it without fabricating rows.
+  // Bokio preview rows may be absent, carry no account (Bokio sends none), or
+  // lack a defensible VAT allocation. Keep the invoice and let completion
+  // revisit it without fabricating rows. Another provider's row set dropped
+  // for a row with no account is refused here as missing lines.
   if (!mapped.items.length && !(c.resource === 'supplierInvoices' && (invoice as SupplierInvoiceDto).supplierEvidence)) {
     return { id: c.id, error: 'MIGRATION_SOURCE_LINES_MISSING' }
   }

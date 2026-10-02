@@ -101,4 +101,38 @@ describe('executeMigration: supplier invoice rows', () => {
     ])
     expect(results.supplierInvoices).toMatchObject({ imported: 2, rowsMismatch: 1 })
   })
+
+  it('imports an invoice with a row that names no account without rows, counted, and never on 4000', async () => {
+    const mock = createQueuedMockSupabase()
+    const unaccounted = mapVismaToSupplierInvoice({
+      Id: 'v-502', InvoiceNumber: '502', InvoiceDate: '2026-06-01', DueDate: '2026-06-30', CurrencyCode: 'SEK',
+      TotalAmount: 1250, PaymentStatus: 3, SupplierName: 'Leverantör AB',
+      Rows: [
+        { LineNumber: 1, AccountNumber: 6530, DebetAmount: 800, CreditAmount: 0 },
+        { LineNumber: 2, DebetAmount: 200, CreditAmount: 0 },
+        { LineNumber: 3, AccountNumber: 2641, DebetAmount: 250, CreditAmount: 0 },
+        { LineNumber: 4, AccountNumber: 2440, DebetAmount: 0, CreditAmount: 1250 },
+      ],
+    })
+    ;(fetchSupplierInvoicesDirect as Mock).mockResolvedValue([unaccounted])
+    ;(hydrateSupplierInvoices as Mock).mockImplementation(async (_p: unknown, _t: unknown, _c: unknown, given: unknown[]) => ({
+      invoices: given, hydration: HYDRATION, unhydratedIds: new Set(),
+    }))
+    ;(fetchAllRows as Mock).mockImplementation(async (build: (range: { from: number; to: number }) => unknown) => {
+      build({ from: 0, to: 999 })
+      const lastTable = mock.supabase.from.mock.calls.at(-1)?.[0]
+      return lastTable === 'suppliers' ? [{ id: 'sup-1', org_number: null, name: 'Leverantör AB' }] : []
+    })
+
+    const results = await executeMigration({
+      consentId: 'consent-1', companyId: 'company-1', userId: 'user-1',
+      supabase: mock.supabase as unknown as SupabaseClient,
+      createHistoryClient: async () => ({ from: vi.fn() }) as unknown as Pick<SupabaseClient, 'from'>,
+      importCompanyInfo: false, importCustomers: false, importSuppliers: false, importSalesInvoices: false,
+      importSupplierInvoices: true, importAssets: false, reconcileVouchers: false, suggestParties: false,
+    })
+
+    expect(mock.findCalls('supplier_invoice_items', 'insert')).toHaveLength(0)
+    expect(results.supplierInvoices).toMatchObject({ imported: 1, rowsMismatch: 0, rowsUnaccounted: 1 })
+  })
 })
