@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { SIE_RESERVED_DIMENSIONS } from '@/lib/reports/sie-export'
+import { isValidRegistryCode } from './sie-object-balances'
 import type { ParsedSIEFile } from './types'
 
 /**
@@ -36,11 +37,6 @@ export interface DimensionImportSummary {
   /** True when this import flipped company_settings.dimensions_enabled on. */
   toggleEnabled: boolean
   warnings: string[]
-}
-
-/** dimension_values.code DB CHECK: 1-40 chars, none of `"{}`. */
-function isValidRegistryCode(code: string): boolean {
-  return code.length >= 1 && code.length <= 40 && !/["{}]/.test(code)
 }
 
 export function collectSIEDimensionUsage(parsed: ParsedSIEFile): {
@@ -102,6 +98,16 @@ export function collectSIEDimensionUsage(parsed: ParsedSIEFile): {
         ensureValue(dimNo, code)
       }
     }
+  }
+  // Objects referenced by #OIB/#OUB (issue #3313): the IB entry tags its
+  // lines with them, so the registry must know them before it posts. A code
+  // the registry cannot hold is left out here rather than reported as
+  // invalid: the IB split skips that row with its own preview note, and an
+  // object balance must never fail an import that ignored it until now.
+  for (const row of [...(parsed.objectOpeningBalances ?? []), ...(parsed.objectClosingBalances ?? [])]) {
+    const dimNo = Number(row.dimNo)
+    if (!Number.isInteger(dimNo) || dimNo < 1 || !isValidRegistryCode(row.code)) continue
+    ensureValue(dimNo, row.code)
   }
 
   return { dims, values, taggedLines, invalidCodes }

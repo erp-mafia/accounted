@@ -56,7 +56,7 @@ registerEndpoint({
     '`period_id` is required.',
     'Account ranges are inclusive on both bounds. `account_from=3000` includes 3000; `account_to=3999` includes 3999.',
     'Lines with `status != \'posted\'` (drafts, reversed) are excluded.',
-    'With `dim_no` + `dim_code` (always together) every opening_balance is 0: IB is company-wide and cannot be scoped to a dimension, so running and closing balances are the tagged lines\' movements only (`partial_view.opening_balances_included` is false).',
+    'With `dim_no` + `dim_code` (always together) the opening_balance is scoped to the filter too: the IB lines tagged with that value (`partial_view.opening_balances` is `dimension_scoped`, and `partial_view.opening_balances_included` is true). A project (dimension 6) opens at its carried balance; a dimension that resets annually (e.g. kostnadsställe, dimension 1) opens at 0, and so do the VAT accounts (26xx), whose IB is never split per project. Running and closing balances are that IB plus the tagged lines\' movements.',
     'A query parameter it does not document (e.g. from_date) is not applied: the answer names it in the X-Ignored-Query-Params header. A dimension filter is always applied or refused, never ignored.',
   ],
   example: {
@@ -132,13 +132,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     )
     if (!gen.ok) return gen.response
 
-    // The generator drops IB under a filter (it is company-wide); say so.
+    // Under a filter the generator scopes IB to the tagged IB lines; say so.
     return ok(
       dimensions
         ? {
             ...gen.result,
             dimension_filter: dimensions,
-            partial_view: dimensionFilterPartialView(dimensions, { dropsOpeningBalances: true }),
+            partial_view: dimensionFilterPartialView(dimensions, { scopedOpeningBalances: true }),
           }
         : gen.result,
       { requestId: ctx.requestId },

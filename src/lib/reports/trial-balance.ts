@@ -451,7 +451,7 @@ export async function generateTrialBalance(
   // Wave 2: opening balances (IB) at period_start and the period activity
   // (roll-forward slice + period sums) are independent reads.
   const [obResult, activity] = await Promise.all([
-    getOpeningBalances(supabase, companyId, period),
+    getOpeningBalances(supabase, companyId, period, { dimensions: dimensionFilter }),
     viaRpc
       ? fetchActivityViaRpc(scope)
       : fetchActivityViaEntryLines(
@@ -461,14 +461,14 @@ export async function generateTrialBalance(
         ),
   ])
 
-  // A dimension-filtered view cannot use company-wide opening balances (the
-  // OB entry and the prior-period RPC are not dimension-aware). Drop them so
-  // every reported amount is dimension-scoped activity: correct for the P&L
-  // reports the filter is whitelisted for, and never fabricates balances if
-  // misapplied. obEntryId is still needed to exclude the OB entry from lines.
-  const openingBalances = dimensionFilter
-    ? new Map<string, { debit: number; credit: number }>()
-    : obResult.balances
+  // Under a dimension filter the IB is scoped to it as well (issue #3313):
+  // the IB entry's lines tagged with the object, or the prior-history
+  // fallback with the same containment. A project's balance-sheet accounts
+  // open at the project's IB; a filter on a dimension that resets annually
+  // opens at zero (getOpeningBalances reads the registry flag). Result accounts never carry IB, so the P&L
+  // reports built on this are unchanged. obEntryId still excludes the IB
+  // entry from the activity lines.
+  const openingBalances = obResult.balances
 
   // Additively fold the roll-forward activity into openingBalances so the
   // downstream IB/period split stays correct without changing call sites.

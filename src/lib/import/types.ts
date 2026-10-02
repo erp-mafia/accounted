@@ -73,7 +73,21 @@ export interface SIEBalance {
   account: string
   amount: number
   quantity?: number
-  objectId?: string
+}
+
+/**
+ * Balance per object from #OIB (opening) or #OUB (closing), SIE type 3+:
+ * `#OIB yearIndex account {dimNo "code"} amount [quantity]`. One object per
+ * row per spec, so the object list is kept as its single pair.
+ */
+export interface SIEObjectBalance {
+  yearIndex: number
+  account: string
+  /** Canonical SIE dimension number as a string ('06' parses to '6'). */
+  dimNo: string
+  code: string
+  amount: number
+  quantity?: number
 }
 
 /**
@@ -171,6 +185,11 @@ export interface ParsedSIEFile {
   openingBalances: SIEBalance[]    // #IB
   closingBalances: SIEBalance[]    // #UB
   resultBalances: SIEBalance[]     // #RES
+  // Per-object balances (#OIB / #OUB). Optional: ParsedSIEFile-shaped
+  // objects built before they were parsed (serialized previews, resumed
+  // import jobs, test fixtures) lack them, so readers use `?? []`.
+  objectOpeningBalances?: SIEObjectBalance[]   // #OIB
+  objectClosingBalances?: SIEObjectBalance[]   // #OUB
 
   // Transactions (SIE4 only)
   vouchers: SIEVoucher[]

@@ -10746,6 +10746,8 @@
     "sie_ib_orphan_skipped": "{count, plural, one {An existing opening-balance voucher was kept} other {# existing opening-balance vouchers were kept}} and the file's opening balances were not imported again. Undo the old voucher first if you want to re-import them.",
     "sie_ib_orphan_amounts_differ": "The existing opening-balance voucher differs from the file's opening balances. Reverse (storno) the old voucher and re-import the file if the file's amounts are the correct ones.",
     "sie_ib_derived": "The file has no opening balances (#IB), so they were derived from the previous year's closing balances.",
+    "sie_ib_project_split_refused": "The opening balance was booked without the per-project split: the dimension registry did not accept every object in the file's object balances ({detail}). The account balances are unchanged.",
+    "sie_ib_project_split_too_large": "The opening balance was booked without the per-project split: the split produced {lines} lines, over the limit for one voucher (2,000 lines or 1 MB). The account balances are unchanged.",
     "sie_ib_excluded_accounts": "Excluded system accounts had opening balances of {total}; the difference of {diff} was booked to account {account}.",
     "sie_ib_unbalanced": "The opening balances were out of balance by {diff}, most likely an untransferred result from the previous year. The difference was booked to account {account}.",
     "sie_ib_rounding": "A rounding difference of {diff} was booked to account {account}.",

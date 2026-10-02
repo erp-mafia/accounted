@@ -266,6 +266,78 @@ describe('SIE database execution protocol', () => {
     expect(finished.bank_sweep).toMatchObject({state:'done',attempt:1,skipped:'no_unlinked_bank_rows',
       auto_linked:0,date_from:'2026-01-01',date_to:'2026-12-31'})
   },60_000)
+  it('splits the IB per project from #OIB through the resumable job path (issue #3313)', async () => {
+    const content = ['#FLAGGA 0','#PROGRAM "Synthetic" 1','#SIETYP 4','#FNAMN "Synthetic AB"','#RAR 0 20260101 20261231',
+      '#KONTO 1470 "WIP"','#KONTO 2081 "Share capital"','#KONTO 3001 "Sales"','#DIM 6 "Projekt"',
+      '#IB 0 1470 5000.00','#IB 0 2081 -5000.00','#OIB 0 1470 {6 "P1"} 1200.00','#OIB 0 1470 {1 "K1"} 99.00',
+      '#VER A 1 20260201 "Arbete"','{','#TRANS 1470 {6 "P1"} 100','#TRANS 3001 {6 "P1"} -100','}'].join('\n')
+    const hash = createHash('sha256').update(content).digest('hex')
+    const mappings = ['1470','2081','3001'].map(number=>({sourceAccount:number,targetAccount:number,sourceName:number,
+      targetName:'Account',confidence:1,matchType:'exact',isOverride:false}))
+    const input = {version:1,sourceHash:hash,mappings,options:{filename:'synthetic.se',createFiscalPeriod:true,
+      importOpeningBalances:true,importTransactions:true,updateAccountNames:false,markImportedNoDocRequired:false}}
+    await client.query('RESET ROLE')
+    await client.query('UPDATE sie_imports SET manifest=$1,file_hash=$2,file_storage_path=$3 WHERE id=$4',
+      [JSON.stringify({input,prior_activity:false}),hash,`${company}/sie-jobs/${hash}.se`,job])
+    await client.query('SET LOCAL ROLE service_role')
+    const state = (await client.query('SELECT * FROM sie_imports WHERE id=$1',[job])).rows[0] as SIEJob
+    const supabase = stagingSIEClient(client,content)
+    expect(await prepareSIEJob(supabase,state,Date.now()+30_000)).toBe(true)
+    await client.query('SELECT yield_sie_import_job($1,$2,$3,$4)',[company,job,worker,attempt])
+    await runSIEWorker({supabase,importId:job,budgetMs:60_000})
+    const finished = (await client.query('SELECT * FROM sie_imports WHERE id=$1',[job])).rows[0]
+    expect(finished.error_message).toBeNull()
+    expect(finished.job_state).toBe('completed')
+    const ib = (await client.query(`SELECT l.account_number, l.debit_amount::float8 AS debit, l.credit_amount::float8 AS credit, l.dimensions
+      FROM journal_entry_lines l JOIN journal_entries e ON e.id = l.journal_entry_id
+      WHERE e.company_id = $1 AND e.source_type = 'opening_balance' AND e.status = 'posted'
+      ORDER BY l.account_number, l.dimensions::text`, [company])).rows
+    // #OIB on dimension 1 (kostnadsställe) resets annually: not carried.
+    expect(ib).toEqual([
+      { account_number: '1470', debit: 3800, credit: 0, dimensions: {} },
+      { account_number: '1470', debit: 1200, credit: 0, dimensions: { '6': 'P1' } },
+      { account_number: '2081', debit: 0, credit: 5000, dimensions: {} },
+    ])
+  },60_000)
+  it('books the IB per account, with a notice, when the registry refuses a #OIB project (issue #3313)', async () => {
+    const content = ['#FLAGGA 0','#PROGRAM "Synthetic" 1','#SIETYP 4','#FNAMN "Synthetic AB"','#RAR 0 20260101 20261231',
+      '#KONTO 1470 "WIP"','#KONTO 2081 "Share capital"','#KONTO 3001 "Sales"','#DIM 6 "Projekt"',
+      '#IB 0 1470 5000.00','#IB 0 2081 -5000.00','#OIB 0 1470 {6 "P1"} 1200.00',
+      '#VER A 1 20260201 "Arbete"','{','#TRANS 1470 {} 100','#TRANS 3001 {} -100','}'].join('\n')
+    const hash = createHash('sha256').update(content).digest('hex')
+    const mappings = ['1470','2081','3001'].map(number=>({sourceAccount:number,targetAccount:number,sourceName:number,
+      targetName:'Account',confidence:1,matchType:'exact',isOverride:false}))
+    const input = {version:1,sourceHash:hash,mappings,options:{filename:'synthetic.se',createFiscalPeriod:true,
+      importOpeningBalances:true,importTransactions:true,updateAccountNames:false,markImportedNoDocRequired:false}}
+    await client.query('RESET ROLE')
+    // Dimensions on, and project P1 archived in this company before the
+    // import: the import's registry upsert leaves it archived.
+    await client.query('INSERT INTO company_settings(company_id,user_id,dimensions_enabled) VALUES($1,$2,true)',[company,actor])
+    await client.query('SELECT public.ensure_company_dimensions($1)',[company])
+    await client.query(`INSERT INTO dimension_values(company_id,dimension_id,code,name,is_active)
+      SELECT $1,d.id,'P1','Avslutat projekt',false FROM dimensions d WHERE d.company_id=$1 AND d.sie_dim_no=6`,[company])
+    await client.query('UPDATE sie_imports SET manifest=$1,file_hash=$2,file_storage_path=$3 WHERE id=$4',
+      [JSON.stringify({input,prior_activity:false}),hash,`${company}/sie-jobs/${hash}.se`,job])
+    await client.query('SET LOCAL ROLE service_role')
+    const state = (await client.query('SELECT * FROM sie_imports WHERE id=$1',[job])).rows[0] as SIEJob
+    const supabase = stagingSIEClient(client,content)
+    expect(await prepareSIEJob(supabase,state,Date.now()+30_000)).toBe(true)
+    await client.query('SELECT yield_sie_import_job($1,$2,$3,$4)',[company,job,worker,attempt])
+    await runSIEWorker({supabase,importId:job,budgetMs:60_000})
+    const finished = (await client.query('SELECT * FROM sie_imports WHERE id=$1',[job])).rows[0]
+    expect(finished.error_message).toBeNull()
+    expect(finished.job_state).toBe('completed')
+    const ib = (await client.query(`SELECT l.account_number, l.debit_amount::float8 AS debit, l.credit_amount::float8 AS credit, l.dimensions
+      FROM journal_entry_lines l JOIN journal_entries e ON e.id = l.journal_entry_id
+      WHERE e.company_id = $1 AND e.source_type = 'opening_balance' AND e.status = 'posted'
+      ORDER BY l.account_number, l.dimensions::text`, [company])).rows
+    expect(ib).toEqual([
+      { account_number: '1470', debit: 5000, credit: 0, dimensions: {} },
+      { account_number: '2081', debit: 0, credit: 5000, dimensions: {} },
+    ])
+    expect(finished.job_result.notices).toContainEqual(expect.objectContaining({ code: 'sie_ib_project_split_refused', severity: 'notice' }))
+    expect(finished.job_result.warnings.join(' ')).toMatch(/utan fördelning per projekt/)
+  },60_000)
   it('keeps a replacement queued through resume and hands over the hold atomically', async () => {
     await prepare([[voucher(0)]])
     await chunk(0)

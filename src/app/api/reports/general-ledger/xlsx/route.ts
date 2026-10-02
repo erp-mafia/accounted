@@ -131,9 +131,10 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
       })
     }
 
-    // Partial-view disclosure: a filtered huvudbok starts balance accounts
-    // at zero IB (opening balances cannot be dimension-scoped): the export
-    // must say so or a project-filtered ledger reads as a full one.
+    // Partial-view disclosure: a filtered huvudbok opens each account at the
+    // object's own IB (its tagged IB lines, issue #3313), not the account's
+    // full IB: the export must say so or a project-filtered ledger reads as a
+    // full one.
     const disclosure = dimensionFilterDisclosure(dimFilter.dimensions)
     if (disclosure) {
       rows.unshift({
@@ -141,7 +142,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
         account_name: '',
         date: null as unknown as Date,
         voucher: '',
-        description: 'Ingående balanser ingår inte i filtrerad vy',
+        description: 'Ingående balans avser endast objektets egna IB-rader',
         source_type: '',
         debit: null as unknown as number,
         credit: null as unknown as number,

@@ -12,7 +12,8 @@
  * - accounts: union by number, first occurrence wins the name; missing
  *   sruCode/accountType are filled in from later duplicates.
  * - vouchers: concatenated in file order (callers pass files oldest first).
- * - opening/closing/result balances: concatenated AS-IS. Each record keeps
+ * - opening/closing/result balances (and #OIB/#OUB object balances):
+ *   concatenated AS-IS. Each record keeps
  *   the yearIndex relative to its SOURCE file's current year, so per-year
  *   balance math on the merged output is not meaningful: two files can both
  *   carry yearIndex 0 records for different calendar years.
@@ -143,6 +144,8 @@ export function mergeParsedSIEFiles(files: ParsedSIEFile[]): ParsedSIEFile {
     openingBalances: files.flatMap((f) => f.openingBalances),
     closingBalances: files.flatMap((f) => f.closingBalances),
     resultBalances: files.flatMap((f) => f.resultBalances),
+    objectOpeningBalances: files.flatMap((f) => f.objectOpeningBalances ?? []),
+    objectClosingBalances: files.flatMap((f) => f.objectClosingBalances ?? []),
     vouchers,
     dimensions: [...dimensionsByNo.values()],
     dimensionValues: [...dimensionValuesByKey.values()],

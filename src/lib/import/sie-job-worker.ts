@@ -11,6 +11,7 @@ import { getMappingStats } from './account-mapper'
 import { computeVoucherNumberRanges } from './sie-import'
 import type { ImportResult, MigrationDocumentation, ParsedSIEFile } from './types'
 import { legacyNotices } from './notices'
+import { openingBalanceSplitRefusedNotice, type OpeningBalanceSplitRefusal } from './sie-object-balances'
 import { buildSIEVatDefaults } from './account-sync'
 import { sweepBankRowsAfterSIEImport } from './sie-post-import-sweep'
 
@@ -86,6 +87,15 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number)
   const differenceAccount = typeof job.manifest.openingBalanceDifferenceAccount === 'string'
     ? job.manifest.openingBalanceDifferenceAccount : '2099'
   if (Math.abs(rounding) > 0.01) warnings.push(`Ingående balanser justerades med ${rounding} SEK på konto ${differenceAccount}.`)
+  const notices = legacyNotices(warnings)
+  // The IB was booked per account although the file split it per project
+  // (issue #3313): the one warning here with a structured sv/en twin.
+  const splitRefused = job.manifest.openingBalanceSplitRefused as OpeningBalanceSplitRefusal | undefined
+  if (splitRefused) {
+    const refused = openingBalanceSplitRefusedNotice(splitRefused)
+    warnings.push(refused.text)
+    notices.push(refused.notice)
+  }
   const voucherMap = entries.map(e => ({sourceId:e.sourceId,series:e.series,targetNumber:e.voucherNumber}))
   const stats = getMappingStats(mappings)
   const documentation: MigrationDocumentation = {
@@ -104,7 +114,7 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number)
   const result: ImportResult = {success:true,importId:job.id,fiscalPeriodId:job.fiscal_period_id,
     openingBalanceEntryId:opening[0]?.id ?? null,journalEntriesCreated:entries.length,
     journalEntryIds:entries.slice(0,200).map(e=>e.id),journalEntryIdsTruncated:entries.length > 200,
-    errors:[],warnings,notices:legacyNotices(warnings),accountsCreated,accountsRenamed:renames.length,
+    errors:[],warnings,notices,accountsCreated,accountsRenamed:renames.length,
     details:{fiscalYear:documentation.fiscalYear,skippedVouchers:skipped,
       openingBalanceSkipped:job.manifest.prior_activity && options.importOpeningBalances ? 'prior_activity' : undefined,
       migrationAdjustment:{created:!!adjustment,accountsAdjusted:Number(job.manifest.migrationAdjustmentAccounts ?? 0)},

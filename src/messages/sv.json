@@ -10746,6 +10746,8 @@
     "sie_ib_orphan_skipped": "{count, plural, one {En befintlig IB-verifikation behölls} other {# befintliga IB-verifikationer behölls}} och filens ingående balanser importerades inte igen. Ångra den gamla IB-verifikationen först om du vill importera om dem.",
     "sie_ib_orphan_amounts_differ": "Den befintliga IB-verifikationen skiljer sig från filens ingående balanser. Ångra (storno) den gamla IB-verifikationen och importera om filen om filens belopp är de rätta.",
     "sie_ib_derived": "Filen saknar ingående balanser (#IB), så de härleddes från föregående års utgående balanser.",
+    "sie_ib_project_split_refused": "Ingående balans bokfördes utan fördelning per projekt: dimensionsregistret godtog inte alla objekt i filens objektbalanser ({detail}). Kontonas saldon är oförändrade.",
+    "sie_ib_project_split_too_large": "Ingående balans bokfördes utan fördelning per projekt: uppdelningen gav {lines} rader och överskrider gränsen för en verifikation (2 000 rader eller 1 MB). Kontonas saldon är oförändrade.",
     "sie_ib_excluded_accounts": "Exkluderade systemkonton hade ingående saldon på {total}; differensen {diff} bokfördes på konto {account}.",
     "sie_ib_unbalanced": "Ingående balanser var obalanserade med {diff}, troligen ett ej omfört resultat från föregående år. Differensen bokfördes på konto {account}.",
     "sie_ib_rounding": "En avrundningsdifferens på {diff} bokfördes på konto {account}.",

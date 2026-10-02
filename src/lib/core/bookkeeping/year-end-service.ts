@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 import { createLogger } from '@/lib/logger'
 
@@ -31,6 +32,8 @@ import { ENTITY_TYPES, resolveCompanyEntityType, resultClosingAccounts } from '@
 import { formatCurrency } from '@/lib/utils'
 import { overDisposedAmount, resultAccountLeftover, resultAccountResidual } from './prior-result-guard'
 import { priorResultCarry } from './prior-result-carry'
+import { buildOpeningBalanceLines, fetchObjectClosingBalances } from './opening-balance-split'
+import type { ObjectBalanceSplit } from '@/lib/bookkeeping/dimension-carry'
 import type {
   YearEndValidation,
   YearEndBlocker,
@@ -999,7 +1002,12 @@ export async function executeYearEndClosing(
  * Generate opening balance entries in the next period from the closed period's
  * balance sheet accounts (class 1-2).
  *
- * Each account's closing balance becomes its opening balance.
+ * Each account's closing balance becomes its opening balance, split per
+ * project (issue #3313, lib/core/bookkeeping/opening-balance-split.ts): one
+ * line per object of an accumulating dimension carrying that object's
+ * closing balance, plus an untagged remainder. The VAT accounts (26xx) are
+ * never split: their IB stays one untagged line. Per-account totals are the
+ * trial balance's, exactly as before the split.
  * The entry must be balanced (total debit openings = total credit openings).
  */
 export async function generateOpeningBalances(
@@ -1030,31 +1038,29 @@ export async function generateOpeningBalances(
     (r) => r.account_class >= 1 && r.account_class <= 2
   )
 
-  const openingLines: CreateJournalEntryLineInput[] = []
-
-  for (const account of balanceSheetAccounts) {
-    const netBalance = account.closing_debit - account.closing_credit
-
-    if (Math.abs(netBalance) < ORE_TOLERANCE) continue
-
-    if (netBalance > 0) {
-      // Debit balance → opening debit
-      openingLines.push({
-        account_number: account.account_number,
-        debit_amount: roundOre(netBalance),
-        credit_amount: 0,
-        line_description: `Ingående balans: ${account.account_name}`,
-      })
-    } else {
-      // Credit balance → opening credit
-      openingLines.push({
-        account_number: account.account_number,
-        debit_amount: 0,
-        credit_amount: roundOre(Math.abs(netBalance)),
-        line_description: `Ingående balans: ${account.account_name}`,
-      })
-    }
+  // Project split. This runs after the period was closed (irreversible), so
+  // a failure must not leave the year without an IB: fall back to one line
+  // per account, alert, and leave the split to be redone later. Totals are
+  // identical either way.
+  let objectBalances = new Map<string, ObjectBalanceSplit[]>()
+  try {
+    objectBalances = await fetchObjectClosingBalances(supabase, companyId, closedPeriodId)
+  } catch (err) {
+    log.error('year-end: opening balance project split failed, IB booked per account (non-fatal)', err as Error, {
+      operation: 'year_end.opening_balance_split',
+      alert: true,
+      companyId,
+      entityType: 'fiscal_period',
+      entityId: nextPeriodId,
+    })
   }
+
+  const accountTotals = balanceSheetAccounts.map((account) => ({
+    account_number: account.account_number,
+    account_name: account.account_name,
+    net: account.closing_debit - account.closing_credit,
+  }))
+  const openingLines: CreateJournalEntryLineInput[] = buildOpeningBalanceLines(accountTotals, objectBalances)
 
   if (openingLines.length === 0) {
     throw new Error('No balance sheet accounts with non-zero closing balance')
@@ -1070,15 +1076,53 @@ export async function generateOpeningBalances(
     )
   }
 
-  // Create opening balance entry in next period
-  const openingEntry = await createJournalEntry(supabase, companyId, userId, {
+  // Create opening balance entry in next period. The project bags are copied
+  // from posted history, so the registry must not refuse them: a project
+  // archived during the year can still hold a 1470 balance (replayDimensions,
+  // scoped to this generator; see CreateEntryOptions).
+  const openingEntryInput = (lines: CreateJournalEntryLineInput[]) => ({
     fiscal_period_id: nextPeriodId,
     entry_date: nextPeriod.period_start,
     description: `Ingående balans ${nextPeriod.name}`,
-    source_type: 'opening_balance',
+    source_type: 'opening_balance' as const,
     voucher_series: 'A',
-    lines: openingLines,
+    lines,
   })
+  let openingEntry: JournalEntry
+  try {
+    openingEntry = await createJournalEntry(
+      supabase, companyId, userId, openingEntryInput(openingLines), undefined, undefined, { replayDimensions: true }
+    )
+  } catch (err) {
+    // The period is already closed, so a split that the database refuses
+    // (a line insert constraint, e.g. a legacy bag the NOT VALID
+    // jel_dimensions_well_formed CHECK never saw, or a commit trigger) must
+    // not leave the year without an IB. Retrying per account must never
+    // double the IB, so it runs only when nothing can have been posted:
+    // - create_entry_lines: the draft never reached commit_journal_entry;
+    // - commit_entry with a Postgres error code: the database answered with
+    //   a rejection, so the commit transaction rolled back. A commit error
+    //   without one (a transport failure, a lost response) may hide a
+    //   commit that succeeded, so it fails as before;
+    // and only after re-reading that the next period holds no posted IB.
+    // Anything else, or an IB that had no split, fails as before.
+    const refusedBeforePosting =
+      err instanceof BookkeepingDatabaseError &&
+      (err.operation === 'create_entry_lines' || (err.operation === 'commit_entry' && Boolean(err.pgCode)))
+    const hadSplit = openingLines.some((line) => line.dimensions !== undefined)
+    if (!hadSplit || !refusedBeforePosting) throw err
+    if (await mayHavePostedOpeningBalance(supabase, companyId, nextPeriodId)) throw err
+    log.error('year-end: opening balance with project split refused, IB booked per account (non-fatal)', err as Error, {
+      operation: 'year_end.opening_balance_split',
+      alert: true,
+      companyId,
+      entityType: 'fiscal_period',
+      entityId: nextPeriodId,
+    })
+    openingEntry = await createJournalEntry(
+      supabase, companyId, userId, openingEntryInput(buildOpeningBalanceLines(accountTotals, new Map()))
+    )
+  }
 
   // Mark next period with opening balance entry
   const { error: updateError } = await supabase
@@ -1095,6 +1139,29 @@ export async function generateOpeningBalances(
   }
 
   return openingEntry
+}
+
+/**
+ * True unless a read confirms the period holds no posted opening balance
+ * entry. Guards the per-account IB retry: a second posted IB would double
+ * every balance and count as period activity. A failed read is treated as
+ * "may have posted", so the retry is skipped and the original error stands.
+ */
+async function mayHavePostedOpeningBalance(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
+    .eq('source_type', 'opening_balance')
+    .eq('status', 'posted')
+    .limit(1)
+  if (error) return true
+  return Array.isArray(data) && data.length > 0
 }
 
 /**

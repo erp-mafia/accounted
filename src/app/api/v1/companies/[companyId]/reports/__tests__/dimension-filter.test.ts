@@ -165,10 +165,16 @@ describe.each([
   })
 })
 
-describe('GET /reports/general-ledger: what the filter cannot scope', () => {
-  it('says opening balances are left out under a filter', async () => {
+describe('GET /reports/general-ledger: how the filter scopes the report', () => {
+  it('says opening balances are scoped to the filter (the tagged IB lines, #3313)', async () => {
     const body = await (await call(generalLedger as Handler, 'general-ledger', FILTER)).json()
-    expect(body.data.partial_view).toEqual({ complete: false, disclosure: DISCLOSURE, opening_balances_included: false })
+    expect(body.data.partial_view).toEqual({
+      complete: false,
+      disclosure: DISCLOSURE,
+      opening_balances: 'dimension_scoped',
+      // The pre-#3313 key stays, now true, so a reader testing it is not misled.
+      opening_balances_included: true,
+    })
     expect(mocks.generateGeneralLedger).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, PERIOD_ID, undefined, undefined, {
       dimensions: { '6': 'P001' },
     })
