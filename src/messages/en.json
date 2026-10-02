@@ -4757,7 +4757,7 @@
     "zoom_page": "Whole page",
     "zoom_width": "Page width",
     "preview_title": "PDF preview",
-    "preview_open": "Open the PDF",
+    "preview_open": "Open in a new tab",
     "preview_loading": "Loading the preview",
     "status_seller_vat_missing": "The company's VAT number is missing and must be on the invoice.",
     "status_seller_vat_add": "Add it",

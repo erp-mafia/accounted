@@ -196,6 +196,10 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           // and intermittently surfaced "Det här innehållet har blockerats"
           // even with a permissive CSP. See AttachmentPreviewSheet.tsx for
           // the same workaround on journal entry attachments.
+          // The fallback child is safe here only because this <object> is
+          // created with it and unmounted for every new render (isLoading).
+          // Chrome blanks a loaded PDF when a child is inserted later; see
+          // EditorPreviewPane before reusing one node across renders.
           <object
             data={blobUrl}
             type="application/pdf"
