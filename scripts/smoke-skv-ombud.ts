@@ -32,10 +32,15 @@
  */
 
 import { config } from 'dotenv'
-// The selected file wins over whatever the shell already exports, and a file
-// that cannot be read stops the run: otherwise a mistyped ENV_FILE would
-// silently send live calls with inherited values to another environment.
+// The selected file is the ONLY source of Skatteverket settings: inherited
+// SKATTEVERKET_* values are cleared first (dotenv's override only replaces
+// keys the file supplies), and a file that cannot be read stops the run.
+// Otherwise a mistyped ENV_FILE, or a file missing one setting, would send
+// live calls with mixed values to another environment.
 const envFile = process.env.ENV_FILE ?? '.env.local'
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith('SKATTEVERKET_')) delete process.env[key]
+}
 const loaded = config({ path: envFile, override: true })
 if (loaded.error) {
   console.error(`Cannot read ${envFile}: ${loaded.error.message}`)
