@@ -670,16 +670,20 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // ROT/RUT begäran om utbetalning: the payout request for deductions given
-  // during year Y must reach Skatteverket by 31 January of year Y+1
-  // (Lag 2009:194 8 §). Missing the date forfeits the payout on account
-  // 1513, so this is the one deadline where lateness costs the principal,
-  // not a fee. Keyed on PAYMENT years (buyer paid), never invoice dates:
-  // rows only exist for years present in rot_rut_payment_years.
+  // Begäran om utbetalning (ROT/RUT and grön teknik): the payout request for
+  // deductions given during year Y must reach Skatteverket by 31 January of
+  // year Y+1 (Lag 2009:194 8 § for ROT/RUT; for grön teknik Skatteverket:
+  // "senast den 31 januari året efter att din kund betalade för
+  // installationen"). Missing the date forfeits the payout on account 1513,
+  // so this is the one deadline where lateness costs the principal, not a
+  // fee. Keyed on PAYMENT years (buyer paid), never invoice dates: rows only
+  // exist for years present in rot_rut_payment_years, which counts every
+  // deduction kind. The type keeps its name (identity is
+  // tax_deadline_type:tax_period, so the title can change safely).
   {
     type: 'rot_rut_begaran',
-    titleTemplate: 'ROT/RUT-begäran om utbetalning {periodLabel}',
-    description: 'Begäran om utbetalning för ROT/RUT-avdrag till Skatteverket',
+    titleTemplate: 'Begäran om utbetalning ROT/RUT och grön teknik {periodLabel}',
+    description: 'Begäran om utbetalning för ROT/RUT-avdrag och skattereduktion för grön teknik till Skatteverket',
     condition: (s) => s.rot_rut_enabled,
     priority: 'critical',
     linkedReportType: null,

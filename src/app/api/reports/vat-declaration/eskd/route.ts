@@ -4,6 +4,9 @@ import { contentDisposition } from '@/lib/api/content-disposition'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { getVatEskdFile } from '@/lib/reports/filing-report-service'
 import type { VatPeriodType } from '@/types'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * Momsdeklaration eSKDUpload (v6.0) XML file for filing at skatteverket.se via

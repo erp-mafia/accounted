@@ -28,6 +28,7 @@ import { planSupplierBankMatch } from '@/lib/invoices/apply-supplier-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
+import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { SupplierInvoice, Transaction } from '@/types'
 
 const MatchSIResponse = z.object({
@@ -497,19 +498,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       newState: { status: newStatus, paid_amount: newPaidAmount, remaining_amount: newRemaining },
     })
 
+    const settledInvoice = {
+      ...invoice,
+      status: newStatus,
+      remaining_amount: newRemaining,
+      paid_amount: newPaidAmount,
+      paid_at: paidAt,
+      payment_journal_entry_id: journalEntryId,
+      transaction_id: txId,
+    } as SupplierInvoice
     try {
       eventBus.emit({
         type: 'supplier_invoice.match_confirmed',
         payload: {
-          supplierInvoice: {
-            ...invoice,
-            status: newStatus,
-            remaining_amount: newRemaining,
-            paid_amount: newPaidAmount,
-            paid_at: paidAt,
-            payment_journal_entry_id: journalEntryId,
-            transaction_id: txId,
-          } as SupplierInvoice,
+          supplierInvoice: settledInvoice,
           transaction: {
             ...transaction,
             supplier_invoice_id,
@@ -524,6 +526,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     } catch (err) {
       txLog.warn('event emit failed (non-critical)', err as Error)
     }
+    // A match that settles the invoice in full is its supplier_invoice.paid
+    // transition; a partial match is not. Same helper as every other
+    // settlement door; paymentAmount is the debt settled, as on the payment row.
+    await emitSupplierInvoicePaidIfSettled({
+      newStatus,
+      supplierInvoice: settledInvoice,
+      paymentAmount: settledAmount,
+      userId: ctx.userId,
+      companyId: ctx.companyId!,
+    })
 
     return ok(
       {

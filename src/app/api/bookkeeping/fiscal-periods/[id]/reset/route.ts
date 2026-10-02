@@ -7,6 +7,9 @@ import {
   getFiscalYearResetEligibility,
   resetFiscalYear,
 } from '@/lib/core/bookkeeping/fiscal-year-reset'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 type Params = { params: Promise<{ id: string }> }
 

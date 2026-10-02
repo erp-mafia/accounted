@@ -29,6 +29,7 @@ import { createLogger } from '@/lib/logger'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 import { kickWebhookDispatch } from './dispatch-kick'
 import { PUBLIC_WEBHOOK_EVENTS as PUBLIC_WEBHOOK_EVENT_CATALOGUE } from './public-events'
+import { verificationAllowsDelivery } from './verification'
 
 const log = createLogger('webhooks/handler')
 
@@ -112,9 +113,9 @@ async function fanOutToWebhooks(args: {
 }): Promise<void> {
   const supabase = createServiceClientNoCookies()
 
-  const { data: webhooks, error: fetchErr } = await supabase
+  const { data: found, error: fetchErr } = await supabase
     .from('webhooks')
-    .select('id, secret, api_version_pinned')
+    .select('id, api_version_pinned, verified_at, verification_grace_ends_at')
     .eq('company_id', args.companyId)
     .eq('event_type', args.eventType)
     .eq('active', true)
@@ -127,7 +128,19 @@ async function fanOutToWebhooks(args: {
     })
     return
   }
-  if (!webhooks || webhooks.length === 0) return
+  // Ownership gate (ADA CASA 7.1.2): nothing is enqueued for an endpoint that
+  // has not passed the verification handshake, unless it predates
+  // verification and is still inside its grace window
+  // (lib/webhooks/verification.ts). Events are not parked for later either: a
+  // pending or paused endpoint is treated like a disabled one.
+  const now = new Date()
+  const webhooks = (found ?? []).filter((w) =>
+    verificationAllowsDelivery(
+      w as { verified_at: string | null; verification_grace_ends_at: string | null },
+      now,
+    ),
+  )
+  if (webhooks.length === 0) return
 
   // Synthesise a correlation id for the fanout batch. The event bus is
   // async: by the time we reach here the originating route's request

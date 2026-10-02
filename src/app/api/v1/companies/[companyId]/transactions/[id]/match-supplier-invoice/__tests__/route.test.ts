@@ -154,6 +154,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     const calls: RecordedCall[] = []
     const matchedHandler = vi.fn()
     eventBus.on('supplier_invoice.match_confirmed', matchedHandler)
+    const paidHandler = vi.fn()
+    eventBus.on('supplier_invoice.paid', paidHandler)
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase(
         {
@@ -199,6 +201,46 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
         }),
       }),
     )
+    // Settled in full by the bank match: supplier_invoice.paid, exactly once.
+    expect(paidHandler).toHaveBeenCalledTimes(1)
+    expect(paidHandler).toHaveBeenCalledWith({
+      supplierInvoice: expect.objectContaining({ id: SI_ID, status: 'paid', remaining_amount: 0 }),
+      paymentAmount: 1000,
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+    })
+  })
+
+  it('a partial bank match confirms the match but does not emit supplier_invoice.paid', async () => {
+    const matchedHandler = vi.fn()
+    eventBus.on('supplier_invoice.match_confirmed', matchedHandler)
+    const paidHandler = vi.fn()
+    eventBus.on('supplier_invoice.paid', paidHandler)
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: { data: { ...TRANSACTION, amount: -400 }, error: null },
+        supplier_invoices: [
+          { data: REGISTERED_INVOICE, error: null },
+          { data: [{ id: SI_ID }], error: null },
+        ],
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      }),
+    )
+
+    const response = await matchSupplierInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
+        { supplier_invoice_id: SI_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.invoice_status).toBe('partially_paid')
+    expect(matchedHandler).toHaveBeenCalledTimes(1)
+    expect(paidHandler).not.toHaveBeenCalled()
   })
 
   it('returns 401 when no bearer token is supplied', async () => {

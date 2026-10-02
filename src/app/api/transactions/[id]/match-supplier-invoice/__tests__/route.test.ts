@@ -629,6 +629,21 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
         }),
       }),
     )
+    // The match settled the supplier invoice in full: supplier_invoice.paid
+    // fires exactly once, with the debt settled.
+    const paidEmits = vi
+      .mocked(eventBus.emit)
+      .mock.calls.filter(([event]) => event.type === 'supplier_invoice.paid')
+    expect(paidEmits).toHaveLength(1)
+    expect(paidEmits[0][0]).toEqual({
+      type: 'supplier_invoice.paid',
+      payload: {
+        supplierInvoice: expect.objectContaining({ id: SI_UUID, status: 'paid', remaining_amount: 0 }),
+        paymentAmount: 1000,
+        userId: 'user-1',
+        companyId: 'company-1',
+      },
+    })
   })
 
   // The suggestion pointer must not survive the match that consumes it: this
@@ -678,6 +693,10 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
     const { body } = await parseJsonResponse<{ invoice_status: string }>(res)
     expect(body.invoice_status).toBe('partially_paid')
     expect(mockClearSuggestions).not.toHaveBeenCalled()
+    // Still owed money: the match is confirmed, the invoice is not paid.
+    const types = vi.mocked(eventBus.emit).mock.calls.map(([event]) => event.type)
+    expect(types).toContain('supplier_invoice.match_confirmed')
+    expect(types).not.toContain('supplier_invoice.paid')
   })
 
   it('öresavrundning: a whole-krona Bankgiro payment settles an öre-bearing invoice in full via 3740', async () => {

@@ -181,6 +181,9 @@ import '@/app/api/v1/webhook-deliveries/[id]/retry/route'
 // Phase 6 PR-3: webhook secret rotation.
 import '@/app/api/v1/companies/[companyId]/webhooks/[id]/rotate-secret/route'
 
+// Endpoint ownership handshake (ADA CASA 7.1.2).
+import '@/app/api/v1/companies/[companyId]/webhooks/[id]/verify/route'
+
 // Inbox item stamp.
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/stamp/route'
 

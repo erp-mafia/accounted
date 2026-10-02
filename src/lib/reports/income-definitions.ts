@@ -57,7 +57,7 @@ export const INCOME_STATEMENT_DEFINITIONS = {
   basis: {
     accounts: '3000-8998',
     definition:
-      "Resultaträkning before bokslut, exact to the öre: every year-end entry (skatt, bokslutsdispositioner, year-end avskrivningar, kontantmetod cut-off) is excluded. Matches the årsredovisning and INK2R only while no bokslut entry is booked; for a closed year's filed figures use gnubok_preview_arsredovisning.",
+      "Resultaträkning before bokslut, exact to the öre: every year-end entry (skatt, bokslutsdispositioner, year-end avskrivningar, kontantmetod cut-off) is excluded. Equals the årsredovisning and INK2R lines only while no bokslut entry is booked, and then only before their rounding to whole kronor; for a closed year's filed figures use gnubok_preview_arsredovisning.",
   },
   nettoomsattning: {
     accounts: '3000-3799',

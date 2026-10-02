@@ -693,9 +693,18 @@ describe('SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS', () => {
       },
     }
     const sv = getErrorMessage(body)
-    expect(sv).toContain('Konto 9999 har belopp')
+    expect(sv).toContain('Målkonto 9999 ligger utanför 1000-8999')
     expect(sv).toContain('2999 OBS-konto')
-    expect(getErrorMessage({ error: { ...body.error, details: { account_numbers: ['9998', '9999'] } } })).toContain('Kontona 9998, 9999 har belopp')
+    expect(getErrorMessage({ error: { ...body.error, details: { account_numbers: ['9998', '9999'] } } })).toContain('Målkontona 9998, 9999 ligger')
+  })
+
+  // #3312: every import entry now routes class 9 amounts to 2999 itself, so the
+  // refusal answers a target someone chose. It points back at that choice, not
+  // at a page outside the onboarding flow the customer was in.
+  it('does not send the user to a page outside their flow', () => {
+    const sv = getErrorMessage({ error: { code: 'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS', message: 'x', details: { account_numbers: ['9998'] } } })
+    expect(sv).not.toContain('Import, SIE-fil')
+    expect(sv).toContain('i kontomappningen')
   })
 
   it('falls back to the registry sentence without details', () => {

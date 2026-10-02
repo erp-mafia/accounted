@@ -49,6 +49,8 @@ import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
+import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
+import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
 import type { Currency, EntityType, Invoice, Transaction } from '@/types'
 
@@ -811,17 +813,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       },
     })
 
+    const settledInvoice = {
+      ...invoice,
+      status: newStatus,
+      paid_at: paidAt,
+      paid_amount: newPaidAmount,
+      remaining_amount: newRemaining,
+    } as Invoice
     try {
       eventBus.emit({
         type: 'invoice.match_confirmed',
         payload: {
-          invoice: {
-            ...invoice,
-            status: newStatus,
-            paid_at: paidAt,
-            paid_amount: newPaidAmount,
-            remaining_amount: newRemaining,
-          } as Invoice,
+          invoice: settledInvoice,
           transaction: {
             ...transaction,
             invoice_id,
@@ -837,6 +840,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     } catch (err) {
       txLog.warn('event emit failed (non-critical)', err as Error)
     }
+    // A match that settles the invoice in full is its invoice.paid transition;
+    // a partial match is not. Same helper as every other settlement door.
+    await emitInvoicePaidIfSettled({
+      newStatus,
+      invoice: settledInvoice,
+      paymentAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
+      paymentDate: transaction.date,
+      userId: ctx.userId,
+      companyId: ctx.companyId!,
+    })
 
     return ok(
       {

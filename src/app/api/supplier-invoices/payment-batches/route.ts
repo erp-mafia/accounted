@@ -8,6 +8,9 @@ import {
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { createPaymentBatch, loadBatchProgress } from '@/lib/payments/batch-operations'
 import type { SupplierPaymentBatch } from '@/types'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * Create a supplier payment batch (betalfil).

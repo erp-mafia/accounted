@@ -54,6 +54,15 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
   }
 })
 
+// batch-categorize runs the booking-time duplicate guard per item. Its
+// detector reads `transactions`, which this file scripts as an ordered queue
+// for the fetch / CAS sequence, so stub it to "no duplicate" (the detection
+// queries are unit-tested in lib/transactions/__tests__/booking-duplicate-detection.test.ts).
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/booking-duplicate-detection')>()),
+  detectBookingDuplicate: vi.fn().mockResolvedValue(null),
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as ingestPOST } from '../route'
 import { POST as batchPOST } from '../../batch-categorize/route'

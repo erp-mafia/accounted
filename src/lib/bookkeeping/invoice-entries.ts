@@ -10,7 +10,7 @@ import {
 } from './dimension-resolver'
 import { generateSalesVatLines } from './vat-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
-import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
+import { computeDeduction, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { creditNatural } from './line-side'
@@ -300,14 +300,18 @@ function generatePerRateLines(
 }
 
 /**
- * Generate ROT/RUT-avdrag debit lines from invoice items.
+ * Generate skattereduktion (ROT/RUT-avdrag, grön teknik) debit lines from
+ * invoice items.
  *
  * For each item flagged with `deduction_type`, produces a debit on BAS 1513
  * (Övriga kortfristiga fordringar, Skatteverket) for the computed
  * deduction amount. The caller must REDUCE the 1510 debit (kundfordringar)
  * by the same total: the customer only owes the post-deduction amount;
- * Skatteverket pays the rest via Husavdragstjänsten. Returns both the
- * lines and the total so callers can apply both adjustments atomically.
+ * Skatteverket pays the rest (Husavdragstjänsten for ROT/RUT, the e-tjänst
+ * Grön teknik: företag for grön teknik). Revenue and utgående moms stay on
+ * the full amount: the reduction is a claim on Skatteverket, not a price
+ * reduction. Returns both the lines and the total so callers can apply both
+ * adjustments atomically.
  *
  * Foreign-currency invoices: ROT/RUT-avdrag is a Sweden-only rule, so
  * receivables on 1513 are always recorded in SEK. We use the same SEK
@@ -342,20 +346,24 @@ function generateRotRutLines(
       // stored deduction_total and the Skatteverket claim carry the net.
       discount_percent: item.discount_percent ?? 0,
       deduction_type: item.deduction_type,
+      // Grön teknik's rate follows the installation type: the same input the
+      // stored deduction_total was computed from.
+      work_type: item.work_type,
       vat_rate: item.vat_rate,
     })
     if (amount <= 0) continue
     const amountSek = Math.round(toSek(amount) * 100) / 100
     if (amountSek <= 0) continue
     totalSek += amountSek
-    const kind = item.deduction_type === 'rot' ? 'ROT' : 'RUT'
+    // 'ROT-avdrag', 'RUT-avdrag' or 'Skattereduktion grön teknik'.
+    const kind = DEDUCTION_TYPE_LABELS[item.deduction_type].ledger
     lines.push({
       account_number: '1513',
       debit_amount: side === 'debit' ? amountSek : 0,
       credit_amount: side === 'credit' ? amountSek : 0,
       line_description: side === 'credit'
-        ? `${kind}-avdrag kreditfaktura ${invoiceTagText}`
-        : `${kind}-avdrag faktura ${invoiceTagText}`,
+        ? `${kind} kreditfaktura ${invoiceTagText}`
+        : `${kind} faktura ${invoiceTagText}`,
       // Per-item line: carries the item's merged bag like its revenue line.
       dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
     })

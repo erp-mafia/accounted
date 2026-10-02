@@ -1601,16 +1601,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // the rest is claimed from Skatteverket. Same helper as the PDF and the
   // invoice email so all three surfaces state the same "Att betala".
   const amountToPay = getAmountToPay(invoice, { ore_rounding: oreRounding })
-  const deductionItems = invoice.items.filter(
-    (i) => i.deduction_type === 'rot' || i.deduction_type === 'rut',
-  )
+  const deductionItems = invoice.items.filter((i) => Boolean(i.deduction_type))
   const hasRot = deductionItems.some((i) => i.deduction_type === 'rot')
   const hasRut = deductionItems.some((i) => i.deduction_type === 'rut')
+  // Grön teknik never shares an invoice with ROT/RUT (refused at creation).
+  const hasGronTeknik = deductionItems.some((i) => i.deduction_type === 'gron_teknik')
   const deductionKindLabel = hasRot && hasRut ? 'ROT/RUT' : hasRot ? 'ROT' : 'RUT'
+  const deductionRowLabel = hasGronTeknik
+    ? t('deduction_row_gron_teknik')
+    : t('deduction_row', { kind: deductionKindLabel })
   const showDeduction = amountToPay.deductionApplies && !isDeliveryNote
-  // Fastighetsbeteckning / lägenhet live on the ROT lines (one property per
-  // invoice in practice); the first ROT line carries the value.
-  const rotItem = deductionItems.find((i) => i.deduction_type === 'rot')
+  // Fastighetsbeteckning / lägenhet live on the ROT and grön teknik lines
+  // (one property per invoice in practice); the first such line carries it.
+  const rotItem = deductionItems.find((i) => i.deduction_type === 'rot' || i.deduction_type === 'gron_teknik')
   const rotHousing = rotItem?.housing_designation ?? null
   const rotApartment = rotItem?.apartment_number ?? null
   const rotBrf = rotItem?.brf_org_number ?? null
@@ -1618,7 +1621,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // "RUT · Städning · 4 tim" under a claimed line, so the claim is visible on
   // the item itself, not only in the PDF. The amount lives in the totals block.
   const deductionLineInfo = (item: InvoiceItem): string => {
-    const parts = [item.deduction_type === 'rot' ? 'ROT' : 'RUT']
+    const parts = [
+      item.deduction_type === 'gron_teknik'
+        ? tInvoices('rot_rut_type_gron_teknik')
+        : item.deduction_type === 'rot' ? 'ROT' : 'RUT',
+    ]
     const label = workTypeLabel(item.work_type)
     if (label) parts.push(label)
     if (item.labor_hours && item.labor_hours > 0) {
@@ -2277,7 +2284,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   <span className="text-muted-foreground">{t('deduction_personnummer_unreadable')}</span>
                 )}
               </DefRow>
-              {hasRot && (
+              {(hasRot || hasGronTeknik) && (
                 <DefRow label={t('deduction_property_label')}>
                   {rotHousing ? (
                     <span>
@@ -2303,7 +2310,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </DefRow>
               )}
               <DefRow label={t('deduction_status_label')}>
-                {payoutRequests.length === 0 ? (
+                {hasGronTeknik && payoutRequests.length === 0 ? (
+                  // No grön teknik file yet: the payout is requested in
+                  // Skatteverkets e-tjänst. The link opens the figures it
+                  // asks for, on this invoice's row.
+                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="text-muted-foreground">{t('deduction_claim_gron_teknik')}</span>
+                    {skvClaimable && (
+                      <Link
+                        href={`/invoices/rot-rut?new=1&type=gron_teknik&invoice=${invoice.id}`}
+                        className={cn(ROW_ACTION_CLASS, 'whitespace-nowrap')}
+                      >
+                        {t('deduction_claim_gron_teknik_cta')}
+                      </Link>
+                    )}
+                  </span>
+                ) : payoutRequests.length === 0 ? (
                   <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span className="text-muted-foreground">{t('deduction_claim_none')}</span>
                     {skvClaimable && (
@@ -2512,7 +2534,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 <span>{formatCurrency(rounding.displayed, invoice.currency)}</span>
               </div>
               <div className="flex justify-between gap-4">
-                <span className="text-muted-foreground">{t('deduction_row', { kind: deductionKindLabel })}</span>
+                <span className="text-muted-foreground">{deductionRowLabel}</span>
                 <span>{formatCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency)}</span>
               </div>
               {/* Skatteverket refused (part of) the deduction and the reclaim

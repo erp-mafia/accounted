@@ -13,7 +13,7 @@
 
 /** SIE import: which account definitions survive and where amounts must land. */
 export const SIE_IMPORT_RULES =
-  'SIE-importer bevarar oanvända kontodefinitioner i klass 9. Oanvända konton under 1000 är källsystemets interna konton och tas inte med. Konton med belopp måste mappas till konton 1000-8999, eftersom klass 0 och 9 inte stöds som ekonomiska rapportkonton; för klass 9 med belopp föreslås 2999 OBS-konto. Källfil och kontomappningar bevaras i importarkivet.'
+  'SIE-importer bevarar oanvända kontodefinitioner i klass 9. Oanvända konton under 1000 är källsystemets interna konton och tas inte med. Konton med belopp måste mappas till konton 1000-8999, eftersom klass 0 och 9 inte stöds som ekonomiska rapportkonton; för klass 9 med belopp föreslås 2999 OBS-konto. Samma mappningsregel gäller i alla importvägar (SIE-fil, flytt från tidigare system, API och MCP) och går före en mappning till klass 9 som en tidigare import sparat; importvägar utan mappningssteg tillämpar förslaget direkt (ärende #3312). Källfil och kontomappningar bevaras i importarkivet.'
 
 /** Öresavrundning on supplier invoices, both bokföringsmetoder. */
 export const SUPPLIER_INVOICE_ROUNDING_RULES = {

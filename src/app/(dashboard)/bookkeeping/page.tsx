@@ -64,6 +64,12 @@ export default function BookkeepingPage() {
   const [initialShowMissingOnly] = useState(
     () => searchParams.get('missingUnderlag') === 'true',
   )
+  // Deep link from the bokslut preflight ("Förklara luckan"): scope the list
+  // to the räkenskapsår whose voucher gap blocked the bokslut. Read once, as above.
+  const [initialGapPeriodId] = useState<string | null>(() => {
+    const raw = searchParams.get('gaps')
+    return raw && UUID_RE.test(raw) ? raw : null
+  })
 
   const [refreshKey, setRefreshKey] = useState(0)
   const [showNewEntry, setShowNewEntry] = useState(false)
@@ -291,6 +297,7 @@ export default function BookkeepingPage() {
       <JournalEntryList
         refreshToken={refreshKey}
         initialShowMissingOnly={initialShowMissingOnly}
+        initialGapPeriodId={initialGapPeriodId}
         pristineSlot={
           <div className="animate-fade-in space-y-4">
             <StartCard

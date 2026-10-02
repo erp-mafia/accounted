@@ -3,6 +3,9 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { validateDocumentMagicBytes } from '@/lib/core/documents/document-service'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 const ParamsSchema = z.object({ id: z.string().uuid() })
 

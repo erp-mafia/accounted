@@ -19,7 +19,7 @@
  * LINK_SI_VOUCHER_NO_AP_DEBIT / LINK_SI_VOUCHER_NO_BANK_CREDIT.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { eventBus } from '@/lib/events/bus'
+import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { createLogger } from '@/lib/logger'
 import {
   CONFIDENCE,
@@ -735,8 +735,7 @@ export interface LinkSupplierInvoiceToVoucherResult {
  * Atomically link an existing posted verifikat as payment for a supplier
  * invoice. Inserts a supplier_invoice_payments row pointing at the JE, advances
  * the invoice's paid_amount / remaining_amount, and emits supplier_invoice.paid
- * (reusing the existing event so reminder/automation subscribers fire without
- * a new channel).
+ * when the link settles the invoice in full.
  *
  * Re-validates inside the same call to defend against stage→commit drift.
  */
@@ -819,28 +818,19 @@ export async function linkSupplierInvoiceToVoucher(
     .eq('company_id', companyId)
     .maybeSingle()
 
+  // supplier_invoice.paid only when this link settled the invoice in full: a
+  // partial link leaves money owed. The RPC locks the row and refuses an
+  // invoice that is not open, so its 'paid' is this call's transition.
+  // Best-effort: an emit failure is logged by the helper (ISO 27001:2022
+  // A.8.15 / OWASP V16) and never blocks the committed link.
   if (invoice) {
-    try {
-      await eventBus.emit({
-        type: 'supplier_invoice.paid',
-        payload: {
-          supplierInvoice: invoice as SupplierInvoice,
-          paymentAmount: result.payment_amount,
-          userId,
-          companyId,
-        },
-      })
-    } catch (err) {
-      // Event emission failure must not block the response, but should leave
-      // an audit trail (ISO 27001:2022 A.8.15 / OWASP V16). Logged at warn
-      // because the link itself succeeded: the downstream reminder/audit
-      // subscriber will need separate intervention.
-      log.warn('supplier_invoice.paid event emission failed', {
-        err,
-        supplierInvoiceId: params.supplierInvoiceId,
-        journalEntryId: params.journalEntryId,
-      })
-    }
+    await emitSupplierInvoicePaidIfSettled({
+      newStatus: result.invoice_status,
+      supplierInvoice: invoice as SupplierInvoice,
+      paymentAmount: result.payment_amount,
+      userId,
+      companyId,
+    })
   }
 
   // Anchor the invoice's retained document to its verifikat when it is still

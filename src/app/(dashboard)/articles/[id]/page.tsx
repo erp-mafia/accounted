@@ -20,7 +20,7 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import { Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
-import { parseArticleHouseworkType, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
+import { DEDUCTION_TYPE_LABEL_KEYS, articleDeductionPrefill, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
@@ -39,6 +39,7 @@ export default function ArticleDetailPage({
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('article_detail')
+  const tInvoices = useTranslations('invoices')
   const errorLocale = useLocale() as ErrorLocale
   const [article, setArticle] = useState<Article | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -205,12 +206,16 @@ export default function ArticleDetailPage({
   if (!article) return null
 
   // "RUT · Städning" for a work-type code, "RUT" for a legacy kind-only row,
-  // nothing for values that are not a housework flag (mis-mapped imports).
+  // "Grön teknik · Installation av solceller" for an installation type,
+  // nothing for values that are not a housework flag (mis-mapped imports) or
+  // that the article's type cannot carry (ROT/RUT on goods): the same rule as
+  // the invoice pre-fill.
   const houseworkDisplay = (() => {
-    const { deductionType, workType } = parseArticleHouseworkType(article.housework_type)
+    const { deductionType, workType } = articleDeductionPrefill(article)
     if (!deductionType) return null
+    const kind = tInvoices(DEDUCTION_TYPE_LABEL_KEYS[deductionType])
     const label = workTypeLabel(workType)
-    return label ? `${deductionType.toUpperCase()} · ${label}` : deductionType.toUpperCase()
+    return label ? `${kind} · ${label}` : kind
   })()
 
   return (
@@ -303,7 +308,7 @@ export default function ArticleDetailPage({
               <span className="text-muted-foreground">{t('revenue_account_auto')}</span>
             )}
           </DefRow>
-          {article.type === 'tjanst' && houseworkDisplay && (
+          {houseworkDisplay && (
             <DefRow label={t('label_housework')}>{houseworkDisplay}</DefRow>
           )}
         </DetailSection>

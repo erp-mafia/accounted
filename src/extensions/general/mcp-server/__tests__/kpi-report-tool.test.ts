@@ -14,6 +14,7 @@ import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
+import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { tools } from '../server'
 import { KPI_METRIC_KEYS } from '../kpi-report'
 
@@ -21,6 +22,8 @@ vi.mock('@/lib/reports/income-statement', () => ({ generateIncomeStatement: vi.f
 vi.mock('@/lib/reports/trial-balance', () => ({ generateTrialBalance: vi.fn() }))
 vi.mock('@/lib/reports/ar-ledger', () => ({ generateARLedger: vi.fn() }))
 vi.mock('@/lib/reports/monthly-breakdown', () => ({ generateMonthlyBreakdown: vi.fn() }))
+// Its own reads would draw from the queued client; covered in report-data-status.test.ts.
+vi.mock('@/lib/reports/data-status', () => ({ buildReportDataStatus: vi.fn() }))
 
 const kpiTool = tools.find((t) => t.name === 'gnubok_get_kpi_report')!
 
@@ -59,6 +62,7 @@ function mockGenerators() {
   } as never)
   vi.mocked(generateARLedger).mockResolvedValue({ total_outstanding: 2500.5, total_overdue: 500 } as never)
   vi.mocked(generateMonthlyBreakdown).mockResolvedValue({ months: [] } as never)
+  vi.mocked(buildReportDataStatus).mockResolvedValue({ unavailable: true, reason: 'not under test' })
 }
 
 beforeEach(() => {
@@ -150,7 +154,7 @@ describe('gnubok_get_kpi_report', () => {
     )) as Record<string, unknown>
 
     expect(Object.keys(result).sort()).toEqual(
-      ['cash_position', 'net_result', 'period_end', 'period_name', 'period_start', 'range', 'receivables_as_of'].sort(),
+      ['cash_position', 'data_status', 'net_result', 'period_end', 'period_name', 'period_start', 'range', 'receivables_as_of'].sort(),
     )
     expect(result.net_result).toBe(6000)
   })

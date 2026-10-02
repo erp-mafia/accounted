@@ -735,7 +735,7 @@ Accepts a SIE4 file (CP437 / Windows-1252 / UTF-8 auto-detected, up to 50 MB) as
 - An identical retry returns the same execution. Deliberate replacement requires options.onExistingPeriod=replace and options.supersedesImportId naming the reviewed predecessor, and uses a new batch after storno.
 - The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.
 - Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.
-- Account mappings are generated server-side from the file's #KONTO records (plus stored per-company overrides). By default the file's account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.
+- Account mappings are generated server-side from the file's #KONTO records (plus stored per-company overrides), by the same rules as the dashboard upload: a class 9 account carrying amounts is mapped to 2999 OBS-konto, also over a stored class 9 mapping. By default the file's account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2443,7 +2443,8 @@ Resolves the BAS account mapping for the transaction (via category, booking temp
 **Do not use for:** Matching a payment to an invoice: use `:match-invoice` or `:match-supplier-invoice`, which storno any conflicting JE first. Uncategorizing: `:uncategorize`.
 
 **Pitfalls:**
-- A bank payment that looks like an invoice payment will be flagged via TX_CATEGORIZE_SUGGEST_SI_MATCH: pass `confirm_no_match: true` to override and force-categorize as direct expense (e.g. when the supplier invoice was already booked).
+- A bank line the ledger already books (a booked sibling transaction, or a voucher booking the same amount on the bank account such as a supplier invoice marked paid) is refused with 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE and the candidate in `details.candidate`: link the transaction to that verifikat instead. Only if it is a genuinely separate event, resend with `force: true` plus `expected_duplicate_journal_entry_id` (or `expected_duplicate_transaction_id`) echoing the candidate; a stale id returns TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH.
+- A plain 244x (supplier payment) or 151x (customer receipt) categorization that an open invoice covers is refused with 409 TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH: match the invoice via `:match-supplier-invoice` / `:match-invoice`, or pass `confirm_no_match: true` to keep the plain categorization.
 - Already-categorized fast path: if the transaction already has a journal_entry_id, only flags get updated. The JE is immutable post-commit.
 - account_override must exist in the chart of accounts; an unknown account returns TX_CATEGORIZE_INVALID_ACCOUNT.
 
@@ -3231,6 +3232,7 @@ Per-item categorization mirroring the single :categorize endpoint. Same `{ resul
 - Max 100 items per call. Sequential processing.
 - Idempotency-Key covers the WHOLE batch: replays return the cached full response.
 - all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.
+- Per item, the same double-booking guards as `:categorize`: TRANSACTION_BOOK_POSSIBLE_DUPLICATE (the ledger already books that bank line; override per item with `force: true` plus the echoed `expected_duplicate_journal_entry_id` / `expected_duplicate_transaction_id`) and TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH (an open invoice covers a plain 244x / 151x categorization; override with `confirm_no_match: true`). An item never dedupes against a verifikat booked earlier in the same batch.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

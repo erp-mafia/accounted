@@ -4,6 +4,9 @@ import { validateBody } from '@/lib/api/validate'
 import { RotRutSettleSchema } from '@/lib/api/schemas'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { settleRotRutPayoutRequest } from '@/lib/invoices/rot-rut-settle'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * POST /api/rot-rut/payout-requests/[id]/settle

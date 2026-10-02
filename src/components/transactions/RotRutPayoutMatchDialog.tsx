@@ -21,6 +21,8 @@ import {
   getRotRutPayoutMatchTargetState,
 } from '@/lib/invoices/rot-rut-payout-matching'
 import { CheckCircle2, AlertTriangle } from 'lucide-react'
+import type { DeductionType } from '@/types'
+import { DEDUCTION_TYPE_LABEL_KEYS } from '@/lib/invoices/rot-rut-rules'
 import type { TransactionWithInvoice } from './transaction-types'
 
 interface RotRutPayoutMatchDialogProps {
@@ -56,6 +58,7 @@ export default function RotRutPayoutMatchDialog({
   onConfirm,
 }: RotRutPayoutMatchDialogProps) {
   const t = useTranslations('tx_rot_rut_match')
+  const tInvoices = useTranslations('invoices')
   const requests = transaction?.potential_rot_rut_payout?.requests ?? []
   const isSet = requests.length > 1
   const single = requests.length === 1 ? requests[0] : null
@@ -130,7 +133,8 @@ export default function RotRutPayoutMatchDialog({
   const receivableCredit = (request: (typeof requests)[number]) =>
     roundOre(legAmount(request) + (oreRoundings[request.id] ?? 0))
 
-  const typeLabel = (deductionType: 'rot' | 'rut') => (deductionType === 'rut' ? 'RUT' : 'ROT')
+  const typeLabel = (deductionType: DeductionType) =>
+    tInvoices(DEDUCTION_TYPE_LABEL_KEYS[deductionType] ?? 'rot_rut_type_rot')
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

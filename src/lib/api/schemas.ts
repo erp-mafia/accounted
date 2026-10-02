@@ -29,11 +29,13 @@ import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { INVOICE_VAT_TREATMENT_OVERRIDES } from '@/lib/invoices/invoice-vat-override'
 import {
+  ARTICLE_HOUSEWORK_TYPE_VALUES,
   DEDUCTION_LINE_ERRORS,
-  HOUSEWORK_TYPE_VALUES,
-  SCHABLON_WORK_TYPES,
-  deductionTypeForWorkType,
+  DEDUCTION_TYPES,
+  HUS_DEDUCTION_TYPES,
+  deductionLineIssues,
   normalizeHouseworkType,
+  type DeductionType,
 } from '@/lib/invoices/rot-rut-rules'
 import { NON_IBAN_CURRENCIES } from '@/lib/invoices/payment-accounts'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
@@ -520,10 +522,11 @@ export const CreateInvoiceItemSchema = z
     // from. Round-tripped on draft edits; the DB trigger refuses a quantity
     // that would over-invoice the order line.
     sales_order_item_id: uuid.nullable().optional(),
-    // ROT/RUT-avdrag fields. `deduction_amount` is intentionally omitted from
-    // the client schema: the API computes it from rot-rut-rules.ts so a
-    // tampered client can't expand the 1513 receivable beyond the line total.
-    deduction_type: z.enum(['rot', 'rut']).nullable().optional(),
+    // Skattereduktion fields (ROT/RUT-avdrag, grön teknik). `deduction_amount`
+    // is intentionally omitted from the client schema: the API computes it
+    // from rot-rut-rules.ts so a tampered client can't expand the 1513
+    // receivable beyond the line total.
+    deduction_type: z.enum(DEDUCTION_TYPES).nullable().optional(),
     labor_hours: z.number().nonnegative().nullable().optional(),
     work_type: z.string().max(64).nullable().optional(),
     housing_designation: z.string().max(128).nullable().optional(),
@@ -565,7 +568,10 @@ export const CreateInvoiceItemSchema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['accrual_period_start'],
-          message: 'ROT/RUT-rader kan inte periodiseras',
+          message:
+            item.deduction_type === 'gron_teknik'
+              ? 'Rader med grön teknik kan inte periodiseras'
+              : 'ROT/RUT-rader kan inte periodiseras',
         })
       }
       // Net of any line discount: a 100 % rebated row has nothing to defer.
@@ -606,31 +612,27 @@ export const SetQuoteStatusSchema = z.object({
 })
 
 /**
- * ROT/RUT claim completeness (HUSFL: art av arbete + antal arbetstimmar) at
- * the invoice level, where document_type is known: only real invoices book a
- * deduction (buildInvoiceWriteData nulls the fields for proformas, delivery
- * notes and quotes), and free-text rows carry no claim. Field-level paths so
- * the editor can point at the row; validateInvoice re-runs the same rules for
- * callers that bypass this schema.
+ * Skattereduktion claim completeness (HUSFL: art av arbete + antal
+ * arbetstimmar; for grön teknik the installation type and the hours per
+ * installation) at the invoice level, where document_type is known: only
+ * real invoices book a deduction (buildInvoiceWriteData nulls the fields for
+ * proformas, delivery notes and quotes), and free-text rows carry no claim.
+ * Field-level paths so the editor can point at the row; validateInvoice
+ * (validateDeductionLines) re-runs the same rules for callers that bypass
+ * this schema.
  */
 function refineRotRutLineCompleteness(
-  data: { document_type?: string; items: Array<{ line_type?: string; deduction_type?: 'rot' | 'rut' | null; work_type?: string | null; labor_hours?: number | null }> },
+  data: { document_type?: string; items: Array<{ line_type?: string; deduction_type?: DeductionType | null; work_type?: string | null; labor_hours?: number | null }> },
   ctx: z.RefinementCtx,
 ): void {
   if (data.document_type && data.document_type !== 'invoice') return
-  data.items.forEach((item, index) => {
-    if (!item.deduction_type || item.line_type === 'text') return
-    const workType = item.work_type?.trim() || null
-    if (!workType) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'work_type'], message: DEDUCTION_LINE_ERRORS.workTypeMissing })
-    } else if (deductionTypeForWorkType(workType) !== item.deduction_type) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'work_type'], message: DEDUCTION_LINE_ERRORS.workTypeMismatch })
-    }
-    const isSchablon = workType != null && SCHABLON_WORK_TYPES.includes(workType)
-    if (!isSchablon && !(typeof item.labor_hours === 'number' && item.labor_hours > 0)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'labor_hours'], message: DEDUCTION_LINE_ERRORS.hoursMissing })
-    }
-  })
+  for (const issue of deductionLineIssues(data.items)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['items', issue.index, issue.field],
+      message: DEDUCTION_LINE_ERRORS[issue.code],
+    })
+  }
 }
 
 /**
@@ -703,16 +705,17 @@ const CreateInvoiceBaseSchema = z.object({
   // Per-invoice opt-out for the automatic Stripe payment link on send.
   // Omitted → true (create) / kept as sent by the form (edit).
   payment_link_auto: z.boolean().optional(),
-  // ROT/RUT claim info. The personnummer is plaintext on the wire and gets
-  // encrypted server-side before it ever hits the DB (see encryptPersonnummer
-  // in lib/salary/personnummer.ts). `deduction_housing_designation` is the
-  // fastighetsbeteckning at invoice level: required when any ROT item is
-  // present (enforced via rot-rut-rules.validateInvoice in the API).
+  // Skattereduktion claim info (ROT/RUT, grön teknik). The personnummer is
+  // plaintext on the wire and gets encrypted server-side before it ever hits
+  // the DB (see encryptPersonnummer in lib/salary/personnummer.ts).
+  // `deduction_housing_designation` is the fastighetsbeteckning at invoice
+  // level: required when any ROT or grön teknik item is present (enforced via
+  // rot-rut-rules.validateInvoice in the API).
   deduction_personnummer: z.string().max(20).optional(),
   deduction_housing_designation: z.string().max(128).optional(),
-  // ROT i bostadsrätt: lägenhetsnummer + föreningens orgnr replace the
+  // Bostadsrätt: lägenhetsnummer + föreningens orgnr replace the
   // fastighetsbeteckning (Begaran.xsd: LagenhetsNr + BrfOrgNr). Stamped onto
-  // the rot lines server-side, same as deduction_housing_designation.
+  // the deduction lines server-side, same as deduction_housing_designation.
   deduction_apartment_number: z.string().max(25).optional(),
   // Same orgnr shape rule as items[].brf_org_number; empty string = not set.
   deduction_brf_org_number: z
@@ -811,7 +814,9 @@ export const CreateCreditNoteSchema = z.object({
 // ============================================================
 
 export const RotRutPayoutFileSchema = z.object({
-  deduction_type: z.enum(['rot', 'rut']),
+  // The HUS file: ROT and RUT only. Grön teknik is requested in its own
+  // e-tjänst with its own schema, so gron_teknik is a 400 here.
+  deduction_type: z.enum(HUS_DEDUCTION_TYPES),
   invoice_ids: z.array(uuid).min(1).max(500),
   // NamnPaBegaran: the XSD caps it at 16 chars; omitted → generated.
   name: z.string().min(1).max(16).optional(),
@@ -888,8 +893,9 @@ export const ArticleTypeSchema = z.enum(['vara', 'tjanst'])
 
 /**
  * articles.housework_type: a Skatteverket arbetstypskod (BYGG, EL, ..., STAD,
- * TRADGARD, ...) or the bare kind ROT / RUT (deduction only, no arbetstyp
- * pre-fill). Case-insensitive, stored upper-case; '' clears to null. The
+ * TRADGARD, ..., INSTALLATION_SOLCELLER for grön teknik) or the bare kind
+ * ROT / RUT (deduction only, no arbetstyp pre-fill). Case-insensitive, stored
+ * upper-case; '' clears to null. The
  * invoice editor derives a line's skattereduktion from this value, so any
  * other string is a silently dead flag and is rejected here.
  */
@@ -905,7 +911,7 @@ export const HouseworkTypeSchema = z
     if (!normalized) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `Ogiltig ROT/RUT-arbetstyp. Tillåtna värden: ${HOUSEWORK_TYPE_VALUES.join(', ')}`,
+        message: `Ogiltig arbetstyp för skattereduktion. Tillåtna värden: ${ARTICLE_HOUSEWORK_TYPE_VALUES.join(', ')}`,
       })
       return z.NEVER
     }

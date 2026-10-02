@@ -6,6 +6,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { SIEJobFailedError } from '@/lib/import/sie-job-client'
 import { formatImportFailure } from '@/lib/import/import-failure'
 import { countSieVouchers, importProviderYears, planProviderYears, providerYearsComplete, type ProviderYearsOutcome } from '@/lib/onboarding-books/provider-years'
+import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
+import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -89,6 +91,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   const [prepared, setPrepared] = useState(0)
   const [total, setTotal] = useState(0)
   const [created, setCreated] = useState(0)
+  const [obs, setObs] = useState<string[]>([])
   const [accountsN, setAccountsN] = useState(0)
   const [regText, setRegText] = useState('')
   const [importError, setImportError] = useState<string | null>(null)
@@ -208,7 +211,8 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   const yearsSub = t('fact_years', { count: years.length })
   const lines: TheaterLine[] = [
     { title: t('th_read_from', { company: companyName, provider: provName }), sub: keptYears.length > 0 ? `${yearsSub} · ${t('fact_years_kept', { count: keptYears.length, years: listYears(keptYears) })}` : yearsSub, tone: 'ok' },
-    { title: t('th_map'), sub: created ? t('th_map_sub_new', { count: accountsN, created }) : t('th_map_sub_known', { count: accountsN }) },
+    // This flow has no mapping page: name the class 9 accounts that land on 2999, as the SIE step does.
+    { title: t('th_map'), sub: [created ? t('th_map_sub_new', { count: accountsN, created }) : t('th_map_sub_known', { count: accountsN }), ...(obs.length > 0 ? [t('fact_obs_to_2999', { accounts: obs.join(', ') })] : [])].join(' · ') },
     { title: t('th_write'), sub: jobPhase === 'preparing' ? t('th_write_preparing', { total: total.toLocaleString('sv-SE') }) : jobPhase === 'checking' ? t('th_write_checking') : t('progress_written', { count: tick.toLocaleString('sv-SE') }) },
     { title: t('th_registers'), sub: regText },
     { title: t('th_balance'), sub: importError ?? t('th_balance_sub'), tone: importError ? 'err' : 'ok' },
@@ -236,6 +240,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     if (!consentId || (preview?.sieAvailable !== false && years.length === 0)) return
     setPhase('importing')
     setImportError(null)
+    setObs([])
     setKeptYears([])
     setUnfetched([])
     setTick(0)
@@ -266,14 +271,21 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
         setAccountsN(data.mappingStats.total)
         setShown(2)
         at(200, () => apiRef.current?.spawnAccounts())
-        const unmapped = data.mappings.filter((m) => !m.targetAccount).map((m) => ({ number: m.sourceAccount, name: data!.parsed.accounts.find((a) => a.number === m.sourceAccount)?.name ?? m.sourceName }))
-        if (unmapped.length > 0) {
-          const res = await fetch('/api/import/sie/create-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accounts: unmapped }) })
+        // The server decided every target it can (class 9 amounts to 2999).
+        // A blank left over that no chart can hold stops here, before any
+        // write: mapped onto itself it was refused one call later (#3312).
+        const resolved = resolveOnboardingMappings(data.mappings, data.parsed.accounts)
+        if (resolved.unresolved.length > 0) {
+          throw new Error(t('accounts_outside_bas', { count: resolved.unresolved.length, accounts: resolved.unresolved.join(', ') }))
+        }
+        setObs(obsAccountsOf(resolved.mappings))
+        if (resolved.create.length > 0) {
+          const res = await fetch('/api/import/sie/create-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accounts: resolved.create }) })
           if (!res.ok) throw new Error(getErrorMessage(await res.json().catch(() => ({}))))
-          setCreated(unmapped.length)
+          setCreated(resolved.create.length)
           void invalidateReferenceData('ref:accounts')
         }
-        const mappings = data.mappings.map((m) => (m.targetAccount ? m : { ...m, targetAccount: m.sourceAccount, targetName: m.sourceName, matchType: 'exact', confidence: 1, isOverride: true }))
+        const mappings = resolved.mappings
         await new Promise((r) => at(1600, () => r(null)))
         setShown(3)
         // A year a completed import already holds is not sent again (a retry

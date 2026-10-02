@@ -10,6 +10,8 @@
  * argument, every function is a pure mapping from form data to wire body.
  */
 
+import type { DeductionType } from '@/types'
+
 /** True when a dimensions bag ({sie_dim_no: code}) carries at least one value. */
 export function hasDimensionValues(
   dims: Record<string, string> | null | undefined,
@@ -24,9 +26,9 @@ export interface SelfBillingCarrierFields {
   received_date?: string
 }
 
-/** The per-item ROT/RUT fields that are privacy-stripped when unused. */
+/** The per-item deduction fields (ROT/RUT, grön teknik) that are privacy-stripped when unused. */
 export interface DeductionItemFields {
-  deduction_type?: 'rot' | 'rut' | null
+  deduction_type?: DeductionType | null
   labor_hours?: number | null
   work_type?: string | null
   housing_designation?: string | null

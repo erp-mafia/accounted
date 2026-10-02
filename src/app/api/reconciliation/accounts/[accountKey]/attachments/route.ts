@@ -9,6 +9,9 @@ import {
 } from '@/lib/reconciliation/attachments'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ISO_DATE_RE } from '@/lib/invariants'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * GET  /api/reconciliation/accounts/{accountKey}/attachments?through_date=

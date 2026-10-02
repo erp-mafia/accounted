@@ -104,13 +104,14 @@ Approval creates a **draft**: no number and no verifikat yet. The F-number is al
 1. \`gnubok_call_tool({ tool: "gnubok_get_invoice", arguments: { invoice_id } })\` (a search-only read, reached through \`gnubok_call_tool\`). Check \`editable_draft\`.
 2. \`gnubok_update_invoice({ invoice_id, delivery_date?, your_reference?, items? })\`. \`items\` is a FULL REPLACE: pass every line back verbatim, with its \`article_id\`, account and ROT/RUT fields, or they are lost.
 
-**ROT/RUT (fakturamodellen)**: the customer pays the reduced amount and the company claims the rest from Skatteverket. Required before staging:
+**ROT/RUT and grön teknik (fakturamodellen)**: the customer pays the reduced amount and the company claims the rest from Skatteverket. Required before staging:
 
 - F-skatt on the company; the customer is a private person (\`individual\`) with \`personal_number\` on file (add it via \`gnubok_update_customer\`).
-- Labour on its own line(s) with \`deduction_type: 'rot' | 'rut'\`, \`labor_hours\` and \`work_type\` (Skatteverket arbetstypskod); material on separate lines without a deduction.
+- ROT/RUT: labour on its own line(s) with \`deduction_type: 'rot' | 'rut'\`, \`labor_hours\` and \`work_type\` (Skatteverket arbetstypskod); material on separate lines without a deduction.
 - ROT: \`housing_designation\` (fastighetsbeteckning), or \`apartment_number\` + \`brf_org_number\` for a bostadsrätt, on the first deduction line.
 - Rates per the rule pack: RUT 50 % of labour incl. moms; ROT 30 % standard (50 % May-Dec 2025); ceilings ROT 50 000, RUT 75 000, combined 75 000 kr per person and year. Accounted computes the deduction; do not calculate it yourself. If you cannot verify the rate for the invoice date, ask the user to confirm it with Skatteverket before sending.
-- The Skatteverket share sits on 1513 until paid out; the claim file comes from \`gnubok_generate_rot_rut_file\`. Whether the customer already used their yearly ceiling elsewhere only the customer knows: ask.
+- **Grön teknik** (skattereduktion för installation of solceller, batterilager, laddpunkt): \`deduction_type: 'gron_teknik'\` on the labour AND material lines, \`work_type\` \`INSTALLATION_SOLCELLER\` (15 %), \`INSTALLATION_LAGRING\` or \`INSTALLATION_LADDPUNKT\` (50 %) of arbete och material incl. moms. Labour and material on lines of their own (the invoice must show both costs); travel, freight, machinery, projektering and rented material on unflagged lines. Fixed price (totalentreprenad): Skatteverket counts arbete och material as 97 % of the price, so flag a line with 97 % and leave 3 % unflagged. Material sold on its own gives no reduction. Actual \`labor_hours\` on at least one line per installation type, also at a fixed price (material lines may leave them empty). Property is required as for ROT. Own ceiling 50 000 kr per person and year, outside the ROT/RUT one. Never on the same invoice as ROT/RUT lines.
+- The Skatteverket share sits on 1513 until paid out; the ROT/RUT claim file comes from \`gnubok_generate_rot_rut_file\`. Grön teknik has no file yet: the user requests it in Skatteverket's e-tjänst for grön teknik. Whether the customer already used their yearly ceiling elsewhere only the customer knows: ask.
 
 ### A draft that should not be sent yet
 

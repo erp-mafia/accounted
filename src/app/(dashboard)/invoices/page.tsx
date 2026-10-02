@@ -63,6 +63,7 @@ import {
   ROT_RUT_LIST_FILTERS,
   matchesRotRutListFilter,
   parseRotRutListFilter,
+  payoutDialogTypeFor,
   rotRutListStateOf,
   type RotRutListFilter,
   type RotRutListItem,
@@ -195,11 +196,16 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   expired: 'quote_status_expired',
 }
 
-/** A list row: the invoice plus the begäran embed the ROT/RUT column reads. */
-type ListInvoice = Invoice & { rot_rut_items?: RotRutListItem[] | null }
+/** A list row: the invoice plus the begäran and deduction-kind embeds the
+ *  skattereduktion column reads. */
+type ListInvoice = Invoice & {
+  rot_rut_items?: RotRutListItem[] | null
+  deduction_lines?: Array<{ deduction_type: string | null }> | null
+}
 
 const ROT_RUT_STATE_LABEL_KEYS: Record<NonNullable<RotRutListState>, string> = {
   claimable: 'rot_rut_status_claimable',
+  etjanst: 'rot_rut_status_etjanst',
   generated: 'rot_rut_status_generated',
   submitted: 'rot_rut_status_submitted',
   paid: 'rot_rut_status_paid',
@@ -432,6 +438,9 @@ export default function InvoicesPage() {
   // The begäran column and its filter share that gate: a company without
   // ROT/RUT never sees an empty column or a picker with nothing to pick.
   const showRotRut = showRotRutAction
+  // An installer who only invoices grön teknik lands on its list, not an
+  // empty ROT one.
+  const rotRutPayoutType = useMemo(() => payoutDialogTypeFor(invoices), [invoices])
 
   // Invoice-register coverage (see lib/invoices/invoice-register-coverage.ts):
   // a migrated or backfilled company has invoices that live only as verifikat,
@@ -470,11 +479,15 @@ export default function InvoicesPage() {
           supabase
             .from('invoices')
             // The begäran embed feeds the ROT/RUT column and filter; the
-            // items index on invoice_id keeps the reverse join cheap.
+            // items index on invoice_id keeps the reverse join cheap. The
+            // deduction-line embed (kind only, deduction lines only, so
+            // empty on most invoices) tells a grön teknik invoice, requested
+            // in Skatteverkets e-tjänst, from one still to put in a file.
             .select(
-              '*, customer:customers(name), rot_rut_items:rot_rut_payout_request_items(request:rot_rut_payout_requests(id, status, created_at))',
+              '*, customer:customers(name), rot_rut_items:rot_rut_payout_request_items(request:rot_rut_payout_requests(id, status, created_at)), deduction_lines:invoice_items(deduction_type)',
             )
             .eq('company_id', company.id)
+            .not('deduction_lines.deduction_type', 'is', null)
             .order('invoice_date', { ascending: false })
             .order('id', { ascending: false })
             .range(from, to),
@@ -1338,6 +1351,7 @@ export default function InvoicesPage() {
         <RotRutPayoutDialog
           open
           canWrite={canWrite}
+          initialType={rotRutPayoutType}
           onOpenChange={(open) => {
             if (!open) closeRotRutPayout()
           }}

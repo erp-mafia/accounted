@@ -38,7 +38,9 @@ Response:
     "active": true,
     "api_version_pinned": "2026-05-12",
     "secret": "whsec_b3a7c9e2...",
-    "created_at": "2026-05-15T12:00:00Z"
+    "created_at": "2026-05-15T12:00:00Z",
+    "verification_status": "pending",
+    "verified_at": null
   },
   "meta": { "request_id": "req_...", "api_version": "2026-05-12" }
 }
@@ -54,7 +56,26 @@ Use the [Node](https://app.gnubok.se/docs/api/webhooks#nodejs) or [Python](https
 
 For an Express handler, that means \`express.raw({ type: 'application/json' })\`: NOT the default \`express.json()\` middleware. For FastAPI / Flask use \`request.get_data()\`. For Cloudflare Workers use \`await request.text()\` BEFORE \`request.json()\`.
 
-## 3. Send a test event
+## 3. Verify the endpoint
+
+A new webhook has \`verification_status: "pending"\` and receives nothing until its URL passes the [ownership handshake](/docs/api/webhooks#endpoint-verification). After checking the signature, answer the \`webhook.verification\` event with the challenge at the top level of a JSON body:
+
+\`\`\`javascript
+if (event.type === 'webhook.verification') {
+  return res.status(200).json({ challenge: event.data.object.challenge })
+}
+\`\`\`
+
+Deploy that, then run the handshake:
+
+\`\`\`bash
+curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/verify" \\
+  -H "Authorization: Bearer gnubok_sk_..."
+\`\`\`
+
+A pass answers \`200\` with \`"verification_status": "verified"\`. A failure answers \`422 WEBHOOK_VERIFICATION_FAILED\` with \`details.reason\` (for example \`challenge_missing\` when the receiver acknowledged with a generic body, or \`http_401\` when it rejected the signature). If you do nothing, Accounted retries on its own after 1m, 5m, 30m, 2h, 12h, then daily, 8 attempts in all. The verify verb needs a live key: test keys cannot run it.
+
+## 4. Send a test event
 
 The \`:test\` verb enqueues a synthetic \`webhook.test\` delivery without driving real state. The dispatcher sends it on the next per-minute cron tick.
 
@@ -87,7 +108,7 @@ X-Gnubok-Api-Version: 2026-05-12
 
 If your receiver returns 2xx, the delivery moves to \`delivered\`. If it returns 4xx (other than 410) or 5xx, it goes to \`failed\` and retries on the schedule \`1m / 5m / 30m / 2h / 12h / 24h / 48h\`.
 
-## 4. Inspect the delivery
+## 5. Inspect the delivery
 
 \`\`\`bash
 curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/deliveries?delivery_id=$DELIVERY_ID" \\
@@ -114,7 +135,7 @@ Response carries the captured response status and body (truncated to 4 KB), whic
 }
 \`\`\`
 
-## 5. Drive a real event
+## 6. Drive a real event
 
 Now mark a real invoice paid (or use any of the [event-emitting endpoints](/docs/api/webhooks#event-types)). The webhook handler picks up the emission and enqueues a delivery within the same request cycle.
 

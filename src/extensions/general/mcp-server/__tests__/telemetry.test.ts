@@ -65,7 +65,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
                 maybeSingle: vi.fn().mockResolvedValue({
-                  data: { entity_type: 'AB', vat_registered: true },
+                  data: { entity_type: 'aktiebolag', vat_registered: true },
                   error: null,
                 }),
               })),

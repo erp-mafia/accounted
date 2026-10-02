@@ -3,7 +3,12 @@ import type { Invoice, InvoiceItem } from '@/types'
 import { truncateToWholeKronor } from '@/lib/money'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { invoiceCustomerOutstanding } from './customer-share'
-import { deductionSekConverter, SCHABLON_WORK_TYPES, type DeductionType } from './rot-rut-rules'
+import {
+  deductionSekConverter,
+  SCHABLON_WORK_TYPES,
+  type DeductionType,
+  type HusDeductionType,
+} from './rot-rut-rules'
 
 /**
  * Begäran om utbetalning: rot & rut (Skatteverkets husavdragstjänst).
@@ -12,6 +17,11 @@ import { deductionSekConverter, SCHABLON_WORK_TYPES, type DeductionType } from '
  * Skatteverkets e-tjänst "Rot och rut: företag" → "Begär utbetalning via
  * fil". There is NO submission API: the file replaces per-ärende manual
  * entry, the upload + signature (e-legitimation) stays with the user.
+ *
+ * ROT and RUT only. Skattereduktion för grön teknik is requested in its own
+ * e-tjänst ("Grön teknik: företag") with its own schema, so a grön teknik
+ * line never enters this file: evaluateInvoiceForFile refuses it with a
+ * pointer (lib/invoices/gron-teknik-claim.ts evaluates those invoices).
  *
  * Schema:
  *   root:  http://xmls.skatteverket.se/se/skatteverket/ht/begaran/6.0
@@ -51,7 +61,7 @@ const KOMPONENT_NS = 'http://xmls.skatteverket.se/se/skatteverket/ht/komponent/b
 // place that decides which services report utförd/ej utförd without hours:
 // the invoice validator and this generator must never disagree on it.
 const schablon = (code: string): boolean => SCHABLON_WORK_TYPES.includes(code)
-const WORK_TYPE_ELEMENTS: Record<DeductionType, ReadonlyArray<{
+const WORK_TYPE_ELEMENTS: Record<HusDeductionType, ReadonlyArray<{
   code: string
   element: string
   schablon?: boolean
@@ -147,12 +157,13 @@ interface EvaluatedArende {
   /** Emission-ready fragments, in XSD order. */
   kopare: string
   fakturaNr: string | null
-  property: { fastighet?: string; lagenhetsNr?: string; brfOrgNr?: string } | null
+  property: ClaimProperty | null
   /** element name → { hours, schablon } aggregated over lines. */
   work: Array<{ element: string; schablon: boolean; hours: number }>
 }
 
-function isDeductionLine(item: InvoiceItem, type: DeductionType): boolean {
+/** A priced line flagged with `type`: text rows never carry a claim. */
+export function isDeductionLine(item: InvoiceItem, type: DeductionType): boolean {
   return item.deduction_type === type && item.line_type !== 'text'
 }
 
@@ -171,13 +182,162 @@ export function normalizeBrfOrgNr(raw: string): string | null {
 }
 
 /**
+ * One step of a claim evaluation: a value, or the blocker that stops the
+ * invoice. The readers below are shared by the HUS file (this module) and
+ * the grön teknik claim (gron-teknik-claim.ts), so the two can never
+ * disagree about when an invoice is paid, whose it is, or where the work
+ * was done.
+ */
+export type ClaimStep<T> = { ok: true; value: T } | { ok: false; code: RotRutBlockerCode; message: string }
+
+/**
+ * Skatteverket refused (part of) this invoice's deduction and the refused
+ * share was booked back onto the customer (rot_rut_reclaim). The buyer now
+ * pays it, so a new begäran for the same kronor would claim from
+ * Skatteverket what the customer already owes: a double collection. The
+ * invoice becomes requestable again only when the reclaim voucher is
+ * reversed (syncRotRutReclaimAfterReversal clears the column).
+ */
+export function readClaimReclaim(invoice: Invoice): ClaimStep<null> {
+  if ((invoice.deduction_reclaimed_total ?? 0) > 0) {
+    return {
+      ok: false,
+      code: 'DEDUCTION_RECLAIMED',
+      message:
+        'Skatteverket har nekat avdraget och det nekade beloppet är bokfört som kundfordran. Fakturan kan inte begäras igen så länge den bokningen står.',
+    }
+  }
+  return { ok: true, value: null }
+}
+
+/**
+ * The payment date a claim reports, once the BUYER has paid their share.
+ *
+ * "Paid" for a claim means the buyer has paid their share: the deduction
+ * itself is Skatteverket's to pay (fakturamodellen). The customer share
+ * outstanding is DERIVED from the header fields through the one shared
+ * definition (lib/invoices/customer-share.ts, twin of migration
+ * 20260817191708), deliberately NOT read off remaining_amount: at least one
+ * writer (payment-sync's storno path) once recomputed remaining_amount
+ * without subtracting the deduction, so the stored column is not a
+ * deterministic signal, while total, paid_amount and deduction_total are
+ * maintained by every settlement path. Invoices settled through older
+ * payment paths can sit at partially_paid although the customer share is
+ * fully paid; those are accepted here instead of being dropped as unpaid.
+ * Amounts are invoice currency throughout.
+ */
+export function readClaimPayment(invoice: Invoice, today?: string): ClaimStep<string> {
+  const customerShareOutstanding = invoiceCustomerOutstanding(invoice, invoice.paid_amount ?? 0)
+  const customerSharePaid =
+    invoice.status === 'paid' ||
+    (invoice.status === 'partially_paid' && customerShareOutstanding <= 0)
+  if (!customerSharePaid) {
+    if (invoice.status === 'partially_paid') {
+      const currencyLabel = (invoice.currency ?? 'SEK').toUpperCase()
+      const amount = customerShareOutstanding.toLocaleString('sv-SE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })
+      return {
+        ok: false,
+        code: 'NOT_PAID',
+        message: `Fakturan är delbetald: ${amount} ${currencyLabel === 'SEK' ? 'kr' : currencyLabel} av kundens del återstår innan utbetalning kan begäras.`,
+      }
+    }
+    return { ok: false, code: 'NOT_PAID', message: 'Kunden måste ha betalat sin del av fakturan innan utbetalning kan begäras.' }
+  }
+  const paidDate = invoice.paid_at ? String(invoice.paid_at).slice(0, 10) : null
+  if (!paidDate) {
+    return { ok: false, code: 'MISSING_PAYMENT_DATE', message: 'Fakturan saknar betalningsdatum.' }
+  }
+  if (today && paidDate > today) {
+    return {
+      ok: false,
+      code: 'FUTURE_PAYMENT_DATE',
+      message: `Fakturans betalningsdatum (${paidDate}) ligger i framtiden och kan inte skickas till Skatteverket ännu.`,
+    }
+  }
+  return { ok: true, value: paidDate }
+}
+
+/** The buyer (Kopare) as the 12-digit personnummer a claim reports. */
+export function readClaimBuyer(invoice: Invoice): ClaimStep<string> {
+  if (!invoice.deduction_personnummer_encrypted) {
+    return { ok: false, code: 'MISSING_PERSONNUMMER', message: 'Fakturan saknar köparens personnummer.' }
+  }
+  let kopare: string
+  try {
+    kopare = decryptPersonnummer(invoice.deduction_personnummer_encrypted).replace(/\D/g, '')
+  } catch {
+    return {
+      ok: false,
+      code: 'PERSONNUMMER_UNREADABLE',
+      message: 'Köparens personnummer kunde inte läsas: öppna fakturautkastet och ange det igen.',
+    }
+  }
+  if (kopare.length !== 12) {
+    return { ok: false, code: 'PERSONNUMMER_UNREADABLE', message: 'Köparens personnummer är inte 12 siffror.' }
+  }
+  return { ok: true, value: kopare }
+}
+
+/** Where the work was done: fastighetsbeteckning, or lägenhetsnummer + BRF orgnr. */
+export interface ClaimProperty {
+  fastighet?: string
+  lagenhetsNr?: string
+  brfOrgNr?: string
+}
+
+/**
+ * Property info read off the claim's lines (stamped there at save time):
+ * fastighetsbeteckning OR lägenhetsnummer + BRF orgnr, within Skatteverket's
+ * lengths (Fastighetsbeteckning max 40, LagenhetsNr max 25). `missingMessage`
+ * names what the kind requires.
+ */
+export function readClaimProperty(lines: InvoiceItem[], missingMessage: string): ClaimStep<ClaimProperty> {
+  const fastighet = lines.map((l) => l.housing_designation?.trim()).find(Boolean) ?? null
+  const lagenhet = lines.map((l) => l.apartment_number?.trim()).find(Boolean) ?? null
+  const brfRaw = lines.map((l) => l.brf_org_number?.trim()).find(Boolean) ?? null
+
+  if (brfRaw && lagenhet) {
+    const brf = normalizeBrfOrgNr(brfRaw)
+    if (!brf) {
+      return {
+        ok: false,
+        code: 'INVALID_BRF_ORGNR',
+        message: `Föreningens organisationsnummer "${brfRaw}" är ogiltigt (10 eller 12 siffror krävs).`,
+      }
+    }
+    if (lagenhet.length > 25) {
+      return { ok: false, code: 'PROPERTY_TOO_LONG', message: 'Lägenhetsnumret är längre än 25 tecken.' }
+    }
+    return { ok: true, value: { lagenhetsNr: lagenhet, brfOrgNr: brf } }
+  }
+  if (fastighet) {
+    if (fastighet.length > 40) {
+      return {
+        ok: false,
+        code: 'PROPERTY_TOO_LONG',
+        message: 'Fastighetsbeteckningen är längre än 40 tecken (Skatteverkets maxlängd).',
+      }
+    }
+    return { ok: true, value: { fastighet } }
+  }
+  return { ok: false, code: 'MISSING_PROPERTY', message: missingMessage }
+}
+
+/** Pointer for a grön teknik invoice met on a HUS surface. */
+const GRON_TEKNIK_ELSEWHERE =
+  'Fakturans skattereduktion är grön teknik: den begärs i Skatteverkets e-tjänst för grön teknik, inte med en ROT- eller RUT-fil.'
+
+/**
  * Evaluate one invoice against the file rules for `type`. Returns either an
  * emission-ready ärende or the FIRST blocker hit (one clear reason beats a
  * pile). Exported so the eligible-list API can show per-invoice reasons with
  * exactly the same logic that later generates the file.
  */
 export function evaluateInvoiceForFile(
-  type: DeductionType,
+  type: HusDeductionType,
   invoice: Invoice,
   options: { today?: string } = {},
 ): { ok: true; value: EvaluatedArende } | { ok: false; blocker: RotRutBlocker } {
@@ -188,26 +348,21 @@ export function evaluateInvoiceForFile(
 
   const items = invoice.items ?? []
   const typeLines = items.filter((i) => isDeductionLine(i, type))
-  const otherType: DeductionType = type === 'rot' ? 'rut' : 'rot'
+  const otherType: HusDeductionType = type === 'rot' ? 'rut' : 'rot'
 
-  // Skatteverket refused (part of) this invoice's deduction and the refused
-  // share was booked back onto the customer (rot_rut_reclaim). The buyer now
-  // pays it, so a new begäran for the same kronor would claim from
-  // Skatteverket what the customer already owes: a double collection. The
-  // invoice becomes requestable again only when the reclaim voucher is
-  // reversed (syncRotRutReclaimAfterReversal clears the column).
-  if ((invoice.deduction_reclaimed_total ?? 0) > 0) {
-    return block(
-      'DEDUCTION_RECLAIMED',
-      'Skatteverket har nekat avdraget och det nekade beloppet är bokfört som kundfordran. Fakturan kan inte begäras igen så länge den bokningen står.',
-    )
-  }
+  const reclaim = readClaimReclaim(invoice)
+  if (!reclaim.ok) return block(reclaim.code, reclaim.message)
   const otherLines = items.filter((i) => isDeductionLine(i, otherType))
+  // Grön teknik never enters a HUS file: its own e-tjänst, its own schema.
+  const gronTeknikLines = items.filter((i) => isDeductionLine(i, 'gron_teknik'))
 
   if (typeLines.length === 0) {
     // Point at the other list instead of a bare "no lines": a paid RUT
     // invoice viewed as ROT (the dialog default) used to read as "no
     // invoices" with no hint that it lives under the other type.
+    if (gronTeknikLines.length > 0) {
+      return block('NO_DEDUCTION_OF_TYPE', GRON_TEKNIK_ELSEWHERE)
+    }
     if (otherLines.length > 0) {
       return block(
         'NO_DEDUCTION_OF_TYPE',
@@ -223,6 +378,12 @@ export function evaluateInvoiceForFile(
     return block(
       'MIXED_DEDUCTION_TYPES',
       'Fakturan blandar ROT- och RUT-rader. Skatteverket tillåter inte båda i samma fil: dela upp i separata fakturor.',
+    )
+  }
+  if (gronTeknikLines.length > 0) {
+    return block(
+      'MIXED_DEDUCTION_TYPES',
+      'Fakturan blandar ROT/RUT-rader med grön teknik. Grön teknik begärs i Skatteverkets e-tjänst för grön teknik: dela upp i separata fakturor.',
     )
   }
 
@@ -242,59 +403,13 @@ export function evaluateInvoiceForFile(
     )
   }
 
-  // "Paid" for a rot/rut claim means the BUYER has paid their share: the
-  // deduction itself is Skatteverket's to pay (fakturamodellen). The customer
-  // share outstanding is DERIVED from the header fields through the one
-  // shared definition (lib/invoices/customer-share.ts, twin of migration
-  // 20260817191708), deliberately NOT read off remaining_amount: at least one
-  // writer (payment-sync's storno path) once recomputed remaining_amount
-  // without subtracting the deduction, so the stored column is not a
-  // deterministic signal, while total, paid_amount and deduction_total are
-  // maintained by every settlement path. Invoices settled through older
-  // payment paths can sit at partially_paid although the customer share is
-  // fully paid; those are accepted here instead of being dropped as unpaid.
-  // Amounts are invoice currency throughout.
-  const customerShareOutstanding = invoiceCustomerOutstanding(invoice, invoice.paid_amount ?? 0)
-  const customerSharePaid =
-    invoice.status === 'paid' ||
-    (invoice.status === 'partially_paid' && customerShareOutstanding <= 0)
-  if (!customerSharePaid) {
-    if (invoice.status === 'partially_paid') {
-      const currencyLabel = (invoice.currency ?? 'SEK').toUpperCase()
-      const amount = customerShareOutstanding.toLocaleString('sv-SE', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })
-      return block(
-        'NOT_PAID',
-        `Fakturan är delbetald: ${amount} ${currencyLabel === 'SEK' ? 'kr' : currencyLabel} av kundens del återstår innan utbetalning kan begäras.`,
-      )
-    }
-    return block('NOT_PAID', 'Kunden måste ha betalat sin del av fakturan innan utbetalning kan begäras.')
-  }
-  const paidDate = invoice.paid_at ? String(invoice.paid_at).slice(0, 10) : null
-  if (!paidDate) {
-    return block('MISSING_PAYMENT_DATE', 'Fakturan saknar betalningsdatum.')
-  }
-  if (options.today && paidDate > options.today) {
-    return block(
-      'FUTURE_PAYMENT_DATE',
-      `Fakturans betalningsdatum (${paidDate}) ligger i framtiden och kan inte skickas till Skatteverket ännu.`,
-    )
-  }
+  const payment = readClaimPayment(invoice, options.today)
+  if (!payment.ok) return block(payment.code, payment.message)
+  const paidDate = payment.value
 
-  if (!invoice.deduction_personnummer_encrypted) {
-    return block('MISSING_PERSONNUMMER', 'Fakturan saknar köparens personnummer.')
-  }
-  let kopare: string
-  try {
-    kopare = decryptPersonnummer(invoice.deduction_personnummer_encrypted).replace(/\D/g, '')
-  } catch {
-    return block('PERSONNUMMER_UNREADABLE', 'Köparens personnummer kunde inte läsas: öppna fakturautkastet och ange det igen.')
-  }
-  if (kopare.length !== 12) {
-    return block('PERSONNUMMER_UNREADABLE', 'Köparens personnummer är inte 12 siffror.')
-  }
+  const buyer = readClaimBuyer(invoice)
+  if (!buyer.ok) return block(buyer.code, buyer.message)
+  const kopare = buyer.value
 
   // Aggregate hours per work type, in XSD element order.
   const elementMap = WORK_TYPE_ELEMENTS[type]
@@ -336,30 +451,12 @@ export function evaluateInvoiceForFile(
   // orgnr, read off the rot lines (stamped there at save time).
   let property: EvaluatedArende['property'] = null
   if (type === 'rot') {
-    const fastighet = typeLines.map((l) => l.housing_designation?.trim()).find(Boolean) ?? null
-    const lagenhet = typeLines.map((l) => l.apartment_number?.trim()).find(Boolean) ?? null
-    const brfRaw = typeLines.map((l) => l.brf_org_number?.trim()).find(Boolean) ?? null
-
-    if (brfRaw && lagenhet) {
-      const brf = normalizeBrfOrgNr(brfRaw)
-      if (!brf) {
-        return block('INVALID_BRF_ORGNR', `Föreningens organisationsnummer "${brfRaw}" är ogiltigt (10 eller 12 siffror krävs).`)
-      }
-      if (lagenhet.length > 25) {
-        return block('PROPERTY_TOO_LONG', 'Lägenhetsnumret är längre än 25 tecken.')
-      }
-      property = { lagenhetsNr: lagenhet, brfOrgNr: brf }
-    } else if (fastighet) {
-      if (fastighet.length > 40) {
-        return block('PROPERTY_TOO_LONG', 'Fastighetsbeteckningen är längre än 40 tecken (Skatteverkets maxlängd).')
-      }
-      property = { fastighet }
-    } else {
-      return block(
-        'MISSING_PROPERTY',
-        'ROT kräver fastighetsbeteckning eller lägenhetsnummer + föreningens orgnr. Komplettera fakturan.',
-      )
-    }
+    const read = readClaimProperty(
+      typeLines,
+      'ROT kräver fastighetsbeteckning eller lägenhetsnummer + föreningens orgnr. Komplettera fakturan.',
+    )
+    if (!read.ok) return block(read.code, read.message)
+    property = read.value
   }
 
   // Amounts: whole kronor, in SEK.
@@ -456,7 +553,7 @@ export function isPastRequestDeadline(paidDate: string, today: string): boolean 
 }
 
 export function buildRotRutFile(params: {
-  type: DeductionType
+  type: HusDeductionType
   /** NamnPaBegaran: clamped to the XSD's 16-char cap. */
   name: string
   invoices: Invoice[]

@@ -5,7 +5,7 @@ import { cellOrNull } from '../shared/column-utils'
 import { parseAmount } from '../opening-balance/parser'
 import { readBestSheet } from '../shared/workbook-reader'
 import type { DetectedArticleColumns, ParsedArticleRow } from './types'
-import { normalizeHouseworkType } from '@/lib/invoices/rot-rut-rules'
+import { deductionTypeForWorkType, normalizeHouseworkType } from '@/lib/invoices/rot-rut-rules'
 
 const VALID_VAT_RATES = [0, 6, 12, 25] as const
 
@@ -198,10 +198,12 @@ export function parseArticlesFile(
     let houseworkType = normalizeHouseworkType(houseworkRaw)
     if (houseworkRaw !== null && houseworkType === null) droppedHouseworkCount++
     // ROT/RUT is computed on labor only (IL 67 kap. 11-19 §§): material never
-    // carries the reduction, so a goods row keeps no housework flag. The
-    // article form hides the field for goods, so a stored flag would be one
-    // the user can neither see nor clear.
-    if (houseworkType !== null && type === 'vara') {
+    // carries the reduction, so a goods row keeps no ROT/RUT flag. The
+    // article form offers goods only the grön teknik installation types, so a
+    // stored ROT/RUT flag would be one the user can neither see nor clear.
+    // Grön teknik is given on arbete OCH material, so a goods row keeps an
+    // installation type (INSTALLATION_*).
+    if (houseworkType !== null && type === 'vara' && deductionTypeForWorkType(houseworkType) !== 'gron_teknik') {
       houseworkType = null
       droppedGoodsHouseworkCount++
     }
