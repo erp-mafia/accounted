@@ -20,9 +20,10 @@
 --   * every chart_of_accounts row is a system-seeded one, so re-seeding does
 --     not discard a user-created account (seed_chart_of_accounts() returns
 --     early when any account exists, so the seeded rows are removed first);
---   * no mapping_rules or account_dimension_rules row exists: those store
---     account numbers as text and would dangle after the re-seed
---     (cash_accounts keeps 1930, which every seed contains).
+--   * no mapping_rules, account_dimension_rules or company-scoped
+--     categorization_templates row exists: those store account numbers as
+--     text and would dangle after the re-seed (cash_accounts keeps 1930,
+--     which every seed contains).
 --
 -- Concurrency: the function takes a transaction-scoped advisory lock keyed on
 -- the company and re-checks journal_entries after removing the seeded chart.
@@ -134,6 +135,7 @@ BEGIN
   SELECT
     (SELECT count(*) FROM public.mapping_rules WHERE company_id = p_company_id)
     + (SELECT count(*) FROM public.account_dimension_rules WHERE company_id = p_company_id)
+    + (SELECT count(*) FROM public.categorization_templates WHERE company_id = p_company_id)
   INTO v_configured_refs;
   IF v_configured_refs > 0 THEN
     RETURN jsonb_build_object(
@@ -182,9 +184,13 @@ BEGIN
     'companies',
     p_company_id,
     v_actor,
-    jsonb_build_object('entity_type', v_company.entity_type),
+    jsonb_build_object(
+      'entity_type', v_company.entity_type,
+      'accounting_framework', v_company.accounting_framework
+    ),
     jsonb_build_object(
       'entity_type', p_entity_type,
+      'accounting_framework', COALESCE(p_accounting_framework, v_company.accounting_framework),
       'replaced_system_accounts', v_removed_accounts
     ),
     'Legal form corrected by the owner while the books were empty; seeded chart replaced'

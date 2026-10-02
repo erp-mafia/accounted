@@ -83,9 +83,18 @@ describe('correct_company_entity_type: empty books', () => {
         `SELECT entity_type, accounting_framework FROM public.companies WHERE id = $1`,
         [companyId],
       )
-      return after.rows[0]
+      // The behandlingshistorik shows the framework change next to the form.
+      const audit = await client.query<{ old_state: Record<string, unknown>; new_state: Record<string, unknown> }>(
+        `SELECT old_state, new_state FROM public.audit_log
+          WHERE company_id = $1 AND table_name = 'companies' AND action = 'UPDATE'
+          ORDER BY created_at DESC LIMIT 1`,
+        [companyId],
+      )
+      return { ...after.rows[0], audit: audit.rows[0] }
     })
-    expect(row).toEqual({ entity_type: 'ekonomisk_forening', accounting_framework: 'k2' })
+    expect(row).toMatchObject({ entity_type: 'ekonomisk_forening', accounting_framework: 'k2' })
+    expect(row.audit.old_state).toEqual({ entity_type: 'aktiebolag', accounting_framework: 'k3' })
+    expect(row.audit.new_state).toMatchObject({ entity_type: 'ekonomisk_forening', accounting_framework: 'k2' })
   })
 
   it('lets the owner turn a misclassified aktiebolag into an ekonomisk förening and re-seeds the chart', async () => {
@@ -99,7 +108,7 @@ describe('correct_company_entity_type: empty books', () => {
     expect(accounts).toEqual(expect.arrayContaining(['2083', '2084', '2086', '2091', '2099', '2890', '3901']))
     expect(accounts).not.toContain('2081')
     expect(accounts).not.toContain('2893')
-    expect(audit?.old_state).toEqual({ entity_type: 'aktiebolag' })
+    expect(audit?.old_state).toMatchObject({ entity_type: 'aktiebolag' })
     expect(audit?.new_state).toMatchObject({ entity_type: 'ekonomisk_forening' })
   })
 
@@ -159,6 +168,19 @@ describe('correct_company_entity_type: fails closed', () => {
     const { result, after } = await correct(ownerId, companyId, 'ekonomisk_forening')
     expect(result).toMatchObject({ ok: false, code: 'ENTITY_TYPE_CHANGE_CONFIGURED_ACCOUNTS', configured_references: 1 })
     expect(after.entity_type).toBe('aktiebolag')
+  })
+
+  it('refuses when a learned categorization template references the chart', async () => {
+    const { ownerId, companyId } = await seededCompany('aktiebolag')
+    await getPool().query(
+      `INSERT INTO public.categorization_templates (user_id, company_id, counterparty_name, debit_account, credit_account)
+       VALUES ($1, $2, 'aktieagarlan', '1930', '2893')`,
+      [ownerId, companyId],
+    )
+    const { result, after, accounts } = await correct(ownerId, companyId, 'ekonomisk_forening')
+    expect(result).toMatchObject({ ok: false, code: 'ENTITY_TYPE_CHANGE_CONFIGURED_ACCOUNTS', configured_references: 1 })
+    expect(after.entity_type).toBe('aktiebolag')
+    expect(accounts).toContain('2893')
   })
 
   it('refuses when a user-created account would be discarded', async () => {
