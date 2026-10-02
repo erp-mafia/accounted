@@ -31,6 +31,7 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     closing: '2099',
     closingName: 'Årets resultat',
     priorYearCarry: '2098',
+    retained: '2091',
     hasOwners: false,
     settlement: { withdrawal: '2890', contribution: '2890' },
     memberCapital: true,

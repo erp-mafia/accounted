@@ -30,12 +30,15 @@ type SkillFormTag = Exclude<NonNullable<SkillApplicability['entity_type']>, 'bot
  * instead of owners, its own equity accounts and filings), so it answers to
  * no tag: a skill written for AB or EF only stays hidden for it, while a skill
  * tagged 'both' or without an entity condition shows for it as for every form.
+ * An ekonomisk förening likewise answers to no tag: it files INK2 like an
+ * aktiebolag, but AB skills speak of aktiekapital, ABL and aktieägare.
  */
 function skillFormTag(entityType: EntityType): SkillFormTag | null {
   return byEntityType<SkillFormTag | null>(entityType, {
     aktiebolag: 'AB',
     enskild_firma: 'EF',
     ideell_forening: null,
+    ekonomisk_forening: null,
   })
 }
 

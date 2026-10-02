@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { getSeedableAccountReference } from '@/lib/bookkeeping/form-accounts'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
 
 const log = createLogger('account-backfill')
@@ -15,8 +15,7 @@ const log = createLogger('account-backfill')
  * turns a standard account into a dead end, so the engine backfills instead.
  *
  * Deliberately conservative:
- *  - Only accounts present in BAS_REFERENCE (or the tiny form-seeded list in
- *    form-accounts.ts) are seeded: unknown numbers stay
+ *  - Only accounts present in BAS_REFERENCE are seeded: unknown numbers stay
  *    missing and surface as AccountsNotInChartError in the caller.
  *  - An account that exists but is INACTIVE is never touched: deactivation is
  *    a deliberate user choice, and silently reactivating would override it.
@@ -34,8 +33,8 @@ export async function backfillStandardBASAccounts(
 
   // Only standard BAS accounts qualify.
   const candidates = accountNumbers
-    .map((num) => ({ num, basRef: getSeedableAccountReference(num) }))
-    .filter((c): c is { num: string; basRef: NonNullable<ReturnType<typeof getSeedableAccountReference>> } =>
+    .map((num) => ({ num, basRef: getBASReference(num) }))
+    .filter((c): c is { num: string; basRef: NonNullable<ReturnType<typeof getBASReference>> } =>
       Boolean(c.basRef),
     )
   if (candidates.length === 0) return []

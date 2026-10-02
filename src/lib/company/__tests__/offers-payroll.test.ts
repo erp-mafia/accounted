@@ -9,6 +9,8 @@ describe('offersPayroll', () => {
     ['aktiebolag', true, true],
     ['ideell_forening', false, true],
     ['ideell_forening', true, true],
+    ['ekonomisk_forening', false, true],
+    ['ekonomisk_forening', true, true],
     ['enskild_firma', false, false],
     ['enskild_firma', true, true],
   ] as const)('%s with pays_salaries=%s -> %s', (entityType, paysSalaries, expected) => {
@@ -16,7 +18,7 @@ describe('offersPayroll', () => {
   })
 
   it('covers every legal form in the registry', () => {
-    expect([...ENTITY_TYPES].sort()).toEqual(['aktiebolag', 'enskild_firma', 'ideell_forening'])
+    expect([...ENTITY_TYPES].sort()).toEqual(['aktiebolag', 'ekonomisk_forening', 'enskild_firma', 'ideell_forening'])
   })
 
   it.each([null, undefined, 'handelsbolag', 'AB'])(
