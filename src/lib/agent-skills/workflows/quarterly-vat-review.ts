@@ -50,7 +50,7 @@ Before starting, tell the user in two lines what you found (company, cadence, pe
 | \`fiscal_year_not_found\` | Yearly period fell back to the calendar year | Re-run with \`year\` = the year the fiscal year ends; check \`gnubok_list_fiscal_periods\`. |
 | \`momsredovisning_entries_excluded\` | Information only: verifikat treated as momsredovisning and kept out of the rutor | Not a blocker. When a ruta disagrees with the ledger, these explain it; inspect with \`gnubok_query_journal\`. |
 
-\`declaration_checks\` codes you can meet: \`RC_BASIS_MISSING\`, \`RC_OUTPUT_MISSING\`, \`RC_INPUT_VAT_MISMATCH\`, \`TAXABLE_SALES_WITHOUT_OUTPUT\`, \`OUTPUT_VAT_WITHOUT_SALES_BASE\`, \`SALES_OUTPUT_VAT_SHORTFALL\`, \`IMPORT_BASE_WITHOUT_OUTPUT\`, \`IMPORT_OUTPUT_WITHOUT_BASE\`, \`SUMMA_MOMS_DRIFT\`. Each has a \`status\` (\`ERROR\` blocks filing, \`WARNING\` needs a human look) and the \`rutor\` involved.
+\`declaration_checks\` codes you can meet: \`RC_BASIS_MISSING\`, \`RC_OUTPUT_MISSING\`, \`RC_INPUT_VAT_MISMATCH\`, \`TAXABLE_SALES_WITHOUT_OUTPUT\`, \`OUTPUT_VAT_WITHOUT_SALES_BASE\`, \`SALES_OUTPUT_VAT_SHORTFALL\`, \`REVENUE_ACCOUNT_WITHOUT_RUTA\` (a class 3 account with a balance but no momskod or momssats, so its sales reach no ruta: ask the user what the account is and set its momskod), \`IMPORT_BASE_WITHOUT_OUTPUT\`, \`IMPORT_OUTPUT_WITHOUT_BASE\`, \`SUMMA_MOMS_DRIFT\`. Each has a \`status\` (\`ERROR\` blocks filing, \`WARNING\` needs a human look) and the \`rutor\` involved.
 
 \`sanity.anomalies\` compares with the previous period: \`output_vat_ratio_drift\` (wrong rate somewhere), \`revenue_drop\` (unbooked invoices?), \`revenue_spike\` (something booked twice?). Raise each as a question to the user; they are not errors by themselves.
 

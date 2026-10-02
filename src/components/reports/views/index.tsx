@@ -1809,9 +1809,14 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // The gap-downgrade evidence (per-momssats 44xx/45xx balances) travels on
   // the declaration payload. Absent on responses from an older deploy: then
   // the gaps keep their blocking ERROR tier rather than guessing.
+  // The class 3 accounts that reach no ruta travel on the payload too
+  // (REVENUE_ACCOUNT_WITHOUT_RUTA, #3387); absent on an older response, which
+  // keeps that warning silent.
   const checks = data
     ? withRcBasisGapFindings(
-        runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data)),
+        runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data), {
+          revenueAccountsWithoutRuta: data.revenueAccountsWithoutRuta,
+        }),
         rcBasisScan,
         data.rcBasisByRate
           ? { rutor: data.rutor, rcBasisByRate: data.rcBasisByRate }

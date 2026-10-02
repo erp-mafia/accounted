@@ -3480,6 +3480,17 @@ export interface VatDeclarationRutor {
   ruta62: number  // Utgående moms 6% import
 }
 
+/**
+ * A revenue (class 3) account whose period balance reaches no ruta on the
+ * momsdeklaration. `amount` is the net credit balance (credit minus debit),
+ * rounded to öre: negative for a net debit such as a lämnad rabatt.
+ */
+export interface VatRevenueAccountWithoutRuta {
+  account_number: string
+  account_name: string
+  amount: number
+}
+
 // VAT declaration response
 export interface VatDeclaration {
   period: {
@@ -3525,6 +3536,18 @@ export interface VatDeclaration {
    * hand.
    */
   rcBasisByRate?: { r25: number; r12: number; r6: number }
+  /**
+   * Class 3 accounts with a balance in the period that the declaration puts in
+   * no ruta: no momskod, no momssats and no fixed BAS ruta (#3387). Carried so
+   * a caller that reads the declaration over HTTP can hand
+   * `runVatDeclarationChecks` the input for REVENUE_ACCOUNT_WITHOUT_RUTA.
+   * Produced by `revenueAccountsWithoutRuta()` (lib/reports/vat-declaration.ts),
+   * never by hand.
+   *
+   * Optional because it crosses a JSON boundary: absent on a response from an
+   * older deploy, and then the check stays silent rather than guessing.
+   */
+  revenueAccountsWithoutRuta?: VatRevenueAccountWithoutRuta[]
   // Supporting data
   invoiceCount: number
   transactionCount: number
