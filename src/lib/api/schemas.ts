@@ -2984,8 +2984,20 @@ export const UpdateSettingsSchema = z.object({
   // The one payment QR code invoices print (lib/invoices/payment-qr.ts).
   invoice_qr_mode: InvoiceQrModeSchema.optional(),
   invoice_show_logo: z.boolean().optional(),
-  invoice_show_company_name: z.boolean().optional(),
-  invoice_company_name_position: z.enum(['header', 'footer']).optional(),
+  // Superseded by the fixed invoice layout (company name in Från and the
+  // footer on every invoice): still accepted and stored so existing callers
+  // keep working, but no settings UI writes them any more. The describe
+  // reaches the MCP settings tool and the API skill.
+  invoice_show_company_name: z
+    .boolean()
+    .optional()
+    .describe(
+      'Superseded by the fixed invoice layout, which always prints the company name in Från and the footer: accepted for compatibility.',
+    ),
+  invoice_company_name_position: z
+    .enum(['header', 'footer'])
+    .optional()
+    .describe('Superseded by the fixed invoice layout: accepted for compatibility, no longer changes the PDF.'),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
   // Opt-in for the invoice payment-link feature (editor field + automatic

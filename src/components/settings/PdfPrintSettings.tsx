@@ -8,11 +8,9 @@ import { useToast } from '@/components/ui/use-toast'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
   SettingsGroup,
-  SettingsReveal,
   SettingsRow,
   SettingsRowEnd,
   SettingsRowNote,
-  SettingsSeg,
   SettingsSelect,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
@@ -33,7 +31,6 @@ type PdfToggleField =
   | 'invoice_show_plusgiro'
   | 'invoice_show_swish'
   | 'invoice_show_logo'
-  | 'invoice_show_company_name'
 
 /** Compact switch row for the show/hide grid: small label, "?", Switch. */
 function PdfToggleRow({
@@ -135,20 +132,6 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
       })
       if (!response.ok) throw new Error()
       onUpdate({ [field]: value } as Partial<CompanySettings>)
-    } catch {
-      toast({ title: t('toast_save_failed'), variant: 'destructive' })
-    }
-  }, [onUpdate, toast, t])
-
-  const savePosition = useCallback(async (value: 'header' | 'footer') => {
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoice_company_name_position: value }),
-      })
-      if (!response.ok) throw new Error()
-      onUpdate({ invoice_company_name_position: value })
     } catch {
       toast({ title: t('toast_save_failed'), variant: 'destructive' })
     }
@@ -267,7 +250,9 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
     { field: 'invoice_show_plusgiro', label: t('show_plusgiro_label'), help: t('show_plusgiro_help'), defaultOn: true },
     { field: 'invoice_show_swish', label: t('show_swish_label'), help: t('show_swish_help'), defaultOn: false },
     { field: 'invoice_show_logo', label: t('show_logo_label'), help: t('show_logo_help'), defaultOn: true },
-    { field: 'invoice_show_company_name', label: t('show_company_name_label'), help: t('show_company_name_help'), defaultOn: true },
+    // No company-name switch or placement: the fixed layout always prints the
+    // legal name in Från and the footer (and in the logo slot without a
+    // logo). The columns stay for API compatibility (DECISIONS 2026-10-02).
   ]
 
   const qrModeOptions = INVOICE_QR_MODES.map((mode) => ({
@@ -361,21 +346,6 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
           />
         ))}
       </div>
-
-      {/* Placement only applies while the company name is shown. */}
-      <SettingsReveal open={settings.invoice_show_company_name ?? true}>
-        <SettingsRow label={t('placement_label')} borderless>
-          <SettingsSeg
-            value={settings.invoice_company_name_position ?? 'header'}
-            onChange={(pos) => void savePosition(pos)}
-            options={[
-              { value: 'header', label: t('placement_header') },
-              { value: 'footer', label: t('placement_footer') },
-            ]}
-            aria-label={t('placement_aria_label')}
-          />
-        </SettingsRow>
-      </SettingsReveal>
 
       <SettingsRow label={t('qr_mode_label')} help={t('qr_mode_help')} align="baseline">
         <QrModeRadioGroup
