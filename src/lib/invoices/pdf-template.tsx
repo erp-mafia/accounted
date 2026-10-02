@@ -1601,8 +1601,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               // null when only RUT lines exist (RUT doesn't require it).
               const housing = items.find((i) => i.housing_designation)?.housing_designation
               const apartment = items.find((i) => i.apartment_number)?.apartment_number
-              // ROT or grön teknik in a bostadsrätt: the förening's orgnr
-              // goes with the lägenhetsnummer.
+              // A bostadsrätt (ROT, grön teknik): the förening's orgnr goes
+              // with the lägenhetsnummer. Printed from whichever deduction
+              // line carries it; RUT lines normally leave it empty.
               const brf = items.find((i) => i.brf_org_number)?.brf_org_number
               return (
                 <>

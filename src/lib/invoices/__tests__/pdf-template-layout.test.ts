@@ -512,15 +512,25 @@ describe('oversize free text', () => {
     )
     expect(box?.props.wrap).toBe(false)
 
+    const landedOn = new Set<number>()
     for (const fillers of [0, 4, 8, 12, 16]) {
       const filler = Array.from({ length: fillers }, (_, i) => makeItem({ sort_order: i, id: `fill-${i}`, description: `Rad ${i + 1}` }))
       const pages = await layOut(InvoicePDF({ invoice, customer, items: [...filler, ...rotItems], company }))
       expectNothingPastThePageEdge(pages)
-      const all = pages.map(textOf).join('')
+      const texts = pages.map(textOf)
+      const all = texts.join('')
       expect(all).toContain('Totalt inkl. moms:')
       expect(all).toContain('799900-0040')
-      expect(all).toContain('Säljaren begär utbetalningen från Skatteverket')
+      // The box is whole: its heading and its last row (the payout notice)
+      // are on the same page.
+      const headingPage = texts.findIndex((t) => t.includes('Underlag för skattereduktion'))
+      const noticePage = texts.findIndex((t) => t.includes('Säljaren begär utbetalningen från Skatteverket'))
+      expect(headingPage).toBeGreaterThanOrEqual(0)
+      expect(noticePage).toBe(headingPage)
+      landedOn.add(headingPage)
     }
+    // The filler rows push the box across a page break at least once.
+    expect(landedOn.size).toBeGreaterThan(1)
   })
 
   it('a 3000-character description without line breaks is not clipped', async () => {
