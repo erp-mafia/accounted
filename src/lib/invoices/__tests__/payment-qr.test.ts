@@ -138,6 +138,59 @@ describe('resolveInvoicePaymentQr: auto', () => {
   })
 })
 
+describe('resolveInvoicePaymentQr: auto and a customer outside Sweden', () => {
+  const danishBusiness = { customer_type: 'eu_business', country: 'DK' }
+
+  it('prints none (foreign_customer) for a Danish business: bank app and Swish need a Swedish bank', () => {
+    expect(resolve({ customer: danishBusiness })).toEqual({ kind: null, mode: 'auto', reason: 'foreign_customer' })
+    expect(resolve({ customer: { customer_type: 'individual', country: 'DK' } })).toEqual({
+      kind: null,
+      mode: 'auto',
+      reason: 'foreign_customer',
+    })
+  })
+
+  it('prints the payment link for a Danish business when the invoice has one', () => {
+    expect(resolve({ customer: danishBusiness, invoice: { payment_link_url: LINK } })).toMatchObject({
+      kind: 'payment_link',
+      mode: 'auto',
+      payload: LINK,
+    })
+  })
+
+  it('leaves an explicit mode alone: the user chose it', () => {
+    expect(resolve({ customer: danishBusiness, invoice: withMode('bank_app') })).toMatchObject({
+      kind: 'bank_app',
+      mode: 'bank_app',
+    })
+    expect(resolve({ customer: danishBusiness, invoice: withMode('swish') })).toMatchObject({
+      kind: 'swish',
+      mode: 'swish',
+    })
+  })
+
+  it('still gives a Swedish private customer Swish', () => {
+    expect(resolve({ customer: { customer_type: 'individual', country: 'SE' } })).toMatchObject({
+      kind: 'swish',
+      mode: 'auto',
+    })
+  })
+
+  it('treats a missing or empty country as Sweden', () => {
+    expect(resolve({ customer: { customer_type: 'swedish_business', country: null } }).kind).toBe('bank_app')
+    expect(resolve({ customer: { customer_type: 'individual', country: null } }).kind).toBe('swish')
+    expect(resolve({ customer: { customer_type: 'swedish_business', country: '' } }).kind).toBe('bank_app')
+  })
+
+  it('reads a lower-case code or a legacy country name the way the rest of the codebase does', () => {
+    expect(resolve({ customer: { customer_type: 'swedish_business', country: 'Sverige' } }).kind).toBe('bank_app')
+    expect(resolve({ customer: { customer_type: 'swedish_business', country: 'Sweden' } }).kind).toBe('bank_app')
+    expect(resolve({ customer: { customer_type: 'eu_business', country: 'dk' } })).toMatchObject({
+      reason: 'foreign_customer',
+    })
+  })
+})
+
 describe('resolveInvoicePaymentQr: an explicit mode never falls back', () => {
   it('none prints none', () => {
     expect(resolve({ invoice: withMode('none') })).toEqual({ kind: null, mode: 'none', reason: 'mode_none' })

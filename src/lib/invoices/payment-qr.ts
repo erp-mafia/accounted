@@ -12,7 +12,10 @@
  *   auto          a private customer (customer_type individual) gets Swish
  *                 when Swish is usable; otherwise the bank-app QR when it is
  *                 usable, else Swish, else the payment-link QR when the
- *                 invoice has a link, else none
+ *                 invoice has a link, else none. A customer outside Sweden
+ *                 never gets the bank-app or the Swish code (both need a
+ *                 Swedish bank): the payment-link QR when there is a link,
+ *                 else none (foreign_customer)
  *   bank_app      the UsingQR code a Swedish bank app scans (SEK, a printed
  *                 bankgiro or plusgiro with a valid check digit, org number)
  *   swish         the Swish code (SEK, a printed, valid Swish number)
@@ -43,6 +46,7 @@ import { invoicePrintsBankgiro, invoicePrintsPlusgiro } from '@/lib/invoices/ocr
 import { invoicePrintsSwish } from '@/lib/invoices/payment-rows'
 import { validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
 import { buildSwishQrPayload, isValidSwish, normaliseSwish } from '@/lib/payments/swish'
+import { normalizeCountryCode } from '@/lib/vat/country-codes'
 
 export type InvoiceQrKind = 'bank_app' | 'swish' | 'payment_link'
 
@@ -79,6 +83,8 @@ export const INVOICE_QR_REASONS = [
   'no_payment_link',
   /** A link's amount was fixed when it was created: it cannot ask for a partly paid remainder. */
   'partly_paid',
+  /** Auto mode, a customer outside Sweden and no payment link: bank-app and Swish codes need a Swedish bank. */
+  'foreign_customer',
 ] as const
 
 export type InvoiceQrReason = (typeof INVOICE_QR_REASONS)[number]
@@ -147,8 +153,11 @@ export interface ResolveInvoicePaymentQrInput {
   invoice: InvoicePaymentQrInvoice
   /** The company with the invoice's payee applied (see the module comment). */
   company: InvoicePaymentQrCompany
-  /** Decides auto's Swish-first rule; a missing customer counts as a business. */
-  customer?: { customer_type?: string | null } | null
+  /**
+   * Decides auto's Swish-first rule (a missing customer counts as a business)
+   * and whether auto may print a Swedish-bank code at all (country).
+   */
+  customer?: { customer_type?: string | null; country?: string | null } | null
   /** Document language: the bank-app code's reference is the OCR only on a Swedish invoice. */
   lang: Lang
 }
@@ -165,6 +174,17 @@ export function resolveInvoiceQrMode(
   company: Pick<InvoicePaymentQrCompany, 'invoice_qr_mode'>,
 ): InvoiceQrMode {
   return knownMode(invoice.qr_mode) ?? knownMode(company.invoice_qr_mode) ?? 'auto'
+}
+
+/**
+ * True when the customer's country names a country other than Sweden. No
+ * country counts as Sweden, as everywhere else; so does a legacy value no
+ * table can map to a code ("Sverige" and "Sweden" map to SE): auto keeps
+ * printing what it printed before rather than guess.
+ */
+function isForeignCustomer(customer: ResolveInvoicePaymentQrInput['customer']): boolean {
+  const code = normalizeCountryCode(customer?.country)
+  return code !== null && code !== 'SE'
 }
 
 type Candidate = { ok: true; payload: string } | { ok: false; reason: InvoiceQrReason }
@@ -231,6 +251,14 @@ export function resolveInvoicePaymentQr(input: ResolveInvoicePaymentQrInput): Re
   if (mode !== 'auto') {
     const candidate = evaluate(mode)
     return candidate.ok ? resolved(mode, candidate.payload) : { kind: null, mode, reason: candidate.reason }
+  }
+
+  // A foreign payer cannot pay a bankgiro from a Swedish bank-app code, and
+  // Swish needs a Swedish bank too: only the link can work. Explicit modes
+  // above are left alone (the user chose them).
+  if (isForeignCustomer(input.customer)) {
+    const link = paymentLinkCandidate(input)
+    return link.ok ? resolved('payment_link', link.payload) : { kind: null, mode, reason: 'foreign_customer' }
   }
 
   const isPrivate = input.customer?.customer_type === 'individual'
