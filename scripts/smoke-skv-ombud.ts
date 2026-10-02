@@ -32,7 +32,15 @@
  */
 
 import { config } from 'dotenv'
-config({ path: process.env.ENV_FILE ?? '.env.local' })
+// The selected file wins over whatever the shell already exports, and a file
+// that cannot be read stops the run: otherwise a mistyped ENV_FILE would
+// silently send live calls with inherited values to another environment.
+const envFile = process.env.ENV_FILE ?? '.env.local'
+const loaded = config({ path: envFile, override: true })
+if (loaded.error) {
+  console.error(`Cannot read ${envFile}: ${loaded.error.message}`)
+  process.exit(1)
+}
 
 import {
   getSystemCertInfo,
@@ -87,7 +95,7 @@ async function main() {
   if (process.env.SKATTEVERKET_SYSTEM_AUTH_MODE === 'off') process.env.SKATTEVERKET_SYSTEM_AUTH_MODE = 'shadow'
 
   const cert = getSystemCertInfo()
-  console.log('Configuration')
+  console.log(`Configuration (${envFile})`)
   console.log(`  token endpoint   ${getSystemTokenUrl() ?? '(SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL missing)'}`)
   console.log(`  client id        ${process.env.SKATTEVERKET_SYSTEM_CLIENT_ID ? 'set' : '(SKATTEVERKET_SYSTEM_CLIENT_ID missing)'}`)
   console.log(`  gateway keys     ${process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID ? 'system pair' : 'shared SKATTEVERKET_APIGW_* pair'}`)

@@ -64,6 +64,21 @@ describe('recordProbeResult', () => {
     expect(payload).not.toHaveProperty('created_at')
   })
 
+  it('a failed connection read records nothing instead of writing over a granted row', async () => {
+    queued.enqueue({ error: { message: 'timeout' } })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const result = await recordProbeResult({
+      companyId: 'company-1',
+      environment: 'production',
+      orgNumber: ORG,
+      lasombud: { status: 'error', detail: 'timeout' },
+    })
+
+    expect(result).toBeNull()
+    expect(upsertPayload()).toBeUndefined()
+  })
+
   it('a changed org number starts the opt-in over: no grant, verification or creator carries across', async () => {
     queued.enqueue({ data: storedRow({ org_number: OTHER_ORG }) })
     queued.enqueue({ data: UPSERTED })

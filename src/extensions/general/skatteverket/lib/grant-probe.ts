@@ -1,6 +1,6 @@
 import { skvRequestWithAuth, SkatteverketAuthError } from './api-client'
 import { getSkattekontoBaseUrl } from './skattekonto-client'
-import { getConnection, recordProbeResult, type GrantStatus, type SkvCompanyConnection } from './connection-store'
+import { getConnectionOrThrow, recordProbeResult, type GrantStatus, type SkvCompanyConnection } from './connection-store'
 import { currentSkvEnvironment } from './resolve-auth'
 import {
   grantCountsFor,
@@ -209,8 +209,10 @@ export async function probeCompanyGrants(
   createdBy?: string
 ): Promise<GrantProbeResult> {
   // The opt-in day: when this company first opted in for this org number. A
-  // first Verifiera (no row yet) or a changed org number opts in today.
-  const stored = await getConnection(companyId, currentSkvEnvironment())
+  // first Verifiera (no row yet) or a changed org number opts in today. A
+  // failed read throws before anything is asked or recorded: guessing "no
+  // row" would make today the opt-in day and deny a grant signed earlier.
+  const stored = await getConnectionOrThrow(companyId, currentSkvEnvironment())
   const optInDay =
     stored && stored.org_number === orgNumber ? isoDate(new Date(stored.created_at)) : isoDate(new Date())
   const registry = await probeViaOmbudsregister(orgNumber, optInDay)

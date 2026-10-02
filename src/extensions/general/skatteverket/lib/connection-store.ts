@@ -63,7 +63,13 @@ const CONNECTION_COLUMNS =
   'id, company_id, environment, org_number, status, lasombud_status, lasombud_checked_at, ' +
   'moms_ombud_status, moms_ombud_checked_at, verified_at, last_probe_at, last_probe_detail, last_error, created_at'
 
-export async function getConnection(
+/**
+ * The company's connection row, null when it has none. A read failure THROWS:
+ * callers that decide or write grant state must not mistake a failed read for
+ * "no row" (that would move the opt-in day to today, or overwrite a granted
+ * row as if it were new).
+ */
+export async function getConnectionOrThrow(
   companyId: string,
   environment: SkvEnvironment
 ): Promise<SkvCompanyConnection | null> {
@@ -74,10 +80,26 @@ export async function getConnection(
     .eq('environment', environment)
     .maybeSingle()
   if (error) {
-    log.warn('getConnection failed', { companyId, environment, error: error.message })
-    return null
+    throw new Error(`skatteverket_company_connections read failed: ${error.message}`)
   }
   return (data as SkvCompanyConnection | null) ?? null
+}
+
+/** getConnectionOrThrow for display and read-auth paths: a failed read is "no row". */
+export async function getConnection(
+  companyId: string,
+  environment: SkvEnvironment
+): Promise<SkvCompanyConnection | null> {
+  try {
+    return await getConnectionOrThrow(companyId, environment)
+  } catch (err) {
+    log.warn('getConnection failed', {
+      companyId,
+      environment,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
 }
 
 /** Aggregate status from the per-behorighet grant states. */
@@ -113,7 +135,18 @@ export async function recordProbeResult(
   input: ProbeResultInput
 ): Promise<SkvCompanyConnection | null> {
   const supabase = getServiceClient()
-  const stored = await getConnection(input.companyId, input.environment)
+  let stored: SkvCompanyConnection | null
+  try {
+    stored = await getConnectionOrThrow(input.companyId, input.environment)
+  } catch (err) {
+    // Writing blind could turn a granted row into 'error' or reset its
+    // opt-in: record nothing, report the failure like a failed upsert.
+    log.error('recordProbeResult: connection read failed; nothing recorded', err as Error, {
+      companyId: input.companyId,
+      environment: input.environment,
+    })
+    return null
+  }
   const now = new Date().toISOString()
   // A row is the opt-in for ONE org number. When the company now answers for
   // another number, nothing recorded for the old one carries over: grant

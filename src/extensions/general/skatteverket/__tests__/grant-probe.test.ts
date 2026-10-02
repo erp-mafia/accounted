@@ -26,7 +26,7 @@ vi.mock('../lib/connection-store', async (importOriginal) => {
   return {
     ...actual,
     recordProbeResult: (...a: unknown[]) => mockRecordProbeResult(...a),
-    getConnection: (...a: unknown[]) => mockGetConnection(...a),
+    getConnectionOrThrow: (...a: unknown[]) => mockGetConnection(...a),
   }
 })
 
@@ -216,6 +216,14 @@ describe('org-number proof: only grants signed on or after the opt-in count', ()
     expect(mockRecordProbeResult).toHaveBeenCalledWith(
       expect.objectContaining({ lasombud: expect.objectContaining({ reason: 'predates_opt_in' }) })
     )
+  })
+
+  it('a failed connection read stops the probe: no register call, nothing recorded', async () => {
+    mockGetConnection.mockRejectedValueOnce(new Error('skatteverket_company_connections read failed: timeout'))
+
+    await expect(probeCompanyGrants('company-1', ORG)).rejects.toThrow('read failed')
+    expect(mockSkvRequestWithAuth).not.toHaveBeenCalled()
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
   })
 
   it('a row recorded for another org number opts in today for the new one', async () => {
