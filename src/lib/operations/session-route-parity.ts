@@ -109,6 +109,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PUT /api/calendar/feed': uiOnly('calendar feed subscription settings for the secret feed URL'),
   'DELETE /api/calendar/feed': uiOnly('revokes the secret calendar feed URL (credential)'),
   'POST /api/company/members/invite': uiOnly(PRIVILEGE),
+  'POST /api/company/members/invite/:id': uiOnly(PRIVILEGE),
   'DELETE /api/company/members/invite/:id': uiOnly(PRIVILEGE),
   'DELETE /api/company/members/:id': uiOnly(PRIVILEGE),
   'POST /api/team/invite': uiOnly(PRIVILEGE),

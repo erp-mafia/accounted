@@ -8,13 +8,7 @@ import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getMultiUserState } from '@/lib/entitlements/multi-user'
-import { getEmailService } from '@/lib/email/service'
-import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
-import {
-  generateInviteEmailSubject,
-  generateInviteEmailHtml,
-  generateInviteEmailText,
-} from '@/lib/email/invite-templates'
+import { sendCompanyInviteMail } from '@/lib/email/send-company-invite'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 
 // Loads the email extension so getEmailService() returns the Resend
@@ -51,8 +45,8 @@ function maskEmail(email: string): string {
  * This is the only place the raw link exists: tokens are stored hashed
  * (lib/auth/invite-tokens.ts), so a self-hosted operator without a mail
  * provider (#1710) or an inviter whose mail bounced would otherwise hold an
- * invitation nobody can accept. There is no re-send for company invites:
- * revoke and invite again to get a fresh link.
+ * invitation nobody can accept. A lost or expired link is renewed with
+ * POST /api/company/members/invite/[id] (re-send), which issues a fresh token.
  */
 export const POST = withRouteContext(
   'company_members.invite',
@@ -241,43 +235,17 @@ export const POST = withRouteContext(
 
     // Send email. email_sent is surfaced in the response so the UI can tell
     // the user when the invitation exists but the mail never went out:
-    // previously a send failure was invisible (invite looked sent).
-    // Brand mail (WL-13): sender identity and the invite link follow the
-    // brand of the company the invite concerns; a company without a brand
-    // uses the validated request origin (appOrigin) and sender exactly as
-    // before.
-    const sender = await getSenderForCompany(companyId)
-    const appUrl = sender.brand ? getBaseUrlForBrand(sender.brand) : appOrigin
-    const inviteUrl = `${appUrl}/invite/${token}`
-    const emailService = getEmailService()
-    let emailSent = false
-    if (emailService.isConfigured()) {
-      const emailData = {
-        companyName: company?.name || 'Företag',
-        inviterEmail: user.email || '',
-        inviteUrl,
-        appName: sender.brand?.appName,
-      }
-
-      const result = await emailService.sendEmail({
-        to: email,
-        subject: generateInviteEmailSubject(emailData),
-        html: generateInviteEmailHtml(emailData),
-        text: generateInviteEmailText(emailData),
-        fromName: sender.fromName ?? undefined,
-        fromAddress: sender.fromAddress ?? undefined,
-        replyTo: sender.replyTo ?? undefined,
-      })
-
-      if (result.success) {
-        emailSent = true
-        log.info('invite email sent', { to: email, messageId: result.messageId })
-      } else {
-        log.error('invite email send failed', new Error(result.error ?? 'unknown'), { to: email })
-      }
-    } else {
-      log.warn('email service not configured: invite email skipped', { to: email })
-    }
+    // previously a send failure was invisible (invite looked sent). Brand
+    // mail (WL-13) and the link base live in the helper shared with re-send.
+    const { inviteUrl, emailSent } = await sendCompanyInviteMail({
+      companyId,
+      companyName: company?.name,
+      email,
+      inviterEmail: user.email || '',
+      token,
+      appOrigin,
+      log,
+    })
 
     return NextResponse.json({
       data: {

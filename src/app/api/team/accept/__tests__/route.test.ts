@@ -100,6 +100,33 @@ describe('POST /api/team/accept', () => {
     expect(status).toBe(403)
     expect(body.error).toContain('matchar inte')
   })
+
+  // crm#241: an expired company invitation stays 'pending' in the database
+  // (nothing flips it when the expiry passes) and can now be revived by a
+  // re-send, so the accept path must judge expires_at itself.
+  it('returns 410 for an expired company invite, marks it expired, and adds no member', async () => {
+    const past = new Date(Date.now() - 86_400_000).toISOString()
+    enqueue({
+      data: {
+        id: 'inv-1',
+        company_id: 'company-1',
+        email: 'invitee@test.se',
+        role: 'member',
+        status: 'pending',
+        expires_at: past,
+      },
+    })
+    enqueue({ error: null }) // company_invitations update -> expired
+
+    const res = await POST(makeReq({ token: 'abc' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(410)
+    expect(body.error).toBe('Inbjudan har gått ut.')
+    expect(findCalls('company_members', 'insert')).toHaveLength(0)
+    const updates = findCalls('company_invitations', 'update')
+    expect(updates).toHaveLength(1)
+    expect(updates[0]![0]).toEqual({ status: 'expired' })
+  })
 })
 
 // WL-08 invite unfreeze: the same token endpoint accepts byrå-team
