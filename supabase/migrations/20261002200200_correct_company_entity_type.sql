@@ -2,7 +2,7 @@
 -- correct_company_entity_type(): owner-only legal-form correction for a
 -- company whose books are still empty.
 --
--- A company registered under the wrong legal form (Growhub Ekonomisk förening
+-- A company registered under the wrong legal form (an ekonomisk förening
 -- is stored as an aktiebolag because onboarding could not offer the form)
 -- cannot be fixed by an UPDATE on companies.entity_type: the chart seeded for
 -- the wrong form (2081 Aktiekapital, 2893 Skuld till aktieägare) stays behind

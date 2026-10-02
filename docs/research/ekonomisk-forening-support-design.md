@@ -189,7 +189,7 @@ Never update only `companies.entity_type`. Provide a guarded migration preview a
 6. Reconcile opening/closing equity and member subledger.
 7. Commit atomically with an immutable migration record and rollback plan before any new posting.
 
-For Growhub, the earlier inspection found no opening balances or journal entries. That makes it the safest migration class: change legal form, replace the empty chart seed, configure member contribution opening state, then validate before the first posting.
+For the pilot association, the earlier inspection found no opening balances or journal entries. That makes it the safest migration class: change legal form, replace the empty chart seed, configure member contribution opening state, then validate before the first posting.
 
 ## Recommended delivery phases
 
@@ -238,7 +238,7 @@ Exit: advanced fixtures and external domain review pass.
 ### Phase 5 - migrate and release
 
 - Run migration preview for misclassified companies.
-- Pilot with Growhub and at least one association with real historic transactions.
+- Pilot with the first association and at least one association with real historic transactions.
 - Monitor warnings, reconciliation failures and manual overrides; only then remove the feature flag.
 
 ## Minimum acceptance suite

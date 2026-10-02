@@ -16,12 +16,12 @@ import { getPool, withUserContext } from '@/tests/pg/setup'
 
 async function seededCompany(entityType: 'aktiebolag' | 'ekonomisk_forening' = 'aktiebolag') {
   const ownerId = await insertAuthUser()
-  const companyId = await insertCompany({ createdBy: ownerId, entityType, name: 'Growhub' })
+  const companyId = await insertCompany({ createdBy: ownerId, entityType, name: 'Testföreningen' })
   await insertCompanyMember({ companyId, userId: ownerId, role: 'owner' })
   await getPool().query(`SELECT public.seed_chart_of_accounts($1::uuid, $2::text)`, [companyId, entityType])
   await getPool().query(
     `INSERT INTO public.company_settings (company_id, user_id, company_name, entity_type)
-     VALUES ($1, $2, 'Growhub', $3)
+     VALUES ($1, $2, 'Testföreningen', $3)
      ON CONFLICT (company_id) DO UPDATE SET entity_type = EXCLUDED.entity_type`,
     [companyId, ownerId, entityType],
   )
