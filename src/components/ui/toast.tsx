@@ -8,6 +8,12 @@ import { cn } from "@/lib/utils"
 
 const ToastProvider = ToastPrimitives.Provider
 
+// Toasts open just under the 48px top bar, never on it: the page's primary
+// action sits top-right in that bar (design.md conventions 2 and 9), and a
+// toast in the same corner covered it until it faded (crm#245). From md up
+// the dashboard panel starts 10px down and ends --agent-dock-w from the right
+// (MAIN_PANEL_CLASS in app/(dashboard)/layout.tsx), so the viewport follows
+// the panel and a docked assistant is never covered either.
 const ToastViewport = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Viewport>,
   React.ComponentPropsWithoutRef<typeof ToastPrimitives.Viewport>
@@ -15,7 +21,7 @@ const ToastViewport = React.forwardRef<
   <ToastPrimitives.Viewport
     ref={ref}
     className={cn(
-      "fixed top-0 z-[100] flex max-h-screen w-full flex-col p-4 sm:top-4 sm:right-4 sm:bottom-auto sm:flex-col md:max-w-[420px]",
+      "fixed top-12 z-[100] flex max-h-screen w-full flex-col p-4 sm:right-4 sm:bottom-auto sm:flex-col md:top-[calc(10px+3rem)] md:right-[var(--agent-dock-w)] md:max-w-[420px]",
       className
     )}
     {...props}
