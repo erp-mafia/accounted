@@ -1460,7 +1460,7 @@ function OptionsStep({
         <OptionRow
           label="Leverantörsfakturor"
           description={provider === 'fortnox'
-            ? 'Endast obetalda leverantörsfakturor hämtas. Historiska betalda fakturor finns kvar i Fortnox.'
+            ? t('ext_arcim_supplier_invoices_unpaid_only')
             : 'Alla leverantörsfakturor (betalda och obetalda)'}
           checked={options.importSupplierInvoices}
           onChange={() => toggleOption('importSupplierInvoices')}
@@ -1841,6 +1841,21 @@ function DocumentImportFollowUp({
     </SectionKicker>
   )
 
+  // Underlag whose verifikat sits in a klarmarkerat or locked year: the
+  // database refuses those links, so a retry cannot help. Say which years and
+  // where to reopen them, before the import (dry run) and after it (crm#251).
+  const lockedCount = state.result?.locked ?? 0
+  const lockedYears = (state.result?.lockedPeriods ?? []).join(', ')
+  const lockedYearsLine = (key: 'ext_arcim_documents_locked_offer' | 'ext_arcim_documents_locked_result') =>
+    lockedCount > 0 ? (
+      <p className="text-sm text-muted-foreground">
+        {t(key, { count: lockedCount, years: lockedYears })}{' '}
+        <Link href="/settings/bookkeeping" className="underline underline-offset-4 hover:text-foreground">
+          {t('ext_arcim_documents_locked_open_years')}
+        </Link>
+      </p>
+    ) : null
+
   if (
     state.phase === 'discovering' ||
     state.phase === 'importing' ||
@@ -1886,6 +1901,7 @@ function DocumentImportFollowUp({
             ? t('ext_arcim_documents_prompt_standalone', { count: state.found, provider })
             : t('ext_arcim_documents_prompt', { count: state.found, provider })}
         </p>
+        {lockedYearsLine('ext_arcim_documents_locked_offer')}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button onClick={onImport}>
             {t('ext_arcim_documents_import_action', { provider })}
@@ -1943,13 +1959,20 @@ function DocumentImportFollowUp({
         value: failed,
         valueClassName: failed > 0 ? 'text-destructive' : 'text-foreground',
       },
+      ...(lockedCount > 0
+        ? [{
+            label: t('ext_arcim_documents_locked'),
+            value: lockedCount,
+            valueClassName: 'text-foreground',
+          }]
+        : []),
     ]
 
     return (
       <section className="space-y-4" aria-live="polite">
         {title}
         <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_result_description')}</p>
-        <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <dl className={cn('grid grid-cols-2 gap-4', outcomes.length > 4 ? 'sm:grid-cols-5' : 'sm:grid-cols-4')}>
           {outcomes.map(({ label, value, valueClassName }) => (
             <div key={label} className="flex flex-col">
               <dt className="order-2 text-xs text-muted-foreground">{label}</dt>
@@ -1963,6 +1986,15 @@ function DocumentImportFollowUp({
           <p className="text-sm text-muted-foreground">
             {t('ext_arcim_documents_unmatched_help')}
           </p>
+        )}
+        {lockedCount > 0 && (
+          <div className="space-y-3">
+            {lockedYearsLine('ext_arcim_documents_locked_result')}
+            <Button variant="outline" onClick={onDiscover}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              {t('ext_arcim_documents_retry_discovery')}
+            </Button>
+          </div>
         )}
         {failed > 0 && (
           <div className="space-y-3">
@@ -2044,6 +2076,7 @@ const NEXT_STEPS: { title: string; sub: string }[] = [
 ]
 
 function ResultStep({
+  provider,
   results,
   sieResults,
   omittedYears,
@@ -2058,6 +2091,8 @@ function ResultStep({
   onDismissDocuments,
   onReconnectDocuments,
 }: {
+  /** The source system, for the copy that differs per provider. */
+  provider: string | null
   results: MigrationResults | null
   sieResults: ImportResult[]
   /** Source fiscal years outside the selection: not fetched in this run. */
@@ -2284,13 +2319,20 @@ function ResultStep({
         failed: false,
       })
     }
-    if (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0)) {
+    if (results.supplierInvoices) {
+      // Shown even at zero: the Fortnox import fetches only unpaid supplier
+      // invoices (filter=unpaid in lib/providers/fortnox/config.ts), so a
+      // register with every invoice paid imports none, and a hidden row read
+      // as "the supplier invoices were lost" (crm#251). The paid ones are in
+      // the ledger as the SIE file's verifikat.
+      const skipDetail = results.supplierInvoices.skipped > 0
+        ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
+        : undefined
+      const scopeDetail = provider === 'fortnox' ? t('ext_arcim_supplier_invoices_unpaid_only') : undefined
       entityLines.push({
         label: 'Leverantörsfakturor',
         value: `${results.supplierInvoices.imported} importerade`,
-        detail: results.supplierInvoices.skipped > 0
-          ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
-          : undefined,
+        detail: [skipDetail, scopeDetail].filter(Boolean).join(' ') || undefined,
         failed: entityRowStatus(results.supplierInvoices.imported, results.supplierInvoices.skipReasons) === 'error',
       })
     }
@@ -3815,6 +3857,7 @@ export default function ArcimMigrationWorkspace({
 
       {step === 'result' && (
         <ResultStep
+          provider={preview?.consent.provider ?? selectedProvider}
           results={migrationResults}
           sieResults={sieImportResults}
           omittedYears={sieData?.omittedYears ?? []}
