@@ -47,7 +47,7 @@ vi.mock('@/lib/invoices/pdf-render-helpers', async () => {
   }
 })
 
-import { buildInvoicePaymentQrImage, renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
+import { buildInvoicePaymentQrImage, countPdfPages, renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 
 const company = (overrides: Partial<CompanySettings> = {}) =>
   makeCompanySettings({
@@ -224,5 +224,30 @@ describe('buildInvoicePaymentQrImage', () => {
 
   it('is null when the resolver chose none', async () => {
     expect(await buildInvoicePaymentQrImage({ kind: null, mode: 'auto', reason: 'nothing_due' })).toBeNull()
+  })
+})
+
+describe('countPdfPages', () => {
+  it('counts the page objects, not the page tree root', () => {
+    const pdf = Buffer.from(
+      '%PDF-1.3\n1 0 obj\n<<\n/Type /Pages\n/Count 3\n>>\nendobj\n'
+      + '2 0 obj\n<<\n/Type /Page\n/Parent 1 0 R\n>>\nendobj\n'
+      + '3 0 obj\n<<\n/Type/Page\n/Parent 1 0 R\n>>\nendobj\n'
+      + '4 0 obj\n<<\n/Type /Page\n/Parent 1 0 R\n>>\nendobj\n',
+      'latin1',
+    )
+    expect(countPdfPages(pdf)).toBe(3)
+    expect(countPdfPages(Buffer.from('not a pdf'))).toBe(0)
+  })
+
+  it('is returned with every render, so the editor can show it', async () => {
+    mocks.renderToBuffer.mockResolvedValue(Buffer.from('<< /Type /Pages >> << /Type /Page >> << /Type /Page >>', 'latin1'))
+    const result = await renderInvoicePdfBuffer({
+      invoice: sentInvoice(),
+      customer: makeCustomer(),
+      items: [],
+      company: company(),
+    })
+    expect(result.pageCount).toBe(2)
   })
 })

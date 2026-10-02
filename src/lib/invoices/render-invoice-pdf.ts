@@ -56,6 +56,17 @@ export interface RenderedInvoicePdf {
   buffer: Buffer
   /** Which QR code the PDF carries, or why none (the preview reports it). */
   paymentQr: ResolvedInvoicePaymentQr
+  /** How many pages the PDF has (the editor shows it next to the preview). */
+  pageCount: number
+}
+
+/**
+ * The number of pages of a rendered PDF. The renderer (pdfkit) writes one
+ * uncompressed page object, `/Type /Page`, per page; `\b` keeps the
+ * `/Type /Pages` tree root out of the count.
+ */
+export function countPdfPages(buffer: Buffer): number {
+  return (buffer.toString('latin1').match(/\/Type\s*\/Page\b/g) ?? []).length
 }
 
 /**
@@ -109,5 +120,5 @@ export async function renderInvoicePdfBuffer(input: RenderInvoicePdfInput): Prom
       paymentQr: await buildInvoicePaymentQrImage(paymentQr),
     }),
   )
-  return { buffer, paymentQr }
+  return { buffer, paymentQr, pageCount: countPdfPages(buffer) }
 }

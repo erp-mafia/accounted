@@ -828,6 +828,76 @@ export const CreateCreditNoteSchema = z.object({
   reason: z.string().optional(),
 })
 
+// A date field of a form being filled in: empty means "not set yet"; an
+// impossible date is refused (the preview renders and fetches a rate for it).
+const previewDate = saneIsoDate.or(z.literal('')).nullish().transform((v) => v || null)
+
+/**
+ * One row of the invoice editor's live preview: the write path's line
+ * (CreateInvoiceItemSchema) without its completeness rules. A row being
+ * typed has no description or price yet, and a cleared number field
+ * arrives as null. Wrong types are still refused.
+ */
+const PreviewInvoiceItemSchema = z.object({
+  line_type: z.enum(['product', 'text']).optional(),
+  description: z.string().max(2000).nullish().transform((v) => v ?? ''),
+  quantity: z.number().nullish().transform((v) => v ?? 0),
+  unit: z.string().max(64).nullish().transform((v) => v ?? ''),
+  unit_price: z.number().nullish().transform((v) => v ?? 0),
+  discount_percent: z.number().min(0).max(100).nullish(),
+  vat_rate: z.number().min(0).max(100).nullish(),
+  deduction_type: z.enum(DEDUCTION_TYPES).nullish(),
+  labor_hours: z.number().nonnegative().nullish(),
+  work_type: z.string().max(64).nullish(),
+  housing_designation: z.string().max(128).nullish(),
+  apartment_number: z.string().max(32).nullish(),
+  brf_org_number: z.string().max(32).nullish(),
+})
+
+/**
+ * POST /api/invoices/preview-pdf (and preview-email): the editor's draft as
+ * it is now, rendered without being saved, from the fields the write path
+ * uses (CreateInvoiceBaseSchema). A live preview renders a half-filled
+ * form: no customer yet, no rows yet and empty dates render with
+ * placeholders (lib/invoices/preview-draft.ts) instead of a 400. A
+ * malformed value (a string quantity, an unknown qr_mode, an impossible
+ * date) is still a 400.
+ *
+ * credited_invoice_id previews the kreditfaktura of that invoice: its rows
+ * and amounts come from the original, as POST /api/invoices creates it, and
+ * notes is the reason printed on it.
+ */
+export const InvoicePreviewSchema = z.object({
+  customer_id: z.union([uuid, z.literal('')]).nullish().transform((v) => v || null),
+  credited_invoice_id: uuid.nullish(),
+  document_type: InvoiceDocumentTypeSchema.optional(),
+  // The predicted number the editor shows ("Nummer N preliminärt").
+  invoice_number: z.string().max(64).nullish(),
+  invoice_date: previewDate,
+  due_date: previewDate,
+  delivery_date: previewDate,
+  valid_until: previewDate,
+  currency: CurrencySchema.optional(),
+  your_reference: z.string().max(500).nullish(),
+  our_reference: z.string().max(500).nullish(),
+  invoice_marking: z.string().max(200).nullish(),
+  notes: z.string().max(10000).nullish(),
+  // Printed only when it is an https address, the shape the write path accepts.
+  payment_link_url: z.string().max(2048).nullish(),
+  payment_cash_account_id: z.union([uuid, z.literal('')]).nullish().transform((v) => v || null),
+  // Empty or null = inherit the company's invoice_qr_mode.
+  qr_mode: z.union([InvoiceQrModeSchema, z.literal('')]).nullish().transform((v) => v || null),
+  ore_rounding: z.boolean().nullish(),
+  ...InvoiceVatOverrideShape,
+  deduction_personnummer: z.string().max(20).nullish(),
+  deduction_housing_designation: z.string().max(128).nullish(),
+  deduction_apartment_number: z.string().max(25).nullish(),
+  deduction_brf_org_number: z.string().max(32).nullish(),
+  items: z.array(PreviewInvoiceItemSchema).max(1000).optional().transform((v) => v ?? []),
+})
+
+export type InvoicePreviewInput = z.infer<typeof InvoicePreviewSchema>
+
 // ============================================================
 // Rot/rut begäran om utbetalning (Skatteverkets husavdragstjänst)
 // ============================================================
