@@ -4,11 +4,13 @@ import { usePathname } from 'next/navigation'
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { SIEImportHoldBanner } from '@/components/import/SIEImportHoldBanner'
+import { isFullBleedEditorPath } from '@/lib/invoices/editor/new-editor-params'
 
 /**
  * Picks the dashboard chrome container based on route. Extension workspaces
- * (/e/*) and the /chat app shell want the full viewport for their own
- * multi-pane layouts; everything else gets the padded full-bleed canvas.
+ * (/e/*), the /chat app shell and the invoice editor want the full viewport
+ * for their own multi-pane layouts; everything else gets the padded
+ * full-bleed canvas.
  *
  * Lives in a client component because the parent (dashboard) layout is
  * shared across all dashboard routes. Server-side pathname checks done in
@@ -37,7 +39,10 @@ export function MainContainer({
   // shouldn't sit inside any horizontal padding: that's what causes a
   // visible gap between the dashboard sidebar and the chat-sidebar pane on
   // wide viewports.
-  const isFullBleed = pathname.startsWith('/e/') || pathname.startsWith('/chat')
+  const isFullBleed =
+    pathname.startsWith('/e/') ||
+    pathname.startsWith('/chat') ||
+    isFullBleedEditorPath(pathname)
 
   if (isFullBleed) {
     return (

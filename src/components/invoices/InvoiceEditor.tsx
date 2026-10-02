@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useId } from 'react'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useForm, useFieldArray, Controller, type FieldErrors } from 'react-hook-form'
 import { Reorder } from 'framer-motion'
@@ -11,7 +11,6 @@ import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { addDays, format } from 'date-fns'
-import { Button } from '@/components/ui/button'
 import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
 import { Input } from '@/components/ui/input'
 import { TagInput } from '@/components/ui/tag-input'
@@ -52,8 +51,8 @@ import { sortArticles } from '@/lib/articles/sort'
 import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { computeLineNet, hasLineDiscount } from '@/lib/invoices/line-amounts'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { Loader2, X, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags, Package, Copy, Percent } from 'lucide-react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Loader2, X, Landmark, AlertTriangle, MoreVertical, CalendarClock, Tags, Package, Percent } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -65,11 +64,7 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { useBranding } from '@/lib/branding/brand-context'
-import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
-import { InvoiceReviewContent } from '@/components/invoices/InvoiceReviewContent'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { openDeferredTab } from '@/lib/browser/deferred-tab'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
@@ -115,6 +110,32 @@ import {
   buildSelfBilledPayload,
   hasDimensionValues,
 } from '@/lib/invoices/editor-payload'
+import { InvoiceEditorShell, type EditorPane } from '@/components/invoices/editor/InvoiceEditorShell'
+import { EditorTopBar, type TopBarMenuEntry } from '@/components/invoices/editor/EditorTopBar'
+import { EditorPreviewPane } from '@/components/invoices/editor/EditorPreviewPane'
+import { EditorEmailPreview, type EmailTextOverride } from '@/components/invoices/editor/EditorEmailPreview'
+import { EditorStatusLine } from '@/components/invoices/editor/EditorStatusLine'
+import { SendConfirmDialog, type ConfirmVoucher } from '@/components/invoices/editor/SendConfirmDialog'
+import { useInvoicePdfPreview } from '@/components/invoices/editor/use-editor-previews'
+import {
+  resolveChannelOptions,
+  resolveEffectiveChannel,
+  type ChannelContext,
+  type EditorChannel,
+  type EmailBlockReason,
+} from '@/lib/invoices/editor/channel'
+import {
+  booksOnIssue as resolveBooksOnIssue,
+  resolveEditorMenu,
+  resolvePrimaryAction,
+  resolveSendLabel,
+  type EditorIntent,
+} from '@/lib/invoices/editor/primary-action'
+import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
+import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
+import { proposeDraftSendLines } from '@/lib/invoices/editor/voucher-preview'
+import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
+import { EMAIL_PATTERN, parseInvoiceRecipientText } from '@/lib/invoices/email-recipients'
 import {
   CURRENCIES,
   type Article,
@@ -122,6 +143,7 @@ import {
   type CreateCustomerInput,
   type Currency,
   type Customer,
+  type EntityType,
   type Invoice,
   type InvoiceDocumentType,
   type InvoiceItem,
@@ -137,18 +159,16 @@ const DEFAULT_PAYMENT_TERM_DAYS = 30
 // A draft invoice + its line items, as fetched for the edit flow.
 export type InvoiceForEdit = Invoice & { items: InvoiceItem[] }
 
-// `create` is the original "new invoice" flow (unchanged). `edit` pre-fills the
-// form from an existing DRAFT and saves via PATCH instead of POST: no review
-// dialog, no number allocation, no self-billed tab, no send/logo prompts.
-// `bare` renders the editor without page chrome (back button, full-size
-// heading, fixed mobile action bar) so it drops into NewInvoiceDialog: the
-// same convention as JournalEntryForm's `bare`.
+// The one-screen editor (/invoices/new, /invoices/[id]/edit): the form on
+// the left, the live PDF and email on the right, sent from the top bar
+// through one confirm dialog. `create` starts empty, `copy` from another
+// invoice, `edit` from an existing DRAFT (saved via PATCH; sending it is in
+// the caret menu).
 export type InvoiceEditorProps = (
   | { mode?: 'create' }
   | { mode: 'edit'; initial: InvoiceForEdit }
   | { mode: 'copy'; initial: InvoiceCopyInitial }
 ) & {
-  bare?: boolean
   /** Open with the självfaktura tab preselected (the "Självfaktura" entry in
    *  the invoice list's split button). Create mode only. */
   initialSelfBilled?: boolean
@@ -226,20 +246,16 @@ function compactDims(dims: Record<string, string>): string {
     .join(' · ')
 }
 
-type SendNowString =
-  | 'send_now_dialog_title'
-  | 'send_now_dialog_description'
-  | 'doc_sent_title'
-  | 'doc_sent_description'
-  | 'send_doc_failed_title'
+// The intents that go through the confirm dialog: a send, or a create
+// without sending (both lock a number).
+type ConfirmIntent = Extract<EditorIntent, { kind: 'send' } | { kind: 'create' }>
 
-// Invoice strings predate the other document types and keep their names.
-const INVOICE_SEND_NOW_KEYS: Record<SendNowString, string> = {
-  send_now_dialog_title: 'send_now_dialog_title',
-  send_now_dialog_description: 'send_now_dialog_description',
-  doc_sent_title: 'invoice_sent_title',
-  doc_sent_description: 'invoice_sent_description',
-  send_doc_failed_title: 'send_invoice_failed_title',
+// Why email is not possible, as keys of the invoice_editor_shell namespace.
+const EMAIL_BLOCK_KEYS: Record<EmailBlockReason, string> = {
+  not_emailable: 'email_block_not_emailable',
+  sandbox: 'email_block_sandbox',
+  no_email_plan: 'email_block_no_email_plan',
+  no_customer_email: 'email_block_no_customer_email',
 }
 
 export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'create' }) {
@@ -249,19 +265,23 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const initial = props.mode === 'edit' ? props.initial : null
   const copyInitial = props.mode === 'copy' ? props.initial : null
   const initialOreRounding = initial?.ore_rounding ?? copyInitial?.ore_rounding
-  const bare = props.bare === true
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
-  const { company } = useCompany()
+  const { company, role, isSandbox } = useCompany()
   const hasEmailSend = useCapability(CAPABILITY.email_send)
   const supabase = createClient()
+  const locale = useLocale() as ErrorLocale
   const t = useTranslations('invoice_editor')
+  const tShell = useTranslations('invoice_editor_shell')
+  const tSend = useTranslations('invoice_send_dialog')
+  const tNav = useTranslations('nav')
   const tVat = useTranslations('vat_treatment_notice')
   const ts = useTranslations('self_billing')
   const ta = useTranslations('accruals')
-  const tCommon = useTranslations('common')
-  const { appName } = useBranding()
+  // Owner/admin: extra email copies (as in SendInvoiceDialog) and payment
+  // details set up from the status line.
+  const isCompanyAdmin = role === 'owner' || role === 'admin'
   // Normal customer invoice (default) or a received self-billing invoice
   // (mottagen självfaktura, ML 17 kap 15§). The mode is chosen upstream in
   // the Ny faktura split button (?self=1) and is fixed for the editor's
@@ -281,17 +301,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // An already-linked invoice keeps showing the section even when the
   // setting is off, so the user can still see or clear the old link.
   const hasExistingPaymentLink = Boolean(initial?.payment_link_url)
-  // Standalone pages get a page-level sticky action bar at the viewport
-  // bottom; body[data-page-bottom-bar] tells the assistant FAB (AgentTrigger)
-  // to lift above it so it never covers the bar's primary button. Dialog mode
-  // needs nothing: the veil already sits over the FAB.
-  useEffect(() => {
-    if (bare) return
-    document.body.setAttribute('data-page-bottom-bar', '1')
-    return () => {
-      document.body.removeAttribute('data-page-bottom-bar')
-    }
-  }, [bare])
   // Active Stripe connection: drives the "auto payment link" toggle in the
   // payment link section. Absent extension or no connection → toggle hidden.
   const [stripeConnected, setStripeConnected] = useState(false)
@@ -476,7 +485,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       // when the company has an active Stripe connection).
       payment_link_auto: z.boolean().optional(),
       // Self-billing received (mottagen självfaktura). Present in the form for
-      // both modes; required only in self_billed mode: enforced in onSubmit.
+      // both modes; required only in self_billed mode: enforced in submitSelfBilled.
       external_invoice_number: z.string().optional(),
       self_billing_agreement_ref: z.string().optional(),
       received_date: z.string().optional(),
@@ -559,15 +568,27 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
-  const [showReview, setShowReview] = useState(false)
+  // The confirm dialog's intent (a send on a channel, or create without
+  // sending), opened from the top bar, its caret menu or Cmd/Ctrl+Enter.
+  const [confirmIntent, setConfirmIntent] = useState<ConfirmIntent | null>(null)
+  // An intent waiting behind the bank-details setup or the first-invoice logo
+  // prompt; it resumes into the confirm once they close.
+  const [queuedIntent, setQueuedIntent] = useState<ConfirmIntent | null>(null)
+  const [logoPromptDone, setLogoPromptDone] = useState(false)
   // Explicit confirm for Swedish VAT to an EU customer whose reverse charge
-  // is blocked (#2749). Reset every time the review dialog closes.
+  // is blocked (#2749). Reset every time the confirm dialog closes.
   const [swedishVatAcknowledged, setSwedishVatAcknowledged] = useState(false)
   const [pendingData, setPendingData] = useState<FormData | null>(null)
-  const [createdInvoiceId, setCreatedInvoiceId] = useState<string | null>(null)
-  const [showSendPrompt, setShowSendPrompt] = useState(false)
-  const [isSending, setIsSending] = useState(false)
-  const [isPreviewing, setIsPreviewing] = useState(false)
+  // The channel the user picked in the caret menu; null = the default
+  // (lib/invoices/editor/channel.ts).
+  const [channelChoice, setChannelChoice] = useState<EditorChannel | null>(null)
+  // The Mejl tab: this send's own subject and message (null = the company's
+  // or the stock texts) and its extra copies.
+  const [emailOverride, setEmailOverride] = useState<EmailTextOverride | null>(null)
+  const [extraCcText, setExtraCcText] = useState('')
+  // Bumped when something the PDF prints changed outside the form (a logo
+  // upload, new bank details): re-renders the preview.
+  const [previewRefreshKey, setPreviewRefreshKey] = useState(0)
   const [, setDefaultNotes] = useState<string | null>(null)
   const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false)
   // Name typed into the picker when the user chose "Skapa kund" from its
@@ -1345,9 +1366,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // atomically at create time; this is read-only.
   useEffect(() => {
     if (!company?.id) return
-    // Editing an existing draft: it already has (or will keep) its own number,
-    // never show the "next number" preview.
-    if (isEditMode || watchDocumentType === 'delivery_note') {
+    // A draft that already has its number keeps it: no "next number"
+    // preview. An unnumbered draft (Spara som utkast) gets one at send.
+    if ((isEditMode && initial?.invoice_number) || watchDocumentType === 'delivery_note') {
       setNumberPreview(null)
       return
     }
@@ -1363,7 +1384,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return () => {
       cancelled = true
     }
-  }, [company?.id, watchDocumentType])
+  }, [company?.id, watchDocumentType, isEditMode, initial?.invoice_number])
 
   useEffect(() => {
     if (watchCustomerId) {
@@ -1815,41 +1836,53 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }
 
-  // A quote's "Giltig till" is its own field; the shared schema still wants a
-  // due_date, so the wire body mirrors valid_until into it. Other document
-  // types never send valid_until (undefined disappears in JSON).
-  function withQuoteValidity(data: FormData): FormData {
-    if (data.document_type !== 'quote') return { ...data, valid_until: undefined }
-    const validUntil = data.valid_until || data.due_date
-    return { ...data, due_date: validUntil, valid_until: validUntil }
+  // Mottagen självfaktura: the two self-billing-only fields are optional in
+  // the shared schema; enforce them here so the inline errors render under
+  // the right inputs.
+  async function submitSelfBilled(data: FormData) {
+    let valid = true
+    if (!data.external_invoice_number?.trim()) {
+      setError('external_invoice_number', { message: ts('validation_external_number_required') })
+      valid = false
+    }
+    if (!data.received_date) {
+      setError('received_date', { message: ts('validation_received_date_required') })
+      valid = false
+    }
+    if (!valid) return
+    await handleSelfBilledSubmit(data)
   }
 
-  async function onSubmit(data: FormData) {
-    if (isEditMode) {
-      // Editing a draft: no review dialog, straight to PATCH.
-      await saveEdit(data)
-      return
+  // Every editor action starts here: the top-bar primary, its caret menu and
+  // Cmd/Ctrl+Enter. The form is validated first; an invalid click moves focus
+  // to the first missing field (onInvalidSubmit) instead of reading as dead.
+  function requestIntent(intent: EditorIntent) {
+    if (inFlight || !canWrite) return
+    switch (intent.kind) {
+      case 'save_changes':
+        void handleSubmit(saveEdit, onInvalidSubmit)()
+        return
+      case 'save_draft':
+        void handleSubmit(saveDraftData, onInvalidSubmit)()
+        return
+      case 'register_self_billed':
+        void handleSubmit(submitSelfBilled, onInvalidSubmit)()
+        return
+      case 'send':
+        // The pick sticks: the primary's face follows the chosen channel.
+        if (!isEditMode) setChannelChoice(intent.channel)
+        void handleSubmit((data) => prepareConfirm(data, intent), onInvalidSubmit)()
+        return
+      case 'create':
+        void handleSubmit((data) => prepareConfirm(data, intent), onInvalidSubmit)()
+        return
     }
-    if (isSelfBilled) {
-      // The two self-billing-only fields are optional in the shared schema:
-      // enforce them here so the inline errors render under the right inputs.
-      let valid = true
-      if (!data.external_invoice_number?.trim()) {
-        setError('external_invoice_number', { message: ts('validation_external_number_required') })
-        valid = false
-      }
-      if (!data.received_date) {
-        setError('received_date', { message: ts('validation_received_date_required') })
-        valid = false
-      }
-      if (!valid) return
-      await handleSelfBilledSubmit(data)
-      return
-    }
-    // The review dialog only mounts once the picked customer resolves against
-    // the loaded customers list. Without this guard a click while the list is
-    // still loading (or failed to load) set showReview on an unmounted dialog:
-    // the button then silently did nothing (support: cbysea.se).
+  }
+
+  async function prepareConfirm(data: FormData, intent: ConfirmIntent) {
+    // The confirm names the customer: a click while the customers list is
+    // still loading (or failed to load) must say so rather than do nothing
+    // (support: cbysea.se).
     if (!selectedCustomer) {
       toast({
         title: t('review_customer_missing_title'),
@@ -1859,11 +1892,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       return
     }
     setPendingData(data)
-    // Re-fetch the preview right before review so the displayed number
-    // reflects any concurrent invoice creations. Skip for delivery notes.
-    // Bounded: this blocks the review dialog from opening, and a hung fetch
-    // must not be able to freeze the flow (the catch below eats the abort).
-    if (data.document_type !== 'delivery_note') {
+    // Re-fetch the preview right before the confirm so the displayed number
+    // reflects any concurrent invoice creations. Skip for delivery notes and
+    // for a draft that already holds its number. Bounded: this blocks the
+    // confirm from opening, and a hung fetch must not freeze the flow.
+    if (data.document_type !== 'delivery_note' && !(isEditMode && initial?.invoice_number)) {
       try {
         const r = await fetch(
           `/api/invoices/next-number?document_type=${encodeURIComponent(data.document_type)}`,
@@ -1877,18 +1910,37 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         // Preview is best-effort; the allocator at create time is the source of truth.
       }
     }
-    if (hasBankDetails === false && watchDocumentType === 'invoice') {
+    continueToConfirm(intent, data.document_type)
+  }
+
+  // The gates in front of the confirm, in order: bank details for a faktura,
+  // then the one-shot logo prompt on the company's very first invoice (issue
+  // #520), so a fresh logo makes it onto the PDF that is sent.
+  function continueToConfirm(
+    intent: ConfirmIntent,
+    documentType: InvoiceDocumentType,
+    done: { bank?: boolean; logo?: boolean } = {},
+  ) {
+    if (!done.bank && hasBankDetails === false && documentType === 'invoice') {
+      setQueuedIntent(intent)
       setShowBankSetup(true)
       return
     }
-    setShowReview(true)
+    if (!done.logo && !logoPromptDone && !isEditMode && hadZeroInvoices === true && !logoUrl) {
+      setQueuedIntent(intent)
+      setShowLogoPrompt(true)
+      return
+    }
+    setQueuedIntent(null)
+    setConfirmIntent(intent)
   }
 
   function handleBankSetupComplete() {
     setHasBankDetails(true)
     setShowBankSetup(false)
-    if (pendingData) {
-      setShowReview(true)
+    setPreviewRefreshKey((key) => key + 1)
+    if (queuedIntent && pendingData) {
+      continueToConfirm(queuedIntent, pendingData.document_type, { bank: true })
     }
   }
 
@@ -1899,31 +1951,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return t('doc_label_invoice')
   }
 
-  // The send-now dialog and its toasts name the document: an offert used to
-  // ask "Skicka fakturan nu?" because these strings had no per-type variant
-  // (reported via support). Invoice keeps the original keys; the other
-  // types read `<base>_<type>` from the same namespace.
-  function sendNowKey(base: SendNowString): string {
-    const type = watchDocumentType
-    if (type === 'proforma' || type === 'quote' || type === 'delivery_note') {
-      return `${base}_${type}`
-    }
-    return INVOICE_SEND_NOW_KEYS[base]
-  }
-
   function handleLogoPromptClose() {
     setShowLogoPrompt(false)
-    // Resume the post-create flow that was deferred by the logo prompt.
-    // The send-now dialog only emails: skipped without the email_send
-    // capability (the invoice page's SendInvoiceDialog carries the upsell).
-    if (selectedCustomer?.email && createdInvoiceId && hasEmailSend) {
-      setShowSendPrompt(true)
-    } else if (createdInvoiceId) {
-      router.replace(`/invoices/${createdInvoiceId}`)
+    setLogoPromptDone(true)
+    setPreviewRefreshKey((key) => key + 1)
+    if (queuedIntent && pendingData) {
+      continueToConfirm(queuedIntent, pendingData.document_type, { bank: true, logo: true })
     }
   }
 
-  async function handleConfirm() {
+  // "Skapa utan att skicka": the numbered document, nothing sent (what
+  // "Granska & skapa" did). The detail page sends it later.
+  async function createWithoutSending() {
     if (!pendingData) return
     setIsSubmitting(true)
 
@@ -1954,20 +1993,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         description: t('doc_created_description', { docLabel, number: result.data.invoice_number }),
       })
 
-      setShowReview(false)
-      setCreatedInvoiceId(result.data.id)
-
-      // First-invoice-only logo prompt (issue #520) takes priority over the
-      // send-now dialog so a fresh upload makes it onto the just-sent PDF
-      // (pdf-template reads logo_url live from company_settings). Once the
-      // prompt closes, handleLogoPromptClose resumes the regular flow.
-      if (hadZeroInvoices === true && !logoUrl) {
-        setShowLogoPrompt(true)
-      } else if (selectedCustomer?.email && hasEmailSend) {
-        setShowSendPrompt(true)
-      } else {
-        router.replace(`/invoices/${result.data.id}`)
-      }
+      setConfirmIntent(null)
+      router.replace(`/invoices/${result.data.id}`)
     } catch (error) {
       toast({
         title: t('create_invoice_failed_title'),
@@ -1977,6 +2004,86 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  // Confirm on a send: persist the form (create, or PATCH the draft), then
+  // send it or mark it sent (lib/invoices/editor/send-sequence.ts). "Jag
+  // skickar själv" lands on the detail page with ?download=1, which downloads
+  // the archived, numbered PDF the customer is to get.
+  async function sendFromEditor(channel: EditorChannel) {
+    if (!pendingData) return
+    // Peppol is never offered from the editor yet (no readiness signal before
+    // the invoice exists); the detail page sends e-fakturor.
+    const route = channel === 'email' ? 'email' : 'manual'
+    setIsSubmitting(true)
+    const result = await persistAndSend({
+      mode: isEditMode ? 'edit' : 'create',
+      invoiceId: initial?.id ?? null,
+      invoiceNumber: initial?.invoice_number ?? null,
+      documentType: pendingData.document_type,
+      payload: buildInvoiceWritePayload(withQuoteValidity(pendingData), { oreRounding, defaultDims }),
+      channel: route,
+      email:
+        route === 'email'
+          ? {
+              additional_cc: isCompanyAdmin ? extraCc : undefined,
+              email_subject: emailOverride?.subject,
+              email_body: emailOverride?.body,
+            }
+          : undefined,
+    })
+
+    if (!result.ok) {
+      const description = getErrorMessage(result.error ?? new Error(`HTTP ${result.status}`), {
+        locale,
+        context: 'invoice',
+        statusCode: result.status || undefined,
+      })
+      if (result.invoiceId) {
+        // The document exists now: a retry from here would create a second
+        // one, so the detail page takes over.
+        toast({
+          title: tShell('toast_saved_not_sent_title'),
+          description: tShell('toast_saved_not_sent', { error: description }),
+          variant: 'destructive',
+        })
+        setConfirmIntent(null)
+        router.replace(`/invoices/${result.invoiceId}`)
+        return
+      }
+      toast({
+        title: isEditMode ? t('update_failed_title') : t('create_invoice_failed_title'),
+        description,
+        variant: 'destructive',
+      })
+      setIsSubmitting(false)
+      return
+    }
+
+    const booked = booksOnIssue && !result.partial
+    toast({
+      title: tShell(
+        route === 'email'
+          ? booked ? 'toast_sent_book_title' : 'toast_sent_title'
+          : booked ? 'toast_marked_book_title' : 'toast_marked_title',
+      ),
+      description: result.partial
+        ? route === 'email'
+          ? tSend('partial_success', { message: result.message ?? tShell('toast_sent_title') })
+          : tSend('mark_partial_success')
+        : route === 'email'
+          ? result.message ?? undefined
+          : undefined,
+      ...(result.partial ? { variant: 'destructive' as const } : {}),
+    })
+    setConfirmIntent(null)
+    // isSubmitting stays on: the editor is leaving, and a second click must
+    // not send twice.
+    router.replace(
+      route === 'manual' && !result.partial
+        ? `/invoices/${result.invoiceId}?download=1`
+        : `/invoices/${result.invoiceId}`,
+    )
   }
 
   // A failed Zod validation must never read as a dead button (the primary is
@@ -2158,131 +2265,30 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }
 
-  async function handleSendNow() {
-    if (!createdInvoiceId) return
-    setIsSending(true)
-
-    try {
-      const response = await fetch(`/api/invoices/${createdInvoiceId}/send`, {
-        method: 'POST',
-      })
-
-      if (!response.ok) {
-        const result = await response.json()
-        throw new Error(getErrorMessage(result, { context: 'invoice', statusCode: response.status }))
-      }
-
-      toast({
-        title: t(sendNowKey('doc_sent_title')),
-        description: t(sendNowKey('doc_sent_description'), { email: selectedCustomer?.email ?? '' }),
-      })
-    } catch (error) {
-      toast({
-        title: t(sendNowKey('send_doc_failed_title')),
-        description: getErrorMessage(error, { context: 'invoice' }),
-        variant: 'destructive',
-      })
-    } finally {
-      setIsSending(false)
-      setShowSendPrompt(false)
-      router.replace(`/invoices/${createdInvoiceId}`)
-    }
-  }
-
-  // Preview from the review dialog (no arg: uses the pending review data) or
-  // from the sticky bar (validated form data passed by handleSubmit).
-  async function handlePreviewPDF(dataOverride?: FormData) {
-    const data = dataOverride ?? pendingData
-    if (!data) return
-    setIsPreviewing(true)
-
-    // Open the tab synchronously inside the click's user activation. A
-    // window.open after the awaits below is popup-blocked whenever generation
-    // outlives the activation window (~5s): exactly the slow cold-start case,
-    // where the preview then silently did nothing (support: cbysea.se).
-    const tab = openDeferredTab(t('preview_pdf_generating'))
-
-    try {
-      const response = await fetch('/api/invoices/preview-pdf', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customer_id: data.customer_id,
-          invoice_date: data.invoice_date,
-          due_date: withQuoteValidity(data).due_date,
-          valid_until: withQuoteValidity(data).valid_until,
-          currency: data.currency,
-          document_type: data.document_type,
-          items: data.items,
-          your_reference: data.your_reference,
-          our_reference: data.our_reference,
-          invoice_marking: data.invoice_marking,
-          notes: data.notes,
-          payment_link_url: data.payment_link_url,
-          payment_cash_account_id: data.payment_cash_account_id || null,
-          invoice_number: numberPreview,
-          // ROT/RUT claim card: the preview shows the same masked personnummer
-          // and fastighetsbeteckning in its deduction box as the created
-          // invoice will. Only sent when a line actually claims a deduction
-          // (same privacy rule as buildInvoiceWritePayload).
-          ...(data.items.some((i) => i.deduction_type)
-            ? {
-                deduction_personnummer: data.deduction_personnummer,
-                deduction_housing_designation: data.deduction_housing_designation,
-              }
-            : {}),
-        }),
-      })
-
-      if (!response.ok) {
-        const result = await response.json()
-        throw new Error(getErrorMessage(result, { context: 'invoice', statusCode: response.status }))
-      }
-
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      if (!tab.navigate(url)) {
-        tab.close()
-        window.URL.revokeObjectURL(url)
-        toast({
-          title: t('preview_pdf_failed'),
-          description: tCommon('popup_blocked_description', { appName }),
-          variant: 'destructive',
-        })
-        return
-      }
-      // The blob URL must outlive the tab's load; revoke on a generous delay
-      // instead of leaking it for the page's lifetime.
-      window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000)
-    } catch (error) {
-      tab.close()
-      toast({
-        title: t('preview_pdf_failed'),
-        description: getErrorMessage(error, { context: 'invoice' }),
-        variant: 'destructive',
-      })
-    } finally {
-      setIsPreviewing(false)
-    }
-  }
-
-  const titleText = isEditMode
-    ? t('title_edit')
-    : isCopyMode
-    ? t('title_copy')
-    : isSelfBilled
+  // The document's own label (Faktura, Offert, ...): the edit title, the
+  // first preview tab and the document-type switch.
+  const docTypeLabel =
+    watchDocumentType === 'proforma'
+      ? t('doctype_proforma')
+      : watchDocumentType === 'delivery_note'
+        ? t('doctype_delivery_note')
+        : watchDocumentType === 'quote'
+          ? t('doctype_quote')
+          : t('doctype_invoice')
+  // The top bar's title doubles as the document-type switch, so it names the
+  // type: "Ny offert" while creating, "Offert" when editing a saved draft
+  // (the meta line says it is a draft).
+  const titleText = isSelfBilled
     ? ts('title')
-    : watchDocumentType === 'proforma'
-    ? t('title_proforma')
-    : watchDocumentType === 'delivery_note'
-      ? t('title_delivery_note')
-      : watchDocumentType === 'quote'
-        ? t('title_quote')
-        : t('title_invoice')
-  // In bare (dialog) mode the dialog owns the accessible title (sr-only
-  // DialogTitle) and the page already has its own h1, so the visible heading
-  // steps down to h2: it still tracks document type and number preview live.
-  const Heading = bare ? 'h2' : 'h1'
+    : isEditMode
+      ? docTypeLabel
+      : watchDocumentType === 'proforma'
+        ? t('title_proforma')
+        : watchDocumentType === 'delivery_note'
+          ? t('title_delivery_note')
+          : watchDocumentType === 'quote'
+            ? t('title_quote')
+            : t('title_invoice')
 
   // Derived snabbflöde state: entry-row suggestions, the Förval chip line and
   // the single next-step line (components/invoices/invoice-editor-flow.ts).
@@ -2332,17 +2338,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     external_number: t('next_step_external_number'),
     received_date: t('next_step_received_date'),
   }
-  const nextStepText =
-    nextStep.kind === 'ready'
-      ? isEditMode
-        ? t('ready_edit')
-        : isSelfBilled
-          ? t('ready_self_billed')
-          : t('ready_create')
-      : nextStep.kind === 'row_incomplete'
-        ? t('next_step_row_incomplete', { index: nextStep.index + 1 })
-        : nextStepLabels[nextStep.kind]
-
   const forvalChips = deriveForvalChips({
     isSelfBilled,
     documentType: watchDocumentType,
@@ -2356,14 +2351,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     oreRounding,
     dims: hasDimensionValues(defaultDims) ? compactDims(defaultDims) : null,
   })
-  const chipTexts = forvalChips.map((chip) => {
+  // The document type is the top bar's title now, so it is not repeated here.
+  const chipTexts = forvalChips.filter((chip) => chip.kind !== 'doc_type').map((chip) => {
     switch (chip.kind) {
-      case 'doc_type':
-        return chip.documentType === 'proforma'
-          ? t('doctype_proforma')
-          : chip.documentType === 'quote'
-            ? t('doctype_quote')
-            : t('doctype_delivery_note')
       case 'currency':
         return t('chip_currency', { currency: chip.currency })
       case 'invoice_date':
@@ -2395,57 +2385,337 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     (typeof itemsRootError?.message === 'string' ? itemsRootError.message : undefined)
 
   const inFlight = isSubmitting || isSavingDraft || isFormSubmitting
-  const showDraftAction = !isEditMode && !isSelfBilled && watchDocumentType === 'invoice'
-  const primaryLabel = isEditMode
-    ? t('save_changes')
-    : isSelfBilled
-      ? ts('register')
-      : t('review_and_create')
 
-  // min-w-0 on the root: DialogContent is display:grid; without it this grid
-  // item's min-width:auto lets the row grid's min-w force the whole column
-  // wider than small viewports and the dialog clips it.
+  // ===== One screen: channel, primary, live preview, status line =========
+  // Pure rules in lib/invoices/editor/*, pinned by unit tests.
+  const booksOnIssue = resolveBooksOnIssue(watchDocumentType, {
+    accountingMethod,
+    deferInvoiceBooking: companySettings?.defer_invoice_booking === true,
+  })
+  const channelContext: ChannelContext = {
+    documentType: watchDocumentType,
+    canEmail: hasEmailSend,
+    isSandbox,
+    customerSelected: Boolean(selectedCustomer),
+    customerEmail: selectedCustomer?.email ?? null,
+    // No company-access or customer-participant signal exists before the
+    // invoice does; e-fakturor are sent from the detail page.
+    peppolReady: false,
+  }
+  const channelOptions = resolveChannelOptions(channelContext)
+  const channel = resolveEffectiveChannel(channelChoice, channelContext)
+  const emailBlock = channelOptions.find((option) => option.channel === 'email')?.reason ?? null
+  const editorMode = isEditMode ? 'edit' : 'create'
+  const primaryContext = { mode: editorMode, isSelfBilled, documentType: watchDocumentType, channel, booksOnIssue } as const
+  const primaryAction = resolvePrimaryAction(primaryContext)
+  const editorMenu = resolveEditorMenu({ ...primaryContext, channelOptions })
+
+  // This send's extra copies (Mejl tab, owner/admin), validated like the
+  // send dialog does before the server sees them.
+  const extraCc = parseInvoiceRecipientText(extraCcText)
+  const invalidExtraCc = extraCc.find((address) => !EMAIL_PATTERN.test(address)) ?? null
+  const extraCcError = invalidExtraCc ? tShell('email_copy_invalid', { address: invalidExtraCc }) : null
+
+  // The live previews render what the write path would save: the same form
+  // values through the same body builder (lib/invoices/editor/preview-request).
+  const formValues = watch()
+  const printedNumber = (isEditMode ? initial?.invoice_number : null) ?? numberPreview
+  const previewRequest = isSelfBilled
+    ? null
+    : buildEditorPreviewRequest(formValues, { oreRounding, defaultDims, invoiceNumber: printedNumber ?? null })
+  const previewBody = previewRequest ? JSON.stringify(previewRequest) : null
+  const emailRequestBody = previewRequest
+    ? JSON.stringify({
+        ...previewRequest,
+        email_subject: emailOverride?.subject ?? null,
+        email_body: emailOverride?.body ?? null,
+      })
+    : null
+  const pdf = useInvoicePdfPreview(previewBody, previewRefreshKey)
+  const preliminaryNumber =
+    !isSelfBilled && watchDocumentType !== 'delivery_note' && !(isEditMode && initial?.invoice_number)
+      ? numberPreview
+      : null
+
+  const statusLine = resolveEditorStatusLine({
+    nextStep,
+    missing: pdf.missing,
+    documentType: watchDocumentType,
+    pageCount: isSelfBilled ? null : pdf.pageCount,
+    previewFailed: Boolean(pdf.error),
+    notes: formValues.notes ?? '',
+    productRowCount,
+    hasDeduction: hasAnyDeduction,
+  })
+  const [pane, setPane] = useState<EditorPane>('form')
+  const describeStep = (step: NextStep) => ({
+    prefix: t('next_step_prefix'),
+    label:
+      step.kind === 'ready'
+        ? ''
+        : step.kind === 'row_incomplete'
+          ? t('next_step_row_incomplete', { index: step.index + 1 })
+          : nextStepLabels[step.kind],
+  })
+  // A jump link in the preview pane at narrow widths: show the form first,
+  // then focus the field once it is laid out.
+  const jumpToStep = (step: NextStep) => {
+    setPane('form')
+    window.setTimeout(() => focusStep(step), 0)
+  }
+  const renderStatusLine = (className?: string) => (
+    <EditorStatusLine
+      status={statusLine}
+      describeStep={describeStep}
+      onStep={jumpToStep}
+      canAddPayee={isCompanyAdmin && canWrite}
+      onAddPayee={() => setShowBankSetup(true)}
+      className={className}
+    />
+  )
+
+  // Cmd/Ctrl+Enter runs the primary (it opens the confirm; Enter there
+  // sends). Through refs so the listener is bound once.
+  const requestIntentRef = useRef(requestIntent)
+  const primaryIntentRef = useRef(primaryAction.intent)
+  useEffect(() => {
+    requestIntentRef.current = requestIntent
+    primaryIntentRef.current = primaryAction.intent
+  })
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey) || event.defaultPrevented) return
+      // A dialog (confirm, new customer, bank details) owns the keyboard.
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return
+      event.preventDefault()
+      requestIntentRef.current(primaryIntentRef.current)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  // ===== Confirm dialog ====================================================
+  const confirmData = pendingData
+  const confirmDocType = confirmData?.document_type ?? watchDocumentType
+  const confirmChannel = confirmIntent?.kind === 'send' ? confirmIntent.channel : null
+  const confirmNumber =
+    confirmDocType === 'delivery_note' && !isEditMode
+      ? null
+      : (isEditMode ? initial?.invoice_number : null) ?? numberPreview
+  const confirmDoc = tShell(`doc_${confirmDocType}`)
+  const confirmCustomer = selectedCustomer?.name ?? ''
+  const confirmTitleKey =
+    confirmIntent?.kind === 'create'
+      ? 'confirm_title_create'
+      : confirmChannel === 'email'
+        ? 'confirm_title_email'
+        : 'confirm_title_manual'
+  const confirmTitle = confirmNumber
+    ? tShell(confirmTitleKey, { doc: confirmDoc, number: confirmNumber, customer: confirmCustomer })
+    : tShell(`${confirmTitleKey}_no_number`, { doc: confirmDoc, customer: confirmCustomer })
+  const confirmCurrency = (confirmData?.currency ?? watchCurrency) as Currency
+  const confirmRows: Array<{ label: string; value: string }> = []
+  if (confirmChannel === 'email') {
+    confirmRows.push({
+      label: tShell('confirm_row_to'),
+      value: [tShell('confirm_to_with_pdf', { email: selectedCustomer?.email ?? '' }), ...(isCompanyAdmin ? extraCc : [])].join(', '),
+    })
+  } else if (confirmChannel) {
+    confirmRows.push({ label: tShell('confirm_row_channel'), value: tShell('confirm_channel_manual') })
+  }
+  confirmRows.push({
+    label: tShell('confirm_row_number'),
+    value: confirmNumber ? tShell('confirm_number_locks', { number: confirmNumber }) : tShell('confirm_number_next'),
+  })
+  if (confirmDocType === 'quote') {
+    confirmRows.push({
+      label: tShell('confirm_row_total'),
+      value: tShell('confirm_amount_valid', {
+        amount: formatCurrency(displayedToPay, confirmCurrency),
+        date: withQuoteValidity({ document_type: 'quote', due_date: confirmData?.due_date ?? '', valid_until: confirmData?.valid_until }).due_date,
+      }),
+    })
+  } else if (confirmDocType !== 'delivery_note') {
+    confirmRows.push({
+      label: hasAnyDeduction || confirmDocType === 'invoice' ? t('to_pay_label') : t('total_label'),
+      value: tShell('confirm_amount_due', {
+        amount: formatCurrency(displayedToPay, confirmCurrency),
+        date: confirmData?.due_date ?? '',
+      }),
+    })
+  }
+  const entityType: EntityType =
+    (companySettings?.entity_type as EntityType | null | undefined) ?? company?.entity_type ?? 'enskild_firma'
+  const accountNames = new Map(activeAccounts.map((account) => [account.account_number, account.account_name]))
+  let confirmVoucher: ConfirmVoucher | null = null
+  if (confirmIntent?.kind === 'create') {
+    confirmVoucher = { kind: 'note', text: tShell('confirm_create_note') }
+  } else if (confirmChannel && confirmDocType === 'invoice' && confirmData) {
+    if (!booksOnIssue) {
+      confirmVoucher = {
+        kind: 'note',
+        text: accountingMethod === 'cash' ? tShell('confirm_voucher_cash') : tShell('confirm_voucher_deferred'),
+      }
+    } else if (confirmCurrency !== 'SEK') {
+      confirmVoucher = { kind: 'note', text: tShell('confirm_voucher_foreign') }
+    } else {
+      const lines = proposeDraftSendLines({
+        invoiceNumber: confirmNumber ?? null,
+        currency: confirmCurrency,
+        vatTreatment: vatRules?.treatment ?? 'standard_25',
+        vatRegistered,
+        defaultVatRate: vatRules?.rate || 25,
+        items: confirmData.items,
+        defaultDimensions: defaultDims,
+        entityType,
+      })
+      if (lines.length > 0) {
+        confirmVoucher = {
+          kind: 'lines',
+          date: confirmData.invoice_date,
+          lines: lines.map((line) => ({
+            account: line.account_number,
+            name: accountNames.get(line.account_number) ?? line.line_description,
+            debit: parseFloat(line.debit_amount) || 0,
+            credit: parseFloat(line.credit_amount) || 0,
+          })),
+        }
+      }
+    }
+  }
+  const confirmLabel =
+    confirmIntent?.kind === 'create'
+      ? tShell('action_create_without_sending')
+      : tShell(resolveSendLabel({ documentType: confirmDocType, channel: confirmChannel ?? channel, booksOnIssue }))
+  const confirmDisabled =
+    !canWrite ||
+    (needsSwedishVatAcknowledgement && !swedishVatAcknowledged) ||
+    (confirmChannel === 'email' && isCompanyAdmin && extraCcError !== null)
+
+  // ===== Top bar ===========================================================
+  // Locked: quotes and delivery notes are numbered from their own series at
+  // insert, so a saved one cannot change type (the API refuses it too).
+  const docTypeLocked = isEditMode && (initial?.document_type === 'quote' || initial?.document_type === 'delivery_note')
+  const documentTypeOptions: Array<{ value: InvoiceDocumentType; label: string }> | null =
+    isSelfBilled || docTypeLocked
+      ? null
+      : [
+          { value: 'invoice', label: t('doctype_invoice') },
+          // Kinds switched off in Inställningar > Försäljning are hidden
+          // unless this document already is one.
+          ...(watchDocumentType === 'proforma' || isInvoiceTypeEnabled(companySettings, 'proforma_enabled')
+            ? [{ value: 'proforma' as const, label: t('doctype_proforma') }]
+            : []),
+          ...(watchDocumentType === 'quote' || isInvoiceTypeEnabled(companySettings, 'quotes_enabled')
+            ? [{ value: 'quote' as const, label: t('doctype_quote') }]
+            : []),
+          { value: 'delivery_note', label: t('doctype_delivery_note') },
+        ]
+  const updatedAt = initial?.updated_at ? new Date(initial.updated_at) : null
+  const metaText = isSelfBilled
+    ? ''
+    : isCopyMode && copyInitial
+      ? tShell('meta_copy', { number: copyInitial.source_invoice_number })
+      : isEditMode && updatedAt && !Number.isNaN(updatedAt.getTime())
+        ? tShell('meta_saved', {
+            time:
+              format(updatedAt, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
+                ? format(updatedAt, 'HH:mm')
+                : format(updatedAt, 'yyyy-MM-dd HH:mm'),
+          })
+        : tShell('meta_draft')
+  const menuEntries: { channels: TopBarMenuEntry[]; actions: TopBarMenuEntry[] } | null = editorMenu
+    ? {
+        channels: editorMenu.channels.map((entry) => ({
+          key: entry.channel,
+          label: tShell(entry.label),
+          selected: entry.selected,
+          disabled: !entry.available || !canWrite,
+          reason: entry.reason ? tShell(EMAIL_BLOCK_KEYS[entry.reason]) : null,
+          onSelect: () => requestIntent(entry.intent),
+        })),
+        actions: editorMenu.actions.map((entry) => ({
+          key: entry.intent.kind,
+          label: tShell(entry.label),
+          disabled: !canWrite,
+          onSelect: () => requestIntent(entry.intent),
+        })),
+      }
+    : null
+  const breadcrumb =
+    watchDocumentType === 'quote' && !isSelfBilled
+      ? { label: tNav('quotes'), href: '/quotes' }
+      : { label: tNav('invoices'), href: '/invoices' }
+
   return (
-    <div className={bare ? 'min-w-0' : 'mx-auto w-full min-w-0 max-w-2xl'}>
-      <div className={bare ? 'px-6 pt-6 pr-10' : undefined}>
-        <div className="flex items-center gap-3">
-          {!bare && (
-            <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label={t('back')}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-          )}
-          <Heading className={bare ? 'font-display text-xl tracking-tight' : 'font-display text-2xl leading-8 tracking-tight'}>
-            {titleText}
-            {numberPreview && !isSelfBilled && (
-              <span className="ml-2 align-baseline font-sans text-[13px] font-normal tracking-normal text-muted-foreground tabular-nums">
-                {numberPreview}
-              </span>
+    <>
+    <InvoiceEditorShell
+      pane={pane}
+      onPaneChange={setPane}
+      renderTopBar={(paneSwitch) => (
+        <EditorTopBar
+          breadcrumb={breadcrumb}
+          title={titleText}
+          documentTypes={documentTypeOptions}
+          documentType={watchDocumentType}
+          onDocumentTypeChange={(value) =>
+            setValue('document_type', value, { shouldDirty: true, shouldValidate: false })
+          }
+          help={
+            <>
+              <p>{isSelfBilled ? tShell('help_self_billed') : tShell('help')}</p>
+              {isCopyMode && copyInitial && (
+                <p className="mt-2">{t('copy_notice', { number: copyInitial.source_invoice_number })}</p>
+              )}
+            </>
+          }
+          meta={metaText}
+          paneSwitch={paneSwitch}
+          primary={{
+            label: tShell(primaryAction.label),
+            onClick: () => requestIntent(primaryAction.intent),
+            disabled: inFlight || !canWrite,
+            loading: inFlight && confirmIntent === null,
+            title: !canWrite ? t('viewer_disabled_tooltip') : undefined,
+            locked: !canWrite,
+          }}
+          menu={menuEntries}
+        />
+      )}
+      preview={
+        isSelfBilled ? null : (
+          <EditorPreviewPane
+            documentLabel={docTypeLabel}
+            pdf={pdf}
+            preliminaryNumber={preliminaryNumber}
+            statusLine={renderStatusLine()}
+            renderEmail={() => (
+              <EditorEmailPreview
+                requestBody={emailRequestBody}
+                unavailableReason={
+                  channel === 'email'
+                    ? null
+                    : emailBlock
+                      ? tShell(EMAIL_BLOCK_KEYS[emailBlock])
+                      : tShell('email_unavailable_manual')
+                }
+                onUseEmail={channel !== 'email' && !emailBlock ? () => setChannelChoice('email') : null}
+                override={emailOverride}
+                onOverrideChange={setEmailOverride}
+                canAddCopies={isCompanyAdmin}
+                extraCcText={extraCcText}
+                onExtraCcTextChange={setExtraCcText}
+                extraCcError={extraCcError}
+              />
             )}
-          </Heading>
-        </div>
-
-        {isCopyMode && copyInitial && (
-          <div className="mt-4 flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm">
-            <Copy className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-            <p className="text-muted-foreground">
-              {t('copy_notice', { number: copyInitial.source_invoice_number })}
-            </p>
-          </div>
-        )}
-
-        {hasBankDetails === false && !isSelfBilled && (
-          <div className="mt-4 flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm">
-            <Landmark className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <p className="text-muted-foreground">{t('bank_missing_warning')}</p>
-            <Button variant="link" size="sm" className="ml-auto shrink-0 px-0" onClick={() => setShowBankSetup(true)}>
-              {t('bank_add_now')}
-            </Button>
-          </div>
-        )}
-      </div>
-
-      <form onSubmit={handleSubmit(onSubmit, onInvalidSubmit)}>
-        <div className={cn('mt-8', bare && 'px-6')}>
+          />
+        )
+      }
+      form={
+      // No submit button inside: every action runs from the top bar
+      // (requestIntent), and Enter in a field never sends.
+      <form noValidate onSubmit={(event) => event.preventDefault()}>
+        <div>
           {/* ===== Kund ===== */}
           <section>
             <SectionLabel>
@@ -3512,44 +3782,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             >
               <div className={cn('min-h-0 overflow-hidden', !settingsOpen && 'invisible')} aria-hidden={!settingsOpen}>
                 <div className="mt-4 border-t border-border">
-                  {!isSelfBilled && (
-                    <div className={SETTINGS_ROW_CLASS}>
-                      <Label className="text-[13px] font-normal">{t('document_type_label')}</Label>
-                      <Controller
-                        name="document_type"
-                        control={control}
-                        render={({ field }) => (
-                          <Select
-                            value={field.value}
-                            onValueChange={field.onChange}
-                            // Quotes and delivery notes are numbered from their
-                            // own series at insert, so an existing one cannot
-                            // change type (the API refuses it too).
-                            disabled={isEditMode && (field.value === 'quote' || field.value === 'delivery_note')}
-                          >
-                            <SelectTrigger className="h-8 w-44 text-[13px]">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="invoice">{t('doctype_invoice')}</SelectItem>
-                              {/* Kinds switched off in Inställningar > Försäljning
-                                  are hidden unless this document already is one. */}
-                              {(field.value === 'proforma' ||
-                                isInvoiceTypeEnabled(companySettings, 'proforma_enabled')) && (
-                                <SelectItem value="proforma">{t('doctype_proforma')}</SelectItem>
-                              )}
-                              {(field.value === 'quote' ||
-                                isInvoiceTypeEnabled(companySettings, 'quotes_enabled')) && (
-                                <SelectItem value="quote">{t('doctype_quote')}</SelectItem>
-                              )}
-                              <SelectItem value="delivery_note">{t('doctype_delivery_note')}</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        )}
-                      />
-                    </div>
-                  )}
-
+                  {/* Dokumenttyp lives in the top bar's title ("Ny faktura" lists
+                      only the enabled types), not in Förval. */}
                   <div className={SETTINGS_ROW_CLASS}>
                     <Label className="text-[13px] font-normal">{t('currency_label')}</Label>
                     <Controller
@@ -3831,161 +4065,30 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             </div>
           </section>
 
-          {/* Next step: the page's single ochre line, sage once everything
-              needed is in place. aria-live so the announcement follows the
-              form state without stealing focus. */}
-          <p
-            className={cn('mt-7 text-[13px]', nextStep.kind === 'ready' ? 'text-success' : 'text-attn')}
-            aria-live="polite"
-          >
-            {nextStep.kind === 'ready' ? (
-              nextStepText
-            ) : (
-              <>
-                {t('next_step_prefix')}{' '}
-                <button
-                  type="button"
-                  className="underline underline-offset-4"
-                  onClick={() => focusStep(nextStep)}
-                >
-                  {nextStepText}
-                </button>
-                .
-              </>
-            )}
-          </p>
-        </div>
-
-        {/* Sticky action bar: position sticky, NEVER fixed (DialogContent's
-            transform re-anchors fixed children in bare mode). It binds to the
-            dialog scroll container in bare mode and to the page panel /
-            window otherwise; the page offset (--bottom-nav-h) clears the
-            mobile bottom nav. */}
-        <div
-          className={cn(
-            'sticky z-20 mt-7 border-t border-border bg-background',
-            bare ? 'bottom-0 px-6' : 'bottom-[var(--bottom-nav-h)]',
-          )}
-        >
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">
-            <div className="whitespace-nowrap text-[13px] text-muted-foreground">
-              {hasAnyDeduction ? t('to_pay_label') : t('total_label')}
-              <span className="ml-2 text-[15px] font-semibold tabular-nums text-foreground">
-                {formatCurrency(displayedToPay, watchCurrency)}
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-3">
-              {showDraftAction && (
-                <button
-                  type="button"
-                  className={cn(QUIET_LINK_CLASS, 'disabled:cursor-not-allowed disabled:opacity-50')}
-                  disabled={inFlight || !canWrite}
-                  title={!canWrite ? t('viewer_disabled_tooltip') : t('save_as_draft_tooltip')}
-                  onClick={handleSubmit(saveDraftData, onInvalidSubmit)}
-                >
-                  {!canWrite && <Lock className="mr-1 inline h-3 w-3" />}
-                  {isSavingDraft && <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />}
-                  {t('save_as_draft')}
-                </button>
-              )}
-              {!isSelfBilled && !isEditMode && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={inFlight}
-                  loading={isPreviewing}
-                  onClick={handleSubmit((data) => handlePreviewPDF(data), onInvalidSubmit)}
-                >
-                  {!isPreviewing && <Eye className="mr-2 h-4 w-4" />}
-                  {isPreviewing ? t('preview_pdf_generating') : t('preview_pdf')}
-                </Button>
-              )}
-              <Button
-                type="submit"
-                disabled={inFlight || !canWrite}
-                loading={isFormSubmitting && !isSavingDraft}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-                {primaryLabel}
-              </Button>
-            </div>
-          </div>
+          {/* The status line lives under the preview; at narrow widths the
+              form shows alone, so it follows the form there. A received
+              självfaktura has no preview: it always sits here. */}
+          {renderStatusLine(isSelfBilled ? 'mt-7' : 'mt-7 @min-[900px]:hidden')}
         </div>
       </form>
+      }
+    />
 
-      {selectedCustomer && vatRules && (
-        <ConfirmationDialog
-          open={showReview}
-          onOpenChange={(open) => {
-            if (!open) setSwedishVatAcknowledged(false)
-            setShowReview(open)
-          }}
-          onConfirm={handleConfirm}
-          isSubmitting={isSubmitting}
-          confirmDisabled={needsSwedishVatAcknowledgement && !swedishVatAcknowledged}
-          title={watchDocumentType === 'proforma'
-            ? t('review_dialog_title_proforma')
-            : watchDocumentType === 'quote'
-              ? t('review_dialog_title_quote')
-              : watchDocumentType === 'delivery_note'
-                ? t('review_dialog_title_delivery_note')
-                : t('review_dialog_title_invoice')}
-          warningText={watchDocumentType === 'invoice'
-            ? accountingMethod === 'cash'
-              ? t('review_warning_invoice_cash')
-              : t('review_warning_invoice_accrual')
-            : watchDocumentType === 'proforma'
-              ? t('review_warning_proforma')
-              : watchDocumentType === 'quote'
-                ? t('review_warning_quote')
-                : t('review_warning_delivery_note')}
-          confirmLabel={watchDocumentType === 'proforma'
-            ? t('confirm_create_proforma')
-            : watchDocumentType === 'quote'
-              ? t('confirm_create_quote')
-              : watchDocumentType === 'delivery_note'
-                ? t('confirm_create_delivery_note')
-                : t('confirm_create_invoice')}
-          extraActions={
-            <Button
-              variant="outline"
-              onClick={() => handlePreviewPDF()}
-              disabled={isSubmitting}
-              loading={isPreviewing}
-            >
-              {!isPreviewing && <Eye className="mr-2 h-4 w-4" />}
-              {isPreviewing ? t('preview_pdf_generating') : t('preview_pdf')}
-            </Button>
-          }
-        >
-          <InvoiceReviewContent
-            customer={selectedCustomer}
-            invoiceDate={pendingData?.invoice_date || ''}
-            dueDate={(isQuoteDoc ? pendingData?.valid_until : pendingData?.due_date) || ''}
-            dueDateLabelKey={isQuoteDoc ? 'valid_until' : 'due_date'}
-            currency={(pendingData?.currency || 'SEK') as Currency}
-            items={(pendingData?.items || []).map((item) => ({
-              ...item,
-              vat_rate: vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0,
-            }))}
-            subtotal={subtotal}
-            vatAmount={vatAmount}
-            total={total}
-            yourReference={pendingData?.your_reference}
-            ourReference={pendingData?.our_reference}
-            invoiceMarking={pendingData?.invoice_marking}
-            notes={pendingData?.notes}
-            numberPreview={numberPreview}
-            oreRounding={oreRounding}
-            vatRegistered={vatRegistered}
-            paymentLink={paymentLinkMode}
-          />
-          {/* Muted here too: the dialog's ochre line is its warningText.
-              Swedish VAT to an EU customer whose reverse charge is blocked
-              needs the explicit tick before the invoice exists (#2749). */}
-          {vatWarnings.length > 0 && (
-            <div className="mt-4 space-y-3">
+      <SendConfirmDialog
+        open={confirmIntent !== null && confirmData !== null}
+        onOpenChange={(open) => {
+          if (open) return
+          setConfirmIntent(null)
+          setSwedishVatAcknowledged(false)
+        }}
+        title={confirmTitle}
+        rows={confirmRows}
+        voucher={confirmVoucher}
+        extra={
+          // Swedish VAT to an EU customer whose reverse charge is blocked
+          // needs the explicit tick before the invoice exists (#2749).
+          selectedCustomer && vatWarnings.length > 0 ? (
+            <div className="space-y-3">
               <VatTreatmentNotice
                 tone="muted"
                 customer={selectedCustomer}
@@ -4000,15 +4103,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     onCheckedChange={(checked) => setSwedishVatAcknowledged(checked === true)}
                     className="mt-0.5"
                   />
-                  <Label htmlFor="swedish-vat-acknowledged" className="text-sm font-normal leading-5">
+                  <Label htmlFor="swedish-vat-acknowledged" className="text-[13px] font-normal leading-5">
                     {tVat('acknowledge_swedish_vat')}
                   </Label>
                 </div>
               )}
             </div>
-          )}
-        </ConfirmationDialog>
-      )}
+          ) : null
+        }
+        confirmLabel={confirmLabel}
+        confirmDisabled={confirmDisabled}
+        busy={isSubmitting}
+        onConfirm={() => {
+          if (confirmIntent?.kind === 'create') void createWithoutSending()
+          else if (confirmIntent?.kind === 'send') void sendFromEditor(confirmIntent.channel)
+        }}
+      />
 
       {/* Create customer dialog */}
       <Dialog open={isCreateCustomerOpen} onOpenChange={setIsCreateCustomerOpen}>
@@ -4039,39 +4149,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         onLogoUpdate={(url) => setLogoUrl(url)}
       />
 
-      {/* Send now prompt dialog */}
-      <Dialog open={showSendPrompt} onOpenChange={(open) => {
-        if (!open && createdInvoiceId) {
-          setShowSendPrompt(false)
-          router.replace(`/invoices/${createdInvoiceId}`)
-        }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t(sendNowKey('send_now_dialog_title'))}</DialogTitle>
-            {/* data-ph-mask: the customer email is user data */}
-            <DialogDescription data-ph-mask="">
-              {t(sendNowKey('send_now_dialog_description'), { email: selectedCustomer?.email ?? '' })}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="flex gap-2 sm:gap-0">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowSendPrompt(false)
-                if (createdInvoiceId) router.replace(`/invoices/${createdInvoiceId}`)
-              }}
-              disabled={isSending}
-            >
-              {t('send_later')}
-            </Button>
-            <Button onClick={handleSendNow} loading={isSending}>
-              {!isSending && <Send className="mr-2 h-4 w-4" />}
-              {isSending ? t('send_now_sending') : t('send_now')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+    </>
   )
 }

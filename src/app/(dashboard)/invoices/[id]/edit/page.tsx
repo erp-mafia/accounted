@@ -8,13 +8,15 @@ import { useToast } from '@/components/ui/use-toast'
 import InvoiceEditor, { type InvoiceForEdit } from '@/components/invoices/InvoiceEditor'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import type { InvoiceItem } from '@/types'
-import { InvoiceEditorSkeleton } from '@/components/common/DetailPageSkeleton'
+import { InvoiceEditorShellSkeleton } from '@/components/invoices/editor/InvoiceEditorShellSkeleton'
 
 /**
  * Edit an existing DRAFT invoice. Loads the invoice + items, guards that it is
  * still an editable draft (no committed verifikat, not sent, not self-billed),
- * then hands it to the shared <InvoiceEditor> in edit mode. The PATCH route
- * enforces the same guard server-side; this just avoids opening a dead form.
+ * then hands it to the shared <InvoiceEditor> in edit mode: the same
+ * one-screen layout as /invoices/new (full-bleed, MainContainer). The PATCH
+ * route enforces the same guard server-side; this just avoids opening a dead
+ * form.
  */
 export default function EditInvoicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -76,7 +78,7 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
   }, [id])
 
   if (isLoading || !invoice) {
-    return <InvoiceEditorSkeleton />
+    return <InvoiceEditorShellSkeleton />
   }
 
   return <InvoiceEditor mode="edit" initial={invoice} />
