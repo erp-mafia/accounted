@@ -121,14 +121,20 @@ export const wrapFullWidthWords = wrapWholeWordsWithin(FULL_WIDTH_BOX_PT)
  *   font, per pt of font size. The built-in fonts measure 1.10 (Helvetica),
  *   1.12 (Times-Roman), 1.13 (Courier), 1.326 (Source Sans 3) and 1.371
  *   (Source Serif 4); 1.4 covers them all.
- * - estimate error: the estimate uses Helvetica widths at 10pt plus 10%, so
- *   it over-counts for every built-in font but Courier, whose fixed-width
- *   glyphs render up to 1.31 times the estimated lines in the narrowest
- *   description column. 1.35 covers that.
+ * - estimate error: the estimate uses Helvetica widths at 10pt plus 10% and
+ *   4pt per space. Text of narrow letters (i, l) is its worst case. In
+ *   Times-Roman and the bundled fonts those glyphs are at most 1.14 times
+ *   the estimated width (Times 'l' at 278 units against 222 * 1.1), and
+ *   ordinary prose comes out under the estimate; 1.35 covers both. Courier is
+ *   fixed-width, every glyph and space 600 units: ordinary prose renders up
+ *   to 1.31 times the estimated lines in the narrowest description column, a
+ *   run of narrow letters up to 600 / (222 * 1.1) = 2.46 times. Courier gets
+ *   2.5.
  *
  * Notes (9pt, 38pt of box chrome) come to 42 lines and a line description
- * (10pt, 13pt of row chrome) to 39: some 420pt in Helvetica, just over half
- * the usable height, and still on the page in the worst built-in case.
+ * (10pt, 13pt of row chrome) to 39 (Courier: 22 and 21): some 420pt in
+ * Helvetica, just over half the usable height, and still on the page in the
+ * worst built-in case.
  *
  * An uploaded font can have any metrics, so it keeps the policy the earlier
  * fixed cap of 12 came from: an assumed pitch of 2 (20pt per line at 10pt)
@@ -140,6 +146,7 @@ export const PAGE_PADDING_PT = 40
 export const USABLE_PAGE_HEIGHT_PT = A4_HEIGHT_PT - 2 * PAGE_PADDING_PT
 export const BUILT_IN_FONT_LINE_PITCH = 1.4
 export const BUILT_IN_FONT_ESTIMATE_ERROR = 1.35
+export const COURIER_ESTIMATE_ERROR = 2.5
 const UPLOADED_FONT_LINE_PITCH = 2
 const UPLOADED_FONT_ESTIMATE_ERROR = 3
 
@@ -153,7 +160,11 @@ export const TABLE_ROW_CHROME_PT = 2 * 6 + 1
 export function keepTogetherLineCap(fontFamily: string, fontSizePt: number, chromePt: number): number {
   const uploaded = fontFamily.startsWith(CUSTOM_INVOICE_FONT_RENDER_PREFIX)
   const pitch = uploaded ? UPLOADED_FONT_LINE_PITCH : BUILT_IN_FONT_LINE_PITCH
-  const error = uploaded ? UPLOADED_FONT_ESTIMATE_ERROR : BUILT_IN_FONT_ESTIMATE_ERROR
+  const error = uploaded
+    ? UPLOADED_FONT_ESTIMATE_ERROR
+    : fontFamily === 'Courier'
+      ? COURIER_ESTIMATE_ERROR
+      : BUILT_IN_FONT_ESTIMATE_ERROR
   return Math.floor((USABLE_PAGE_HEIGHT_PT - chromePt) / (fontSizePt * pitch * error))
 }
 

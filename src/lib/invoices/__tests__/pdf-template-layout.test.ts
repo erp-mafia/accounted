@@ -24,6 +24,7 @@ import layoutDocument from '@react-pdf/layout'
 import {
   BUILT_IN_FONT_ESTIMATE_ERROR,
   BUILT_IN_FONT_LINE_PITCH,
+  COURIER_ESTIMATE_ERROR,
   DRAFT_WATERMARK_COLOR,
   DRAFT_WATERMARK_FONT_SIZE_PT,
   DRAFT_WATERMARK_OPACITY,
@@ -596,6 +597,14 @@ const PAYMENT_TERMS_NOTE = [
 
 const BUILT_IN_FONTS = ['Helvetica', 'Times-Roman', 'Courier', 'Source Sans 3', 'Source Serif 4'] as const
 
+/** The estimate error the cap allows for in a built-in font. */
+function estimateErrorFor(font: string): number {
+  return font === 'Courier' ? COURIER_ESTIMATE_ERROR : BUILT_IN_FONT_ESTIMATE_ERROR
+}
+
+/** Text of narrow letters: where the Helvetica-based estimate errs most. */
+const NARROW_LETTERS = Array.from({ length: 39 }, () => Array.from({ length: 7 }, () => 'llllll').join(' ')).join('\n')
+
 interface PlacedText {
   page: number
   node: LaidOutNode
@@ -627,6 +636,18 @@ function lineCount(nodes: PlacedText[]): number {
   return nodes.reduce((sum, n) => sum + (n.node.lines?.length ?? 0), 0)
 }
 
+/**
+ * A block kept together although it is taller than the page is placed with
+ * its box cut at the page edge while its lines run on past it: clipped
+ * without anything ending past the edge. The lines must fit their box.
+ */
+function expectNoClippedLines(nodes: PlacedText[], label: string) {
+  for (const { node } of nodes) {
+    const linesHeight = (node.lines ?? []).reduce((sum, line) => sum + line.box.height, 0)
+    expect(linesHeight, `${label}: lines run past their box`).toBeLessThanOrEqual(node.box!.height + 0.5)
+  }
+}
+
 async function withFont(fontFamily: string) {
   const { prepareInvoiceFont } = await import('@/lib/invoices/pdf-fonts')
   return prepareInvoiceFont(company, { fontFamily } as never)
@@ -635,23 +656,24 @@ async function withFont(fontFamily: string) {
 describe('keeping free text together', () => {
   it('derives the line cap from the usable page height, the line pitch and the estimate error', () => {
     expect(USABLE_PAGE_HEIGHT_PT).toBeCloseTo(841.89 - 2 * 40, 2)
-    const worstCaseHeight = (lines: number, fontSizePt: number, chromePt: number) =>
-      lines * fontSizePt * BUILT_IN_FONT_LINE_PITCH * BUILT_IN_FONT_ESTIMATE_ERROR + chromePt
-    for (const [fontSizePt, chromePt] of [
-      [NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT],
-      [TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT],
-    ]) {
-      const cap = keepTogetherLineCap('Helvetica', fontSizePt, chromePt)
-      // The largest count whose worst case still fits on an empty page.
-      expect(worstCaseHeight(cap, fontSizePt, chromePt)).toBeLessThanOrEqual(USABLE_PAGE_HEIGHT_PT)
-      expect(worstCaseHeight(cap + 1, fontSizePt, chromePt)).toBeGreaterThan(USABLE_PAGE_HEIGHT_PT)
-      for (const font of BUILT_IN_FONTS) {
-        expect(keepTogetherLineCap(font, fontSizePt, chromePt)).toBe(cap)
+    for (const font of BUILT_IN_FONTS) {
+      const worstCaseHeight = (lines: number, fontSizePt: number, chromePt: number) =>
+        lines * fontSizePt * BUILT_IN_FONT_LINE_PITCH * estimateErrorFor(font) + chromePt
+      for (const [fontSizePt, chromePt] of [
+        [NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT],
+        [TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT],
+      ]) {
+        const cap = keepTogetherLineCap(font, fontSizePt, chromePt)
+        // The largest count whose worst case still fits on an empty page.
+        expect(worstCaseHeight(cap, fontSizePt, chromePt)).toBeLessThanOrEqual(USABLE_PAGE_HEIGHT_PT)
+        expect(worstCaseHeight(cap + 1, fontSizePt, chromePt)).toBeGreaterThan(USABLE_PAGE_HEIGHT_PT)
       }
     }
     // The values the template comment quotes.
     expect(keepTogetherLineCap('Helvetica', NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(42)
     expect(keepTogetherLineCap('Helvetica', TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)).toBe(39)
+    expect(keepTogetherLineCap('Courier', NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(22)
+    expect(keepTogetherLineCap('Courier', TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)).toBe(21)
   })
 
   it('keeps the earlier cap of about 12 lines for an uploaded font, whose metrics are unknown', () => {
@@ -721,6 +743,29 @@ describe('keeping free text together', () => {
     }
   })
 
+  it('stays within the assumed error on text of narrow letters, and never clips it', { timeout: 30_000 }, async () => {
+    const items = [
+      makeItem({ description: NARROW_LETTERS, discount_percent: 10 }),
+      makeItem({ sort_order: 1, id: 'item-1', description: 'Annan rad', vat_rate: 12 }),
+    ]
+    // The same letters in the notes, told apart from the description.
+    const notes = NARROW_LETTERS.replace(/l/g, 'i')
+    for (const font of BUILT_IN_FONTS) {
+      const branding = await withFont(font)
+      const pages = await layOut(InvoicePDF({ invoice: { ...sentInvoice(), notes }, customer, items, company, branding }))
+      expectNothingPastThePageEdge(pages)
+      const description = placedTextNodes(pages).filter((n) => textOf(n.node) === NARROW_LETTERS)
+      expectNoClippedLines(description, font)
+      expectNoClippedLines(noteNodes(pages, notes), font)
+      const descriptionLines = lineCount(description)
+      expect(descriptionLines, font).toBeGreaterThan(0)
+      expect(descriptionLines, font).toBeLessThanOrEqual(estimateLines(NARROW_LETTERS, DESCRIPTION_COLUMN_PT) * estimateErrorFor(font))
+      const noteLines = lineCount(noteNodes(pages, notes))
+      expect(noteLines, font).toBeGreaterThan(0)
+      expect(noteLines, font).toBeLessThanOrEqual(estimateLines(notes, FULL_WIDTH_BOX_PT) * estimateErrorFor(font))
+    }
+  })
+
   it('moves a 20-odd line payment-terms note to the next page whole instead of splitting it', async () => {
     const noteCap = keepTogetherLineCap('Helvetica', NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)
     // Past the old fixed cap (which let it split), well within the derived one.
@@ -753,6 +798,7 @@ describe('keeping free text together', () => {
     const spaceLeft = pages[0].box!.height - PAGE_PADDING_PT - lastRow!.bottom
     expect(noteHeight).toBeGreaterThan(spaceLeft)
     expectNothingPastThePageEdge(pages)
+    expectNoClippedLines(nodes, 'note')
   })
 
   it('keeps a 25-line description row together', () => {
@@ -784,6 +830,7 @@ describe('keeping free text together', () => {
     // the note as a whole across pages.
     const nodes = noteNodes(pages, notes)
     expect(nodes).toHaveLength(9)
+    expectNoClippedLines(nodes, 'note')
     expect(new Set(nodes.map((n) => n.page)).size).toBeGreaterThan(1)
     expect(pages.map(textOf).join('')).toContain('Punkt 9.9')
   })
