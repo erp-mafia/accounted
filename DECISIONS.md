@@ -1164,3 +1164,4 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-09-30] v1/MCP partial_view keeps opening_balances_included (now true) next to the new opening_balances: 'dimension_scoped' instead of removing it, so existing readers are not misled (#3313). (PR #3328)
 [2026-09-30] SIE_JOB_VERSION not bumped for #OIB/#OUB: keys appended to SNAPSHOT_ARRAYS, object source sealed in the manifest; jobs snapshotted before deploy book their IB untagged (#3313). (PR #3328)
 [2026-09-30] #3313 sliced: import + year-end + scoped report IB first (PR #3328, 'Part of'); SIE #OIB/#OUB export and the user-triggered 'split IB per project' action are follow-ups.
+[2026-10-02] The send dialog previews buildInvoiceRegistrationLines / buildCreditNoteLines, moved verbatim to invoice-lines, not a patched buildSendLines: edited rows book verbatim, and only one definition cannot drift. The credit-note preview omits the "(avser A-n)" text suffix.

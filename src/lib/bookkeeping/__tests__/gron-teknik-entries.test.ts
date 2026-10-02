@@ -215,6 +215,7 @@ describe('proposals: grön teknik', () => {
   it('the send preview splits the receivable the same way and names grön teknik', () => {
     const lines = proposeSendLines({
       invoice: {
+        id: 'invoice-1',
         invoice_number: '1001',
         total: 101250,
         total_sek: null,

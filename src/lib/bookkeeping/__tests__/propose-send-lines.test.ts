@@ -35,6 +35,7 @@ function makeInvoiceInput(overrides: Partial<{
   default_dimensions: Record<string, string> | null
 }> = {}) {
   return {
+    id: 'inv-1',
     invoice_number: '2025-001',
     total: 12500,
     total_sek: null,
@@ -58,11 +59,12 @@ describe('proposeSendLines', () => {
     })
 
     expect(lines).toHaveLength(3)
+    // The server generator's own line texts (buildInvoiceRegistrationLines).
     expect(lines[0]).toEqual({
       account_number: '1510',
       debit_amount: '12500',
       credit_amount: '',
-      line_description: 'Försäljning faktura 2025-001',
+      line_description: 'Faktura 2025-001',
     })
     expect(lines[1]).toEqual({
       account_number: '3001',
@@ -74,7 +76,7 @@ describe('proposeSendLines', () => {
       account_number: '2611',
       debit_amount: '',
       credit_amount: '2500',
-      line_description: 'Utgående moms 25%',
+      line_description: 'Utgående moms 25% faktura 2025-001',
     })
   })
 
@@ -185,13 +187,9 @@ describe('proposeSendLines', () => {
       entityType: 'enskild_firma',
     })
 
+    // The order and texts createCreditNoteJournalEntry books
+    // (buildCreditNoteLines): reversed revenue and moms first, then 1510.
     expect(lines).toEqual([
-      {
-        account_number: '1510',
-        debit_amount: '',
-        credit_amount: '12500',
-        line_description: 'Kreditfaktura KR-2025-001',
-      },
       {
         account_number: '3001',
         debit_amount: '10000',
@@ -202,7 +200,13 @@ describe('proposeSendLines', () => {
         account_number: '2611',
         debit_amount: '2500',
         credit_amount: '',
-        line_description: 'Moms kreditfaktura 25%',
+        line_description: 'Kreditfaktura KR-2025-001',
+      },
+      {
+        account_number: '1510',
+        debit_amount: '',
+        credit_amount: '12500',
+        line_description: 'Kreditfaktura KR-2025-001',
       },
     ])
   })
