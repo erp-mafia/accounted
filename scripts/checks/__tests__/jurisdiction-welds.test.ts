@@ -139,6 +139,26 @@ describe('bas-account-literal: shapes left alone', () => {
     expect(bas(`/* '1930' is the bank account`)).toEqual([])
     expect(bas(`  /* bank '1930' */  `)).toEqual([])
   })
+
+  it('ignores unmarked continuation lines of a multi-line block comment', () => {
+    const source = [
+      `/*`,
+      `  Bank is '1930' and VAT settles on '2650'`,
+      `  account.startsWith('19') stays a comment too`,
+      `*/`,
+      `const bank = '1930'`,
+    ].join('\n')
+    expect(findBasAccountWeldsInSource(source).map((f: BasFinding) => f.line)).toEqual([5])
+  })
+
+  it('counts code after a block comment closes on a continuation line', () => {
+    expect(findBasAccountWeldsInSource([`/* note`, `   ends here */ const bank = '1930'`].join('\n')).map((f: BasFinding) => f.line)).toEqual([2])
+  })
+
+  it('does not open a block comment from a /* inside a string', () => {
+    const source = [`const glob = 'src/*'`, `const bank = '1930'`, `const vat = "2650" // '*/'`].join('\n')
+    expect(findBasAccountWeldsInSource(source).map((f: BasFinding) => f.line)).toEqual([2, 3])
+  })
 })
 
 describe('sek-literal', () => {

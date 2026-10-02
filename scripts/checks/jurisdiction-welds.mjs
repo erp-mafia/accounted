@@ -37,6 +37,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 /**
@@ -141,12 +142,62 @@ export const isUnder = (relPath, paths) =>
 
 // A line comment, a doc-comment continuation, or a block comment ('/* */' or
 // JSX '{/* */}') with no code after it on the line: '/* x */ f('2650')' is code.
-const isCommentLine = (text) => {
+// insideBlock: the line starts inside a block comment opened on an earlier
+// line, so it is comment up to the closing '*/' even without a leading '*'.
+const isCommentLine = (text, insideBlock = false) => {
+  if (insideBlock) {
+    const close = text.indexOf('*/')
+    if (close === -1) return true
+    const rest = text.slice(close + 2)
+    return /^\s*\}?\s*$/.test(rest) || isCommentLine(rest)
+  }
   if (/^\s*(?:\/\/|\*)/.test(text)) return true
   const open = /^\s*\{?\s*\/\*/.exec(text)
   if (!open) return false
   const close = text.indexOf('*/', open[0].length)
   return close === -1 || /^\s*\}?\s*$/.test(text.slice(close + 2))
+}
+
+/**
+ * For each line (by index into `starts`), whether it begins inside a block
+ * comment opened on an earlier line. A small lexer: it skips string and
+ * template literals and line comments, so a '/*' inside them opens nothing.
+ * A quote or double quote never spans a line (it also ends JSX text such as
+ * "Don't"); regex literals are not recognised, which is acceptable for a
+ * ratchet that only counts.
+ */
+function blockCommentLineStarts(source, lineCount) {
+  const inside = new Uint8Array(lineCount)
+  let line = 0
+  let inBlock = false
+  let quote = null
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]
+    if (c === '\n') {
+      if (quote === "'" || quote === '"') quote = null
+      line++
+      if (line < lineCount) inside[line] = inBlock ? 1 : 0
+      continue
+    }
+    if (inBlock) {
+      if (c === '*' && source[i + 1] === '/') { inBlock = false; i++ }
+      continue
+    }
+    if (quote) {
+      if (c === '\\' && source[i + 1] !== '\n') i++
+      else if (c === quote) quote = null
+      continue
+    }
+    if (c === '/' && source[i + 1] === '/') {
+      const end = source.indexOf('\n', i)
+      if (end === -1) break
+      i = end - 1
+      continue
+    }
+    if (c === '/' && source[i + 1] === '*') { inBlock = true; i++; continue }
+    if (c === "'" || c === '"' || c === '`') quote = c
+  }
+  return inside
 }
 
 // 1. basAccountLiteral ------------------------------------------------------
@@ -216,10 +267,12 @@ function receiverName(textBefore) {
 function lineLocator(source) {
   // Built on the first match only: most files have none.
   let starts = null
+  let insideBlock = null
   const lineOf = (offset) => {
     if (!starts) {
       starts = [0]
       for (let i = source.indexOf('\n'); i !== -1; i = source.indexOf('\n', i + 1)) starts.push(i + 1)
+      insideBlock = blockCommentLineStarts(source, starts.length)
     }
     let lo = 0
     let hi = starts.length - 1
@@ -237,7 +290,7 @@ function lineLocator(source) {
       let comment = commentCache.get(i)
       if (comment === undefined) {
         const end = i + 1 < starts.length ? starts[i + 1] - 1 : source.length
-        comment = isCommentLine(source.slice(starts[i], end))
+        comment = isCommentLine(source.slice(starts[i], end), insideBlock[i] === 1)
         commentCache.set(i, comment)
       }
       return { line: i + 1, lineStart: starts[i], comment }
@@ -471,8 +524,8 @@ export function compareFileEdges(baselineFiles, currentFiles) {
   return { added, removed }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
-  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'src')
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src')
   const welds = findJurisdictionWelds(root)
   const bas = countByFile(welds.basAccountLiteral)
   const sek = countByFile(welds.sekLiteral)
