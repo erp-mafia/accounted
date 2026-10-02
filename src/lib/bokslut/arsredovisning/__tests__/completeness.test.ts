@@ -445,6 +445,55 @@ describe('validateAnnualReportCompleteness: ekonomisk förening', () => {
     })
     expect(result.issues.map((issue) => issue.code)).toContain('AR-AUDITOR-REPORT-MISSING')
   })
+
+  it('never files an unanswered ÅRL 6 kap. 3 § amount as "inga"; an entered 0 is an answer', () => {
+    const base = input('filing')
+    const withAmounts = (
+      repayable: number | null,
+      redeemable: number | null,
+      forlagsinsatser: number,
+    ): ArsredovisningData => {
+      const r = foreningReport('Oförändrat medlemsantal.')
+      return {
+        ...r,
+        balansrakning: {
+          ...r.balansrakning,
+          equity_liabilities: [
+            ...r.balansrakning.equity_liabilities,
+            { label: 'Förlagsinsatser', semantic_key: 'balance_sheet_forlagsinsatser', current: forlagsinsatser, previous: null },
+          ],
+        },
+        forvaltningsberattelse: {
+          ...r.forvaltningsberattelse,
+          member_disclosures: {
+            ...r.forvaltningsberattelse.member_disclosures,
+            forlagsinsatser_dividend_right: forlagsinsatser ? 'Rätt till 4 % utdelning enligt stadgarna.' : null,
+            insatser_repayable_next_year: repayable,
+            forlagsinsatser_redeemable_two_years: redeemable,
+          },
+        },
+      } as unknown as ArsredovisningData
+    }
+    const codes = (r: ArsredovisningData) =>
+      validateAnnualReportCompleteness({ ...base, report: r }).issues.map((issue) => issue.code)
+
+    expect(codes(withAmounts(null, null, 0))).toContain('AR-EF-MEMBER-AMOUNTS')
+    // Without förlagsinsatser only the repayable insatser are asked.
+    expect(codes(withAmounts(0, null, 0))).not.toContain('AR-EF-MEMBER-AMOUNTS')
+    expect(codes(withAmounts(12_500, null, 50_000))).toContain('AR-EF-MEMBER-AMOUNTS')
+    expect(codes(withAmounts(12_500, 0, 50_000))).not.toContain('AR-EF-MEMBER-AMOUNTS')
+  })
+
+  it('cites the förening\'s own prudence rule (EFL 12 kap. 4 §), not the aktiebolag\'s', () => {
+    const value = input('draft')
+    const r = foreningReport('Oförändrat medlemsantal.')
+    r.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend = 50
+    const issue = validateAnnualReportCompleteness({ ...value, report: r }).issues.find(
+      (i) => i.code === 'AR-DIVIDEND-PRUDENCE-UNCONFIRMED',
+    )
+    expect(issue?.remediation).toContain('12 kap. 4 § lagen om ekonomiska föreningar')
+    expect(issue?.remediation).not.toContain('ABL')
+  })
 })
 
 // Feedback seq 740922: a K2 aktiebolag closed its year with eget kapital

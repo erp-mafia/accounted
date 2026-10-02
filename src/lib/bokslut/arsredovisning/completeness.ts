@@ -295,7 +295,11 @@ export function validateAnnualReportCompleteness(
       'error',
       'management_report',
       'Försiktighetsregeln för föreslagen utdelning är inte bekräftad.',
-      'Bedöm bolagets kapitalbehov, likviditet, ställning och risker enligt ABL 17 kap. 3 §.',
+      // The rule lives in the law of the form: ABL 17 kap. 3 § for an
+      // aktiebolag, EFL 12 kap. 4 § for an ekonomisk förening.
+      report.company.entity_type === 'ekonomisk_forening'
+        ? 'Bedöm föreningens konsolideringsbehov, likviditet, ställning och risker enligt 12 kap. 4 § lagen om ekonomiska föreningar.'
+        : 'Bedöm bolagets kapitalbehov, likviditet, ställning och risker enligt ABL 17 kap. 3 §.',
     )
   }
   if (!profile.narrative_confirmed_at) {
@@ -476,8 +480,7 @@ export function validateAnnualReportCompleteness(
       )
     }
     // ÅRL 6 kap. 3 § p. 1: the förvaltningsberättelse of an ekonomisk
-    // förening must state material changes in the number of members; the
-    // amount disclosures default to "inga", the text cannot.
+    // förening must state material changes in the number of members.
     if (
       report.company.entity_type === 'ekonomisk_forening' &&
       !report.forvaltningsberattelse.member_disclosures?.member_count_change?.trim()
@@ -509,6 +512,25 @@ export function validateAnnualReportCompleteness(
         'error',
         'management_report',
         'Föreningen har förlagsinsatser men förvaltningsberättelsen saknar uppgift om den rätt till utdelning som de medför (ÅRL 6 kap. 3 §).',
+      )
+    }
+    // ÅRL 6 kap. 3 § p. 2 and 4: the two amounts are statements of fact, so
+    // an unanswered one (null) is not read as "inga". The repayable insatser
+    // are always asked; the redeemable förlagsinsatser only when the förening
+    // has förlagsinsatser, since without any the sum is necessarily nil.
+    const memberDisclosures = report.forvaltningsberattelse.member_disclosures
+    if (
+      report.company.entity_type === 'ekonomisk_forening' &&
+      (memberDisclosures?.insatser_repayable_next_year == null ||
+        (forlagsinsatserBalance !== 0 && memberDisclosures?.forlagsinsatser_redeemable_two_years == null))
+    ) {
+      push(
+        issues,
+        'AR-EF-MEMBER-AMOUNTS',
+        'error',
+        'management_report',
+        'Förvaltningsberättelsen saknar belopp för insatser som ska återbetalas eller förlagsinsatser som ska lösas in (ÅRL 6 kap. 3 §).',
+        'Ange beloppen, eller 0 om det inte finns några.',
       )
     }
     // EFL 8 kap. 1 §: an ekonomisk förening always has a revisor, so the

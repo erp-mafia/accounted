@@ -85,8 +85,9 @@ export interface StatementRow {
  * be repaid during the next fiscal year under EFL 10 kap. 11 and 16 §§,
  * (3) the right to distribution that förlagsinsatser carry, and (4) the sum
  * of förlagsinsatser given notice for redemption in the next two fiscal
- * years. Null amounts render the statutory "inga" statement; a missing
- * member text blocks filing (completeness AR-EF-MEMBER-INFO).
+ * years. Null means unanswered, never "inga": a missing member text blocks
+ * filing (completeness AR-EF-MEMBER-INFO), and so does a missing amount
+ * (AR-EF-MEMBER-AMOUNTS); an entered 0 prints "inga".
  */
 export interface MemberDisclosures {
   member_count_change: string | null

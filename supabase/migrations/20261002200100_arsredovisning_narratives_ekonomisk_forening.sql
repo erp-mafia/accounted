@@ -8,8 +8,9 @@
 --      nästkommande två räkenskapsåren (EFL 11 kap. 7 §).
 --
 -- Per fiscal period like the other disclosure overrides on this table. NULL
--- amounts render the statutory "inga" statement; the member text is required
--- before the document is fileable (lib/bokslut/arsredovisning/completeness.ts).
+-- means unanswered and 0 means "inga"; the member text and the amounts are
+-- required before the document is fileable
+-- (lib/bokslut/arsredovisning/completeness.ts).
 -- The columns exist for every legal form but are only rendered for the
 -- ekonomisk förening. No trigger, RPC or RLS change.
 -- pg-test: skip (nullable columns with CHECK constraints only; no trigger, RPC or RLS change)

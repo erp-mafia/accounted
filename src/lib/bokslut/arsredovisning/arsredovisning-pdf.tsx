@@ -106,6 +106,16 @@ function fmt(amount: number): string {
 }
 
 /**
+ * An ÅRL 6 kap. 3 § amount: an entered 0 is the statutory "inga", an
+ * unanswered one (null) prints `unanswered` so the document never states a
+ * fact the user did not give.
+ */
+function memberAmount(amount: number | null | undefined, unanswered: string): string {
+  if (amount == null) return unanswered
+  return amount === 0 ? 'inga' : `${fmt(amount)} kr`
+}
+
+/**
  * Renders ÅRL post-level statement rows (see statement-rows.ts) with a
  * jämförelseår column. Headings carry no amounts; totals get the bordered
  * bold style. The previous-year column stays empty for the company's first
@@ -181,6 +191,9 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
   const meetingNoun = isForening ? 'föreningsstämma' : 'årsstämma'
   const entityNoun = isForening ? 'föreningens' : 'bolagets'
   const member = data.forvaltningsberattelse.member_disclosures
+  const hasForlagsinsatser =
+    (data.balansrakning.equity_liabilities.find((row) => row.semantic_key === 'balance_sheet_forlagsinsatser')
+      ?.current ?? 0) !== 0
   const reportSignatureDate = data.signatures
     .map((signature) => signature.signed_at?.slice(0, 10) ?? null)
     .filter((date): date is string => date !== null)
@@ -256,14 +269,14 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
             </Text>
             <Text style={styles.paragraph}>
               Insatsbelopp som ska återbetalas under nästa räkenskapsår (EFL 10 kap. 11 och 16 §§):{' '}
-              {member.insatser_repayable_next_year ? `${fmt(member.insatser_repayable_next_year)} kr` : 'inga'}
+              {memberAmount(member.insatser_repayable_next_year, 'uppgift saknas')}
             </Text>
             <Text style={styles.paragraph}>
               Rätt till utdelning som gjorda förlagsinsatser medför: {member.forlagsinsatser_dividend_right?.trim() || 'uppgift saknas'}
             </Text>
             <Text style={styles.paragraph}>
               Förlagsinsatser som har sagts upp och ska lösas in under de nästkommande två räkenskapsåren:{' '}
-              {member.forlagsinsatser_redeemable_two_years ? `${fmt(member.forlagsinsatser_redeemable_two_years)} kr` : 'inga'}
+              {memberAmount(member.forlagsinsatser_redeemable_two_years, hasForlagsinsatser ? 'uppgift saknas' : 'inga')}
             </Text>
           </>
         )}
@@ -289,7 +302,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
               : [{ label: 'Fri överkursfond', amount: data.forvaltningsberattelse.resultatdisposition_amounts.share_premium_reserve, isTotal: false }]),
             { label: 'Årets resultat', amount: data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result, isTotal: false },
             { label: `Summa till ${meeting}s förfogande`, amount: data.forvaltningsberattelse.resultatdisposition_amounts.total, isTotal: true },
-            { label: isForening ? 'Föreslagen vinstutdelning till medlemmarna' : 'Föreslagen utdelning', amount: -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend, isTotal: false },
+            { label: isForening ? 'Föreslagen vinstutdelning' : 'Föreslagen utdelning', amount: -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend, isTotal: false },
             { label: 'Balanseras i ny räkning', amount: data.forvaltningsberattelse.resultatdisposition_amounts.carried_forward, isTotal: true },
           ] as const
         ).map(({ label, amount, isTotal }) => (
