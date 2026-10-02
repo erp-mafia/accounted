@@ -152,6 +152,70 @@ describe('buildPayslipData', () => {
   })
 })
 
+describe('buildPayslipData: tax table the run used (#3400)', () => {
+  const company = { name: 'Bolaget AB', org_number: null }
+
+  it('prints the table the run was calculated on after the employee moved to another table', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({ tax_table_number: 33, tax_column: 1, tax_table_year: 2026 }),
+      employee: { ...employee, tax_table_number: 34, tax_column: 2 },
+      company,
+      audience: EMPLOYER,
+    })
+
+    expect(data.taxReference).toBe('Tabell 33, kol 1')
+  })
+
+  it('prints the same table on the employee copy', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({ tax_table_number: 33, tax_column: 1, tax_table_year: 2026 }),
+      employee: { ...employee, tax_table_number: 34, tax_column: 2 },
+      company,
+      audience: { kind: 'employee', settings: null },
+    })
+
+    expect(data.taxReference).toBe('Tabell 33, kol 1')
+  })
+
+  it('falls back to the employee row for an old run without the snapshot', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({ tax_table_number: null, tax_column: null, tax_table_year: null }),
+      employee: { ...employee, tax_table_number: 34, tax_column: 2 },
+      company,
+      audience: EMPLOYER,
+    })
+
+    expect(data.taxReference).toBe('Tabell 34, kol 2')
+  })
+
+  it('prints Schablon 30% for a run taxed without a table even if the employee has one now', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({ tax_table_number: null, tax_column: 1, tax_table_year: 2026 }),
+      employee: { ...employee, tax_table_number: 34, tax_column: 1 },
+      company,
+      audience: EMPLOYER,
+    })
+
+    expect(data.taxReference).toBe('Schablon 30%')
+  })
+
+  it('prints column 1 when the snapshot has a table but no column, as the engine calculated', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({ tax_table_number: 33, tax_column: null, tax_table_year: 2026 }),
+      employee: { ...employee, tax_table_number: 34, tax_column: 3 },
+      company,
+      audience: EMPLOYER,
+    })
+
+    expect(data.taxReference).toBe('Tabell 33, kol 1')
+  })
+})
+
 describe('payslipFileName', () => {
   it('builds the period-stamped filename', () => {
     expect(payslipFileName(run, employee)).toBe('lonespec_Exempelsson_Anna_2026-06.pdf')
