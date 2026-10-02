@@ -104,7 +104,12 @@ beforeEach(() => {
 
 // A receipt linked to Bokio entry "V33", dated inside FY2021.
 const VOUCHER_REF: BokioVoucherRef = { series: 'V', number: 33, date: '2021-03-01' }
-const PERIODS = [{ id: 'fp-2021', period_start: '2021-02-04', period_end: '2021-12-31' }]
+// Every row carries the lock columns, as fetchFiscalPeriods selects them:
+// a row without them would read as locked under the trigger's predicate.
+type PeriodFixture = { id: string; period_start: string; period_end: string; is_closed: boolean; locked_at: string | null }
+const PERIODS: PeriodFixture[] = [
+  { id: 'fp-2021', period_start: '2021-02-04', period_end: '2021-12-31', is_closed: false, locked_at: null },
+]
 const GNUBOK_VOUCHERS = [
   { id: 'je-1', fiscal_period_id: 'fp-2021', entry_date: '2021-03-01', source_voucher_series: 'V', source_voucher_number: 33 },
 ]
@@ -491,8 +496,8 @@ describe('importProviderDocuments', () => {
   it('matches a Fortnox voucher by its booking date across split local periods', async () => {
     const supabase = wireFortnox({
       periods: [
-        { id: 'fp-2021-h1', period_start: '2021-02-04', period_end: '2021-06-30' },
-        { id: 'fp-2021-h2', period_start: '2021-07-01', period_end: '2021-12-31' },
+        { id: 'fp-2021-h1', period_start: '2021-02-04', period_end: '2021-06-30', is_closed: false, locked_at: null },
+        { id: 'fp-2021-h2', period_start: '2021-07-01', period_end: '2021-12-31', is_closed: false, locked_at: null },
       ],
       vouchers: [
         {
@@ -514,6 +519,96 @@ describe('importProviderDocuments', () => {
     })
 
     expect(result).toMatchObject({ scanned: 1, linked: 1, unmatched: 0 })
+  })
+
+  describe('verifikat in a klarmarkerat or locked year (crm#251)', () => {
+    // A broken first year and a calendar year after it, as a migrated
+    // company's books look. The second Fortnox file belongs to 2024.
+    const BROKEN_YEAR: PeriodFixture = {
+      id: 'fp-2023', period_start: '2022-12-29', period_end: '2023-12-31', is_closed: false, locked_at: null,
+    }
+    const OPEN_YEAR: PeriodFixture = {
+      id: 'fp-2024', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false, locked_at: null,
+    }
+    const TWO_YEARS = {
+      years: [
+        { id: 7, fromDate: '2022-12-29', toDate: '2023-12-31' },
+        { id: 8, fromDate: '2024-01-01', toDate: '2024-12-31' },
+      ],
+      connections: [
+        { ...FORTNOX_CONNECTION, fileId: 'file-a', number: 12, financialYearId: 7 },
+        { ...FORTNOX_CONNECTION, fileId: 'file-b', number: 3, financialYearId: 8 },
+      ],
+      vouchers: [
+        { id: 'je-2023', fiscal_period_id: 'fp-2023', entry_date: '2023-05-02', source_voucher_series: 'A', source_voucher_number: 12 },
+        { id: 'je-2024', fiscal_period_id: 'fp-2024', entry_date: '2024-02-01', source_voucher_series: 'A', source_voucher_number: 3 },
+      ],
+    }
+
+    it('reports a receipt in a klarmarkerat year as locked, without a download, and links the rest', async () => {
+      const supabase = wireFortnox({
+        ...TWO_YEARS,
+        periods: [
+          { ...BROKEN_YEAR, is_closed: true, locked_at: '2026-09-30T11:52:22Z' },
+          OPEN_YEAR,
+        ],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      // Not a failure: the period-lock trigger would refuse the link, so a
+      // retry cannot help until the year is reopened.
+      expect(result).toMatchObject({ scanned: 2, linked: 1, locked: 1, failed: 0, lockedPeriods: ['2022/2023'] })
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(1)
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledWith(expect.anything(), 'fortnox-token', 'file-b')
+      expect(mockUpload).toHaveBeenCalledTimes(1)
+      expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'je-2024' })
+    })
+
+    it('treats a locked year that is not closed (locked_at only) as locked too', async () => {
+      const supabase = wireFortnox({
+        ...TWO_YEARS,
+        periods: [BROKEN_YEAR, { ...OPEN_YEAR, locked_at: '2026-09-30T12:00:00Z' }],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 1, locked: 1, failed: 0, lockedPeriods: ['2024'] })
+      expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'je-2023' })
+    })
+
+    it('counts locked receipts apart from would-link ones in the dry run, oldest year first', async () => {
+      const supabase = wireFortnox({
+        ...TWO_YEARS,
+        periods: [
+          { ...OPEN_YEAR, is_closed: true, locked_at: '2026-09-30T11:52:23Z' },
+          { ...BROKEN_YEAR, is_closed: true, locked_at: '2026-09-30T11:52:22Z' },
+        ],
+      })
+
+      const result = await importProviderDocuments({
+        supabase, companyId: COMPANY, userId: USER, consentId: 'c1', dryRun: true,
+      })
+
+      expect(result).toMatchObject({
+        dryRun: true, scanned: 2, linked: 0, locked: 2, failed: 0, lockedPeriods: ['2022/2023', '2024'],
+      })
+      expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalled()
+    })
+
+    it('leaves a locked verifikat that already carries other underlag as skipped, not locked', async () => {
+      const supabase = wireFortnox({
+        ...TWO_YEARS,
+        periods: [{ ...BROKEN_YEAR, is_closed: true, locked_at: '2026-09-30T11:52:22Z' }, OPEN_YEAR],
+        existingAttachments: [
+          { id: 'doc-manual', sha256_hash: 'sha-other', journal_entry_id: 'je-2023', upload_source: 'upload' },
+        ],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 1, skipped: 1, locked: 0, lockedPeriods: [] })
+    })
   })
 
   it('keeps a dotted Bokio description as a basename and appends the effective extension', async () => {

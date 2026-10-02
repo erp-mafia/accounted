@@ -135,6 +135,8 @@ describe('POST /import-documents', () => {
       skipped: 0,
       unmatched: 1,
       failed: 0,
+      locked: 2,
+      lockedPeriods: ['2024'],
       dryRun: true,
       unmatchedSamples: [],
     })
@@ -143,11 +145,16 @@ describe('POST /import-documents', () => {
     const { status, body } = await parseJsonResponse<{
       success: boolean
       dryRun: boolean
-      result: { scanned: number }
+      result: { scanned: number; locked: number; lockedPeriods: string[] }
     }>(response)
 
     expect(status).toBe(200)
-    expect(body).toMatchObject({ success: true, dryRun: true, result: { scanned: 4 } })
+    // The locked-year count reaches the wizard, which names the years to reopen (crm#251).
+    expect(body).toMatchObject({
+      success: true,
+      dryRun: true,
+      result: { scanned: 4, locked: 2, lockedPeriods: ['2024'] },
+    })
     expect(importProviderDocuments).toHaveBeenCalledWith(
       expect.objectContaining({
         companyId: 'company-1',

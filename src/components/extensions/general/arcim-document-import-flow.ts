@@ -84,6 +84,14 @@ export interface ArcimDocumentImportResult {
   skipped: number
   unmatched: number
   failed: number
+  /**
+   * Underlag whose verifikat sits in a klarmarkerat or locked year: the
+   * database refuses those links until the year is reopened, so they are
+   * neither failures nor retryable as they stand.
+   */
+  locked: number
+  /** The fiscal years behind `locked` ("2024", "2022/2023"), oldest first. */
+  lockedPeriods: string[]
   dryRun: boolean
   unmatchedSamples: { uploadId: string; voucher: string; date: string }[]
   /** Attachments in the provider's whole list (not just this call). */
@@ -114,6 +122,9 @@ export function mergeArcimDocumentImportResults(
     skipped: accumulated.skipped + next.skipped,
     unmatched: accumulated.unmatched + next.unmatched,
     failed: accumulated.failed + next.failed,
+    locked: accumulated.locked + next.locked,
+    // Labels sort the same way the server sorts them: oldest year first.
+    lockedPeriods: [...new Set([...accumulated.lockedPeriods, ...next.lockedPeriods])].sort(),
     unmatchedSamples: [...accumulated.unmatchedSamples, ...next.unmatchedSamples].slice(
       0,
       MAX_UNMATCHED_SAMPLES,
@@ -315,9 +326,11 @@ function problemFromPayload(payload: unknown): ArcimDocumentImportProblem {
 
 type WireDocumentImportResult = Omit<
   ArcimDocumentImportResult,
-  'total' | 'partial' | 'nextCursor'
+  'total' | 'partial' | 'nextCursor' | 'locked' | 'lockedPeriods'
 > &
-  Partial<Pick<ArcimDocumentImportResult, 'total' | 'partial' | 'nextCursor'>>
+  Partial<
+    Pick<ArcimDocumentImportResult, 'total' | 'partial' | 'nextCursor' | 'locked' | 'lockedPeriods'>
+  >
 
 function isDocumentImportResult(value: unknown): value is WireDocumentImportResult {
   if (!value || typeof value !== 'object') return false
@@ -334,12 +347,19 @@ function isDocumentImportResult(value: unknown): value is WireDocumentImportResu
   )
 }
 
-/** Older servers answer without the resume fields: a single complete slice. */
+/**
+ * Older servers answer without the resume fields (a single complete slice) and
+ * without the locked-year count (nothing was told apart as locked).
+ */
 function normalizeDocumentImportResult(
   result: WireDocumentImportResult,
 ): ArcimDocumentImportResult {
   return {
     ...result,
+    locked: typeof result.locked === 'number' ? result.locked : 0,
+    lockedPeriods: Array.isArray(result.lockedPeriods)
+      ? result.lockedPeriods.filter((label): label is string => typeof label === 'string')
+      : [],
     total: typeof result.total === 'number' ? result.total : result.scanned,
     partial: result.partial === true,
     nextCursor:

@@ -2034,6 +2034,7 @@ export const arcimMigrationExtension: Extension = {
             skipped: result.skipped,
             unmatched: result.unmatched,
             failed: result.failed,
+            locked: result.locked,
             partial: result.partial,
             nextCursor: result.nextCursor,
           })

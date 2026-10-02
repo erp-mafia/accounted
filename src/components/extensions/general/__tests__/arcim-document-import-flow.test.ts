@@ -28,6 +28,8 @@ function result(
     skipped: 0,
     unmatched: 2,
     failed: 0,
+    locked: 0,
+    lockedPeriods: [],
     dryRun: true,
     unmatchedSamples: [],
     total: 7,
@@ -358,6 +360,25 @@ describe('resumable import (one server slice per call)', () => {
     })
   })
 
+  it('reads an older server answer without the locked-year fields as nothing locked', async () => {
+    const { locked: _l, lockedPeriods: _lp, ...legacy } = result({ scanned: 4 })
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ success: true, result: legacy }))
+
+    const normalized = await requestArcimDocumentImport('consent-1', true, fetcher)
+
+    expect(normalized).toMatchObject({ scanned: 4, locked: 0, lockedPeriods: [] })
+  })
+
+  it('keeps the locked count and years a server reports (crm#251)', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      jsonResponse({ success: true, result: result({ locked: 491, lockedPeriods: ['2022/2023', '2024', '2025'] }) }),
+    )
+
+    const normalized = await requestArcimDocumentImport('consent-1', true, fetcher)
+
+    expect(normalized).toMatchObject({ locked: 491, lockedPeriods: ['2022/2023', '2024', '2025'] })
+  })
+
   it('sends the cursor only when resuming', async () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({ success: true, result: result() }))
 
@@ -387,6 +408,15 @@ describe('resumable import (one server slice per call)', () => {
       nextCursor: 'file-37',
     })
     expect(merged.unmatchedSamples).toHaveLength(2)
+  })
+
+  it('sums locked receipts across slices and keeps each locked year once, oldest first', () => {
+    const merged = mergeArcimDocumentImportResults(
+      result({ locked: 3, lockedPeriods: ['2024', '2025'] }),
+      result({ locked: 2, lockedPeriods: ['2022/2023', '2024'] }),
+    )
+
+    expect(merged).toMatchObject({ locked: 5, lockedPeriods: ['2022/2023', '2024', '2025'] })
   })
 
   it('loops until the server reports the end, passing the cursor back and reporting running totals', async () => {
