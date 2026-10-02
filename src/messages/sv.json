@@ -2440,7 +2440,11 @@
     "fab_description": "Visa assistentknappen nere till höger på alla sidor. Assistenten finns alltid kvar i sidomenyn.",
     "fab_save_failed": "Kunde inte spara inställningen",
     "fab_load_failed": "Inställningen kunde inte läsas in, så det går inte att se eller ändra ditt val just nu.",
-    "fab_load_retry": "Försök igen"
+    "fab_load_retry": "Försök igen",
+    "fab_hide": "Dölj knappen",
+    "fab_hidden_title": "Assistentknappen är dold",
+    "fab_hidden_description": "Assistenten finns kvar i sidomenyn. Knappen slår du på igen under assistentens inställningar.",
+    "fab_hidden_undo": "Ångra"
   },
   "settings_account_danger": {
     "confirm_hint": "Inget händer direkt: du bekräftar i nästa steg genom att skriva din e-postadress.",

@@ -2440,7 +2440,11 @@
     "fab_description": "Show the assistant button in the bottom-right corner on every page. The assistant is always available in the sidebar.",
     "fab_save_failed": "Could not save the setting",
     "fab_load_failed": "The setting could not be loaded, so your choice cannot be shown or changed right now.",
-    "fab_load_retry": "Try again"
+    "fab_load_retry": "Try again",
+    "fab_hide": "Hide the button",
+    "fab_hidden_title": "Assistant button hidden",
+    "fab_hidden_description": "The assistant stays in the sidebar. Turn the button back on in the assistant settings.",
+    "fab_hidden_undo": "Undo"
   },
   "settings_account_danger": {
     "confirm_hint": "Nothing happens right away: you confirm in the next step by typing your email address.",
