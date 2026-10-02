@@ -646,4 +646,51 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     expect(result.http_status).toBe(400)
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
+
+  it('stays the authority on an overshoot of 1 kr or more: refused before anything is posted (crm#253)', async () => {
+    // Staging refuses this now too (planTransactionInvoiceMatch, shared), but
+    // an op staged before that, or one whose invoice changed since, still hits
+    // the same guard here with the same threshold.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: 814,
+        currency: 'SEK',
+        date: '2026-09-30',
+        invoice_id: null,
+        journal_entry_id: 'je-categorized',
+        cash_account_id: null,
+      },
+      error: null,
+    }) // transaction fetch (categorized: a storno would follow a pass)
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026001',
+        status: 'sent',
+        total: 812.40,
+        remaining_amount: 812.40,
+        paid_amount: 0,
+        currency: 'SEK',
+        exchange_rate: null,
+        journal_entry_id: null,
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toContain('Transaktionsbeloppet är större än fakturans återstående belopp')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
 })

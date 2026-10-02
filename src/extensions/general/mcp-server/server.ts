@@ -73,7 +73,7 @@ import {
 } from './public-tools'
 import { isEagerAuthRequested } from './auth-mode'
 import { createLogger } from '@/lib/logger'
-import { roundOre, sumOre } from '@/lib/money'
+import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
 import { addDaysIso } from '@/lib/dates/iso'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import {
@@ -422,6 +422,12 @@ import {
   type DuplicateCandidateOutcome,
 } from '@/lib/invoices/already-explained-guard'
 import { findCashMethodUnbookedAllocations } from '@/lib/invoices/batch-cash-method-guard'
+import {
+  planTransactionInvoiceMatch,
+  type MatchInvoiceAmounts,
+  type MatchPaymentPlanResult,
+  type MatchTransactionAmounts,
+} from '@/lib/invoices/match-payment-plan'
 import {
   buildBatchAllocationPreview,
   type BatchAllocationPreviewInvoice,
@@ -884,6 +890,85 @@ function duplicateCandidateRefusal(
     ),
     { code: 'MATCH_INVOICE_POSSIBLE_DUPLICATE' },
   )
+}
+
+/** Plain two-decimal amounts for agent-facing English prose ("1234.50"). */
+const AGENT_AMOUNT_FORMAT = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+  useGrouping: false,
+})
+
+/**
+ * The stage-time overpayment refusal for a transaction-to-invoice match,
+ * coded MATCH_AMOUNT_EXCEEDS_REMAINING like the approval that would otherwise
+ * reject the staged op (crm#253). The registry's Swedish sentence is generic,
+ * so message_en carries what the agent needs: the three amounts and the
+ * routes that book an overpayment today. Where the excess belongs (another
+ * invoice, a liability to the customer, a write-off) is the user's call, so
+ * the agent is told to ask rather than pick an account. Keep the English free
+ * of Swedish letters: a message that reads as Swedish (isSwedishUserMessage)
+ * would replace the registry's message_sv instead of riding message_en.
+ *
+ * The settle-and-book-the-excess route depends on the invoice: a sent or
+ * overdue invoice can be marked paid for exactly its remaining amount (any
+ * accounting method), with the excess as its own two-line verifikat and the
+ * bank row split across both; a partially paid one cannot, so it takes one
+ * verifikat linked through its 1510 credit, which only faktureringsmetoden
+ * reads (kontantmetoden matches the bank debit, which here exceeds the
+ * remaining amount).
+ */
+function overpaymentRefusal(
+  outcome: Extract<MatchPaymentPlanResult, { code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' }>,
+  ctx: { invoiceStatus: string; transactionDate: string },
+): Error {
+  const amount = (n: number) => `${AGENT_AMOUNT_FORMAT.format(n)} ${outcome.currency}`
+  const { transaction_amount: paid, remaining_amount: remaining, excess } = outcome.details
+  const band = outcome.absorbsOre
+    ? `only a difference under ${amount(ORE_ROUNDING_SETTLEMENT_MAX)} is settled automatically as a rounding difference on 3740`
+    : 'a cross-currency match cannot settle more than the remaining amount'
+  const separately =
+    ctx.invoiceStatus === 'partially_paid'
+      ? `book one verifikat with gnubok_create_voucher (debit the bank account ${amount(paid)}, credit 1510 ${amount(remaining)}, ` +
+        `credit the account the user chose ${amount(excess)}), settle the invoice from it with gnubok_link_invoice_to_voucher ` +
+        `(faktureringsmetoden only), and link the bank row to it with gnubok_reconcile_match`
+      : `settle this invoice with gnubok_mark_invoice_as_paid (payment_date ${ctx.transactionDate}; it books exactly ${amount(remaining)}), ` +
+        `book the ${amount(excess)} excess with gnubok_create_voucher (debit the bank account, credit the account the user chose), ` +
+        `then link the bank row to both verifikat with one gnubok_reconcile_match pair (allocations ${amount(remaining)} and ${amount(excess)})`
+  return codedRefusal(
+    'MATCH_AMOUNT_EXCEEDS_REMAINING',
+    `Not staged: the transaction (${amount(paid)}) exceeds the invoice's remaining amount (${amount(remaining)}) by ${amount(excess)}. ` +
+      `A match settles at most the remaining amount and ${band}, so approval would reject this match. ` +
+      'Ask the user where the excess belongs (another open invoice, or a liability to the customer to refund or offset), then: ' +
+      `if it pays other open invoices from the same customer, allocate the transaction across them with gnubok_match_batch_allocate ` +
+      `(allocations summing to ${amount(paid)}); otherwise ${separately}.`,
+    {
+      description:
+        'Do not retry this match unchanged: it fails until the amounts change. Ask the user where the excess belongs, then use a route the message names: gnubok_match_batch_allocate when it pays other invoices, otherwise settle the invoice and book the excess as its own verifikat.',
+    },
+  )
+}
+
+/**
+ * Stage-time twin of the commit executor's payment plan for a
+ * transaction-to-invoice match: the same planTransactionInvoiceMatch call
+ * (FX resolution, pure-SEK öre absorption, the remaining amount after earlier
+ * partial payments), throwing the refusal the approval would answer with, so
+ * no doomed op is staged (crm#253). The executor re-runs the plan as the hard
+ * gate. A rate that is not available yet fails open: it can be published
+ * before approval.
+ */
+async function refuseUnpayableMatch(
+  supabase: SupabaseClient,
+  transaction: MatchTransactionAmounts,
+  invoice: MatchInvoiceAmounts & { status: string },
+): Promise<void> {
+  const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice)
+  if (matchPlan.ok || matchPlan.code === 'MATCH_INVOICE_FX_RATE_UNAVAILABLE') return
+  if (matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING') {
+    throw overpaymentRefusal(matchPlan, { invoiceStatus: invoice.status, transactionDate: transaction.date })
+  }
+  throw registryError(matchPlan.code)
 }
 
 export interface McpTool {
@@ -12757,6 +12842,11 @@ export const tools: McpTool[] = [
         throw duplicateCandidateRefusal(duplicate)
       }
 
+      // Overpayment guard at stage time (crm#253): a match the approval would
+      // reject is refused here, with the amounts and the routes that do book
+      // it, instead of being staged and failing at approval.
+      await refuseUnpayableMatch(supabase, transaction, invoice)
+
       const txDesc = transaction.merchant_name || transaction.description || transactionId
 
       return stagePendingOperation(supabase, companyId, userId, 'match_transaction_invoice',
@@ -14111,7 +14201,7 @@ export const tools: McpTool[] = [
       // out of scope for this tool.
       const { data: transactions, error: txError } = await supabase
         .from('transactions')
-        .select('id, description, merchant_name, amount, currency, date, reference, journal_entry_id, invoice_id')
+        .select('id, description, merchant_name, amount, currency, amount_sek, exchange_rate, date, reference, journal_entry_id, invoice_id')
         .eq('company_id', companyId)
         .gte('date', dateFrom)
         .lte('date', dateTo)
@@ -14142,6 +14232,11 @@ export const tools: McpTool[] = [
       }
 
       const proposals: Proposal[] = []
+      // The rows behind each proposal, for the stage-time payment plan below.
+      const proposalSources = new Map<
+        string,
+        { tx: (typeof txList)[number]; invoice: Awaited<ReturnType<typeof findMatchingInvoices>>[number]['invoice'] }
+      >()
       let belowThreshold = 0
       let noMatchFound = 0
 
@@ -14174,6 +14269,7 @@ export const tools: McpTool[] = [
           belowThreshold++
         } else {
           proposals.push({ ...baseProposal, decision: 'propose' as const })
+          proposalSources.set(baseProposal.transaction_id, { tx, invoice: best.invoice })
         }
       }
 
@@ -14201,6 +14297,11 @@ export const tools: McpTool[] = [
       let stagedCount = 0
       for (const p of proposed) {
         try {
+          // The single-match tool's stage-time overpayment guard (crm#253): a
+          // proposal the approval would reject lands in stage_failures with
+          // the amounts and the routes that book it, instead of being staged.
+          const source = proposalSources.get(p.transaction_id)
+          if (source) await refuseUnpayableMatch(supabase, source.tx, source.invoice)
           await stagePendingOperation(
             supabase,
             companyId,
