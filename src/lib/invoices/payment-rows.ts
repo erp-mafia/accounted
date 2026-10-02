@@ -164,6 +164,30 @@ export function formatIbanForDisplay(value: string | null): string | null {
   return formatIbanGroups(value.replace(/\s/g, '').toUpperCase())
 }
 
+/**
+ * The rows a customer can pay with on their own: an account or number to pay
+ * to, or the online payment link. BIC and the routing rows only qualify an
+ * account, and the reference rows (OCR, Meddelande) say what to write with
+ * the payment, so none of them makes an invoice payable.
+ */
+export const PAYABLE_PAYMENT_ROW_KEYS: ReadonlySet<InvoicePaymentRowKey> = new Set<InvoicePaymentRowKey>([
+  'bankgiro',
+  'plusgiro',
+  'bank_account',
+  'swish',
+  'iban',
+  'payment_link',
+])
+
+/**
+ * Whether the printed rows give the customer a way to pay (R9: the send
+ * check needs one to PRINT, not just to be stored). The preview's "payee
+ * missing" and the editor's Betalning section both ask this, so they agree.
+ */
+export function printsPayableRow(rows: readonly Pick<InvoicePaymentRow, 'key'>[]): boolean {
+  return rows.some((row) => PAYABLE_PAYMENT_ROW_KEYS.has(row.key))
+}
+
 export function buildInvoicePaymentRows({
   company,
   invoice,

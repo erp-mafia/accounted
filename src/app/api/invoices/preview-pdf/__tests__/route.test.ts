@@ -277,6 +277,31 @@ describe('POST /api/invoices/preview-pdf', () => {
       expect(response.status).toBe(200)
       expect(response.headers.get('X-Invoice-Missing')).toBe('payee')
     })
+
+    // One predicate with the editor's Betalning section (printsPayableRow):
+    // the link is a way to pay, a BIC alone is not.
+    it('takes a printed payment link as payable when the stored bankgiro is hidden', async () => {
+      enqueue({ data: { ...company, invoice_show_bankgiro: false }, error: null })
+      enqueue({ data: customer, error: null })
+
+      const response = await previewRequest({ ...validBody, payment_link_url: 'https://pay.example.com/abc' })
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('X-Invoice-Missing')).toBeNull()
+    })
+
+    it('reports the payee missing when only a BIC would print', async () => {
+      enqueue({
+        data: { ...company, bankgiro: null, swish: '1231234567', invoice_show_swish: false, bic: 'ESSESESS' },
+        error: null,
+      })
+      enqueue({ data: customer, error: null })
+
+      const response = await previewRequest(validBody)
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('X-Invoice-Missing')).toBe('payee')
+    })
   })
 
   // R12: the preview is the real render, from every field the write path

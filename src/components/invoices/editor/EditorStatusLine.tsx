@@ -15,6 +15,8 @@ interface EditorStatusLineProps<TStep> {
   onAddPayee: () => void
   /** Jump to the invoice date (it is in a locked or closed period). */
   onFixDate?: () => void
+  /** Owner/admin may open the tax settings to add the VAT number; others are asked to get one. */
+  canEditTaxSettings?: boolean
   className?: string
 }
 
@@ -31,6 +33,7 @@ export function EditorStatusLine<TStep>({
   canAddPayee,
   onAddPayee,
   onFixDate,
+  canEditTaxSettings = false,
   className,
 }: EditorStatusLineProps<TStep>) {
   const t = useTranslations('invoice_editor_shell')
@@ -45,6 +48,16 @@ export function EditorStatusLine<TStep>({
     content = (
       <AttnLine action={onFixDate ? { label: t('status_date_fix'), onClick: onFixDate } : undefined}>
         {t(`status_date_${status.lock}`)}
+      </AttnLine>
+    )
+  } else if (status.kind === 'seller_vat_missing') {
+    content = canEditTaxSettings ? (
+      <AttnLine action={{ label: t('status_seller_vat_add'), href: '/settings/tax' }}>
+        {t('status_seller_vat_missing')}
+      </AttnLine>
+    ) : (
+      <AttnLine>
+        {t('status_seller_vat_missing')} {t('status_seller_vat_ask_admin')}
       </AttnLine>
     )
   } else if (status.kind === 'payee_missing') {

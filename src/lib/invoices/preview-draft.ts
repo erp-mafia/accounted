@@ -18,7 +18,7 @@ import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
-import { buildInvoicePaymentRows } from '@/lib/invoices/payment-rows'
+import { buildInvoicePaymentRows, printsPayableRow } from '@/lib/invoices/payment-rows'
 import { computeDeduction, computeInvoiceDeductionTotal } from '@/lib/invoices/rot-rut-rules'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
@@ -190,8 +190,10 @@ function documentLanguage(customer: Customer): 'sv' | 'en' {
 
 /**
  * Whether the customer can pay this document from what prints: the payee
- * the send check requires, and at least one payment method row on the page
- * (a stored but hidden Swish number prints nothing).
+ * the send check requires, and at least one payable row on the page
+ * (printsPayableRow: a stored but hidden Swish number prints nothing, and a
+ * BIC alone is nothing to pay to). The editor's Betalning section asks the
+ * same (lib/invoices/editor/payment-summary.ts).
  */
 function printsPayableMethod(
   company: CompanySettings,
@@ -201,11 +203,11 @@ function printsPayableMethod(
 ): boolean {
   if (!invoiceRequiresPaymentAccount(invoice)) return true
   if (!hasRequiredInvoicePaymentAccount(company, invoice)) return false
-  return buildInvoicePaymentRows({
+  return printsPayableRow(buildInvoicePaymentRows({
     company: companyWithInvoicePaymentAccount(company, invoice.currency, payee),
     invoice,
     lang,
-  }).some((row) => row.key !== 'ocr' && row.key !== 'message')
+  }))
 }
 
 export async function buildInvoicePreviewDraft(params: {

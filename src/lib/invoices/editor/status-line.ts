@@ -16,6 +16,11 @@ export type EditorStatusLine<TStep> =
   | { kind: 'step'; step: TStep }
   /** The invoice date is in a locked or closed period: sending would book into it. */
   | { kind: 'date_locked'; lock: InvoiceDateLock }
+  /**
+   * A momsregistrerad seller with no momsregistreringsnummer: the number must
+   * be on the faktura (ML 17 kap. 24 §), so the send refuses it.
+   */
+  | { kind: 'seller_vat_missing' }
   /** A faktura whose payment details print nothing the customer can pay to. */
   | { kind: 'payee_missing' }
   /** The last preview request failed; the previous render stays on screen. */
@@ -38,6 +43,12 @@ export interface StatusLineInput<TStep extends { kind: string }> {
   hasDeduction: boolean
   /** invoiceDateLock() of the invoice date, passed only when sending books it. */
   dateLock?: InvoiceDateLock | null
+  /**
+   * The document needs the seller's VAT number and the company has none
+   * (!hasRequiredSellerVatNumber, lib/invoices/seller-vat-number.ts). Credit
+   * notes, quotes, proformas and följesedlar never need it.
+   */
+  sellerVatMissing?: boolean
 }
 
 // A note this long fills a third of a page or more on its own: the likeliest
@@ -70,6 +81,7 @@ export function resolveEditorStatusLine<TStep extends { kind: string }>(
 ): EditorStatusLine<TStep> {
   if (input.nextStep.kind !== 'ready') return { kind: 'step', step: input.nextStep }
   if (input.dateLock) return { kind: 'date_locked', lock: input.dateLock }
+  if (input.sellerVatMissing) return { kind: 'seller_vat_missing' }
   // Only a faktura carries a payment area; a quote, proforma or följesedel
   // without bank details is complete.
   if (input.documentType === 'invoice' && input.missing.includes('payee')) return { kind: 'payee_missing' }

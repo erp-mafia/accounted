@@ -82,6 +82,20 @@ describe('persistAndSend', () => {
     expect(result).toMatchObject({ ok: true, partial: true })
   })
 
+  it('sends an e-faktura on the Peppol channel, never a mark-sent', async () => {
+    const { fetchImpl, calls } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { json: { data: { network_submitted: true } } },
+    ])
+    const result = await persistAndSend(input({ channel: 'peppol', email: { email_subject: 'ignored' } }), fetchImpl)
+    expect(calls.map((c) => [c.method, c.url, c.body])).toEqual([
+      ['POST', '/api/invoices', { customer_id: 'c1', items: [] }],
+      ['POST', '/api/invoices/inv-1/peppol/send', undefined],
+    ])
+    expect(calls.some((c) => c.url.endsWith('/mark-sent'))).toBe(false)
+    expect(result).toEqual({ ok: true, invoiceId: 'inv-1', invoiceNumber: '1043', partial: false, message: null })
+  })
+
   it('saves an edited unnumbered faktura, finalizes it, then sends', async () => {
     const { fetchImpl, calls } = stubFetch([
       { json: { data: { id: 'inv-9' } } },
@@ -133,6 +147,41 @@ describe('persistAndSend', () => {
     ])
     const result = await persistAndSend(input(), fetchImpl)
     expect(result).toMatchObject({ ok: false, stage: 'send', invoiceId: 'inv-1', status: 502 })
+  })
+
+  it('reports the created document when the send request never gets an answer', async () => {
+    // Offline after the create: the fetch rejects instead of answering. The
+    // sequence must still resolve with the id, or the editor stays busy and a
+    // reload creates the invoice a second time.
+    const calls: string[] = []
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push(url)
+      if (url === '/api/invoices') {
+        return new Response(JSON.stringify({ data: { id: 'inv-1', invoice_number: '1043' } }), { status: 201 })
+      }
+      throw new TypeError('Failed to fetch')
+    })
+    const result = await persistAndSend(input(), fetchImpl)
+    expect(calls).toEqual(['/api/invoices', '/api/invoices/inv-1/send'])
+    expect(result).toMatchObject({ ok: false, stage: 'send', invoiceId: 'inv-1', status: 0 })
+    expect(result.ok === false && result.error).toBeInstanceOf(TypeError)
+  })
+
+  it('reports a rejected create as a failed save with no document', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
+    })
+    const result = await persistAndSend(input(), fetchImpl)
+    expect(result).toMatchObject({ ok: false, stage: 'persist', invoiceId: null, status: 0 })
+  })
+
+  it('reports a rejected finalize with the draft id', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith('/finalize')) throw new TypeError('Failed to fetch')
+      return new Response(JSON.stringify({ data: {} }), { status: 200 })
+    })
+    const result = await persistAndSend(input({ mode: 'edit', invoiceId: 'inv-9', invoiceNumber: null }), fetchImpl)
+    expect(result).toMatchObject({ ok: false, stage: 'finalize', invoiceId: 'inv-9', status: 0 })
   })
 
   it('reports a failed finalize with the draft id', async () => {

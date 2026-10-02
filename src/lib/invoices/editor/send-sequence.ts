@@ -19,12 +19,23 @@ import type { InvoiceDocumentType } from '@/types'
  *               and its own subject and message when given.
  *     - manual: POST /api/invoices/{id}/mark-sent ("Jag skickar själv"; the
  *               caller downloads the archived PDF afterwards).
+ *     - peppol: POST /api/invoices/{id}/peppol/send (the e-faktura through
+ *               the company's access point; never a mark-sent).
  *
  * A failure after step 1 still reports the saved document's id: it exists
- * now, and a retry from the editor would create a second one.
+ * now, and a retry from the editor would create a second one. That holds for
+ * a request that never gets an answer too (offline, a dropped connection): a
+ * rejected fetch is reported as a failed step with status 0, never thrown,
+ * so the caller's "saved but not sent" path always runs.
  */
 
-export type SendSequenceChannel = 'email' | 'manual'
+export type SendSequenceChannel = 'email' | 'manual' | 'peppol'
+
+const SEND_ROUTES: Record<SendSequenceChannel, string> = {
+  email: 'send',
+  manual: 'mark-sent',
+  peppol: 'peppol/send',
+}
 
 export interface SendEmailOptions {
   additional_cc?: string[]
@@ -77,6 +88,29 @@ async function readJson(response: Response): Promise<Record<string, unknown> | n
   }
 }
 
+/** One step's answer: the parsed body, or why the step failed. */
+type StepReply =
+  | { ok: true; status: number; json: Record<string, unknown> | null }
+  | { ok: false; status: number; error: unknown }
+
+/**
+ * One step's request. A non-2xx answer fails with its parsed body; a fetch
+ * that rejects (no network, aborted) fails with status 0 and the thrown
+ * error, so no step can escape the result type.
+ */
+async function step(fetchImpl: FetchLike, url: string, init: RequestInit): Promise<StepReply> {
+  let response: Response
+  try {
+    response = await fetchImpl(url, init)
+  } catch (error) {
+    return { ok: false, status: 0, error }
+  }
+  const json = await readJson(response)
+  return response.ok
+    ? { ok: true, status: response.status, json }
+    : { ok: false, status: response.status, error: json }
+}
+
 function jsonInit(method: string, body: unknown): RequestInit {
   return {
     method,
@@ -106,54 +140,55 @@ export async function persistAndSend(
     if (!input.invoiceId) {
       return { ok: false, stage: 'persist', invoiceId: null, status: 0, error: new Error('missing invoice id') }
     }
-    const response = await fetchImpl(
+    const saved = await step(
+      fetchImpl,
       `/api/invoices/${encodeURIComponent(input.invoiceId)}`,
       jsonInit('PATCH', input.payload),
     )
-    const result = await readJson(response)
-    if (!response.ok) {
-      return { ok: false, stage: 'persist', invoiceId: null, status: response.status, error: result }
+    if (!saved.ok) {
+      return { ok: false, stage: 'persist', invoiceId: null, status: saved.status, error: saved.error }
     }
     invoiceId = input.invoiceId
     invoiceNumber = input.invoiceNumber ?? null
     if (input.documentType === 'invoice' && !invoiceNumber) {
-      const finalize = await fetchImpl(`/api/invoices/${encodeURIComponent(invoiceId)}/finalize`, {
+      const finalized = await step(fetchImpl, `/api/invoices/${encodeURIComponent(invoiceId)}/finalize`, {
         method: 'POST',
       })
-      const finalized = await readJson(finalize)
-      if (!finalize.ok) {
-        return { ok: false, stage: 'finalize', invoiceId, status: finalize.status, error: finalized }
+      if (!finalized.ok) {
+        return { ok: false, stage: 'finalize', invoiceId, status: finalized.status, error: finalized.error }
       }
-      const data = finalized?.data as { invoice_number?: string | null } | undefined
+      const data = finalized.json?.data as { invoice_number?: string | null } | undefined
       invoiceNumber = data?.invoice_number ?? null
     }
   } else {
-    const response = await fetchImpl('/api/invoices', jsonInit('POST', input.payload))
-    const result = await readJson(response)
-    const data = result?.data as { id?: string; invoice_number?: string | null } | undefined
-    if (!response.ok || !data?.id) {
-      return { ok: false, stage: 'persist', invoiceId: null, status: response.status, error: result }
+    const created = await step(fetchImpl, '/api/invoices', jsonInit('POST', input.payload))
+    if (!created.ok) {
+      return { ok: false, stage: 'persist', invoiceId: null, status: created.status, error: created.error }
+    }
+    const data = created.json?.data as { id?: string; invoice_number?: string | null } | undefined
+    if (!data?.id) {
+      return { ok: false, stage: 'persist', invoiceId: null, status: created.status, error: created.json }
     }
     invoiceId = data.id
     invoiceNumber = data.invoice_number ?? null
   }
 
   // 2. Send.
-  const route = input.channel === 'email' ? 'send' : 'mark-sent'
+  const route = SEND_ROUTES[input.channel]
   const body = input.channel === 'email' ? buildSendBody(input.email) : null
-  const sendResponse = await fetchImpl(
+  const sent = await step(
+    fetchImpl,
     `/api/invoices/${encodeURIComponent(invoiceId)}/${route}`,
     body ? jsonInit('POST', body) : { method: 'POST' },
   )
-  const sent = await readJson(sendResponse)
-  if (!sendResponse.ok) {
-    return { ok: false, stage: 'send', invoiceId, status: sendResponse.status, error: sent }
+  if (!sent.ok) {
+    return { ok: false, stage: 'send', invoiceId, status: sent.status, error: sent.error }
   }
   return {
     ok: true,
     invoiceId,
     invoiceNumber,
-    partial: sent?.partial === true,
-    message: typeof sent?.message === 'string' ? sent.message : null,
+    partial: sent.json?.partial === true,
+    message: typeof sent.json?.message === 'string' ? sent.json.message : null,
   }
 }

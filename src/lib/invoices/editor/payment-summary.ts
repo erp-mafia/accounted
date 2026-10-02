@@ -1,5 +1,4 @@
 import type { CompanySettings, Currency, InvoicePaymentAccount, InvoiceQrMode } from '@/types'
-import { formatIbanGroups } from '@/lib/company/connection-iban'
 import {
   companyWithInvoicePaymentAccount,
   hasUsableInvoicePaymentAccount,
@@ -7,6 +6,7 @@ import {
 } from '@/lib/invoices/payment-accounts'
 import {
   buildInvoicePaymentRows,
+  printsPayableRow,
   type InvoicePaymentRow,
   type InvoicePaymentRowKey,
 } from '@/lib/invoices/payment-rows'
@@ -28,7 +28,12 @@ import {
  * Pure: the component renders what these return.
  */
 
-/** The rows that are a way to pay (the reference, BIC and routing rows only qualify one). */
+/**
+ * The rows the summary names as the way to pay: an account or a number (the
+ * reference, BIC and routing rows only qualify one; the payment link has its
+ * own part). Whether the invoice is payable at all is printsPayableRow, the
+ * preview's own test, which also counts the link.
+ */
 const METHOD_KEYS = new Set<InvoicePaymentRow['key']>(['bankgiro', 'plusgiro', 'bank_account', 'swish', 'iban'])
 
 export interface EditorPaymentSummaryInput {
@@ -63,7 +68,10 @@ export interface EditorPaymentSummary {
   /** A payment link prints, or is created at send. */
   paymentLink: 'printed' | 'auto' | null
   qr: ResolvedInvoicePaymentQr
-  /** Nothing the customer can pay to prints for the currency. */
+  /**
+   * The send has no payee: no usable account is stored for the currency, or
+   * nothing payable prints (preview-draft's X-Invoice-Missing "payee").
+   */
   payeeMissing: boolean
   /** The stored account could be paid to (the details exist but are hidden). */
   storedAccountUsable: boolean
@@ -104,14 +112,15 @@ export function buildEditorPaymentSummary(input: EditorPaymentSummaryInput): Edi
     customer: input.customer,
     lang: input.lang,
   })
+  const storedAccountUsable = hasUsableInvoicePaymentAccount(account, input.currency)
   return {
     bankName: clean(account?.bank_name),
     methods,
     reference,
     paymentLink: link ? 'printed' : input.autoPaymentLink ? 'auto' : null,
     qr,
-    payeeMissing: methods.length === 0,
-    storedAccountUsable: hasUsableInvoicePaymentAccount(account, input.currency),
+    payeeMissing: !storedAccountUsable || !printsPayableRow(rows),
+    storedAccountUsable,
   }
 }
 
@@ -137,13 +146,13 @@ const QR_PART_KEYS: Record<InvoiceQrKind, string> = {
 
 /**
  * The number a method part shows: the bank account without its bank name
- * (that leads the line), an IBAN in groups of four as people read it.
+ * (that leads the line). Everything else as the PDF prints it; the payment
+ * rows already group an IBAN in fours and a Swish number as people read it.
  */
 function methodValue(row: InvoicePaymentRow, bankName: string | null): string {
   if (row.key === 'bank_account' && bankName && row.value.startsWith(`${bankName}, `)) {
     return row.value.slice(bankName.length + 2)
   }
-  if (row.key === 'iban') return formatIbanGroups(row.value)
   return row.value
 }
 
@@ -151,21 +160,25 @@ function methodValue(row: InvoicePaymentRow, bankName: string | null): string {
  * The summary line, piece by piece: bank · first way to pay (with "med OCR"
  * when the OCR number belongs to it) and the names of the others ·
  * "Meddelande: fakturanummer" when there is no OCR · the payment link · the
- * QR code. Empty when nothing prints (the section offers to add details).
+ * QR code. With only a payment link printing (the account hidden), the line
+ * is the link and its code. Empty when nothing prints (the section offers to
+ * add details).
  */
 export function describeEditorPaymentSummary(summary: EditorPaymentSummary): SummaryPart[] {
   if (summary.payeeMissing) return []
   const parts: SummaryPart[] = []
-  if (summary.bankName) parts.push({ kind: 'text', text: summary.bankName })
   const [first, ...others] = summary.methods
-  const withOcr = summary.reference === 'ocr' && (first.key === 'bankgiro' || first.key === 'plusgiro')
-  parts.push({
-    kind: 'key',
-    key: withOcr ? `${METHOD_PART_KEYS[first.key]}_ocr` : METHOD_PART_KEYS[first.key],
-    values: { number: methodValue(first, summary.bankName) },
-  })
-  if (others.length > 0) parts.push({ kind: 'others', methods: others.map((row) => row.key) })
-  if (summary.reference === 'message') parts.push({ kind: 'key', key: 'reference_message' })
+  if (first) {
+    if (summary.bankName) parts.push({ kind: 'text', text: summary.bankName })
+    const withOcr = summary.reference === 'ocr' && (first.key === 'bankgiro' || first.key === 'plusgiro')
+    parts.push({
+      kind: 'key',
+      key: withOcr ? `${METHOD_PART_KEYS[first.key]}_ocr` : METHOD_PART_KEYS[first.key],
+      values: { number: methodValue(first, summary.bankName) },
+    })
+    if (others.length > 0) parts.push({ kind: 'others', methods: others.map((row) => row.key) })
+    if (summary.reference === 'message') parts.push({ kind: 'key', key: 'reference_message' })
+  }
   if (summary.paymentLink === 'printed') parts.push({ kind: 'key', key: 'link_printed' })
   else if (summary.paymentLink === 'auto') parts.push({ kind: 'key', key: 'link_auto' })
   if (summary.qr.kind) parts.push({ kind: 'key', key: QR_PART_KEYS[summary.qr.kind] })

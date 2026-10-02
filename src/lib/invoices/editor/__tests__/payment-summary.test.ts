@@ -142,6 +142,32 @@ describe('buildEditorPaymentSummary', () => {
     expect(linkOnly.payeeMissing).toBe(true)
   })
 
+  it('takes a printed payment link as payable when the stored account is hidden, as the preview does', () => {
+    // The send check passes (a bankgiro is stored) and the link is a way to
+    // pay that prints: preview-draft reports no missing payee, so the editor
+    // must not open the payee fix on every send either.
+    const summary = buildEditorPaymentSummary(
+      input({
+        settings: settings({ invoice_show_bankgiro: false }),
+        invoice: { payment_link_url: 'https://pay.example.com/abc' },
+      }),
+    )
+    expect(summary.methods).toEqual([])
+    expect(summary.payeeMissing).toBe(false)
+    expect(summary.qr.kind).toBe('payment_link')
+    expect(describeEditorPaymentSummary(summary)).toEqual([
+      { kind: 'key', key: 'link_printed' },
+      { kind: 'key', key: 'qr_payment_link' },
+    ])
+    expect(paymentReason(summary, { lang: 'sv', showOcr: true })).toBeNull()
+  })
+
+  it('does not take a BIC alone as a way to pay', () => {
+    const summary = buildEditorPaymentSummary(input({ settings: settings({ bankgiro: null, bic: 'ESSESESS' }) }))
+    expect(summary.storedAccountUsable).toBe(true)
+    expect(summary.payeeMissing).toBe(true)
+  })
+
   it('uses the invoice qr_mode over the company setting', () => {
     const summary = buildEditorPaymentSummary(input({ invoice: { qr_mode: 'none' } }))
     expect(summary.qr).toMatchObject({ kind: null, reason: 'mode_none' })

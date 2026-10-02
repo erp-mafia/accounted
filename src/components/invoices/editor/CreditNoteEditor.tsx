@@ -224,67 +224,74 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     }
   }
 
-  async function send(route: EditorChannel) {
+  async function send(channel: EditorChannel) {
     if (!invoice) return
-    const sendChannel = route === 'email' ? 'email' : 'manual'
     setIsSubmitting(true)
-    const result = await persistAndSend({
-      mode: 'create',
-      documentType: 'invoice',
-      payload: { credited_invoice_id: invoice.id, reason },
-      channel: sendChannel,
-      email:
-        sendChannel === 'email'
-          ? {
-              additional_cc: isCompanyAdmin ? extraCc : undefined,
-              email_subject: emailOverride?.subject,
-              email_body: emailOverride?.body,
-            }
-          : undefined,
-    })
-    if (!result.ok) {
-      const description = getErrorMessage(result.error ?? new Error(`HTTP ${result.status}`), {
-        locale,
-        context: 'invoice',
-        statusCode: result.status || undefined,
+    try {
+      const result = await persistAndSend({
+        mode: 'create',
+        documentType: 'invoice',
+        payload: { credited_invoice_id: invoice.id, reason },
+        channel,
+        email:
+          channel === 'email'
+            ? {
+                additional_cc: isCompanyAdmin ? extraCc : undefined,
+                email_subject: emailOverride?.subject,
+                email_body: emailOverride?.body,
+              }
+            : undefined,
       })
-      if (result.invoiceId) {
-        // The credit note exists now: its own page sends it.
-        toast({
-          title: tShell('toast_saved_not_sent_title'),
-          description: tShell('toast_saved_not_sent', { error: description }),
-          variant: 'destructive',
+      if (!result.ok) {
+        const description = getErrorMessage(result.error ?? new Error(`HTTP ${result.status}`), {
+          locale,
+          context: 'invoice',
+          statusCode: result.status || undefined,
         })
-        setConfirmIntent(null)
-        router.replace(`/invoices/${result.invoiceId}`)
+        if (result.invoiceId) {
+          // The credit note exists now: its own page sends it.
+          toast({
+            title: tShell('toast_saved_not_sent_title'),
+            description: tShell('toast_saved_not_sent', { error: description }),
+            variant: 'destructive',
+          })
+          setConfirmIntent(null)
+          router.replace(`/invoices/${result.invoiceId}`)
+          return
+        }
+        toast({ title: t('create_failed_title'), description, variant: 'destructive' })
+        setIsSubmitting(false)
         return
       }
-      toast({ title: t('create_failed_title'), description, variant: 'destructive' })
+      const booked = books && !result.partial
+      const marked = channel === 'manual'
+      toast({
+        title: tShell(
+          marked
+            ? booked ? 'toast_marked_book_title' : 'toast_marked_title'
+            : booked ? 'toast_sent_book_title' : 'toast_sent_title',
+        ),
+        description: result.partial
+          ? marked
+            ? tSend('mark_partial_success')
+            : tSend('partial_success', { message: result.message ?? tShell('toast_sent_title') })
+          : channel === 'email'
+            ? result.message ?? undefined
+            : undefined,
+        ...(result.partial ? { variant: 'destructive' as const } : {}),
+      })
+      setConfirmIntent(null)
+      router.replace(
+        marked && !result.partial
+          ? `/invoices/${result.invoiceId}?download=1`
+          : `/invoices/${result.invoiceId}`,
+      )
+    } catch (error) {
+      // persistAndSend reports every failed request in its result; anything
+      // else must not leave the confirm busy with Avbryt disabled.
+      toast({ title: t('create_failed_title'), description: getErrorMessage(error, { locale }), variant: 'destructive' })
       setIsSubmitting(false)
-      return
     }
-    const booked = books && !result.partial
-    toast({
-      title: tShell(
-        sendChannel === 'email'
-          ? booked ? 'toast_sent_book_title' : 'toast_sent_title'
-          : booked ? 'toast_marked_book_title' : 'toast_marked_title',
-      ),
-      description: result.partial
-        ? sendChannel === 'email'
-          ? tSend('partial_success', { message: result.message ?? tShell('toast_sent_title') })
-          : tSend('mark_partial_success')
-        : sendChannel === 'email'
-          ? result.message ?? undefined
-          : undefined,
-      ...(result.partial ? { variant: 'destructive' as const } : {}),
-    })
-    setConfirmIntent(null)
-    router.replace(
-      sendChannel === 'manual' && !result.partial
-        ? `/invoices/${result.invoiceId}?download=1`
-        : `/invoices/${result.invoiceId}`,
-    )
   }
 
   if (!invoice) return <InvoiceEditorShellSkeleton />

@@ -41,6 +41,18 @@ describe('resolveEditorStatusLine', () => {
     ).toEqual({ kind: 'step', step: { kind: 'customer' } })
   })
 
+  it('then a VAT-registered seller without a VAT number', () => {
+    expect(resolveEditorStatusLine(input({ sellerVatMissing: true, missing: ['payee'], pageCount: 2 }))).toEqual({
+      kind: 'seller_vat_missing',
+    })
+    // A locked date is fixed first: it is the one the user can change here.
+    expect(resolveEditorStatusLine(input({ sellerVatMissing: true, dateLock: 'company_lock' }))).toEqual({
+      kind: 'date_locked',
+      lock: 'company_lock',
+    })
+    expect(resolveEditorStatusLine(input({ sellerVatMissing: false }))).toEqual({ kind: 'none' })
+  })
+
   it('then a faktura without payment details', () => {
     expect(resolveEditorStatusLine(input({ missing: ['payee'] }))).toEqual({ kind: 'payee_missing' })
   })

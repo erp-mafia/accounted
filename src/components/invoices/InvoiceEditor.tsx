@@ -136,6 +136,7 @@ import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
 import { proposeDraftSendLines } from '@/lib/invoices/editor/voucher-preview'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
+import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import {
   invoiceDateLock,
   resolveDetailsChips,
@@ -2040,6 +2041,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       focusSettingsField('invoice_date')
       return
     }
+    // The send refuses a faktura without the seller's VAT number, and the
+    // create before it would already have numbered it: stop here and say why
+    // (the status line carries the fix).
+    if (intent.kind === 'send' && sellerVatMissing) {
+      toast({
+        title: tShell('toast_cannot_send_title'),
+        description: getErrorMessage({ error: { code: 'INVOICE_SEND_VAT_NUMBER_MISSING' } }, { locale, context: 'invoice' }),
+        variant: 'destructive',
+      })
+      return
+    }
     // The confirm names the customer: a click while the customers list is
     // still loading (or failed to load) must say so rather than do nothing
     // (support: cbysea.se).
@@ -2191,83 +2203,94 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }
 
   // Confirm on a send: persist the form (create, or PATCH the draft), then
-  // send it or mark it sent (lib/invoices/editor/send-sequence.ts). "Jag
-  // skickar själv" lands on the detail page with ?download=1, which downloads
-  // the archived, numbered PDF the customer is to get.
+  // send it, mark it sent or hand it to Peppol
+  // (lib/invoices/editor/send-sequence.ts). "Jag skickar själv" lands on the
+  // detail page with ?download=1, which downloads the archived, numbered PDF
+  // the customer is to get.
   async function sendFromEditor(channel: EditorChannel) {
     if (!pendingData) return
-    // Peppol is never offered from the editor yet (no readiness signal before
-    // the invoice exists); the detail page sends e-fakturor.
-    const route = channel === 'email' ? 'email' : 'manual'
     setIsSubmitting(true)
-    const result = await persistAndSend({
-      mode: isEditMode ? 'edit' : 'create',
-      invoiceId: initial?.id ?? null,
-      invoiceNumber: initial?.invoice_number ?? null,
-      documentType: pendingData.document_type,
-      payload: buildInvoiceWritePayload(withQuoteValidity(pendingData), { oreRounding, defaultDims }),
-      channel: route,
-      email:
-        route === 'email'
-          ? {
-              additional_cc: isCompanyAdmin ? extraCc : undefined,
-              email_subject: emailOverride?.subject,
-              email_body: emailOverride?.body,
-            }
-          : undefined,
-    })
-
-    if (!result.ok) {
-      const description = getErrorMessage(result.error ?? new Error(`HTTP ${result.status}`), {
-        locale,
-        context: 'invoice',
-        statusCode: result.status || undefined,
+    try {
+      const result = await persistAndSend({
+        mode: isEditMode ? 'edit' : 'create',
+        invoiceId: initial?.id ?? null,
+        invoiceNumber: initial?.invoice_number ?? null,
+        documentType: pendingData.document_type,
+        payload: buildInvoiceWritePayload(withQuoteValidity(pendingData), { oreRounding, defaultDims }),
+        channel,
+        email:
+          channel === 'email'
+            ? {
+                additional_cc: isCompanyAdmin ? extraCc : undefined,
+                email_subject: emailOverride?.subject,
+                email_body: emailOverride?.body,
+              }
+            : undefined,
       })
-      if (result.invoiceId) {
-        // The document exists now: a retry from here would create a second
-        // one, so the detail page takes over.
+
+      if (!result.ok) {
+        const description = getErrorMessage(result.error ?? new Error(`HTTP ${result.status}`), {
+          locale,
+          context: 'invoice',
+          statusCode: result.status || undefined,
+        })
+        if (result.invoiceId) {
+          // The document exists now: a retry from here would create a second
+          // one, so the detail page takes over.
+          toast({
+            title: tShell('toast_saved_not_sent_title'),
+            description: tShell('toast_saved_not_sent', { error: description }),
+            variant: 'destructive',
+          })
+          setConfirmIntent(null)
+          router.replace(`/invoices/${result.invoiceId}`)
+          return
+        }
         toast({
-          title: tShell('toast_saved_not_sent_title'),
-          description: tShell('toast_saved_not_sent', { error: description }),
+          title: isEditMode ? t('update_failed_title') : t('create_invoice_failed_title'),
+          description,
           variant: 'destructive',
         })
-        setConfirmIntent(null)
-        router.replace(`/invoices/${result.invoiceId}`)
+        setIsSubmitting(false)
         return
       }
+
+      const booked = booksOnIssue && !result.partial
+      const marked = channel === 'manual'
+      toast({
+        title: tShell(
+          marked
+            ? booked ? 'toast_marked_book_title' : 'toast_marked_title'
+            : booked ? 'toast_sent_book_title' : 'toast_sent_title',
+        ),
+        description: result.partial
+          ? marked
+            ? tSend('mark_partial_success')
+            : tSend('partial_success', { message: result.message ?? tShell('toast_sent_title') })
+          : channel === 'email'
+            ? result.message ?? undefined
+            : undefined,
+        ...(result.partial ? { variant: 'destructive' as const } : {}),
+      })
+      setConfirmIntent(null)
+      // isSubmitting stays on: the editor is leaving, and a second click must
+      // not send twice.
+      router.replace(
+        marked && !result.partial
+          ? `/invoices/${result.invoiceId}?download=1`
+          : `/invoices/${result.invoiceId}`,
+      )
+    } catch (error) {
+      // persistAndSend reports every failed request in its result; this is
+      // for anything else (building the body), so the confirm never stays
+      // busy with Avbryt disabled.
       toast({
         title: isEditMode ? t('update_failed_title') : t('create_invoice_failed_title'),
-        description,
+        description: getErrorMessage(error, { locale, context: 'invoice' }),
         variant: 'destructive',
       })
       setIsSubmitting(false)
-      return
     }
-
-    const booked = booksOnIssue && !result.partial
-    toast({
-      title: tShell(
-        route === 'email'
-          ? booked ? 'toast_sent_book_title' : 'toast_sent_title'
-          : booked ? 'toast_marked_book_title' : 'toast_marked_title',
-      ),
-      description: result.partial
-        ? route === 'email'
-          ? tSend('partial_success', { message: result.message ?? tShell('toast_sent_title') })
-          : tSend('mark_partial_success')
-        : route === 'email'
-          ? result.message ?? undefined
-          : undefined,
-      ...(result.partial ? { variant: 'destructive' as const } : {}),
-    })
-    setConfirmIntent(null)
-    // isSubmitting stays on: the editor is leaving, and a second click must
-    // not send twice.
-    router.replace(
-      route === 'manual' && !result.partial
-        ? `/invoices/${result.invoiceId}?download=1`
-        : `/invoices/${result.invoiceId}`,
-    )
   }
 
   // A failed Zod validation must never read as a dead button (the primary is
@@ -2655,6 +2678,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           periods: fiscalPeriods,
         })
       : null
+  // A momsregistrerad company without its VAT number cannot send a faktura
+  // (ML 17 kap. 24 §; the send route refuses it after the create has numbered
+  // it), so the editor says so before the confirm instead.
+  const sellerVatMissing =
+    !isSelfBilled &&
+    companySettings !== null &&
+    !hasRequiredSellerVatNumber(companySettings, { document_type: watchDocumentType, credited_invoice_id: null })
   const detailsReasons = resolveDetailsExpansion({
     documentType: watchDocumentType,
     isSelfBilled,
@@ -2904,6 +2934,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     productRowCount,
     hasDeduction: hasAnyDeduction,
     dateLock,
+    sellerVatMissing,
   })
   const [pane, setPane] = useState<EditorPane>('form')
   const describeStep = (step: NextStep) => ({
@@ -2929,6 +2960,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       canAddPayee={isCompanyAdmin && canWrite}
       onAddPayee={openPayeeFix}
       onFixDate={() => focusSettingsField('invoice_date')}
+      canEditTaxSettings={isCompanyAdmin && canWrite}
       className={className}
     />
   )
