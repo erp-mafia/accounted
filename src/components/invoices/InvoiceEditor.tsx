@@ -2387,9 +2387,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       case 'currency':
         focusSettingsField('currency')
         return
-      case 'delivery':
-        focusSettingsField('delivery_date')
-        return
       case 'language':
         setDetailsOpen(true)
         return
@@ -2756,7 +2753,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     validUntil: watchValidUntil || '',
     currency: watchCurrency,
     language: documentLanguage,
-    deliveryDate: watchDeliveryDate || '',
     dimensionsEnabled: dimensionsEnabled && isInvoiceDoc,
     dims: hasDimensionValues(defaultDims) ? compactDimensions(defaultDims) : null,
   })

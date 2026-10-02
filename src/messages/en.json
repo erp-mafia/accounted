@@ -4861,8 +4861,6 @@
     "chip_due_days": "Due {date} · {days, plural, one {# day} other {# days}}",
     "chip_valid_until": "Valid until {date}",
     "chip_valid_until_days": "Valid until {date} · {days, plural, one {# day} other {# days}}",
-    "chip_delivery": "Delivery date {date}",
-    "chip_add_delivery": "Delivery date",
     "chip_dimensions": "Dimensions: {dims}",
     "chip_add_dimensions": "Dimensions",
     "rows_title": "Rows",

@@ -120,8 +120,6 @@ export type DetailsChip =
   | { kind: 'currency'; currency: string }
   /** From the customer card: there is no per-invoice language. */
   | { kind: 'language'; language: DetailsLanguage }
-  /** date null: the dashed "+ Leveransdatum" chip. */
-  | { kind: 'delivery'; date: string | null }
   /** dims null: the dashed "+ Dimensioner" chip. */
   | { kind: 'dimensions'; dims: string | null }
 
@@ -133,7 +131,6 @@ export interface DetailsChipsInput {
   validUntil: string
   currency: string
   language: DetailsLanguage
-  deliveryDate: string
   /** company_settings.dimensions_enabled, on a faktura. */
   dimensionsEnabled: boolean
   /** The invoice's default dimensions, compacted ("KS01 · P001"); null when none. */
@@ -143,6 +140,12 @@ export interface DetailsChipsInput {
 /**
  * The chip row, in reading order. A received självfaktura shows its dates
  * next to the issuer, so only the due date and the currency are chips there.
+ *
+ * Leveransdatum is not a chip: it prints only when it differs from the
+ * invoice date, and then the section opens by itself (resolveDetailsExpansion).
+ * Until then it is one "+ Leveransdatum" link inside the opened fields, so
+ * the everyday invoice keeps the row to dates, currency and language
+ * (p2-coverage 3.2) on one line.
  */
 export function resolveDetailsChips(input: DetailsChipsInput): DetailsChip[] {
   const chips: DetailsChip[] = []
@@ -157,7 +160,6 @@ export function resolveDetailsChips(input: DetailsChipsInput): DetailsChip[] {
   chips.push({ kind: 'currency', currency: input.currency })
   if (!input.isSelfBilled) {
     chips.push({ kind: 'language', language: input.language })
-    if (input.documentType === 'invoice') chips.push({ kind: 'delivery', date: input.deliveryDate || null })
     if (input.documentType === 'invoice' && input.dimensionsEnabled) {
       chips.push({ kind: 'dimensions', dims: input.dims })
     }

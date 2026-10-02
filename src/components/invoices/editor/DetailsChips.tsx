@@ -23,7 +23,7 @@ interface DetailsChipsProps {
 /**
  * The folded Detaljer section: the invoice's dates, currency and language
  * as one row of pills. Each pill opens the fields at its own field, and the
- * dashed ones add what is not set yet (Leveransdatum, Dimensioner).
+ * dashed one adds what is not set yet (Dimensioner).
  */
 export function DetailsChips({ chips, isQuote, today, onSelect }: DetailsChipsProps) {
   const t = useTranslations('invoice_editor_form')
@@ -56,10 +56,6 @@ export function DetailsChips({ chips, isQuote, today, onSelect }: DetailsChipsPr
             break
           case 'language':
             label = chip.language === 'en' ? t('language_en') : t('language_sv')
-            break
-          case 'delivery':
-            add = chip.date === null
-            label = chip.date ? t('chip_delivery', { date: date(chip.date) }) : t('chip_add_delivery')
             break
           case 'dimensions':
             add = chip.dims === null

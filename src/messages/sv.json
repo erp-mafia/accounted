@@ -4861,8 +4861,6 @@
     "chip_due_days": "Förfaller {date} · {days, plural, one {# dag} other {# dagar}}",
     "chip_valid_until": "Giltig till {date}",
     "chip_valid_until_days": "Giltig till {date} · {days, plural, one {# dag} other {# dagar}}",
-    "chip_delivery": "Leveransdatum {date}",
-    "chip_add_delivery": "Leveransdatum",
     "chip_dimensions": "Dimensioner: {dims}",
     "chip_add_dimensions": "Dimensioner",
     "rows_title": "Rader",

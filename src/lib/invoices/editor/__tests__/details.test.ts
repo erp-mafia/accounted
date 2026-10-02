@@ -107,7 +107,6 @@ function chips(overrides: Partial<DetailsChipsInput> = {}): DetailsChipsInput {
     validUntil: '2026-11-01',
     currency: 'SEK',
     language: 'sv',
-    deliveryDate: '',
     dimensionsEnabled: false,
     dims: null,
     ...overrides,
@@ -115,17 +114,18 @@ function chips(overrides: Partial<DetailsChipsInput> = {}): DetailsChipsInput {
 }
 
 describe('resolveDetailsChips', () => {
-  it('reads Fakturadatum, Förfaller, valuta, språk and + Leveransdatum', () => {
+  it('reads Fakturadatum, Förfaller, valuta and språk, with Leveransdatum folded into the fields', () => {
+    // No "+ Leveransdatum" chip: it is a link inside the opened fields, and a
+    // differing delivery date opens them by itself (resolveDetailsExpansion).
     expect(resolveDetailsChips(chips())).toEqual([
       { kind: 'invoice_date', date: '2026-10-02' },
       { kind: 'due', date: '2026-11-01', days: 30 },
       { kind: 'currency', currency: 'SEK' },
       { kind: 'language', language: 'sv' },
-      { kind: 'delivery', date: null },
     ])
   })
 
-  it('shows Giltig till instead of a due date on a quote, and no delivery date', () => {
+  it('shows Giltig till instead of a due date on a quote', () => {
     expect(resolveDetailsChips(chips({ documentType: 'quote' }))).toEqual([
       { kind: 'invoice_date', date: '2026-10-02' },
       { kind: 'valid_until', date: '2026-11-01', days: 30 },
