@@ -31,7 +31,7 @@
 -- The replacement CHECKs are added NOT VALID so the swap never scans (and
 -- never blocks writes to) companies, company_settings or the template
 -- library on a live deploy; every existing row already satisfies the wider
--- list. 20260923220300 validates them under SHARE UPDATE EXCLUSIVE.
+-- list. 20261002200300 validates them under SHARE UPDATE EXCLUSIVE.
 ALTER TABLE public.companies
   DROP CONSTRAINT IF EXISTS companies_entity_type_check;
 ALTER TABLE public.companies

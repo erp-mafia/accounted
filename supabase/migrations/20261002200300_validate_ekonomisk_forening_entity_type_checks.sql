@@ -1,6 +1,6 @@
 -- =============================================================================
 -- Validate the entity_type CHECK constraints re-added NOT VALID by
--- 20260923220000_ekonomisk_forening_foundation.sql. VALIDATE CONSTRAINT scans
+-- 20261002200000_ekonomisk_forening_foundation.sql. VALIDATE CONSTRAINT scans
 -- under SHARE UPDATE EXCLUSIVE, so concurrent writes keep flowing; it runs in
 -- its own migration so the ACCESS EXCLUSIVE lock of the ADD CONSTRAINT above
 -- has been released before the scan starts. Every existing row already

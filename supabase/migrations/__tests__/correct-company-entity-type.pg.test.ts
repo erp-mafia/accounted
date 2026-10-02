@@ -9,7 +9,7 @@ import {
 import { getPool, withUserContext } from '@/tests/pg/setup'
 
 /**
- * 20260923220200_correct_company_entity_type.sql: an owner can correct the
+ * 20261002200200_correct_company_entity_type.sql: an owner can correct the
  * legal form of a company whose books are empty; the seeded chart follows
  * the new form; everything else fails closed with a code.
  */
