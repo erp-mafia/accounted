@@ -4,7 +4,11 @@ import { PRIVATE_NO_STORE_HEADERS, privateNoStore } from '@/lib/api/private-no-s
 import { validateBody } from '@/lib/api/validate'
 import { InvoiceEmailPreviewSchema } from '@/lib/api/schemas'
 import { buildInvoicePreviewDraft, isPreviewPlaceholderCustomer } from '@/lib/invoices/preview-draft'
-import { generateInvoiceEmailHtml, generateInvoiceEmailSubject } from '@/lib/email/invoice-templates'
+import {
+  generateInvoiceEmailHtml,
+  generateInvoiceEmailSubject,
+  invoiceEmailEditableTexts,
+} from '@/lib/email/invoice-templates'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import {
   EMAIL_PATTERN,
@@ -24,7 +28,11 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
  * the PDF preview builds it (lib/invoices/preview-draft.ts), so the two
  * state the same amount and payment details.
  *
- * Returns { data: { subject, html, from, reply_to, to, cc, missing } }:
+ * Returns { data: { subject, html, editable, from, reply_to, to, cc, missing } }:
+ *  - editable: { subject, body }, the subject and message as text to edit,
+ *    placeholders left in ({fakturanummer}, ...): what the editor's
+ *    "Redigera text för den här fakturan" starts from and sends back as
+ *    email_subject / email_body;
  *  - from: the sender's display name, and its address when the company
  *    sends from its own verified domain (null = the platform address);
  *  - reply_to: where a reply lands (null = the template leaves out the
@@ -81,6 +89,7 @@ export const POST = withRouteContext('invoice.preview_email', async (request, {
       data: {
         subject: generateInvoiceEmailSubject(emailData),
         html: generateInvoiceEmailHtml(emailData),
+        editable: invoiceEmailEditableTexts(emailData),
         from: { name: sender?.name ?? company.company_name, address: sender?.address ?? null },
         reply_to: replyTo,
         to: recipients.to,

@@ -38,6 +38,7 @@ const CUSTOMER_ID = '6f1c2a3e-0000-4000-8000-000000000011'
 interface EmailPreview {
   subject: string
   html: string
+  editable: { subject: string; body: string }
   from: { name: string; address: string | null }
   reply_to: string | null
   to: string[]
@@ -140,6 +141,11 @@ describe('POST /api/invoices/preview-email', () => {
       cc: ['arkiv@ekholm.test', 'ekonomi@nordljus.test'],
       missing: [],
     })
+    // The texts to edit keep their placeholders: the send fills in the number it allocates.
+    expect(body.data.editable).toEqual({
+      subject: 'Faktura {fakturanummer} från {företag}',
+      body: 'Tack för ditt förtroende! Bifogat hittar du din faktura.',
+    })
   })
 
   it('uses this send\'s own subject and message, with the placeholders filled in', async () => {
@@ -158,6 +164,10 @@ describe('POST /api/invoices/preview-email', () => {
     // User text is escaped, and its line breaks kept.
     expect(body.data.html).toContain('Hej igen!<br>Här är fakturan för workshopen &lt;3')
     expect(body.data.html).not.toContain('Tack för ditt förtroende!')
+    expect(body.data.editable).toEqual({
+      subject: 'Faktura {fakturanummer}, {belopp}',
+      body: 'Hej igen!\nHär är fakturan för workshopen <3',
+    })
   })
 
   it('writes in the customer\'s language', async () => {

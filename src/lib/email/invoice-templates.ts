@@ -225,6 +225,39 @@ function resolveCustomTexts(data: InvoiceEmailData, lang: EmailLang): ResolvedCu
   }
 }
 
+/**
+ * The subject and message this email would use, as text a person edits:
+ * this send's own text, else the company's text (a standard faktura only),
+ * else the stock text, with the placeholders ({fakturanummer}, {belopp}, ...)
+ * left in. The invoice editor's "Redigera text för den här fakturan" starts
+ * from these, so an edited subject still gets the number the send
+ * allocates, not the number the preview predicted.
+ */
+export function invoiceEmailEditableTexts(data: InvoiceEmailData): { subject: string; body: string } {
+  const { invoice, customer } = data
+  const lang = resolveLang(customer)
+  const L = LABELS[lang]
+  const raw = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined
+  const texts = isStandardInvoice(invoice) ? data.company.invoice_email_texts : undefined
+  const langTexts = texts && typeof texts === 'object' ? texts[lang] : undefined
+  const companyTexts: InvoiceEmailTextOverrides =
+    langTexts && typeof langTexts === 'object' ? langTexts : {}
+  const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
+  const stockBody = invoice.credited_invoice_id
+    ? L.bodyCreditNote
+    : docType === 'quote'
+      ? L.bodyQuote(quoteValidUntil(invoice))
+      : L.bodyInvoice
+  return {
+    subject:
+      raw(data.overrides?.subject)
+      ?? raw(companyTexts.subject)
+      ?? L.subjectFrom(getDocumentLabel(invoice, lang), '{fakturanummer}', '{företag}'),
+    body: raw(data.overrides?.body) ?? raw(companyTexts.body) ?? stockBody,
+  }
+}
+
 // Minimal hex validator: guards against branding values that bypass the
 // settings UI and could inject CSS via crafted strings. Anything malformed
 // falls back to the legacy default.
