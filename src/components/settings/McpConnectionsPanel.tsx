@@ -42,13 +42,21 @@ const LOGO: Partial<Record<ConnectionKind | ConnectTarget, string>> = {
 /**
  * Single-colour brand marks drawn in currentColor, so they follow the theme
  * (a black <img> would vanish in dark mode). Path data from simple-icons
- * 16.32.0, CC0-1.0: Cursor's mark, and the Model Context Protocol mark for a
- * generic MCP client.
+ * 16.32.0, CC0-1.0: Cursor's and Google Gemini's marks, and the Model Context
+ * Protocol mark for a generic MCP client.
  */
 function CursorMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
       <path d="M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23" />
+    </svg>
+  )
+}
+
+function GeminiMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81" />
     </svg>
   )
 }
@@ -64,6 +72,7 @@ function McpMark({ className }: { className?: string }) {
 const ICON = {
   local: Terminal,
   cursor: CursorMark,
+  gemini: GeminiMark,
   mcp: McpMark,
   other: McpMark,
   key: KeyRound,
@@ -136,7 +145,7 @@ export function McpConnectionsPanel({
   function rowName(key: ApiKeyRow): string {
     const kind = connectionKind(key)
     if (kind === 'key') return key.name
-    if (kind === 'claude' || kind === 'chatgpt' || kind === 'grok') return targetName(kind)
+    if (kind === 'claude' || kind === 'chatgpt' || kind === 'grok' || kind === 'gemini') return targetName(kind)
     return t(`kind_${kind}`)
   }
 

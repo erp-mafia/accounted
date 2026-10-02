@@ -688,7 +688,7 @@ export async function ensureSubscription(
   userId: string,
   orgnr: string,
 ): Promise<void> {
-  const { supabase, client, appUrl } = deps
+  const { client, appUrl } = deps
   if (!/^https?:\/\//.test(appUrl)) {
     // A relative/empty base URL would register a broken webhook endpoint at
     // Bolagsverket. Fail fast: the caller logs this as a subscription failure.
@@ -697,7 +697,12 @@ export async function ensureSubscription(
     )
   }
   const url = `${appUrl.replace(/\/$/, '')}/api/extensions/ext/bolagsverket/webhook`
-  const { data: existing } = await supabase
+  // auth_secret authenticates Bolagsverket's deliveries to our webhook, so it
+  // is withheld from end-user roles and the row is written by the server
+  // only: every read and write of a subscription runs on the service role,
+  // scoped to the company the caller's submission already resolved.
+  const serviceClient = createServiceClientNoCookies()
+  const { data: existing } = await serviceClient
     .from('bolagsverket_subscriptions')
     .select('id, auth_secret')
     .eq('company_id', companyId)
@@ -714,7 +719,6 @@ export async function ensureSubscription(
   // authenticates the same deliveries.
   let sharedSecret: string | null = null
   if (!existing) {
-    const serviceClient = createServiceClientNoCookies()
     const { data: shared } = await serviceClient
       .from('bolagsverket_subscriptions')
       .select('auth_secret')
@@ -733,12 +737,13 @@ export async function ensureSubscription(
   const expires = new Date()
   expires.setMonth(expires.getMonth() + 6)
   if (existing) {
-    await supabase
+    await serviceClient
       .from('bolagsverket_subscriptions')
       .update({ subscribed_at: new Date().toISOString(), expires_at: expires.toISOString() })
       .eq('id', (existing as { id: string }).id)
+      .eq('company_id', companyId)
   } else {
-    await supabase.from('bolagsverket_subscriptions').insert({
+    await serviceClient.from('bolagsverket_subscriptions').insert({
       company_id: companyId,
       user_id: userId,
       orgnr,

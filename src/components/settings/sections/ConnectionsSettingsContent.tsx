@@ -5,7 +5,14 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Landmark } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { GoogleMark } from '@/components/ui/provider-marks'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
+import {
+  fetchMailConnections,
+  summarizeMailboxes,
+  MAIL_SETTINGS_HREF,
+  type MailboxSummary,
+} from '@/components/extensions/general/mail-connections'
 import {
   SettingsGroup,
   SettingsRow,
@@ -58,6 +65,8 @@ interface Status {
   bankCount: number
   skvConnected: boolean
   peppolOn: boolean
+  /** Null when the mailboxes could not be read (the row then shows no state). */
+  mail: MailboxSummary | null
 }
 
 /**
@@ -79,6 +88,7 @@ export function ConnectionsSettingsContent() {
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking') && !isSandbox
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket') && !isSandbox
   const hasWhatsApp = ENABLED_EXTENSION_IDS.has('whatsapp-inbox') && !isSandbox
+  const hasMail = ENABLED_EXTENSION_IDS.has('mail') && !isSandbox
   const hasStripe = ENABLED_EXTENSION_IDS.has('stripe')
   const hasShopify = ENABLED_EXTENSION_IDS.has('shopify')
   const hasWooCommerce = ENABLED_EXTENSION_IDS.has('woocommerce')
@@ -110,7 +120,8 @@ export function ConnectionsSettingsContent() {
         .eq('status', 'active'),
       skvCount,
       fetch('/api/settings/peppol').then((res) => (res.ok ? res.json() : null)),
-    ]).then(([bank, skv, peppol]) => {
+      hasMail ? fetchMailConnections() : Promise.resolve(null),
+    ]).then(([bank, skv, peppol, mail]) => {
       if (cancelled) return
       const banks = bank.status === 'fulfilled' ? ((bank.value.data ?? []) as Array<{ bank_name: string | null }>) : []
       const registration =
@@ -122,12 +133,13 @@ export function ConnectionsSettingsContent() {
         bankCount: banks.length,
         skvConnected: skv.status === 'fulfilled' && skv.value > 0,
         peppolOn: registration?.status === 'registered' || registration?.status === 'pending',
+        mail: mail.status === 'fulfilled' && mail.value ? summarizeMailboxes(mail.value) : null,
       })
     })
     return () => {
       cancelled = true
     }
-  }, [companyId])
+  }, [companyId, hasMail])
 
   const bankFile = bankLogo(status?.bankName ?? null)
 
@@ -139,6 +151,8 @@ export function ConnectionsSettingsContent() {
     href: string
     /** null: the state is not read here, so the button just opens the page. */
     connected: boolean | null
+    /** The state is an exception the person has to act on (ochre). */
+    attention?: boolean
   }) {
     return (
       <SettingsRow
@@ -150,7 +164,11 @@ export function ConnectionsSettingsContent() {
         }
         help={opts.help}
       >
-        {opts.state ? <SettingsRowNote className={opts.connected ? 'text-foreground' : undefined}>{opts.state}</SettingsRowNote> : null}
+        {opts.state ? (
+          <SettingsRowNote className={opts.attention ? 'text-attn' : opts.connected ? 'text-foreground' : undefined}>
+            {opts.state}
+          </SettingsRowNote>
+        ) : null}
         <SettingsRowEnd>
           <Button variant="outline" size="sm" asChild>
             <Link href={opts.href}>{opts.connected === null ? t('open') : opts.connected ? t('manage') : t('connect')}</Link>
@@ -161,6 +179,21 @@ export function ConnectionsSettingsContent() {
   }
 
   const off = status ? t('not_connected') : null
+
+  // Gmail shows once its read says there is something to offer: a mailbox,
+  // or a company that may connect one. While Google's review keeps new
+  // consents closed, a row whose button leads to a page with no connect
+  // button is a dead end. A failed read still shows the row, stateless,
+  // like every other row here.
+  const mail = status?.mail ?? null
+  const showMail = hasMail && status !== null && (mail === null || mail.available)
+  const mailState = mail
+    ? mail.needsReconnect.length > 0
+      ? t('gmail_reconnect')
+      : mail.active.length > 0
+        ? t('gmail_connected', { count: mail.active.length })
+        : off
+    : null
 
   return (
     <div>
@@ -211,6 +244,16 @@ export function ConnectionsSettingsContent() {
             help: t('whatsapp_help'),
             href: '/settings/whatsapp',
             connected: null,
+          })}
+        {showMail &&
+          row({
+            logo: <GoogleMark className="h-4 w-4" />,
+            name: t('gmail'),
+            help: t('gmail_help'),
+            state: mailState,
+            href: MAIL_SETTINGS_HREF,
+            connected: mail ? mail.active.length + mail.needsReconnect.length > 0 : null,
+            attention: (mail?.needsReconnect.length ?? 0) > 0,
           })}
       </SettingsGroup>
 

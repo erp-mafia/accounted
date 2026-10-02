@@ -290,11 +290,10 @@ describe('cutover parity: payslip data with a known net', () => {
         bank_account_number: '9876543',
       },
       company: { name: 'Bolaget AB', org_number: '5560000000' },
+      audience: { kind: 'employer' },
     })
     expect(data).toMatchInlineSnapshot(`
       {
-        "avgifterAmount": 10997,
-        "avgifterRate": 0.3142,
         "bankAccount": "8327-****6543",
         "breakdownSteps": [
           {
@@ -307,6 +306,13 @@ describe('cutover parity: payslip data with a known net', () => {
         "companyOrgNumber": "5560000000",
         "deviationPeriodLabel": null,
         "employeeName": "Anna Exempelsson",
+        "employerCost": {
+          "avgifterAmount": 10997,
+          "avgifterRate": 0.3142,
+          "totalEmployerCost": 51516.74,
+          "vacationAccrual": 4200,
+          "vacationAccrualAvgifter": 1319.74,
+        },
         "employmentType": "Anställd",
         "grossSalary": 35000,
         "lineItems": [
@@ -324,9 +330,6 @@ describe('cutover parity: payslip data with a known net', () => {
         "personnummerMasked": "19900101-****",
         "taxReference": "Tabell 33, kol 1",
         "taxWithheld": 8000,
-        "totalEmployerCost": 51516.74,
-        "vacationAccrual": 4200,
-        "vacationAccrualAvgifter": 1319.74,
         "ytdGross": 210000,
         "ytdNet": 162000,
         "ytdTax": 48000,

@@ -769,3 +769,105 @@ describe('generateARLedger: partially paid invoices (feedback seq 817399)', () =
     expect(report.unpaid_count).toBe(1)
   })
 })
+
+describe('generateARLedger: migrated credit notes', () => {
+  // The provider migration imports every kreditfaktura as status 'credited'
+  // with nothing paid or remaining; Accounted's own credit notes are 'sent'.
+  const base = {
+    customer_id: 'cust-a',
+    customer: { id: 'cust-a', name: 'Callidus Tech AB' },
+    invoice_date: '2026-02-13',
+    due_date: '2026-03-15',
+    currency: 'SEK',
+  }
+  const migratedCreditNote = (id: string, total: number, credited_invoice_id: string | null = null) => ({
+    ...base,
+    id,
+    invoice_number: id,
+    total,
+    paid_amount: 0,
+    remaining_amount: 0,
+    status: 'credited',
+    credited_invoice_id,
+  })
+
+  it('leaves out an unlinked credit note whose original was imported as paid', async () => {
+    // Invoice 5 came in as paid and is not in the population; 1510 is 0.
+    results = [{ data: [migratedCreditNote('6', -11615)], error: null }]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.entries).toEqual([])
+    expect(report.total_outstanding).toBe(0)
+    expect(report.unpaid_count).toBe(0)
+  })
+
+  it('leaves out a linked credit note whose original is credited and fully paid', async () => {
+    results = [
+      {
+        data: [
+          { ...base, id: 'orig', invoice_number: '10', total: 5000, paid_amount: 5000, status: 'credited' },
+          migratedCreditNote('cn', -5000, 'orig'),
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.entries).toEqual([])
+    expect(report.total_outstanding).toBe(0)
+  })
+
+  it('counts a partial credit once: the provider netted it into the original', async () => {
+    // Faktura 9 694, krediterad med 4 847 i källsystemet: the original arrives
+    // with paid_amount 4 847 carrying the credit, so 4 847 is still owed.
+    results = [
+      {
+        data: [
+          { ...base, id: 'orig', invoice_number: '5922', total: 9694, paid_amount: 4847, status: 'sent' },
+          migratedCreditNote('cn', -4847, 'orig'),
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.total_outstanding).toBe(4847)
+    expect(report.entries[0].invoices.map((inv) => inv.invoice_id)).toEqual(['orig'])
+  })
+
+  it('keeps the open invoices of the same customer', async () => {
+    results = [
+      {
+        data: [
+          { ...base, id: 'open', invoice_number: '12', total: 1000, paid_amount: 0, status: 'sent' },
+          migratedCreditNote('cn', -11615),
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.total_outstanding).toBe(1000)
+    expect(report.entries[0].invoices.map((inv) => inv.invoice_id)).toEqual(['open'])
+  })
+
+  it('does not touch an in-app credit note, which is issued as sent', async () => {
+    results = [
+      {
+        data: [
+          { ...base, id: 'orig', invoice_number: '13', total: 1000, paid_amount: 1000, status: 'credited' },
+          { ...base, id: 'cn', invoice_number: '14', total: -1000, paid_amount: 0, status: 'sent', credited_invoice_id: 'orig' },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.total_outstanding).toBe(-1000)
+  })
+})

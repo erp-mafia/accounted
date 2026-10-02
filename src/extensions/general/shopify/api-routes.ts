@@ -260,11 +260,14 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       })
       if (!rl.ok) return rl.response!
 
-      // Membership-scoped lookup via the user client; the sync itself runs on
-      // the service client (cursor updates and ingest are service paths). The
-      // manual button ignores transaction_sync_enabled (that flag gates the
-      // nightly cron): pressing it IS the opt-in.
-      const { data: connection } = await auth.supabase
+      // The sync decrypts the stored credentials, which end-user roles cannot
+      // read, so the lookup runs on the service role, scoped to the caller's
+      // active company (the dispatcher resolved it from their membership).
+      // The sync itself runs there too (cursor updates and ingest are service
+      // paths). The manual button ignores transaction_sync_enabled (that flag
+      // gates the nightly cron): pressing it IS the opt-in.
+      const serviceClient = createServiceClientNoCookies()
+      const { data: connection } = await serviceClient
         .from('shopify_connections')
         .select('*')
         .eq('company_id', auth.companyId)
@@ -279,7 +282,6 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       }
 
       try {
-        const serviceClient = createServiceClientNoCookies()
         // Bounded like the cron (see MANUAL_SYNC_BUDGET_MS).
         const summary = await syncShopifyOrders(
           serviceClient,
@@ -331,7 +333,10 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      const { data: connection } = await auth.supabase
+      // Service role for the same reason as /sync: the run needs the
+      // encrypted credentials, which end-user roles cannot read.
+      const serviceClient = createServiceClientNoCookies()
+      const { data: connection } = await serviceClient
         .from('shopify_connections')
         .select('*')
         .eq('company_id', auth.companyId)
@@ -368,7 +373,6 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       }
 
       try {
-        const serviceClient = createServiceClientNoCookies()
         const summary = await syncShopifyOrders(
           serviceClient,
           { ...(connection as ShopifyConnection), last_order_synced_at: parsed.iso },

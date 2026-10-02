@@ -303,8 +303,8 @@ function prepareInvoice(input: PeppolInvoiceInput):
   if ((invoice.deduction_total ?? 0) !== 0) {
     issues.push(validationIssue(
       'DEDUCTION_UNSUPPORTED', 'invoice.deduction_total',
-      'ROT- och RUT-avdrag stöds ännu inte av Peppol-exporten.',
-      'ROT and RUT deductions are not yet supported by the Peppol export.',
+      'Skattereduktion (ROT, RUT eller grön teknik) stöds ännu inte av Peppol-exporten.',
+      'Tax reductions (ROT, RUT or green technology) are not yet supported by the Peppol export.',
     ))
   }
   if (!company.vat_registered || !['standard_25', 'reduced_12', 'reduced_6'].includes(invoice.vat_treatment)) {

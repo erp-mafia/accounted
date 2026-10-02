@@ -35,9 +35,11 @@ vi.mock('@/lib/auth/api-keys', () => ({
 
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { validateIxbrlWithArelle } from '@/lib/bokslut/ixbrl/validate/arelle-client'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
   applyHandelse,
   BolagsverketSubmissionError,
+  ensureSubscription,
   handleWebhook,
   hashPnr,
   normalizeOrgnr,
@@ -137,6 +139,87 @@ function message(overrides: Partial<HandelseMeddelande> = {}): HandelseMeddeland
     ...overrides,
   }
 }
+
+describe('ensureSubscription', () => {
+  const HOOK = 'https://app.test/api/extensions/ext/bolagsverket/webhook'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  /**
+   * auth_secret is withheld from end-user roles and the table is written by
+   * the server only (20260929173432): a session client that is touched at
+   * all fails the test.
+   */
+  function sessionThatMustNotBeUsed() {
+    return {
+      from: vi.fn(() => {
+        throw new Error('the session client must not touch bolagsverket_subscriptions')
+      }),
+    }
+  }
+
+  function serviceReturning(...results: Array<{ data?: unknown; error?: unknown }>) {
+    const service = createQueuedMockSupabase()
+    for (const result of results) service.enqueue(result)
+    vi.mocked(createServiceClientNoCookies).mockReturnValueOnce(service.supabase as never)
+    return service
+  }
+
+  it('registers a new subscription on the service role, never the session client', async () => {
+    const service = serviceReturning(
+      { data: null }, // no subscription for this company
+      { data: null }, // no other company shares the orgnr
+      { data: null }, // insert
+    )
+    const session = sessionThatMustNotBeUsed()
+    const createSubscription = vi.fn(async (_url: string, _orgnr: string, _secret: string) => undefined)
+    const client = makeClientMock({ createSubscription })
+
+    await ensureSubscription(
+      { supabase: session as never, client: client as never, appUrl: 'https://app.test', log: makeLog() },
+      'company-1',
+      'user-1',
+      '5560001111',
+    )
+
+    expect(session.from).not.toHaveBeenCalled()
+    expect(service.findCall('bolagsverket_subscriptions', 'select')).toEqual(['id, auth_secret'])
+    expect(service.findCalls('bolagsverket_subscriptions', 'eq')[0]).toEqual(['company_id', 'company-1'])
+    const inserted = service.findCall('bolagsverket_subscriptions', 'insert')![0] as {
+      company_id: string
+      user_id: string
+      auth_secret: string
+    }
+    expect(inserted).toMatchObject({ company_id: 'company-1', user_id: 'user-1', orgnr: '5560001111', url: HOOK })
+    expect(createSubscription).toHaveBeenCalledWith(HOOK, '5560001111', inserted.auth_secret)
+  })
+
+  it("renews this company's subscription with its stored secret, scoped to the company", async () => {
+    const service = serviceReturning(
+      { data: { id: 'sub-1', auth_secret: 'stored-secret' } },
+      { data: null }, // renewal update
+    )
+    const session = sessionThatMustNotBeUsed()
+    const createSubscription = vi.fn(async (_url: string, _orgnr: string, _secret: string) => undefined)
+    const client = makeClientMock({ createSubscription })
+
+    await ensureSubscription(
+      { supabase: session as never, client: client as never, appUrl: 'https://app.test', log: makeLog() },
+      'company-1',
+      'user-1',
+      '5560001111',
+    )
+
+    expect(session.from).not.toHaveBeenCalled()
+    expect(createSubscription).toHaveBeenCalledWith(HOOK, '5560001111', 'stored-secret')
+    expect(service.findCall('bolagsverket_subscriptions', 'insert')).toBeUndefined()
+    const eqs = service.findCalls('bolagsverket_subscriptions', 'eq')
+    expect(eqs).toContainEqual(['id', 'sub-1'])
+    expect(eqs.filter(([column]) => column === 'company_id')).toHaveLength(2) // lookup + renewal
+  })
+})
 
 describe('normalizeOrgnr / hashPnr', () => {
   it('normalizes 12-digit and dashed org numbers to the 10-digit API form', () => {

@@ -16,7 +16,7 @@ import type { KnowledgeAction, KnowledgeOption } from '@/lib/agent-skills/knowle
 import { registrySkillSlug, skillsToDoNow, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { ownSkillSteps } from '@/lib/agent-skills/own-skill-body'
 import { AUTHOR_HANDLE, isReservedHandle } from '@/lib/agent-skills/validation'
-import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { formatDateLong } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
@@ -37,7 +37,7 @@ import { StartNote } from './StartNote'
 import { trackInstructions } from './track'
 import { RoutineOffer, RoutinePanel } from './RoutinePanel'
 import { isPeriodFlow, parseRoutineQuery, parseRoutineSent } from '@/lib/agent-skills/routine'
-import { agentIdFromSegment, agentStatus, fetchConnections, readAgents, readCatalog, readOptions, readUsage, readWorklist, knowledgeHref, simulatedClient, KNOWLEDGE_FAILED_PARAM, KNOWLEDGE_FAILED_VALUE, type SkillSummary } from './data'
+import { agentIdFromSegment, agentStatus, fetchConnections, readAgents, readCatalog, readOptions, readUsage, readWorklist, knowledgeHref, simulatedClient, simulatedConnection, KNOWLEDGE_FAILED_PARAM, KNOWLEDGE_FAILED_VALUE, type SkillSummary } from './data'
 import styles from './skills.module.css'
 
 // Skriv själv, loaded when an own flow is edited (it imports this file's fields, so not statically).
@@ -72,16 +72,17 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   const curated = isAgentId(agentId) ? agentId as RegistrySkillId : null
 
   // ── the AI connection, read once and whenever the user comes back ──
-  const [connected, setConnected] = useState<AiClient[] | null>(null)
+  const [connection, setConnection] = useState<AiConnection | null>(null)
   useEffect(() => {
     const simulated = simulatedClient()
     const controller = new AbortController()
-    const check = () => { if (document.visibilityState !== 'hidden') void (simulated ? Promise.resolve([simulated]) : fetchConnections(controller.signal)).then((list) => { if (list) setConnected(list) }) }
+    const check = () => { if (document.visibilityState !== 'hidden') void (simulated ? Promise.resolve(simulatedConnection(simulated)) : fetchConnections(controller.signal)).then((read) => { if (read) setConnection(read) }) }
     check()
     window.addEventListener('focus', check)
     return () => { controller.abort(); window.removeEventListener('focus', check) }
   }, [])
-  const client = pickConnectedAiClient(connected ?? []) ?? 'claude'
+  // Handed to a verified client, or Claude when the connected agent names none.
+  const client = pickConnectedAiClient(connection?.clients ?? []) ?? 'claude'
   const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
   const [claudeTarget] = useClaudeTarget()
   const target: ClaudeTarget = client === 'claude' ? claudeTarget : 'web'
@@ -128,7 +129,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   const changed = knowledge.some((k) => k.source === 'added') || (overview?.removed.length ?? 0) > 0
   const status = curated ? agentStatus({
     id: curated,
-    aiKnown: connected === null ? null : connected.length > 0,
+    aiKnown: connection === null ? null : connection.connected,
     overview: agents.data,
     waiting: skillsToDoNow(worklist.data ?? {}).get(curated),
     lastAt: usage.data?.[curated]?.last_at,
@@ -195,7 +196,8 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   const say = curated ? t(`skills.${curated}.say`) : t('own_say', { name })
   // A month-end close or VAT flow scheduled weekly first checks whether its period is already done.
   const routineSay = curated && isPeriodFlow(curated) ? t(`routine_say.${curated}`) : say
-  const disconnected = connected !== null && connected.length === 0
+  // Any live agent key counts, also one that names no client: re-offering the connect only fails in the client.
+  const disconnected = connection !== null && !connection.connected
   // Curated flows are fixed text, so on the web they open filled in; an own flow's prompt carries the name the user wrote, so it is copied.
   const prompt = pinCompany(t('prompt', { say, agent: agentId, client }), t('prompt_company_pin', { company: companyName, companyId }))
   function run(start: ClaudeTarget = 'web'): Promise<StartOutcome> | undefined {

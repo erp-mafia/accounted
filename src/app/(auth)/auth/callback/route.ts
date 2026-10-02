@@ -267,7 +267,11 @@ export async function GET(request: NextRequest) {
   }
 
   if (authenticated) {
-    let redirectPath = next
+    // Same-origin from the start: every branch below may leave redirectPath
+    // untouched (getUser() can come back empty right after an exchange), and
+    // the raw `next` then reaches NextResponse.redirect, where `//evil.com`
+    // resolves off-origin.
+    let redirectPath = safeReturnTo(next, '/')
     // Set once a byrå-team invite is accepted below, so the final response
     // clears the invite cookie instead of leaving it for a redundant retry.
     let inviteConsumed = false

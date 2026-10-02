@@ -461,6 +461,35 @@ describe('GET /callback: full-page fallback when there is no opener', () => {
     expect(target.searchParams.get('consentId')).toBe('consent-1')
   })
 
+  it("carries the proxy's nonce on both popup scripts: the CSP has no 'unsafe-inline'", async () => {
+    const proxyNonce = 'cHJveHktbm9uY2UtMTIzNDU2Nzg='
+    ;(consumeOAuthState as Mock).mockResolvedValue({
+      consentId: 'consent-1',
+      provider: 'fortnox',
+      userId: 'user-1',
+    })
+    const success = await callbackHandler(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/callback', {
+        searchParams: { code: 'provider-auth-code', state: 'one-time-token' },
+        headers: { 'x-nonce': proxyNonce },
+      }),
+    )
+    const successHtml = await success.text()
+    expect(successHtml).toContain('arcim-oauth-success')
+    expect(successHtml).toContain(`<script nonce="${proxyNonce}">`)
+
+    ;(consumeOAuthState as Mock).mockResolvedValue(null)
+    const failure = await callbackHandler(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/callback', {
+        searchParams: { code: 'provider-auth-code', state: 'one-time-token' },
+        headers: { 'x-nonce': proxyNonce },
+      }),
+    )
+    const failureHtml = await failure.text()
+    expect(failureHtml).toContain('arcim-oauth-error')
+    expect(failureHtml).toContain(`<script nonce="${proxyNonce}">`)
+  })
+
   it('sends a failure back to the wizard with the reason attached', async () => {
     ;(consumeOAuthState as Mock).mockResolvedValue(null)
 

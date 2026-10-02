@@ -179,6 +179,36 @@ describe('withRouteContext', () => {
     )
   })
 
+  it('keeps the phases in the op-completed log but off the response in production', async () => {
+    const logLines = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      // A self-hosted production server: NODE_ENV alone decides. (It also
+      // turns the logger's info lines on; the test env keeps them quiet.)
+      vi.stubEnv('VERCEL_ENV', undefined)
+      vi.stubEnv('NODE_ENV', 'production')
+      vi.stubEnv('EXPOSE_TIMING_HEADERS', undefined)
+      const route = withRouteContext('test.read', async () => NextResponse.json({ ok: true }))
+
+      const res = await route(new Request('http://localhost/api/test'), EMPTY_PARAMS)
+
+      expect(res.status).toBe(200)
+      expect(res.headers.get('Server-Timing')).toBeNull()
+      const completed = logLines.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.includes('"op completed"'))
+      expect(completed).toBeDefined()
+      expect(completed).toMatch(/"authMs":\d+/)
+      expect(completed).toMatch(/"handlerMs":\d+/)
+
+      vi.stubEnv('EXPOSE_TIMING_HEADERS', 'true')
+      const optedIn = await route(new Request('http://localhost/api/test'), EMPTY_PARAMS)
+      expect(optedIn.headers.get('Server-Timing')).toMatch(/^auth;dur=\d+/)
+    } finally {
+      vi.unstubAllEnvs()
+      logLines.mockRestore()
+    }
+  })
+
   it('refuses an export before building it while an import is unfinished', async () => {
     const { supabase } = createMockSupabase()
     supabase.rpc.mockResolvedValue({ data: null, error: { code: '55000', message: 'SIE_IMPORT_HOLD' } })

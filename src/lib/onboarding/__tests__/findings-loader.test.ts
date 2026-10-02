@@ -3,7 +3,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { loadBooksFindings } from '../findings'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-vi.mock('@/lib/onboarding/ai-clients.server', () => ({ loadConnectedAiClients: vi.fn().mockResolvedValue([]) }))
+vi.mock('@/lib/onboarding/ai-clients.server', () => ({ loadAiConnection: vi.fn().mockResolvedValue({ connected: false, clients: [] }) }))
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 const client = supabase as unknown as SupabaseClient
 

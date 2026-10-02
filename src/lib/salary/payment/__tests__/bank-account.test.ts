@@ -12,6 +12,7 @@ import {
   describePayeeAccountProblems,
   employeeBankDetailsRemark,
   PayeeAccountError,
+  maskPayeeAccount,
 } from '@/lib/salary/payment/bank-account'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -306,5 +307,12 @@ describe('lookupBicByBankName', () => {
     expect(lookupBicByBankName('Min Lokala Bank')).toBeNull()
     expect(lookupBicByBankName('')).toBeNull()
     expect(lookupBicByBankName(null)).toBeNull()
+  })
+})
+
+describe('maskPayeeAccount', () => {
+  it('keeps the clearing and the last four account digits, the payslip form', () => {
+    expect(maskPayeeAccount('6000', '123456789')).toBe('6000-****6789')
+    expect(maskPayeeAccount('8327-9', '12 345 678')).toBe('83279-****5678')
   })
 })

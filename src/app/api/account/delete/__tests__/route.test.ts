@@ -11,6 +11,12 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
 }))
 
+// The mail extension's seam. Absent by default, as in a build without it.
+const { mailService } = vi.hoisted(() => ({
+  mailService: {} as { prepareGrantRevocation?: (userId: string) => Promise<unknown> },
+}))
+vi.mock('@/lib/mail-search/service', () => ({ getMailSearchService: () => mailService }))
+
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { POST } from '../route'
 
@@ -28,6 +34,12 @@ function mockAuth(
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user } }),
       signOut,
+      // A user without a verified factor: requireAuth asks the auth server
+      // for every AAL1 session now that the step-up does not hang on the
+      // NEXT_PUBLIC_REQUIRE_MFA flag.
+      mfa: {
+        listFactors: vi.fn().mockResolvedValue({ data: { all: [], totp: [], phone: [] }, error: null }),
+      },
     },
     rpc,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -66,6 +78,7 @@ function mockServiceClient(blockers: { id: string; name: string }[] = []) {
 beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
+  delete mailService.prepareGrantRevocation
 })
 
 describe('POST /api/account/delete', () => {
@@ -153,5 +166,103 @@ describe('POST /api/account/delete', () => {
     expect(adminSignOut).not.toHaveBeenCalled()
     expect(emitted).toHaveLength(1)
     expect(emitted[0]).toMatchObject({ userId: 'user-1' })
+  })
+})
+
+/**
+ * The erasure RPC shreds the stored mailbox tokens, which ends our copy of a
+ * Gmail grant but not the grant at Google. So the grants are read before the
+ * RPC and revoked after it, and only when it succeeded: a refused erasure
+ * (the person still owns companies) must leave every mailbox working.
+ */
+describe('POST /api/account/delete: mailbox grants', () => {
+  function prepared(steps: string[]) {
+    const revoke = vi.fn(async () => {
+      steps.push('revoke')
+    })
+    mailService.prepareGrantRevocation = vi.fn(async () => {
+      steps.push('prepare')
+      return { count: 2, revoke }
+    })
+    return revoke
+  }
+
+  function deleteRequest() {
+    return createMockRequest('/api/account/delete', {
+      method: 'POST',
+      body: { confirm_email: 'u@example.com' },
+    })
+  }
+
+  it('reads the grants before the erasure and revokes them after it succeeded', async () => {
+    const steps: string[] = []
+    const revoke = prepared(steps)
+    const { rpc } = mockAuth({ id: 'user-1', email: 'u@example.com' })
+    rpc.mockImplementation(async () => {
+      steps.push('erase')
+      return { data: null, error: null }
+    })
+    mockServiceClient()
+
+    const { status } = await parseJsonResponse(await POST(deleteRequest()))
+
+    expect(status).toBe(200)
+    expect(mailService.prepareGrantRevocation).toHaveBeenCalledWith('user-1')
+    expect(revoke).toHaveBeenCalledTimes(1)
+    expect(steps).toEqual(['prepare', 'erase', 'revoke'])
+  })
+
+  it('revokes nothing when the erasure is refused because companies are still owned', async () => {
+    const revoke = prepared([])
+    mockAuth({ id: 'user-1', email: 'u@example.com' }, { data: null, error: { code: 'P0001', message: 'blocked' } })
+    mockServiceClient([{ id: 'c1', name: 'Acme AB' }])
+
+    const { status } = await parseJsonResponse(await POST(deleteRequest()))
+
+    expect(status).toBe(409)
+    expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('revokes nothing when the erasure fails for any other reason', async () => {
+    const revoke = prepared([])
+    mockAuth({ id: 'user-1', email: 'u@example.com' }, { data: null, error: { code: 'XX000', message: 'boom' } })
+    mockServiceClient()
+
+    const { status } = await parseJsonResponse(await POST(deleteRequest()))
+
+    expect(status).toBe(500)
+    expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('reads nothing before the confirmation email matches', async () => {
+    prepared([])
+    mockAuth({ id: 'user-1', email: 'right@example.com' })
+
+    const { status } = await parseJsonResponse(await POST(deleteRequest()))
+
+    expect(status).toBe(400)
+    expect(mailService.prepareGrantRevocation).not.toHaveBeenCalled()
+  })
+
+  it('still erases the account when the grants cannot be read', async () => {
+    mailService.prepareGrantRevocation = vi.fn().mockRejectedValue(new Error('db down'))
+    const { rpc } = mockAuth({ id: 'user-1', email: 'u@example.com' })
+    mockServiceClient()
+
+    const { status } = await parseJsonResponse(await POST(deleteRequest()))
+
+    expect(status).toBe(200)
+    expect(rpc).toHaveBeenCalledWith('anonymize_user_account', { target_user_id: 'user-1' })
+  })
+
+  it('answers success when Google cannot be reached: the erasure already happened', async () => {
+    const revoke = prepared([])
+    revoke.mockRejectedValue(new Error('network'))
+    mockAuth({ id: 'user-1', email: 'u@example.com' })
+    mockServiceClient()
+
+    const { status } = await parseJsonResponse(await POST(deleteRequest()))
+
+    expect(status).toBe(200)
   })
 })

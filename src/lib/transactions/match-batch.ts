@@ -26,8 +26,7 @@
  * no behandlingshistorik.
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
-import type { Invoice, SupplierInvoice, Transaction } from '@/types'
-import { eventBus } from '@/lib/events/bus'
+import { emitBatchAllocationEvents } from '@/lib/transactions/batch-allocation-events'
 import { clearSettledBatchAllocationSuggestions } from '@/lib/invoices/clear-settled-batch-allocations'
 import {
   alreadyExplainedDetails,
@@ -188,55 +187,14 @@ export async function matchTransactionBatch(
     return { ok: false, code, details: (result as RpcErr | null)?.details }
   }
 
-  // Re-fetch the transaction for event payloads (the RPC already updated it).
-  // Non-critical: events fail open on a miss.
-  const { data: tx } = await supabase
-    .from('transactions')
-    .select('*')
-    .eq('id', transactionId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-
-  // One event per allocation so existing subscribers (reminder cancellation,
-  // automation, processing history) keep working. Best-effort.
-  for (const alloc of result.allocations) {
-    try {
-      if (alloc.kind === 'customer_invoice' && alloc.invoice_id) {
-        const { data: invoice } = await supabase
-          .from('invoices')
-          .select('*')
-          .eq('id', alloc.invoice_id)
-          .eq('company_id', companyId)
-          .maybeSingle()
-        if (invoice && tx) {
-          await eventBus.emit({
-            type: 'invoice.match_confirmed',
-            payload: { invoice: invoice as Invoice, transaction: tx as Transaction, userId, companyId },
-          })
-        }
-      } else if (alloc.kind === 'supplier_invoice' && alloc.supplier_invoice_id) {
-        const { data: supplierInvoice } = await supabase
-          .from('supplier_invoices')
-          .select('*')
-          .eq('id', alloc.supplier_invoice_id)
-          .eq('company_id', companyId)
-          .maybeSingle()
-        if (supplierInvoice && tx) {
-          await eventBus.emit({
-            type: 'supplier_invoice.match_confirmed',
-            payload: {
-              supplierInvoice: supplierInvoice as SupplierInvoice,
-              transaction: tx as Transaction,
-              userId,
-              companyId,
-            },
-          })
-        }
-      }
-    } catch (err) {
-      txLog.warn('match_batch event emission failed', err as Error)
-    }
-  }
+  // One set of events per allocation (match_confirmed always, *.paid when the
+  // allocation settled the invoice in full), shared with the MCP executor so
+  // the doors cannot drift. Best-effort: the RPC has committed.
+  await emitBatchAllocationEvents(
+    supabase,
+    { companyId, userId, transactionId, allocations: result.allocations },
+    txLog,
+  )
 
   // Every allocation settled in full retires its suggestion pointer from the
   // company's OTHER transactions (issue #1259).

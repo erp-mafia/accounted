@@ -1,6 +1,6 @@
 import { sleep } from '@/lib/utils'
-import crypto from 'crypto'
 import { z } from 'zod'
+import { requestCspNonce } from '@/lib/security/csp'
 import { parseEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
@@ -519,8 +519,11 @@ export const skatteverketExtension: Extension = {
           JSON.stringify(value ?? '').replace(/</g, '\\u003c')
 
         // CSP allows only the nonce-carrying inline script; everything else
-        // is blocked. Cache-Control: no-store because the callback URL
-        // carries a one-shot authorization code and must never be cached.
+        // is blocked. The nonce is the proxy's for this request, so the
+        // script also runs under the proxy's CSP header (the only one a
+        // self-hosted `next start` delivers). Cache-Control: no-store because
+        // the callback URL carries a one-shot authorization code and must
+        // never be cached.
         const responseHeaders = (nonce: string) => ({
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Security-Policy':
@@ -538,7 +541,7 @@ export const skatteverketExtension: Extension = {
         // history: navigating Back from the landing page must not re-run the
         // callback into a guaranteed state error.
         const respondWithSuccess = (fallbackPath: string) => {
-          const nonce = crypto.randomUUID()
+          const nonce = requestCspNonce(request.headers)
           const html = `<!DOCTYPE html><html><body><script nonce="${nonce}">
             if (window.opener) {
               window.opener.postMessage({ type: 'skatteverket-oauth-success' }, ${jsLiteral(responseOrigin)});
@@ -565,7 +568,7 @@ export const skatteverketExtension: Extension = {
           fallbackPath: string,
           options: { closeTab?: boolean } = {},
         ) => {
-          const nonce = crypto.randomUUID()
+          const nonce = requestCspNonce(request.headers)
           const escapedReason = reason
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')

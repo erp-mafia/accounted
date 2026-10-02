@@ -8,7 +8,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFetch } from '@/lib/hooks/use-fetch'
 import { useFormat } from '@/lib/hooks/use-format'
-import type { AiClient } from '@/lib/onboarding/ai-clients'
+import { aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
 import { AI_TASK_HREF, AI_TASK_LABEL_KEY, listAiTasks } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
@@ -20,12 +20,12 @@ import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
 
 /** Null when the status is unavailable: the chips keep what they last showed. */
-async function fetchAiStatus(signal: AbortSignal): Promise<AiClient[] | null> {
+async function fetchAiStatus(signal: AbortSignal): Promise<AiConnection | null> {
   try {
     const res = await fetch('/api/onboarding/ai-status', { signal })
     if (!res.ok) return null
-    const json = (await res.json()) as { data: { connected: AiClient[] } }
-    return json.data.connected
+    const json = (await res.json()) as { data: { connected: AiClient[]; agentConnected?: boolean } }
+    return aiConnectionFromWire(json.data.connected, json.data.agentConnected)
   } catch {
     return null
   }
@@ -51,13 +51,14 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const { findings, state } = ctx
   const hasAi = useCapability(CAPABILITY.ai)
   const [preferredClient, setPreferredClient] = useState<AiClient>()
-  const [polledConnected, setPolledConnected] = useState<AiClient[] | null>(null)
+  const [polled, setPolled] = useState<AiConnection | null>(null)
   const [open, setOpen] = useState(false)
   const { data: worklist, loading, error, refetch } = useFetch<{ data: WorklistCounts }, WorklistCounts>(
     '/api/worklist/counts',
     { select: (body) => body.data },
   )
-  const connected = polledConnected ?? findings?.ai.connected ?? []
+  const connection = polled ?? aiConnectionFromWire(findings?.ai.connected ?? [], findings?.ai.agentConnected)
+  const connected = connection.clients
   const connectionKey = connected.join(',')
   const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
 
@@ -78,7 +79,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   useEffect(() => {
     const poller = createAiStatusPoller({
       fetchStatus: fetchAiStatus,
-      onStatus: setPolledConnected,
+      onStatus: setPolled,
       isHidden: () => document.visibilityState === 'hidden',
     })
     pollerRef.current = poller
@@ -128,7 +129,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
 
       <h2 className="agent-title">{t('ai_title')}</h2>
       <p className="agent-lead">{t('ai_lead')}</p>
-      <AgentChips connected={connected} onConnect={onConnect} />
+      <AgentChips connection={connection} onConnect={onConnect} />
 
       {error ? (
         <p className="found-note" role="alert">

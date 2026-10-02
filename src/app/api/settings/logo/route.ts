@@ -4,6 +4,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { LOGO_UPLOAD_MAX_BYTES, LOGO_UPLOAD_MAX_MB } from '@/lib/invoices/branding-constants'
 import { detectFileMagic } from '@/lib/core/documents/document-service'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * Raster formats only, decided by the file's magic bytes (detectFileMagic),

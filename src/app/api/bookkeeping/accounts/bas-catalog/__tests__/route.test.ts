@@ -5,7 +5,7 @@ const mockAuth = vi.fn()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn().mockResolvedValue({
     from: vi.fn(),
-    auth: { getUser: () => mockAuth() },
+    auth: { getUser: () => mockAuth(), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   }),
 }))
 

@@ -3,6 +3,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildCanonicalAnnualReport } from '@/lib/bokslut/arsredovisning/model'
 import { getAnnualReportCapabilities } from '@/lib/bokslut/arsredovisning/capabilities'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export const GET = withRouteContext(
   'period.arsredovisning_data',

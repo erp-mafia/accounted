@@ -45,6 +45,16 @@ export function normalizeBankNumber(input: string | null | undefined): string {
 }
 
 /**
+ * An employee's account as salary documents print it: the clearing number and
+ * the last four digits of the account, the rest starred ("8327-****1234", the
+ * payslip form). A personkonto number is the holder's personnummer, so a list
+ * that leaves the payment file never carries it in full.
+ */
+export function maskPayeeAccount(clearing: string | null | undefined, account: string | null | undefined): string {
+  return `${normalizeBankNumber(clearing)}-****${normalizeBankNumber(account).slice(-4)}`
+}
+
+/**
  * Non-blocking check-digit ("kontrollsiffra") result for an employee's
  * clearing/account pair. 'invalid' surfaces an advisory warning in the form,
  * but never blocks saving: the check digit catches typos, it does not prove

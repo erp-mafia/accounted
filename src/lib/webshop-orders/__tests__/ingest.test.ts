@@ -304,6 +304,42 @@ describe('upsertWebshopOrders', () => {
     expect(payload.exchange_rate).toBe(11.5)
   })
 
+  it('heals an unbooked row stored with a currency symbol once the sync sends the code', async () => {
+    // A store plugin wrote the HTML-encoded SEK symbol into the order
+    // currency; the row landed with that string and no SEK amount. The next
+    // sync maps it to SEK, and the currency plus everything derived from it
+    // is rewritten.
+    mock.enqueueMany([
+      {
+        data: [existingRow({ currency: '&#107;&#114;', total_sek: null, exchange_rate: null })],
+      },
+      { data: [] },
+      { data: null }, // update
+    ])
+
+    const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert()])
+
+    expect(result).toMatchObject({ updated: 1, unchanged: 0, frozenFlagged: 0 })
+    const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+    expect(update).toMatchObject({ currency: 'SEK', total_sek: 500, exchange_rate: 1 })
+  })
+
+  it('never rewrites the currency of a booked row stored with a currency symbol', async () => {
+    mock.enqueueMany([
+      { data: [existingRow({ currency: '&#107;&#114;', journal_entry_id: 'je-1' })] },
+      { data: [] },
+      { data: null }, // safe-field update (drift flag)
+    ])
+
+    const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert()])
+
+    expect(result.frozenFlagged).toBe(1)
+    const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+    expect(update.remote_changed_after_freeze).toBe(true)
+    expect(update).not.toHaveProperty('currency')
+    expect(update).not.toHaveProperty('total_sek')
+  })
+
   it('surfaces select errors without throwing', async () => {
     mock.enqueueMany([{ data: null, error: { message: 'boom', code: '500' } }])
 

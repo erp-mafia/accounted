@@ -29,6 +29,7 @@ import {
   mapRefundToWebshopRow,
   orderImports,
   orderIsPaid,
+  orderCurrency,
   orderRemoves,
   syncWooCommerceOrders,
   wooOrderExternalId,
@@ -117,24 +118,107 @@ function makeOrder(overrides: Partial<WooOrder> = {}): WooOrder {
   }
 }
 
-/** Minimal chainable supabase mock covering the sync's query patterns. */
-function makeSupabaseMock() {
+/**
+ * Minimal chainable supabase mock covering the sync's query patterns, with an
+ * in-memory extension_data keyed by `key` (the skipped-orders list). Each row
+ * carries an updated_at that bumps on every write, like the table's trigger,
+ * and conditional updates/deletes match zero rows once it has moved.
+ * `beforeExtensionWrite` runs just before each list write, where a concurrent
+ * run would land; `concurrentWrite` is that other run's write.
+ */
+function makeSupabaseMock(
+  options: {
+    extensionData?: Map<string, unknown>
+    failExtensionWrite?: boolean
+    beforeExtensionWrite?: (concurrentWrite: (key: string, value: unknown) => void) => void
+  } = {},
+) {
   const updates: Array<{ table: string; values: Record<string, unknown> }> = []
+  const extensionData = options.extensionData ?? new Map<string, unknown>()
+  const versions = new Map<string, number>()
+  let clock = 0
+  const versionOf = (key: string) => `2026-09-30T00:00:00.${String(versions.get(key) ?? 0).padStart(6, '0')}+00:00`
+  const store = (key: string, value: unknown) => {
+    extensionData.set(key, value)
+    versions.set(key, ++clock)
+  }
+  const concurrentWrite = (key: string, value: unknown) => store(key, value)
+
   const client = {
     from(table: string) {
+      const filters: Record<string, unknown> = {}
+      let mode: 'read' | 'update' | 'delete' = 'read'
+      let payload: Record<string, unknown> = {}
+      const runWrite = async () => {
+        options.beforeExtensionWrite?.(concurrentWrite)
+        if (options.failExtensionWrite) return { data: null, error: { message: 'boom' } }
+        const key = String(filters.key)
+        if (!extensionData.has(key) || versionOf(key) !== filters.updated_at) {
+          return { data: [], error: null }
+        }
+        if (mode === 'delete') {
+          extensionData.delete(key)
+          versions.delete(key)
+        } else {
+          store(key, payload.value)
+        }
+        return { data: [{ id: 'row-1' }], error: null }
+      }
       const builder = {
-        select: () => builder,
-        eq: () => builder,
-        maybeSingle: async () => ({ data: null, error: null }),
+        select: () => (table === 'extension_data' && mode !== 'read' ? runWrite() : builder),
+        eq: (column: string, value: unknown) => {
+          filters[column] = value
+          return builder
+        },
+        maybeSingle: async () => {
+          const key = String(filters.key)
+          return table === 'extension_data' && extensionData.has(key)
+            ? { data: { value: extensionData.get(key), updated_at: versionOf(key) }, error: null }
+            : { data: null, error: null }
+        },
         update: (values: Record<string, unknown>) => {
-          updates.push({ table, values })
+          if (table === 'extension_data') {
+            mode = 'update'
+            payload = values
+          } else {
+            updates.push({ table, values })
+          }
+          return builder
+        },
+        insert: async (row: { key: string; value: unknown }) => {
+          options.beforeExtensionWrite?.(concurrentWrite)
+          if (options.failExtensionWrite) return { error: { message: 'boom' } }
+          if (extensionData.has(row.key)) return { error: { code: '23505', message: 'duplicate' } }
+          store(row.key, row.value)
+          return { error: null }
+        },
+        delete: () => {
+          mode = 'delete'
           return builder
         },
       }
       return builder
     },
   }
-  return { client: client as unknown as SupabaseClient, updates }
+  return { client: client as unknown as SupabaseClient, updates, extensionData }
+}
+
+const SKIPPED_KEY = 'skipped_currency_orders:shop.example.se'
+
+function skippedIds(extensionData: Map<string, unknown>): number[] {
+  const value = extensionData.get(SKIPPED_KEY) as { orders: Array<{ order_id: number }> } | undefined
+  return value?.orders.map((o) => o.order_id) ?? []
+}
+
+function storedEntry(orderId: number) {
+  return {
+    order_id: orderId,
+    order_number: String(orderId),
+    order_date: '2026-07-15',
+    currency: '??',
+    first_seen_at: '2026-07-15T00:00:00.000Z',
+    last_seen_at: '2026-07-15T00:00:00.000Z',
+  }
 }
 
 function cursorUpdates(updates: Array<{ table: string; values: Record<string, unknown> }>) {
@@ -206,7 +290,7 @@ describe('orderImports / orderRemoves / orderIsPaid', () => {
 })
 
 describe('mapOrderToWebshopRow', () => {
-  const connection = { id: 'conn-1', store_name: 'Testbutiken' }
+  const connection = { id: 'conn-1', store_name: 'Testbutiken', currency: 'SEK' }
 
   it('maps the full booking underlag', () => {
     const rows = mapOrderToWebshopRow(connection, 'shop.example.se', makeOrder())
@@ -301,8 +385,53 @@ describe('mapOrderToWebshopRow', () => {
   })
 })
 
+describe('order currency', () => {
+  const connection = { id: 'conn-1', store_name: 'Testbutiken', currency: 'SEK' }
+  const refund: WooRefund = {
+    id: 77,
+    amount: '250.00',
+    reason: 'Retur',
+    date_created_gmt: '2026-08-03T10:00:00',
+  }
+
+  it('keeps an ISO code, whatever its case', () => {
+    expect(mapOrderToWebshopRow(connection, 's', makeOrder({ currency: 'SEK' }))[0].currency).toBe('SEK')
+    expect(mapOrderToWebshopRow(connection, 's', makeOrder({ currency: 'sek' }))[0].currency).toBe('SEK')
+    // A code other than the store's is kept as-is: multi-currency stores.
+    expect(mapOrderToWebshopRow(connection, 's', makeOrder({ currency: 'EUR' }))[0].currency).toBe('EUR')
+  })
+
+  it('reads the HTML-encoded store currency symbol as the store currency', () => {
+    // "&#107;&#114;" is "kr", the SEK symbol as WooCommerce stores it.
+    const rows = mapOrderToWebshopRow(connection, 's', makeOrder({ currency: '&#107;&#114;' }))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].currency).toBe('SEK')
+    expect(mapOrderToWebshopRow(connection, 's', makeOrder({ currency: ' kr ' }))[0].currency).toBe('SEK')
+    expect(
+      mapRefundToWebshopRow(connection, 's', makeOrder({ currency: '&#107;&#114;' }), refund)[0]
+        .currency,
+    ).toBe('SEK')
+  })
+
+  it('refuses a symbol that is not the store currency: the euro sign never becomes SEK', () => {
+    for (const currency of ['&euro;', '&#8364;', '\u20ac']) {
+      expect(orderCurrency(connection, makeOrder({ currency }))).toBeNull()
+      expect(mapOrderToWebshopRow(connection, 's', makeOrder({ currency }))).toEqual([])
+      expect(mapRefundToWebshopRow(connection, 's', makeOrder({ currency }), refund)).toEqual([])
+    }
+  })
+
+  it('refuses a symbol when the store currency is unknown, and garbage outright', () => {
+    const noStoreCurrency = { ...connection, currency: null }
+    expect(orderCurrency(noStoreCurrency, makeOrder({ currency: '&#107;&#114;' }))).toBeNull()
+    expect(orderCurrency(connection, makeOrder({ currency: '' }))).toBeNull()
+    expect(orderCurrency(connection, makeOrder({ currency: 'XX' }))).toBeNull()
+    expect(orderCurrency(connection, makeOrder({ currency: 'ABC' }))).toBeNull()
+  })
+})
+
 describe('mapRefundToWebshopRow', () => {
-  const connection = { id: 'conn-1', store_name: 'Testbutiken' }
+  const connection = { id: 'conn-1', store_name: 'Testbutiken', currency: 'SEK' }
   const refund: WooRefund = {
     id: 77,
     amount: '250.00',
@@ -693,6 +822,184 @@ describe('syncWooCommerceOrders', () => {
     expect(upsertWebshopOrders).not.toHaveBeenCalled()
     // Deliberate: a permanently corrupt total must not stall the feed.
     expect(cursorUpdates(updates)).toHaveLength(1)
+  })
+
+  it('stores the store currency for an order carrying the encoded symbol', async () => {
+    const { client } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ currency: '&#107;&#114;' })])
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary.unknownCurrency).toBe(0)
+    const rows = vi.mocked(upsertWebshopOrders).mock.calls[0][3] as WebshopOrderUpsert[]
+    expect(rows.map((r) => r.currency)).toEqual(['SEK'])
+  })
+
+  it('skips an order whose currency cannot be known, with its refunds, without stalling the cursor', async () => {
+    const { client, updates } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce([
+      makeOrder({ currency: '&euro;', refunds: [{ id: 77, reason: '', total: '-250.00' }] }),
+    ])
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary).toMatchObject({ fetched: 1, unknownCurrency: 1, errors: 0 })
+    expect(upsertWebshopOrders).not.toHaveBeenCalled()
+    expect(listOrderRefunds).not.toHaveBeenCalled()
+    // Syncing again cannot fix the store's data; the feed moves on.
+    expect(cursorUpdates(updates)).toHaveLength(1)
+  })
+
+  it('records a skipped order durably with what the panel needs', async () => {
+    const { client, extensionData } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ id: 7, number: 'W-7', currency: '&euro;' })])
+
+    await syncWooCommerceOrders(client, makeConnection())
+
+    const stored = extensionData.get(SKIPPED_KEY) as { orders: Array<Record<string, unknown>> }
+    expect(stored.orders).toHaveLength(1)
+    expect(stored.orders[0]).toMatchObject({
+      order_id: 7,
+      order_number: 'W-7',
+      order_date: '2026-08-01',
+      currency: '&euro;',
+    })
+    expect(stored.orders[0].first_seen_at).toBe(stored.orders[0].last_seen_at)
+  })
+
+  it('keeps one entry per order across runs and keeps its first sighting', async () => {
+    const extensionData = new Map<string, unknown>()
+    const { client } = makeSupabaseMock({ extensionData })
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ id: 7, currency: '&euro;' })])
+    await syncWooCommerceOrders(client, makeConnection())
+    const first = (extensionData.get(SKIPPED_KEY) as { orders: Array<{ first_seen_at: string }> })
+      .orders[0].first_seen_at
+
+    listOrdersPage.mockResolvedValueOnce([
+      makeOrder({ id: 7, currency: '&euro;' }),
+      makeOrder({ id: 8, currency: '??' }),
+    ])
+    await syncWooCommerceOrders(client, makeConnection())
+
+    expect(skippedIds(extensionData)).toEqual([7, 8])
+    const stored = extensionData.get(SKIPPED_KEY) as { orders: Array<{ first_seen_at: string }> }
+    expect(stored.orders[0].first_seen_at).toBe(first)
+  })
+
+  it('removes an order from the skipped list once a later sync imports it', async () => {
+    const extensionData = new Map<string, unknown>()
+    const { client } = makeSupabaseMock({ extensionData })
+    listOrdersPage.mockResolvedValueOnce([
+      makeOrder({ id: 7, currency: '&euro;' }),
+      makeOrder({ id: 8, currency: '??' }),
+    ])
+    await syncWooCommerceOrders(client, makeConnection())
+    expect(skippedIds(extensionData)).toEqual([7, 8])
+
+    // The store fixed order 7; order 8 is still broken.
+    listOrdersPage.mockResolvedValueOnce([
+      makeOrder({ id: 7, currency: 'SEK' }),
+      makeOrder({ id: 8, currency: '??' }),
+    ])
+    await syncWooCommerceOrders(client, makeConnection())
+    expect(skippedIds(extensionData)).toEqual([8])
+
+    // Order 8 fixed too: the row is removed, not left as an empty list.
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ id: 8, currency: 'SEK' })])
+    await syncWooCommerceOrders(client, makeConnection())
+    expect(extensionData.has(SKIPPED_KEY)).toBe(false)
+  })
+
+  it('keeps a listed order while its upsert reports errors', async () => {
+    const extensionData = new Map<string, unknown>()
+    const { client } = makeSupabaseMock({ extensionData })
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ id: 7, currency: '&euro;' })])
+    await syncWooCommerceOrders(client, makeConnection())
+
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ id: 7, currency: 'SEK' })])
+    vi.mocked(upsertWebshopOrders).mockResolvedValueOnce({ ...emptyUpsertResult, errors: 1 })
+    await syncWooCommerceOrders(client, makeConnection())
+
+    expect(skippedIds(extensionData)).toEqual([7])
+  })
+
+  it('holds the cursor below a skipped order when the list cannot be written', async () => {
+    const { client, updates } = makeSupabaseMock({ failExtensionWrite: true })
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ id: 7, currency: '&euro;' })])
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary).toMatchObject({ unknownCurrency: 1, errors: 1 })
+    // The cursor never passes the order, so the next run sees it again.
+    const cursors = cursorUpdates(updates).map((u) =>
+      Date.parse(String(u.values.last_order_synced_at)),
+    )
+    expect(Math.max(0, ...cursors)).toBeLessThan(Date.parse('2026-08-01T09:05:00Z'))
+  })
+
+  it('merges with a concurrent run instead of dropping the entry it added', async () => {
+    const extensionData = new Map<string, unknown>()
+    const other = { orders: [storedEntry(99)] }
+    let interleaved = false
+    const { client } = makeSupabaseMock({
+      extensionData,
+      // Another run of the same store lands its entry between this run's
+      // read and write, once.
+      beforeExtensionWrite: (concurrentWrite) => {
+        if (interleaved) return
+        interleaved = true
+        concurrentWrite(SKIPPED_KEY, other)
+      },
+    })
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ id: 7, currency: '&euro;' })])
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary.errors).toBe(0)
+    expect(skippedIds(extensionData).sort((a, b) => a - b)).toEqual([7, 99])
+  })
+
+  it('does not resurrect an entry a concurrent run removed', async () => {
+    const extensionData = new Map<string, unknown>([
+      [SKIPPED_KEY, { orders: [storedEntry(5), storedEntry(6)] }],
+    ])
+    let interleaved = false
+    const { client } = makeSupabaseMock({
+      extensionData,
+      // The other run imported order 5 after this run read the list.
+      beforeExtensionWrite: (concurrentWrite) => {
+        if (interleaved) return
+        interleaved = true
+        concurrentWrite(SKIPPED_KEY, { orders: [storedEntry(6)] })
+      },
+    })
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ id: 7, currency: '&euro;' })])
+
+    await syncWooCommerceOrders(client, makeConnection())
+
+    expect(skippedIds(extensionData).sort((a, b) => a - b)).toEqual([6, 7])
+  })
+
+  it('holds the cursor below a skipped order when the list stays contended', async () => {
+    let n = 0
+    const { client, updates, extensionData } = makeSupabaseMock({
+      extensionData: new Map<string, unknown>([[SKIPPED_KEY, { orders: [storedEntry(5)] }]]),
+      // Every write loses the race: the row moves on each time.
+      beforeExtensionWrite: (concurrentWrite) => {
+        n += 1
+        concurrentWrite(SKIPPED_KEY, { orders: [storedEntry(5), storedEntry(100 + n)] })
+      },
+    })
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ id: 7, currency: '&euro;' })])
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary).toMatchObject({ unknownCurrency: 1, errors: 1 })
+    expect(skippedIds(extensionData)).not.toContain(7)
+    const cursors = cursorUpdates(updates).map((u) =>
+      Date.parse(String(u.values.last_order_synced_at)),
+    )
+    expect(Math.max(0, ...cursors)).toBeLessThan(Date.parse('2026-08-01T09:05:00Z'))
   })
 
   it('does nothing for a connection without credentials or not active', async () => {

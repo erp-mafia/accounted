@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export const GET = withRouteContext(
   'reconciliation.bank.status',

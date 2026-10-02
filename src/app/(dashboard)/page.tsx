@@ -5,10 +5,8 @@ import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
 import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
-import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
-import { claudeStepDone } from '@/lib/onboarding/checklist'
 import { decideHemGate } from '@/lib/onboarding/hem-gate'
-import { loadConnectedAiClients } from '@/lib/onboarding/ai-clients.server'
+import { readAiConnection } from '@/lib/onboarding/ai-clients.server'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
   getDashboardAuthContext,
@@ -79,13 +77,13 @@ export default async function DashboardPage() {
 
   const now = new Date()
 
-  // Service role for the OAuth-key count below: api_keys' SELECT policy is
-  // company_id IN user_company_ids() (20260330130000), so through the user
-  // client a key minted companyless (company_id NULL, the connect-before-
-  // signup flow) or bound to a company the user has since archived or left is
-  // invisible, and the step would stay open for exactly the user who just
-  // connected. The query filters on user_id explicitly, so no other user's
-  // rows are reachable.
+  // Service role for the agent-connection read below: api_keys' SELECT
+  // policy is company_id IN user_company_ids() (20260330130000), so through
+  // the user client a key minted companyless (company_id NULL, the connect-
+  // before-signup flow) or bound to a company the user has since archived or
+  // left is invisible, and the agent would read as not connected for exactly
+  // the user who just connected. The query filters on user_id explicitly,
+  // so no other user's rows are reachable.
   const serviceClient = await createServiceClient()
 
   const [
@@ -93,8 +91,7 @@ export default async function DashboardPage() {
     { data: profile },
     agentProfile,
     { count: skatteverketTokenCount },
-    { count: oauthKeyCount, error: oauthKeyError },
-    aiClients,
+    aiConnection,
   ] =
     await Promise.all([
       getDashboardSettings(),
@@ -103,23 +100,15 @@ export default async function DashboardPage() {
       getResolvedDashboardAgentProfile(),
       // The Skatteverket promo below the panes needs this flag in the shell;
       // the checklist section reads it again for its own step (cheap head count).
-      supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('company_id', companyId).eq('status', 'active'),
-      // The checklist's "Anslut till Claude" step is done when the MCP OAuth
-      // token route has minted a key for this user (claudeStepDone). Keyed on
-      // the user, not the company: the Claude connection follows the person,
-      // and the key's company_id is whatever was active at sign-in (or null
-      // for a companyless signup), so a company filter would miss real
-      // connections. Revoked rows do not count.
-      serviceClient
-        .from('api_keys')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .eq('name', OAUTH_MCP_KEY_NAME)
-        .is('revoked_at', null),
-      // Which of Claude / ChatGPT / Grok completed the OAuth sign-in: the
-      // Att göra footer hands the first row to a connected client. Same
-      // per-user rule as the count above; a failed read answers none.
-      loadConnectedAiClients(serviceClient, user.id),
+      // 'id', never '*': the token columns are withheld from end-user roles.
+      supabase.from('skatteverket_tokens').select('id', { count: 'exact', head: true }).eq('user_id', user.id).eq('company_id', companyId).eq('status', 'active'),
+      // Is an agent connected (the checklist's connect step and the
+      // kopplingar chip), and which of Claude / ChatGPT / Grok it is when
+      // known (the Att göra row's AI action): one read, one answer for every
+      // surface. Keyed on the user, not the company: the connection follows
+      // the person. Throws on a failed read: guessing "not connected" would
+      // re-open the connect step for a connected user.
+      readAiConnection(serviceClient, user.id),
     ])
 
   // A FAILED settings read must not masquerade as "onboarding not done":
@@ -129,12 +118,6 @@ export default async function DashboardPage() {
   const { data: settings, error: settingsError } = settingsRes
   if (settingsError) {
     throw new Error(`company_settings fetch failed: ${settingsError.message}`)
-  }
-  // Same rule for the OAuth-key count: a failed query answers count null,
-  // which claudeStepDone would read as "never connected" and re-open the
-  // Claude step for a connected user. Surface it instead of guessing.
-  if (oauthKeyError) {
-    throw new Error(`api_keys count failed: ${oauthKeyError.message}`)
   }
 
   // The decision lives in lib/onboarding/hem-gate.ts (pure, unit-tested): a
@@ -155,7 +138,6 @@ export default async function DashboardPage() {
   if (hemGate === 'onboarding' || !settings) redirect('/onboarding')
 
   const agentBuilt = Boolean(agentProfile?.verified_at)
-  const hasMcpKey = claudeStepDone({ oauthKeyCount })
   const userFirstName = profile?.full_name?.trim().split(/\s+/)[0] ?? null
   const initialSetup = {
     path: settings.initial_setup_path ?? null,
@@ -182,7 +164,7 @@ export default async function DashboardPage() {
         userId={user.id}
         now={now}
         initialSetup={initialSetup}
-        hasMcpKey={hasMcpKey}
+        hasMcpKey={aiConnection.connected}
         vatRegistered={settings.vat_registered}
         momsPeriod={settings.moms_period ?? null}
       />
@@ -209,7 +191,7 @@ export default async function DashboardPage() {
             now={now}
             setupOpen={setupOpen}
             hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
-            aiClients={aiClients}
+            aiConnection={aiConnection}
           />
         </Suspense>
       }

@@ -3,6 +3,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getJournalEntryRattelseLog } from '@/lib/core/bookkeeping/journal-entry-corrections'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * GET /api/bookkeeping/journal-entries/[id]/rattelse-log

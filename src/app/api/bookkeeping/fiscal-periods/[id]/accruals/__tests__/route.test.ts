@@ -61,7 +61,7 @@ beforeAll(async () => {
  *  companies fallback lives inside lib/company/context, tested there). */
 function mockSupabase() {
   return {
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
     from: vi.fn(() => ({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
@@ -80,7 +80,7 @@ beforeEach(() => {
 describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
   it('returns 401 when unauthenticated', async () => {
     mockCreateClient.mockResolvedValue({
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
     })
     const res = await GET(
       createMockRequest('/api/bookkeeping/fiscal-periods/period-1/accruals'),
@@ -210,7 +210,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
     entriesChain.ilike = () => entriesChain
     entriesChain.limit = () => Promise.resolve({ data: [], error: null })
     return {
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
       from: vi.fn((table: string) => (table === 'fiscal_periods' ? periodChain : entriesChain)),
     }
   }
@@ -235,7 +235,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
 
   it('returns 401 when unauthenticated', async () => {
     mockCreateClient.mockResolvedValue({
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
     })
     const res = await post({ items: [accrued] })
     expect(res.status).toBe(401)

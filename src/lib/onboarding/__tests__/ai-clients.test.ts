@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  agentChipView,
   aiChatLink,
+  aiConnection,
+  aiConnectionFromWire,
   aiConnectAction,
   aiPrefilledChatLink,
   connectedAiClients,
   kvittojaktenSkillSlug,
   openAiConnector,
+  NO_AI_CONNECTION,
   pickConnectedAiClient,
+  unknownAgentOnly,
 } from '../ai-clients'
 
 describe('openAiConnector', () => {
@@ -43,6 +48,79 @@ describe('connectedAiClients', () => {
     expect(
       connectedAiClients([{ client: null }, { client: 'cursor' }, { client: 'local' }, { client: 'cursor_deeplink' }]),
     ).toEqual([])
+  })
+})
+
+describe('aiConnection', () => {
+  it('counts a key minted before the client column as a connected agent with no named client', () => {
+    expect(aiConnection([{ client: null }])).toEqual({ connected: true, clients: [] })
+  })
+
+  it.each(['cursor', 'local', 'cursor_deeplink', 'some-registered-client'])(
+    'counts a %s key as connected without naming it',
+    (client) => {
+      expect(aiConnection([{ client }])).toEqual({ connected: true, clients: [] })
+    },
+  )
+
+  it('names only the verified clients when known and unknown keys are mixed', () => {
+    expect(aiConnection([{ client: null }, { client: 'grok' }, { client: 'cursor' }, { client: 'claude' }])).toEqual({
+      connected: true,
+      clients: ['claude', 'grok'],
+    })
+  })
+
+  it('is not connected without a live OAuth key', () => {
+    expect(aiConnection([])).toEqual(NO_AI_CONNECTION)
+    expect(NO_AI_CONNECTION).toEqual({ connected: false, clients: [] })
+  })
+
+  it('never hands work to an unknown client', () => {
+    expect(pickConnectedAiClient(aiConnection([{ client: null }, { client: 'cursor' }]).clients)).toBeNull()
+    expect(pickConnectedAiClient(aiConnection([{ client: null }, { client: 'chatgpt' }]).clients)).toBe('chatgpt')
+  })
+})
+
+describe('aiConnectionFromWire', () => {
+  it('keeps a connection that names no client connected', () => {
+    expect(aiConnectionFromWire([], true)).toEqual({ connected: true, clients: [] })
+  })
+
+  it('reads no flag and no client as not connected', () => {
+    expect(aiConnectionFromWire([], false)).toEqual(NO_AI_CONNECTION)
+    expect(aiConnectionFromWire([], undefined)).toEqual(NO_AI_CONNECTION)
+  })
+
+  it('reads a named client as connected even without the flag', () => {
+    expect(aiConnectionFromWire(['claude'], undefined)).toEqual({ connected: true, clients: ['claude'] })
+  })
+})
+
+describe('unknownAgentOnly', () => {
+  it('is true only when an agent is connected and none of the three is named', () => {
+    expect(unknownAgentOnly(aiConnection([{ client: null }]))).toBe(true)
+    expect(unknownAgentOnly(aiConnection([{ client: 'cursor' }, { client: 'local' }]))).toBe(true)
+    expect(unknownAgentOnly(aiConnection([{ client: null }, { client: 'claude' }]))).toBe(false)
+    expect(unknownAgentOnly(aiConnection([]))).toBe(false)
+  })
+})
+
+describe('agentChipView', () => {
+  it('offers the three clients to connect while nothing is connected', () => {
+    expect(agentChipView(NO_AI_CONNECTION)).toEqual({ on: false, logos: ['claude', 'chatgpt', 'grok'], named: [] })
+  })
+
+  it('reads a key with no known client as a generic connected agent: on, no logo, no name', () => {
+    expect(agentChipView(aiConnection([{ client: null }]))).toEqual({ on: true, logos: [], named: [] })
+    expect(agentChipView(aiConnection([{ client: 'local' }]))).toEqual({ on: true, logos: [], named: [] })
+  })
+
+  it('keeps the known clients\' logos and names when connected', () => {
+    expect(agentChipView(aiConnection([{ client: 'claude' }, { client: null }]))).toEqual({
+      on: true,
+      logos: ['claude'],
+      named: ['claude'],
+    })
   })
 })
 

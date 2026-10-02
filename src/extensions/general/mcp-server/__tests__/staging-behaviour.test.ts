@@ -722,7 +722,11 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // Documents and the invoice inbox (wave 3): an unlinked document, an
   // unbooked transaction whose pin is not räkenskapsinformation, and inbox
   // items never converted or booked.
-  gnubok_delete_document: { rows: { document_attachments: { file_name: 'kvitto.pdf', journal_entry_id: null } } },
+  // No registered record holds the document either (lib/documents/deletion.ts reads these pins).
+  gnubok_delete_document: {
+    rows: { document_attachments: { file_name: 'kvitto.pdf', journal_entry_id: null } },
+    empty: ['supplier_invoices', 'expense_claims', 'transactions', 'invoice_inbox_items'],
+  },
   gnubok_detach_document_from_transaction: {
     rows: { transactions: { document_id: SOME_UUID }, document_attachments: { journal_entry_id: null } },
   },

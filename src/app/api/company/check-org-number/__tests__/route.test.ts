@@ -30,7 +30,7 @@ function buildSupabase(opts: {
   }
   ;(chain as { then?: unknown }).then = (resolve: (v: unknown) => void) => resolve(result)
   return {
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: opts.user } }) },
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: opts.user } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
     from: vi.fn(() => chain),
   }
 }

@@ -203,4 +203,34 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
       debit: 625,
     })
   })
+
+  it('leaves out a migrated credit note whose original was imported as paid, like the aggregate', async () => {
+    const row = {
+      invoice_date: '2026-02-13',
+      due_date: '2026-03-15',
+      currency: 'SEK',
+      exchange_rate: null,
+      remaining_amount: 0,
+      notes: null,
+    }
+    authWith(
+      buildSupabase(
+        { id: 'cust-1', name: 'Callidus Tech AB' },
+        {
+          data: [
+            { ...row, id: 'inv-open', invoice_number: '10', total: 1000, paid_amount: 0, remaining_amount: 1000, status: 'sent' },
+            { ...row, id: 'inv-cn', invoice_number: '6', total: -11615, paid_amount: 0, status: 'credited' },
+          ],
+          error: null,
+        },
+        { data: [], error: null }
+      )
+    )
+    const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
+    const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as { data: { lines: Array<{ invoice_id: string }> } }
+    expect(body.data.lines.map((line) => line.invoice_id)).toEqual(['inv-open'])
+  })
 })

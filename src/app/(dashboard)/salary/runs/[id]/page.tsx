@@ -695,7 +695,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         }).employee
         let ok = false
         try {
-          const res = await fetch(`/api/salary/runs/${id}/payslips/${sre.employee_id}/pdf`)
+          // The archive is what the employer hands out: the employee copy,
+          // which follows the company's payslip section switches.
+          const res = await fetch(`/api/salary/runs/${id}/payslips/${sre.employee_id}/pdf?audience=employee`)
           if (res.ok) {
             const blob = await res.blob()
             const fileName = employee

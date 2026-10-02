@@ -13,6 +13,8 @@ import {
   type WooCredentials,
 } from './api-client'
 import { credentialsOf } from './connect'
+import { resolveOrderCurrency } from './order-currency'
+import { applySkippedOrdersChange, type SkippedSighting } from './skipped-orders'
 import type { WooCommerceConnection, WooOrder, WooRefund } from '../types'
 
 const defaultLog = createLogger('woocommerce/order-sync')
@@ -120,6 +122,12 @@ export interface WooCommerceSyncSummary {
   frozenFlagged: number
   /** Rows linked to a row the retired transactions feed already imported. */
   crossMarked: number
+  /**
+   * Orders skipped because their currency is not an ISO code and not the
+   * store currency's own symbol (see resolveOrderCurrency). Kept apart from
+   * `errors`: syncing again does not help, the store's data has to change.
+   */
+  unknownCurrency: number
   errors: number
   /** Set when the caller's time budget ran out before all pages processed. */
   deadlineReached?: boolean
@@ -392,9 +400,20 @@ function refundedTotal(order: WooOrder): number {
   return sum
 }
 
+/**
+ * The order's ISO currency, or null when it cannot be known (the order is
+ * then skipped, with its refunds; see lib/order-currency).
+ */
+export function orderCurrency(
+  connection: Pick<WooCommerceConnection, 'currency'>,
+  order: Pick<WooOrder, 'currency'>,
+): string | null {
+  return resolveOrderCurrency(order.currency, connection.currency)
+}
+
 /** Map one order to its webshop_orders upsert row. */
 export function mapOrderToWebshopRow(
-  connection: Pick<WooCommerceConnection, 'id' | 'store_name'>,
+  connection: Pick<WooCommerceConnection, 'id' | 'store_name' | 'currency'>,
   storeScope: string,
   order: WooOrder,
 ): WebshopOrderUpsert[] {
@@ -404,6 +423,8 @@ export function mapOrderToWebshopRow(
   // them would strand an unbookable "Att bokföra" row (the engine refuses
   // zero-sum entries and feed rows are undeletable).
   if (total === null || total === 0) return []
+  const currency = orderCurrency(connection, order)
+  if (currency === null) return []
   return [
     {
       platform: 'woocommerce',
@@ -419,7 +440,7 @@ export function mapOrderToWebshopRow(
       is_paid: orderIsPaid(order),
       order_date: isoDateOfGmt(order.date_created_gmt),
       paid_date: order.date_paid_gmt ? isoDateOfGmt(order.date_paid_gmt) : null,
-      currency: order.currency.toUpperCase(),
+      currency,
       total,
       total_tax: parseAmount(order.total_tax) ?? 0,
       vat_breakdown: buildVatBreakdown(order),
@@ -439,13 +460,15 @@ export function mapOrderToWebshopRow(
 
 /** Map one refund of a paid order to its negative upsert row. */
 export function mapRefundToWebshopRow(
-  connection: Pick<WooCommerceConnection, 'id' | 'store_name'>,
+  connection: Pick<WooCommerceConnection, 'id' | 'store_name' | 'currency'>,
   storeScope: string,
   order: WooOrder,
   refund: WooRefund,
 ): WebshopOrderUpsert[] {
   const amount = parseAmount(refund.amount)
   if (amount === null || amount === 0) return []
+  const currency = orderCurrency(connection, order)
+  if (currency === null) return []
   // The refund's VAT reversal: from its own line allocation, else prorated
   // from the parent order's mix. Without this the refund books with zero
   // moms and ruta 10 stays over-declared (skeptic finding). Buckets hold
@@ -467,7 +490,7 @@ export function mapRefundToWebshopRow(
       is_paid: true,
       order_date: isoDateOfGmt(refund.date_created_gmt),
       paid_date: isoDateOfGmt(refund.date_created_gmt),
-      currency: order.currency.toUpperCase(),
+      currency,
       total: -Math.abs(amount),
       total_tax: -totalTax,
       vat_breakdown: breakdown,
@@ -496,6 +519,16 @@ interface PageRowsOutcome {
    */
   incompleteModifiedMs: number[]
   hitDeadline: boolean
+  /**
+   * Orders skipped for an unresolvable currency, for the durable list (see
+   * lib/skipped-orders), with date_modified (ms) so a failed list write can
+   * hold the cursor below them.
+   */
+  skippedSightings: Array<SkippedSighting & { modifiedMs: number }>
+  /** Orders whose order row is in `rows`: imported once the upsert succeeds. */
+  importedOrderIds: number[]
+  /** Orders the store no longer reports as importing (failed, trash). */
+  goneOrderIds: number[]
 }
 
 /** Upsert rows for one page of orders: order rows plus refund rows. */
@@ -513,6 +546,9 @@ async function buildPageRows(
     removalExternalIds: [],
     incompleteModifiedMs: [],
     hitDeadline: false,
+    skippedSightings: [],
+    importedOrderIds: [],
+    goneOrderIds: [],
   }
 
   for (const order of orders) {
@@ -524,7 +560,10 @@ async function buildPageRows(
     // list call asks for status=any, which excludes trash), and a failed
     // order's refund would parent to a row being removed: an unexplainable
     // negative either way.
-    if (!orderImports(order)) continue
+    if (!orderImports(order)) {
+      outcome.goneOrderIds.push(order.id)
+      continue
+    }
     // A corrupt total is counted and logged, never silently identical to a
     // zero-total order. Deliberately NOT held via the cursor: a permanently
     // corrupt total would stall the whole feed forever, where a skipped row
@@ -536,7 +575,35 @@ async function buildPageRows(
         total: order.total,
       })
     }
-    outcome.rows.push(...mapOrderToWebshopRow(connection, storeScope, order))
+    // Same doctrine for a currency that is no ISO code: skipped with its
+    // refunds (a refund row without its parent is an unexplainable negative),
+    // counted, logged and recorded in the durable skipped list (the cursor
+    // moves on, so the list is what keeps the order visible until it
+    // imports). An order that imports nothing anyway (zero or corrupt total)
+    // is not counted a second time.
+    if (orderCurrency(connection, order) === null) {
+      if ((parseAmount(order.total) ?? 0) !== 0) {
+        summary.unknownCurrency += 1
+        log.warn('order currency is not an ISO code; order skipped', {
+          orderId: order.id,
+          currency: order.currency,
+          storeCurrency: connection.currency,
+        })
+        outcome.skippedSightings.push({
+          order_id: order.id,
+          order_number: typeof order.number === 'string' && order.number
+            ? order.number
+            : String(order.id),
+          order_date: order.date_created_gmt ? isoDateOfGmt(order.date_created_gmt) : null,
+          currency: typeof order.currency === 'string' ? order.currency : String(order.currency),
+          modifiedMs: gmtToMs(order.date_modified_gmt),
+        })
+      }
+      continue
+    }
+    const orderRows = mapOrderToWebshopRow(connection, storeScope, order)
+    outcome.rows.push(...orderRows)
+    if (orderRows.length > 0) outcome.importedOrderIds.push(order.id)
     // Refunds only exist for paid orders; a refund row without its parent
     // would be an unexplainable negative.
     if (!orderIsPaid(order) || (order.refunds?.length ?? 0) === 0) continue
@@ -620,6 +687,7 @@ export async function syncWooCommerceOrders(
     removed: 0,
     frozenFlagged: 0,
     crossMarked: 0,
+    unknownCurrency: 0,
     errors: 0,
   }
   if (
@@ -673,6 +741,10 @@ export async function syncWooCommerceOrders(
 
       const firstMs = gmtToMs(orders[0].date_modified_gmt)
       const lastMs = gmtToMs(orders[orders.length - 1].date_modified_gmt)
+      // Orders this page imported for sure; stays empty when the upsert
+      // dropped rows (the service does not say which), so a listed order
+      // leaves the skipped list only once its row is known to be stored.
+      let importedOrderIds: number[] = []
 
       if (page.rows.length > 0) {
         const result = await upsertWebshopOrders(
@@ -687,6 +759,7 @@ export async function syncWooCommerceOrders(
         summary.frozenFlagged += result.frozenFlagged
         summary.crossMarked += result.crossMarked
         summary.errors += result.errors
+        if (result.errors === 0) importedOrderIds = page.importedOrderIds
         if (result.errors > 0) {
           // Failed upserts are dropped inside the service; hold the cursor
           // below this page so the next run re-lists and retries it rather
@@ -710,6 +783,35 @@ export async function syncWooCommerceOrders(
       }
       for (const ms of page.incompleteModifiedMs) {
         failureFloorMs = Math.min(failureFloorMs, ms - 1000)
+      }
+
+      // Durable skipped list, written before the cursor can pass this page.
+      // Only this page's delta is applied, merged into the freshly read row
+      // under compare-and-swap, so a concurrent run of the same store (manual
+      // sync, backfill, cron) cannot drop entries the other added. A failed
+      // or still-contended write holds the cursor below the page's skipped
+      // orders so the next run sees them again and retries the write.
+      const listWrite = await applySkippedOrdersChange(
+        supabase,
+        connection.company_id,
+        connection.user_id,
+        storeScope,
+        {
+          sighted: page.skippedSightings,
+          resolvedOrderIds: [...importedOrderIds, ...page.goneOrderIds],
+        },
+        new Date().toISOString(),
+      )
+      if (listWrite === 'failed' || listWrite === 'contended') {
+        summary.errors += 1
+        for (const sighting of page.skippedSightings) {
+          failureFloorMs = Math.min(failureFloorMs, sighting.modifiedMs - 1000)
+        }
+        log.warn('skipped-orders list write failed; cursor held for retry', {
+          connectionId: connection.id,
+          skipped: page.skippedSightings.length,
+          outcome: listWrite,
+        })
       }
 
       // Persist the cursor after each page: monotonic (never regresses below

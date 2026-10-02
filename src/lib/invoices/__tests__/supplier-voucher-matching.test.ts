@@ -428,6 +428,7 @@ describe('linkSupplierInvoiceToVoucher', () => {
       expect(result.result.paymentId).toBe('sip-1')
     }
 
+    expect(emitSpy).toHaveBeenCalledTimes(1)
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'supplier_invoice.paid',
@@ -484,6 +485,38 @@ describe('linkSupplierInvoiceToVoucher', () => {
     // Issue #1259: a partially paid invoice is still matchable, so the
     // suggestions pointing at it must survive.
     expect(mockClearSuggestions).not.toHaveBeenCalled()
+  })
+
+  it('does not emit supplier_invoice.paid when the link only pays part of the invoice', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'sip-3',
+        invoice_status: 'partially_paid',
+        paid_amount: 400,
+        remaining_amount: 600,
+        payment_amount: 400,
+        journal_entry_id: 'je-1',
+        currency: 'SEK',
+      },
+      error: null,
+    })
+    // The re-fetch finds the invoice: still no event, money is owed.
+    enqueue({
+      data: makeSupplierInvoice({ id: 'si-3', status: 'partially_paid', paid_amount: 400, remaining_amount: 600 }),
+      error: null,
+    })
+
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-3',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(emitSpy).not.toHaveBeenCalled()
   })
 })
 

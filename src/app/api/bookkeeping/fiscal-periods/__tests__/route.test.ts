@@ -57,6 +57,7 @@ function buildMockSupabase(options: {
   const supabase = {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user } }),
+      mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) },
     },
     from: vi.fn().mockImplementation((table: string) => {
       if (table === 'company_settings') {
@@ -516,7 +517,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
 
     let fpCallIndex = 0
     const supabase = {
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
       from: vi.fn().mockImplementation((table: string) => {
         if (table === 'company_settings') {
           return {
@@ -592,7 +593,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
 
     let fpCallIndex = 0
     const supabase = {
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
       from: vi.fn().mockImplementation((table: string) => {
         if (table === 'company_settings') {
           return {
@@ -671,7 +672,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
 
     let fpCallIndex = 0
     const supabase = {
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
       from: vi.fn().mockImplementation((table: string) => {
         if (table === 'company_settings') {
           return {

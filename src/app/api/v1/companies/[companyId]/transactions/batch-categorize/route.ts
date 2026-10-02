@@ -5,7 +5,12 @@
  * Partial-success semantics: per-item failure does not roll back items
  * that succeeded. Each item is processed through the same orchestration
  * as the single :categorize endpoint, so it can fail individually for any
- * of the same reasons (invalid template, invalid mapping, race, etc.).
+ * of the same reasons (invalid template, invalid mapping, race, etc.),
+ * including the two double-booking guards the single endpoint and the
+ * dashboard share (TRANSACTION_BOOK_POSSIBLE_DUPLICATE with the bound
+ * force override; TX_CATEGORIZE_SUGGEST_SI_MATCH / _CI_MATCH with
+ * confirm_no_match). Like the other bulk booking drivers, an item never
+ * dedupes against a verifikat booked earlier in the same batch.
  *
  * Idempotent over the whole batch. Dry-runnable.
  */
@@ -33,6 +38,9 @@ import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-e
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { runBookingDuplicateGuard } from '@/lib/transactions/booking-duplicate-guard'
+import type { BookingDuplicateExclusions } from '@/lib/transactions/booking-duplicate-detection'
+import { findInvoiceMatchSuggestion } from '@/lib/transactions/invoice-match-suggestion'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -88,6 +96,7 @@ registerEndpoint({
     'Max 100 items per call. Sequential processing.',
     'Idempotency-Key covers the WHOLE batch: replays return the cached full response.',
     'all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.',
+    'Per item, the same double-booking guards as `:categorize`: TRANSACTION_BOOK_POSSIBLE_DUPLICATE (the ledger already books that bank line; override per item with `force: true` plus the echoed `expected_duplicate_journal_entry_id` / `expected_duplicate_transaction_id`) and TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH (an open invoice covers a plain 244x / 151x categorization; override with `confirm_no_match: true`). An item never dedupes against a verifikat booked earlier in the same batch.',
   ],
   example: {
     request: {
@@ -120,6 +129,27 @@ interface Item {
   error?: { code: string; message: string; details?: unknown }
 }
 
+/** Per-item refusal from one of the shared double-booking guards. */
+function guardRefusal(
+  index: number,
+  transactionId: string,
+  code: string,
+  details: unknown,
+): Item {
+  return {
+    ok: false,
+    request_index: index,
+    transaction_id: transactionId,
+    error: {
+      code,
+      message:
+        getErrorEntry(code)?.message_sv ??
+        'Transaktionen bokfördes inte: se felkoden och detaljerna.',
+      details,
+    },
+  }
+}
+
 function categorizeUpdateError(error: unknown): NonNullable<Item['error']> {
   const structured = getStructuredError(error)
   if (structured.code === 'TX_CATEGORIZE_IGNORED_CONFLICT') {
@@ -147,6 +177,8 @@ async function categorizeOne(
   input: z.infer<typeof CategorizeTransactionSchema>,
   dryRun: boolean,
   log: Logger,
+  /** Transactions / verifikat booked earlier in THIS batch (see BookingDuplicateExclusions). */
+  exclude: BookingDuplicateExclusions,
 ): Promise<Item> {
   const { data: transaction, error: fetchErr } = await supabase
     .from('transactions')
@@ -160,6 +192,39 @@ async function categorizeOne(
       request_index: index,
       transaction_id: transactionId,
       error: { code: 'TX_CATEGORIZE_TX_NOT_FOUND', message: 'Transaction not found.' },
+    }
+  }
+
+  // Only a row without a verifikat gets booked; an already-categorized row
+  // takes the flag-only path below, so neither double-booking guard applies.
+  const wouldBook = !transaction.journal_entry_id
+  const itemLog = log.child({ transactionId, request_index: index })
+
+  // Booking-time duplicate guard: same helper, code and bound force override
+  // as :categorize and the dashboard route. The dismissal of an honoured
+  // force is recorded only when the item is really booked (not on a dry-run).
+  if (wouldBook) {
+    const duplicateVerdict = await runBookingDuplicateGuard(
+      supabase,
+      companyId,
+      userId,
+      {
+        id: transactionId,
+        date: transaction.date,
+        amount: transaction.amount,
+        // `amount` is denominated in `currency`; the ledger legs the guard
+        // compares it against are always SEK. Selected above via select('*').
+        currency: transaction.currency ?? null,
+        amount_sek: transaction.amount_sek ?? null,
+        exchange_rate: transaction.exchange_rate ?? null,
+        cash_account_id: transaction.cash_account_id ?? null,
+      },
+      input,
+      itemLog,
+      { exclude, recordDismissal: !dryRun, via: 'api_force' },
+    )
+    if (!duplicateVerdict.ok) {
+      return guardRefusal(index, transactionId, duplicateVerdict.code, duplicateVerdict.details)
     }
   }
 
@@ -278,6 +343,26 @@ async function categorizeOne(
         message: `Följande konton behöver aktiveras: ${missingAccounts.join(', ')}`,
         details: { account_numbers: missingAccounts },
       },
+    }
+  }
+
+  // Invoice-match intercept: same helper, codes and confirm_no_match override
+  // as :categorize and the dashboard route. Read-only, so dry-runs see it too.
+  if (wouldBook) {
+    const invoiceSuggestion = await findInvoiceMatchSuggestion(
+      supabase,
+      companyId,
+      {
+        transaction: transaction as Transaction & { reference?: string | null },
+        debitAccount: mappingResult.debit_account,
+        creditAccount: mappingResult.credit_account,
+        isBusiness: is_business,
+        confirmNoMatch: input.confirm_no_match,
+      },
+      itemLog,
+    )
+    if (invoiceSuggestion) {
+      return guardRefusal(index, transactionId, invoiceSuggestion.code, invoiceSuggestion.details)
     }
   }
 
@@ -554,6 +639,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const vatRegistered: boolean | null = settings?.vat_registered ?? null
 
     const results: Item[] = []
+    // Transactions and verifikat booked so far in THIS batch. Passed to the
+    // next item's duplicate guard so distinct bank movements the caller
+    // listed that share (date, amount, account) never dedupe against each
+    // other's fresh verifikat; a duplicate that existed before the batch is
+    // in neither list and is still refused. Same rule as the bulk inbox
+    // driver (lib/transactions/categorize-core.ts).
+    const bookedTransactionIds: string[] = []
+    const bookedJournalEntryIds: string[] = []
     for (let i = 0; i < body.items.length; i++) {
       const item = body.items[i]
       const r = await categorizeOne(
@@ -567,8 +660,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         item.categorization,
         ctx.dryRun,
         ctx.log,
+        {
+          excludeTransactionIds: [...bookedTransactionIds],
+          excludeJournalEntryIds: [...bookedJournalEntryIds],
+        },
       )
       results.push(r)
+      const booked = r.data as { journal_entry_created?: boolean; journal_entry_id?: string | null } | undefined
+      if (r.ok && booked?.journal_entry_created && booked.journal_entry_id) {
+        bookedTransactionIds.push(r.transaction_id)
+        bookedJournalEntryIds.push(booked.journal_entry_id)
+      }
     }
 
     const summary = {

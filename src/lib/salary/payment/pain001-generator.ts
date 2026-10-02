@@ -138,8 +138,7 @@ export function generatePain001(
   // ─── Per-employee credit transfers ───
   for (let i = 0; i < employees.length; i++) {
     const emp = employees[i]
-    const txSuffix = `-TX${String(i + 1).padStart(4, '0')}`
-    const txId = suffixId(msgId, txSuffix)
+    const txId = pain001TransactionId(msgId, i)
     const { clearing4, accountDigits } = payeeAccountParts(
       emp.name,
       emp.clearingNumber,
@@ -184,6 +183,15 @@ export function generatePain001(
   lines.push('</Document>')
 
   return lines.join('\n')
+}
+
+/**
+ * InstrId / EndToEndId of the credit transfer at `index` (0-based) in the
+ * batch: the message id plus a per-transaction counter, Max35Text. Exported
+ * so the bank list names each payment by the id the file carries.
+ */
+export function pain001TransactionId(messageId: string, index: number): string {
+  return suffixId(max35(messageId), `-TX${String(index + 1).padStart(4, '0')}`)
 }
 
 // ============================================================

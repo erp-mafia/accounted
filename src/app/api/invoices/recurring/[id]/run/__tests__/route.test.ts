@@ -94,7 +94,7 @@ describe('POST /api/invoices/recurring/[id]/run', () => {
       then: (resolve: (v: unknown) => void) => resolve({ error: null }),
     }
     activeSupabase = {
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
       from: vi.fn(() => chain),
     }
     executeRecurringSchedule.mockResolvedValue({
@@ -136,7 +136,7 @@ describe('POST /api/invoices/recurring/[id]/run: billing period', () => {
       then: (resolve: (v: unknown) => void) => resolve({ error: null }),
     }
     activeSupabase = {
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
       from: vi.fn(() => chain),
     }
     executeRecurringSchedule.mockResolvedValue({ invoiceId: 'inv-1', invoiceNumber: 'F-1', autoSent: false, warning: null })

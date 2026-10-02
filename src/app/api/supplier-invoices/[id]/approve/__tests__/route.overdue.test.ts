@@ -40,7 +40,7 @@ const chain: any = {
 const mockSupabase = {
   from: () => chain,
   rpc: () => chain,
-  auth: { getUser: vi.fn() },
+  auth: { getUser: vi.fn(), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
 }
 
 vi.mock('@/lib/supabase/server', () => ({

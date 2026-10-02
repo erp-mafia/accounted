@@ -12,6 +12,7 @@ describe('connectionKind', () => {
     expect(connectionKind({ source: 'signin', client: 'claude' })).toBe('claude')
     expect(connectionKind({ source: 'signin', client: 'chatgpt' })).toBe('chatgpt')
     expect(connectionKind({ source: 'signin', client: 'grok' })).toBe('grok')
+    expect(connectionKind({ source: 'signin', client: 'gemini' })).toBe('gemini')
     expect(connectionKind({ source: 'signin', client: 'local' })).toBe('local')
   })
 

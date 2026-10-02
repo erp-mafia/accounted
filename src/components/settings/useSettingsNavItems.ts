@@ -42,9 +42,10 @@ const GROUP_ORDER: SettingsGroupKey[] = ['account', 'company', 'accounting', 'sa
 /**
  * Sections that have a page but no rail entry: each is reached from a hub
  * section and highlights that hub in the rail. Kopplingar lists the bank,
- * WhatsApp, Skatteverket and Peppol connections and links to their pages,
- * which stay at their own URLs because OAuth callbacks and deep links
- * (bank consent renewal, ?select_accounts=, ?skv_connected=) land there.
+ * WhatsApp, Skatteverket, Peppol and Gmail connections and links to their
+ * pages, which stay at their own URLs because OAuth callbacks and deep links
+ * (bank consent renewal, ?select_accounts=, ?skv_connected=, ?mail=) land
+ * there.
  * The assistant section is off the rail for now (founder 2026-09-24) but its
  * page stays reachable from the assistant's own "manage memory" links.
  */
@@ -53,6 +54,7 @@ export const SETTINGS_SECTION_PARENT: Record<string, string> = {
   whatsapp: 'connections',
   skatteverket: 'connections',
   peppol: 'connections',
+  mail: 'connections',
   assistant: 'connections',
 }
 

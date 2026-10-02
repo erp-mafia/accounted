@@ -2,7 +2,7 @@ import { after } from 'next/server'
 import { countCompletedSieImports, countInboxItems, countTransactions, readActiveBankConnections } from './hem-reads'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
-import type { AiClient } from '@/lib/onboarding/ai-clients'
+import type { AiConnection } from '@/lib/onboarding/ai-clients'
 import ResumePane from '@/components/dashboard/ResumePane'
 import { HemNotices } from '@/components/dashboard/HemNotices'
 import {
@@ -85,7 +85,7 @@ export async function HemChecklistSection({
   userId: string
   now: Date
   initialSetup: InitialSetupState
-  /** Live OAuth-minted MCP key exists for this user: see claudeStepDone(). */
+  /** An agent is connected: AiConnection.connected (lib/onboarding/ai-clients). */
   hasMcpKey: boolean
   vatRegistered: boolean
   momsPeriod: MomsPeriod | null
@@ -110,8 +110,9 @@ export async function HemChecklistSection({
     countCompletedSieImports(companyId),
     // Skatteverket connections are per (user, company): filtering on user_id
     // alone made a connection on ANY of the user's companies hide the connect
-    // nudge on all of them.
-    supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', userId).eq('company_id', companyId),
+    // nudge on all of them. 'id', never '*': the token columns are withheld
+    // from end-user roles.
+    supabase.from('skatteverket_tokens').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('company_id', companyId),
     // Any item ever received in the document inbox (email/WhatsApp/upload)
     // marks the receipts checklist step done: same "has ever done X" shape
     // as the other flags above.
@@ -205,14 +206,14 @@ export async function HemPanesSection({
   now,
   setupOpen,
   hasSkatteverketConnected,
-  aiClients,
+  aiConnection,
 }: {
   companyId: string
   now: Date
   setupOpen: boolean
   hasSkatteverketConnected: boolean
-  /** See AttGoraSection.aiClients. */
-  aiClients: AiClient[]
+  /** See AttGoraSection.aiConnection. */
+  aiConnection: AiConnection
 }) {
   const { supabase } = await getDashboardAuthContext()
   // Fetched once at the scan cap: the Att göra pane shows the first five and
@@ -292,7 +293,7 @@ export async function HemPanesSection({
           emptyLedger={emptyLedger}
           hasActiveBankConnection={hasActiveBankConnection}
           hasSkatteverketConnection={hasSkatteverketConnected}
-          aiClients={aiClients}
+          aiConnection={aiConnection}
           // While the getting-started checklist is open it carries the bank
           // and Skatteverket steps itself; afterwards the kopplingar row keeps
           // the connections visible for whoever declined them in the books act.

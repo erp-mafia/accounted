@@ -16,7 +16,10 @@
  *     send has on every door);
  *   - only once the run is approved (approved, paid or booked);
  *   - every attempt, sent, failed or skipped for a missing address, lands in
- *     salary_payslip_deliveries: the delivery log (BFL 7 kap.).
+ *     salary_payslip_deliveries: the delivery log (BFL 7 kap.);
+ *   - before the first email of a run goes out, the payslip sections the
+ *     employee copy prints are fixed on the run (section-snapshot), so the
+ *     emailed payslip keeps its content when the company's switches change.
  *
  * A dry run reads and checks and answers who would get a link and who lacks
  * an email address. It sends nothing, rotates no link and logs no delivery
@@ -32,9 +35,14 @@ import { getCompanyDisplayName } from '@/lib/company/context'
 import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
+import {
+  PAYSLIP_ISSUABLE_STATUSES,
+  issuePayslipSections,
+  type IssuableRun,
+} from '@/lib/salary/payslips/section-snapshot'
 
 /** Run statuses from which lönebesked may be sent. */
-export const PAYSLIP_SENDABLE_STATUSES = ['approved', 'paid', 'booked'] as const
+export const PAYSLIP_SENDABLE_STATUSES = PAYSLIP_ISSUABLE_STATUSES
 
 export type PayslipDeliveryStatus = 'sent' | 'failed' | 'skipped'
 
@@ -88,13 +96,13 @@ export async function sendPayslips(
 
   const { data: run } = await supabase
     .from('salary_runs')
-    .select('id, status, period_year, period_month, payment_date')
+    .select('id, status, period_year, period_month, payment_date, payslip_sections_issued_at, payslip_show_employer_cost, payslip_show_breakdown')
     .eq('id', salaryRunId)
     .eq('company_id', companyId)
     .single()
 
   if (!run) return { ok: false, code: 'SALARY_RUN_NOT_FOUND' }
-  const runRow = run as { status: string; period_year: number; period_month: number; payment_date: string }
+  const runRow = run as IssuableRun & { period_year: number; period_month: number; payment_date: string }
   if (!(PAYSLIP_SENDABLE_STATUSES as readonly string[]).includes(runRow.status)) {
     return {
       ok: false,
@@ -147,6 +155,30 @@ export async function sendPayslips(
         employees_missing_email: missing.map((r) => r.employee_name),
         delivery: 'A secure link per employee (no attachment); any earlier link for the run stops working.',
       },
+    }
+  }
+
+  // Fix the sections the employee copy prints before the first link goes
+  // out; a run already issued keeps what it was issued with. Only when an
+  // email will actually be sent: a run where nobody has an address reaches
+  // no employee. Fail closed: without the switches nothing is sent, so no
+  // employee receives a payslip whose content is not on record.
+  if (runEmployees.some((row) => Boolean(row.employee?.email))) {
+    const { data: sectionSettings, error: settingsError } = await supabase
+      .from('company_settings')
+      .select('salary_payslip_show_employer_cost, salary_payslip_show_breakdown')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const issued = settingsError
+      ? ({ ok: false, error: settingsError } as const)
+      : await issuePayslipSections(supabase, { companyId, run: runRow, settings: sectionSettings })
+    if (!issued.ok) {
+      log.warn('payslip sections could not be fixed; nothing sent', { salaryRunId })
+      return {
+        ok: false,
+        code: 'INTERNAL_ERROR',
+        messageSv: 'Kunde inte läsa lönespecifikationens inställningar. Inga lönebesked skickades. Försök igen.',
+      }
     }
   }
 

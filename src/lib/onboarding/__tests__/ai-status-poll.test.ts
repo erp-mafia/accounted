@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AiClient } from '@/lib/onboarding/ai-clients'
+import { aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { AI_POLL_MS, AI_POLL_WINDOW_MS, createAiStatusPoller } from '../ai-status-poll'
+
+/** The status a read answers when these named clients are connected. */
+const status = (...clients: AiClient[]): AiConnection => aiConnectionFromWire(clients, clients.length > 0)
 
 /** A status read the test resolves by hand, so a slow response can be held open. */
 function deferredFetch() {
-  const pending: { resolve: (v: AiClient[] | null) => void; signal: AbortSignal }[] = []
+  const pending: { resolve: (v: AiConnection | null) => void; signal: AbortSignal }[] = []
   const fetchStatus = vi.fn(
-    (signal: AbortSignal) => new Promise<AiClient[] | null>((resolve) => pending.push({ resolve, signal })),
+    (signal: AbortSignal) => new Promise<AiConnection | null>((resolve) => pending.push({ resolve, signal })),
   )
   return { fetchStatus, pending }
 }
@@ -22,7 +25,7 @@ describe('createAiStatusPoller', () => {
     await vi.advanceTimersByTimeAsync(AI_POLL_MS * 3)
     expect(fetchStatus).toHaveBeenCalledTimes(1)
 
-    pending[0].resolve([])
+    pending[0].resolve(status())
     await vi.advanceTimersByTimeAsync(AI_POLL_MS - 1)
     expect(fetchStatus).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1)
@@ -38,7 +41,7 @@ describe('createAiStatusPoller', () => {
     poller.check()
     poller.attempt('chatgpt')
     expect(fetchStatus).toHaveBeenCalledTimes(1)
-    pending[0].resolve([])
+    pending[0].resolve(status())
     await vi.advanceTimersByTimeAsync(0)
     expect(fetchStatus).toHaveBeenCalledTimes(1)
     poller.stop()
@@ -46,21 +49,21 @@ describe('createAiStatusPoller', () => {
 
   it('keeps the last status and ends the window when a read fails', async () => {
     const onStatus = vi.fn()
-    const fetchStatus = vi.fn<(signal: AbortSignal) => Promise<AiClient[] | null>>()
-      .mockResolvedValueOnce(['grok'])
+    const fetchStatus = vi.fn<(signal: AbortSignal) => Promise<AiConnection | null>>()
+      .mockResolvedValueOnce(status('grok'))
       .mockResolvedValueOnce(null)
     const poller = createAiStatusPoller({ fetchStatus, onStatus })
     poller.attempt('claude')
     await vi.advanceTimersByTimeAsync(AI_POLL_MS)
     expect(fetchStatus).toHaveBeenCalledTimes(2)
     expect(onStatus).toHaveBeenCalledTimes(1)
-    expect(onStatus).toHaveBeenLastCalledWith(['grok'])
+    expect(onStatus).toHaveBeenLastCalledWith(status('grok'))
 
     await vi.advanceTimersByTimeAsync(AI_POLL_WINDOW_MS)
     expect(fetchStatus).toHaveBeenCalledTimes(2)
 
     // Coming back reopens the window: the attempt is still unanswered.
-    fetchStatus.mockResolvedValue([])
+    fetchStatus.mockResolvedValue(status())
     poller.check()
     await vi.advanceTimersByTimeAsync(AI_POLL_MS)
     expect(fetchStatus).toHaveBeenCalledTimes(4)
@@ -80,13 +83,13 @@ describe('createAiStatusPoller', () => {
 
   it('stops when the attempted client connects, and another attempt restarts it', async () => {
     const onStatus = vi.fn()
-    const fetchStatus = vi.fn<(signal: AbortSignal) => Promise<AiClient[] | null>>()
-      .mockResolvedValueOnce([])
-      .mockResolvedValue(['claude'])
+    const fetchStatus = vi.fn<(signal: AbortSignal) => Promise<AiConnection | null>>()
+      .mockResolvedValueOnce(status())
+      .mockResolvedValue(status('claude'))
     const poller = createAiStatusPoller({ fetchStatus, onStatus })
     poller.attempt('claude')
     await vi.advanceTimersByTimeAsync(AI_POLL_MS)
-    expect(onStatus).toHaveBeenLastCalledWith(['claude'])
+    expect(onStatus).toHaveBeenLastCalledWith(status('claude'))
     await vi.advanceTimersByTimeAsync(AI_POLL_WINDOW_MS)
     expect(fetchStatus).toHaveBeenCalledTimes(2)
 
@@ -97,7 +100,7 @@ describe('createAiStatusPoller', () => {
   })
 
   it('ends the window when the time runs out', async () => {
-    const fetchStatus = vi.fn().mockResolvedValue([])
+    const fetchStatus = vi.fn().mockResolvedValue(status())
     const poller = createAiStatusPoller({ fetchStatus, onStatus: vi.fn() })
     poller.attempt('claude')
     await vi.advanceTimersByTimeAsync(AI_POLL_WINDOW_MS * 3)
@@ -106,7 +109,7 @@ describe('createAiStatusPoller', () => {
   })
 
   it('asks once on focus when no attempt is pending', async () => {
-    const fetchStatus = vi.fn().mockResolvedValue([])
+    const fetchStatus = vi.fn().mockResolvedValue(status())
     const poller = createAiStatusPoller({ fetchStatus, onStatus: vi.fn() })
     poller.check()
     await vi.advanceTimersByTimeAsync(AI_POLL_WINDOW_MS)
@@ -116,7 +119,7 @@ describe('createAiStatusPoller', () => {
 
   it('does not read while the tab is hidden, and resumes on focus', async () => {
     let hidden = false
-    const fetchStatus = vi.fn().mockResolvedValue([])
+    const fetchStatus = vi.fn().mockResolvedValue(status())
     const poller = createAiStatusPoller({ fetchStatus, onStatus: vi.fn(), isHidden: () => hidden })
     poller.attempt('claude')
     await vi.advanceTimersByTimeAsync(0)
@@ -141,11 +144,23 @@ describe('createAiStatusPoller', () => {
     poller.stop()
     expect(pending[0].signal.aborted).toBe(true)
 
-    pending[0].resolve(['claude'])
+    pending[0].resolve(status('claude'))
     await vi.advanceTimersByTimeAsync(AI_POLL_WINDOW_MS)
     expect(onStatus).not.toHaveBeenCalled()
     expect(fetchStatus).toHaveBeenCalledTimes(1)
     poller.check()
     expect(fetchStatus).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps waiting for the attempted client when only a key that names no client is live', async () => {
+    const onStatus = vi.fn()
+    const unnamed: AiConnection = { connected: true, clients: [] }
+    const fetchStatus = vi.fn<(signal: AbortSignal) => Promise<AiConnection | null>>().mockResolvedValue(unnamed)
+    const poller = createAiStatusPoller({ fetchStatus, onStatus })
+    poller.attempt('claude')
+    await vi.advanceTimersByTimeAsync(AI_POLL_MS)
+    expect(onStatus).toHaveBeenLastCalledWith(unnamed)
+    expect(fetchStatus).toHaveBeenCalledTimes(2)
+    poller.stop()
   })
 })

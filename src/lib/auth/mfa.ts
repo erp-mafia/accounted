@@ -1,8 +1,10 @@
 /**
  * MFA (Multi-Factor Authentication) helpers.
  *
- * MFA is only required on the hosted version, never for self-hosted deployments.
- * Enforcement is application-side (middleware + API routes), not RLS.
+ * On hosted, anyone with a verified factor is stepped up to AAL2; forcing
+ * enrolment on users without one is what NEXT_PUBLIC_REQUIRE_MFA controls.
+ * Self-hosted deployments have no MFA gates. Enforcement is application-side
+ * (middleware + API routes), not RLS.
  */
 
 import { flagEnabled, isSelfHosted } from '@/lib/env/public-flags'
@@ -36,13 +38,37 @@ export function isMfaExemptionActive(
 }
 
 /**
- * Check if MFA should be enforced for a specific user.
- * BankID-linked users skip TOTP because BankID is inherently 2FA.
- * A live, time-boxed exemption (see isMfaExemptionActive) also skips it.
+ * Whether a user stands outside every MFA gate: BankID-linked users (BankID
+ * is inherently 2FA) and a live, time-boxed exemption (isMfaExemptionActive).
+ */
+export function isMfaExempt(user: { app_metadata?: Record<string, unknown> }): boolean {
+  if (user.app_metadata?.bankid_linked) return true
+  return isMfaExemptionActive(user)
+}
+
+/**
+ * Whether a session below AAL2 must be stepped up, given that the user has a
+ * verified factor to step up with (callers check the factor server-side).
+ *
+ * Independent of NEXT_PUBLIC_REQUIRE_MFA on purpose. Someone who enrolled an
+ * authenticator has asked for it, and their password alone must not open the
+ * account. Production ran with the flag's value unreadable ("true\n", never
+ * equal to "true"), and because the step-up used to hang on the flag, every
+ * enrolled user was let in at AAL1 by anyone holding the password. The flag
+ * now only decides whether users WITHOUT a factor must enrol one
+ * (shouldEnforceMfa). Self-hosted keeps its own policy: no MFA gates.
+ */
+export function mfaStepUpApplies(user: { app_metadata?: Record<string, unknown> }): boolean {
+  if (isSelfHosted()) return false
+  return !isMfaExempt(user)
+}
+
+/**
+ * Whether a user WITHOUT a verified factor must enrol one before using the
+ * app: hosted with NEXT_PUBLIC_REQUIRE_MFA on, and not exempt. A user who has
+ * a factor is stepped up whatever this says (mfaStepUpApplies).
  */
 export function shouldEnforceMfa(user: { app_metadata?: Record<string, unknown> }): boolean {
   if (!isMfaRequired()) return false
-  if (user.app_metadata?.bankid_linked) return false
-  if (isMfaExemptionActive(user)) return false
-  return true
+  return !isMfaExempt(user)
 }

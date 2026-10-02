@@ -15,7 +15,7 @@ import { SHOWN_FLOWS } from './catalog-setup'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { formatDateLong } from '@/lib/utils'
 import { ownSkillSteps } from '@/lib/agent-skills/own-skill-body'
-import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { handoffRoute, pinCompany, startInAi, type ClaudeTarget, type StartOutcome } from './run'
 import { ClaudeStart } from './ClaudeStart'
 import { useClaudeTarget } from './claude-target'
@@ -32,7 +32,7 @@ import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
 import { useAnalysisLabel, useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { analysisSegment, communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readCatalog, readOptions, rulesSegment, simulatedClient, type CommunityMeta } from './data'
+import { analysisSegment, communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readCatalog, readOptions, rulesSegment, simulatedClient, simulatedConnection, type CommunityMeta } from './data'
 import styles from './skills.module.css'
 
 // The Markdown parser loads with the first pack that is opened, not with the list.
@@ -93,7 +93,7 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
   const handedSent = parseRoutineSent(handedParams)
   const [view, setView] = useState<'main' | 'give' | 'routine'>(handedRoutine ? 'routine' : 'main')
   // ── the AI connection, read once and whenever the user comes back (as on a flow's page) ──
-  const [connected, setConnected] = useState<AiClient[] | null>(null)
+  const [connection, setConnection] = useState<AiConnection | null>(null)
   const [outcome, setOutcome] = useState<StartOutcome | null>(null)
   const [editing, setEditing] = useState(false)
   // A pack's own text is written for the AI (often in English): folded until asked for.
@@ -101,14 +101,16 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
   useEffect(() => {
     const simulated = simulatedClient()
     const controller = new AbortController()
-    const check = () => { if (document.visibilityState !== 'hidden') void (simulated ? Promise.resolve([simulated]) : fetchConnections(controller.signal)).then((list) => { if (list) setConnected(list) }) }
+    const check = () => { if (document.visibilityState !== 'hidden') void (simulated ? Promise.resolve(simulatedConnection(simulated)) : fetchConnections(controller.signal)).then((read) => { if (read) setConnection(read) }) }
     check()
     window.addEventListener('focus', check)
     return () => { controller.abort(); window.removeEventListener('focus', check) }
   }, [])
-  const client = pickConnectedAiClient(connected ?? []) ?? 'claude'
+  // Handed to a verified client, or Claude when the connected agent names none.
+  const client = pickConnectedAiClient(connection?.clients ?? []) ?? 'claude'
   const ai = AI_CLIENTS.find((c) => c.id === client)!
-  const disconnected = connected !== null && connected.length === 0
+  // Any live agent key counts, also one that names no client: re-offering the connect only fails in the client.
+  const disconnected = connection !== null && !connection.connected
   const [claudeTarget] = useClaudeTarget()
   const target: ClaudeTarget = client === 'claude' ? claudeTarget : 'web'
 

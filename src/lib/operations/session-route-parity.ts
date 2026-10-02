@@ -525,9 +525,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/connect/skv/oauth/token': machine(CONNECTOR),
   'POST /api/connect/bank/:path*': machine(CONNECTOR),
   'DELETE /api/connect/bank/:path*': machine(CONNECTOR),
-  'POST /api/connect/peppol/:path*': machine(CONNECTOR),
-  'PUT /api/connect/peppol/:path*': machine(CONNECTOR),
-  'DELETE /api/connect/peppol/:path*': machine(CONNECTOR),
   'POST /api/connect/skv/api/:path*': machine(CONNECTOR),
   'PUT /api/connect/skv/api/:path*': machine(CONNECTOR),
   'PATCH /api/connect/skv/api/:path*': machine(CONNECTOR),
@@ -633,6 +630,15 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/extensions/ext/invoice-inbox/inbox/domain': gap('P3'),
   'POST /api/extensions/ext/invoice-inbox/inbound': machine(WEBHOOK),
 
+  // mail (Gmail receipt hunt). Searching a mailbox stays a press by a
+  // signed-in person: Google approved gmail.readonly for that trigger, not
+  // for an API key or an agent, and the nightly cron never searches mail.
+  'POST /api/extensions/ext/mail/oauth/start': uiOnly(OAUTH_CONNECT),
+  'DELETE /api/extensions/ext/mail/connections': gap('P3'),
+  'POST /api/receipt-hunt/run': uiOnly(
+    'mailbox search a signed-in person starts: the Gmail scope was approved for that trigger, not for API keys or agents',
+  ),
+
   // stripe (payments integration, not billing)
   'POST /api/extensions/ext/stripe/connect': uiOnly(OAUTH_CONNECT),
   'DELETE /api/extensions/ext/stripe/disconnect': gap('P3'),
@@ -674,4 +680,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 132
+export const GAP_CEILING = 133

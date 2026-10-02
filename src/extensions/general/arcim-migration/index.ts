@@ -50,7 +50,8 @@ import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { mergeParsedSIEFiles } from '@/lib/import/sie-merge'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
-import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
+import { getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
+import { suggestSIEMappings } from '@/lib/import/sie-preview-mappings'
 import { applySourceVatCodes } from '@/lib/import/account-vat-treatment'
 import { fortnoxVatCodeToTreatment } from '@/lib/providers/fortnox/vat-codes'
 import { loadMappings, generateImportPreview, findOverlappingPeriodImports } from '@/lib/import/sie-import'
@@ -73,6 +74,7 @@ import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
 import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { createLogger } from '@/lib/logger'
+import { requestCspNonce } from '@/lib/security/csp'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
 import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
 
@@ -752,6 +754,11 @@ export const arcimMigrationExtension: Extension = {
         const jsLiteral = (value: unknown) =>
           JSON.stringify(value ?? '').replace(/</g, '\\u003c')
 
+        // The proxy's CSP (lib/security/csp.ts) has no 'unsafe-inline': the
+        // popup scripts below run only because they carry this request's
+        // nonce.
+        const scriptNonce = requestCspNonce(request.headers)
+
         const respondWithError = (reason: string, consentId?: string) => {
           const cancelled = reason === OAUTH_CANCELLED_MESSAGE
           const fallbackUrl = new URL(`${responseOrigin}/import`)
@@ -777,7 +784,7 @@ export const arcimMigrationExtension: Extension = {
           // state that is already spent, so a Back or a reload onto it can
           // only fail. no-store keeps it out of the browser cache for the same
           // reason.
-          const html = `<!DOCTYPE html><html><body><script>
+          const html = `<!DOCTYPE html><html><body><script nonce="${scriptNonce}">
             if (window.opener) {
               window.opener.postMessage({ type: 'arcim-oauth-error', reason: ${jsLiteral(reason)}, cancelled: ${cancelled} }, ${jsLiteral(responseOrigin)});
             } else {
@@ -938,7 +945,7 @@ export const arcimMigrationExtension: Extension = {
           // consequence of leaving the URL in history: a second delivery 19
           // seconds after a successful connect, answered with a red "ingen
           // giltig migrationssession" about a connection that had just worked.
-          const html = `<!DOCTYPE html><html><body><script>
+          const html = `<!DOCTYPE html><html><body><script nonce="${scriptNonce}">
             if (window.opener) {
               window.opener.postMessage({ type: 'arcim-oauth-success', consentId: ${jsLiteral(consentId)} }, ${jsLiteral(responseOrigin)});
               window.close();
@@ -1300,7 +1307,13 @@ export const arcimMigrationExtension: Extension = {
           // such an account was impossible to map onto. See
           // ./lib/mapping-targets.
           const mappingTargets = await buildMappingTargets(supabase, companyId, moduleLog)
-          let mappings = suggestMappings(allAccounts, mappingTargets, existingRecords)
+          // The same decision the file upload makes, over the whole dataset
+          // (#3312). A class 9 account with amounts in any selected year goes
+          // to 2999; without this a stored 9xxx mapping, the chart's own 9xxx
+          // row or the onboarding step's self-map handed the job a 9xxx target
+          // it refuses, on every retry. Unused definitions are still kept.
+          const decided = suggestSIEMappings(merged, mappingTargets, existingRecords, allAccounts)
+          let mappings = decided.mappings
 
           // The momskod each account has in the source system. SIE4 #KONTO
           // carries none, so without this the mapping step can only guess
@@ -1329,6 +1342,9 @@ export const arcimMigrationExtension: Extension = {
           log.info(`Account mapping: ${allAccounts.length} unique accounts across ${sieFiles.length} files, ${mappingStats.unmapped} unmapped`)
 
           const preview = generateImportPreview(merged, mappings)
+          // Definitions the decision left out of the mapping (unused numbers
+          // no chart can hold) are named, as the upload's preview names them.
+          preview.archivedOnlyAccounts = decided.archivedOnlyAccounts
 
           // Detect prior imports by *fiscal period overlap*, not file hash.
           // Providers embed the export-time #GEN date in every SIE export so

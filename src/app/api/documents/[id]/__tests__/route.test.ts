@@ -7,7 +7,7 @@ import {
   makeDocumentAttachment,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -70,6 +70,28 @@ beforeEach(() => {
 
 function makeReq(method: 'GET' | 'DELETE' = 'DELETE') {
   return new Request('http://localhost/api/documents/doc-1', { method })
+}
+
+/**
+ * The five pin reads deleteDocument() makes after the document row, in
+ * readDocumentDeletePins' order: supplier invoices, expense claims, bank
+ * transactions, inbox items by file, inbox items by received Peppol XML.
+ */
+function enqueuePins(pins: { supplierInvoice?: boolean; expenseClaim?: boolean; bankTransaction?: boolean; inboxFile?: unknown[]; inboxXml?: unknown[] } = {}) {
+  enqueue({ data: pins.supplierInvoice ? [{ id: 'si-1' }] : [] })
+  enqueue({ data: pins.expenseClaim ? [{ id: 'ec-1' }] : [] })
+  enqueue({ data: pins.bankTransaction ? [{ id: 'tx-1' }] : [] })
+  enqueue({ data: pins.inboxFile ?? [] })
+  enqueue({ data: pins.inboxXml ?? [] })
+}
+
+const LOOSE_DOC = {
+  id: 'doc-1',
+  file_name: 'kvitto.pdf',
+  storage_path: 'documents/user-1/kvitto.pdf',
+  journal_entry_id: null,
+  journal_entry_line_id: null,
+  user_id: 'user-1',
 }
 
 describe('GET /api/documents/[id]', () => {
@@ -229,6 +251,7 @@ describe('DELETE /api/documents/[id]', () => {
       },
       error: null,
     })
+    enqueuePins()
     enqueue({ data: null, error: null }) // delete
 
     const handler = vi.fn()
@@ -278,6 +301,7 @@ describe('DELETE /api/documents/[id]', () => {
       },
       error: null,
     })
+    enqueuePins()
     enqueue({
       data: null,
       error: { message: 'Cannot delete document linked to a posted journal entry (Bokföringslagen)' },
@@ -287,5 +311,111 @@ describe('DELETE /api/documents/[id]', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
     expect(status).toBe(409)
     expect(body.error.message).toContain('Bokföringslagen')
+  })
+
+  it('returns 409 DOC_DELETE_LINKED for a document linked only at a verifikat line, without deleting', async () => {
+    enqueue({
+      data: {
+        id: 'doc-1',
+        file_name: 'kvitto.pdf',
+        storage_path: 'documents/user-1/kvitto.pdf',
+        journal_entry_id: null,
+        journal_entry_line_id: 'line-1',
+        user_id: 'user-1',
+      },
+      error: null,
+    })
+    const res = await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('DOC_DELETE_LINKED')
+    expect(body.error.message).toContain('7 kap')
+    expect(serviceRemoveMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION when a bank transaction pins the document between the pin read and the delete (FK RESTRICT), not a 500', async () => {
+    // A receipt attached to a bank transaction after the pins were read:
+    // transactions.document_id is ON DELETE RESTRICT, so the database refuses
+    // the delete with 23503 and the shared foreign-key refusal map answers it.
+    enqueue({
+      data: {
+        id: 'doc-1',
+        file_name: 'kvitto.pdf',
+        storage_path: 'documents/user-1/kvitto.pdf',
+        journal_entry_id: null,
+        journal_entry_line_id: null,
+        user_id: 'user-1',
+      },
+      error: null,
+    })
+    enqueuePins()
+    enqueue({
+      data: null,
+      error: {
+        code: '23503',
+        message: 'update or delete on table "document_attachments" violates foreign key constraint "transactions_document_id_fkey" on table "transactions"',
+      },
+    })
+    const res = await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en: string; details: { referenced_by: string } }
+    }>(res)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION')
+    expect(body.error.message).toContain('banktransaktion')
+    expect(body.error.message_en).toContain('bank transaction')
+    expect(body.error.details.referenced_by).toBe('transactions')
+    expect(serviceRemoveMock).not.toHaveBeenCalled()
+  })
+  // crm#230: every record that holds a document is refused by the server rule
+  // itself (documentDeleteRefusal), so the API and agents get the same answer
+  // Arkiv's missing button implies.
+  it.each([
+    {
+      pin: 'the underlag of a registered supplier invoice',
+      pins: { supplierInvoice: true },
+      code: 'DOC_DELETE_SUPPLIER_INVOICE_UNDERLAG',
+      sv: 'registrerad leverantörsfaktura',
+      en: 'supplier invoice',
+    },
+    { pin: 'the underlag of an utlägg', pins: { expenseClaim: true }, code: 'DOC_DELETE_EXPENSE_CLAIM_UNDERLAG', sv: 'registrerat utlägg', en: 'expense claim' },
+    {
+      pin: 'the file of an inbox item booked through a verifikat',
+      pins: { inboxFile: [{ created_journal_entry_id: 'je-1', created_supplier_invoice_id: null }] },
+      code: 'DOC_DELETE_BOOKED_INBOX_ITEM',
+      sv: 'redan har bokförts',
+      en: 'already been booked',
+    },
+    {
+      pin: 'the received Peppol XML of an e-invoice turned into a supplier invoice',
+      pins: { inboxXml: [{ created_journal_entry_id: null, created_supplier_invoice_id: 'si-1' }] },
+      code: 'DOC_DELETE_BOOKED_INBOX_ITEM',
+      sv: 'i det skick det togs emot',
+      en: 'form it was received',
+    },
+    { pin: 'the underlag of a bank transaction', pins: { bankTransaction: true }, code: 'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION', sv: 'banktransaktion', en: 'bank transaction' },
+  ])('returns 409 $code for $pin, deleting nothing', async ({ pins, code, sv, en }) => {
+    enqueue({ data: LOOSE_DOC, error: null })
+    enqueuePins(pins)
+    const res = await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; message_en: string } }>(res)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe(code)
+    expect(body.error.message).toContain(sv)
+    expect(body.error.message_en).toContain(en)
+    expect(serviceRemoveMock).not.toHaveBeenCalled()
+    expect(findCalls('document_attachments', 'delete')).toEqual([])
+  })
+
+  it('deletes a loose document whose inbox item was never booked', async () => {
+    enqueue({ data: LOOSE_DOC, error: null })
+    enqueuePins({ inboxFile: [{ created_journal_entry_id: null, created_supplier_invoice_id: null }] })
+    enqueue({ data: null, error: null }) // delete
+    const res = await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse<{ data: { id: string; deleted: boolean } }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ id: 'doc-1', deleted: true })
+    expect(findCalls('document_attachments', 'delete')).toHaveLength(1)
+    expect(serviceRemoveMock).toHaveBeenCalledOnce()
   })
 })

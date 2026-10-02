@@ -175,7 +175,7 @@ interface ExtensionContext {
 - **Delivery:** the bus (`src/lib/events/bus.ts`) runs all handlers for an event concurrently with `Promise.allSettled`. A rejected handler is logged and never fails the emitter.
 - **Payload types:** event names and payloads live in `src/lib/events/types.ts`. Type payloads with `EventPayload<'<event>'>`.
 - **ctx may be missing:** the registry builds `ctx` when the event fires, from `createClient()` and the payload's `userId` and `companyId`. When that fails (no `userId`, or no request scope), the handler receives `ctx === undefined`, so always handle that case. An event emitted from a cron job or webhook may also carry a client without a signed-in user.
-- **Initialization:** handlers are subscribed only after `ensureInitialized()` (`src/lib/init.ts`) has run in the process, since that function calls `loadExtensions()`. Any route that emits events, or that looks up extensions in the registry, must call `ensureInitialized()` at module level. Otherwise events go nowhere and `extensionRegistry.get()` returns `undefined`.
+- **Initialization:** handlers are subscribed only after `ensureInitialized()` (`src/lib/init.ts`) has run in the process, since that function calls `loadExtensions()`. Any route that emits events, or that looks up extensions in the registry, must call `ensureInitialized()` at module level; `withRouteContext` does not do it for you. Otherwise events go nowhere and `extensionRegistry.get()` returns `undefined`. `npm run check:guards` (uninitialized-event-route) fails a new route that can reach `eventBus.emit` without the call.
 
 ## API routes
 

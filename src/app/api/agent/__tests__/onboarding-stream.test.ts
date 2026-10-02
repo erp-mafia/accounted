@@ -53,6 +53,7 @@ function mockAuth(userId: string | null, membership: { role: string } | null) {
   mockCreateClient.mockResolvedValue({
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: userId ? { id: userId } : null } }),
+      mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) },
     },
     from: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnThis(),

@@ -559,10 +559,12 @@ export default function AccountMappingStep({
                               value === 'none' ? null : Number(value),
                             )}
                           >
-                            <SelectTrigger className="w-24 shrink-0" aria-label={t('vat_rate_label')}>
+                            <SelectTrigger className="w-36 shrink-0" aria-label={t('vat_rate_label')}>
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
+                              {/* A null rate is "not set": the momskod or the
+                                  BAS number decides it. Explicit no VAT is 0 %. */}
                               <SelectItem value="none">{t('vat_rate_none')}</SelectItem>
                               <SelectItem value="0">0 %</SelectItem>
                               <SelectItem value="0.25">25 %</SelectItem>

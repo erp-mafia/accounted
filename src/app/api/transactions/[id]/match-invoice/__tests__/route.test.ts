@@ -536,6 +536,22 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
         }),
       }),
     )
+    // A bank match that settles the invoice in full is the invoice.paid
+    // transition: webhook subscribers hear it exactly once.
+    const paidEmits = vi
+      .mocked(eventBus.emit)
+      .mock.calls.filter(([event]) => event.type === 'invoice.paid')
+    expect(paidEmits).toHaveLength(1)
+    expect(paidEmits[0][0]).toMatchObject({
+      type: 'invoice.paid',
+      payload: {
+        invoice: expect.objectContaining({ id: VALID_UUID, status: 'paid', remaining_amount: 0 }),
+        paymentAmount: 12500,
+        paymentDate: '2024-06-15',
+        userId: 'user-1',
+        companyId: 'company-1',
+      },
+    })
 
     // Clearing path now builds lines via buildInvoicePaymentClearingLines and
     // posts via createJournalEntry directly (FX fix PR #614 round 6). For a
@@ -762,6 +778,10 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // Issue #1259: a partially paid invoice is still matchable, so the sibling
     // suggestions must survive.
     expect(mockClearSuggestions).not.toHaveBeenCalled()
+    // Still owed money: the match is confirmed, the invoice is not paid.
+    const types = vi.mocked(eventBus.emit).mock.calls.map(([event]) => event.type)
+    expect(types).toContain('invoice.match_confirmed')
+    expect(types).not.toContain('invoice.paid')
   })
 
   // Issue #1259: full settlement retires the pointer at this invoice from every

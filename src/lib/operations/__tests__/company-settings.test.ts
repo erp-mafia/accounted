@@ -30,6 +30,8 @@ const NOT_ON_THE_API: Record<string, string> = {
   salary_pay_day: 'payroll: PATCH /salary/settings',
   salary_default_bank: 'payroll: PATCH /salary/settings',
   salary_net_rounding: 'payroll: PATCH /salary/settings',
+  salary_payslip_show_employer_cost: 'payroll: PATCH /salary/settings',
+  salary_payslip_show_breakdown: 'payroll: PATCH /salary/settings',
   salary_calculation_policy: 'payroll: PATCH /salary/settings (merged, not replaced)',
   salary_deviation_period: 'payroll: PATCH /salary/settings',
 }

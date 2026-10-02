@@ -147,6 +147,17 @@ describe('one callback transaction', () => {
     expect(mocks.balance).not.toHaveBeenCalled()
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_granted' }))
   })
+  it("stamps the proxy's nonce so the finalize page runs under the proxy's CSP header too", async () => {
+    // A self-hosted `next start` delivers only the proxy's header (src/proxy.ts),
+    // so both inline scripts must carry the nonce that header trusts.
+    mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [account] })
+    const proxyNonce = 'cHJveHktbm9uY2UtMTIzNDU2Nzg='
+    const response = await GET(new Request(request().url, { headers: { 'x-nonce': proxyNonce } }))
+    const body = await response.text()
+    expect(response.headers.get('content-security-policy')).toContain(`script-src 'nonce-${proxyNonce}'`)
+    expect(body.split(`<script nonce="${proxyNonce}">`).length - 1).toBe(2)
+    expect(body).not.toMatch(/<script(?![^>]*nonce=)/)
+  })
   it('accepts an empty bank response and leaves the picker to report it', async () => {
     mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [] })
     expect((await complete()).body).toContain('select_accounts='); expect(plan().mirrors).toEqual([])

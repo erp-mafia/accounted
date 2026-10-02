@@ -1,5 +1,5 @@
-import { randomBytes } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
+import { requestCspNonce } from '@/lib/security/csp'
 import { NextResponse, after } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
@@ -385,10 +385,11 @@ export async function GET(request: Request) {
   }
 
   // Per-request CSP nonce for the two inline scripts on the finalize page
-  // (ASVS V3.3): mirrors the mcp-oauth consent page. The global next.config
-  // CSP also applies; the intersection means inline scripts on THIS response
-  // must carry the nonce.
-  const cspNonce = randomBytes(16).toString('base64')
+  // (ASVS V3.3): mirrors the mcp-oauth consent page. It is the proxy's nonce
+  // for this request, so the scripts run under the proxy's CSP header as well
+  // as under the one set below (a self-hosted `next start` delivers only the
+  // proxy's).
+  const cspNonce = requestCspNonce(request.headers)
   const csp = [
     "default-src 'none'",
     `script-src 'nonce-${cspNonce}'`,

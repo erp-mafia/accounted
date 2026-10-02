@@ -57,6 +57,7 @@ import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttach
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
 import NoDocRequiredToggle from '@/components/bookkeeping/NoDocRequiredToggle'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
+import VoucherGapNotice from '@/components/bookkeeping/VoucherGapNotice'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
 import AttachmentPreviewSheet from '@/components/bookkeeping/AttachmentPreviewSheet'
@@ -200,6 +201,7 @@ export default function JournalEntryList({
   pristineSlot,
   refreshToken,
   initialShowMissingOnly = false,
+  initialGapPeriodId = null,
 }: {
   pristineSlot?: ReactNode
   /**
@@ -218,6 +220,13 @@ export default function JournalEntryList({
    * is not overwritten.
    */
   initialShowMissingOnly?: boolean
+  /**
+   * Deep-link arrival from the bokslut preflight ("Förklara luckan"): scope
+   * this visit to the räkenskapsår whose unexplained voucher gap blocked the
+   * bokslut, so the gap rows above the table are the ones it named. In memory
+   * only; the saved fiscal-year preference is not overwritten.
+   */
+  initialGapPeriodId?: string | null
 } = {}) {
   const router = useRouter()
   const { toast } = useToast()
@@ -290,6 +299,8 @@ export default function JournalEntryList({
   // One-shot: a deep-link arrival scopes the first period resolution to all
   // years (see the period effect below) without touching the saved preference.
   const deepLinkAllYearsRef = useRef(initialShowMissingOnly)
+  // One-shot as well: the räkenskapsår a bokslut gap blocker pointed at.
+  const deepLinkPeriodRef = useRef<string | null>(initialGapPeriodId)
   const [filterOpen, setFilterOpen] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -508,6 +519,25 @@ export default function JournalEntryList({
       deepLinkAllYearsRef.current = false
       periodScopeResolvedForRef.current = company.id
       setPeriodId(null)
+      setPeriodHydrated(true)
+      return
+    }
+
+    // Deep-link arrival from the bokslut preflight ("Förklara luckan"): scope
+    // this visit to the räkenskapsår the blocker named. Waits for the period
+    // list so a stale id falls back to the current year instead of scoping
+    // the list to nothing. In memory only, consumed once.
+    if (deepLinkPeriodRef.current) {
+      if (fiscalPeriodsLoading) return
+      const wanted = deepLinkPeriodRef.current
+      deepLinkPeriodRef.current = null
+      periodScopeResolvedForRef.current = company.id
+      const today = new Date().toISOString().split('T')[0]
+      setPeriodId(
+        fiscalPeriods.some((p) => p.id === wanted)
+          ? wanted
+          : resolveCurrentPeriodId(fiscalPeriods, today),
+      )
       setPeriodHydrated(true)
       return
     }
@@ -1351,11 +1381,28 @@ export default function JournalEntryList({
             <FyPicker
               value={periodId}
               onChange={handlePeriodChange}
-              suppressAutoRestore={initialShowMissingOnly}
+              suppressAutoRestore={initialShowMissingOnly || initialGapPeriodId !== null}
             />
           </div>
         )}
       </div>
+
+      {/* Holes in this year's voucher numbering with their documented
+          explanations, or the Förklara action: the surface that satisfies the
+          BFNAR 2013:2 documentation requirement the bokslut preflight checks.
+          Scoped to the selected räkenskapsår, or the current one under "Alla
+          räkenskapsår"; hidden on the drafts view and when the series is
+          unbroken. */}
+      {listMode === 'committed' && periodHydrated && (
+        <VoucherGapNotice
+          periodId={
+            periodId ??
+            resolveCurrentPeriodId(fiscalPeriods, new Date().toISOString().split('T')[0])
+          }
+          series={seriesFilter !== 'all' ? seriesFilter : null}
+          refreshToken={refreshToken}
+        />
+      )}
 
       {loading && !hasLoaded ? (
         <DataList className="stagger-enter">

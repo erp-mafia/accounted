@@ -171,6 +171,20 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(createKeyArgs(supabase).p_client).toBe('chatgpt')
     })
 
+    it('records gemini for a Gemini custom-app callback on Google\'s relay', async () => {
+      const redirectUri = 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1234567890-app_accounted_se'
+      vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri, exp: Date.now() + 60_000 })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults())
+
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
+      expect(res.status).toBe(200)
+      expect(createKeyArgs(supabase).p_client).toBe('gemini')
+    })
+
     it('stores client null for a redirect URI without a live registration', async () => {
       vi.mocked(decryptAuthCode).mockReturnValue({
         userId: 'user-1',

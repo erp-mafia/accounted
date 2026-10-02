@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
+import { createServiceClient } from '@/lib/supabase/server'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Only the two content toggles are user-settable. Strict: the previous
@@ -33,6 +34,34 @@ function feedUrls(feedToken: string) {
   }
 }
 
+// Every column except feed_token. The token is the feed's bearer credential
+// and is withheld from end-user roles by a column grant, so the session
+// client reads these columns and the route adds the token itself.
+const FEED_COLUMNS =
+  'id, user_id, company_id, is_active, include_tax_deadlines, include_invoices, last_accessed_at, access_count, created_at, updated_at, expires_at'
+
+/**
+ * The feed's token, read on the service role. Callers pass a feed the
+ * session client already returned for the caller's active company, so the
+ * membership check has happened; the company filter keeps the read in it.
+ */
+async function readFeedToken(companyId: string, feedId: string): Promise<string> {
+  const { data, error } = await createServiceClient()
+    .from('calendar_feeds')
+    .select('feed_token')
+    .eq('id', feedId)
+    .eq('company_id', companyId)
+    .single()
+  if (error || !data) {
+    throw new Error(`calendar feed token read failed: ${error?.message ?? 'no row'}`)
+  }
+  return data.feed_token as string
+}
+
+function withFeedUrls<T extends object>(feed: T, feedToken: string) {
+  return { ...feed, feed_token: feedToken, ...feedUrls(feedToken) }
+}
+
 /**
  * GET /api/calendar/feed
  * Get current user's calendar feed settings
@@ -42,7 +71,7 @@ export const GET = withRouteContext('calendar_feed.get', async (_request, ctx) =
 
   const { data: feed, error } = await supabase
     .from('calendar_feeds')
-    .select('*')
+    .select(FEED_COLUMNS)
     .eq('company_id', companyId)
     .single()
 
@@ -52,9 +81,8 @@ export const GET = withRouteContext('calendar_feed.get', async (_request, ctx) =
   }
 
   if (feed) {
-    return NextResponse.json({
-      data: { ...feed, ...feedUrls(feed.feed_token) },
-    })
+    const feedToken = await readFeedToken(companyId, feed.id)
+    return NextResponse.json({ data: withFeedUrls(feed, feedToken) })
   }
 
   return NextResponse.json({ data: null })
@@ -83,26 +111,27 @@ export const POST = withRouteContext(
       )
     }
 
-    // Create new feed
+    // Create new feed. The route mints the token (same format as the column
+    // default) so it can hand it out without reading the column back.
+    const feedToken = crypto.randomUUID()
     const { data: feed, error } = await supabase
       .from('calendar_feeds')
       .insert({
         user_id: user.id,
         company_id: companyId,
+        feed_token: feedToken,
         is_active: true,
         include_tax_deadlines: true,
         include_invoices: true,
       })
-      .select()
+      .select(FEED_COLUMNS)
       .single()
 
     if (error) {
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
-    return NextResponse.json({
-      data: { ...feed, ...feedUrls(feed.feed_token) },
-    })
+    return NextResponse.json({ data: withFeedUrls(feed, feedToken) })
   },
   { requireWrite: true },
 )
@@ -126,16 +155,15 @@ export const PUT = withRouteContext(
       .from('calendar_feeds')
       .update(validation.data)
       .eq('company_id', companyId)
-      .select()
+      .select(FEED_COLUMNS)
       .single()
 
     if (error) {
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
-    return NextResponse.json({
-      data: { ...feed, ...feedUrls(feed.feed_token) },
-    })
+    const feedToken = await readFeedToken(companyId, feed.id)
+    return NextResponse.json({ data: withFeedUrls(feed, feedToken) })
   },
   { requireWrite: true },
 )
@@ -150,24 +178,23 @@ export const DELETE = withRouteContext(
     const { supabase, companyId } = ctx
 
     // Generate a new token by updating with a new UUID
+    const feedToken = crypto.randomUUID()
     const { data: feed, error } = await supabase
       .from('calendar_feeds')
       .update({
-        feed_token: crypto.randomUUID(),
+        feed_token: feedToken,
         access_count: 0,
         last_accessed_at: null,
       })
       .eq('company_id', companyId)
-      .select()
+      .select(FEED_COLUMNS)
       .single()
 
     if (error) {
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
-    return NextResponse.json({
-      data: { ...feed, ...feedUrls(feed.feed_token) },
-    })
+    return NextResponse.json({ data: withFeedUrls(feed, feedToken) })
   },
   { requireWrite: true },
 )

@@ -6,6 +6,9 @@ import {
 } from '@/lib/core/bookkeeping/year-end-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /** GET: validate readiness + preview the year-end entries. */
 export const GET = withRouteContext(

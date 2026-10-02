@@ -276,7 +276,8 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
           onCommit?.(search)
         } else {
           // Nothing actively chosen: close the list and let the event bubble
-          // so the form-level Enter (open review when balanced) can take over.
+          // so the host form decides (the verifikat form opens the review from
+          // an empty row's empty account field).
           setIsOpen(false)
         }
         break

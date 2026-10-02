@@ -67,10 +67,33 @@ export interface ARLedgerReport {
  * Invoice statuses in the live kundreskontra. 'partially_paid' is as open as
  * 'sent' and 'overdue': the first partial payment moves an invoice there and
  * it stays until the rest is paid. 'credited' originals are kept so they net
- * against their credit notes. The customer drill-down route reads this same
- * list, so the aggregate and its detail rows cannot drift apart.
+ * against their credit notes; migrated credit notes that carry the same
+ * status are left out by withoutSettledCreditNotes. The customer
+ * drill-down route reads this same list and filter, so the aggregate and its
+ * detail rows cannot drift apart.
  */
 export const AR_LEDGER_STATUSES = ['sent', 'overdue', 'partially_paid', 'credited'] as const
+
+/**
+ * A kreditfaktura the provider migration imported as settled. Accounted issues
+ * its own credit notes as 'sent' (issue-credit-note.ts) and reserves
+ * 'credited' for the invoice a credit note reverses, which is why
+ * AR_LEDGER_STATUSES keeps that status. The migration gives every imported
+ * credit note 'credited' instead, as a terminal state with nothing paid and
+ * nothing remaining (arcim-migration entity-mapper): the provider had already
+ * netted it into the balance of the invoice it credits, whose paid_amount
+ * carries it. Read like an original, total - paid_amount counted each credit a
+ * second time, as an open negative receivable, while 1510 stood at 0. Same
+ * rule as the kontantmetod cut-off (kontantmetod-cutoff.ts).
+ */
+export function isSettledCreditNote(inv: { status?: string | null; total?: unknown }): boolean {
+  return inv.status === 'credited' && (Number(inv.total) || 0) < 0
+}
+
+/** The reskontra population without settled credit notes. */
+export function withoutSettledCreditNotes<T extends { status?: string | null; total?: unknown }>(rows: T[]): T[] {
+  return rows.filter((row) => !isSettledCreditNote(row))
+}
 
 /**
  * Generate AR ledger (kundreskontra) with aging analysis.
@@ -144,7 +167,7 @@ export async function generateARLedger(
   const byCustomer = new Map<string, ARLedgerEntry>()
   let unconvertedFxCount = 0
 
-  for (const inv of invoices) {
+  for (const inv of withoutSettledCreditNotes(invoices)) {
     const customerId = inv.customer_id
     const customerName = inv.customer?.name || 'Okänd kund'
 

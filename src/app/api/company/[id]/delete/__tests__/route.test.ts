@@ -15,6 +15,12 @@ vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: vi.fn(),
 }))
 
+// The mail extension's seam. Absent by default, as in a build without it.
+const { mailService } = vi.hoisted(() => ({
+  mailService: {} as { endCompanyGrants?: (companyId: string, userId: string) => Promise<unknown> },
+}))
+vi.mock('@/lib/mail-search/service', () => ({ getMailSearchService: () => mailService }))
+
 import { createServiceClient } from '@/lib/supabase/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { POST } from '../route'
@@ -95,6 +101,7 @@ function mockAuth(userId: string | null) {
 beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
+  delete mailService.endCompanyGrants
 })
 
 describe('POST /api/company/[id]/delete', () => {
@@ -381,5 +388,74 @@ describe('POST /api/company/[id]/delete', () => {
     expect(insertSpy).toHaveBeenCalledWith(
       expect.objectContaining({ table_name: 'zettle_connections' }),
     )
+  })
+})
+
+/**
+ * An archived company is hidden from its members, so nobody could disconnect
+ * its mailboxes afterwards: the archive ends them, through the seam the mail
+ * extension registers (core never imports it).
+ */
+describe('POST /api/company/[id]/delete: mailbox grants', () => {
+  function archiveRequest() {
+    return createMockRequest('/api/company/c1/delete', {
+      method: 'POST',
+      body: { confirm_name: 'Acme AB' },
+    })
+  }
+
+  function ownerOfAcme(updateResults: Record<string, Row> = {}) {
+    mockAuth('user-1')
+    return mockService(
+      {
+        companies: [{ data: { id: 'c1', name: 'Acme AB', archived_at: null }, error: null }],
+        company_members: [{ data: { role: 'owner' }, error: null }],
+      },
+      updateResults,
+    )
+  }
+
+  it('ends the company\'s mailbox grants, as the archiving owner', async () => {
+    mailService.endCompanyGrants = vi.fn().mockResolvedValue({ ended: 2, failed: 0 })
+    ownerOfAcme()
+
+    const { status } = await parseJsonResponse(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    expect(status).toBe(200)
+    expect(mailService.endCompanyGrants).toHaveBeenCalledWith('c1', 'user-1')
+  })
+
+  it('still archives when the grants cannot be ended', async () => {
+    mailService.endCompanyGrants = vi.fn().mockRejectedValue(new Error('google down'))
+    const { updateSpies } = ownerOfAcme()
+
+    const { status } = await parseJsonResponse(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    expect(status).toBe(200)
+    expect(updateSpies.companies).toHaveBeenCalled()
+  })
+
+  it('ends nothing when the archive itself failed', async () => {
+    mailService.endCompanyGrants = vi.fn()
+    ownerOfAcme({ companies: { data: null, error: { message: 'boom' } } })
+
+    const { status } = await parseJsonResponse(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    expect(status).toBe(500)
+    expect(mailService.endCompanyGrants).not.toHaveBeenCalled()
+  })
+
+  it('ends nothing for someone who may not archive the company', async () => {
+    mailService.endCompanyGrants = vi.fn()
+    mockAuth('user-1')
+    mockService({
+      companies: [{ data: { id: 'c1', name: 'Acme AB', archived_at: null }, error: null }],
+      company_members: [{ data: { role: 'member' }, error: null }],
+    })
+
+    const { status } = await parseJsonResponse(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    expect(status).toBe(403)
+    expect(mailService.endCompanyGrants).not.toHaveBeenCalled()
   })
 })

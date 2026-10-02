@@ -44,12 +44,22 @@ export function formatCurrency(
   // reached Intl unguarded: `currency: null` throws RangeError and a single
   // legacy row blanked the whole transactions list into the error boundary.
   const code = currency || 'SEK'
-  return new Intl.NumberFormat('sv-SE', {
-    style: 'currency',
-    currency: code,
+  const digits = {
     minimumFractionDigits: options?.minimumFractionDigits ?? 0,
     maximumFractionDigits: options?.maximumFractionDigits ?? 2,
-  }).format(amount)
+  }
+  try {
+    return new Intl.NumberFormat('sv-SE', { style: 'currency', currency: code, ...digits }).format(
+      amount,
+    )
+  } catch {
+    // A value that is not a currency code (a webshop plugin wrote the
+    // HTML-encoded symbol "&#107;&#114;" into an order's currency) makes Intl
+    // throw RangeError, and one such row took the whole Orders page into the
+    // error boundary. Formatting is display: show the number and the raw
+    // value, never crash the page.
+    return `${new Intl.NumberFormat('sv-SE', digits).format(amount)} ${code}`
+  }
 }
 
 export function formatDate(date: Date | string): string {

@@ -24,7 +24,16 @@ import {
   type WooSyncPayload,
 } from '../lib/settings-actions'
 import { MAX_BACKFILL_YEARS } from '../types'
-import type { WooCommerceConnectionStatus, WooCommerceStatusResponse } from '../types'
+import type {
+  WooCommerceConnectionStatus,
+  WooCommerceConnectionStatusView,
+  WooCommerceStatusResponse,
+} from '../types'
+
+/** "#1042 (2026-08-01)": the order number the store shows, plus its date. */
+function skippedOrderLabel(order: { order_number: string; order_date: string | null }): string {
+  return order.order_date ? `#${order.order_number} (${order.order_date})` : `#${order.order_number}`
+}
 
 const STATUS_VARIANT: Record<
   WooCommerceConnectionStatus['status'],
@@ -65,7 +74,7 @@ export default function WooCommerceSettingsPanel() {
   const [loading, setLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
   const [configured, setConfigured] = useState(false)
-  const [connections, setConnections] = useState<WooCommerceConnectionStatus[]>([])
+  const [connections, setConnections] = useState<WooCommerceConnectionStatusView[]>([])
   const [storeUrl, setStoreUrl] = useState('')
   const [manualMode, setManualMode] = useState(false)
   const [consumerKey, setConsumerKey] = useState('')
@@ -201,16 +210,40 @@ export default function WooCommerceSettingsPanel() {
     failedTitle: string,
   ) {
     const summary = syncSummary(payload ?? null)
+    // Orders skipped for an unusable currency get their own sentence on any
+    // counted outcome: syncing again does not bring them in.
+    const withCurrencyNote = (text: string, unknownCurrency: number) =>
+      unknownCurrency > 0
+        ? `${text} ${t('sync_unknown_currency', { count: unknownCurrency })}`
+        : text
     if (summary.reason === 'revoked') {
       toast({ title: failedTitle, description: t('sync_revoked'), variant: 'destructive' })
     } else if (summary.reason === 'partial') {
-      toast({ title: t('sync_partial_title'), description: t('sync_partial', summary.values) })
+      toast({
+        title: t('sync_partial_title'),
+        description: withCurrencyNote(
+          t('sync_partial', summary.values),
+          summary.values.unknownCurrency,
+        ),
+      })
     } else if (summary.reason === 'empty') {
       toast({ title: doneTitle, description: t('sync_done_empty') })
     } else if (summary.reason === 'errors') {
-      toast({ title: doneTitle, description: t('sync_done_feed_errors', summary.values) })
+      toast({
+        title: doneTitle,
+        description: withCurrencyNote(
+          t('sync_done_feed_errors', summary.values),
+          summary.values.unknownCurrency,
+        ),
+      })
     } else if (summary.reason === 'feed') {
-      toast({ title: doneTitle, description: t('sync_done_feed', summary.values) })
+      toast({
+        title: doneTitle,
+        description: withCurrencyNote(
+          t('sync_done_feed', summary.values),
+          summary.values.unknownCurrency,
+        ),
+      })
     } else {
       toast({ title: doneTitle })
     }
@@ -393,6 +426,8 @@ export default function WooCommerceSettingsPanel() {
           // Handlers early-return while ANY request runs (shared busyId), so
           // every card's controls disable; the spinner stays on the busy one.
           const blocked = busyId !== null
+          const skipped = connection.skipped_currency_orders
+          const skippedMore = skipped ? skipped.count - skipped.orders.length : 0
           return (
             <div key={connection.id} className="space-y-4 rounded-lg border border-border p-4">
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -474,6 +509,24 @@ export default function WooCommerceSettingsPanel() {
                   )
                 )}
               </div>
+
+              {skipped && skipped.count > 0 && (
+                // Orders the sync skipped for an unusable currency stay listed
+                // until a sync imports them: the cursor has moved past them,
+                // so this is the only lasting trace (lib/skipped-orders).
+                <div className="max-w-prose space-y-1 border-t border-border pt-4">
+                  <p className="attn text-[12.5px]">
+                    {t('skipped_orders_attn', { count: skipped.count })}
+                  </p>
+                  <p className="text-sm text-muted-foreground">{t('skipped_orders_help')}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {t('skipped_orders_list', {
+                      orders: skipped.orders.map(skippedOrderLabel).join(', '),
+                    })}
+                    {skippedMore > 0 ? ` ${t('skipped_orders_more', { count: skippedMore })}` : ''}
+                  </p>
+                </div>
+              )}
 
               {isActive && (
                 <div className="flex flex-wrap items-start justify-between gap-4 border-t border-border pt-4">

@@ -12,7 +12,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
 import type { AiTaskCategory } from '@/lib/worklist/ai-task'
 import type { MissingUnderlagSample } from '@/lib/worklist/missing-underlag'
-import type { AiClient } from '@/lib/onboarding/ai-clients'
+import { NO_AI_CONNECTION, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { AiTaskAction } from './AiTaskAction'
 import { KopplingarChips } from './KopplingarChips'
 import {
@@ -84,11 +84,11 @@ interface AttGoraSectionProps {
    */
   hasActiveBankConnection?: boolean
   /**
-   * AI clients this user has connected over MCP OAuth (lib/onboarding/
-   * ai-clients). Drives the footer: hand the first row to a connected
-   * client, or offer the connect buttons when there is none.
+   * This user's agent connection over MCP OAuth (lib/onboarding/ai-clients).
+   * `connected` drives the kopplingar chip; the row's AI action hands work
+   * only to one of the verified `clients`.
    */
-  aiClients?: AiClient[]
+  aiConnection?: AiConnection
   /**
    * What the biggest missing underlag actually need fetching from, derived
    * from the same page of rows the count comes from (lib/worklist/
@@ -176,7 +176,7 @@ export default function AttGoraSection({
   expiringBankConnections = [],
   emptyLedger = false,
   hasActiveBankConnection = true,
-  aiClients = [],
+  aiConnection = NO_AI_CONNECTION,
   missingUnderlag,
   hasSkatteverketConnection = false,
   showKopplingar = false,
@@ -308,7 +308,7 @@ export default function AttGoraSection({
   // Kvittojakten on "Verifikat utan underlag" (AiTaskAction renders nothing
   // for the other categories).
   const aiAction = (category: AiTaskCategory, count: number) =>
-    <AiTaskAction clients={aiClients} task={{ category, count }} />
+    <AiTaskAction clients={aiConnection.clients} task={{ category, count }} />
 
   // Where the biggest missing underlag actually have to be fetched from, in
   // one line, derived from the ledger rather than reported back by an agent.
@@ -655,7 +655,7 @@ export default function AttGoraSection({
       </div>
       {showKopplingar && (
         <KopplingarChips
-          aiClients={aiClients}
+          aiConnection={aiConnection}
           hasBank={hasActiveBankConnection}
           hasSkatteverket={hasSkatteverketConnection}
         />

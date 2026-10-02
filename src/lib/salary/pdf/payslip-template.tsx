@@ -12,9 +12,13 @@ import { getBranding } from '@/lib/branding/service'
  * - Company + employee identification
  * - Line items (salary, absence, benefits, deductions)
  * - Gross → Tax → Net summary with tax table reference
- * - Employer cost breakdown (avgifter, vacation accrual): transparency feature
+ * - Employer cost breakdown (avgifter, vacation accrual), when employerCost is set
  * - YTD totals (cumulative year-to-date)
- * - Calculation breakdown (optional detail showing every formula step)
+ * - Calculation breakdown (every formula step), when breakdownSteps is set
+ *
+ * Which of the two optional sections a copy carries is decided upstream by
+ * its audience (build-payslip-data), never here: the template prints what
+ * the data holds.
  */
 
 const styles = StyleSheet.create({
@@ -223,12 +227,9 @@ export interface PayslipData {
   netSalary: number
   taxReference: string // e.g. "Tabell 33, kolumn 1"
 
-  // Employer cost (transparency feature)
-  avgifterRate: number
-  avgifterAmount: number
-  vacationAccrual: number
-  vacationAccrualAvgifter: number
-  totalEmployerCost: number
+  // Employer cost. null when the section is not printed: the employee copy
+  // of a company that turned it off (lib/salary/payslips/build-payslip-data).
+  employerCost: PayslipEmployerCost | null
 
   // YTD. ytdNet is null when the cutover opening balance had no historical
   // net: the accumulator then prints "Underlag saknas" instead of a false 0.
@@ -239,8 +240,17 @@ export interface PayslipData {
   // Bank
   bankAccount?: string // masked
 
-  // Calculation breakdown (optional)
+  // Calculation breakdown. Absent when there are no steps, or on the employee
+  // copy of a company that turned the section off.
   breakdownSteps?: { label: string; formula: string; output: number }[]
+}
+
+export interface PayslipEmployerCost {
+  avgifterRate: number
+  avgifterAmount: number
+  vacationAccrual: number
+  vacationAccrualAvgifter: number
+  totalEmployerCost: number
 }
 
 export interface PayslipLineItem {
@@ -352,26 +362,28 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
           </View>
         </View>
 
-        {/* Employer cost (transparency feature: our differentiator) */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Arbetsgivarkostnad</Text>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Arbetsgivaravgifter ({(data.avgifterRate * 100).toFixed(2)}%)</Text>
-            <Text style={styles.summaryValue}>{fmt(data.avgifterAmount)}</Text>
+        {/* Employer cost: printed unless this copy's audience left it out */}
+        {data.employerCost && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Arbetsgivarkostnad</Text>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Arbetsgivaravgifter ({(data.employerCost.avgifterRate * 100).toFixed(2)}%)</Text>
+              <Text style={styles.summaryValue}>{fmt(data.employerCost.avgifterAmount)}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Semesteravsättning</Text>
+              <Text style={styles.summaryValue}>{fmt(data.employerCost.vacationAccrual)}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Sociala avgifter på semester</Text>
+              <Text style={styles.summaryValue}>{fmt(data.employerCost.vacationAccrualAvgifter)}</Text>
+            </View>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Total arbetsgivarkostnad</Text>
+              <Text style={styles.totalValue}>{fmt(data.employerCost.totalEmployerCost)}</Text>
+            </View>
           </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Semesteravsättning</Text>
-            <Text style={styles.summaryValue}>{fmt(data.vacationAccrual)}</Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Sociala avgifter på semester</Text>
-            <Text style={styles.summaryValue}>{fmt(data.vacationAccrualAvgifter)}</Text>
-          </View>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total arbetsgivarkostnad</Text>
-            <Text style={styles.totalValue}>{fmt(data.totalEmployerCost)}</Text>
-          </View>
-        </View>
+        )}
 
         {/* YTD */}
         <View style={styles.ytdSection}>
@@ -390,7 +402,7 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
           </View>
         </View>
 
-        {/* Calculation breakdown (optional detail page) */}
+        {/* Calculation breakdown: printed when this copy carries steps */}
         {data.breakdownSteps && data.breakdownSteps.length > 0 && (
           <View style={styles.breakdownSection}>
             <Text style={styles.breakdownTitle}>Beräkningsunderlag</Text>

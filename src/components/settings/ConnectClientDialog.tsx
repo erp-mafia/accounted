@@ -22,7 +22,7 @@ const branding = getBranding()
 const connectorName = branding.appName.toLowerCase()
 
 /** The clients the Settings tiles offer, in display order. */
-export const CONNECT_TARGETS = ['claude', 'chatgpt', 'grok', 'claude-code', 'cursor', 'other'] as const
+export const CONNECT_TARGETS = ['claude', 'chatgpt', 'grok', 'gemini', 'claude-code', 'cursor', 'other'] as const
 export type ConnectTarget = (typeof CONNECT_TARGETS)[number]
 
 /**
@@ -35,6 +35,7 @@ type StepSet =
   | 'claude_desktop'
   | 'chatgpt'
   | 'grok'
+  | 'gemini'
   | 'code_plugin'
   | 'code_signin'
   | 'code_key'
@@ -93,6 +94,20 @@ const MODES: Record<ConnectTarget, Mode[]> = {
   // sideDoorServerUrl owns that difference.
   chatgpt: [{ set: 'chatgpt', steps: 3, snippet: (origin) => sideDoorServerUrl({ origin, door: 'chatgpt' }) }],
   grok: [{ set: 'grok', steps: 3, snippet: (origin) => sideDoorServerUrl({ origin, door: 'grok' }) }],
+  // Gemini takes only a URL (no key field) and signs in over OAuth. The eager
+  // flag answers its first tokenless request with the 401 challenge that
+  // starts the sign-in, as for claude.ai and Grok, rather than a lazy 200 its
+  // dialog could read as a server without authentication.
+  gemini: [
+    {
+      set: 'gemini',
+      steps: 3,
+      snippet: (origin) => mcpServerUrl({ origin, client: 'gemini', eagerAuth: true }),
+      // Google's eligibility rules for custom apps, so a user outside them
+      // learns it here rather than from a missing menu in Gemini.
+      snippetLabel: 'gemini_availability_label',
+    },
+  ],
   'claude-code': [
     {
       set: 'code_plugin',
@@ -145,6 +160,8 @@ function openHref(target: ConnectTarget, origin: string): string | null {
     case 'chatgpt':
     case 'grok':
       return AI_CLIENTS.find((c) => c.id === target)?.home ?? null
+    case 'gemini':
+      return 'https://gemini.google.com/'
     default:
       return null
   }

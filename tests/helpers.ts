@@ -24,6 +24,15 @@ import type { SIEVoucher, SIETransactionLine } from '@/lib/import/types'
 // ============================================================
 
 /**
+ * listFactors() for a user without a verified factor: the shared mocks'
+ * default, since requireAuth consults it for every AAL1 session.
+ */
+export const NO_VERIFIED_FACTORS = {
+  data: { all: [], totp: [], phone: [], webauthn: [] },
+  error: null,
+}
+
+/**
  * Creates a deeply chainable mock that mirrors the Supabase client API.
  *
  * Usage:
@@ -563,6 +572,8 @@ export function makeCompanySettings(
     salary_pay_day: 25,
     salary_default_bank: null,
     salary_net_rounding: false,
+    salary_payslip_show_employer_cost: true,
+    salary_payslip_show_breakdown: true,
     salary_deviation_period: 'same_month',
     salary_vacation_year_basis: 'calendar',
     logo_url: null,
@@ -769,6 +780,10 @@ export function createQueuedMockSupabase() {
     storage: storageMock,
     auth: {
       getUser: vi.fn(),
+      // A user without a verified factor. requireAuth asks the auth server
+      // for every AAL1 session (the step-up no longer hangs on the
+      // NEXT_PUBLIC_REQUIRE_MFA flag); a test about the gate overrides this.
+      mfa: { listFactors: vi.fn().mockResolvedValue(NO_VERIFIED_FACTORS) },
     },
   }
 
@@ -868,6 +883,7 @@ export function createTableMockSupabase(
     }),
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: null }, error: null }),
+      mfa: { listFactors: vi.fn().mockResolvedValue(NO_VERIFIED_FACTORS) },
     },
   }
 

@@ -9,6 +9,7 @@ import {
   Source_Sans_3,
   Work_Sans,
 } from "next/font/google";
+import { headers } from "next/headers";
 import Script from "next/script";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
@@ -19,6 +20,7 @@ import { DeployReloadPrompt } from "@/components/system/DeployReloadPrompt";
 import { ThemeColorSync } from "@/components/system/ThemeColorSync";
 import { ThemeProvider } from "@/components/theme-provider";
 import { PaletteProvider } from "@/components/providers/PaletteProvider";
+import { NonceProvider } from "@/components/providers/NonceProvider";
 import { SWRProvider } from "@/components/providers/SWRProvider";
 import { ScrollbarReveal } from "@/components/ScrollbarReveal";
 import { ensureInitialized } from "@/lib/init";
@@ -29,6 +31,7 @@ import { getBrandFontPair } from "@/lib/branding/fonts";
 import { BrandProvider } from "@/lib/branding/brand-context";
 import { toPublicBrand } from "@/lib/branding/public-brand";
 import { APP_TIME_ZONE } from "@/i18n/config";
+import { CSP_NONCE_HEADER } from "@/lib/security/csp";
 import "./globals.css";
 
 // Brand resolution (WL-12: the lookup runs in the root layout, not
@@ -154,6 +157,14 @@ export default async function RootLayout({
   const brand = await resolveRequestBrand();
   const locale = await getLocale();
   const messages = await getMessages();
+  // Per-request CSP nonce from the proxy (src/proxy.ts, lib/security/csp.ts).
+  // Next.js stamps it on its own scripts; the scripts this layout renders
+  // (next-themes' and the palette's no-flash scripts, the service-worker
+  // registration, Turnstile via NonceProvider) must carry it themselves or
+  // the strict script-src blocks them. Reading the request header keeps
+  // every page dynamic, which a nonce requires anyway: resolveRequestBrand
+  // already reads headers() above.
+  const nonce = (await headers()).get(CSP_NONCE_HEADER) ?? undefined;
 
   // Brand COLOR theming deliberately removed (founder call 2026-08-04):
   // white-label is logo + app name + domain only; every host renders the
@@ -193,36 +204,39 @@ export default async function RootLayout({
       <body
         className="antialiased"
       >
-        {/* timeZone is passed explicitly: client components must format in the
-            same zone the server rendered with, or timestamps shift on hydration. */}
-        <NextIntlClientProvider locale={locale} messages={messages} timeZone={APP_TIME_ZONE}>
-          <BrandProvider brand={brand ? toPublicBrand(brand) : null}>
-            <ThemeProvider
-              attribute="class"
-              defaultTheme="light"
-              enableSystem
-              disableTransitionOnChange
-            >
-              <PaletteProvider>
-                <SWRProvider>
-                  <TooltipProvider>
-                    {children}
-                    <Toaster />
-                    <DeployReloadPrompt />
-                    <ThemeColorSync />
-                    <ScrollbarReveal />
-                  </TooltipProvider>
-                </SWRProvider>
-              </PaletteProvider>
-            </ThemeProvider>
-          </BrandProvider>
-        </NextIntlClientProvider>
+        <NonceProvider nonce={nonce}>
+          {/* timeZone is passed explicitly: client components must format in the
+              same zone the server rendered with, or timestamps shift on hydration. */}
+          <NextIntlClientProvider locale={locale} messages={messages} timeZone={APP_TIME_ZONE}>
+            <BrandProvider brand={brand ? toPublicBrand(brand) : null}>
+              <ThemeProvider
+                attribute="class"
+                defaultTheme="light"
+                enableSystem
+                disableTransitionOnChange
+                nonce={nonce}
+              >
+                <PaletteProvider nonce={nonce}>
+                  <SWRProvider>
+                    <TooltipProvider>
+                      {children}
+                      <Toaster />
+                      <DeployReloadPrompt />
+                      <ThemeColorSync />
+                      <ScrollbarReveal />
+                    </TooltipProvider>
+                  </SWRProvider>
+                </PaletteProvider>
+              </ThemeProvider>
+            </BrandProvider>
+          </NextIntlClientProvider>
+        </NonceProvider>
         {/* Vercel Speed Insights is hosted-only telemetry: a self-hosted
             (AGPL) instance must not report its users' page timings to our
             Vercel project. Read through lib/env/public-flags, never compared
             in place (the Docker build folds in-place NEXT_PUBLIC_* reads). */}
         {!isSelfHosted() && <SpeedInsights />}
-        <Script src="/sw-register.js" strategy="afterInteractive" />
+        <Script src="/sw-register.js" strategy="afterInteractive" nonce={nonce} />
       </body>
     </html>
   );

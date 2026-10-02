@@ -22,10 +22,12 @@ import {
  * Instance-side Peppol transport for connector mode (WS3).
  *
  * A self-hosted instance with a connector key and no Qvalia keys of its own
- * reaches Arcim's contracted access point through the hosted proxy
- * (`app/api/connect/peppol/*`). The proxy speaks the PeppolTransport
+ * reaches Arcim's contracted access point through the Accounted Connect
+ * service (`/api/connect/peppol/*` under GNUBOK_CONNECT_URL). The service
+ * lives in its own private repo; this repo keeps only the wire contract
+ * (`@accounted/connect-contract`). The service speaks the PeppolTransport
  * operations, not Qvalia paths, so the instance never learns Arcim's partner
- * or account numbers and the hosted side can enforce ownership: a key can
+ * or account numbers and the service can enforce ownership: a key can
  * only poll, fetch evidence for, or receive documents belonging to
  * participants and submissions it registered itself.
  *

@@ -24,7 +24,7 @@ const chain: any = {
 }
 
 const mockSupabase = {
-  auth: { getUser: vi.fn() },
+  auth: { getUser: vi.fn(), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   // The table name is unused by the shared chain, but declared so a test can
   // install a table-aware implementation of its own.
   from: vi.fn((_table?: string) => chain),

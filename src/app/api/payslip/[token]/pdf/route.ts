@@ -3,6 +3,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolvePayslipToken, isValidPayslipTokenFormat } from '@/lib/salary/payslips/links'
 import { buildPayslipData, payslipFileName } from '@/lib/salary/payslips/build-payslip-data'
+import { issuePayslipSections } from '@/lib/salary/payslips/section-snapshot'
 import { PayslipPDF } from '@/lib/salary/pdf/payslip-template'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
@@ -44,7 +45,7 @@ export async function GET(
 
   const { link } = resolved
 
-  const [{ data: run }, { data: sre }, { data: company }, { data: settings }] = await Promise.all([
+  const [{ data: run }, { data: sre }, { data: company }, { data: settings, error: settingsError }] = await Promise.all([
     serviceClient
       .from('salary_runs')
       .select('*')
@@ -64,7 +65,7 @@ export async function GET(
       .single(),
     serviceClient
       .from('company_settings')
-      .select('company_name')
+      .select('company_name, salary_payslip_show_employer_cost, salary_payslip_show_breakdown')
       .eq('company_id', link.company_id)
       .maybeSingle(),
   ])
@@ -72,6 +73,21 @@ export async function GET(
   if (!run || !sre || !company) {
     return new NextResponse('Not found', { status: 404 })
   }
+
+  // Fail closed: without the company's section switches this copy would fall
+  // back to the defaults and print sections hidden from the employee.
+  if (settingsError) {
+    return new NextResponse('Could not load payslip', { status: 500 })
+  }
+
+  // The send fixed the sections this copy prints on the run; a run issued
+  // some other way first is fixed here, before the employee sees it. Either
+  // way the copy renders what was issued, not today's switches.
+  const issued = await issuePayslipSections(serviceClient, { companyId: link.company_id, run, settings })
+  if (!issued.ok) {
+    return new NextResponse('Could not load payslip', { status: 500 })
+  }
+  const issuedRun = { ...run, ...issued.snapshot }
 
   const emp = sre.employee as unknown as {
     first_name: string
@@ -85,12 +101,14 @@ export async function GET(
   }
 
   // Employer name follows the current company_settings.company_name, falling
-  // back to the frozen onboarding companies.name.
+  // back to the frozen onboarding companies.name. This link is what the
+  // employee receives: the sections the run was issued with apply.
   const data = buildPayslipData({
-    run,
+    run: issuedRun,
     sre,
     employee: emp,
     company: { name: settings?.company_name || company.name, org_number: company.org_number },
+    audience: { kind: 'employee', settings },
   })
   const fileName = payslipFileName(run, emp)
 

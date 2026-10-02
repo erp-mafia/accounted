@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { CreateJournalEntryInput, JournalEntry } from '@/types'
+import type { CreateJournalEntryInput, DeductionType, JournalEntry } from '@/types'
 import { ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX, roundOre } from '@/lib/money'
+import { DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
 import { createJournalEntry, findFiscalPeriod } from './engine'
 
 /**
@@ -38,7 +39,7 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
 export interface RotRutPayoutLeg {
   requestId: string
   requestName: string
-  deductionType: 'rot' | 'rut'
+  deductionType: DeductionType
   /** What Skatteverket paid for this begäran (kr). */
   amount: number
   /**
@@ -51,14 +52,24 @@ export interface RotRutPayoutLeg {
   invoiceCount?: number
 }
 
+/**
+ * The deduction as named inside the voucher text: one kind reads as its own
+ * (DEDUCTION_TYPE_LABELS.noun: 'ROT-avdrag', 'RUT-avdrag', 'skattereduktion
+ * grön teknik'); ROT and RUT together keep 'ROT/RUT-avdrag'; any other mix
+ * is the plain 'skattereduktion'.
+ */
 function deductionLabel(legs: Array<Pick<RotRutPayoutLeg, 'deductionType'>>): string {
   const types = new Set(legs.map((leg) => leg.deductionType))
-  if (types.size === 1) return types.has('rut') ? 'RUT' : 'ROT'
-  return 'ROT/RUT'
+  if (types.size === 1) {
+    const [only] = [...types]
+    return (DEDUCTION_TYPE_LABELS[only] ?? DEDUCTION_TYPE_LABELS.rot).noun
+  }
+  if ([...types].every((type) => type === 'rot' || type === 'rut')) return 'ROT/RUT-avdrag'
+  return 'skattereduktion'
 }
 
 function payoutDescription(label: string, names: string[]): string {
-  return `Utbetalning ${label}-avdrag från Skatteverket (${names.join(', ')})`
+  return `Utbetalning ${label} från Skatteverket (${names.join(', ')})`
 }
 
 export async function createRotRutPayoutSetEntry(
@@ -124,7 +135,7 @@ export async function createRotRutPayoutSetEntry(
           account_number: ORE_ROUNDING_ACCOUNT,
           debit_amount: leg.oreRounding,
           credit_amount: 0,
-          line_description: `Öresavrundning ${deductionLabel([leg])}-avdrag (${leg.requestName})`,
+          line_description: `Öresavrundning ${deductionLabel([leg])} (${leg.requestName})`,
         })),
       ...legs.map((leg) => ({
         account_number: '1513',
@@ -151,7 +162,7 @@ export async function createRotRutPayoutEntry(
   params: {
     requestId: string
     requestName: string
-    deductionType: 'rot' | 'rut'
+    deductionType: DeductionType
     paymentDate: string
     amount: number
     /** See RotRutPayoutLeg.oreRounding. */
@@ -206,7 +217,7 @@ export async function createRotRutReclaimEntry(
   params: {
     requestId: string
     requestName: string
-    deductionType: 'rot' | 'rut'
+    deductionType: DeductionType
     bookingDate: string
     /** One leg per invoice with a refused share; at least one, all > 0. */
     legs: RotRutReclaimLeg[]
@@ -223,10 +234,11 @@ export async function createRotRutReclaimEntry(
     throw new Error(`No open fiscal period found for booking date ${params.bookingDate}`)
   }
 
-  const label = params.deductionType === 'rut' ? 'RUT' : 'ROT'
-  const description = `Nekat ${label}-avdrag från Skatteverket (${params.requestName})`
+  // 'Nekat ROT-avdrag', 'Nekat RUT-avdrag' or 'Nekad skattereduktion grön teknik'.
+  const refused = (DEDUCTION_TYPE_LABELS[params.deductionType] ?? DEDUCTION_TYPE_LABELS.rot).refused
+  const description = `${refused} från Skatteverket (${params.requestName})`
   const legDescription = (leg: RotRutReclaimLeg) =>
-    `Nekat ${label}-avdrag faktura ${leg.invoiceNumber ?? leg.invoiceId}`
+    `${refused} faktura ${leg.invoiceNumber ?? leg.invoiceId}`
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,

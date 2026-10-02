@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Landmark } from 'lucide-react'
+import { Bot, Landmark } from 'lucide-react'
 import { AiConnectorDialog } from '@/components/onboarding/AiConnectorDialog'
 import {
   DropdownMenu,
@@ -15,7 +15,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import { useBranding } from '@/lib/branding/brand-context'
 import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { AI_CLIENTS, aiConnectAction, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, agentChipView, aiConnectAction, openAiConnector, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 
 /**
  * Kopplingar: the three things Att göra can be wired to (an AI agent, the
@@ -28,11 +28,11 @@ import { AI_CLIENTS, aiConnectAction, openAiConnector, type AiClient } from '@/l
  * connect action as a pill like every other control.
  */
 export function KopplingarChips({
-  aiClients,
+  aiConnection,
   hasBank,
   hasSkatteverket,
 }: {
-  aiClients: AiClient[]
+  aiConnection: AiConnection
   hasBank: boolean
   hasSkatteverket: boolean
 }) {
@@ -47,8 +47,12 @@ export function KopplingarChips({
   // Sandbox companies cannot reach Skatteverket (the sandbox blocks it), and
   // the chip is pointless without the extension or the plan capability.
   const showSkv = skvExtension && skvCapability && !isSandbox
-  const connectedAi = AI_CLIENTS.filter((c) => aiClients.includes(c.id))
-  const aiOn = connectedAi.length > 0
+  // On for any connected agent, named ones or not (agentChipView): an agent
+  // connected through a client we cannot name still reads as connected.
+  const agentChip = agentChipView(aiConnection)
+  const aiOn = agentChip.on
+  const agentLogos = AI_CLIENTS.filter((c) => agentChip.logos.includes(c.id))
+  const agentNames = AI_CLIENTS.filter((c) => agentChip.named.includes(c.id)).map((c) => c.name)
 
   function connect(client: AiClient) {
     const action = aiConnectAction(client, { origin: window.location.origin, appName })
@@ -56,22 +60,24 @@ export function KopplingarChips({
     else openAiConnector(action.open)
   }
 
-  const agentLogos = (aiOn ? connectedAi : AI_CLIENTS)
-
   return (
     <div className="px-1 pt-4 pb-2">
       <AiConnectorDialog action={connectAction} onClose={() => setConnectAction(null)} />
       <ul aria-label={t('kopplingar_title')} className="flex flex-wrap items-center gap-2">
         <Chip
           icon={
-            <span className="flex items-center -space-x-1">
-              {agentLogos.map((c) => (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img key={c.id} src={c.logo} alt="" className="h-4 w-4 rounded-full bg-background ring-1 ring-background" />
-              ))}
-            </span>
+            agentLogos.length > 0 ? (
+              <span className="flex items-center -space-x-1">
+                {agentLogos.map((c) => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img key={c.id} src={c.logo} alt="" className="h-4 w-4 rounded-full bg-background ring-1 ring-background" />
+                ))}
+              </span>
+            ) : (
+              <Bot className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />
+            )
           }
-          name={aiOn ? connectedAi.map((c) => c.name).join(', ') : t('kopplingar_agent')}
+          name={agentNames.length > 0 ? agentNames.join(', ') : t('kopplingar_agent')}
           status={aiOn ? t('kopplingar_agent_on') : t('kopplingar_agent_off')}
           action={aiOn ? null : (
             <DropdownMenu>

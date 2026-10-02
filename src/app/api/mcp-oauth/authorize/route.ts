@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { createAuthCode } from '@/lib/auth/oauth-codes'
-import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { mfaStepUpApplies, shouldEnforceMfa } from '@/lib/auth/mfa'
 import { getActiveCompanyId } from '@/lib/company/context'
 import {
   listUserCompaniesForPicker,
@@ -19,6 +19,7 @@ import {
   type RedirectUriResolution,
 } from '@/lib/auth/oauth-allowlist'
 import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
+import { requestCspNonce } from '@/lib/security/csp'
 import {
   ALL_SCOPES,
   API_KEY_SCOPES,
@@ -59,18 +60,17 @@ type ScopeParseResult =
  *     unknown: refusing the request is safer than silently dropping it back
  *     to defaults the caller didn't ask for (V10.2.6).
  *
- * The bare `mcp` marker is treated as "no granular scopes" and accepted for
- * backwards compatibility with Claude's connector: it falls through to
- * `undefined` so the read-only defaults apply.
+ * Marker scopes carry no granular request and are dropped before parsing:
+ * `mcp`, the one scope discovery advertises (Claude sends it bare), and
+ * `offline_access`, which Gemini adds to ask for a refresh token (every
+ * grant gets one anyway). A request of markers only is the same as no scope.
  */
+const MARKER_SCOPES: ReadonlySet<string> = new Set(['mcp', 'offline_access'])
+
 function parseRequestedScopes(scopeParam: string | null): ScopeParseResult {
   if (!scopeParam) return { kind: 'ok', scopes: undefined }
-  const requested = scopeParam.split(/\s+/).filter(Boolean)
+  const requested = scopeParam.split(/\s+/).filter((s) => s && !MARKER_SCOPES.has(s))
   if (requested.length === 0) return { kind: 'ok', scopes: undefined }
-  // The coarse-grained `mcp` marker is treated as "no granular request" so
-  // we can keep Claude's existing flow working unchanged.
-  const onlyMcp = requested.length === 1 && requested[0] === 'mcp'
-  if (onlyMcp) return { kind: 'ok', scopes: undefined }
   const valid = requested.filter((s): s is ApiKeyScope => s in API_KEY_SCOPES)
   if (valid.length === 0) {
     return {
@@ -127,22 +127,26 @@ function buildLoginRedirect(request: Request): Response {
  * MFA on every subsequent call: so the consent session itself must be AAL2.
  * The middleware MFA gate deliberately exempts /api/mcp-oauth/* (the token
  * endpoint is Bearer-only), which makes this route responsible for its own
- * step-up. Returns null when the session is AAL2 (or MFA isn't required),
- * otherwise a redirect to /mfa/verify (factor enrolled, session still AAL1)
- * or /mfa/enroll (no factor at all) that returns to this authorize URL.
+ * step-up. Returns null when the session is AAL2, or when the user has no
+ * verified factor and enrolment is not forced; otherwise a redirect to
+ * /mfa/verify (factor enrolled, session still AAL1) or /mfa/enroll (no factor
+ * while NEXT_PUBLIC_REQUIRE_MFA forces enrolment) that returns to this
+ * authorize URL. A user with a factor is stepped up whatever the flag says
+ * (mfaStepUpApplies): the key this consent mints must never come out of a
+ * password-only session of an enrolled account.
  *
  * The enrollment leg matters for accounts created inside the OAuth popup
  * (issue #1814): the middleware only forces enrollment once a company exists,
  * so a brand-new password account would otherwise consent at AAL1 and mint an
  * MFA-exempt key for an account with no second factor. BankID-linked accounts
- * are exempt via shouldEnforceMfa, same as everywhere else.
+ * are exempt, same as everywhere else.
  */
 async function requireAal2(
   supabase: SupabaseClient,
   user: User,
   request: Request,
 ): Promise<Response | null> {
-  if (!shouldEnforceMfa(user)) return null
+  if (!mfaStepUpApplies(user)) return null
   const url = new URL(request.url)
   const returnTo = `${url.pathname}${url.search}`
   const stepUp = (page: '/mfa/verify' | '/mfa/enroll') =>
@@ -157,14 +161,22 @@ async function requireAal2(
   if (aal.currentLevel === 'aal2') return null
   if (aal.nextLevel === 'aal2') return stepUp('/mfa/verify')
 
-  // nextLevel below aal2 should mean no verified factor exists. If one does
-  // exist anyway (inconsistent answer), step up rather than enroll a second
-  // factor. Otherwise enroll: mirrors the middleware gate (lib/supabase/
-  // middleware.ts), which skips zero-company users and so never ran for an
-  // account created inside the popup.
-  const { data: factors } = await supabase.auth.mfa.listFactors()
-  const hasVerifiedFactor = factors?.totp?.some((f) => f.status === 'verified') ?? false
-  return stepUp(hasVerifiedFactor ? '/mfa/verify' : '/mfa/enroll')
+  // nextLevel below aal2 should mean no verified factor exists, but nextLevel
+  // is computed from the cookie's copy of the factor list, which whoever
+  // holds the password can edit. So "no factor" is confirmed with the auth
+  // server before consent may pass at AAL1, and an unanswered lookup fails
+  // closed to the verify page. A factor found there means step up, never
+  // enroll a second one. Without one, enrol only while enrolment is forced:
+  // mirrors the middleware gate (lib/supabase/middleware.ts), which skips
+  // zero-company users and so never ran for an account created inside the
+  // popup.
+  const { data: factors, error: factorsError } = await supabase.auth.mfa.listFactors()
+  if (factorsError || !factors) return stepUp('/mfa/verify')
+  const hasVerifiedFactor = [...(factors.all ?? []), ...(factors.totp ?? [])].some(
+    (f) => f.status === 'verified',
+  )
+  if (hasVerifiedFactor) return stepUp('/mfa/verify')
+  return shouldEnforceMfa(user) ? stepUp('/mfa/enroll') : null
 }
 
 function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Response {
@@ -338,8 +350,10 @@ export async function GET(request: Request) {
   // makes the inline block executable while keeping the rest of the page
   // immune to script injection: without this the consent page is
   // incompatible with a strict CSP and counts as unsafe-inline (ASVS V3.3,
-  // SOC 2 CC6.1). The nonce is regenerated per response.
-  const cspNonce = crypto.randomBytes(16).toString('base64')
+  // SOC 2 CC6.1). Fresh per request: the proxy's own nonce for this request,
+  // so the script runs under the proxy's CSP header as well as under the one
+  // set below (a self-hosted `next start` delivers only the proxy's).
+  const cspNonce = requestCspNonce(request.headers)
 
   // Bind the requested scope to the consent display. The HMAC signature is
   // verified on POST so a tampered form submission cannot widen the grant
@@ -1143,7 +1157,7 @@ export async function POST(request: Request) {
   //          (RFC 6749 §3.3 strict). A client that asked for only read scopes
   //          can never end up with write grants, even if the user tampered
   //          with the form (least-privilege, SOC 2 CC6.3, NIST AC-6).
-  //        • If the client passed no scope (or only the `mcp` marker), the
+  //        • If the client passed no scope (or only marker scopes), the
   //          ceiling = ALL_SCOPES. The resource owner has full discretion at
   //          consent time, which RFC 6749 §3.3 permits ("based on … the
   //          resource owner's instructions"). The silent fallback when the
@@ -1326,6 +1340,8 @@ function describeClient(
         return { name: 'ChatGPT (OpenAI)', tag: 'Verifierad', verified: true }
       case 'grok':
         return { name: 'Grok (xAI)', tag: 'Verifierad', verified: true }
+      case 'gemini':
+        return { name: 'Gemini (Google)', tag: 'Verifierad', verified: true }
       case 'cursor':
         return { name: 'Cursor (Anysphere)', tag: 'Verifierad', verified: true }
       case 'cursor_deeplink':

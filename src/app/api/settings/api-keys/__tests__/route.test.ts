@@ -7,7 +7,7 @@ import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 // requireWritePermission. Mock all three so we can drive each branch.
 
 const mockSupabase = {
-  auth: { getUser: vi.fn() },
+  auth: { getUser: vi.fn(), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   from: vi.fn(),
 }
 

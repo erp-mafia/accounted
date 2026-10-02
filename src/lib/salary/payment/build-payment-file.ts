@@ -43,9 +43,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getBranding } from '@/lib/branding/service'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
-import { generatePain001 } from './pain001-generator'
+import { generatePain001, pain001TransactionId } from './pain001-generator'
 import type { Pain001CompanyData, Pain001Employee } from './pain001-generator'
-import { generateBgLb } from './bg-lb-generator'
+import { generateBgLb, utbetalningsnummer } from './bg-lb-generator'
 import type { BgLbCompanyData, BgLbEmployee } from './bg-lb-generator'
 import { effectiveNetPayout } from './effective-net'
 import {
@@ -53,12 +53,14 @@ import {
   describePayeeAccountProblems,
   lookupBicByBankName,
   lookupBicByClearing,
+  maskPayeeAccount,
   normalizeBankNumber,
   payeeAccountProblem,
 } from './bank-account'
 
-export const SALARY_PAYMENT_FILE_FORMATS = ['pain001', 'bg_lb'] as const
-export type SalaryPaymentFileFormat = (typeof SALARY_PAYMENT_FILE_FORMATS)[number]
+import { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat } from './payment-format'
+
+export { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat }
 
 /** Run statuses a payment file may be generated from. */
 export const SALARY_PAYMENT_FILE_ALLOWED_STATUSES = ['approved', 'paid', 'booked'] as const
@@ -96,6 +98,33 @@ export type SalaryPaymentFileErrorCode =
 
 export type SalaryPaymentFileLoadStage = 'run' | 'company' | 'settings' | 'employees'
 
+/**
+ * One payment the file carries, in file order: the banklista line. Built from
+ * the same payee array the generator wrote, so the list and the file cannot
+ * disagree.
+ */
+export interface SalaryPaymentFilePayee {
+  employeeId: string
+  name: string
+  /** Clearing number and the last four digits of the account (maskPayeeAccount). */
+  maskedAccount: string
+  /** The amount in the file, rounded to öre. */
+  amount: number
+  /**
+   * What ties the line to its record in the file: the EndToEndId (pain.001)
+   * or the utbetalningsnummer on the TK40/TK14 pair (Bankgirot LB).
+   */
+  reference: string
+}
+
+/** The payer as the file names it. */
+export interface SalaryPaymentFilePayer {
+  name: string
+  orgNumber: string | null
+  /** The debtor IBAN (pain.001) or the sender bankgiro (LB), as written in the file. */
+  account: string
+}
+
 export interface SalaryPaymentFileError {
   ok: false
   code: SalaryPaymentFileErrorCode
@@ -128,7 +157,11 @@ export interface SalaryPaymentFileOk {
   periodLabel: string
   /** Employees that appear in the file (positive payout). */
   employeeCount: number
+  /** Sum of `payees[].amount`: the file's control sum (pain.001 CtrlSum, LB TK29). */
   totalAmount: number
+  /** The payments the file carries, in file order (the banklista). */
+  payees: SalaryPaymentFilePayee[]
+  payer: SalaryPaymentFilePayer
   /** Non-blocking Swedish annotations the caller should surface. */
   warnings: string[]
   /** Value written to payment_file_generated_at; null on a dry run. */
@@ -239,6 +272,20 @@ export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): Salary
     case 'ARCHIVE_FAILED':
     case 'DB_ERROR':
       return null
+  }
+}
+
+/** The bank-list line for one payee the generator wrote. */
+function payeeLine(
+  e: { employeeId: string; name: string; clearingNumber: string; bankAccountNumber: string; netSalary: number },
+  reference: string,
+): SalaryPaymentFilePayee {
+  return {
+    employeeId: e.employeeId,
+    name: e.name,
+    maskedAccount: maskPayeeAccount(e.clearingNumber, e.bankAccountNumber),
+    amount: e.netSalary,
+    reference,
   }
 }
 
@@ -362,7 +409,13 @@ export async function buildSalaryPaymentFile(
   // 7. Bank details, but only for employees who actually appear in the file
   // (positive payout). A zero-net employee is filtered out below, so missing
   // bank details for them must not block the file.
-  const withNet = runEmployees.map((sre) => ({ sre, effectiveNet: effectiveNetPayout(sre) }))
+  // Rounded to öre here, once: this is the amount every generator writes
+  // and the bank list shows, so the per-line amounts and the control sum are
+  // computed from the same numbers.
+  const withNet = runEmployees.map((sre) => ({
+    sre,
+    effectiveNet: Math.round(effectiveNetPayout(sre) * 100) / 100,
+  }))
   const paid = withNet.filter(({ effectiveNet }) => effectiveNet > 0)
   const skipped = withNet.length - paid.length
 
@@ -414,7 +467,14 @@ export async function buildSalaryPaymentFile(
     }
     // The LB file ties account to amount with an utbetalningsnummer built on
     // the employee's specification number; pain.001 ignores it.
-    return { name, clearingNumber, bankAccountNumber, payeeNumber: emp.specification_number ?? 0, netSalary: effectiveNet }
+    return {
+      employeeId: sre.employee_id,
+      name,
+      clearingNumber,
+      bankAccountNumber,
+      payeeNumber: emp.specification_number ?? 0,
+      netSalary: effectiveNet,
+    }
   })
 
   const totalAmount = Math.round(employees.reduce((sum, e) => sum + e.netSalary, 0) * 100) / 100
@@ -426,6 +486,7 @@ export async function buildSalaryPaymentFile(
   let filename: string
   let contentType: SalaryPaymentFileOk['contentType']
   let charset: SalaryPaymentFileOk['charset']
+  let payees: SalaryPaymentFilePayee[]
   try {
     if (format === 'pain001') {
       const messageId = `${getBranding().appName.toUpperCase()}-${companyRow.org_number?.replace('-', '')}-${periodLabel}`
@@ -437,6 +498,7 @@ export async function buildSalaryPaymentFile(
       filename = `pain001_lon_${periodLabel}.xml`
       contentType = 'application/xml'
       charset = 'utf-8'
+      payees = employees.map((e, i) => payeeLine(e, pain001TransactionId(messageId, i)))
     } else {
       const result = generateBgLb(bgLbCompany as BgLbCompanyData, employees as BgLbEmployee[], {
         paymentDate: runRow.payment_date,
@@ -446,6 +508,9 @@ export async function buildSalaryPaymentFile(
       filename = result.filename
       contentType = 'text/plain'
       charset = 'iso-8859-1'
+      // The generator has already accepted every payee number, so this
+      // cannot throw here; it is the number the TK40/TK14 pair carries.
+      payees = employees.map((e) => payeeLine(e, utbetalningsnummer(e.payeeNumber)))
     }
   } catch (err) {
     return fail(
@@ -476,6 +541,14 @@ export async function buildSalaryPaymentFile(
     periodLabel,
     employeeCount: employees.length,
     totalAmount,
+    payees,
+    payer: pain001Company
+      ? { name: pain001Company.name, orgNumber: companyRow.org_number, account: pain001Company.iban }
+      : {
+          name: (bgLbCompany as BgLbCompanyData).name,
+          orgNumber: companyRow.org_number,
+          account: (bgLbCompany as BgLbCompanyData).senderBankgiro,
+        },
     warnings,
   }
 

@@ -61,6 +61,7 @@ function buildMockSupabase(options: {
   const supabase = {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user } }),
+      mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) },
     },
     from: vi.fn().mockImplementation((table: string) => {
       if (table === 'journal_entries') {

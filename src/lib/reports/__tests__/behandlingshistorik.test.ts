@@ -825,6 +825,60 @@ describe('buildBehandlingshistorikExport', () => {
 // Behandlingsregler and program versions (BFNAR 2013:2 p. 9.16, 2nd paragraph)
 // ============================================================
 
+describe('auditRowToEvent: mailboxes the receipt hunt reads', () => {
+  it('shows who connected which mailbox, with the access granted', () => {
+    const event = auditRowToEvent(
+      auditRow({
+        table_name: 'mail_connections',
+        action: 'INSERT',
+        new_state: {
+          email_address: 'ekonomi@example.se',
+          provider: 'gmail',
+          scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+        },
+      }),
+    )
+    expect(event).toMatchObject({
+      category: 'atkomst',
+      code: 'mail_connection.connected',
+      event: 'Brevlåda ansluten',
+      object: 'ekonomi@example.se',
+      details: ['Behörighet: https://www.googleapis.com/auth/gmail.readonly'],
+      actor: { type: 'user', user_id: 'user-1' },
+    })
+  })
+
+  it('shows a disconnect and whether the provider confirmed the access was withdrawn', () => {
+    const event = auditRowToEvent(
+      auditRow({
+        table_name: 'mail_connections',
+        action: 'DELETE',
+        old_state: { email_address: 'ekonomi@example.se', provider: 'gmail' },
+        new_state: { provider_revocation: 'revoked' },
+      }),
+    )
+    expect(event).toMatchObject({
+      category: 'atkomst',
+      code: 'mail_connection.disconnected',
+      event: 'Brevlåda frånkopplad',
+      object: 'ekonomi@example.se',
+      details: ['Återkallad hos leverantören: ja'],
+    })
+  })
+
+  it('still shows a disconnect written before the outcome was recorded', () => {
+    const event = auditRowToEvent(
+      auditRow({
+        table_name: 'mail_connections',
+        action: 'DELETE',
+        old_state: { email_address: 'ekonomi@example.se', provider: 'gmail' },
+        new_state: null,
+      }),
+    )
+    expect(event).toMatchObject({ code: 'mail_connection.disconnected', details: [] })
+  })
+})
+
 describe('auditRowToEvent: behandlingsregler', () => {
   it('mapping_rules: a rule change names the rule and diffs the accounts', () => {
     const ins = auditRowToEvent(

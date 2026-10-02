@@ -11,6 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { TD_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
+import { canOfferSplitMatch } from '@/lib/transactions/split-match'
 import {
   AlertCircle,
   ArrowRightLeft,
@@ -302,7 +303,10 @@ export default function TransactionInboxCard({
       documentId: attachedDocumentId,
       hasHandler: !!onDetachDocument,
     })
-  const showSplitItem = showInvoiceMatchButton && !!onOpenSplitMatch
+  // Not gated on the invoice suggestion: one payment for several invoices is
+  // exactly when the matcher still suggests a single one (see split-match.ts).
+  const showSplitItem =
+    canOfferSplitMatch({ isUnbooked, hasRotRutPayoutMatch, hasExpensePayoutMatch }) && !!onOpenSplitMatch
   const showEditItem = isTitleEditable && !!onEditTitle
   // Moving between cash accounts only makes sense with somewhere to move TO,
   // and only for rows the server would accept: same movable gate as the title
