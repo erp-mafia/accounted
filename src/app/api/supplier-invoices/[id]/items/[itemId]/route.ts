@@ -4,6 +4,9 @@ import { validateBody } from '@/lib/api/validate'
 import { SupplierInvoiceItemAccountSchema } from '@/lib/api/schemas'
 import { moveSupplierInvoiceItemAccount } from '@/lib/supplier-invoices/item-account'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export { planAccountMove } from '@/lib/supplier-invoices/item-account'
 

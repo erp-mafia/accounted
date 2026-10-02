@@ -8,6 +8,9 @@ import {
   reconciliationLinksBodyRefinement,
 } from '@/lib/reconciliation/schemas'
 import { matchPairs } from '@/lib/reconciliation/actions'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 const ReconciliationLinksBodySchema = z
   .object({

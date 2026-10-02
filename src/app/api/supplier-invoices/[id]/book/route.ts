@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { bookSupplierInvoice } from '@/lib/supplier-invoices/book-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * POST /api/supplier-invoices/[id]/book

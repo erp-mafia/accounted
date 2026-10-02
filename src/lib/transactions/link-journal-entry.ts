@@ -17,6 +17,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
+import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
+import { roundOre } from '@/lib/money'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
@@ -484,17 +486,18 @@ export async function linkTransactionToJournalEntry(
   })
 
   if (invoice && invoiceId) {
+    const settledInvoice = {
+      ...invoice,
+      status: newStatus,
+      paid_at: paidAt,
+      paid_amount: newPaidAmount,
+      remaining_amount: newRemaining,
+    } as Invoice
     try {
       eventBus.emit({
         type: 'invoice.match_confirmed',
         payload: {
-          invoice: {
-            ...invoice,
-            status: newStatus,
-            paid_at: paidAt,
-            paid_amount: newPaidAmount,
-            remaining_amount: newRemaining,
-          } as Invoice,
+          invoice: settledInvoice,
           transaction: {
             ...transaction,
             journal_entry_id: journalEntryId,
@@ -510,6 +513,29 @@ export async function linkTransactionToJournalEntry(
       })
     } catch {
       /* non-critical */
+    }
+    // Linking the payment that settles the invoice in full is its
+    // invoice.paid transition; a partial link is not. The CAS update above
+    // admits one winner, so this fires once. Subscribers get the full
+    // committed row like every other settlement door (the narrow read above
+    // lacks e.g. stripe_payment_link_id, which the Stripe handler needs), so
+    // it is re-read on this transition only. Same-currency only (guarded
+    // above), so the applied amount is in the invoice currency.
+    if (newStatus === 'paid') {
+      const { data: committedInvoice } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('id', invoiceId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      await emitInvoicePaidIfSettled({
+        newStatus,
+        invoice: (committedInvoice as Invoice | null) ?? settledInvoice,
+        paymentAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
+        paymentDate: transaction.date as string,
+        userId,
+        companyId,
+      })
     }
   }
 

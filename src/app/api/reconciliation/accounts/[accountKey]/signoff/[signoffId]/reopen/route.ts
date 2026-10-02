@@ -4,6 +4,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { AccountKeySchema } from '@/lib/reconciliation/schemas'
 import { ReconciliationSignoffError, reopenSignoff } from '@/lib/reconciliation/signoff'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 const ReopenBodySchema = z.object({ reason: z.string().max(2000).nullable().optional() })
 

@@ -152,6 +152,29 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
       description: 'Use a live key for this endpoint, or pick an endpoint that supports dry-run.',
     },
   },
+  // Webhook endpoint ownership handshake (lib/webhooks/verification.ts).
+  WEBHOOK_NOT_VERIFIED: {
+    httpStatus: 409,
+    message_sv:
+      'Webhookens mottagaradress är inte verifierad. Inga händelser skickas dit förrän den har klarat verifieringen.',
+    message_en:
+      'The webhook endpoint has not passed the ownership verification handshake, so no events are sent to it.',
+    remediation: {
+      description:
+        'Make the endpoint answer the webhook.verification request with 2xx and {"challenge": "<the value sent>"}, then call POST /api/v1/companies/{companyId}/webhooks/{id}/verify.',
+    },
+  },
+  WEBHOOK_VERIFICATION_FAILED: {
+    httpStatus: 422,
+    message_sv:
+      'Webhookens mottagaradress klarade inte verifieringen. Den måste svara med samma challenge-värde som skickades.',
+    message_en:
+      'The webhook endpoint did not pass the verification handshake: it must answer with 2xx and {"challenge": "<the value sent>"} within 10 seconds.',
+    remediation: {
+      description:
+        'Read details.reason, fix the receiver, then call POST /api/v1/companies/{companyId}/webhooks/{id}/verify again.',
+    },
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────

@@ -800,4 +800,69 @@ describe('linkInvoiceToVoucher', () => {
     expect(result.ok).toBe(true)
     expect(mockClearSuggestions).not.toHaveBeenCalled()
   })
+
+  it('emits invoice.paid once when the link settles the invoice in full', async () => {
+    const paid = vi.fn()
+    eventBus.on('invoice.paid', paid)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'pay-1',
+        invoice_status: 'paid',
+        paid_amount: 1000,
+        remaining_amount: 0,
+        payment_amount: 1000,
+        journal_entry_id: 'je-1',
+        currency: 'SEK',
+        payment_date: '2026-06-01',
+      },
+      error: null,
+    })
+    enqueue({ data: { id: 'inv-1', status: 'paid', remaining_amount: 0 }, error: null }) // post-link re-fetch
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(paid).toHaveBeenCalledTimes(1)
+    expect(paid).toHaveBeenCalledWith({
+      invoice: expect.objectContaining({ id: 'inv-1', status: 'paid' }),
+      paymentAmount: 1000,
+      paymentDate: '2026-06-01',
+      userId: 'user-1',
+      companyId: 'company-1',
+    })
+  })
+
+  it('does not emit invoice.paid when the link only pays part of the invoice', async () => {
+    const paid = vi.fn()
+    eventBus.on('invoice.paid', paid)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'pay-1',
+        invoice_status: 'partially_paid',
+        paid_amount: 400,
+        remaining_amount: 600,
+        payment_amount: 400,
+        journal_entry_id: 'je-1',
+        currency: 'SEK',
+        payment_date: '2026-06-01',
+      },
+      error: null,
+    })
+    enqueue({ data: { id: 'inv-1', status: 'partially_paid', remaining_amount: 600 }, error: null })
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(paid).not.toHaveBeenCalled()
+  })
 })

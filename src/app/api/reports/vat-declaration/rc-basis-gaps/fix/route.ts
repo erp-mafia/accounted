@@ -7,6 +7,9 @@ import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import type { CreateJournalEntryLineInput, JournalEntryLine } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * POST /api/reports/vat-declaration/rc-basis-gaps/fix

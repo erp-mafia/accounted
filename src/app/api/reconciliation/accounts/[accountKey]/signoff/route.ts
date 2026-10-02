@@ -6,6 +6,9 @@ import { listSignoffs } from '@/lib/reconciliation/signoff-store'
 import { ReconciliationSignoffError, signOffAccount } from '@/lib/reconciliation/signoff'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ISO_DATE_RE } from '@/lib/invariants'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 const SignoffBodySchema = z.object({
   through_date: z.string().regex(ISO_DATE_RE),

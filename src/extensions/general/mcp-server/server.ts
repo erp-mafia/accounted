@@ -204,6 +204,7 @@ import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import { loadSkillProvenance, skillBodyHash, oauthActorLabel } from '@/lib/agent-skills/provenance'
 import { loadCompanySkillRows, ownSkill } from '@/lib/agent-skills/company-skills'
+import { skillAppliesToCompany } from '@/lib/agent-skills/applicability'
 import { buildOwnSkill, buildOwnText, OWN_SKILL_COPY } from '@/lib/agent-skills/own-skill-body'
 import { loadDocumentClaims, sharedDocumentWarning } from '@/lib/receipt-hunt/document-claims'
 import { SkillBodySchema } from '@/lib/agent-skills/validation'
@@ -399,6 +400,8 @@ import {
   reverseLines,
   undatedSettlementsNote,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
+import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
+import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
 import { CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
@@ -3655,18 +3658,12 @@ export async function computeVatCloseCheck(
   }
 
   // 4) Blocker scans: run in parallel
-  const [uncategorizedRes, unapprovedRes, recon, missingUnderlag] = await Promise.all([
-    // is_ignored = false: a transaction the user ignored on purpose (private,
-    // duplicate feed row) is not waiting to be booked, and the same predicate
-    // drives the Att göra worklist (lib/worklist/categories.ts). The column is
-    // NOT NULL DEFAULT false, so eq is exact.
-    supabase
-      .from('transactions')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .gte('date', start).lte('date', end)
-      .is('journal_entry_id', null)
-      .eq('is_ignored', false),
+  const [unbooked, unapprovedRes, recon, missingUnderlag] = await Promise.all([
+    // The shared "no verifikat" predicate (lib/transactions/unbooked.ts), the
+    // same one the period-lock guard, attention and report data_status use.
+    // The local journal_entry_id IS NULL count it replaced also counted
+    // private rows and bulk-booked rows anchored via transaction_voucher_links.
+    countUnbookedBankTransactions(supabase, companyId, { fromDate: start, toDate: end }),
     supabase
       .from('supplier_invoices')
       .select('id', { count: 'exact', head: true })
@@ -3714,13 +3711,13 @@ export async function computeVatCloseCheck(
       hint: `Företagets räkenskapsår börjar månad ${configuredStartMonth}. Kontrollera räkenskapsåren med gnubok_list_fiscal_periods och ange year = det år räkenskapsåret slutar.`,
     })
   }
-  const uncategorizedCount = uncategorizedRes.count ?? 0
+  const uncategorizedCount = unbooked.total
   if (uncategorizedCount > 0) {
     blockers.push({
       kind: 'uncategorized_transactions',
       severity: 'high',
       count: uncategorizedCount,
-      message: `${uncategorizedCount} okategoriserade banktransaktioner i perioden`,
+      message: `${uncategorizedCount} banktransaktioner i perioden saknar verifikat`,
       hint: UNCATEGORIZED_TRANSACTIONS_HINT,
     })
   }
@@ -6295,14 +6292,7 @@ export const tools: McpTool[] = [
       // applicability declaration are always shown (universal).
       const applicable = includeAll
         ? tagFiltered
-        : tagFiltered.filter((s) => {
-            if (!s.applicability) return true
-            const a = s.applicability
-            if (a.entity_type && a.entity_type !== 'both' && entityType && entityType !== a.entity_type) return false
-            if (a.requires?.includes('employees') && !hasEmployees) return false
-            if (a.requires?.includes('vat_registered') && !vatRegistered) return false
-            return true
-          })
+        : tagFiltered.filter((s) => skillAppliesToCompany(s.applicability, { entityType, hasEmployees, vatRegistered }))
 
       return {
         skills: applicable.map((s) => ({
@@ -9890,15 +9880,18 @@ export const tools: McpTool[] = [
       // default silently truncated any period with >1000 entry lines (wrong
       // sums, false "not balanced"), and it ignored opening balances.
       // generateTrialBalance paginates and rolls IB forward.
-      const trialBalance = await generateTrialBalance(
-        supabase,
-        companyId,
-        period.id,
-        // Saldobalans is the ledger as posted, resultatavslut included.
-        dimFilter.filter
-          ? { closingEntry: 'include' as const, dimensions: dimFilter.filter }
-          : { closingEntry: 'include' as const },
-      )
+      const [trialBalance, dataStatus] = await Promise.all([
+        generateTrialBalance(
+          supabase,
+          companyId,
+          period.id,
+          // Saldobalans is the ledger as posted, resultatavslut included.
+          dimFilter.filter
+            ? { closingEntry: 'include' as const, dimensions: dimFilter.filter }
+            : { closingEntry: 'include' as const },
+        ),
+        buildReportDataStatus(supabase, companyId, { periodId: period.id }),
+      ])
 
       const rows = trialBalance.rows
         .map((r) => {
@@ -9935,6 +9928,7 @@ export const tools: McpTool[] = [
           : {}),
         ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
         ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
+        data_status: dataStatus,
       }
     },
   },
@@ -10089,8 +10083,9 @@ export const tools: McpTool[] = [
 
       // Same inputs as the KPI page (src/app/api/reports/kpi/route.ts): the
       // company's account overrides, receivables as of the range end and
-      // payment days over payments inside the range.
-      const [accountOverrides, incomeStatement, trialBalance, arLedger, monthlyBreakdown, paidInvoices] =
+      // payment days over payments inside the range. data_status covers the
+      // same range as the figures.
+      const [accountOverrides, incomeStatement, trialBalance, arLedger, monthlyBreakdown, paidInvoices, dataStatus] =
         await Promise.all([
           fetchKpiAccountOverrides(supabase, companyId),
           generateIncomeStatement(supabase, companyId, period.id, range),
@@ -10098,6 +10093,7 @@ export const tools: McpTool[] = [
           generateARLedger(supabase, companyId, receivablesAsOf),
           generateMonthlyBreakdown(supabase, companyId, period.id),
           fetchPaidInvoicesInRange(supabase, companyId, rangeStart, rangeEnd),
+          buildReportDataStatus(supabase, companyId, { periodId: period.id, ...range }),
         ])
 
       const report = {
@@ -10124,6 +10120,7 @@ export const tools: McpTool[] = [
         total_revenue: incomeStatement.total_revenue,
         total_expenses: incomeStatement.total_expenses,
         months: monthlyBreakdown.months,
+        data_status: dataStatus,
       }
       return pickKpiMetrics(report, metrics)
     },
@@ -10165,15 +10162,18 @@ export const tools: McpTool[] = [
       const range = parseReportRangeArgs(args, period, { from: 'from_date', to: 'to_date' })
       const dimFilter = await resolveReportDimensionFilter(supabase, companyId, args.dimensions)
 
-      const result = await generateIncomeStatement(
-        supabase,
-        companyId,
-        period.id,
-        {
-          ...range,
-          ...(dimFilter.filter ? { dimensions: dimFilter.filter } : {}),
-        },
-      )
+      const [result, dataStatus] = await Promise.all([
+        generateIncomeStatement(
+          supabase,
+          companyId,
+          period.id,
+          {
+            ...range,
+            ...(dimFilter.filter ? { dimensions: dimFilter.filter } : {}),
+          },
+        ),
+        buildReportDataStatus(supabase, companyId, { periodId: period.id, ...range }),
+      ])
       // Echo the effective range, not the fiscal-period bounds.
       result.period = {
         start: range.fromDate ?? period.period_start,
@@ -10185,6 +10185,7 @@ export const tools: McpTool[] = [
         ...result,
         ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
         ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
+        data_status: dataStatus,
       }
     },
   },
@@ -12005,15 +12006,19 @@ export const tools: McpTool[] = [
       rejectUnknownArgs(args, ['period_id', 'as_of_date'])
       const range = parseReportRangeArgs(args, period, { to: 'as_of_date' })
 
-      const result = await generateBalanceSheet(supabase, companyId, period.id, {
-        toDate: range.toDate,
-      })
+      const [result, dataStatus] = await Promise.all([
+        generateBalanceSheet(supabase, companyId, period.id, {
+          toDate: range.toDate,
+        }),
+        buildReportDataStatus(supabase, companyId, { periodId: period.id, toDate: range.toDate }),
+      ])
 
       return {
         period_name: period.name,
         ...result,
         // Echo the effective window: cumulative from period start to as_of_date.
         period: { start: period.period_start, end: range.toDate ?? period.period_end },
+        data_status: dataStatus,
       }
     },
   },
@@ -12059,18 +12064,22 @@ export const tools: McpTool[] = [
 
       const dimFilter = await resolveReportDimensionFilter(supabase, companyId, args.dimensions)
 
-      const report = await generateGeneralLedger(
-        supabase,
-        companyId,
-        periodId!,
-        accountFrom,
-        accountTo,
-        dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
-      )
+      const [report, dataStatus] = await Promise.all([
+        generateGeneralLedger(
+          supabase,
+          companyId,
+          periodId!,
+          accountFrom,
+          accountTo,
+          dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+        ),
+        buildReportDataStatus(supabase, companyId, { periodId: periodId! }),
+      ])
       return {
         ...report,
         ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
         ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
+        data_status: dataStatus,
       }
     },
   },
@@ -22161,7 +22170,8 @@ export const tools: McpTool[] = [
       }
 
       const { parseSIEFile, validateSIEFile } = await import('@/lib/import/sie-parser')
-      const { suggestMappings, getMappingStats, isSystemAccount } = await import('@/lib/import/account-mapper')
+      const { getMappingStats, isSystemAccount } = await import('@/lib/import/account-mapper')
+      const { suggestSIEMappings } = await import('@/lib/import/sie-preview-mappings')
       const { scanSieForCp1252Artifacts, formatSieArtifactWarning } = await import('@/lib/import/sie-artifact-scan')
       const { generateImportPreview, checkDuplicateImport, checkDuplicatePeriodImport } = await import('@/lib/import/sie-import')
       const { BAS_REFERENCE } = await import('@/lib/bookkeeping/bas-data')
@@ -22231,10 +22241,14 @@ export const tools: McpTool[] = [
         .from('sie_account_mappings')
         .select('*')
         .eq('company_id', companyId)
-      const mappings = suggestMappings(
-        bookkeepingAccounts,
+      // The dashboard upload's own decision (#3312), so the mappings an agent
+      // passes on to gnubok_import_sie are the ones the job accepts: class 9
+      // amounts to 2999, also over a stored class 9 mapping.
+      const { mappings } = suggestSIEMappings(
+        parsed,
         BAS_REFERENCE,
-        (storedMappings as import('@/lib/import/types').SIEAccountMappingRecord[]) || undefined
+        (storedMappings as import('@/lib/import/types').SIEAccountMappingRecord[]) || undefined,
+        bookkeepingAccounts
       )
       const mappingStats = getMappingStats(mappings)
       const preview = generateImportPreview(parsed, mappings)
@@ -25954,6 +25968,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice. Refund via gnubok_credit_supplier_invoice.',
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report, plus _ar_ledger / _supplier_ledger through gnubok_call_tool: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
+            '• Trust in figures: gnubok_get_trial_balance, _income_statement, _balance_sheet, _kpi_report and _general_ledger return data_status (company-wide for the range, also on filtered reports). When data_status.preliminary is true, say the figures are preliminary and mention the caveats that bear on the question; do not recite them all. When data_status.unavailable is true, say the completeness of the figures could not be checked.',
             '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) opens the approval queue where the user approves/rejects with a click. All also return structured data; other clients ignore the UI and use the data.',
             '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',

@@ -26,10 +26,54 @@ If you've used [Stripe webhooks](https://docs.stripe.com/webhooks), the model is
 ## Lifecycle
 
 1. **Register a receiver** with [\`POST /api/v1/companies/{companyId}/webhooks\`](/docs/api/reference/webhooks#post-webhooks-create). The response includes an HMAC signing secret returned **exactly once**: store it on the receiver side immediately. If you lose it, rotate it with [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/rotate-secret\`](/docs/api/reference/webhooks#post-webhooks-rotate_secret): a fresh secret is issued in place and the old one is invalidated immediately, with no change to the webhook's id or delivery history.
-2. **Accounted emits events** internally (e.g. an invoice is marked paid via the dashboard or another API call). The webhook handler enqueues a delivery row.
-3. **The dispatcher runs immediately after the event**, signs the payload with HMAC-SHA256, and POSTs to your URL with a 10-second timeout. A cron sweep every minute picks up anything the immediate pass did not get to, so first-attempt latency is normally a second or two but is never guaranteed to be: treat delivery as prompt, not synchronous.
-4. **Your receiver verifies the signature**, processes the event idempotently, and returns 2xx.
-5. **Failed deliveries retry** at \`1m / 5m / 30m / 2h / 12h / 24h / 48h\` (7 retries, ~87 hours total, about 3.6 days). After all attempts the delivery is marked \`dead\`. HTTP 410 from your receiver short-circuits to \`dead\` immediately and **auto-disables** the webhook.
+2. **Prove you own the URL.** A new webhook starts with \`verification_status: "pending"\` and receives nothing until its URL passes the [verification handshake](#endpoint-verification): Accounted POSTs a signed \`webhook.verification\` event and your receiver answers with the challenge it contains. Run it with [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/verify\`](/docs/api/reference/webhooks#post-webhooks-verify) once your receiver handles it.
+3. **Accounted emits events** internally (e.g. an invoice is marked paid via the dashboard or another API call). The webhook handler enqueues a delivery row.
+4. **The dispatcher runs immediately after the event**, signs the payload with HMAC-SHA256, and POSTs to your URL with a 10-second timeout. A cron sweep every minute picks up anything the immediate pass did not get to, so first-attempt latency is normally a second or two but is never guaranteed to be: treat delivery as prompt, not synchronous.
+5. **Your receiver verifies the signature**, processes the event idempotently, and returns 2xx.
+6. **Failed deliveries retry** at \`1m / 5m / 30m / 2h / 12h / 24h / 48h\` (7 retries, ~87 hours total, about 3.6 days). After all attempts the delivery is marked \`dead\`. HTTP 410 from your receiver short-circuits to \`dead\` immediately and **auto-disables** the webhook.
+
+## Endpoint verification
+
+Before Accounted delivers events to a URL, the URL has to show that whoever runs it wants them. This is a challenge-response handshake, required for every new webhook and whenever \`webhook_url\` changes.
+
+**The request.** Accounted POSTs to your \`webhook_url\` exactly like a delivery: same headers, same \`X-Gnubok-Signature\` (signed with the webhook's own secret, so verify it as usual), same envelope. \`X-Gnubok-Event\` and \`type\` are \`webhook.verification\`, and \`data.object\` carries a random challenge:
+
+\`\`\`json
+{
+  "id": "5b0e8c1e-3f5a-4d0c-9d7e-2a61c1f0b9a4",
+  "type": "webhook.verification",
+  "api_version": "2026-05-12",
+  "created": 1778846400,
+  "data": {
+    "object": {
+      "webhook_id": "a8f1e4c2-3b5d-4e6f-8a90-1b2c3d4e5f60",
+      "challenge": "k3JvNfQm7Zx2cW8pLr5TbY1uHs9DgE4aVq6oMn0iXtA"
+    }
+  },
+  "previous_attributes": null
+}
+\`\`\`
+
+**The answer.** Within 10 seconds, without a redirect, respond with any \`2xx\` status and a JSON body whose top-level \`challenge\` is the value you received:
+
+\`\`\`json
+{ "challenge": "k3JvNfQm7Zx2cW8pLr5TbY1uHs9DgE4aVq6oMn0iXtA" }
+\`\`\`
+
+The challenge is nested in the request but must come back at the top level: echoing the request body back does not pass. The response is read up to 4 KB; the \`Content-Type\` is not checked. Anything else (another status, a timeout, a redirect, no or a different \`challenge\`) fails the attempt and nothing is delivered.
+
+**When it runs.** Call [\`POST /webhooks/{webhookId}/verify\`](/docs/api/reference/webhooks#post-webhooks-verify) to run it immediately: \`200\` with \`verification_status: "verified"\` on a pass, \`422 WEBHOOK_VERIFICATION_FAILED\` with \`details.reason\` on a failure (one call per webhook per 10 seconds; faster repeats get \`429\`). Accounted also tries on its own after 1 minute, 5 minutes, 30 minutes, 2 hours, 12 hours, then daily, 8 attempts in all for a new or changed URL. Each attempt carries a fresh challenge and a fresh \`X-Gnubok-Delivery\` id.
+
+**Where you see it.** Every webhook read returns \`verification_status\`, \`verified_at\`, \`verification_grace_ends_at\`, \`verification_attempts\`, \`verification_last_attempt_at\`, \`verification_last_error\` and \`verification_next_attempt_at\`:
+
+| \`verification_status\` | Events delivered? | Meaning |
+|---|---|---|
+| \`verified\` | yes | The current URL passed the handshake. |
+| \`pending\` | no | A new URL, or one changed with \`PATCH\`, that has not passed yet. Events in the meantime are skipped, as for a disabled webhook, not delivered later. |
+| \`grace_period\` | yes | A webhook that existed before verification was introduced (2026-09). It keeps receiving events until \`verification_grace_ends_at\`, 30 days after the change went live, while Accounted attempts the handshake daily. |
+| \`paused\` | no | The same webhook after its grace window closed without a pass. Deliveries already queued are withheld (\`error: endpoint_unverified\`) and retry on the normal schedule; pass the handshake to resume. |
+
+\`POST /webhooks/{webhookId}/test\` and \`POST /webhook-deliveries/{deliveryId}/retry\` send events, so they answer \`409 WEBHOOK_NOT_VERIFIED\` for a \`pending\` or \`paused\` webhook. Changing \`webhook_url\` resets verification (and ends any grace window): have the new receiver answer \`webhook.verification\` before you switch.
 
 ## Event types
 
@@ -109,6 +153,10 @@ app.post(
     }
 
     const event = JSON.parse(rawBody)
+    // Ownership handshake: echo the challenge at the top level.
+    if (event.type === 'webhook.verification') {
+      return res.status(200).json({ challenge: event.data.object.challenge })
+    }
     // Idempotency: process the delivery id once.
     if (alreadyProcessed(event.id)) return res.status(200).send('ok')
     handleEvent(event)
@@ -163,6 +211,9 @@ def webhook():
         abort(400, "invalid signature")
 
     event = json.loads(raw_body)
+    # Ownership handshake: echo the challenge at the top level.
+    if event["type"] == "webhook.verification":
+        return {"challenge": event["data"]["object"]["challenge"]}, 200
     if already_processed(event["id"]):
         return "", 200
     handle_event(event)
@@ -200,7 +251,9 @@ Use [\`GET /api/v1/companies/{companyId}/webhooks/{webhookId}/deliveries\`](/doc
 
 To replay a \`dead\` or \`delivered\` delivery, call [\`POST /api/v1/webhook-deliveries/{deliveryId}/retry\`](/docs/api/reference/webhooks#post-webhook_deliveries-retry). The retry creates a fresh delivery row pointing at the same payload: the original audit row stays in place. Receivers must be idempotent on the \`X-Gnubok-Delivery\` header.
 
-To send a synthetic test event without driving real state, call [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/test\`](/docs/api/reference/webhooks#post-webhooks-test). The dispatcher delivers a \`webhook.test\` event with a static payload immediately, so the outcome is normally visible within a second or two.
+To send a synthetic test event without driving real state, call [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/test\`](/docs/api/reference/webhooks#post-webhooks-test). The dispatcher delivers a \`webhook.test\` event with a static payload immediately, so the outcome is normally visible within a second or two. The webhook must be verified (or in its grace window) first.
+
+When a webhook is not \`verified\`, \`verification_last_error\` on the webhook says why the last handshake failed: \`http_<status>\`, \`timeout\`, \`redirect_blocked\`, \`response_not_json\`, \`response_too_large\`, \`challenge_missing\`, \`challenge_mismatch\`, \`transport_error\` or \`url_unsafe:<class>\`.
 
 ## Auto-disable behaviour
 

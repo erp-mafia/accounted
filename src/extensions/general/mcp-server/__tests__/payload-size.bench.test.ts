@@ -634,6 +634,13 @@ describe('tools/list payload size guard', () => {
     //     envelope's operation_id note and the generated tools' dry_run and
     //     idempotency_key notes. Measured 63 302 on the old base; rebased onto
     //     #3169 it measures 64 860, 170 under main alone. Ceiling unchanged.
+    //   * Report trust envelope (#3103, #3105): gnubok_get_income_statement
+    //     names nettoomsattning (3000-3799) as the revenue figure and
+    //     declares it in its outputSchema (#3103). The per-figure account
+    //     definitions and the report data_status (#3105) travel in the
+    //     response and are declared in no outputSchema, so they cost the
+    //     catalog nothing. Measured 64 937 on 2026-10-01 on top of main;
+    //     #3105 changes no tool schema or description. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(65_500)
   })
 

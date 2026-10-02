@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { listGronTeknikCandidates, listRotRutCandidates } from '@/lib/invoices/rot-rut-service'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * GET /api/rot-rut/eligible?type=rot|rut|gron_teknik

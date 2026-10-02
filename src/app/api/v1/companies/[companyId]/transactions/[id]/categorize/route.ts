@@ -3,8 +3,18 @@
  *
  * Categorize a transaction and create the corresponding journal entry. This
  * is a thin v1 surface over the same orchestration the internal dashboard
- * route uses: same mapping engine, same booking templates, same SI-match
- * suggestion intercept, same CAS race guard.
+ * route uses: same mapping engine, same booking templates, same CAS race
+ * guard, and the same two double-booking guards, run through the helpers the
+ * dashboard route calls:
+ *   - booking-time duplicate guard (lib/transactions/booking-duplicate-guard):
+ *     409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE when the ledger already books
+ *     this bank line; override with force: true bound to the reviewed
+ *     candidate (expected_duplicate_journal_entry_id or
+ *     expected_duplicate_transaction_id).
+ *   - invoice-match intercept (lib/transactions/invoice-match-suggestion):
+ *     409 TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH for
+ *     a plain 244x / 151x categorization an open invoice covers; override
+ *     with confirm_no_match: true.
  *
  * Already-categorized fast path: if the transaction already has a journal
  * entry, only the is_business / category flags are updated. The JE is left
@@ -17,7 +27,10 @@
  * therefore always null and kept only for response-shape compatibility.
  *
  * Dry-runnable: returns the resolved mapping (debit/credit + VAT lines)
- * without inserting the journal entry or mutating the transaction.
+ * without inserting the journal entry or mutating the transaction. Both
+ * double-booking guards are read-only and run on a dry-run too, so a preview
+ * surfaces the refusal the live call would hit; an honoured force writes its
+ * behandlingshistorik record only on the live call.
  */
 import { z } from 'zod'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
@@ -49,6 +62,8 @@ import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { runBookingDuplicateGuard } from '@/lib/transactions/booking-duplicate-guard'
+import { findInvoiceMatchSuggestion } from '@/lib/transactions/invoice-match-suggestion'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { eventBus } from '@/lib/events'
@@ -85,7 +100,8 @@ registerEndpoint({
   doNotUseFor:
     'Matching a payment to an invoice: use `:match-invoice` or `:match-supplier-invoice`, which storno any conflicting JE first. Uncategorizing: `:uncategorize`.',
   pitfalls: [
-    'A bank payment that looks like an invoice payment will be flagged via TX_CATEGORIZE_SUGGEST_SI_MATCH: pass `confirm_no_match: true` to override and force-categorize as direct expense (e.g. when the supplier invoice was already booked).',
+    'A bank line the ledger already books (a booked sibling transaction, or a voucher booking the same amount on the bank account such as a supplier invoice marked paid) is refused with 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE and the candidate in `details.candidate`: link the transaction to that verifikat instead. Only if it is a genuinely separate event, resend with `force: true` plus `expected_duplicate_journal_entry_id` (or `expected_duplicate_transaction_id`) echoing the candidate; a stale id returns TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH.',
+    'A plain 244x (supplier payment) or 151x (customer receipt) categorization that an open invoice covers is refused with 409 TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH: match the invoice via `:match-supplier-invoice` / `:match-invoice`, or pass `confirm_no_match: true` to keep the plain categorization.',
     'Already-categorized fast path: if the transaction already has a journal_entry_id, only flags get updated. The JE is immutable post-commit.',
     'account_override must exist in the chart of accounts; an unknown account returns TX_CATEGORIZE_INVALID_ACCOUNT.',
   ],
@@ -145,6 +161,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     const txLog = ctx.log.child({ transactionId: txId })
+    // A booking happens only when the row has no verifikat yet: the live
+    // already-categorized fast path below returns before any guard, and a
+    // dry-run on such a row previews no booking, so neither guard applies.
+    const wouldBook = !transaction.journal_entry_id
 
     // Already-categorized fast path: just flip flags. Skip on dry-run so the
     // caller can preview the full mapping that would be applied to a fresh tx.
@@ -169,6 +189,40 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         },
         { requestId: ctx.requestId },
       )
+    }
+
+    // Booking-time duplicate guard, same helper, code and override as the
+    // dashboard route: refuse a second verifikat for an affärshändelse the
+    // ledger already books (TRANSACTION_BOOK_POSSIBLE_DUPLICATE); force: true
+    // bound to the reviewed candidate books anyway and is recorded in
+    // behandlingshistorik (live call only). Runs before any categorization
+    // work, like the dashboard route.
+    if (wouldBook) {
+      const duplicateVerdict = await runBookingDuplicateGuard(
+        ctx.supabase,
+        ctx.companyId!,
+        ctx.userId,
+        {
+          id: txId,
+          date: transaction.date,
+          amount: transaction.amount,
+          // `amount` is denominated in `currency`; the ledger legs the guard
+          // compares it against are always SEK. Selected above via select('*').
+          currency: transaction.currency ?? null,
+          amount_sek: transaction.amount_sek ?? null,
+          exchange_rate: transaction.exchange_rate ?? null,
+          cash_account_id: transaction.cash_account_id ?? null,
+        },
+        body,
+        txLog,
+        { recordDismissal: !ctx.dryRun, via: 'api_force' },
+      )
+      if (!duplicateVerdict.ok) {
+        return v1ErrorResponseFromCode(duplicateVerdict.code, txLog, {
+          requestId: ctx.requestId,
+          details: duplicateVerdict.details,
+        })
+      }
     }
 
     const { data: settings } = await ctx.supabase
@@ -365,6 +419,34 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Invoice-match intercept, same helper, code and override as the
+    // dashboard route: a plain 244x / 151x categorization that an open
+    // supplier / customer invoice covers is refused with the candidates
+    // (TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH) so the
+    // payment is matched to the invoice instead of booked a second time;
+    // confirm_no_match: true keeps the plain categorization. Read-only, so it
+    // runs on a dry-run as well.
+    if (wouldBook) {
+      const invoiceSuggestion = await findInvoiceMatchSuggestion(
+        ctx.supabase,
+        ctx.companyId!,
+        {
+          transaction: transaction as Transaction & { reference?: string | null },
+          debitAccount: mappingResult.debit_account,
+          creditAccount: mappingResult.credit_account,
+          isBusiness: is_business,
+          confirmNoMatch: body.confirm_no_match,
+        },
+        txLog,
+      )
+      if (invoiceSuggestion) {
+        return v1ErrorResponseFromCode(invoiceSuggestion.code, txLog, {
+          requestId: ctx.requestId,
+          details: invoiceSuggestion.details,
+        })
+      }
+    }
+
     // Dry-run stops here: caller sees the resolved mapping without burning
     // a voucher number or mutating any state.
     if (ctx.dryRun) {
@@ -413,10 +495,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
-    // Live path: create the journal entry. The internal route runs a
-    // duplicate-payment guard (Prong B) here that surfaces SI-match
-    // suggestions; we preserve that behavior so v1 and the dashboard
-    // diverge on neither booking outcomes nor compliance.
+    // Live path: create the journal entry. The duplicate-payment guard and
+    // the invoice-match intercept already ran above through the same helpers
+    // the dashboard route calls, so v1 and the dashboard diverge on neither
+    // booking outcomes nor compliance.
     let journalEntryId: string | null = null
     try {
       const journalEntry = await createTransactionJournalEntry(

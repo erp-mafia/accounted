@@ -20,7 +20,7 @@
  * behaviour stays in lockstep.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { eventBus } from '@/lib/events/bus'
+import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { createLogger } from '@/lib/logger'
 import {
   CONFIDENCE,
@@ -738,8 +738,7 @@ interface RpcLinkInvoiceErr {
 /**
  * Atomically link an existing posted verifikat to an invoice. Inserts an
  * invoice_payments row, advances the invoice's paid_amount/remaining_amount,
- * and emits invoice.match_confirmed (reusing the existing event so reminder
- * cancellation + automations fire without a new event channel).
+ * and emits invoice.paid when the link settles the invoice in full.
  *
  * Re-validates inside the same call to defend against stage→commit drift:
  * voucher reversed, invoice paid by another flow, etc. Any structured
@@ -801,21 +800,18 @@ export async function linkInvoiceToVoucher(
     .eq('company_id', companyId)
     .maybeSingle()
 
+  // invoice.paid only when this link settled the invoice in full: a partial
+  // link leaves money owed. The RPC locks the row and refuses an invoice that
+  // is not open, so its 'paid' is this call's transition. Best-effort.
   if (invoice) {
-    try {
-      await eventBus.emit({
-        type: 'invoice.paid',
-        payload: {
-          invoice: invoice as Invoice,
-          paymentAmount: rpc.payment_amount,
-          paymentDate: rpc.payment_date,
-          userId,
-          companyId,
-        },
-      })
-    } catch {
-      /* non-critical */
-    }
+    await emitInvoicePaidIfSettled({
+      newStatus: rpc.invoice_status,
+      invoice: invoice as Invoice,
+      paymentAmount: rpc.payment_amount,
+      paymentDate: rpc.payment_date,
+      userId,
+      companyId,
+    })
   }
 
   // The invoice's archived PDF is the underlag for the linked booking. Under

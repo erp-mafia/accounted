@@ -68,6 +68,12 @@ function logAndZero(
  * is_business IS NULL is sufficient; is_ignored excludes the user's
  * explicitly-suppressed rows. Served by the partial index
  * idx_transactions_company_unbooked.
+ *
+ * This answers "which rows still need a triage decision" (the inbox badge).
+ * "Is the ledger complete for a range" is a different question with its own
+ * helper, lib/transactions/unbooked.ts: it also counts rows triaged as
+ * business that never got a verifikat (574 such rows in 52 real companies in
+ * prod on 2026-09-27; the thousands more in sandbox demo companies aside).
  */
 export async function countUnbookedTransactions(
   supabase: SupabaseClient,

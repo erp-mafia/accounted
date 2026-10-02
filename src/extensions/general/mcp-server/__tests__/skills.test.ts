@@ -17,10 +17,10 @@ vi.mock('@/lib/supabase/server', () => ({
  *   - company_settings (entity_type + vat_registered, used by applicability filter)
  *   - employees (active count, used by applicability filter)
  *
- *  All test queries resolve to the same defaults: entity_type='AB',
- *  vat_registered=true, 1 active employee: so every applicability-filtered
- *  skill is included by default. Individual tests can override via the
- *  optional overrides parameter.
+ *  All test queries resolve to the same defaults: entity_type='aktiebolag'
+ *  (the stored form, never the skill tag 'AB'), vat_registered=true, 1 active
+ *  employee: so every applicability-filtered skill is included by default.
+ *  Individual tests can override via the optional overrides parameter.
  */
 function makeSupabaseWithEmptyAtomRegistry(
   rows: unknown[] = [],
@@ -28,7 +28,7 @@ function makeSupabaseWithEmptyAtomRegistry(
   refRow: unknown = null,
   companySkillRows: unknown[] = [],
 ) {
-  const entityType = overrides.entityType ?? 'AB'
+  const entityType = overrides.entityType ?? 'aktiebolag'
   const vatRegistered = overrides.vatRegistered ?? true
   const employeeCount = overrides.employeeCount ?? 1
 
@@ -374,7 +374,7 @@ describe('gnubok_list_skills tool', () => {
 
   it('applicability filter hides AB-only skills for EF companies', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
-    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'EF', employeeCount: 0, vatRegistered: true })
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'enskild_firma', employeeCount: 0, vatRegistered: true })
     const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
       skills: Array<{ slug: string }>
       hidden_count: number
@@ -387,12 +387,33 @@ describe('gnubok_list_skills tool', () => {
     expect(slugs).toContain('invoicing-rules')
     expect(slugs).toContain('quarterly-vat-review') // vat_registered=true
     expect(result.hidden_count).toBeGreaterThan(0)
-    expect(result.company_context).toEqual({ entity_type: 'EF', has_employees: false, vat_registered: true })
+    expect(result.company_context).toEqual({ entity_type: 'enskild_firma', has_employees: false, vat_registered: true })
+  })
+
+  it.each([
+    ['aktiebolag', true],
+    ['enskild_firma', false],
+    ['ideell_forening', false],
+  ] as const)('shows the AB-only year-end close to %s: %s', async (entityType, shown) => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType })
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ slug: string }>
+      hidden_count: number
+      company_context: { entity_type: string | null }
+    }
+    const slugs = result.skills.map((s) => s.slug)
+    expect(slugs.includes('year-end-close')).toBe(shown)
+    // Skills tagged 'both' show for every form, a förening included.
+    expect(slugs).toContain('month-end-close')
+    expect(slugs).toContain('payroll-monthly')
+    expect(result.hidden_count).toBe(shown ? 0 : 1)
+    expect(result.company_context.entity_type).toBe(entityType)
   })
 
   it('include_all=true bypasses applicability filter', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
-    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'EF', employeeCount: 0, vatRegistered: false })
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'enskild_firma', employeeCount: 0, vatRegistered: false })
     const filtered = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
       count: number
       hidden_count: number

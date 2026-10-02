@@ -7,9 +7,12 @@
  * the amount in kronor and the settlement account. This rebuilds what
  * BookDirectlyDialog's buildPrefillLines seeded before the dialog swap:
  * the transaction's SEK amount against the settlement account, with the
- * counter-account left blank for the user to pick. No VAT split: with a
- * matched transaction the old prefill skipped document VAT too, since the
- * document total and the bank movement are not guaranteed to agree.
+ * counter-account left blank for the user to pick. No VAT split: the
+ * skeleton is built from the bank row alone, and the document total and the
+ * bank movement are not guaranteed to agree. BookDirectlyDialog no longer
+ * matches this: with a selected SEK transaction it keeps the document's
+ * extracted VAT, except for a company that is not VAT-registered
+ * (lib/bookkeeping/book-direct-prefill.ts).
  *
  * The SEK amount goes through resolveSekAmountOrNull: a foreign row with
  * neither a stored SEK value nor a rate has no honest kronor figure, and

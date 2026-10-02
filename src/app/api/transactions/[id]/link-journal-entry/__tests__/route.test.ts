@@ -239,8 +239,20 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     enqueue({ data: [{ id: INV_UUID }], error: null })
     // Insert invoice_payments
     enqueue({ data: { id: 'ip-1' }, error: null })
-    // logMatchEvent
+    // Underlag propagation: the transaction's pinned document, then matched
+    // inbox items (none)
     enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null })
+    // Settled in full: the committed invoice row is re-read for invoice.paid
+    const committedInvoice = makeInvoice({
+      id: INV_UUID,
+      status: 'paid',
+      total: 1000,
+      remaining_amount: 0,
+      paid_amount: 1000,
+      currency: 'SEK',
+    })
+    enqueue({ data: { ...committedInvoice, stripe_payment_link_id: 'plink_1' }, error: null })
 
     const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
       method: 'POST',
@@ -287,6 +299,23 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       'invoice',
       INV_UUID,
     )
+    // Linking the settling payment is the invoice.paid transition: once, with
+    // the full committed row (the Stripe handler reads stripe_payment_link_id,
+    // which the narrow settlement read does not carry).
+    const paidEmits = vi
+      .mocked(eventBus.emit)
+      .mock.calls.filter(([event]) => event.type === 'invoice.paid')
+    expect(paidEmits).toHaveLength(1)
+    expect(paidEmits[0][0]).toEqual({
+      type: 'invoice.paid',
+      payload: {
+        invoice: expect.objectContaining({ id: INV_UUID, status: 'paid', stripe_payment_link_id: 'plink_1' }),
+        paymentAmount: 1000,
+        paymentDate: '2026-05-15',
+        userId: 'user-1',
+        companyId: 'company-1',
+      },
+    })
   })
 
   it('leaves the suggestions alone on a partial payment: the invoice is still matchable', async () => {
@@ -330,6 +359,10 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     expect(status).toBe(200)
     expect(body.invoice_status).toBe('partially_paid')
     expect(mockClearSuggestions).not.toHaveBeenCalled()
+    // Money is still owed: the match is confirmed, the invoice is not paid.
+    const types = vi.mocked(eventBus.emit).mock.calls.map(([event]) => event.type)
+    expect(types).toContain('invoice.match_confirmed')
+    expect(types).not.toContain('invoice.paid')
   })
 
   it('returns 404 when invoice_id supplied but invoice not found', async () => {

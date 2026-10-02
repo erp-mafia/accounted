@@ -1,6 +1,9 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { downloadPaymentBatchFile } from '@/lib/payments/batch-operations'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * Download the payment file for a batch.

@@ -5,6 +5,9 @@ import { AccountKeySchema } from '@/lib/reconciliation/schemas'
 import { unmatchLink } from '@/lib/reconciliation/actions'
 import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * DELETE /api/reconciliation/accounts/{accountKey}/links/{linkId}

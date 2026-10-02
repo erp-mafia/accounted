@@ -7,6 +7,9 @@ import { AccountKeySchema } from '@/lib/reconciliation/schemas'
 import { getAttachmentRow } from '@/lib/reconciliation/attachments-store'
 import { downloadUnderlag, ReconciliationAttachmentError, removeUnderlag } from '@/lib/reconciliation/attachments'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 const UUID = z.string().uuid()
 

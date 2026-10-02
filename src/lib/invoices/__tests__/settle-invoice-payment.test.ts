@@ -425,6 +425,24 @@ describe('settleInvoicePayment', () => {
     expect(vi.mocked(clearSettledInvoiceSuggestions)).not.toHaveBeenCalled()
   })
 
+  it('does not emit invoice.paid for a partial payment: money is still owed', async () => {
+    const handler = vi.fn()
+    eventBus.on('invoice.paid', handler)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }] })
+
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      { ...BASE_PARAMS, paymentAmountInInvoiceCurrency: 500, invoice: payableInvoice() },
+    )
+
+    expect(result).toMatchObject({ ok: true, newStatus: 'partially_paid' })
+    expect(handler).not.toHaveBeenCalled()
+  })
+
   it('emits invoice.paid with the settled state', async () => {
     const handler = vi.fn()
     eventBus.on('invoice.paid', handler)
@@ -437,6 +455,7 @@ describe('settleInvoicePayment', () => {
       invoice: payableInvoice(),
     })
 
+    expect(handler).toHaveBeenCalledTimes(1)
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
         companyId: 'company-1',

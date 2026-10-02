@@ -145,6 +145,11 @@ async function main(): Promise<void> {
           types: ['new_document', 'document_delivery', 'document_error'],
         }),
       )
+      if (configured && typeof configured === 'object' && 'signingSecret' in configured) {
+        // Returned once. Without it in the environment the webhook route keeps
+        // authenticating on the shared-secret header and cannot verify signatures.
+        console.log('\nCopy signingSecret above into QVALIA_WEBHOOK_SIGNING_SECRET now: Qvalia returns it only once.')
+      }
       const webhookId = configured && typeof configured === 'object' && 'id' in configured
         ? String((configured as { id: unknown }).id)
         : null
