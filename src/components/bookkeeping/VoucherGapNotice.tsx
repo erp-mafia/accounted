@@ -43,6 +43,11 @@ function gapKey(gap: VoucherGap): string {
   return `${gap.series}:${gap.gap_start}:${gap.gap_end}`
 }
 
+/** Identifies the period and series a gap list was loaded for. */
+function scopeKeyOf(periodId: string | null, series: string | null): string {
+  return `${periodId ?? ''}|${series ?? ''}`
+}
+
 /**
  * Holes in the voucher numbering of one räkenskapsår, listed above the
  * verifikat table: each with its documented explanation, or the Förklara
@@ -74,7 +79,13 @@ export default function VoucherGapNotice({
   // to someone whose save would be refused anyway.
   const canExplain = role === 'owner' || role === 'admin'
 
-  const [gaps, setGaps] = useState<VoucherGap[]>([])
+  // Gaps are kept with the scope they were loaded for and rendered only while
+  // that scope is current: on a period or series switch the old rows vanish
+  // at once instead of staying clickable until the new reply lands, so a
+  // dialog can only ever open for a gap of the year it would be saved to.
+  const scopeKey = scopeKeyOf(periodId, series)
+  const [loaded, setLoaded] = useState<{ scopeKey: string; gaps: VoucherGap[] } | null>(null)
+  const gaps = loaded && loaded.scopeKey === scopeKey ? loaded.gaps : []
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   // The gap being explained, pinned to the räkenskapsår it was opened for: a
   // save must never attach an explanation to a year the list switched to
@@ -88,11 +99,9 @@ export default function VoucherGapNotice({
 
   /** Fetches the gaps of the current period and series; stale replies are dropped. */
   const load = useCallback(async () => {
-    if (!periodId) {
-      setGaps([])
-      return
-    }
+    if (!periodId) return
     const gen = ++fetchGenRef.current
+    const key = scopeKeyOf(periodId, series)
     const params = new URLSearchParams({ fiscal_period_id: periodId })
     if (series) params.set('voucher_series', series)
     try {
@@ -100,11 +109,11 @@ export default function VoucherGapNotice({
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
       if (gen !== fetchGenRef.current) return
-      setGaps((json?.data?.gaps ?? []) as VoucherGap[])
+      setLoaded({ scopeKey: key, gaps: (json?.data?.gaps ?? []) as VoucherGap[] })
     } catch {
       // A failed probe hides the rows; the bokslut preflight is the
       // enforcement surface and reports its own failures.
-      if (gen === fetchGenRef.current) setGaps([])
+      if (gen === fetchGenRef.current) setLoaded({ scopeKey: key, gaps: [] })
     }
   }, [periodId, series])
 
