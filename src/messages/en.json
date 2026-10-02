@@ -2679,6 +2679,8 @@
     "show_plusgiro_help": "Show plusgiro number on invoice printout",
     "show_swish_label": "Show Swish",
     "show_swish_help": "Show swish number and qr code on invoice",
+    "show_payment_qr_label": "Show bank app QR code",
+    "show_payment_qr_help": "Show a QR code your customer scans in their banking app to fill in the bankgiro or plusgiro, amount, due date and OCR. Applies to invoices in SEK paid to a bankgiro or plusgiro, and needs an organisation number.",
     "show_logo_label": "Show logo",
     "show_logo_help": "Show uploaded logo in the invoice header",
     "show_company_name_label": "Show company name on invoice",

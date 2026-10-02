@@ -8,10 +8,14 @@ import {
   Image,
   Link,
   StyleSheet,
+  Svg,
+  Path,
+  Rect,
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'
+import { bankPaymentQrSymbol, buildBankPaymentQrPayload } from '@/lib/invoices/bank-payment-qr'
 import {
   BUNDLED_INVOICE_FONT_FAMILIES,
   INVOICE_LOGO_MAX_HEIGHT_PT,
@@ -341,6 +345,7 @@ const LABELS = {
     paymentReference: 'Betalningsreferens:',
     invoiceNumber: 'Fakturanummer:',
     swishQrCaption: 'Skanna för att betala med Swish',
+    bankPaymentQrCaption: 'Skanna med din bankapp',
     payOnline: 'Betala online:',
     paymentLinkQrCaption: 'Skanna för att betala online',
     // Footer
@@ -432,6 +437,7 @@ const LABELS = {
     paymentReference: 'Payment reference:',
     invoiceNumber: 'Invoice number:',
     swishQrCaption: 'Scan to pay with Swish',
+    bankPaymentQrCaption: 'Scan with your banking app',
     payOnline: 'Pay online:',
     paymentLinkQrCaption: 'Scan to pay online',
     orgNoLong: 'Reg. no.:',
@@ -450,6 +456,22 @@ const LABELS = {
 // Swish on invoices (the number row + the payment QR). When true, the Swish row
 // and QR render on the invoice PDF and the settings "Visa Swish" toggle is live.
 export const SHOW_SWISH_ON_INVOICE = true
+
+// QR codes in the payment box sit in a row from its top-right corner, just
+// below "Att betala": the Swish QR first, then the payment-link QR, then the
+// bank-app QR (crm#249), each 96pt wide with a 14pt gap. A third code would
+// leave the payment rows too narrow, so the bank-app QR then starts a second
+// row under the Swish QR.
+export const PAYMENT_QR_PT = 96
+export const PAYMENT_QR_STEP_PT = 110
+// One QR row: the symbol, a two-line caption (room for the tallest bundled
+// font) and a 10pt gap.
+export const PAYMENT_QR_ROW_STEP_PT = 134
+// The corner QRs are absolutely positioned, so they do not stretch the box.
+// With the bank-app QR the box is at least this tall (15pt padding, one QR
+// row, the bottom padding), plus one row step when it sits on the second
+// row, so the symbol never spills over the block below.
+export const PAYMENT_QR_SECTION_MIN_HEIGHT_PT = 160
 
 /**
  * Render a stored VAT notice in the document language.
@@ -1129,6 +1151,27 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // recomputation of the deduction-aware total; the fallback to the amount to
   // pay covers legacy rows marked paid before paid_amount was recorded.
   const paidState = resolvePdfPaidState(invoice, docType, isCreditNote, amountToPay.toPay)
+  // Bank-app payment QR (UsingQR, crm#249), built from the very figures this
+  // page prints: "Att betala" (the remainder on a partly paid invoice), the
+  // printed giro, and the OCR reference when the OCR row is printed. Drawn as
+  // vector paths, so every render path gets it without a pre-rendered image.
+  const bankPaymentQrPayload = buildBankPaymentQrPayload({
+    company,
+    invoice,
+    amountDue: paidState ? paidState.remainingAmount : amountToPay.toPay,
+    lang,
+  })
+  const bankPaymentQr = bankPaymentQrPayload ? bankPaymentQrSymbol(bankPaymentQrPayload) : null
+  // Where the bank-app QR goes, and the room the payment rows leave for the
+  // QR column (they wrap before it instead of running under the white square).
+  const otherCornerQrs = (swishQrDataUrl ? 1 : 0) + (paymentLinkQrDataUrl ? 1 : 0)
+  const bankPaymentQrSlot = otherCornerQrs < 2 ? otherCornerQrs : 0
+  const bankPaymentQrRow = otherCornerQrs < 2 ? 0 : 1
+  const bankPaymentQrSectionStyle = {
+    minHeight: PAYMENT_QR_SECTION_MIN_HEIGHT_PT + bankPaymentQrRow * PAYMENT_QR_ROW_STEP_PT,
+    // At most two QR columns: the rows end 14pt before the leftmost one.
+    paddingRight: 15 + PAYMENT_QR_STEP_PT * Math.min(otherCornerQrs + 1, 2),
+  }
   // Draft watermark (#2437): genuine drafts, plus the corrupt-state case of a
   // non-cancelled invoice that somehow lacks a number. Cancelled wins (the
   // MAKULERAD banner below), and the interactive preview has its own title.
@@ -1660,7 +1703,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Payment information - not shown for credit notes, proformas, quotes, or delivery notes */}
         {!isCreditNote && !isProforma && !isQuote && !isDeliveryNote && (
-          <View style={styles.paymentSection} wrap={false}>
+          <View
+            style={bankPaymentQr ? [styles.paymentSection, bankPaymentQrSectionStyle] : styles.paymentSection}
+            wrap={false}
+          >
             <Text style={styles.paymentTitle}>{L.paymentHeading}</Text>
             {invoice.payment_link_url && (
               <View style={styles.paymentRow}>
@@ -1763,6 +1809,31 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               <View style={{ position: 'absolute', top: 15, right: swishQrDataUrl ? 125 : 15, width: 96, alignItems: 'center' }}>
                 <Image src={paymentLinkQrDataUrl} style={{ width: 96, height: 96 }} />
                 <Text style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}>{L.paymentLinkQrCaption}</Text>
+              </View>
+            )}
+            {/* Bank-app QR: next free slot in the row, or the second row
+                when two codes already sit there. White behind the symbol and
+                its quiet zone, as the format asks; nothing drawn over it. */}
+            {bankPaymentQr && (
+              <View
+                style={{
+                  position: 'absolute',
+                  top: 15 + bankPaymentQrRow * PAYMENT_QR_ROW_STEP_PT,
+                  right: 15 + PAYMENT_QR_STEP_PT * bankPaymentQrSlot,
+                  width: PAYMENT_QR_PT,
+                  alignItems: 'center',
+                }}
+              >
+                <Svg width={PAYMENT_QR_PT} height={PAYMENT_QR_PT} viewBox={`0 0 ${bankPaymentQr.size} ${bankPaymentQr.size}`}>
+                  <Rect x={0} y={0} width={bankPaymentQr.size} height={bankPaymentQr.size} fill="#ffffff" />
+                  <Path d={bankPaymentQr.path} fill="#000000" />
+                </Svg>
+                <Text
+                  style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}
+                  hyphenationCallback={wrapDescriptionWords}
+                >
+                  {L.bankPaymentQrCaption}
+                </Text>
               </View>
             )}
           </View>

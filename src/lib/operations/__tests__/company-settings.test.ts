@@ -37,6 +37,14 @@ const NOT_ON_THE_API: Record<string, string> = {
 }
 
 describe('settings operations: field split', () => {
+  it('lets the API and MCP read and write the bank-app payment QR switch next to the Swish one (crm#249)', () => {
+    expect(keys(settingsUpdate.input)).toContain('invoice_show_payment_qr')
+    expect(keys(settingsUpdate.input)).toContain('invoice_show_swish')
+    const resource = toSettingsResource('c1', { invoice_show_payment_qr: true } as never)
+    expect(resource.invoice_show_payment_qr).toBe(true)
+    expect(toSettingsResource('c1', {} as never).invoice_show_payment_qr).toBeNull()
+  })
+
   it('puts every tax-relevant field the API writes in the tax profile, never in settings.update', () => {
     const general = keys(settingsUpdate.input)
     for (const field of TAX_RELEVANT_FIELDS) {

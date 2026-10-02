@@ -81,6 +81,7 @@ export const GENERAL_SETTINGS_FIELDS = [
   'invoice_show_bankgiro',
   'invoice_show_plusgiro',
   'invoice_show_swish',
+  'invoice_show_payment_qr',
   'invoice_show_logo',
   'invoice_show_company_name',
   'invoice_company_name_position',
@@ -227,7 +228,7 @@ const SettingsResource = z.object({
   ...Object.fromEntries(
     [
       'ore_rounding', 'invoice_show_ocr', 'invoice_show_bankgiro', 'invoice_show_plusgiro', 'invoice_show_swish',
-      'invoice_show_logo', 'invoice_show_company_name', 'invoice_payment_links_enabled', 'send_invoice_reminders',
+      'invoice_show_payment_qr', 'invoice_show_logo', 'invoice_show_company_name', 'invoice_payment_links_enabled', 'send_invoice_reminders',
       'reminder_fee_enabled', 'dimensions_enabled', 'mileage_enabled', 'sales_orders_enabled',
       'quotes_enabled', 'proforma_enabled', 'recurring_invoices_enabled', 'self_billing_enabled', 'f_skatt',
       'vat_registered', 'vat_taxable_base_over_40m', 'vat_has_eu_trade', 'periodisk_sammanstallning_enabled',

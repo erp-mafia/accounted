@@ -2679,6 +2679,8 @@
     "show_plusgiro_help": "Visa plusgironummer på fakturautskrift",
     "show_swish_label": "Visa Swish",
     "show_swish_help": "Visa swish nummer och qr kod på faktura",
+    "show_payment_qr_label": "Visa QR-kod för bankapp",
+    "show_payment_qr_help": "Visa en QR-kod som kunden skannar i sin bankapp för att få bankgiro eller plusgiro, belopp, förfallodag och OCR ifyllt. Gäller fakturor i kronor till bankgiro eller plusgiro, och kräver organisationsnummer.",
     "show_logo_label": "Visa logga",
     "show_logo_help": "Visa uppladdad logga i fakturahuvudet",
     "show_company_name_label": "Visa företagsnamn i faktura",
