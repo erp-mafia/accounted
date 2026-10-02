@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { undoBankImport } from '@/lib/import/bank-file/undo-operation'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 // Bulk-deleting a large batch (a full-year CSV is thousands of rows) can take
 // longer than the default function timeout. Match the bank-file execute route

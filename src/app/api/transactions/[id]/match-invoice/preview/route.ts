@@ -33,6 +33,9 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import type { CreateJournalEntryLineInput, Currency, EntityType, Invoice } from '@/types'
 import { z } from 'zod'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 type PreviewLine = {
   account_number: string

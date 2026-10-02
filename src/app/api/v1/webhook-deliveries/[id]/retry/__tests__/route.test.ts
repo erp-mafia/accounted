@@ -117,6 +117,8 @@ const ACTIVE_WEBHOOK = {
   webhook_url: 'https://example.com/hooks',
   active: true,
   disabled_at: null,
+  verified_at: '2026-05-15T12:00:00Z',
+  verification_grace_ends_at: null,
 }
 
 beforeEach(() => {
@@ -323,5 +325,119 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
     )
 
     expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/v1/webhook-deliveries/:id/retry: per-key company access', () => {
+  // The URL carries no companyId, so the company comes from the delivery row.
+  // A key's company allowlist and per-company read-only access must hold here
+  // exactly as they do on /companies/{companyId}/... routes.
+  const OTHER_COMPANY_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+
+  function keyWith(extra: Record<string, unknown>) {
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: OTHER_COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      scopes: ['webhooks:manage'],
+      mode: 'live',
+      ...extra,
+    })
+  }
+
+  function happySupabase(role = 'owner') {
+    const client = makeFlexibleSupabase({
+      webhook_deliveries: [
+        { data: DEAD_DELIVERY, error: null }, // lookup
+        { data: { id: NEW_DELIVERY_ID }, error: null }, // insert
+      ],
+      company_members: { data: { company_id: COMPANY_ID, role }, error: null },
+      webhooks: { data: ACTIVE_WEBHOOK, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    return client
+  }
+
+  function retry() {
+    return retryDelivery(
+      makeRequest(`https://x.test/api/v1/webhook-deliveries/${DELIVERY_ID}/retry`, { method: 'POST' }),
+      idParams(DELIVERY_ID),
+    )
+  }
+
+  function deliveryTableCalls(client: ReturnType<typeof makeFlexibleSupabase>): number {
+    return client.from.mock.calls.filter(([t]) => t === 'webhook_deliveries').length
+  }
+
+  it('answers 404 NOT_FOUND for a delivery of a member company outside the key allowlist, and enqueues nothing', async () => {
+    keyWith({ allowedCompanyIds: [OTHER_COMPANY_ID], readOnlyCompanyIds: null })
+    const client = happySupabase()
+
+    const res = await retry()
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+    // Indistinguishable from an unknown delivery id: the delivery's company
+    // is not named to a key that cannot reach it.
+    expect(JSON.stringify(body.error.details ?? {})).not.toContain(COMPANY_ID)
+    // Only the lookup ran: no insert, no webhook read.
+    expect(deliveryTableCalls(client)).toBe(1)
+    expect(client.from).not.toHaveBeenCalledWith('webhooks')
+  })
+
+  it('retries a delivery of a company inside the key allowlist (case-insensitive)', async () => {
+    keyWith({ allowedCompanyIds: [OTHER_COMPANY_ID, COMPANY_ID.toUpperCase()], readOnlyCompanyIds: null })
+    const client = happySupabase()
+
+    const res = await retry()
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.webhook_delivery_id).toBe(NEW_DELIVERY_ID)
+    expect(deliveryTableCalls(client)).toBe(2)
+  })
+
+  it('retries for a key without an allowlist (every membership reachable)', async () => {
+    keyWith({ allowedCompanyIds: null, readOnlyCompanyIds: null })
+    happySupabase()
+
+    const res = await retry()
+
+    expect(res.status).toBe(200)
+  })
+
+  it('refuses a key with read-only access to the delivery company with 403 CONNECTION_READ_ONLY', async () => {
+    keyWith({ allowedCompanyIds: [COMPANY_ID], readOnlyCompanyIds: [COMPANY_ID] })
+    const client = happySupabase()
+
+    const res = await retry()
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.code).toBe('CONNECTION_READ_ONLY')
+    expect(deliveryTableCalls(client)).toBe(1)
+  })
+
+  it('refuses a viewer membership with 403 ROLE_READ_ONLY', async () => {
+    keyWith({ allowedCompanyIds: null, readOnlyCompanyIds: null })
+    const client = happySupabase('viewer')
+
+    const res = await retry()
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.code).toBe('ROLE_READ_ONLY')
+    expect(deliveryTableCalls(client)).toBe(1)
+  })
+
+  it('returns 401 without a bearer token', async () => {
+    const res = await retryDelivery(
+      new Request(`https://x.test/api/v1/webhook-deliveries/${DELIVERY_ID}/retry`, { method: 'POST' }),
+      idParams(DELIVERY_ID),
+    )
+    expect(res.status).toBe(401)
   })
 })

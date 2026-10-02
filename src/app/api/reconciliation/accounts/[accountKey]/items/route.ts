@@ -3,6 +3,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { AccountKeySchema, ReconciliationItemBucketSchema } from '@/lib/reconciliation/schemas'
 import { listAccountItems, MAX_ITEMS_LIMIT } from '@/lib/reconciliation/items'
 import { ISO_DATE_RE } from '@/lib/invariants'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 const DATE = ISO_DATE_RE
 

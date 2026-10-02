@@ -14,7 +14,7 @@ import {
 } from '@/lib/import/sie-parser'
 import { submitSIEJob } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
-import { suggestMappings } from '@/lib/import/account-mapper'
+import { suggestSIEMappings } from '@/lib/import/sie-preview-mappings'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -47,7 +47,7 @@ registerEndpoint({
     'An identical retry returns the same execution. Deliberate replacement requires options.onExistingPeriod=replace and options.supersedesImportId naming the reviewed predecessor, and uses a new batch after storno.',
     'The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
     'Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.',
-    'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides). By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.',
+    'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides), by the same rules as the dashboard upload: a class 9 account carrying amounts is mapped to 2999 OBS-konto, also over a stored class 9 mapping. By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.',
   ],
   example: {
     response: {
@@ -177,13 +177,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     // Build account mappings server-side from the file's #KONTO records and
-    // any stored per-company overrides: same as the dashboard execute route.
+    // any stored per-company overrides, by the same decision the dashboard
+    // upload makes (#3312): class 9 amounts to 2999, unused definitions kept.
     // (This route used to pass [] as mappings, which executeSIEImport's
     // mapping-coverage guard rejects for any real file.)
     const storedMappings = await fetchAllRows<SIEAccountMappingRecord>(({from,to}) => ctx.supabase
       .from('sie_account_mappings').select('*').eq('company_id',ctx.companyId).order('source_account').range(from,to))
-    const mappings = suggestMappings(
-      parsed.accounts,
+    const { mappings } = suggestSIEMappings(
+      parsed,
       BAS_REFERENCE,
       (storedMappings as SIEAccountMappingRecord[]) || undefined,
     )

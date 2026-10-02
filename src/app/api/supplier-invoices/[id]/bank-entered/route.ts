@@ -4,6 +4,9 @@ import { validateBody } from '@/lib/api/validate'
 import { SupplierInvoiceBankEnteredSchema } from '@/lib/api/schemas'
 import { setSupplierInvoiceBankEntered } from '@/lib/supplier-invoices/manage'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * "Inlagd i banken" (#2220): record that the user entered this payment in

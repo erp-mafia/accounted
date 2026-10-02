@@ -4,6 +4,9 @@ import { validateBody } from '@/lib/api/validate'
 import { SIEJobActionSchema } from '@/lib/api/schemas'
 import { requestSIEJobAction } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export const maxDuration = 300
 

@@ -12,7 +12,7 @@ import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
-import { eventBus } from '@/lib/events'
+import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
 
 /**
@@ -30,7 +30,7 @@ import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/t
  *   4. CAS-guarded invoice status update; a lost race or failed update cancels
  *      the just-posted voucher and removes the payment row so GL and
  *      sub-ledger never diverge
- *   5. invoice.paid event (best-effort)
+ *   5. invoice.paid event when the invoice is now fully paid (best-effort)
  *
  * `settlementAccountNumber` routes the debit side: default 1930 (bank), 1686
  * for PSP-balance settlements (Stripe) where the money reaches the bank only
@@ -364,28 +364,23 @@ export async function settleInvoicePayment(
   }
 
   // Notify subscribers: invoice.paid fans out to registered webhooks and the
-  // Stripe extension's link-deactivation handler. Best-effort: the payment is
-  // already committed, so an emit failure must not fail the operation.
-  try {
-    await eventBus.emit({
-      type: 'invoice.paid',
-      payload: {
-        invoice: {
-          ...invoice,
-          status: newStatus,
-          paid_amount: newPaidAmount,
-          remaining_amount: newRemaining,
-          paid_at: paidAt ?? invoice.paid_at,
-        } as Invoice,
-        companyId,
-        userId,
-        paymentAmount: paymentAmountInInvoiceCurrency,
-        paymentDate,
-      },
-    })
-  } catch {
-    // Swallowed by design; the DB state is the source of truth.
-  }
+  // Stripe extension's link-deactivation handler, once, when this payment
+  // settles the invoice in full (never on a partial). Best-effort: the
+  // payment is already committed, so an emit failure never fails it.
+  await emitInvoicePaidIfSettled({
+    newStatus,
+    invoice: {
+      ...invoice,
+      status: newStatus,
+      paid_amount: newPaidAmount,
+      remaining_amount: newRemaining,
+      paid_at: paidAt ?? invoice.paid_at,
+    } as Invoice,
+    companyId,
+    userId,
+    paymentAmount: paymentAmountInInvoiceCurrency,
+    paymentDate,
+  })
 
   return {
     ok: true,

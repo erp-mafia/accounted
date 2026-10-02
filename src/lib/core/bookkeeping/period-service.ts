@@ -4,6 +4,7 @@ import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
 import { addDaysIso } from '@/lib/dates/iso'
+import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import type { FiscalPeriod } from '@/types'
 
 const log = createLogger('period-service')
@@ -43,13 +44,12 @@ export interface UnbookedInPeriod {
   businessUnbooked: number
 }
 
-/** PostgREST rejects very long URLs, so `.in()` lists are chunked. */
-const ANCHOR_LOOKUP_CHUNK = 200
-
 /**
  * Count the bank transactions in [periodStart, periodEnd] that a period lock
  * would strand. Throws on any query failure so the caller can fail closed:
- * never return 0 for a check that did not actually run.
+ * never return 0 for a check that did not actually run. The predicate lives in
+ * lib/transactions/unbooked.ts, shared with the VAT close check, the
+ * attention resource and the report data_status, so all of them agree.
  */
 export async function countUnbookedInPeriod(
   supabase: SupabaseClient,
@@ -57,84 +57,11 @@ export async function countUnbookedInPeriod(
   periodStart: string,
   periodEnd: string,
 ): Promise<UnbookedInPeriod> {
-  // Leg 1: never triaged. This is the canonical "att bokföra" predicate from
-  // lib/worklist/categories.ts, so the number here reconciles with the
-  // "N st att bokföra" badge instead of being a second, unexplainable count.
-  // Served by the partial index idx_transactions_company_unbooked.
-  const { count: untriaged, error: untriagedError } = await supabase
-    .from('transactions')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .is('is_business', null)
-    .eq('is_ignored', false)
-    .gte('date', periodStart)
-    .lte('date', periodEnd)
-  if (untriagedError) {
-    throw new Error(`untriaged transaction count failed: ${untriagedError.message}`)
-  }
-
-  // Leg 2: triaged as a business event, but no verifikat anywhere. The user has
-  // already confirmed this is the company's affärshändelse, so a lock strands
-  // it just as hard as an untriaged one, only with less excuse. Fetch the ids
-  // and subtract the ones anchored via the non-denormalized locations.
-  //
-  // Paginated via fetchAllRows with a stable id order: PostgREST silently caps
-  // a bare select at 1000 rows, and this candidate set is NOT bounded in
-  // practice, because bulk-booked transactions keep journal_entry_id NULL
-  // (anchored only via transaction_voucher_links). An unpaginated read would
-  // drop every candidate past row 1000, under-counting businessUnbooked and
-  // letting a period lock while genuinely unbooked affärshändelser are
-  // stranded in it (BFL 5 kap 2 §).
-  let candidates: Array<{ id?: string }>
-  try {
-    candidates = await fetchAllRows<{ id?: string }>(({ from, to }) =>
-      supabase
-        .from('transactions')
-        .select('id')
-        .eq('company_id', companyId)
-        .eq('is_business', true)
-        .eq('is_ignored', false)
-        .is('journal_entry_id', null)
-        .gte('date', periodStart)
-        .lte('date', periodEnd)
-        .order('id', { ascending: true })
-        .range(from, to)
-    )
-  } catch (err) {
-    throw new Error(
-      `business transaction lookup failed: ${err instanceof Error ? err.message : String(err)}`
-    )
-  }
-
-  const candidateIds = candidates
-    .map((row) => row.id)
-    .filter((id): id is string => typeof id === 'string')
-  if (candidateIds.length === 0) {
-    return { untriaged: untriaged ?? 0, businessUnbooked: 0 }
-  }
-
-  const anchored = new Set<string>()
-  for (const table of ['transaction_voucher_links', 'invoice_payments', 'supplier_invoice_payments'] as const) {
-    for (let i = 0; i < candidateIds.length; i += ANCHOR_LOOKUP_CHUNK) {
-      const chunk = candidateIds.slice(i, i + ANCHOR_LOOKUP_CHUNK)
-      const { data, error } = await supabase
-        .from(table)
-        .select('transaction_id')
-        .in('transaction_id', chunk)
-      if (error) {
-        throw new Error(`${table} anchor lookup failed: ${error.message}`)
-      }
-      for (const row of data ?? []) {
-        const id = (row as { transaction_id?: string | null }).transaction_id
-        if (id) anchored.add(id)
-      }
-    }
-  }
-
-  return {
-    untriaged: untriaged ?? 0,
-    businessUnbooked: candidateIds.filter((id) => !anchored.has(id)).length,
-  }
+  const counts = await countUnbookedBankTransactions(supabase, companyId, {
+    fromDate: periodStart,
+    toDate: periodEnd,
+  })
+  return { untriaged: counts.untriaged, businessUnbooked: counts.business_unbooked }
 }
 
 /**

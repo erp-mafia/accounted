@@ -2,6 +2,9 @@ import { after, NextResponse } from 'next/server'
 import { requestSIEJobAction } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export const maxDuration = 300
 /** Compatibility endpoint: queue batch storno; never delete by fiscal period. */

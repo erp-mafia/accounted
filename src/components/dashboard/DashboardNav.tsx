@@ -66,7 +66,7 @@ import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
-import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import { offersPayroll } from '@/lib/company/offers-payroll'
 import { SidebarV2 } from './SidebarV2'
 import { scrubAuthCookies } from '@/lib/auth/browser-session-cookies'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags, type NavV2Item } from './nav-v2'
@@ -544,12 +544,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     return <Icon className={className} />
   }
 
-  // Payroll shows by default for every juridisk person (a company that is a
-  // legal person of its own employs people as a matter of course); a form
-  // whose org number is the owner's personnummer opts in through
-  // pays_salaries. #782
-  const isEmployer =
-    (isEntityType(entityType) && !usesPersonnummerAsOrgNumber(entityType)) || paysSalaries
+  // Payroll shows by default for every juridisk person; a form whose org
+  // number is the owner's personnummer opts in through pays_salaries. The
+  // rule is shared with the MCP capabilities resource. #782
+  const isEmployer = offersPayroll(entityType, paysSalaries)
 
   // One gate for both navigations: a surface hides for the same reason in
   // the sidebar tree (nav-v2.ts) and in the phone menu.

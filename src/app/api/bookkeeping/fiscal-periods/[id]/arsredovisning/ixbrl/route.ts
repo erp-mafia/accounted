@@ -1,6 +1,9 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getArsredovisningIxbrlFile } from '@/lib/bokslut/arsredovisning/file-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * GET /api/bookkeeping/fiscal-periods/:id/arsredovisning/ixbrl

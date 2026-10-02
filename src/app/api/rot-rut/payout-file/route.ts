@@ -5,6 +5,9 @@ import { RotRutPayoutFileSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
 import { uploadDocument } from '@/lib/core/documents/document-service'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * POST /api/rot-rut/payout-file

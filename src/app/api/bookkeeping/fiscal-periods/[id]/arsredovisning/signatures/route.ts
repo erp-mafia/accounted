@@ -6,6 +6,9 @@ import { listSignatureRequests } from '@/lib/bokslut/arsredovisning/signature-se
 import { SignatoryCreateSchema } from '@/lib/bokslut/arsredovisning/workflow-schemas'
 import { addArsredovisningSignatory } from '@/lib/bokslut/arsredovisning/workflow-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export const GET = withRouteContext(
   'period.arsredovisning_signatures_list',

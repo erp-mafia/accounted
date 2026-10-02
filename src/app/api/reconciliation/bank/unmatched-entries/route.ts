@@ -7,6 +7,9 @@ import {
 } from '@/lib/reconciliation/bank-reconciliation'
 import { describeCashAccountSiblings, normalizeIban, shouldRepointToSibling } from '@/lib/cash-accounts/service'
 import type { Transaction } from '@/types'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export const GET = withRouteContext(
   'reconciliation.bank.unmatched_entries',

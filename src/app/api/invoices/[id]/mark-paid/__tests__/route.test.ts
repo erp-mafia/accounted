@@ -966,9 +966,58 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     // partial and the transactions scan never runs. Comparing the raw SEK
     // 5 748,35 against 1 000 read it as a full settlement and probed.
     expect(mockSupabase.from).not.toHaveBeenCalledWith('transactions')
-    // The event carries the invoice-currency amount, matching the ledger.
+    // 500 EUR is still owed: invoice.paid means fully paid, so a partial
+    // payment never fires it (lib/invoices/paid-events.ts).
+    expect(paidHandler).not.toHaveBeenCalled()
+  })
+
+  it('emits invoice.paid once, with the invoice-currency amount, when SEK lines settle a EUR invoice in full', async () => {
+    // Same EUR invoice, paid in full: 11 496,70 kr at 11,4967 is exactly the
+    // 1 000 EUR remaining. The duplicate-guard sweeps find nothing, so the
+    // payment books and the event carries the EUR amount, matching the ledger.
+    const customer = makeCustomer()
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      currency: 'EUR',
+      exchange_rate: 11.4967,
+      total: 1000,
+      remaining_amount: 1000,
+      customer,
+    })
+
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // duplicate guard: EUR currency sweep
+    enqueue({ data: [], error: null }) // duplicate guard: SEK currency sweep
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS update
+
+    mockFindFiscalPeriod.mockResolvedValue('fp-1')
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-eur-full' })
+    const paidHandler = vi.fn()
+    eventBus.on('invoice.paid', paidHandler)
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1930', debit_amount: 11496.7, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 11496.7 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ status: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.status).toBe('paid')
+    expect(paidHandler).toHaveBeenCalledTimes(1)
     expect(paidHandler).toHaveBeenCalledWith(
-      expect.objectContaining({ paymentAmount: 500 }),
+      expect.objectContaining({
+        paymentAmount: 1000,
+        invoice: expect.objectContaining({ status: 'paid', remaining_amount: 0 }),
+      }),
     )
   })
 

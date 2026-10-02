@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { eventBus } from '@/lib/events'
+import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { ensureInitialized } from '@/lib/init'
 import {
   createSupplierInvoicePaymentEntry,
@@ -399,19 +399,15 @@ export const POST = withRouteContext(
     // committed and immutable, so the helper logs and returns null on failure.
     await anchorSupplierInvoiceDocument(supabase, companyId!, id)
 
-    try {
-      await eventBus.emit({
-        type: 'supplier_invoice.paid',
-        payload: {
-          supplierInvoice: { ...invoice, paid_at: paidAt ?? invoice.paid_at } as SupplierInvoice,
-          paymentAmount,
-          companyId: companyId!,
-          userId: user.id,
-        },
-      })
-    } catch (err) {
-      opLog.warn('supplier_invoice.paid event emission failed', err as Error)
-    }
+    // supplier_invoice.paid once, when this payment settles the invoice in
+    // full (never on a partial). Best-effort; the helper logs a failure.
+    await emitSupplierInvoicePaidIfSettled({
+      newStatus,
+      supplierInvoice: { ...invoice, paid_at: paidAt ?? invoice.paid_at } as SupplierInvoice,
+      paymentAmount,
+      companyId: companyId!,
+      userId: user.id,
+    })
 
     // Remember the chosen payment account so the next dialog can default to it.
     // Only update when the caller actually picked one: the MCP / agent path

@@ -4,6 +4,9 @@ import { validateBody } from '@/lib/api/validate'
 import { updateFiscalPeriod } from '@/lib/core/bookkeeping/fiscal-year-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { z } from 'zod'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 const UpdateFiscalPeriodSchema = z.object({
   name: z.string().min(1).optional(),

@@ -3,6 +3,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { PreviewSupplierPaymentBatchSchema } from '@/lib/api/schemas'
 import { previewSupplierPaymentBatch } from '@/lib/payments/batch-service'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * Preview a payment batch before creating it: which of the selected invoices

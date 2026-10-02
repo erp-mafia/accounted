@@ -6,6 +6,9 @@ import { getNarrative } from '@/lib/bokslut/arsredovisning/narrative-service'
 import { NarrativeUpdateSchema } from '@/lib/bokslut/arsredovisning/workflow-schemas'
 import { updateArsredovisningNarrative } from '@/lib/bokslut/arsredovisning/workflow-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export const GET = withRouteContext(
   'period.arsredovisning_narrative_get',

@@ -11,7 +11,8 @@ import {
 
 /**
  * These assertions mirror update_overdue_supplier_invoices()
- * (20260727160000_supplier_invoice_overdue_symmetric.sql). The pg-real test
+ * (20260924204244_supplier_invoice_overdue_skip_reset_archives.sql; its
+ * row predicate is unchanged from 20260727160000). The pg-real test
  * (tests/pg/supplier-invoice-overdue-cron.pg.test.ts) pins the SQL side; this
  * file pins the app side so the two cannot drift apart silently.
  */

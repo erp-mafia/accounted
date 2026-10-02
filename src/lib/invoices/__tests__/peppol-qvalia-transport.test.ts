@@ -113,7 +113,19 @@ describe('readQvaliaConfigFromEnv', () => {
       authScheme: 'raw',
       webhookSecret: 's',
       webhookHeader: 'x-accounted-webhook-key',
+      webhookSigningSecret: null,
     })
+  })
+
+  it('reads the webhook signing secret, trimmed', () => {
+    const parsed = readQvaliaConfigFromEnv({
+      QVALIA_API_KEY: 'k',
+      QVALIA_PARTNER_REG_NO: 'SE1',
+      QVALIA_BASE_URL: 'https://api.qvalia.com',
+      QVALIA_WEBHOOK_SIGNING_SECRET: ' qv_whsec_1 ',
+    })
+    expect(parsed?.webhookSigningSecret).toBe('qv_whsec_1')
+    expect(parsed?.webhookSecret).toBeNull()
   })
 
   it('honours an explicit account number, the ApiKey prefix and a custom header', () => {
@@ -449,6 +461,55 @@ describe('Qvalia transport: verifyWebhook', () => {
       isTerminal: true,
       detail: 'error: Peppol validation failed: invoice does not conform to UBL 2.1',
     })
+  })
+})
+
+describe('Qvalia transport: verifyWebhook with a signing secret', () => {
+  // Fixed vector: HMAC-SHA256('qv_whsec_transport', '1790000000.' + BODY),
+  // cross-checked with openssl dgst -sha256 -hmac.
+  const SIGNING = 'qv_whsec_transport'
+  const T = 1790000000
+  const BODY = '{"eventId":"evt_1","eventType":"document_delivery","direction":"outgoing","integrationId":"int-9","globalTransactionId":"int-9","status":{"status":"processed","updatedAt":"2026-09-21T14:13:19.000Z"}}'
+  const V1 = 'f92a01f19779983acc443a620aee3612a8babf2928cbd59038cc8e0212d3872b'
+  const transport = createQvaliaTransport(
+    { ...config, webhookSecret: null, webhookSigningSecret: SIGNING },
+    { fetch: vi.fn<typeof fetch>(), now: () => new Date(T * 1000) },
+  )
+
+  function signed(signature: string | null, body = BODY) {
+    const headers = new Headers({ 'content-type': 'application/json' })
+    if (signature) headers.set('X-Qvalia-Signature', signature)
+    return { headers, rawBody: new TextEncoder().encode(body) }
+  }
+
+  it('accepts a valid signature over the raw bytes and marks the verification method', async () => {
+    const [event] = await transport.verifyWebhook(signed(`t=${T},v1=${V1}`))
+    expect(event).toMatchObject({
+      providerSubmissionId: 'int-9',
+      providerEventId: 'document_delivery:int-9:processed',
+      verificationMethod: 'hmac_sha256_signature',
+    })
+  })
+
+  it('rejects a missing, tampered, re-timestamped or stale signature as an auth failure', async () => {
+    await expect(transport.verifyWebhook(signed(null))).rejects.toMatchObject({ kind: 'auth' })
+    await expect(transport.verifyWebhook(signed(`t=${T},v1=${V1}`, BODY.replace('processed', 'rejected')))).rejects.toMatchObject({ kind: 'auth' })
+    await expect(transport.verifyWebhook(signed(`t=${T - 1},v1=${V1}`))).rejects.toMatchObject({ kind: 'auth' })
+    const later = createQvaliaTransport(
+      { ...config, webhookSecret: null, webhookSigningSecret: SIGNING },
+      { fetch: vi.fn<typeof fetch>(), now: () => new Date((T + 301) * 1000) },
+    )
+    await expect(later.verifyWebhook(signed(`t=${T},v1=${V1}`))).rejects.toMatchObject({ kind: 'auth' })
+  })
+
+  it('does not fall back to the shared-secret header once a signing secret is set', async () => {
+    const both = createQvaliaTransport(
+      { ...config, webhookSigningSecret: SIGNING },
+      { fetch: vi.fn<typeof fetch>(), now: () => new Date(T * 1000) },
+    )
+    const request = signed(null)
+    request.headers.set('X-Accounted-Webhook-Key', config.webhookSecret!)
+    await expect(both.verifyWebhook(request)).rejects.toMatchObject({ kind: 'auth' })
   })
 })
 

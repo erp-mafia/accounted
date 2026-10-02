@@ -10,6 +10,9 @@ import { utcDateStamp } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
