@@ -4935,7 +4935,8 @@
     "reason_no_swish": "Ingen Swish-kod: företaget har inget Swishnummer.",
     "reason_invalid_swish": "Ingen Swish-kod: Swishnumret är ogiltigt.",
     "reason_swish_hidden": "Ingen Swish-kod: Swish visas inte på fakturorna.",
-    "reason_no_link": "Ingen QR-kod: fakturan har ingen betallänk."
+    "reason_no_link": "Ingen QR-kod: fakturan har ingen betallänk.",
+    "reason_foreign_customer": "Ingen QR-kod: bankapp och Swish fungerar bara för kunder i Sverige."
   },
   "invoice_editor_panel": {
     "back": "Tillbaka",

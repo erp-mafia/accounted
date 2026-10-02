@@ -253,6 +253,14 @@ describe('paymentReason', () => {
     })
   })
 
+  it('explains why a customer abroad gets no bank-app or Swish code', () => {
+    expect(reason({ customer: { customer_type: 'eu_business', country: 'DK' } })).toEqual({
+      key: 'reason_foreign_customer',
+      action: null,
+    })
+    expect(reason({ customer: { customer_type: 'swedish_business', country: 'SE' } })).toBeNull()
+  })
+
   it('promises the link code at send when Stripe creates the link', () => {
     expect(
       reason({ autoPaymentLink: true, settings: settings({ bankgiro: null, clearing_number: '6123', account_number: '456789012' }) }),

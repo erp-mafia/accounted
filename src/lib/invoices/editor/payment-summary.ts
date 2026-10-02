@@ -52,7 +52,8 @@ export interface EditorPaymentSummaryInput {
     due_date: string | null
     invoice_date: string | null
   }
-  customer: { customer_type?: string | null } | null
+  /** The country decides whether Swedish bank-app and Swish codes apply (auto mode). */
+  customer: { customer_type?: string | null; country?: string | null } | null
   lang: 'sv' | 'en'
   /** A Stripe link is created when the invoice is sent (no link exists yet). */
   autoPaymentLink: boolean
@@ -249,6 +250,8 @@ export function paymentReason(
       return { key: 'reason_swish_hidden', action: 'open_panel' }
     case 'no_payment_link':
       return { key: 'reason_no_link', action: 'open_panel' }
+    case 'foreign_customer':
+      return { key: 'reason_foreign_customer', action: null }
   }
 }
 

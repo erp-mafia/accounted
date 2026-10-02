@@ -4935,7 +4935,8 @@
     "reason_no_swish": "No Swish code: the company has no Swish number.",
     "reason_invalid_swish": "No Swish code: the Swish number is not valid.",
     "reason_swish_hidden": "No Swish code: Swish is not shown on invoices.",
-    "reason_no_link": "No QR code: the invoice has no payment link."
+    "reason_no_link": "No QR code: the invoice has no payment link.",
+    "reason_foreign_customer": "No QR code: the banking app and Swish only work for customers in Sweden."
   },
   "invoice_editor_panel": {
     "back": "Back",
