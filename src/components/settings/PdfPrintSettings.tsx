@@ -65,18 +65,21 @@ function PdfToggleRow({
 /**
  * The one QR code invoices print (lib/invoices/payment-qr.ts): a radio list
  * with a short hint under each choice. It fills the control column like the
- * other settings controls.
+ * other settings controls. Also the invoice editor's "Betalning och
+ * utseende" panel, where the per-invoice list adds "as all invoices".
  */
-function QrModeRadioGroup({
+export function QrModeRadioGroup<T extends string = InvoiceQrMode>({
   value,
   onChange,
   options,
   label,
+  disabled,
 }: {
-  value: InvoiceQrMode
-  onChange: (mode: InvoiceQrMode) => void
-  options: Array<{ value: InvoiceQrMode; label: string; hint: string }>
+  value: T
+  onChange: (mode: T) => void
+  options: Array<{ value: T; label: string; hint: string }>
   label: string
+  disabled?: boolean
 }) {
   return (
     <div role="radiogroup" aria-label={label} className="flex w-full flex-col gap-1">
@@ -88,9 +91,10 @@ function QrModeRadioGroup({
             type="button"
             role="radio"
             aria-checked={checked}
+            disabled={disabled}
             onClick={() => onChange(option.value)}
             data-ph-unmask=""
-            className="flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            className="flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span
               aria-hidden

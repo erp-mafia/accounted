@@ -13,6 +13,8 @@ interface EditorStatusLineProps<TStep> {
   /** Owner/admin may add payment details here; others are asked to get one. */
   canAddPayee: boolean
   onAddPayee: () => void
+  /** Jump to the invoice date (it is in a locked or closed period). */
+  onFixDate?: () => void
   className?: string
 }
 
@@ -28,6 +30,7 @@ export function EditorStatusLine<TStep>({
   onStep,
   canAddPayee,
   onAddPayee,
+  onFixDate,
   className,
 }: EditorStatusLineProps<TStep>) {
   const t = useTranslations('invoice_editor_shell')
@@ -37,6 +40,12 @@ export function EditorStatusLine<TStep>({
     const { prefix, label } = describeStep(status.step)
     content = (
       <AttnLine action={{ label, onClick: () => onStep(status.step) }}>{prefix}</AttnLine>
+    )
+  } else if (status.kind === 'date_locked') {
+    content = (
+      <AttnLine action={onFixDate ? { label: t('status_date_fix'), onClick: onFixDate } : undefined}>
+        {t(`status_date_${status.lock}`)}
+      </AttnLine>
     )
   } else if (status.kind === 'payee_missing') {
     content = canAddPayee ? (
