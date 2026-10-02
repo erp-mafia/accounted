@@ -2691,7 +2691,7 @@
     "qr_mode_label": "QR code on the invoice",
     "qr_mode_help": "Each invoice gets at most one QR code. It sits in the payment box and asks for the amount still to pay.",
     "qr_mode_auto": "Automatic",
-    "qr_mode_auto_hint": "Swish for private customers, otherwise the banking app. Otherwise the payment link, if the invoice has one.",
+    "qr_mode_auto_hint": "Swish for private customers, otherwise the banking app. Otherwise, and always for customers abroad, the payment link if the invoice has one.",
     "qr_mode_bank_app": "Banking app",
     "qr_mode_bank_app_hint": "Fills in amount, bankgiro or plusgiro, OCR and due date. Needs a bankgiro or plusgiro and invoices in SEK.",
     "qr_mode_swish": "Swish",

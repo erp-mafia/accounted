@@ -2691,7 +2691,7 @@
     "qr_mode_label": "QR-kod på fakturan",
     "qr_mode_help": "Varje faktura får högst en QR-kod. Den står i betalningsrutan och gäller beloppet som återstår att betala.",
     "qr_mode_auto": "Automatiskt",
-    "qr_mode_auto_hint": "Swish till privatpersoner, annars bankapp. Annars betallänken, om fakturan har en.",
+    "qr_mode_auto_hint": "Swish till privatpersoner, annars bankapp. Annars, och alltid till kunder utomlands, betallänken om fakturan har en.",
     "qr_mode_bank_app": "Bankapp",
     "qr_mode_bank_app_hint": "Belopp, bankgiro eller plusgiro, OCR och förfallodag fylls i. Kräver bankgiro eller plusgiro och fakturor i kronor.",
     "qr_mode_swish": "Swish",
