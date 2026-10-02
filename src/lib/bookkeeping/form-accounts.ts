@@ -1,12 +1,12 @@
 import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
-import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 
 /**
  * Accounts that are not in the BAS 2026 reference but are seeded by
  * seed_chart_of_accounts() for one legal form, so booking templates for that
- * form may reference them and account-backfill can restore them. Keep this
- * list tiny: every entry is a deviation from the standard chart that a
- * reviewer has to justify.
+ * form may reference them. account-backfill deliberately does not restore
+ * them: it cannot tell the form, and for any other form the number is not
+ * this account. Keep this list tiny: every entry is a deviation from the
+ * standard chart that a reviewer has to justify.
  *
  * 3901 Medlemsavgifter (ekonomisk förening): a sub-account under BAS group 39
  * Övriga rörelseintäkter. Membership fees are tax-exempt for the association
@@ -31,9 +31,4 @@ export const FORM_SEEDED_ACCOUNTS: Readonly<Record<string, BASReferenceAccount>>
 
 export function getFormSeededAccount(accountNumber: string): BASReferenceAccount | undefined {
   return FORM_SEEDED_ACCOUNTS[accountNumber]
-}
-
-/** BAS 2026 first, then the form-seeded deviations. */
-export function getSeedableAccountReference(accountNumber: string): BASReferenceAccount | undefined {
-  return getBASReference(accountNumber) ?? getFormSeededAccount(accountNumber)
 }

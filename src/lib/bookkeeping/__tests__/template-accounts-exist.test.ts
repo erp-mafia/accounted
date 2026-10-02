@@ -32,7 +32,7 @@ describe('BOOKING_TEMPLATES reference only real BAS accounts', () => {
         const account = (t as unknown as Record<string, string | undefined>)[field]
         if (!account) continue
         // Form-seeded accounts (3901 Medlemsavgifter) are seeded by
-        // seed_chart_of_accounts() and restored by account-backfill.
+        // seed_chart_of_accounts() for the form whose templates use them.
         if (!getBASReference(account) && !getFormSeededAccount(account)) {
           missing.push(`${t.id}.${field} = ${account}`)
         }

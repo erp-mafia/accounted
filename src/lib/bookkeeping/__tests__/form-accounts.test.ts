@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
-import {
-  FORM_SEEDED_ACCOUNTS,
-  getFormSeededAccount,
-  getSeedableAccountReference,
-} from '@/lib/bookkeeping/form-accounts'
+import { FORM_SEEDED_ACCOUNTS, getFormSeededAccount } from '@/lib/bookkeeping/form-accounts'
 
 describe('form-seeded accounts', () => {
   it('lists only accounts that BAS 2026 does not define', () => {
@@ -23,11 +19,5 @@ describe('form-seeded accounts', () => {
       normal_balance: 'credit',
       sru_code: getBASReference('3900')?.sru_code ?? '7413',
     })
-  })
-
-  it('prefers BAS 2026 and falls back to the form-seeded list', () => {
-    expect(getSeedableAccountReference('1930')?.account_name).toBe(getBASReference('1930')?.account_name)
-    expect(getSeedableAccountReference('3901')?.account_name).toBe('Medlemsavgifter')
-    expect(getSeedableAccountReference('3902')).toBeUndefined()
   })
 })
