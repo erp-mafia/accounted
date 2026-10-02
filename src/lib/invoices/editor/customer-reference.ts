@@ -32,3 +32,16 @@ export function planYourReferencePrefill(input: {
   if (ownedByUser) return { value: current, prefilled: null }
   return { value: contact, prefilled: contact || null }
 }
+
+/**
+ * Whether Er referens should be planned again: only when the picked customer
+ * differs from the one the field last followed. The editor's customer effect
+ * also re-runs when the customer list refreshes, and a refresh must neither
+ * refill a field the user emptied nor fill a saved draft's empty value.
+ */
+export function customerChangedForReference(
+  followedCustomerId: string | null | undefined,
+  customerId: string | null | undefined,
+): boolean {
+  return (followedCustomerId || null) !== (customerId || null)
+}

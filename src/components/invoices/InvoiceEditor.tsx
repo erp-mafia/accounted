@@ -140,7 +140,7 @@ import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/edi
 import { proposeDraftSendLines } from '@/lib/invoices/editor/voucher-preview'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
-import { planYourReferencePrefill } from '@/lib/invoices/editor/customer-reference'
+import { customerChangedForReference, planYourReferencePrefill } from '@/lib/invoices/editor/customer-reference'
 import {
   invoiceDateLock,
   resolveDetailsChips,
@@ -749,6 +749,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // The Er referens the editor filled in from the customer card itself
   // (lib/invoices/editor/customer-reference.ts); null once it is the user's.
   const prefilledReferenceRef = useRef<string | null>(null)
+  // The customer Er referens last followed. A saved draft starts on its own
+  // customer, so its value stands until another one is picked; a new or
+  // copied invoice starts on none.
+  const referenceCustomerRef = useRef<string | null>(isEditMode ? (initial?.customer_id ?? null) : null)
 
   // Edit mode: the claim card's property fields are restored from the first
   // line that names the property (ROT or grön teknik: stamped onto every
@@ -1521,8 +1525,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }, [company?.id, watchDocumentType, isEditMode, initial?.invoice_number])
 
   useEffect(() => {
-    // False only while a saved draft's own customer resolves the first time.
-    const userPicked = didInitialCustomerSync.current
     if (watchCustomerId) {
       const customer = customers.find((c) => c.id === watchCustomerId)
       setSelectedCustomer(customer || null)
@@ -1573,11 +1575,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
     // Er referens from the customer card's contact person: into an empty
     // field, replacing only what the editor itself put there, never what the
-    // user typed. Not on the first resolution of a saved draft (its own
-    // value stands), and never for a received självfaktura (no references).
-    if (mode === 'self_billed' || !userPicked) return
+    // user typed. Only when the customer changes: this effect also re-runs
+    // on a refreshed customer list, which must not refill a field the user
+    // emptied, and a saved draft's own customer never replaces its value.
+    // Never for a received självfaktura (no references).
+    if (mode === 'self_billed') return
     const customer = watchCustomerId ? customers.find((c) => c.id === watchCustomerId) : null
     if (watchCustomerId && !customer) return
+    if (!customerChangedForReference(referenceCustomerRef.current, watchCustomerId)) return
+    referenceCustomerRef.current = watchCustomerId || null
     const current = getValues('your_reference') ?? ''
     const plan = planYourReferencePrefill({
       current,

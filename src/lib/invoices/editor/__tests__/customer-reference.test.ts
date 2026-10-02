@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { planYourReferencePrefill } from '../customer-reference'
+import { customerChangedForReference, planYourReferencePrefill } from '../customer-reference'
 
 describe('planYourReferencePrefill', () => {
   it('fills an empty field with the customer card contact person', () => {
@@ -61,5 +61,22 @@ describe('planYourReferencePrefill', () => {
       value: 'Per Lind',
       prefilled: 'Per Lind',
     })
+  })
+})
+
+describe('customerChangedForReference', () => {
+  it('plans again only for a different customer than the one the field followed', () => {
+    expect(customerChangedForReference(null, 'cust-a')).toBe(true)
+    expect(customerChangedForReference('cust-a', 'cust-b')).toBe(true)
+    expect(customerChangedForReference('cust-a', null)).toBe(true)
+  })
+
+  it('ignores a refreshed customer list for the same customer, so an emptied field stays empty', () => {
+    expect(customerChangedForReference('cust-a', 'cust-a')).toBe(false)
+  })
+
+  it('treats no customer and an empty id alike', () => {
+    expect(customerChangedForReference(null, '')).toBe(false)
+    expect(customerChangedForReference(undefined, null)).toBe(false)
   })
 })
