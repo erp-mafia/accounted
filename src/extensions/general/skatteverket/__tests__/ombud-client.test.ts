@@ -28,6 +28,8 @@ import {
   OmbudApiError,
   resolveOmbudRoleCodes,
   summarizeGrants,
+  grantCountsFor,
+  grantPredatesOptIn,
 } from '../lib/ombud-client'
 import { SkatteverketAuthError } from '../lib/api-client'
 
@@ -249,6 +251,8 @@ describe('pure helpers', () => {
       moms_ombud: false,
       roles: ['JLO', 'MOMS', 'DEKL'],
       recognized: true,
+      // The future-dated MOMS post is not active, so it sets no signing day.
+      signedFrom: { lasombud: '2026-01-01', moms_ombud: null },
     })
     expect(summary.get('195001011234')).toMatchObject({ lasombud: false, moms_ombud: true, recognized: true })
     expect(summary.size).toBe(2)
@@ -259,5 +263,27 @@ describe('pure helpers', () => {
       '2026-09-01',
     )
     expect(unknown.get('165560000000')).toMatchObject({ roles: ['ZZ'], recognized: false, lasombud: false })
+  })
+
+  it('grantCountsFor: only an active grant signed on or after the opt-in day counts', () => {
+    const summary = summarizeGrants(
+      [
+        { huvudman: '165560000000', roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-03-01' },
+        { huvudman: '165560000000', roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-06-15T00:00:00' },
+        { huvudman: '165560000000', roll: 'MOMS', rollbeskrivning: 'Momsdeklaration, ombud', giltigFrom: '2026-02-01' },
+      ],
+      '2026-09-01',
+    ).get('165560000000')
+
+    // The newest active post decides, compared on its date part.
+    expect(summary?.signedFrom).toEqual({ lasombud: '2026-06-15', moms_ombud: '2026-02-01' })
+    expect(grantCountsFor(summary, 'lasombud', '2026-06-15')).toBe(true)
+    expect(grantCountsFor(summary, 'lasombud', '2026-06-16')).toBe(false)
+    expect(grantPredatesOptIn(summary, 'lasombud', '2026-06-16')).toBe(true)
+    expect(grantCountsFor(summary, 'moms_ombud', '2026-05-01')).toBe(false)
+    expect(grantPredatesOptIn(summary, 'moms_ombud', '2026-05-01')).toBe(true)
+    // Nothing granted is neither counted nor "predating".
+    expect(grantCountsFor(undefined, 'lasombud', '2026-01-01')).toBe(false)
+    expect(grantPredatesOptIn(undefined, 'lasombud', '2026-01-01')).toBe(false)
   })
 })

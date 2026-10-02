@@ -50,11 +50,18 @@ export interface SkvCompanyConnection {
   last_probe_at: string | null
   last_probe_detail: Record<string, unknown> | null
   last_error: string | null
+  /**
+   * The company's opt-in for THIS org number: the first deep link or
+   * Verifiera on it (reset when the org number changes, see
+   * recordProbeResult). A grant only counts when it was signed on or after
+   * this day (ombudGrantCounts in ombud-client.ts).
+   */
+  created_at: string
 }
 
 const CONNECTION_COLUMNS =
   'id, company_id, environment, org_number, status, lasombud_status, lasombud_checked_at, ' +
-  'moms_ombud_status, moms_ombud_checked_at, verified_at, last_probe_at, last_probe_detail, last_error'
+  'moms_ombud_status, moms_ombud_checked_at, verified_at, last_probe_at, last_probe_detail, last_error, created_at'
 
 export async function getConnection(
   companyId: string,
@@ -92,8 +99,9 @@ export interface ProbeResultInput {
   environment: SkvEnvironment
   orgNumber: string
   createdBy?: string
-  lasombud?: { status: GrantStatus; detail?: unknown }
-  momsOmbud?: { status: GrantStatus; detail?: unknown }
+  /** `reason` is stored with the detail for the settings panel (e.g. predates_opt_in). */
+  lasombud?: { status: GrantStatus; detail?: unknown; reason?: string }
+  momsOmbud?: { status: GrantStatus; detail?: unknown; reason?: string }
   error?: string | null
 }
 
@@ -105,8 +113,14 @@ export async function recordProbeResult(
   input: ProbeResultInput
 ): Promise<SkvCompanyConnection | null> {
   const supabase = getServiceClient()
-  const existing = await getConnection(input.companyId, input.environment)
+  const stored = await getConnection(input.companyId, input.environment)
   const now = new Date().toISOString()
+  // A row is the opt-in for ONE org number. When the company now answers for
+  // another number, nothing recorded for the old one carries over: grant
+  // states, verification time and the opt-in day all start again, so a grant
+  // the previous number's owner signed can never be inherited.
+  const orgNumberChanged = stored !== null && stored.org_number !== input.orgNumber
+  const existing = orgNumberChanged ? null : stored
 
   const nextGrant = (
     previous: GrantStatus,
@@ -139,6 +153,10 @@ export async function recordProbeResult(
   if (input.momsOmbud) row.moms_ombud_checked_at = now
   if (input.createdBy && !existing) row.created_by = input.createdBy
   if (status === 'verified' && !existing?.verified_at) row.verified_at = now
+  if (orgNumberChanged) {
+    row.created_at = now
+    if (status !== 'verified') row.verified_at = null
+  }
 
   const { data, error } = await supabase
     .from('skatteverket_company_connections')
@@ -215,22 +233,70 @@ export async function markConnectionRevoked(
  */
 export async function listVerifiedCompanies(
   environment: SkvEnvironment,
-  behorighet: SkvBehorighet,
-  limit = 200
+  behorighet: SkvBehorighet
 ): Promise<Array<{ company_id: string; org_number: string; created_by: string | null }>> {
+  type Row = { company_id: string; org_number: string; created_by: string | null }
   const column = behorighet === 'lasombud' ? 'lasombud_status' : 'moms_ombud_status'
-  const { data, error } = await getServiceClient()
-    .from('skatteverket_company_connections')
-    .select('company_id, org_number, created_by')
-    .eq('environment', environment)
-    .in('status', ['verified', 'partial'])
-    .eq(column, 'granted')
-    .limit(limit)
-  if (error) {
-    log.warn('listVerifiedCompanies failed', { environment, behorighet, error: error.message })
+  try {
+    const client = getServiceClient()
+    // Every granted company, not a first page: a fixed cap here silently
+    // left companies past it on personal tokens (the sync cron orders and
+    // caps its own work list).
+    const rows = await fetchAllRows<Row>(({ from, to }) =>
+      client
+        .from('skatteverket_company_connections')
+        .select('company_id, org_number, created_by')
+        .eq('environment', environment)
+        .in('status', ['verified', 'partial'])
+        .eq(column, 'granted')
+        .order('company_id', { ascending: true })
+        .range(from, to)
+    )
+    return await keepRowsOnCurrentOrgNumber(rows)
+  } catch (error) {
+    log.warn('listVerifiedCompanies failed', {
+      environment,
+      behorighet,
+      error: error instanceof Error ? error.message : String(error),
+    })
     return []
   }
-  return (data ?? []) as Array<{ company_id: string; org_number: string; created_by: string | null }>
+}
+
+/**
+ * The rows whose company STILL answers for the org number the row was
+ * verified on (company_settings, 12-digit redovisare form). System reads
+ * address Skatteverket by the company's current org number, so a grant
+ * recorded for another number must not serve them: a tenant could otherwise
+ * verify its own number, then switch its settings to a number whose owner
+ * appointed Accounted. Fails closed: a settings read error keeps nothing.
+ */
+export async function keepRowsOnCurrentOrgNumber<T extends { company_id: string; org_number: string }>(
+  rows: T[]
+): Promise<T[]> {
+  if (rows.length === 0) return []
+  const current = new Map<string, string>()
+  const ids = [...new Set(rows.map((row) => row.company_id))]
+  const client = getServiceClient()
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await client
+      .from('company_settings')
+      .select('company_id, org_number, entity_type')
+      .in('company_id', ids.slice(i, i + 200))
+    if (error) {
+      log.warn('org-number binding check failed; no row kept', { error: error.message })
+      return []
+    }
+    for (const settings of (data ?? []) as Array<{ company_id: string; org_number: string | null; entity_type: string | null }>) {
+      if (!settings.org_number) continue
+      try {
+        current.set(settings.company_id, toRedovisare12(settings.org_number, parseEntityType(settings.entity_type)))
+      } catch {
+        // An unparsable org number binds to nothing.
+      }
+    }
+  }
+  return rows.filter((row) => current.get(row.company_id) === row.org_number)
 }
 
 /**
@@ -247,7 +313,7 @@ export async function listConnections(environment: SkvEnvironment): Promise<SkvC
     return await fetchAllRows<SkvCompanyConnection>(({ from, to }) =>
       client
         .from('skatteverket_company_connections')
-        .select('id, company_id, environment, org_number, status, lasombud_status, lasombud_checked_at, moms_ombud_status, moms_ombud_checked_at, verified_at, last_probe_at, last_probe_detail, last_error')
+        .select('id, company_id, environment, org_number, status, lasombud_status, lasombud_checked_at, moms_ombud_status, moms_ombud_checked_at, verified_at, last_probe_at, last_probe_detail, last_error, created_at')
         .eq('environment', environment)
         .order('created_at', { ascending: true })
         .order('id', { ascending: true })

@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { findCompanyTokenUser, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
-import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
+import { findCompanyTokenUser, hasOmbudReadAccess } from '@/extensions/general/skatteverket/lib/resolve-auth'
 
 export interface SkvConnectionHealth {
   status: 'active' | 'needs_reconsent'
@@ -24,9 +23,9 @@ export const SKV_NEEDS_RECONSENT_MESSAGE =
  * lookup failure also answers null, never a thrown tool call.
  *
  * The system-before-user priority mirrors resolveReadAuth
- * (skatteverket/lib/resolve-auth.ts); not reused directly because callers
- * need token metadata (createdAt, reconsent status) that resolveReadAuth
- * deliberately collapses into an auth result.
+ * (skatteverket/lib/resolve-auth.ts) through the same hasOmbudReadAccess;
+ * not reused whole because callers need token metadata (createdAt, reconsent
+ * status) that resolveReadAuth deliberately collapses into an auth result.
  */
 export async function getSkvConnectionHealth(
   supabase: SupabaseClient,
@@ -34,11 +33,7 @@ export async function getSkvConnectionHealth(
 ): Promise<SkvConnectionHealth | null> {
   try {
     if (process.env.SKATTEVERKET_ENABLED !== 'true') return null
-    if (
-      getSystemAuthMode() === 'on' &&
-      isSystemAuthConfigured() &&
-      (await hasVerifiedGrant(companyId, 'lasombud'))
-    ) {
+    if (await hasOmbudReadAccess(companyId)) {
       return { status: 'active', source: 'system' }
     }
     const token = await findCompanyTokenUser(supabase, companyId)

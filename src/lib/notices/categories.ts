@@ -23,6 +23,7 @@ import {
   type SkattekontoReconciliationLatest,
 } from '@/lib/reconciliation/skattekonto-latest'
 import { expiringBankConnectionsFrom, skvStatusNeedsReconnect } from './predicates'
+import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
 import type { Notice } from './types'
 
@@ -246,6 +247,8 @@ export async function detectSkvDisconnected(
     if (!skvStatusNeedsReconnect({ connected: true, needsReconsent, expired, canRefresh })) {
       return null
     }
+    // Last, so the ombud lookup only runs for a session that would nag.
+    if (await hasSkatteverketOmbudReadAccess(companyId)) return null
     // needs_reconsent rows discriminate on when the terminal error was
     // detected; refresh-exhausted rows on when the token expired: either way
     // a NEW failure after a successful re-consent mints a new id.

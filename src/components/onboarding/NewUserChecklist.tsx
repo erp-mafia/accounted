@@ -30,6 +30,7 @@ import { PROVIDER_DISPLAY_NAMES } from '@/lib/providers/unfinished-connect'
 import type { ProviderName } from '@/lib/providers/types'
 import type { InitialSetupPath, InitialSetupState } from '@/types'
 import { useBranding } from '@/lib/branding/brand-context'
+import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
 
 interface NewUserChecklistProps {
   initialState: InitialSetupState
@@ -37,6 +38,11 @@ interface NewUserChecklistProps {
   hasBookkeepingImported?: boolean
   hasBankConnected?: boolean
   hasSkatteverketConnected?: boolean
+  /**
+   * Accounted can be the company's ombud (system auth on): the Skatteverket
+   * step appoints it instead of starting an hourly BankID session.
+   */
+  skvOmbudEnabled?: boolean
   hasInboxItems?: boolean
   /** The user holds a live OAuth-minted MCP key, i.e. a Claude (or other
    *  MCP client) connection completed its first sign-in. This is the only
@@ -92,6 +98,7 @@ export default function NewUserChecklist({
   hasBookkeepingImported = false,
   hasBankConnected = false,
   hasSkatteverketConnected = false,
+  skvOmbudEnabled = false,
   hasInboxItems = false,
   hasMcpKey = false,
   vatLine = null,
@@ -128,6 +135,9 @@ export default function NewUserChecklist({
   // so the one-click Claude path stays the visual primary; at most one open.
   const [sideDoor, setSideDoor] = useState<SideDoor | null>(null)
   const [serverUrlCopied, setServerUrlCopied] = useState(false)
+  const ombud = useOmbudAppointWithToasts((result) => {
+    if (result === 'granted') router.refresh()
+  })
 
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
@@ -468,21 +478,35 @@ export default function NewUserChecklist({
             active={activeStep === 3}
             title={t('step_skv_title')}
             last={lastStep === 'skv'}
-            action={(variant) => (
-              <Button size="sm" variant={variant} asChild>
-                {/* The authorize endpoint redirects off-site to Skatteverket. */}
-                {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-                <a
-                  href="/api/extensions/ext/skatteverket/authorize?return_to=/"
-                  onClick={() => captureSetup('onboarding_setup_step_started', { step: 'skatteverket' })}
+            action={(variant) =>
+              skvOmbudEnabled ? (
+                <Button
+                  size="sm"
+                  variant={variant}
+                  loading={ombud.linking || ombud.checking}
+                  onClick={() => {
+                    captureSetup('onboarding_setup_step_started', { step: 'skatteverket' })
+                    void ombud.appoint()
+                  }}
                 >
                   {t('step_skv_action')}
-                </a>
-              </Button>
-            )}
+                </Button>
+              ) : (
+                <Button size="sm" variant={variant} asChild>
+                  {/* The authorize endpoint redirects off-site to Skatteverket. */}
+                  {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+                  <a
+                    href="/api/extensions/ext/skatteverket/authorize?return_to=/"
+                    onClick={() => captureSetup('onboarding_setup_step_started', { step: 'skatteverket' })}
+                  >
+                    {t('step_skv_action')}
+                  </a>
+                </Button>
+              )
+            }
             marks={<LogoMark src="/logos/skatteverket_color.svg" name="Skatteverket" />}
           >
-            {t('step_skv_description')}
+            {skvOmbudEnabled ? t('step_skv_description_ombud', { appName }) : t('step_skv_description')}
             {vatLine?.kind === 'date' && (
               <>
                 {' '}

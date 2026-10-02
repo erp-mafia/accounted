@@ -324,6 +324,39 @@ describe('skvRequestWithAuth: system mode', () => {
     })
   })
 
+  describe('gateway keys', () => {
+    afterEach(() => {
+      delete process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID
+      delete process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_SECRET
+    })
+
+    const headersOfLastCall = () =>
+      ((global.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as RequestInit).headers as Record<string, string>
+
+    it("system calls carry the system application's own pair when it is configured", async () => {
+      process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID = 'sys-gw-id'
+      process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_SECRET = 'sys-gw-secret'
+      mockFetchStatus(200, '{}')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      expect(headersOfLastCall()).toMatchObject({ Client_Id: 'sys-gw-id', Client_Secret: 'sys-gw-secret' })
+    })
+
+    it('a lone system id or secret falls back to the shared pair, never a mix', async () => {
+      process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID = 'sys-gw-id'
+      mockFetchStatus(200, '{}')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      expect(headersOfLastCall()).toMatchObject({ Client_Id: 'gw-id', Client_Secret: 'gw-secret' })
+    })
+
+    it('BankID (user) calls keep the shared pair even when a system pair exists', async () => {
+      process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID = 'sys-gw-id'
+      process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_SECRET = 'sys-gw-secret'
+      mockFetchStatus(200, '{}')
+      await skvRequest(fakeSupabase, 'user-1', 'company-1', 'GET', '/x')
+      expect(headersOfLastCall()).toMatchObject({ Client_Id: 'gw-id', Client_Secret: 'gw-secret' })
+    })
+  })
+
   it('401 in system mode -> SYSTEM_AUTH_FAILED and NEVER touches the user token table', async () => {
     mockFetchStatus(401, '{"error":"Token has been revoked."}')
     try {

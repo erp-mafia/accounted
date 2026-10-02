@@ -25,8 +25,11 @@ const MAX_COMPANIES_PER_RUN = 50
 /**
  * GET /api/extensions/skatteverket/skattekonto/sync/cron
  *
- * Daily skattekonto sync (cron 0 4 * * *: 04:00 UTC, 06:00 Swedish time).
- * Pulls saldo + transactions and persists them to skattekonto_transactions.
+ * Hourly skattekonto sync (cron 0 * * * *). Hourly because an ombud
+ * company costs one shared system token and two reads per run, and its
+ * skattekonto should be as fresh as a logged-in user's; a personal session
+ * that is alive at the top of the hour is synced too. Pulls saldo +
+ * transactions and persists them to skattekonto_transactions.
  *
  * Work list is a union keyed by company:
  *   1. System-mode entries: companies with a verified lasombud grant, synced
@@ -40,8 +43,9 @@ const MAX_COMPANIES_PER_RUN = 50
  * Shadow mode logs per user-mode company whether a verified grant exists,
  * without any behavior change: the rollout confidence signal.
  *
- * Skips a company if it was synced within the last hour (cooldown),
- * to keep manual + cron triggers from racing each other.
+ * Skips a company if it was synced within the last 50 minutes (cooldown),
+ * to keep manual + cron triggers from racing each other. Under an hour so
+ * the previous hourly run never blocks the next one.
  *
  * Time budget: 50s (Vercel default 60s function timeout, 10s margin).
  *
@@ -178,7 +182,7 @@ export async function GET(request: Request) {
 
   const startTime = Date.now()
   const TIME_BUDGET_MS = 50_000
-  const SYNC_COOLDOWN_MS = 60 * 60 * 1000 // 1 hour
+  const SYNC_COOLDOWN_MS = 50 * 60 * 1000 // 50 minutes, under the hourly schedule
   const shadowMode = getSystemAuthMode() === 'shadow'
 
   type Result = {

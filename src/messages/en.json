@@ -1717,6 +1717,7 @@
     "dismiss": "Hide",
     "step_skv_title": "Connect Skatteverket",
     "step_skv_description": "See the tax account and file VAT and employer declarations right from here. Connects with BankID in a couple of minutes.",
+    "step_skv_description_ombud": "See the tax account and file VAT and employer declarations right from here. Appoint {appName} as ombud once with BankID, and the tax account is fetched without new sign-ins.",
     "step_skv_action": "Connect Skatteverket",
     "step_skv_next_vat": "First VAT return: {date}.",
     "step_skv_choose_period": "Pick a VAT period in settings, otherwise no VAT deadlines are tracked.",
@@ -3422,8 +3423,8 @@
     "system_verify_rate_limited": "Wait a minute between verifications.",
     "system_deeplink": "Appoint {appName} as ombud",
     "system_deeplink_loading": "Creating link...",
-    "system_deeplink_failed": "The link could not be created",
     "system_deeplink_hint": "The link opens Skatteverket's e-service with {appName} and the roles pre-selected. Sign there with BankID. The link is valid for three weeks.",
+    "system_predates_opt_in": "The authorization at Skatteverket was signed before the company was connected in {appName}, so it does not count. Appoint {appName} as ombud again with the button below.",
     "needs_reconsent_message": "The Skatteverket connection needs to be renewed. Automatic syncing is paused until you reconnect with BankID.",
     "missing_scope_message": "The connection lacks permission for one or more services, for example the tax account. Reconnect and approve all permissions on Skatteverket's consent page.",
     "connect_waiting": "Waiting for BankID…",
@@ -10722,6 +10723,12 @@
     "skv_unavailable": "The Skatteverket connection is not enabled on this installation.",
     "skv_hold": "At Skatteverket. Approve with BankID on your phone …",
     "skv_failed": "The connection to Skatteverket failed. Try again.",
+    "skv_ombud_sub": "Recommended. Appoint {appName} as ombud at Skatteverket once with BankID, and the tax account is reconciled automatically. You sign declarations as usual.",
+    "skv_ombud_connect": "Appoint {appName} as ombud",
+    "skv_ombud_hold": "At Skatteverket. Sign with BankID, then come back here …",
+    "skv_ombud_not_yet": "We cannot find the ombud at Skatteverket yet. Finish signing there and try again.",
+    "skv_ombud_wait": "Wait a minute and try again.",
+    "skv_ombud_link_failed": "The link to Skatteverket could not be created. Try again.",
     "skv_abandoned": "The tab closed before Skatteverket answered. Try again.",
     "v_skv_connected": "The tax account is fetched from Skatteverket",
     "v_skv_saldo": "Balance at Skatteverket: {amount}",
@@ -12075,5 +12082,15 @@
     "shop_help": "Orders are fetched from the web shop and booked.",
     "zettle": "Zettle",
     "zettle_help": "Paid purchases and refunds are fetched to the Orders page, where you book them."
+  },
+  "skatteverket_ombud": {
+    "appoint": "Appoint {appName} as ombud at Skatteverket",
+    "appoint_hint": "Skatteverket's e-service opens with {appName} pre-filled. Sign with BankID, then come back here.",
+    "granted": "Done. {appName} now fetches from Skatteverket without you signing in.",
+    "not_yet": "No ombud found yet",
+    "not_yet_hint": "Sign at Skatteverket and come back here, or press Verify under Settings > Skatteverket.",
+    "rate_limited": "Wait a minute and try again.",
+    "link_failed": "The link to Skatteverket could not be created",
+    "verify_failed": "The ombud could not be checked"
   }
 }

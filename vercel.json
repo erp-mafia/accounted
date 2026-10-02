@@ -84,7 +84,7 @@
     },
     {
       "path": "/api/extensions/skatteverket/skattekonto/sync/cron",
-      "schedule": "0 4 * * *"
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/extensions/skatteverket/agi/kvittenser/cron",

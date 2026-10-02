@@ -1717,6 +1717,7 @@
     "dismiss": "Dölj",
     "step_skv_title": "Anslut Skatteverket",
     "step_skv_description": "Se skattekontot och lämna moms- och arbetsgivardeklarationer direkt härifrån. Ansluts med BankID på ett par minuter.",
+    "step_skv_description_ombud": "Se skattekontot och lämna moms- och arbetsgivardeklarationer direkt härifrån. Utse {appName} som ombud en gång med BankID, så hämtas skattekontot utan nya inloggningar.",
     "step_skv_action": "Anslut Skatteverket",
     "step_skv_next_vat": "Första momsdeklarationen: {date}.",
     "step_skv_choose_period": "Välj momsperiod i inställningarna, annars bevakas inga momsdeadlines.",
@@ -3422,8 +3423,8 @@
     "system_verify_rate_limited": "Vänta en minut mellan verifieringar.",
     "system_deeplink": "Utse {appName} som ombud",
     "system_deeplink_loading": "Skapar länk...",
-    "system_deeplink_failed": "Länken kunde inte skapas",
     "system_deeplink_hint": "Länken öppnar Skatteverkets e-tjänst med {appName} och rollerna förvalda. Signera där med BankID. Länken gäller i tre veckor.",
+    "system_predates_opt_in": "Behörigheten hos Skatteverket signerades innan bolaget kopplades i {appName} och räknas därför inte. Utse {appName} som ombud igen med knappen nedan.",
     "needs_reconsent_message": "Anslutningen till Skatteverket behöver förnyas. Den automatiska synkroniseringen är pausad tills du ansluter igen med BankID.",
     "missing_scope_message": "Anslutningen saknar behörighet för en eller flera tjänster, till exempel skattekontot. Anslut igen och godkänn alla behörigheter på Skatteverkets samtyckessida.",
     "connect_waiting": "Väntar på BankID…",
@@ -10722,6 +10723,12 @@
     "skv_unavailable": "Skatteverket-kopplingen är inte aktiverad på den här installationen.",
     "skv_hold": "Hos Skatteverket. Godkänn med BankID i mobilen …",
     "skv_failed": "Anslutningen till Skatteverket misslyckades. Försök igen.",
+    "skv_ombud_sub": "Rekommenderat. Utse {appName} som ombud hos Skatteverket en gång med BankID, så stäms skattekontot av automatiskt. Deklarationer signerar du som vanligt.",
+    "skv_ombud_connect": "Utse {appName} som ombud",
+    "skv_ombud_hold": "Hos Skatteverket. Signera med BankID och kom sedan tillbaka hit …",
+    "skv_ombud_not_yet": "Vi hittar inget ombud hos Skatteverket än. Signera klart där och försök igen.",
+    "skv_ombud_wait": "Vänta en minut och försök igen.",
+    "skv_ombud_link_failed": "Länken till Skatteverket kunde inte skapas. Försök igen.",
     "skv_abandoned": "Fliken stängdes innan Skatteverket svarade. Försök igen.",
     "v_skv_connected": "Skattekontot hämtas från Skatteverket",
     "v_skv_saldo": "Saldo hos Skatteverket: {amount}",
@@ -12075,5 +12082,15 @@
     "shop_help": "Ordrar hämtas från webshoppen och bokförs.",
     "zettle": "Zettle",
     "zettle_help": "Betalda köp och återbetalningar hämtas till Ordersidan, där du bokför dem."
+  },
+  "skatteverket_ombud": {
+    "appoint": "Utse {appName} som ombud hos Skatteverket",
+    "appoint_hint": "Skatteverkets e-tjänst öppnas med {appName} förvalt. Signera med BankID och kom sedan tillbaka hit.",
+    "granted": "Klart. {appName} hämtar nu från Skatteverket utan att du loggar in.",
+    "not_yet": "Inget ombud hittat än",
+    "not_yet_hint": "Signera hos Skatteverket och kom tillbaka hit, eller tryck Verifiera under Inställningar > Skatteverket.",
+    "rate_limited": "Vänta en minut och försök igen.",
+    "link_failed": "Länken till Skatteverket kunde inte skapas",
+    "verify_failed": "Ombudet kunde inte kontrolleras"
   }
 }

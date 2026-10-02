@@ -13,11 +13,14 @@ import {
   type SkvCompanyConnection,
 } from '@/extensions/general/skatteverket/lib/connection-store'
 import {
+  grantCountsFor,
+  grantPredatesOptIn,
   isoDate,
   listOmbudGrants,
   summarizeGrants,
   type HuvudmanGrantSummary,
 } from '@/extensions/general/skatteverket/lib/ombud-client'
+import type { SkvBehorighet } from '@/extensions/general/skatteverket/lib/connection-store'
 
 ensureInitialized()
 
@@ -40,8 +43,9 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
 /**
  * GET /api/extensions/skatteverket/ombud/sync/cron
  *
- * Daily ombudsregister sync (cron 30 3 * * *, half an hour before the
- * skattekonto sync so a grant signed yesterday is used this morning).
+ * Daily ombudsregister sync (cron 30 3 * * *). The hourly skattekonto sync
+ * picks a grant recorded here up on its next run; Verifiera in the settings
+ * records one at once.
  *
  * Companies appoint Accounted as ombud in Skatteverket's e-service, and
  * nothing calls us back. One call to Ombudshantering v2
@@ -60,6 +64,8 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  *     until a member re-verifies; a still-standing grant at Skatteverket is
  *     not permission to switch the row back on,
  *   - a listed huvudman: granted/denied per behörighet from its active roles,
+ *     where a role signed before the row's opt-in day does not count
+ *     (grantCountsFor: the org-number proof),
  *   - an unlisted huvudman: both behörigheter denied (withdrawn or expired),
  *     subject to the downgrade guards below.
  *
@@ -169,8 +175,8 @@ export async function GET(request: Request) {
       companyId: decision.row.company_id,
       environment,
       orgNumber: decision.row.org_number,
-      lasombud: { status: decision.lasombud, detail: decision.detail },
-      momsOmbud: { status: decision.momsOmbud, detail: decision.detail },
+      lasombud: { status: decision.lasombud, detail: decision.detail, ...reasonFor(decision, 'lasombud') },
+      momsOmbud: { status: decision.momsOmbud, detail: decision.detail, ...reasonFor(decision, 'moms_ombud') },
       error: null,
     })
     if (!recorded) {
@@ -191,6 +197,13 @@ export async function GET(request: Request) {
     guardReason: emptyRegisterGuard ? 'empty_register' : massDowngradeGuard ? 'mass_downgrade' : null,
     durationMs: Date.now() - startedAt,
   })
+}
+
+function reasonFor(
+  decision: { predatesOptIn?: SkvBehorighet[] },
+  key: SkvBehorighet
+): { reason?: 'predates_opt_in' } {
+  return decision.predatesOptIn?.includes(key) ? { reason: 'predates_opt_in' } : {}
 }
 
 function isAnyGranted(row: SkvCompanyConnection): boolean {
@@ -220,6 +233,8 @@ type Decision =
       lasombud: GrantStatus
       momsOmbud: GrantStatus
       detail: string
+      /** Behörigheter active at Skatteverket but signed before the row's opt-in. */
+      predatesOptIn?: SkvBehorighet[]
     }
 
 /**
@@ -254,10 +269,15 @@ export function planDecisions(
       decisions.push({ kind: 'unrecognized', row })
       continue
     }
-    const lasombud: GrantStatus = summary?.lasombud ? 'granted' : 'denied'
-    const momsOmbud: GrantStatus = summary?.moms_ombud ? 'granted' : 'denied'
+    const optInDay = isoDate(new Date(row.created_at))
+    const lasombud: GrantStatus = grantCountsFor(summary, 'lasombud', optInDay) ? 'granted' : 'denied'
+    const momsOmbud: GrantStatus = grantCountsFor(summary, 'moms_ombud', optInDay) ? 'granted' : 'denied'
+    const predatesOptIn = (['lasombud', 'moms_ombud'] as const).filter((key) =>
+      grantPredatesOptIn(summary, key, optInDay)
+    )
     const detail = summary
-      ? `ombudsregister ${today}: roller ${summary.roles.join(', ') || 'inga'}`
+      ? `ombudsregister ${today}: roller ${summary.roles.join(', ') || 'inga'}` +
+        (predatesOptIn.length > 0 ? `; signerad före kopplingen ${optInDay}` : '')
       : `ombudsregister ${today}: huvudman saknas`
     // A row already showing exactly this state is left alone, so a never-listed
     // company is written once (unknown -> denied, "Saknas" in settings) and
@@ -267,7 +287,14 @@ export function planDecisions(
       continue
     }
     const losesEverything = isAnyGranted(row) && lasombud === 'denied' && momsOmbud === 'denied'
-    decisions.push({ kind: losesEverything ? 'downgrade' : 'record', row, lasombud, momsOmbud, detail })
+    decisions.push({
+      kind: losesEverything ? 'downgrade' : 'record',
+      row,
+      lasombud,
+      momsOmbud,
+      detail,
+      ...(predatesOptIn.length > 0 ? { predatesOptIn } : {}),
+    })
   }
   return decisions
 }

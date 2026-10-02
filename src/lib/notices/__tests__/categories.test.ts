@@ -4,12 +4,16 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const otherAccountHintMock = vi.hoisted(() => vi.fn())
+const ombudReadAccessMock = vi.hoisted(() => vi.fn(async () => false))
 
 vi.mock('@/lib/extensions/_generated/enabled-extensions', () => ({
   ENABLED_EXTENSION_IDS: new Set(['cloud-backup', 'skatteverket']),
 }))
 vi.mock('@/lib/company/other-account-hint', () => ({
   shouldShowOtherAccountHint: otherAccountHintMock,
+}))
+vi.mock('@/lib/skatteverket/ombud-access', () => ({
+  hasSkatteverketOmbudReadAccess: ombudReadAccessMock,
 }))
 
 import {
@@ -91,6 +95,10 @@ describe('skvStatusNeedsReconnect (pure)', () => {
     expect(
       skvStatusNeedsReconnect({ connected: true, disabled: true, needsReconsent: true }),
     ).toBe(false)
+  })
+  it('stays quiet while reads run on the ombud grant, whatever the session says', () => {
+    expect(skvStatusNeedsReconnect({ connected: true, ombud: true, needsReconsent: true })).toBe(false)
+    expect(skvStatusNeedsReconnect({ connected: true, ombud: true, expired: true, canRefresh: false })).toBe(false)
   })
 })
 
@@ -224,6 +232,27 @@ describe('detectExpiringBankConnections', () => {
 })
 
 describe('detectSkvDisconnected', () => {
+  it('stays silent on a dead session when the company reads through Accounted as ombud', async () => {
+    enqueue({
+      data: {
+        status: 'needs_reconsent',
+        expires_at: '2026-08-19T10:00:00Z',
+        refresh_token: 'ciphertext',
+        refresh_count: 1,
+        last_error_at: '2026-08-18T03:00:00Z',
+      },
+    })
+    ombudReadAccessMock.mockResolvedValueOnce(true)
+    await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()
+    expect(ombudReadAccessMock).toHaveBeenCalledWith(COMPANY)
+  })
+
+  it('never asks about the ombud for a healthy session', async () => {
+    enqueue({ data: null })
+    await detectSkvDisconnected(supabase, USER, COMPANY, NOW)
+    expect(ombudReadAccessMock).not.toHaveBeenCalled()
+  })
+
   it('returns null when no token row exists (not connected)', async () => {
     enqueue({ data: null })
     await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()

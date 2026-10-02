@@ -397,6 +397,12 @@ export interface HuvudmanGrantSummary {
    * company decision.
    */
   recognized: boolean
+  /**
+   * Per behörighet, the latest giltigFrom (yyyy-mm-dd) among its ACTIVE
+   * posts: when the newest standing grant was signed. Null when none is
+   * active. Read through grantCountsFor, never on its own.
+   */
+  signedFrom: Record<SkvBehorighet, string | null>
 }
 
 /**
@@ -414,14 +420,55 @@ export function summarizeGrants(posts: Behorighetspost[], today: string): Map<st
     }
     let row = out.get(huvudman)
     if (!row) {
-      row = { huvudman, lasombud: false, moms_ombud: false, roles: [], recognized: false }
+      row = {
+        huvudman,
+        lasombud: false,
+        moms_ombud: false,
+        roles: [],
+        recognized: false,
+        signedFrom: { lasombud: null, moms_ombud: null },
+      }
       out.set(huvudman, row)
     }
     if (!row.roles.includes(post.roll)) row.roles.push(post.roll)
     const key = classifyOmbudRole(post)
     if (!key) continue
     row.recognized = true
-    if (isGrantActive(post, today)) row[key] = true
+    if (isGrantActive(post, today)) {
+      row[key] = true
+      const from = post.giltigFrom.slice(0, 10)
+      const latest = row.signedFrom[key]
+      if (!latest || from > latest) row.signedFrom[key] = from
+    }
   }
   return out
+}
+
+/**
+ * Whether a register grant counts for a company that opted in on `optInDay`
+ * (yyyy-mm-dd, the day its connection row was created for this org number).
+ *
+ * Org-number proof (founder decision 2026-10-02): a grant counts only when it
+ * was signed on or after the company's own opt-in. Org numbers are public and
+ * any tenant can type one; a grant signed BEFORE the tenant opted in was given
+ * to Accounted for someone else's use of the number (a former customer who
+ * left without withdrawing it), and must not be inherited. A grant signed
+ * after the opt-in was signed by a firmatecknare for this very connection.
+ */
+export function grantCountsFor(
+  summary: HuvudmanGrantSummary | undefined,
+  key: SkvBehorighet,
+  optInDay: string
+): boolean {
+  const from = summary?.signedFrom[key]
+  return Boolean(summary?.[key] && from && from >= optInDay)
+}
+
+/** True when the behörighet is active at Skatteverket but was signed before the opt-in. */
+export function grantPredatesOptIn(
+  summary: HuvudmanGrantSummary | undefined,
+  key: SkvBehorighet,
+  optInDay: string
+): boolean {
+  return Boolean(summary?.[key]) && !grantCountsFor(summary, key, optInDay)
 }

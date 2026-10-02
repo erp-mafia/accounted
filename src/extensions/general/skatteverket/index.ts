@@ -57,7 +57,7 @@ import {
   markConnectionRevoked,
   recordProbeResult,
 } from './lib/connection-store'
-import { currentSkvEnvironment, resolveReadAuth } from './lib/resolve-auth'
+import { currentSkvEnvironment, hasOmbudReadAccess, isSystemReadActive, resolveReadAuth } from './lib/resolve-auth'
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
@@ -821,9 +821,14 @@ export const skatteverketExtension: Extension = {
         const tokens = await getTokens(ctx.supabase, ctx.userId, ctx.companyId)
         const environment = getSkatteverketEnvironment()
         const disabled = (process.env.SKATTEVERKET_DISABLED ?? '').toLowerCase() === 'true'
+        // Reads run on Accounted's ombud grant: the personal session below
+        // only matters for signing, so the reconnect prompts stand down
+        // (skvStatusNeedsReconnect). `connected` keeps meaning "this user
+        // has a BankID connection", which the submit panels still need.
+        const ombud = await hasOmbudReadAccess(ctx.companyId).catch(() => false)
 
         if (!tokens) {
-          return NextResponse.json({ connected: false, environment, disabled })
+          return NextResponse.json({ connected: false, ombud, environment, disabled })
         }
 
         const expired = tokens.expires_at < Date.now()
@@ -844,6 +849,7 @@ export const skatteverketExtension: Extension = {
 
         return NextResponse.json({
           connected: true,
+          ombud,
           expired,
           canRefresh,
           needsReconsent: health?.status === 'needs_reconsent',
@@ -936,9 +942,14 @@ export const skatteverketExtension: Extension = {
           )
         }
 
-        // Manual probes are rate limited: one per minute per company.
+        // Manual probes are rate limited: one per minute per company. Timed
+        // on the last real probe (lasombud_checked_at), not last_probe_at,
+        // which the deep link's opt-in row also stamps: a user who signs at
+        // Skatteverket within a minute of opening the link and comes back
+        // must get a verification, not a 429.
         const existing = await getConnection(ctx.companyId, currentSkvEnvironment())
-        if (existing?.last_probe_at && Date.now() - new Date(existing.last_probe_at).getTime() < 60_000) {
+        const lastProbe = existing?.lasombud_checked_at ?? null
+        if (lastProbe && Date.now() - new Date(lastProbe).getTime() < 60_000) {
           return NextResponse.json(
             { error: 'Vänta en minut mellan verifieringar.', connection: existing },
             { status: 429 }
@@ -2888,6 +2899,11 @@ export const skatteverketExtension: Extension = {
     validateAgiUppgift,
     syncSkattekontoNow,
     previewSkattekontoSync,
+    // Ombud state for core surfaces (Hem, the reconnect notice, onboarding)
+    // that must stop asking for BankID once reads run on the ombud grant.
+    // Contract in lib/skatteverket/ombud-access.ts.
+    isOmbudEnabled: async () => isSystemReadActive(),
+    hasOmbudReadAccess,
   },
 }
 

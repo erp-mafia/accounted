@@ -98,6 +98,8 @@ interface AttGoraSectionProps {
   missingUnderlag?: MissingUnderlagSample
   /** False when no Skatteverket token is stored: the kopplingar chip offers the connect. */
   hasSkatteverketConnection?: boolean
+  /** Accounted can be appointed as ombud at Skatteverket (system auth on). */
+  skvOmbudEnabled?: boolean
   /**
    * Whether to render the kopplingar row under the list. Off while the
    * getting-started checklist is open: it carries the bank and Skatteverket
@@ -179,6 +181,7 @@ export default function AttGoraSection({
   aiConnection = NO_AI_CONNECTION,
   missingUnderlag,
   hasSkatteverketConnection = false,
+  skvOmbudEnabled = false,
   showKopplingar = false,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
@@ -658,6 +661,7 @@ export default function AttGoraSection({
           aiConnection={aiConnection}
           hasBank={hasActiveBankConnection}
           hasSkatteverket={hasSkatteverketConnection}
+          skvOmbudEnabled={skvOmbudEnabled}
         />
       )}
     </section>

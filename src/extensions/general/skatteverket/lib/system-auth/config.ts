@@ -56,6 +56,20 @@ export function getSystemScopes(): string[] {
   return raw.split(/\s+/).filter(Boolean)
 }
 
+/**
+ * API gateway keys (the Client_Id/Client_Secret headers) for system-mode
+ * calls. Skatteverket issues gateway keys per application, and the Client
+ * Credentials connection with an utpekad organisationslegitimation is an
+ * application of its own: its calls must carry its keys, not the BankID
+ * application's. Both or neither: a lone id or secret falls back to the
+ * shared SKATTEVERKET_APIGW_* pair rather than mixing two applications.
+ */
+export function getSystemApiGwCredentials(): { clientId: string; clientSecret: string } | null {
+  const clientId = process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID
+  const clientSecret = process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_SECRET
+  return clientId && clientSecret ? { clientId, clientSecret } : null
+}
+
 /** Accounted's own org number: what the end company grants behorighet to. */
 export function getOmbudOrgNumber(): string | null {
   return process.env.SKATTEVERKET_OMBUD_ORG_NUMBER ?? null

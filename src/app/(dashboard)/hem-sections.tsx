@@ -1,6 +1,7 @@
 import { after } from 'next/server'
 import { countCompletedSieImports, countInboxItems, countTransactions, readActiveBankConnections } from './hem-reads'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
+import { hasSkatteverketOmbudReadAccess, isSkatteverketOmbudEnabled } from '@/lib/skatteverket/ombud-access'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import type { AiConnection } from '@/lib/onboarding/ai-clients'
 import ResumePane from '@/components/dashboard/ResumePane'
@@ -102,6 +103,7 @@ export async function HemChecklistSection({
     { data: nextVatDeadline },
     { data: latestFileSweep },
     unfinishedConnect,
+    skvOmbudReadAccess,
   ] = await Promise.all([
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -148,6 +150,9 @@ export async function HemChecklistSection({
     ENABLED_EXTENSION_IDS.has('arcim-migration')
       ? findUnfinishedConnect(createServiceClient(), companyId, now)
       : Promise.resolve(null),
+    // Accounted as ombud also counts as connected: its reads need no
+    // personal BankID session (lib/skatteverket/ombud-access.ts).
+    hasSkatteverketOmbudReadAccess(companyId),
   ])
 
   const connections = (bankConnections ?? []) as BankConnectionRow[]
@@ -156,7 +161,7 @@ export async function HemChecklistSection({
     hasInvoices: (invoiceCount || 0) > 0,
     hasBankConnected: connections.length > 0 || (transactionCount || 0) > 0,
     hasSIEImport: (sieImportCount || 0) > 0,
-    hasSkatteverketConnected: (skatteverketTokenCount || 0) > 0,
+    hasSkatteverketConnected: (skatteverketTokenCount || 0) > 0 || skvOmbudReadAccess,
     hasInboxItems: (inboxItemCount || 0) > 0,
   }
 
@@ -183,6 +188,7 @@ export async function HemChecklistSection({
       hasBookkeepingImported={onboardingProgress.hasSIEImport}
       hasBankConnected={onboardingProgress.hasBankConnected}
       hasSkatteverketConnected={onboardingProgress.hasSkatteverketConnected}
+      skvOmbudEnabled={await isSkatteverketOmbudEnabled()}
       hasInboxItems={onboardingProgress.hasInboxItems}
       hasMcpKey={hasMcpKey}
       vatLine={vatLine}
@@ -293,6 +299,7 @@ export async function HemPanesSection({
           emptyLedger={emptyLedger}
           hasActiveBankConnection={hasActiveBankConnection}
           hasSkatteverketConnection={hasSkatteverketConnected}
+          skvOmbudEnabled={await isSkatteverketOmbudEnabled()}
           aiConnection={aiConnection}
           // While the getting-started checklist is open it carries the bank
           // and Skatteverket steps itself; afterwards the kopplingar row keeps

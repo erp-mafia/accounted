@@ -19,6 +19,8 @@ export interface BooksFlags {
   hasMigration: boolean
   hasBanking: boolean
   hasSkatteverket: boolean
+  /** Accounted can be appointed as ombud (system auth on): the step appoints instead of a BankID login. */
+  skvOmbud?: boolean
 }
 
 export interface BooksState {

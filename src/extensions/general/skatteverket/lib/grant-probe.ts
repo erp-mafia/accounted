@@ -1,8 +1,15 @@
 import { skvRequestWithAuth, SkatteverketAuthError } from './api-client'
 import { getSkattekontoBaseUrl } from './skattekonto-client'
-import { recordProbeResult, type GrantStatus, type SkvCompanyConnection } from './connection-store'
+import { getConnection, recordProbeResult, type GrantStatus, type SkvCompanyConnection } from './connection-store'
 import { currentSkvEnvironment } from './resolve-auth'
-import { isoDate, listOmbudGrants, OmbudApiError, summarizeGrants } from './ombud-client'
+import {
+  grantCountsFor,
+  grantPredatesOptIn,
+  isoDate,
+  listOmbudGrants,
+  OmbudApiError,
+  summarizeGrants,
+} from './ombud-client'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('skatteverket-grant-probe')
@@ -34,11 +41,18 @@ const log = createLogger('skatteverket-grant-probe')
  *
  * 'error' never downgrades a previously granted state (connection-store
  * rule); only an explicit 'denied' does.
+ *
+ * Only the register can GRANT: a behörighet counts when it was signed on or
+ * after the company's own opt-in (grantCountsFor), and the read probes cannot
+ * see when anything was signed. A probe that would have said 'granted' says
+ * 'error' instead; a 403 still proves the absence of a grant.
  */
 
 export interface ProbeClassification {
   status: GrantStatus
   detail: string
+  /** Machine-readable why, for the settings panel (stored in last_probe_detail). */
+  reason?: 'predates_opt_in'
 }
 
 function classifyError(err: unknown): ProbeClassification {
@@ -115,6 +129,7 @@ export interface RegistryProbe {
  */
 export async function probeViaOmbudsregister(
   orgNumber: string,
+  optInDay: string,
   today: string = isoDate(new Date())
 ): Promise<{ result: RegistryProbe; roles: string[] } | { result: null; reason: string }> {
   try {
@@ -136,15 +151,21 @@ export async function probeViaOmbudsregister(
         roles,
       }
     }
-    const describe = (granted: boolean, key: 'lasombud' | 'moms_ombud'): ProbeClassification =>
-      granted
-        ? { status: 'granted', detail: `ombudsregister: ${key} aktiv ${today}` }
-        : { status: 'denied', detail: `ombudsregister: ${key} saknas (roller: ${roles.join(', ') || 'inga'})` }
+    const describe = (key: 'lasombud' | 'moms_ombud'): ProbeClassification => {
+      if (grantCountsFor(summary, key, optInDay)) {
+        return { status: 'granted', detail: `ombudsregister: ${key} aktiv ${today}` }
+      }
+      if (grantPredatesOptIn(summary, key, optInDay)) {
+        return {
+          status: 'denied',
+          detail: `ombudsregister: ${key} signerad ${summary?.signedFrom[key]}, före kopplingen ${optInDay}`,
+          reason: 'predates_opt_in',
+        }
+      }
+      return { status: 'denied', detail: `ombudsregister: ${key} saknas (roller: ${roles.join(', ') || 'inga'})` }
+    }
     return {
-      result: {
-        lasombud: describe(summary?.lasombud ?? false, 'lasombud'),
-        momsOmbud: describe(summary?.moms_ombud ?? false, 'moms_ombud'),
-      },
+      result: { lasombud: describe('lasombud'), momsOmbud: describe('moms_ombud') },
       roles,
     }
   } catch (err) {
@@ -157,6 +178,16 @@ export async function probeViaOmbudsregister(
     log.warn('ombudsregister lookup unavailable, falling back to service probes', { orgNumber, reason })
     return { result: null, reason }
   }
+}
+
+/**
+ * A read probe proves access but not WHEN the grant was signed, so it can
+ * never establish one (see the header): its 'granted' becomes 'error', which
+ * also never downgrades a grant the register established earlier.
+ */
+function cannotGrant(probe: ProbeClassification): ProbeClassification {
+  if (probe.status !== 'granted') return probe
+  return { status: 'error', detail: `${probe.detail}; signeringsdag okänd utan ombudsregistret` }
 }
 
 export interface GrantProbeResult {
@@ -177,7 +208,12 @@ export async function probeCompanyGrants(
   orgNumber: string,
   createdBy?: string
 ): Promise<GrantProbeResult> {
-  const registry = await probeViaOmbudsregister(orgNumber)
+  // The opt-in day: when this company first opted in for this org number. A
+  // first Verifiera (no row yet) or a changed org number opts in today.
+  const stored = await getConnection(companyId, currentSkvEnvironment())
+  const optInDay =
+    stored && stored.org_number === orgNumber ? isoDate(new Date(stored.created_at)) : isoDate(new Date())
+  const registry = await probeViaOmbudsregister(orgNumber, optInDay)
 
   let lasombud: ProbeClassification
   let momsOmbud: ProbeClassification
@@ -186,8 +222,8 @@ export async function probeCompanyGrants(
     ;({ lasombud, momsOmbud } = registry.result)
     source = 'registry'
   } else {
-    lasombud = await probeLasombud(orgNumber)
-    momsOmbud = await probeMomsOmbud(orgNumber)
+    lasombud = cannotGrant(await probeLasombud(orgNumber))
+    momsOmbud = cannotGrant(await probeMomsOmbud(orgNumber))
     source = 'service'
     const note = ` (ombudsregister otillgängligt: ${registry.reason})`
     lasombud = { ...lasombud, detail: lasombud.detail + note }
@@ -206,8 +242,8 @@ export async function probeCompanyGrants(
     environment: currentSkvEnvironment(),
     orgNumber,
     createdBy,
-    lasombud: { status: lasombud.status, detail: lasombud.detail },
-    momsOmbud: { status: momsOmbud.status, detail: momsOmbud.detail },
+    lasombud: { status: lasombud.status, detail: lasombud.detail, reason: lasombud.reason },
+    momsOmbud: { status: momsOmbud.status, detail: momsOmbud.detail, reason: momsOmbud.reason },
     error:
       lasombud.status === 'error' || momsOmbud.status === 'error'
         ? [lasombud, momsOmbud]

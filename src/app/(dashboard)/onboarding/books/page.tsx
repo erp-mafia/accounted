@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { isSkatteverketOmbudEnabled } from '@/lib/skatteverket/ombud-access'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { resolveBooksResume, type LatestImportJob } from '@/lib/onboarding-books/resume'
 import BooksJourney from '@/components/onboarding/books/BooksJourney'
@@ -73,6 +74,7 @@ export default async function BooksPage({
       hasMigration={ENABLED_EXTENSION_IDS.has('arcim-migration')}
       hasBanking={ENABLED_EXTENSION_IDS.has('enable-banking')}
       hasSkatteverket={ENABLED_EXTENSION_IDS.has('skatteverket')}
+      skvOmbud={await isSkatteverketOmbudEnabled()}
     />
   )
 }

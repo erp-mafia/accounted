@@ -1,9 +1,12 @@
 /**
  * Grant verification: the ombudsregister (Ombudshantering v2) decides when it
- * answers; the read-service probes (200 / felkod 3 / OMBUD_GRANT_MISSING /
- * 404 / transient) decide only when the register cannot be consulted. The
- * transient-error-never-downgrades rule lives in connection-store's
- * recordProbeResult and is asserted through the recorded input here.
+ * answers, and a grant counts only when it was signed on or after the
+ * company's own opt-in for the org number. The read-service probes (200 /
+ * felkod 3 / OMBUD_GRANT_MISSING / 404 / transient) speak only when the
+ * register cannot be consulted, and since they cannot see when anything was
+ * signed they can deny but never grant. The transient-error-never-downgrades
+ * rule lives in connection-store's recordProbeResult and is asserted through
+ * the recorded input here.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -17,11 +20,13 @@ vi.mock('../lib/api-client', async (importOriginal) => {
 })
 
 const mockRecordProbeResult = vi.fn()
+const mockGetConnection = vi.fn()
 vi.mock('../lib/connection-store', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>
   return {
     ...actual,
     recordProbeResult: (...a: unknown[]) => mockRecordProbeResult(...a),
+    getConnection: (...a: unknown[]) => mockGetConnection(...a),
   }
 })
 
@@ -30,6 +35,8 @@ import { SkatteverketAuthError } from '../lib/api-client'
 
 const ORG = '165560000000'
 const TODAY = '2026-09-01'
+/** The company opted in (deep link or Verifiera) before the grants below were signed. */
+const OPT_IN_AT = '2026-07-01T10:00:00Z'
 
 /** The register call is always first; make it fail so the service probes decide. */
 function registryUnavailable() {
@@ -43,6 +50,7 @@ function registryAnswers(posts: unknown[]) {
 beforeEach(() => {
   vi.clearAllMocks()
   mockRecordProbeResult.mockResolvedValue({ id: 'conn-1', status: 'verified' })
+  mockGetConnection.mockResolvedValue({ id: 'conn-1', org_number: ORG, created_at: OPT_IN_AT })
   vi.spyOn(console, 'info').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -127,7 +135,8 @@ describe('probeCompanyGrants via the ombudsregister', () => {
     const result = await probeCompanyGrants('company-1', ORG)
 
     expect(result.source).toBe('service')
-    expect(result.lasombud.status).toBe('granted')
+    // The read probe proves access but not the signing day: never a grant.
+    expect(result.lasombud.status).toBe('error')
     expect(result.lasombud.detail).toContain('OBR_HTTP_ERROR')
   })
 
@@ -157,19 +166,70 @@ describe('probeCompanyGrants via the ombudsregister', () => {
     const result = await probeCompanyGrants('company-1', ORG)
 
     expect(result.source).toBe('service')
-    expect(result.lasombud.status).toBe('granted')
+    expect(result.lasombud.status).toBe('error')
     expect(result.lasombud.detail).toContain('OBR_FORBIDDEN')
     expect(mockSkvRequestWithAuth).toHaveBeenCalledTimes(3)
   })
 })
 
-async function probeViaOmbudsregisterWith(posts: unknown[]) {
+async function probeViaOmbudsregisterWith(posts: unknown[], optInDay = '2024-12-01') {
   registryAnswers(posts)
-  return probeViaOmbudsregister(ORG, TODAY)
+  return probeViaOmbudsregister(ORG, optInDay, TODAY)
 }
 
+describe('org-number proof: only grants signed on or after the opt-in count', () => {
+  it('a grant signed before the opt-in is denied with reason predates_opt_in', async () => {
+    const result = await probeViaOmbudsregisterWith(
+      [{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-05-10' }],
+      '2026-08-20'
+    )
+    expect(result.result?.lasombud).toMatchObject({ status: 'denied', reason: 'predates_opt_in' })
+    expect(result.result?.lasombud.detail).toContain('2026-05-10')
+    // A role never granted is a plain denial, no reason.
+    expect(result.result?.momsOmbud.reason).toBeUndefined()
+  })
+
+  it('a grant signed on the opt-in day counts, and a re-signed newer post wins over an old one', async () => {
+    const sameDay = await probeViaOmbudsregisterWith(
+      [{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-08-20' }],
+      '2026-08-20'
+    )
+    expect(sameDay.result?.lasombud.status).toBe('granted')
+
+    const resigned = await probeViaOmbudsregisterWith(
+      [
+        { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2025-02-01' },
+        { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-08-21' },
+      ],
+      '2026-08-20'
+    )
+    expect(resigned.result?.lasombud.status).toBe('granted')
+  })
+
+  it('a first Verifiera (no row yet) opts in today: an older grant does not count', async () => {
+    mockGetConnection.mockResolvedValueOnce(null)
+    registryAnswers([{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-01-15' }])
+
+    const result = await probeCompanyGrants('company-1', ORG)
+
+    expect(result.lasombud).toMatchObject({ status: 'denied', reason: 'predates_opt_in' })
+    expect(mockRecordProbeResult).toHaveBeenCalledWith(
+      expect.objectContaining({ lasombud: expect.objectContaining({ reason: 'predates_opt_in' }) })
+    )
+  })
+
+  it('a row recorded for another org number opts in today for the new one', async () => {
+    mockGetConnection.mockResolvedValueOnce({ id: 'conn-1', org_number: '165599999999', created_at: '2025-01-01T00:00:00Z' })
+    registryAnswers([{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-01-15' }])
+
+    const result = await probeCompanyGrants('company-1', ORG)
+
+    expect(result.lasombud.status).toBe('denied')
+  })
+})
+
 describe('probeCompanyGrants service-probe fallback', () => {
-  it('both probes 200 -> both granted', async () => {
+  it('both probes 200 -> error, never granted: the signing day is unknown without the register', async () => {
     registryUnavailable()
     mockSkvRequestWithAuth
       .mockResolvedValueOnce({ ok: true, status: 200 }) // saldo
@@ -178,8 +238,9 @@ describe('probeCompanyGrants service-probe fallback', () => {
     const result = await probeCompanyGrants('company-1', ORG)
 
     expect(result.source).toBe('service')
-    expect(result.lasombud.status).toBe('granted')
-    expect(result.momsOmbud.status).toBe('granted')
+    expect(result.lasombud.status).toBe('error')
+    expect(result.momsOmbud.status).toBe('error')
+    expect(result.lasombud.detail).toContain('signeringsdag okänd')
     // All calls ran on SYSTEM credentials.
     for (const call of mockSkvRequestWithAuth.mock.calls) expect(call[0]).toEqual({ mode: 'system' })
     // The fallback reason travels in the detail for the settings panel/probe row.
@@ -194,12 +255,12 @@ describe('probeCompanyGrants service-probe fallback', () => {
 
     const result = await probeCompanyGrants('company-1', ORG)
 
-    expect(result.lasombud.status).toBe('granted')
+    expect(result.lasombud.status).toBe('error')
     expect(result.lasombud.detail.startsWith('204')).toBe(true)
     expect(result.momsOmbud.detail.startsWith('200')).toBe(true)
   })
 
-  it('felkod 3 (no skattekonto) still proves the lasombud authorization', async () => {
+  it('felkod 3 (no skattekonto) proves access but, like a 200, cannot grant', async () => {
     registryUnavailable()
     mockSkvRequestWithAuth
       .mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({ felkod: 3 }) })
@@ -207,9 +268,10 @@ describe('probeCompanyGrants service-probe fallback', () => {
 
     const result = await probeCompanyGrants('company-1', ORG)
 
-    expect(result.lasombud.status).toBe('granted')
-    // 404 on /utkast = no draft, but the gateway authorized us.
-    expect(result.momsOmbud.status).toBe('granted')
+    expect(result.lasombud.status).toBe('error')
+    expect(result.lasombud.detail).toContain('felkod 3')
+    // 404 on /utkast = no draft, but the gateway authorized us: still not a grant.
+    expect(result.momsOmbud.status).toBe('error')
   })
 
   it('OMBUD_GRANT_MISSING on the read services classifies as denied', async () => {
@@ -252,9 +314,9 @@ describe('probeCompanyGrants service-probe fallback', () => {
         companyId: 'company-1',
         orgNumber: ORG,
         createdBy: 'user-1',
-        lasombud: expect.objectContaining({ status: 'granted' }),
-        momsOmbud: expect.objectContaining({ status: 'granted' }),
-        error: null,
+        lasombud: expect.objectContaining({ status: 'error' }),
+        momsOmbud: expect.objectContaining({ status: 'error' }),
+        error: expect.stringContaining('signeringsdag okänd'),
       })
     )
   })

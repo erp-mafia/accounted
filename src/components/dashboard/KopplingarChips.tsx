@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Bot, Landmark } from 'lucide-react'
 import { AiConnectorDialog } from '@/components/onboarding/AiConnectorDialog'
@@ -16,6 +17,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { AI_CLIENTS, agentChipView, aiConnectAction, openAiConnector, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
+import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
 
 /**
  * Kopplingar: the three things Att göra can be wired to (an AI agent, the
@@ -31,10 +33,16 @@ export function KopplingarChips({
   aiConnection,
   hasBank,
   hasSkatteverket,
+  skvOmbudEnabled = false,
 }: {
   aiConnection: AiConnection
   hasBank: boolean
   hasSkatteverket: boolean
+  /**
+   * Accounted can be the company's ombud (system auth on): the pill appoints
+   * it at Skatteverket instead of starting an hourly BankID session.
+   */
+  skvOmbudEnabled?: boolean
 }) {
   const t = useTranslations('dashboard')
   const { appName } = useBranding()
@@ -43,6 +51,11 @@ export function KopplingarChips({
   const skvCapability = useCapability(CAPABILITY.skatteverket)
   const isSandbox = useCompanyOptional()?.isSandbox ?? false
   const [connectAction, setConnectAction] = useState<ReturnType<typeof aiConnectAction> | null>(null)
+  const router = useRouter()
+  const ombud = useOmbudAppointWithToasts((result) => {
+    if (result === 'granted') router.refresh()
+  })
+  const tOmbud = useTranslations('skatteverket_ombud')
 
   // Sandbox companies cannot reach Skatteverket (the sandbox blocks it), and
   // the chip is pointless without the extension or the plan capability.
@@ -120,7 +133,18 @@ export function KopplingarChips({
             }
             name={t('kopplingar_skv_short')}
             status={hasSkatteverket ? t('kopplingar_skv_on') : t('kopplingar_skv_off')}
-            action={hasSkatteverket ? null : (
+            action={hasSkatteverket ? null : skvOmbudEnabled ? (
+              <button
+                type="button"
+                onClick={() => void ombud.appoint()}
+                disabled={ombud.linking || ombud.checking}
+                className={pillClass}
+                aria-label={tOmbud('appoint', { appName })}
+                title={tOmbud('appoint_hint', { appName })}
+              >
+                {t('kopplingar_connect')}
+              </button>
+            ) : (
               // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api route, not a Next page; the authorize endpoint 302s to Skatteverket, which the client router cannot follow
               <a
                 href="/api/extensions/ext/skatteverket/authorize?return_to=/"
@@ -138,7 +162,7 @@ export function KopplingarChips({
 }
 
 const pillClass =
-  'inline-flex h-6 items-center rounded-full bg-secondary px-3 text-[11px] text-foreground transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+  'inline-flex h-6 items-center rounded-full bg-secondary px-3 text-[11px] text-foreground transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50'
 
 function Chip({
   icon,

@@ -53,7 +53,9 @@ function connection(
   orgNumber: string,
   lasombud: Status = 'granted',
   moms: Status = 'granted',
-  status = 'verified'
+  status = 'verified',
+  // The opt-in: before the 2026-07-19 grants below unless a test says otherwise.
+  createdAt = '2026-07-01T08:00:00Z'
 ) {
   return {
     id: `conn-${companyId}`,
@@ -63,6 +65,7 @@ function connection(
     status,
     lasombud_status: lasombud,
     moms_ombud_status: moms,
+    created_at: createdAt,
   }
 }
 
@@ -176,6 +179,34 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
     })
     // Never creates a row for the unmatched huvudman.
     expect(mockRecordProbeResult.mock.calls.some((c) => c[0].orgNumber === '165550000000')).toBe(false)
+  })
+
+  it('org-number proof: a grant signed before the row opted in is not granted, and says why', async () => {
+    mockListConnections.mockResolvedValue([
+      // Opted in after the 2026-07-19 grants were signed: a former owner's grants.
+      connection('c-late', '165560000000', 'unknown', 'unknown', 'pending', '2026-08-01T09:00:00Z'),
+      // Opted in on the signing day: counts.
+      connection('c-same-day', '195001011234', 'unknown', 'unknown', 'pending', '2026-07-19T06:00:00Z'),
+    ])
+    mockListOmbudGrants.mockResolvedValue([
+      JLO('165560000000'),
+      MOMS('165560000000'),
+      JLO('195001011234'),
+    ])
+
+    const body = await (await GET(request())).json()
+
+    expect(body).toMatchObject({ granted: 1, denied: 1 })
+    expect(recordedFor('c-late')[0]).toMatchObject({
+      lasombud: { status: 'denied', reason: 'predates_opt_in' },
+      momsOmbud: { status: 'denied', reason: 'predates_opt_in' },
+    })
+    expect(recordedFor('c-late')[0].lasombud.detail).toContain('signerad före kopplingen 2026-08-01')
+    expect(recordedFor('c-same-day')[0]).toMatchObject({
+      lasombud: expect.objectContaining({ status: 'granted' }),
+      momsOmbud: { status: 'denied', detail: expect.any(String) },
+    })
+    expect(recordedFor('c-same-day')[0].momsOmbud.reason).toBeUndefined()
   })
 
   it('skips rows the tenant revoked locally even though the grant still stands at Skatteverket', async () => {
