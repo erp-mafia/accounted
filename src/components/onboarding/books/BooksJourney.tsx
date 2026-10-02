@@ -56,6 +56,8 @@ interface BooksJourneyProps {
  * are recommended, never mandatory. Leaving the act clears the
  * first-session gate and opens Hem. "Hoppa över tills vidare" leaves from
  * any step but Klart, also while an import runs (lib/onboarding-books/skip).
+ * Tillbaka on the first step with nowhere to go back to opens the same
+ * confirm, since it leaves the act too.
  */
 export default function BooksJourney(props: BooksJourneyProps) {
   const t = useTranslations('books')
@@ -83,6 +85,8 @@ export default function BooksJourney(props: BooksJourneyProps) {
   const [leaving, setLeaving] = useState(false)
   const [leaveError, setLeaveError] = useState(false)
   const [skipOpen, setSkipOpen] = useState(false)
+  // Read by the import loops mid-await, where the leaving state is stale.
+  const leavingRef = useRef(false)
   const station = stationOf(state.step)
   const navigation = useOnboardingNavigation({
     scope: props.draftScope,
@@ -127,6 +131,7 @@ export default function BooksJourney(props: BooksJourneyProps) {
     async (outcome: 'done' | 'skipped', href = '/', hardNavigation = false) => {
       if (leaving) return
       setLeaving(true)
+      leavingRef.current = true
       setLeaveError(false)
       try {
         const response = await fetch('/api/onboarding/books/exit', {
@@ -138,6 +143,7 @@ export default function BooksJourney(props: BooksJourneyProps) {
       } catch {
         setLeaveError(true)
         setLeaving(false)
+        leavingRef.current = false
         return
       }
       clearDraft()
@@ -185,7 +191,16 @@ export default function BooksJourney(props: BooksJourneyProps) {
 
   const skip = booksSkip(state, (findings?.books.entries ?? 0) > 0)
 
-  const ctx: BooksCtx = { state, dispatch, flags, findings, loadingFindings, loadFindings, landedError: props.landedError }
+  const ctx: BooksCtx = {
+    state,
+    dispatch,
+    flags,
+    findings,
+    loadingFindings,
+    loadFindings,
+    landedError: props.landedError,
+    isLeaving: () => leavingRef.current,
+  }
 
   // Keep navigation in view, including during work when leaving is disabled.
   const canGoBack =
@@ -223,7 +238,7 @@ export default function BooksJourney(props: BooksJourneyProps) {
           <JourneyOrb state={orbState} targetX={STATION_FRACS[station]} />
         </JourneyTrack>
         <div className="bks-backrow">
-          <Button variant="ghost" className="text-muted-foreground" disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => state.step === 'source' ? void leave('skipped') : dispatch({ type: 'GO_BACK', flags }))}>
+          <Button variant="ghost" className="text-muted-foreground" disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => state.step === 'source' ? setSkipOpen(true) : dispatch({ type: 'GO_BACK', flags }))}>
             ‹ {t('back')}
           </Button>
           {/* Never disabled by running work: an import is the server's job, so
@@ -246,9 +261,11 @@ export default function BooksJourney(props: BooksJourneyProps) {
         description={
           skip.notice === 'running'
             ? t('skip_running')
-            : skip.notice === 'empty'
-              ? t('skip_all_cost', { appName })
-              : undefined
+            : skip.notice === 'resume'
+              ? t('skip_resume')
+              : skip.notice === 'empty'
+                ? t('skip_all_cost', { appName })
+                : undefined
         }
         confirmLabel={t('skip_all_confirm')}
         onConfirm={() => leave('skipped', skip.href, skip.hardNavigation)}

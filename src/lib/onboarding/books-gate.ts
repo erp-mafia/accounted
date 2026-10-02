@@ -29,8 +29,9 @@ export function booksGateEnabled(): boolean {
  * user's own rows, never from which page the client rendered: only a first
  * company does, meaning the user had no live (non-archived) membership
  * before this create. Someone who already has a company knows the app, and
- * gating them took away the way back to that company. A client company made
- * under a byrå team never arms it: the consultant's home is the cockpit.
+ * gating them took away the way back to that company. A client company the
+ * caller creates under a byrå team never arms it: the consultant's home is
+ * the cockpit.
  * An unknown membership state (the read failed) does not arm it either: no
  * gate only means Hem opens with the checklist.
  */

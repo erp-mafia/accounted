@@ -193,7 +193,11 @@ async function createCompanyFromOnboardingImpl(params: {
   }
 
   // Read before the create: afterwards the new company is itself a live
-  // membership and every user would look like a returning one.
+  // membership and every user would look like a returning one. teamKind is
+  // the team the caller asked for: a byrå team there is the cockpit's
+  // new-client flow. The brand-signup homing above moves a user's own first
+  // company onto the brand's byrå team, and that user keeps the first session
+  // the journey gave them before the gate moved server-side.
   const armBooksGate = shouldArmBooksGate({
     teamKind: (teamRow as { kind?: string } | null)?.kind,
     hasLiveCompany: await hasLiveCompany(supabase, user.id),

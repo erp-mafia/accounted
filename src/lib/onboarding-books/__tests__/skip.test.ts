@@ -20,10 +20,26 @@ describe('booksSkip', () => {
     }
   })
 
-  it('sends a resumed job, even a paused or failed one, to the history where it is continued or undone', () => {
-    expect(booksSkip({ ...base, step: 'resume', working: false, path: 'migration' }, false)).toMatchObject({
-      notice: 'running',
+  it('sends a resumed job, even a paused or failed one, to the history without promising it finishes', () => {
+    // Paused or failed: the step stopped working, and the job waits for the user.
+    expect(booksSkip({ ...base, step: 'resume', working: false, path: 'migration' }, false)).toEqual({
+      notice: 'resume',
       href: IMPORT_HISTORY_HREF,
+      hardNavigation: false,
+    })
+    expect(booksSkip({ ...base, step: 'resume', working: true, path: 'migration' }, false)).toEqual({
+      notice: 'resume',
+      href: IMPORT_HISTORY_HREF,
+      hardNavigation: true,
+    })
+  })
+
+  it('does not speak of an import while the bank or Skatteverket step works', () => {
+    expect(booksSkip({ ...base, step: 'bank', working: true }, false)).toEqual({ notice: 'empty', href: '/', hardNavigation: false })
+    expect(booksSkip({ ...base, step: 'skv', working: true, imported: true, path: 'migration' }, false)).toEqual({
+      notice: 'later',
+      href: '/',
+      hardNavigation: false,
     })
   })
 
