@@ -2,7 +2,7 @@
 
 import { Fragment, useState, useEffect, useRef, useMemo, useId } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useForm, useFieldArray, Controller, type FieldErrors } from 'react-hook-form'
@@ -167,6 +167,7 @@ import {
 import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { formatSwishForDisplay } from '@/lib/invoices/payment-rows'
 import { EditorSection } from '@/components/invoices/editor/EditorSection'
+import { useClaimNavRow } from '@/components/dashboard/nav-row-claim'
 import { DetailsChips } from '@/components/invoices/editor/DetailsChips'
 import { PaymentSummary } from '@/components/invoices/editor/PaymentSummary'
 import { PaymentPanel, type PaymentPanelScope } from '@/components/invoices/editor/PaymentPanel'
@@ -309,6 +310,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const copyInitial = props.mode === 'copy' ? props.initial : null
   const initialOreRounding = initial?.ore_rounding ?? copyInitial?.ore_rounding
   const router = useRouter()
+  const pathname = usePathname()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const { company, role, isSandbox } = useCompany()
@@ -930,6 +932,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }, [payeeState, payeeOptions, watchPayeeAccount, setValue])
   const watchCustomerId = watch('customer_id')
   const watchDocumentType = watch('document_type') as InvoiceDocumentType
+  // An offert belongs under Offerter in the sidebar, whatever the URL says;
+  // every other type stays under Kundfakturor (the URL's row).
+  useClaimNavRow(pathname, watchDocumentType === 'quote' ? '/quotes' : null)
   // Subscribed at render level so the Förval chip line and the next-step line
   // stay live while the settings panel is collapsed.
   const watchInvoiceDate = watch('invoice_date')

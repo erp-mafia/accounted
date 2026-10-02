@@ -69,7 +69,8 @@ import type { EntityType } from '@/types'
 import { offersPayroll } from '@/lib/company/offers-payroll'
 import { SidebarV2 } from './SidebarV2'
 import { scrubAuthCookies } from '@/lib/auth/browser-session-cookies'
-import { NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags, type NavV2Item } from './nav-v2'
+import { NAV_V2_COMPANY, NAV_V2_TOP, claimedRowActive, type NavGateFlags, type NavV2Item } from './nav-v2'
+import { useNavRowClaim } from './nav-row-claim'
 
 void _ENABLED_EXTENSION_IDS
 
@@ -333,6 +334,7 @@ function entityGateAllows(gate: EntityType | readonly EntityType[], entityType: 
 
 export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, arkivEnabled = false, agentsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
+  const navRowClaim = useNavRowClaim(pathname)
   const router = useRouter()
   const supabase = useRealtimeSupabase()
   const { company, capabilities, byraTeam } = useCompany()
@@ -424,6 +426,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   }
 
   const isActive = (href: string) => {
+    // A page that names its own row (an offert in the invoice editor) wins
+    // over the URL's prefix match.
+    const claimed = claimedRowActive(href, pathname, navRowClaim)
+    if (claimed !== undefined) return claimed
     if (href === '/') {
       return pathname === '/'
     }
