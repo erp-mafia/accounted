@@ -15,7 +15,6 @@ import {
 } from '@/lib/invoices/bank-payment-qr'
 
 const company = (overrides: Partial<BankPaymentQrCompany> = {}): BankPaymentQrCompany => ({
-  invoice_show_payment_qr: true,
   company_name: 'Testbolaget AB',
   org_number: '5566778899',
   bankgiro: '5050-1055',
@@ -197,13 +196,10 @@ describe('buildBankPaymentQrPayload: reference and identity', () => {
   })
 })
 
+// Whether an invoice prints this code at all is the QR mode's call
+// (lib/invoices/payment-qr.ts, tested in payment-qr.test.ts); the builder
+// itself still refuses anything a bank app must not pay.
 describe('buildBankPaymentQrPayload: which documents get a QR', () => {
-  it('is off unless the company switched it on', () => {
-    expect(build({ company: { invoice_show_payment_qr: false } })).toBeNull()
-    expect(build({ company: { invoice_show_payment_qr: null } })).toBeNull()
-    expect(build({ company: { invoice_show_payment_qr: undefined } })).toBeNull()
-  })
-
   it('never puts a payment QR on a credit note', () => {
     expect(build({ invoice: { credited_invoice_id: 'inv-orig' } })).toBeNull()
   })

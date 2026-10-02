@@ -1,14 +1,14 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { PRIVATE_NO_STORE_HEADERS, privateNoStore } from '@/lib/api/private-no-store'
-import { InvoicePDF, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import type { InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
+import { describeInvoicePaymentQr } from '@/lib/invoices/payment-qr'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { getVatRules } from '@/lib/invoices/vat-rules'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { contentDisposition } from '@/lib/api/content-disposition'
-import type { InvoiceItem, Customer, CompanySettings, Currency, InvoiceDocumentType } from '@/types'
+import { INVOICE_QR_MODES, type InvoiceItem, type Customer, type CompanySettings, type Currency, type InvoiceDocumentType, type InvoiceQrMode } from '@/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { computeDeduction, computeInvoiceDeductionTotal, type DeductionType } from '@/lib/invoices/rot-rut-rules'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
@@ -68,10 +68,26 @@ function resolvePreviewPersonnummerMasked(typed: string | null, customer: Custom
 }
 
 /**
+ * The draft's own QR choice: one of INVOICE_QR_MODES, or null (also for an
+ * empty value) to inherit the company's invoice_qr_mode. Undefined when the
+ * value is not a mode at all, which the route refuses.
+ */
+function previewQrMode(value: unknown): InvoiceQrMode | null | undefined {
+  if (value === undefined || value === null || value === '') return null
+  return typeof value === 'string' && (INVOICE_QR_MODES as readonly string[]).includes(value)
+    ? (value as InvoiceQrMode)
+    : undefined
+}
+
+/**
  * POST /api/invoices/preview-pdf
  *
  * Generates a preview PDF from form data without creating an invoice.
  * Returns the PDF as an inline blob for display in a new browser tab.
+ *
+ * Response header X-Invoice-Qr names the payment QR code the PDF carries
+ * (bank_app, swish, payment_link) or why it has none (none:<reason>, the
+ * reason codes of lib/invoices/payment-qr.ts), so the editor can explain it.
  */
 export const POST = withRouteContext('invoice.preview_pdf', async (request, {
   supabase,
@@ -86,7 +102,16 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     invoice_marking, notes,
     document_type, invoice_number, payment_link_url, payment_cash_account_id,
     deduction_personnummer, deduction_housing_designation, deduction_apartment_number, deduction_brf_org_number,
+    qr_mode,
   } = body
+
+  const previewQr = previewQrMode(qr_mode)
+  if (previewQr === undefined) {
+    return NextResponse.json(
+      { error: 'Ogiltigt val av QR-kod' },
+      { status: 400, headers: PRIVATE_NO_STORE_HEADERS },
+    )
+  }
 
   // Preview-only https gate, mirroring CreateInvoiceSchema: the value is
   // rendered as a clickable link + QR in the preview PDF.
@@ -345,6 +370,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     invoice_marking: (typeof invoice_marking === 'string' && invoice_marking.trim()) || null,
     notes: notes || null,
     payment_link_url: previewPaymentLink,
+    qr_mode: previewQr,
     reverse_charge_text: vatRules.reverseChargeText || null,
     credited_invoice_id: null,
     document_type: docType,
@@ -360,25 +386,15 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
   } as InvoicePdfInvoice
 
   try {
-    const { branding, company: renderCompany } = await prepareInvoicePdfRender(
-      company as CompanySettings,
-      previewInvoice.currency,
-      { paymentAccountRequired: invoiceRequiresPaymentAccount(previewInvoice), payee: previewPayee },
-    )
-    const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, previewInvoice)
-    const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(previewInvoice, renderCompany)
-    const pdfBuffer = await renderToBuffer(
-      InvoicePDF({
-        invoice: previewInvoice,
-        customer,
-        items: invoiceItems,
-        company: renderCompany,
-        isPreview: true,
-        branding,
-        swishQrDataUrl,
-        paymentLinkQrDataUrl,
-      })
-    )
+    const { buffer: pdfBuffer, paymentQr } = await renderInvoicePdfBuffer({
+      invoice: previewInvoice,
+      customer,
+      items: invoiceItems,
+      company: company as CompanySettings,
+      isPreview: true,
+      paymentAccountRequired: invoiceRequiresPaymentAccount(previewInvoice),
+      payee: previewPayee,
+    })
     const filename = invoicePdfFilename({
       companyName: (company as CompanySettings).company_name,
       customerName: customer.name,
@@ -393,6 +409,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
         'Content-Type': 'application/pdf',
         'Content-Disposition': contentDisposition('inline', filename),
         'Cache-Control': 'private, no-store',
+        'X-Invoice-Qr': describeInvoicePaymentQr(paymentQr),
       },
     })
   } catch (error) {

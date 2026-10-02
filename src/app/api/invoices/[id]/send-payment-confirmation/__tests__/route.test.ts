@@ -42,7 +42,6 @@ vi.mock('@/lib/invoices/pdf-template', () => ({
   brandingFromCompanySettings: vi.fn().mockReturnValue({}),
   // As in production: the real QR builders run, so the paid re-render's
   // missing pay-again QR is proven, not switched off by the mock.
-  SHOW_SWISH_ON_INVOICE: true,
 }))
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 
@@ -266,8 +265,8 @@ describe('POST /api/invoices/[id]/send-payment-confirmation', () => {
     expect(InvoicePDF).toHaveBeenCalledWith(
       expect.objectContaining({
         invoice: expect.objectContaining({ status: 'paid' }),
-        swishQrDataUrl: null,
-        paymentLinkQrDataUrl: null,
+        // The one QR slot stays empty: a paid invoice asks for no payment.
+        paymentQr: null,
       }),
     )
   })

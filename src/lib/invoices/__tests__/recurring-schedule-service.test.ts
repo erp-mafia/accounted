@@ -35,12 +35,8 @@ vi.mock('@/lib/invoices/pdf-template', () => ({
 }))
 
 const mockPrepareRender = vi.fn()
-const mockSwishQr = vi.fn()
-const mockPaymentLinkQr = vi.fn()
 vi.mock('@/lib/invoices/pdf-render-helpers', () => ({
   prepareInvoicePdfRender: (...args: unknown[]) => mockPrepareRender(...args),
-  buildSwishQrDataUrl: (...args: unknown[]) => mockSwishQr(...args),
-  buildPaymentLinkQrDataUrl: (...args: unknown[]) => mockPaymentLinkQr(...args),
 }))
 
 const mockApplyPaymentLink = vi.fn()
@@ -430,8 +426,6 @@ describe('executeRecurringSchedule auto-send', () => {
       },
     )
     mockPrepareRender.mockResolvedValue({ branding: {}, company })
-    mockSwishQr.mockResolvedValue(null)
-    mockPaymentLinkQr.mockResolvedValue(null)
     mockRenderToBuffer.mockResolvedValue(Buffer.from('fake-pdf'))
     mockInvoicePDF.mockReturnValue('pdf-element')
     mockSendEmail.mockResolvedValue({ success: true, messageId: 'm-1' })
@@ -447,7 +441,6 @@ describe('executeRecurringSchedule auto-send', () => {
         return { failure: null }
       },
     )
-    mockPaymentLinkQr.mockResolvedValue('data:image/png;base64,QR')
 
     const result = await executeRecurringSchedule(client, makeSchedule(), today)
 
@@ -473,13 +466,17 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockApplyPaymentLink.mock.invocationCallOrder[0]).toBeLessThan(
       mockRenderToBuffer.mock.invocationCallOrder[0],
     )
-    // QR built from the renderable copy (status overridden to 'sent').
-    expect(mockPaymentLinkQr).toHaveBeenCalledWith(
-      expect.objectContaining({ payment_link_url: 'https://pay.example/x', status: 'sent' }),
-      expect.anything(),
-    )
+    // The one QR resolved from the renderable copy (status overridden to
+    // 'sent'): the company's bankgiro has a wrong check digit and there is no
+    // Swish, so auto prints the link the send just created.
     expect(mockInvoicePDF).toHaveBeenCalledWith(
-      expect.objectContaining({ paymentLinkQrDataUrl: 'data:image/png;base64,QR' }),
+      expect.objectContaining({
+        invoice: expect.objectContaining({ payment_link_url: 'https://pay.example/x', status: 'sent' }),
+        paymentQr: expect.objectContaining({
+          kind: 'payment_link',
+          imageDataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+        }),
+      }),
     )
     expect(mockSendEmail).toHaveBeenCalledWith(expect.objectContaining({
       attachments: [expect.objectContaining({

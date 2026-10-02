@@ -55,7 +55,6 @@ export const USINGQR_VERSION = 1
 export const BANK_PAYMENT_QR_QUIET_ZONE = 4
 
 export interface BankPaymentQrCompany {
-  invoice_show_payment_qr?: boolean | null
   company_name?: string | null
   org_number?: string | null
   bankgiro?: string | null
@@ -121,11 +120,11 @@ function asciiJson(value: unknown): string {
 
 /**
  * The UsingQR payload for an invoice, or null when the invoice must not
- * carry one (switch off, not a payable SEK invoice, nothing left to pay, or
- * a mandatory field missing).
+ * carry one (not a payable SEK invoice, nothing left to pay, or a mandatory
+ * field missing). Whether the invoice prints this code at all is decided by
+ * lib/invoices/payment-qr.ts (the invoice's QR mode); this only builds it.
  */
 export function buildBankPaymentQrPayload({ company, invoice, amountDue, lang }: BankPaymentQrInput): string | null {
-  if (!(company.invoice_show_payment_qr ?? false)) return null
   // The same gate as the Swish and payment-link QRs (lib/invoices/amount-due).
   if (!isInvoicePayableStatus(invoice)) return null
   if ((invoice.currency ?? 'SEK') !== 'SEK') return null

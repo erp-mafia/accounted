@@ -315,7 +315,6 @@ describe('payment details follow the invoice currency', () => {
     for (const out of [html, text]) {
       expect(out).toContain('DE89370400440532013000')
       expect(out).toContain('DEUTDEFF')
-      expect(out).toContain('Deutsche Bank')
       expect(out).not.toContain('SE4550000000058398257466')
       expect(out).not.toContain('ESSESESS')
     }

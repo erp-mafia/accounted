@@ -1,4 +1,3 @@
-import { renderToBuffer } from '@react-pdf/renderer'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
@@ -8,12 +7,7 @@ import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import type { CustomIssuanceLine } from '@/lib/invoices/issuance-custom-lines'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import {
-  prepareInvoicePdfRender,
-  buildSwishQrDataUrl,
-  buildPaymentLinkQrDataUrl,
-} from '@/lib/invoices/pdf-render-helpers'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
@@ -97,30 +91,17 @@ export async function archiveIssuedInvoicePdf(args: {
     // stale and still reads 'draft': override here so the archived underlag
     // isn't stamped "UTKAST".
     const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
-    const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
-    const { branding, company: renderCompany } = await prepareInvoicePdfRender(
-      settings,
-      renderableInvoice.currency,
-      { paymentAccountRequired, payee: renderableInvoice.payment_details ?? null },
-    )
-    // Both QRs, exactly as the send route renders them: the archived underlag
-    // must be the document the customer holds. Without the link QR, an
-    // invoice with a typed-in payment link printed its "Betala online" row
-    // but archived no code for it, while the preview showed one.
-    const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
-    const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice, renderCompany)
-    const pdfBuffer = await renderToBuffer(
-      InvoicePDF({
-        invoice: renderableInvoice,
-        customer: invoice.customer as Customer,
-        items,
-        company: renderCompany,
-        originalInvoiceNumber: args.originalInvoiceNumber,
-        branding,
-        swishQrDataUrl,
-        paymentLinkQrDataUrl,
-      }),
-    )
+    // The same render entry point as the send route, so the archived
+    // underlag carries the same QR code as the document the customer holds
+    // (and the preview): it used to archive no payment-link code at all.
+    const { buffer: pdfBuffer } = await renderInvoicePdfBuffer({
+      invoice: renderableInvoice,
+      customer: invoice.customer as Customer,
+      items,
+      company: settings,
+      originalInvoiceNumber: args.originalInvoiceNumber,
+      paymentAccountRequired: invoiceRequiresPaymentAccount(invoice as Invoice),
+    })
 
     const filename = invoicePdfFilename({
       companyName: settings.company_name,

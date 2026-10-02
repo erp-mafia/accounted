@@ -18,13 +18,7 @@
  */
 
 import { z } from 'zod'
-import { renderToBuffer } from '@react-pdf/renderer'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import {
-  prepareInvoicePdfRender,
-  buildSwishQrDataUrl,
-  buildPaymentLinkQrDataUrl,
-} from '@/lib/invoices/pdf-render-helpers'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { registerEndpoint } from '@/lib/api/v1/registry'
@@ -174,26 +168,18 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     let pdfBuffer: Buffer
     try {
-      const { branding, company: renderCompany } = await prepareInvoicePdfRender(
-        company as CompanySettings,
-        typed.currency,
-        { paymentAccountRequired: invoiceRequiresPaymentAccount(typed), payee: typed.payment_details ?? null },
-      )
-      // Same QRs as the dashboard download and the sent file.
-      const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, typed as Invoice)
-      const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(typed as Invoice, renderCompany)
-      pdfBuffer = await renderToBuffer(
-        InvoicePDF({
+      // Same render path, so the same QR code, as the dashboard download and
+      // the sent file.
+      pdfBuffer = (
+        await renderInvoicePdfBuffer({
           invoice: typed as Invoice,
           customer: typed.customer as Customer,
           items,
-          company: renderCompany,
+          company: company as CompanySettings,
           originalInvoiceNumber,
-          branding,
-          swishQrDataUrl,
-          paymentLinkQrDataUrl,
-        }),
-      )
+          paymentAccountRequired: invoiceRequiresPaymentAccount(typed),
+        })
+      ).buffer
     } catch (err) {
       ctx.log.error('invoices.pdf: render failed', err as Error, {
         invoiceId,
