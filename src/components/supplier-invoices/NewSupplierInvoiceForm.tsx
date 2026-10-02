@@ -422,11 +422,12 @@ export default function NewSupplierInvoiceForm({
   const isEF = entityType === 'enskild_firma'
 
   // Out-of-period guard (mirrors the manual voucher form). A registration JE is
-  // only posted at registration time under the accrual method or when the
-  // invoice is marked paid privately: cash method books at payment, so an
+  // only posted at registration time when the booking moment is 'issue' or the
+  // invoice is marked paid privately (the same rule as create.ts): cash method
+  // books at payment and deferred booking at the Bokför step, so an
   // out-of-period date is fine there and we stay quiet. periodsLoaded gates the
   // warning so it never flashes before the fiscal periods have been fetched.
-  const willBookAtRegistration = accountingMethod === 'accrual' || watchedPaidPrivately
+  const willBookAtRegistration = bookingMoment === 'issue' || watchedPaidPrivately
   const invoiceDateOutsidePeriod =
     periodsLoaded &&
     !!watchedInvoiceDate &&
@@ -1459,7 +1460,9 @@ export default function NewSupplierInvoiceForm({
     watchedPaidPrivately || isEF
       ? willBookAtRegistration
         ? t('ready_line_register')
-        : t('ready_line_register_cash')
+        : bookingMoment === 'payment'
+          ? t('ready_line_register_cash')
+          : t('ready_line_register_deferred')
       : bookingMoment === 'issue'
         ? t('ready_line_review')
         : bookingMoment === 'payment'
@@ -1467,7 +1470,11 @@ export default function NewSupplierInvoiceForm({
           : t('ready_line_review_deferred')
 
   const forvalChips: string[] = [
-    willBookAtRegistration ? t('forval_books_at_registration') : t('forval_books_at_payment'),
+    willBookAtRegistration
+      ? t('forval_books_at_registration')
+      : bookingMoment === 'payment'
+        ? t('forval_books_at_payment')
+        : t('forval_books_on_book_step'),
   ]
   if (watchedReverseCharge) forvalChips.push(t('reverse_charge_label'))
   if ((watchedCurrency || 'SEK') !== 'SEK') {
