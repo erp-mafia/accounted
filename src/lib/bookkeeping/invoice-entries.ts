@@ -31,6 +31,7 @@ import {
   buildInvoiceDescription,
   buildInvoiceRegistrationLines,
   headerToSekOrThrow,
+  invoiceCashBankSek,
 } from './invoice-lines'
 export { buildInvoiceCashLines } from './invoice-lines'
 
@@ -360,6 +361,10 @@ export async function createCreditNoteJournalEntry(
  * Create the journal entry for kontantmetoden (cash method) when payment is
  * received: the lines of buildInvoiceCashLines, booked in the open period of
  * the payment date. Returns null when no open period covers it.
+ *
+ * With a matched bank row, the bank leg is what arrived on it
+ * (invoiceCashBankSek) and a sub-krona gap goes to 3740; the mark-paid doors
+ * pass no row and book the customer share.
  */
 export async function createInvoiceCashEntry(
   supabase: SupabaseClient,
@@ -383,6 +388,7 @@ export async function createInvoiceCashEntry(
     entityType,
     customerName,
     settlementAccountNumber,
+    invoiceCashBankSek(bankTransaction),
   )
 
   const input: CreateJournalEntryInput = {

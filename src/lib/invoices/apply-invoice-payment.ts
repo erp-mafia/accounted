@@ -22,7 +22,8 @@
  * guard rail #9: identical to the route's previous `Math.round(x*100)/100`
  * except on exact-half-öre amounts, where `roundOre` rounds correctly.
  */
-import { roundOre, ORE_TOLERANCE, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
+import { roundOre, ORE_TOLERANCE, ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
+import { oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
 
 /** Half an öre: anything over the remaining by more than this is a real overpayment. */
 export const PAYMENT_OVERSHOOT_TOLERANCE = ORE_TOLERANCE
@@ -84,11 +85,12 @@ export function planInvoicePayment(
     }
   }
 
-  const diff = roundOre(currentRemaining - paymentAmountInInvoiceCurrency)
-
   // Within the öre band (and absorbing) → settle in full; the 3740 line carries
   // the residual. Covers both a short whole-krona payment and a rounded-up one.
-  if (absorbOre && Math.abs(diff) < ORE_ROUNDING_SETTLEMENT_MAX) {
+  // The band is the one every payment builder books by (oreSettlementResidual),
+  // so the plan never settles a gap the verifikat does not put on 3740. An
+  // exact payment falls through to the plain path below, which settles it too.
+  if (absorbOre && oreSettlementResidual(currentRemaining, paymentAmountInInvoiceCurrency) !== 0) {
     return {
       ok: true,
       plan: {
@@ -96,7 +98,7 @@ export function planInvoicePayment(
         newRemaining: 0,
         isFullyPaid: true,
         newStatus: 'paid',
-        oreSettled: Math.abs(diff) >= ORE_TOLERANCE,
+        oreSettled: true,
       },
     }
   }
@@ -116,9 +118,6 @@ export function planInvoicePayment(
     },
   }
 }
-
-/** BAS öres- och kronutjämning: the only account that may carry an absorbed residual. */
-const ORE_ROUNDING_ACCOUNT = '3740'
 
 /** BAS 1513, Kundfordringar delad faktura: Skatteverket's ROT/RUT share. */
 export const ROT_RUT_RECEIVABLE_ACCOUNT = '1513'
@@ -189,7 +188,7 @@ export function planInvoicePaymentForLines(
 
   const currentRemaining =
     invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
-  const residual = roundOre(currentRemaining - paymentAmountInInvoiceCurrency)
+  const residual = oreSettlementResidual(currentRemaining, paymentAmountInInvoiceCurrency)
   const net3740 = roundOre(
     lines!
       .filter((l) => l.account_number === ORE_ROUNDING_ACCOUNT)

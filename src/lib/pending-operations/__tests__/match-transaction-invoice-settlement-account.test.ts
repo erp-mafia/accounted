@@ -471,6 +471,76 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     })
   })
 
+  it('kontantmetod: the cash entry books 1930 at the bank row and the öre on 3740 (cash-bank-match-ore)', async () => {
+    // The real cash entry generator, fed the transaction the executor passes:
+    // 12 500 on a never-booked 12 499,63 invoice.
+    const actual = await vi.importActual<typeof import('@/lib/bookkeeping/invoice-entries')>(
+      '@/lib/bookkeeping/invoice-entries',
+    )
+    mockCreateCashEntry.mockImplementationOnce(actual.createInvoiceCashEntry)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: 12500,
+        currency: 'SEK',
+        date: '2026-05-12',
+        invoice_id: null,
+        journal_entry_id: null,
+        cash_account_id: null,
+      },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026001',
+        status: 'sent',
+        total: 12499.63,
+        subtotal: 9999.7,
+        vat_amount: 2499.93,
+        vat_treatment: 'standard_25',
+        remaining_amount: 12499.63,
+        paid_amount: 0,
+        currency: 'SEK',
+        exchange_rate: null,
+        journal_entry_id: null,
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // transactions update (link)
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(mockCreateCashEntry).toHaveBeenCalledTimes(1)
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      source_type: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.source_type).toBe('invoice_cash_payment')
+    expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 12500, 0],
+      ['3001', 0, 9999.7],
+      ['2611', 0, 2499.93],
+      ['3740', 0, 0.37],
+    ])
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 12499.63,
+      remaining_amount: 0,
+    })
+  })
+
   it('3740 residual: the invoice_payments row carries the applied amount, not the cash received (#2250)', async () => {
     // Remaining 999.60 settled by a whole-krona 1 000.00 bank line: 3740
     // absorbs the 0.40 and paid_amount advances by the remaining only, so the

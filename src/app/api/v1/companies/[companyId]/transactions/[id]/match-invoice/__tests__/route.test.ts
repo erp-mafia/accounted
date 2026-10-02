@@ -355,6 +355,63 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
     expect(paidHandler).toHaveBeenCalledWith(expect.objectContaining({ paymentAmount: 999.6 }))
   })
 
+  it('kontantmetod: a whole-krona bank row books 1930 at the row and the öre on 3740 (cash-bank-match-ore)', async () => {
+    // 1 000 on a never-booked 999,60 invoice: the cash entry recognises
+    // revenue and moms on the invoice amounts, 1930 takes what arrived.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: { data: { ...TRANSACTION, amount: 1000 }, error: null },
+        invoices: [
+          {
+            data: {
+              ...SENT_INVOICE,
+              total: 999.6,
+              subtotal: 799.68,
+              vat_amount: 199.92,
+              vat_treatment: 'standard_25',
+              remaining_amount: 999.6,
+              paid_amount: 0,
+            },
+            error: null,
+          },
+          { data: [{ id: INVOICE_ID }], error: null },
+        ],
+        company_settings: {
+          data: { accounting_method: 'cash', entity_type: 'enskild_firma' },
+          error: null,
+        },
+        invoice_payments: [
+          { data: [], error: null },
+          { data: { id: 'ip-1' }, error: null },
+        ],
+      }),
+    )
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.invoice_status).toBe('paid')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      source_type: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.source_type).toBe('invoice_cash_payment')
+    expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 1000, 0],
+      ['3001', 0, 799.68],
+      ['2611', 0, 199.92],
+      ['3740', 0, 0.4],
+    ])
+  })
+
   it('returns 401 when no bearer token is supplied', async () => {
     mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
     const response = await matchInvoice(

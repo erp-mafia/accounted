@@ -192,7 +192,11 @@ describe('GET /api/transactions/[id]/match-invoice/preview', () => {
     const bank = body.lines.find((l) => l.account_number === '1930')
     expect(revenue?.credit_amount).toBe(4170) // net subtotal, NOT 3127.5
     expect(vat?.credit_amount).toBe(1042.5)
-    expect(bank?.debit_amount).toBe(5212.5)
+    // The whole-krona bank row (5 213) is what 1930 takes; the 0,50 over the
+    // invoice is öresavrundning on 3740, revenue and moms unchanged.
+    expect(bank?.debit_amount).toBe(5213)
+    const ore = body.lines.find((l) => l.account_number === '3740')
+    expect(ore).toMatchObject({ debit_amount: 0, credit_amount: 0.5 })
   })
 
   // Settlement-account resolution (customer-invoice counterpart of the

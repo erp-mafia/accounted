@@ -25,6 +25,7 @@ import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { computeDeduction, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
+import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { roundOre } from '@/lib/money'
 import type {
   CreateJournalEntryLineInput,
@@ -623,6 +624,20 @@ export interface InvoiceCashLinesSource {
 }
 
 /**
+ * The SEK that arrived on the bank row a kontantmetoden payment is matched
+ * to, for buildInvoiceCashLines' `knownBankSek`. Undefined unless the row is
+ * in SEK: öresavrundning is a whole-krona rule, and a foreign row settles
+ * with a kursdiff instead. One derivation for the match route, its preview
+ * and createInvoiceCashEntry, so what the dialog shows is what gets booked.
+ */
+export function invoiceCashBankSek(
+  bankTransaction?: { amount: number; currency?: string | null } | null,
+): number | undefined {
+  if (!bankTransaction || bankTransaction.currency !== 'SEK') return undefined
+  return roundOre(Math.abs(bankTransaction.amount))
+}
+
+/**
  * The kontantmetoden (cash method) verifikat for a received payment, pure:
  * createInvoiceCashEntry books exactly these lines, and the bank-match
  * preview and the payment dialog (proposePaymentLines) show them, so the
@@ -630,15 +645,26 @@ export interface InvoiceCashLinesSource {
  * dimensions included. Supports per-item VAT rates. Revenue + VAT
  * recognised at payment.
  *
- *   Debit  1930 Företagskonto       [total]
+ *   Debit  1930 Företagskonto       [customer share, or the bank amount]
+ *   Debit  1513 Skatteverket        [ROT/RUT deduction]  (if applicable)
  *   Credit 30xx Försäljning         [subtotal per rate]
  *   Credit 26xx Utgående moms       [vat per rate]  (if applicable)
+ *   Dr/Cr  3740 Öresavrundning      [bank vs share gap]  (if applicable)
+ *
+ * `knownBankSek`: the SEK that actually arrived (invoiceCashBankSek), when
+ * the payment is matched to a bank row. On a SEK invoice a gap under one
+ * krona to the customer share is öresavrundning: 1930 takes what arrived and
+ * 3740 the gap (customer side of oreRoundingLine), so 1930 follows the bank
+ * statement. Revenue and moms stay on the invoice amounts: 3740 carries no
+ * VAT. An exact row, a gap of a krona or more (the routes refuse those
+ * before booking) and a foreign invoice book the customer share as before.
  */
 export function buildInvoiceCashLines(
   invoice: InvoiceCashLinesSource,
   entityType: EntityType,
   customerName?: string,
   settlementAccountNumber: string = '1930',
+  knownBankSek?: number,
 ): { description: string; lines: CreateJournalEntryLineInput[] } {
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = invoice.currency !== 'SEK'
@@ -698,7 +724,11 @@ export function buildInvoiceCashLines(
   const cashDebit = isForeign
     ? Math.round(totalCredits * 100) / 100
     : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
-  const bankAmount = Math.round((cashDebit - rotRut.totalSek) * 100) / 100
+  const customerShare = roundOre(cashDebit - rotRut.totalSek)
+  const oreGap = !isForeign && customerShare > 0 && knownBankSek != null && knownBankSek > 0
+    ? oreSettlementResidual(customerShare, knownBankSek)
+    : 0
+  const bankAmount = roundOre(customerShare - oreGap)
   lines.push({
     account_number: settlementAccountNumber,
     debit_amount: bankAmount,
@@ -709,6 +739,9 @@ export function buildInvoiceCashLines(
 
   lines.push(...rotRut.lines)
   lines.push(...creditLines)
+  if (oreGap !== 0) {
+    lines.push({ ...oreRoundingLine(oreGap, 'customer'), dimensions: defaultDimensions })
+  }
 
   return {
     description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),

@@ -163,6 +163,53 @@ describe('bank-match preview and booking are identical', () => {
     expect(shown.documentDimensions).toEqual({ '6': 'P1' })
   })
 
+  it('kontantmetod: a whole-krona bank row books 1930 at the row and the öre on 3740', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 1235, currency: 'SEK', date: '2026-05-18', invoice_id: null })
+    const invoice = {
+      ...makeInvoice({
+        id: INVOICE_ID,
+        status: 'sent',
+        total: 1234.56,
+        subtotal: 987.65,
+        vat_amount: 246.91,
+        remaining_amount: 1234.56,
+        paid_amount: 0,
+        journal_entry_id: null,
+        default_dimensions: { '6': 'P1' },
+      }),
+      customer: makeCustomer({ name: 'Kund AB' }),
+      credit_notes: [],
+      items: [{ description: 'Konsult', vat_rate: 25, line_total: 987.65, vat_amount: 246.91 }],
+    }
+    const settings = { accounting_method: 'cash', entity_type: 'aktiebolag' }
+
+    enqueue({ data: tx, error: null }) // preview: transaction
+    enqueue({ data: invoice, error: null }) // preview: invoice
+    enqueue({ data: settings, error: null }) // preview: settings
+    enqueue({ data: [], error: null }) // preview: cash accounts -> 1930
+    const shown = await preview()
+
+    enqueue({ data: tx, error: null }) // POST: transaction
+    enqueue({ data: invoice, error: null }) // POST: invoice
+    enqueue({ data: [], error: null }) // POST: hard-duplicate check
+    enqueue({ data: settings, error: null }) // POST: settings
+    enqueue({ data: [], error: null }) // POST: cash accounts -> 1930
+    enqueue({ data: [{ id: INVOICE_ID }], error: null }) // POST: invoice update
+    enqueue({ data: null, error: null }) // POST: transaction link
+    const booked = await book()
+
+    expect(shown.status).toBe(200)
+    expect(booked.status).toBe(200)
+    expect(shown.lines).toEqual(booked.lines)
+    expect(shown.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 1235, 0],
+      ['3001', 0, 987.65],
+      ['2611', 0, 246.91],
+      ['3740', 0, 0.44],
+    ])
+    for (const line of shown.lines) expect(line.dimensions).toEqual({ '6': 'P1' })
+  })
+
   it('faktureringsmetod: the clearing rows, the öre residual on 3740, every leg tagged', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 12500, currency: 'SEK', date: '2026-05-18', invoice_id: null })
     const invoice = {
