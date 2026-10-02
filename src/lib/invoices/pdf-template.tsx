@@ -96,26 +96,77 @@ export const wrapDescriptionWords = wrapWholeWordsWithin(DESCRIPTION_COLUMN_PT)
 export const wrapFullWidthWords = wrapWholeWordsWithin(FULL_WIDTH_BOX_PT)
 
 /**
- * Whether a free-text block is short enough to be kept on one page.
+ * Keeping free text together across a page break.
  *
- * `wrap={false}` keeps a block from splitting across pages, but react-pdf
- * places a non-splittable block that is taller than a page anyway and
- * everything past the page edge is lost. Blocks that could plausibly be that
- * tall (line descriptions and notes, both multi-line) are only kept together
- * when a line estimate says they fit comfortably; past that they are allowed
- * to split, which is the lesser evil.
+ * `wrap={false}` keeps a block from splitting across pages: when it does not
+ * fit below what is already on the page it moves to the next page whole. But
+ * react-pdf places a non-splittable block that is taller than a whole page
+ * anyway, and everything past the page edge is lost. The decision is made
+ * before layout, so a block of free text (line descriptions, notes) is kept
+ * together only when a line estimate says it fits on an empty page; past
+ * that it may split, which is the lesser evil.
  *
  * The estimate counts rendered lines, not source lines: a token wider than
  * the column is chunked by the wrap callback and each chunk can take a line
- * of its own. The cap is small enough that even the tallest font a company
- * can pick (bundled Source Serif 4 at about 13.7pt per line, or an uploaded
- * font at 20pt) keeps 12 lines under 250pt, a third of the usable page
- * height, so a kept-together block can never be taller than a page.
+ * of its own.
+ *
+ * How many estimated lines may be kept together is derived from the page:
+ *
+ *   lines * fontSize * linePitch * estimateError + chrome <= usable height
+ *
+ * - usable height: A4 (841.89pt) minus the page padding top and bottom,
+ *   761.89pt. A block that moved to a fresh page has all of it.
+ * - chrome: the block's own margin, padding and border.
+ * - line pitch: react-pdf sets a line at (ascent - descent + lineGap) of the
+ *   font, per pt of font size. The built-in fonts measure 1.10 (Helvetica),
+ *   1.12 (Times-Roman), 1.13 (Courier), 1.326 (Source Sans 3) and 1.371
+ *   (Source Serif 4); 1.4 covers them all.
+ * - estimate error: the estimate uses Helvetica widths at 10pt plus 10%, so
+ *   it over-counts for every built-in font but Courier, whose fixed-width
+ *   glyphs render up to 1.31 times the estimated lines in the narrowest
+ *   description column. 1.35 covers that.
+ *
+ * Notes (9pt, 38pt of box chrome) come to 42 lines and a line description
+ * (10pt, 13pt of row chrome) to 39: some 420pt in Helvetica, just over half
+ * the usable height, and still on the page in the worst built-in case.
+ *
+ * An uploaded font can have any metrics, so it keeps the policy the earlier
+ * fixed cap of 12 came from: an assumed pitch of 2 (20pt per line at 10pt)
+ * and no more than a third of the page, an error factor of 3. That still
+ * comes to 12 or 13 lines.
+ */
+const A4_HEIGHT_PT = 841.89
+export const PAGE_PADDING_PT = 40
+export const USABLE_PAGE_HEIGHT_PT = A4_HEIGHT_PT - 2 * PAGE_PADDING_PT
+export const BUILT_IN_FONT_LINE_PITCH = 1.4
+export const BUILT_IN_FONT_ESTIMATE_ERROR = 1.35
+const UPLOADED_FONT_LINE_PITCH = 2
+const UPLOADED_FONT_ESTIMATE_ERROR = 3
+
+/** styles.noticeText and styles.noticeBox: 9pt text; marginTop 12, padding 12, border 1. */
+export const NOTICE_FONT_SIZE_PT = 9
+export const NOTICE_BOX_CHROME_PT = 12 + 2 * 12 + 2 * 1
+/** styles.tableRow: 10pt text (the page's, inherited); paddingVertical 6, borderBottom 1. */
+export const TABLE_ROW_FONT_SIZE_PT = 10
+export const TABLE_ROW_CHROME_PT = 2 * 6 + 1
+
+export function keepTogetherLineCap(fontFamily: string, fontSizePt: number, chromePt: number): number {
+  const uploaded = fontFamily.startsWith(CUSTOM_INVOICE_FONT_RENDER_PREFIX)
+  const pitch = uploaded ? UPLOADED_FONT_LINE_PITCH : BUILT_IN_FONT_LINE_PITCH
+  const error = uploaded ? UPLOADED_FONT_ESTIMATE_ERROR : BUILT_IN_FONT_ESTIMATE_ERROR
+  return Math.floor((USABLE_PAGE_HEIGHT_PT - chromePt) / (fontSizePt * pitch * error))
+}
+
+/**
+ * The fixed cap for the ROT/RUT box. Its estimate only sees the line
+ * descriptions, not the title, rows and notices or the kind and amount
+ * printed around each description, so the derivation above does not hold
+ * for it. 12 lines at 20pt stay under a third of the page, which leaves the
+ * other two thirds for what the estimate does not count.
  */
 export const MAX_KEEP_TOGETHER_LINES = 12
 
-export function fitsOnOnePage(text: string | null | undefined, budgetPt: number): boolean {
-  if (!text) return true
+export function estimateLines(text: string, budgetPt: number): number {
   let lines = 0
   for (const line of text.split('\n')) {
     let chunkLines = 0
@@ -128,9 +179,25 @@ export function fitsOnOnePage(text: string | null | undefined, budgetPt: number)
     }
     const flowingLines = Math.ceil(flowingWidth / budgetPt)
     lines += chunkLines + Math.max(chunkLines === 0 ? 1 : 0, flowingLines)
-    if (lines > MAX_KEEP_TOGETHER_LINES) return false
   }
-  return true
+  return lines
+}
+
+export function fitsOnOnePage(text: string | null | undefined, budgetPt: number, maxLines: number): boolean {
+  if (!text) return true
+  return estimateLines(text, budgetPt) <= maxLines
+}
+
+/**
+ * Free text split into paragraphs at blank lines, for a block that may have
+ * to split: each paragraph is then kept together on its own, so the break
+ * falls between paragraphs instead of inside one. A paragraph carries the
+ * blank lines that follow it, so the pieces rendered one after another lay
+ * out line for line like the whole text: react-pdf drops a single trailing
+ * newline and renders each further one as an empty line.
+ */
+export function splitParagraphs(text: string): string[] {
+  return text.split(/(?<=\n[^\S\n]*\n)(?=[^\n]*\S)/)
 }
 
 /**
@@ -484,7 +551,7 @@ function createStyles(branding?: InvoiceBranding) {
   const b = resolveBranding(branding)
   return StyleSheet.create({
     page: {
-      padding: 40,
+      padding: PAGE_PADDING_PT,
       fontSize: 10,
       fontFamily: b.fontFamily,
     },
@@ -667,7 +734,7 @@ function createStyles(branding?: InvoiceBranding) {
       borderColor: '#dee2e6',
     },
     noticeText: {
-      fontSize: 9,
+      fontSize: NOTICE_FONT_SIZE_PT,
       color: '#495057',
     },
     creditNoteBox: {
@@ -966,6 +1033,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // current branding. createStyles() with no argument returns the original
   // hardcoded stylesheet: the default code path is unchanged.
   const styles = createStyles(branding)
+  // How many estimated lines of free text a table row or the notes box may
+  // hold and still be kept on one page, in this render's font.
+  const fontFamily = resolveBranding(branding).fontFamily
+  const rowLineCap = keepTogetherLineCap(fontFamily, TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)
+  const noteLineCap = keepTogetherLineCap(fontFamily, NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)
   const isCreditNote = !!invoice.credited_invoice_id
   // ROT/RUT personnummer as printed in the deduction box: YYYYMMDD-XXXX.
   // Derived from the stored ciphertext unless the caller already masked a
@@ -1273,7 +1345,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <View
                   key={index}
                   style={styles.tableRow}
-                  wrap={!fitsOnOnePage(item.description, FULL_WIDTH_BOX_PT)}
+                  wrap={!fitsOnOnePage(item.description, FULL_WIDTH_BOX_PT, rowLineCap)}
                 >
                   <Text style={[styles.colDescription, { width: '100%' }]} hyphenationCallback={wrapFullWidthWords}>
                     {item.description || ' '}
@@ -1283,7 +1355,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <View
                   key={index}
                   style={styles.tableRow}
-                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_COLUMN_PT)}
+                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_COLUMN_PT, rowLineCap)}
                 >
                   <Text style={styles.colDescription} hyphenationCallback={wrapDescriptionWords}>{item.description}</Text>
                   <Text style={styles.colQty}>{item.quantity}</Text>
@@ -1309,10 +1381,22 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         </View>
 
         {/* Notes: directly under the line items they annotate and above the
-            totals, the placement Swedish invoice readers expect. */}
+            totals, the placement Swedish invoice readers expect. The box
+            moves to the next page whole whenever it fits on one; a note too
+            long for any page splits between its paragraphs, each of which is
+            kept together in turn when it fits. */}
         {invoice.notes && (
-          <View style={styles.noticeBox} wrap={!fitsOnOnePage(invoice.notes, FULL_WIDTH_BOX_PT)}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{invoice.notes}</Text>
+          <View style={styles.noticeBox} wrap={!fitsOnOnePage(invoice.notes, FULL_WIDTH_BOX_PT, noteLineCap)}>
+            {splitParagraphs(invoice.notes).map((paragraph, index) => (
+              <Text
+                key={index}
+                style={styles.noticeText}
+                hyphenationCallback={wrapFullWidthWords}
+                wrap={!fitsOnOnePage(paragraph, FULL_WIDTH_BOX_PT, noteLineCap)}
+              >
+                {paragraph}
+              </Text>
+            ))}
           </View>
         )}
 
@@ -1432,7 +1516,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         {!isDeliveryNote && !isCreditNote && (invoice.deduction_total ?? 0) > 0 && (
           // Kept on one page while the per-line breakdown (which carries the
           // line descriptions, possibly multi-line) is short enough; past
-          // that it may split rather than be clipped.
+          // that it may split rather than be clipped. Fixed cap: the estimate
+          // does not see the rest of the box (MAX_KEEP_TOGETHER_LINES).
           <View
             style={styles.deductionBox}
             wrap={
@@ -1442,6 +1527,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   .map((i) => i.description)
                   .join('\n'),
                 FULL_WIDTH_BOX_PT,
+                MAX_KEEP_TOGETHER_LINES,
               )
             }
           >
