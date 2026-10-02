@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   booksInvoicesOnIssue,
+  invoiceBookingMoment,
   cashPartialBlockReason,
   creditNoteNeedsJournalEntry,
   supplierCreditNoteNeedsJournalEntry,
@@ -25,6 +26,23 @@ describe('booksInvoicesOnIssue (#967)', () => {
     expect(booksInvoicesOnIssue(null)).toBe(true)
     expect(booksInvoicesOnIssue(undefined)).toBe(true)
     expect(booksInvoicesOnIssue({})).toBe(true)
+  })
+})
+
+describe('invoiceBookingMoment', () => {
+  it('books at issue under faktureringsmetoden and while settings are missing', () => {
+    expect(invoiceBookingMoment({ accounting_method: 'accrual' })).toBe('issue')
+    expect(invoiceBookingMoment(null)).toBe('issue')
+    expect(invoiceBookingMoment({})).toBe('issue')
+  })
+
+  it('books at payment under kontantmetoden, whatever the defer flag says', () => {
+    expect(invoiceBookingMoment({ accounting_method: 'cash' })).toBe('payment')
+    expect(invoiceBookingMoment({ accounting_method: 'cash', defer_invoice_booking: true })).toBe('payment')
+  })
+
+  it('books at the explicit Bokför step when booking is deferred', () => {
+    expect(invoiceBookingMoment({ accounting_method: 'accrual', defer_invoice_booking: true })).toBe('manual')
   })
 })
 

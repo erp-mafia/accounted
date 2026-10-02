@@ -71,7 +71,7 @@ it.each([false, true])('renders a rounding credit and the actual 2440 total (exp
   const html = renderToStaticMarkup(createElement(SupplierInvoiceReviewContent, {
     supplier: makeSupplier(), invoiceNumber: form.supplier_invoice_number,
     invoiceDate: form.invoice_date, dueDate: form.due_date,
-    currency: 'SEK', reverseCharge: false, items, oreRounding: true,
+    currency: 'SEK', reverseCharge: false, items, oreRounding: true, bookingMoment: 'issue',
   }))
   const body = [...html.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].at(-1)![1]
   const cellsFor = (account: string) => {
@@ -120,7 +120,7 @@ it.each([
   const html = renderToStaticMarkup(createElement(SupplierInvoiceReviewContent, {
     supplier: makeSupplier({ supplier_type: 'swedish_business' }), invoiceNumber: form.supplier_invoice_number,
     invoiceDate: form.invoice_date, dueDate: form.due_date, exchangeRate: data.exchange_rate,
-    currency, reverseCharge: true, items: data.items, oreRounding: false,
+    currency, reverseCharge: true, items: data.items, oreRounding: false, bookingMoment: 'issue',
   }))
   const body = [...html.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].at(-1)![1]
   const vatRow = [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].find(row => row[1].includes('2647'))![1]

@@ -200,6 +200,7 @@ export default function NewSupplierInvoiceForm({
     accounts,
     entityType,
     accountingMethod,
+    bookingMoment,
     oreRounding,
     setOreRounding,
     dimensionsEnabled,
@@ -1459,7 +1460,11 @@ export default function NewSupplierInvoiceForm({
       ? willBookAtRegistration
         ? t('ready_line_register')
         : t('ready_line_register_cash')
-      : t('ready_line_review')
+      : bookingMoment === 'issue'
+        ? t('ready_line_review')
+        : bookingMoment === 'payment'
+          ? t('ready_line_review_cash')
+          : t('ready_line_review_deferred')
 
   const forvalChips: string[] = [
     willBookAtRegistration ? t('forval_books_at_registration') : t('forval_books_at_payment'),
@@ -2485,7 +2490,13 @@ export default function NewSupplierInvoiceForm({
             onConfirm={handleConfirm}
             isSubmitting={isSubmitting}
             title={t('review_dialog_title')}
-            warningText={t('review_dialog_warning')}
+            warningText={
+              bookingMoment === 'issue'
+                ? t('review_dialog_warning')
+                : bookingMoment === 'payment'
+                  ? t('review_dialog_warning_cash')
+                  : t('review_dialog_warning_deferred')
+            }
             confirmLabel={t('review_dialog_confirm')}
           >
             <SupplierInvoiceReviewContent
@@ -2500,6 +2511,7 @@ export default function NewSupplierInvoiceForm({
               paymentReference={pendingData.payment_reference || undefined}
               items={pendingData.items}
               oreRounding={oreRounding}
+              bookingMoment={bookingMoment}
             />
           </ConfirmationDialog>
         )

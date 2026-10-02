@@ -49,6 +49,7 @@ export function useSupplierInvoiceData() {
     accounts,
     entityType: defaults.entityType,
     accountingMethod: defaults.accountingMethod,
+    bookingMoment: defaults.bookingMoment,
     oreRounding: oreRoundingOverride ?? defaults.oreRounding,
     setOreRounding,
     dimensionsEnabled: defaults.dimensionsEnabled,
