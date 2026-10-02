@@ -525,6 +525,8 @@ export interface CompanySettings {
   invoice_show_bankgiro: boolean
   invoice_show_plusgiro: boolean
   invoice_show_swish: boolean
+  // Bank-app payment QR (UsingQR) in the PDF payment box (default false).
+  invoice_show_payment_qr: boolean
   invoice_show_logo: boolean
   invoice_show_company_name: boolean
   invoice_company_name_position: 'header' | 'footer'

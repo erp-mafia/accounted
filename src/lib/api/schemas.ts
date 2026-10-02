@@ -2851,6 +2851,7 @@ export const UpdateSettingsSchema = z.object({
   invoice_show_bankgiro: z.boolean().optional(),
   invoice_show_plusgiro: z.boolean().optional(),
   invoice_show_swish: z.boolean().optional(),
+  invoice_show_payment_qr: z.boolean().optional(),
   invoice_show_logo: z.boolean().optional(),
   invoice_show_company_name: z.boolean().optional(),
   invoice_company_name_position: z.enum(['header', 'footer']).optional(),

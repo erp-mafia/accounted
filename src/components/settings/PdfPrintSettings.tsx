@@ -31,6 +31,7 @@ type PdfToggleField =
   | 'invoice_show_bankgiro'
   | 'invoice_show_plusgiro'
   | 'invoice_show_swish'
+  | 'invoice_show_payment_qr'
   | 'invoice_show_logo'
   | 'invoice_show_company_name'
 
@@ -197,6 +198,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
     { field: 'invoice_show_bankgiro', label: t('show_bankgiro_label'), help: t('show_bankgiro_help'), defaultOn: true },
     { field: 'invoice_show_plusgiro', label: t('show_plusgiro_label'), help: t('show_plusgiro_help'), defaultOn: true },
     { field: 'invoice_show_swish', label: t('show_swish_label'), help: t('show_swish_help'), defaultOn: false },
+    { field: 'invoice_show_payment_qr', label: t('show_payment_qr_label'), help: t('show_payment_qr_help'), defaultOn: false },
     { field: 'invoice_show_logo', label: t('show_logo_label'), help: t('show_logo_help'), defaultOn: true },
     { field: 'invoice_show_company_name', label: t('show_company_name_label'), help: t('show_company_name_help'), defaultOn: true },
   ]
