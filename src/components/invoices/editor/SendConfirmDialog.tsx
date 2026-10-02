@@ -99,21 +99,35 @@ export function SendConfirmDialog({
 
         {voucher?.kind === 'lines' && (
           <div>
-            <p className="border-b border-border pb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            <p className="pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               {t('confirm_voucher_title', { date: voucher.date })}
             </p>
-            <table className="w-full border-collapse text-[13px]" data-ph-mask="">
+            {/* Fixed layout: the name column takes what the amounts leave and
+                truncates to one line (full name on hover). */}
+            <table className="w-full table-fixed border-collapse text-[13px]" data-ph-mask="">
+              <colgroup>
+                <col className="w-14" />
+                <col />
+                <col className="w-24" />
+                <col className="w-24" />
+              </colgroup>
+              <thead>
+                <tr className="border-b border-border text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <th scope="col" className="py-2 text-left font-medium">{t('confirm_voucher_account')}</th>
+                  <th scope="col" className="py-2 pr-2 text-left font-medium">{t('confirm_voucher_name')}</th>
+                  <th scope="col" className="py-2 text-right font-medium">{t('confirm_voucher_debit')}</th>
+                  <th scope="col" className="py-2 text-right font-medium">{t('confirm_voucher_credit')}</th>
+                </tr>
+              </thead>
               <tbody>
                 {voucher.lines.map((line, index) => (
                   <tr key={`${line.account}-${index}`} className="border-b border-border">
-                    <td className="w-14 py-2 tabular-nums">{line.account}</td>
-                    <td className="py-2 pr-2">{line.name}</td>
-                    <td className="w-28 py-2 text-right tabular-nums">
-                      {line.debit ? formatAmount(line.debit) : ''}
+                    <td className="py-2 tabular-nums">{line.account}</td>
+                    <td className="truncate py-2 pr-2" title={line.name}>
+                      {line.name}
                     </td>
-                    <td className="w-28 py-2 text-right tabular-nums">
-                      {line.credit ? formatAmount(line.credit) : ''}
-                    </td>
+                    <td className="py-2 text-right tabular-nums">{line.debit ? formatAmount(line.debit) : ''}</td>
+                    <td className="py-2 text-right tabular-nums">{line.credit ? formatAmount(line.credit) : ''}</td>
                   </tr>
                 ))}
               </tbody>
