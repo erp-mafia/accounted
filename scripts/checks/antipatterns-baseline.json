@@ -218,7 +218,7 @@
     ]
   },
   "basAccountLiteral": {
-    "count": 1586,
+    "count": 1584,
     "files": {
       "app/(dashboard)/assets/[id]/dispose/page.tsx": 1,
       "app/(dashboard)/bookkeeping/year-end/periodisering/page.tsx": 13,
@@ -226,7 +226,6 @@
       "app/(dashboard)/mileage/page.tsx": 10,
       "app/(dashboard)/supplier-invoices/[id]/page.tsx": 1,
       "app/api/bookkeeping/fiscal-periods/[id]/accruals/route.ts": 12,
-      "app/api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner/route.ts": 2,
       "app/api/import/bank-file/execute/route.ts": 1,
       "app/api/reconciliation/bank/link/route.ts": 2,
       "app/api/reconciliation/bank/run/route.ts": 2,
@@ -240,7 +239,6 @@
       "app/api/sandbox/seed/salary.ts": 1,
       "app/api/settings/eu-trade-signal/route.ts": 3,
       "app/api/settings/ku-signal/route.ts": 3,
-      "app/api/transactions/[id]/categorize/route.ts": 6,
       "app/api/v1/companies/[companyId]/accounts/route.ts": 5,
       "app/api/v1/companies/[companyId]/assets/[id]/dispose/route.ts": 3,
       "app/api/v1/companies/[companyId]/assets/[id]/route.ts": 3,
@@ -264,14 +262,13 @@
       "app/api/v1/companies/[companyId]/suppliers/route.ts": 3,
       "components/bookkeeping/AccrualPeriodControl.tsx": 9,
       "components/bookkeeping/year-end/AccrualsStep.tsx": 9,
-      "components/bookkeeping/year-end/DispositionsStep.tsx": 8,
       "components/dimensions/BulkTagWorkbench.tsx": 2,
-      "components/extensions/general/BookDirectlyDialog.tsx": 6,
+      "components/extensions/general/BookDirectlyDialog.tsx": 5,
       "components/extensions/general/RegisterExpenseDialog.tsx": 1,
       "components/import/BankFileConfirmStep.tsx": 4,
       "components/import/OpeningBalanceRowEditor.tsx": 2,
       "components/onboarding/books/steps/ProviderStep.tsx": 2,
-      "components/onboarding/books/steps/SieStep.tsx": 3,
+      "components/onboarding/books/steps/SieStep.tsx": 2,
       "components/onboarding/books/ui/InsightPanel.tsx": 1,
       "components/orders/BulkOrderBookingDialog.tsx": 1,
       "components/reports/INK2DeclarationView.tsx": 13,
@@ -319,13 +316,16 @@
       "lib/arkiv/lint/checks.ts": 10,
       "lib/bookkeeping/account-descriptions.ts": 49,
       "lib/bookkeeping/accruals/account-suggestions.ts": 13,
-      "lib/bookkeeping/booking-templates.ts": 173,
-      "lib/bookkeeping/category-mapping.ts": 41,
+      "lib/bookkeeping/book-direct-prefill.ts": 2,
+      "lib/bookkeeping/booking-templates.ts": 179,
+      "lib/bookkeeping/category-mapping.ts": 42,
       "lib/bookkeeping/chart-of-accounts-service.ts": 2,
       "lib/bookkeeping/client-account-names.ts": 72,
       "lib/bookkeeping/counterparty-templates.ts": 31,
       "lib/bookkeeping/currency-revaluation.ts": 6,
-      "lib/bookkeeping/invoice-accounts.ts": 15,
+      "lib/bookkeeping/dimension-carry.ts": 1,
+      "lib/bookkeeping/form-accounts.ts": 3,
+      "lib/bookkeeping/invoice-accounts.ts": 16,
       "lib/bookkeeping/invoice-entries.ts": 10,
       "lib/bookkeeping/invoice-payment-lines.ts": 6,
       "lib/bookkeeping/mapping-engine.ts": 11,
@@ -352,6 +352,7 @@
       "lib/core/bookkeeping/journal-entry-corrections.ts": 3,
       "lib/core/bookkeeping/kontantmetod-cutoff.ts": 7,
       "lib/core/bookkeeping/prior-result-guard.ts": 2,
+      "lib/core/bookkeeping/result-appropriation-repair.ts": 2,
       "lib/core/bookkeeping/result-appropriation-service.ts": 2,
       "lib/core/bookkeeping/year-end-service.ts": 3,
       "lib/docs/content/cookbook/ingest-bank-transactions.ts": 6,
@@ -441,7 +442,7 @@
     }
   },
   "sekLiteral": {
-    "count": 226,
+    "count": 227,
     "files": {
       "app/(dashboard)/bookkeeping/[id]/page.tsx": 3,
       "app/(dashboard)/deadlines/page.tsx": 1,
@@ -469,7 +470,7 @@
       "components/bookkeeping/JournalEntryForm.tsx": 4,
       "components/bookkeeping/JournalEntryList.tsx": 1,
       "components/bookkeeping/StrikeLinesDialog.tsx": 1,
-      "components/extensions/general/BookDirectlyDialog.tsx": 7,
+      "components/extensions/general/BookDirectlyDialog.tsx": 6,
       "components/extensions/general/RegisterExpenseDialog.tsx": 1,
       "components/import/ArticlesEditStep.tsx": 1,
       "components/inbox/TransactionMatchPicker.tsx": 6,
@@ -512,6 +513,7 @@
       "lib/api/schemas.ts": 1,
       "lib/bokslut/accruals/auto-detect.ts": 1,
       "lib/bokslut/arsredovisning/eligibility.ts": 1,
+      "lib/bookkeeping/book-direct-prefill.ts": 1,
       "lib/bookkeeping/category-mapping.ts": 1,
       "lib/bookkeeping/invoice-entries.ts": 3,
       "lib/bookkeeping/invoice-payment-lines.ts": 2,
@@ -534,12 +536,14 @@
       "lib/invoices/apply-invoice-payment.ts": 1,
       "lib/invoices/apply-supplier-payment.ts": 6,
       "lib/invoices/backfill-invoice-payment-rows.ts": 1,
+      "lib/invoices/bank-payment-qr.ts": 1,
       "lib/invoices/build-invoice-write.ts": 1,
       "lib/invoices/convert-to-invoice.ts": 1,
       "lib/invoices/duplicate-guard-currency.ts": 3,
       "lib/invoices/duplicate-payment-candidates.ts": 1,
       "lib/invoices/invoice-matching.ts": 3,
       "lib/invoices/link-migrated-registration-vouchers.ts": 2,
+      "lib/invoices/match-payment-plan.ts": 3,
       "lib/invoices/payment-accounts.ts": 3,
       "lib/invoices/pdf-render-helpers.ts": 1,
       "lib/invoices/pdf-template.tsx": 1,
@@ -557,7 +561,7 @@
       "lib/invoices/supplier-voucher-matching.ts": 3,
       "lib/invoices/voucher-matching.ts": 3,
       "lib/payments/batch-eligibility.ts": 1,
-      "lib/pending-operations/commit.ts": 5,
+      "lib/pending-operations/commit.ts": 2,
       "lib/providers/bokio/supplier-evidence.ts": 1,
       "lib/receipt-hunt/fx.ts": 1,
       "lib/reconciliation/covering-set-candidate.ts": 1,
@@ -580,7 +584,7 @@
     }
   },
   "kernelImports": {
-    "count": 23,
+    "count": 26,
     "files": {
       "lib/bookkeeping/engine.ts": [
         "lib/import/sie-job-contract",
@@ -612,6 +616,12 @@
         "lib/invoices/customer-share",
         "lib/reports/reskontra-payments"
       ],
+      "lib/core/bookkeeping/opening-balance-split.ts": [
+        "lib/import/sie-object-balances"
+      ],
+      "lib/core/bookkeeping/period-service.ts": [
+        "lib/transactions/unbooked"
+      ],
       "lib/core/bookkeeping/prior-result-carry.ts": [
         "lib/bokslut/rounding",
         "lib/reports/opening-balances"
@@ -629,6 +639,7 @@
         "lib/reports/trial-balance"
       ],
       "lib/core/documents/document-service.ts": [
+        "lib/documents/deletion",
         "lib/documents/preview"
       ]
     }
