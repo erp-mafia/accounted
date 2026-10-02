@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { BalansrapportPDF, ResultatrapportPDF } from '../operational-report-pdf-template'
 import type { BalansrapportReport, CompanySettings, ResultatrapportReport } from '@/types'
+import { pdfTextStrings } from '@/tests/pdf-text'
 
 // Real @react-pdf/renderer layout is CPU-heavy; under a fully parallel
 // test run these can exceed the 5s default on a saturated machine.
@@ -22,10 +23,33 @@ function balansrapport(overrides: Partial<BalansrapportReport> = {}): Balansrapp
       {
         class: 1,
         class_label: '1 Tillgångar',
-        rows: [
-          { account_number: '1930', account_name: 'Företagskonto', ib: 50000, ub: 75000, period_change: 25000 },
+        sections: [
+          {
+            key: 'omsattningstillgangar',
+            label: 'Omsättningstillgångar',
+            total_label: 'Summa omsättningstillgångar',
+            rows: [],
+            sections: [
+              {
+                key: 'kassaBank',
+                label: 'Kassa och bank',
+                total_label: 'Summa kassa och bank',
+                rows: [
+                  { account_number: '1930', account_name: 'Företagskonto', ib: 50000, ub: 75000, period_change: 25000 },
+                ],
+                sections: [],
+                subtotal_ib: 50000,
+                subtotal_change: 25000,
+                subtotal_ub: 75000,
+              },
+            ],
+            subtotal_ib: 50000,
+            subtotal_change: 25000,
+            subtotal_ub: 75000,
+          },
         ],
         subtotal_ib: 50000,
+        subtotal_change: 25000,
         subtotal_ub: 75000,
       },
     ],
@@ -95,6 +119,33 @@ describe('operational report PDFs', () => {
       )
 
       expect(buffer.slice(0, 5).toString()).toBe('%PDF-')
+    },
+    RENDER_TIMEOUT
+  )
+
+  it(
+    'prints the balansrapport ÅRL headings and their Summa lines around the accounts',
+    async () => {
+      const buffer = await renderToBuffer(
+        BalansrapportPDF({
+          report: balansrapport(),
+          company: fakeCompany(),
+          generatedAt: '2026-07-28T10:00:00.000Z',
+        })
+      )
+
+      const text = pdfTextStrings(buffer).join('\n')
+      const order = [
+        '1 Tillgångar',
+        'Omsättningstillgångar',
+        'Kassa och bank',
+        'Företagskonto',
+        'Summa kassa och bank',
+        'Summa omsättningstillgångar',
+        'Summa 1 Tillgångar',
+      ].map((label) => text.indexOf(label))
+      expect(order.every((index) => index >= 0)).toBe(true)
+      expect([...order].sort((a, b) => a - b)).toEqual(order)
     },
     RENDER_TIMEOUT
   )

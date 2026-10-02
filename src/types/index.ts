@@ -2460,11 +2460,31 @@ export interface BalansrapportRow {
   period_change: number
 }
 
+/**
+ * A balance-sheet heading in the Balansrapport (Anläggningstillgångar,
+ * Kortfristiga skulder, ...). A heading holds either account rows or
+ * subsections, never both; its subtotals are the sum of what it holds.
+ */
+export interface BalansrapportSection {
+  /** K2 section key (lib/bokslut/ixbrl/k2-mapper.ts K2_BR_LAYOUT), or 'unclassified'. */
+  key: string
+  label: string
+  /** "Summa <label>", the line under the section. */
+  total_label: string
+  rows: BalansrapportRow[]
+  sections: BalansrapportSection[]
+  subtotal_ib: number
+  subtotal_change: number
+  subtotal_ub: number
+}
+
 export interface BalansrapportGroup {
   class: number
   class_label: string
-  rows: BalansrapportRow[]
+  /** Every account of the class, under its ÅRL heading. */
+  sections: BalansrapportSection[]
   subtotal_ib: number
+  subtotal_change: number
   subtotal_ub: number
 }
 
