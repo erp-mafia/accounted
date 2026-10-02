@@ -43,6 +43,7 @@
  * never an unbook (the voucher is immutable per BFL).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { DeductionType } from '@/types'
 import { createRotRutReclaimEntry, type RotRutReclaimLeg } from '@/lib/bookkeeping/rot-rut-entries'
 import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
@@ -92,7 +93,7 @@ const REOPENABLE_INVOICE_STATUSES = ['paid', 'partially_paid', 'sent', 'overdue'
 interface RequestRow {
   id: string
   name: string
-  deduction_type: 'rot' | 'rut'
+  deduction_type: DeductionType
   status: string
   requested_total: number | string
   decided_total: number | string | null

@@ -663,13 +663,16 @@ export function getErrorMessage(
 
       // Name the accounts: the registry sentence alone sent a customer back
       // to a mapping step that does not exist in the onboarding flow (desk
-      // crm#63). The English registry text is returned above unchanged.
+      // crm#63). Every import entry now routes class 9 amounts to 2999 itself
+      // (#3312), so this fires only for a target someone chose in a mapping:
+      // point back at that choice, never at a page outside the user's flow.
+      // The English registry text is returned above unchanged.
       if (structured.code === 'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS') {
         const accounts = (structured.details as { account_numbers?: unknown } | undefined)?.account_numbers
         if (Array.isArray(accounts) && accounts.length > 0) {
           const list = (accounts as string[]).join(', ')
-          const subject = accounts.length === 1 ? `Konto ${list} har` : `Kontona ${list} har`
-          return `${subject} belopp men ligger utanför 1000-8999 och kan inte tas med i balans- och resultatrapporterna. Mappa till ett konto i kontoplanen via Import, SIE-fil (observationskonton i klass 9 hör hemma på 2999 OBS-konto) och försök igen.`
+          const subject = accounts.length === 1 ? `Målkonto ${list} ligger` : `Målkontona ${list} ligger`
+          return `${subject} utanför 1000-8999 och kan inte ta emot belopp i balans- och resultatrapporterna. Välj ett konto i 1000-8999 i kontomappningen och försök igen (observationskonton i klass 9 hör hemma på 2999 OBS-konto).`
         }
       }
 

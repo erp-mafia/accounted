@@ -1,5 +1,6 @@
 import { addDays, differenceInCalendarDays, format, isValid, parseISO } from 'date-fns'
 import { foldText } from '@/lib/bookkeeping/account-search'
+import { gronTeknikWorkType } from '@/lib/invoices/rot-rut-rules'
 
 /**
  * Pure derivations behind the invoice editor's snabbflöde shell:
@@ -58,26 +59,29 @@ export interface NextStepInput {
   requiresPersonnummer: boolean
   personnummer: string
   /**
-   * A ROT line exists AND a deduction amount is claimed (fastighetsbeteckning
-   * is then required). Derive via deriveRequiresHousing so the gate provably
-   * matches the ROT/RUT claim card's mount condition.
+   * A ROT or grön teknik line exists AND a deduction amount is claimed
+   * (fastighetsbeteckning is then required). Derive via deriveRequiresHousing
+   * so the gate provably matches the claim card's mount condition.
    */
   requiresHousing: boolean
   housingDesignation: string
 }
 
 /**
- * The housing (fastighetsbeteckning) requirement behind NextStepInput. A ROT
- * line alone is not enough: the claim card only mounts while a deduction
- * amount is claimed (deductionTotal > 0), so a ROT-flagged line whose amount
- * is still zero (transient state while typing) must not produce a housing
- * step, or the next-step link would try to focus an unmounted field.
+ * The housing (fastighetsbeteckning) requirement behind NextStepInput. ROT
+ * and grön teknik both name the property (RUT does not). A flagged line
+ * alone is not enough: the claim card only mounts while a deduction amount
+ * is claimed (deductionTotal > 0), so a flagged line whose amount is still
+ * zero (transient state while typing) must not produce a housing step, or
+ * the next-step link would try to focus an unmounted field.
  */
 export function deriveRequiresHousing(input: {
   hasRotLine: boolean
+  /** A grön teknik line: requires the property exactly like ROT. */
+  hasGronTeknikLine?: boolean
   deductionTotal: number
 }): boolean {
-  return input.hasRotLine && input.deductionTotal > 0
+  return (input.hasRotLine || input.hasGronTeknikLine === true) && input.deductionTotal > 0
 }
 
 /**
@@ -85,6 +89,26 @@ export function deriveRequiresHousing(input: {
  * customer -> dates -> first incomplete line -> payment link -> ROT/RUT claim
  * fields -> self-billed extras -> ready.
  */
+/**
+ * The installation type a row starts with when it is flagged grön teknik: the
+ * one the invoice's other grön teknik rows already carry (the first valid
+ * one), so an installer picks "solceller" once per invoice instead of on
+ * every labour and material row. Null when no other row has one: the user
+ * chooses.
+ */
+export function defaultGronTeknikWorkType(
+  items: ReadonlyArray<{ deduction_type?: string | null; work_type?: string | null } | undefined>,
+  index: number,
+): string | null {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (i === index || item?.deduction_type !== 'gron_teknik') continue
+    const type = gronTeknikWorkType(item.work_type)
+    if (type) return type.code
+  }
+  return null
+}
+
 export function deriveNextStep(input: NextStepInput): NextStep {
   if (!input.customerSelected) return { kind: 'customer' }
   if (!input.invoiceDate) return { kind: 'invoice_date' }

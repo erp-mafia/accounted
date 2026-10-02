@@ -7,6 +7,9 @@ import { listAnnualReportVersions } from '@/lib/bokslut/arsredovisning/version-s
 import { VersionCreateSchema } from '@/lib/bokslut/arsredovisning/workflow-schemas'
 import { createArsredovisningVersion } from '@/lib/bokslut/arsredovisning/workflow-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 async function ownsPeriod(
   supabase: SupabaseClient,

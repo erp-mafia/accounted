@@ -7,6 +7,9 @@ import {
   removeArsredovisningSignatory,
 } from '@/lib/bokslut/arsredovisning/workflow-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 // PATCH transitions: pending -> signed (manual entry for the paper / outside-
 // BankID flow) or pending -> declined. DELETE removes an unbound pending

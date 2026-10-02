@@ -24,6 +24,8 @@ import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
+import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
+import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { CreateJournalEntryLineInput, Currency, Invoice, Transaction } from '@/types'
@@ -830,17 +832,18 @@ export const POST = withRouteContext(
       },
     })
 
+    const settledInvoice = {
+      ...invoice,
+      status: newStatus,
+      paid_at: paidAt,
+      paid_amount: newPaidAmount,
+      remaining_amount: newRemaining,
+    } as Invoice
     try {
       eventBus.emit({
         type: 'invoice.match_confirmed',
         payload: {
-          invoice: {
-            ...invoice,
-            status: newStatus,
-            paid_at: paidAt,
-            paid_amount: newPaidAmount,
-            remaining_amount: newRemaining,
-          } as Invoice,
+          invoice: settledInvoice,
           transaction: {
             ...transaction,
             invoice_id,
@@ -856,6 +859,18 @@ export const POST = withRouteContext(
     } catch (err) {
       txLog.warn('invoice.match_confirmed event emission failed', err as Error)
     }
+    // A match that settles the invoice in full is its invoice.paid transition
+    // (webhooks, Stripe link deactivation); a partial match is not. The CAS
+    // update above admits one winner, so this fires once. paymentAmount is
+    // the amount applied, in invoice currency, same as the payment row.
+    await emitInvoicePaidIfSettled({
+      newStatus,
+      invoice: settledInvoice,
+      paymentAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
+      paymentDate: transaction.date,
+      userId: user.id,
+      companyId,
+    })
 
     return NextResponse.json({
       success: true,

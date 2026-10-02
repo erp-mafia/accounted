@@ -12,6 +12,9 @@ import { BokslutsbilagorPDF } from '@/lib/reports/bokslutsbilagor-pdf-template'
 import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import { slugifyCompanyName } from '@/lib/reports/xlsx-export'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 const BokslutsbilagorQuerySchema = z.object({
   period_id: z.string().uuid(),

@@ -12,6 +12,7 @@ import {
   InvoiceFxRateMissingError,
 } from './invoice-accounts'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
+import { DEDUCTION_TYPE_LABELS, deductionKindsOf } from '@/lib/invoices/rot-rut-rules'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { EntityType, InvoiceItem, VatTreatment } from '@/types'
@@ -457,13 +458,18 @@ function proposeCashLines(
     line_description: desc,
   })
   if (deductionSek > 0) {
+    // A grön teknik invoice names its own reduction; ROT, RUT and anything
+    // not known from the items keep the combined text they always had.
+    const kinds = deductionKindsOf(invoice.items ?? [])
+    const label =
+      kinds.length === 1 && kinds[0] === 'gron_teknik' ? DEDUCTION_TYPE_LABELS.gron_teknik.ledger : 'ROT/RUT-avdrag'
     lines.push({
       account_number: '1513',
       debit_amount: toFormAmount(deductionSek),
       credit_amount: '',
       line_description: invoice.invoice_number
-        ? `ROT/RUT-avdrag faktura ${invoice.invoice_number}`
-        : 'ROT/RUT-avdrag faktura',
+        ? `${label} faktura ${invoice.invoice_number}`
+        : `${label} faktura`,
     })
   }
 

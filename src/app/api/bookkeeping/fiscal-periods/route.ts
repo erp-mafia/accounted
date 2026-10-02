@@ -5,6 +5,9 @@ import { CreateFiscalPeriodSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { createFiscalPeriod } from '@/lib/core/bookkeeping/fiscal-year-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 // GET keeps its legacy `{ error: string }` failure shape. POST answers the
 // canonical `{ error: { code, message } }` envelope (the räkenskapsår UI reads

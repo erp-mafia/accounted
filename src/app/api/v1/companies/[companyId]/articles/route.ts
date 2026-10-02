@@ -53,7 +53,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/articles',
   summary: 'List the article register (artikelregister).',
   description:
-    'Returns the company\'s articles ordered by name. Pass ?include_inactive=true to include soft-deactivated articles. Use the returned id as items[].article_id when creating invoices; housework_type carries the ROT/RUT arbetstypskod for service articles, and revenue_account the optional BAS class-3 override.',
+    'Returns the company\'s articles ordered by name. Pass ?include_inactive=true to include soft-deactivated articles. Use the returned id as items[].article_id when creating invoices; housework_type carries the ROT/RUT arbetstypskod for service articles, or a grön teknik installation type (INSTALLATION_SOLCELLER, INSTALLATION_LAGRING, INSTALLATION_LADDPUNKT, also on goods), and revenue_account the optional BAS class-3 override.',
   useWhen:
     'You need the article catalog before composing invoice lines: to resolve an article_id, read its price/VAT defaults, or find ROT/RUT-tagged service articles (housework_type set).',
   doNotUseFor:
@@ -62,7 +62,7 @@ registerEndpoint({
     'Linking article_id does NOT auto-fill the invoice line: send description, unit_price, vat_rate etc. explicitly on the item (copy them from this response).',
     'price_excl_vat always excludes VAT.',
     'price_excl_vat is denominated in the article\'s own currency, which is NOT always SEK. Check currency before copying the price onto an invoice line: the invoice carries a single currency for all its lines and there is no FX conversion here.',
-    'housework_type is an arbetstypskod hint (e.g. BYGG, STAD); the invoice line still needs deduction_type + labor_hours + work_type set explicitly for ROT/RUT.',
+    'housework_type is an arbetstypskod hint (e.g. BYGG, STAD, INSTALLATION_SOLCELLER); the invoice line still needs deduction_type + labor_hours + work_type set explicitly for ROT/RUT and grön teknik.',
     'Inactive articles (active=false) are hidden by default but remain linkable for historical reads.',
   ],
   example: {

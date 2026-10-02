@@ -147,6 +147,8 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     const matchedHandler = vi.fn()
     eventBus.on('invoice.match_confirmed', matchedHandler)
+    const paidHandler = vi.fn()
+    eventBus.on('invoice.paid', paidHandler)
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
       data: {
@@ -227,6 +229,16 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
         }),
       }),
     )
+    // The agent-approved match settled the invoice in full: invoice.paid
+    // fires once, exactly as on the dashboard and v1 match routes.
+    expect(paidHandler).toHaveBeenCalledTimes(1)
+    expect(paidHandler).toHaveBeenCalledWith({
+      invoice: expect.objectContaining({ id: 'inv-1', status: 'paid', remaining_amount: 0 }),
+      paymentAmount: 12500,
+      paymentDate: '2026-05-12',
+      userId: 'user-1',
+      companyId: 'company-1',
+    })
     // Issue #1259: the invoice is settled, so every OTHER transaction still
     // carrying a suggestion pointer at it is retired; this op's own row is
     // cleared by the link update.
@@ -238,6 +250,10 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
 
   it('leaves the suggestions alone on a partial payment: the invoice is still matchable', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    const matchedHandler = vi.fn()
+    eventBus.on('invoice.match_confirmed', matchedHandler)
+    const paidHandler = vi.fn()
+    eventBus.on('invoice.paid', paidHandler)
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
       data: {
@@ -280,6 +296,9 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     expect(result.status).toBe('committed')
     expect(result.data).toMatchObject({ invoice_status: 'partially_paid' })
     expect(mockClearSuggestions).not.toHaveBeenCalled()
+    // Money is still owed: the match is confirmed, the invoice is not paid.
+    expect(matchedHandler).toHaveBeenCalledTimes(1)
+    expect(paidHandler).not.toHaveBeenCalled()
   })
 
   it('defaults to 1930 when the transaction has no linked cash account', async () => {

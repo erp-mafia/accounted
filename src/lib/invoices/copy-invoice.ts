@@ -1,5 +1,6 @@
 import type {
   Currency,
+  DeductionType,
   Invoice,
   InvoiceDocumentType,
   InvoiceItem,
@@ -26,7 +27,7 @@ export interface InvoiceCopyItem {
   vat_rate: number
   article_id: null
   revenue_account: string | null
-  deduction_type: 'rot' | 'rut' | null
+  deduction_type: DeductionType | null
   labor_hours: number | null
   work_type: string | null
   housing_designation: null

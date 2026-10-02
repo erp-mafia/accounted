@@ -20,7 +20,7 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 
-/** The per-line ROT/RUT fields the editor posts alongside the amounts. */
+/** The per-line deduction fields (ROT/RUT, grön teknik) the editor posts alongside the amounts. */
 interface PreviewItemInput {
   description: string
   quantity: number
@@ -255,6 +255,8 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
           quantity: item.quantity,
           discount_percent: discountPercent,
           deduction_type: deductionType,
+          // Grön teknik's rate follows the installation type.
+          work_type: item.work_type ?? null,
           vat_rate: rate,
         })
       : 0
@@ -296,6 +298,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
           quantity: item.quantity,
           discount_percent: item.discount_percent ?? 0,
           deduction_type: item.deduction_type ?? null,
+          work_type: item.work_type ?? null,
           vat_rate: item.vat_rate,
         })),
       )

@@ -24,6 +24,9 @@ import {
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 type PreviewLine = {
   account_number: string

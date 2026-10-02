@@ -28,11 +28,16 @@ export type SkillTier = 'workflow' | 'horizontal' | 'vertical' | 'modifier' | 'c
  * default: agents get a focused list. Pass `include_all: true` on the tool
  * call to bypass the filter when needed.
  *
- * Each condition is optional and ANDed:
- *  - `entity_type: 'AB'` hides the skill for sole traders (EF)
- *  - `entity_type: 'EF'` hides it for limited companies
+ * Each condition is optional and ANDed, and evaluated only by
+ * `skillAppliesToCompany` (./applicability.ts):
+ *  - `entity_type: 'AB'` shows the skill only for an aktiebolag
+ *  - `entity_type: 'EF'` shows it only for an enskild firma
+ *  - `entity_type: 'both'` shows it for every legal form, ideell förening included
  *  - `requires: ['employees']` hides the skill until the company has ≥ 1 employee
  *  - `requires: ['vat_registered']` hides it for non-VAT-registered companies
+ *
+ * The tags are short codes, not the stored form (`aktiebolag`,
+ * `enskild_firma`): never compare them to `entity_type` directly.
  *
  * Workflow skills that are universal (e.g. invoicing-rules) leave applicability
  * undefined and are always shown.

@@ -1066,6 +1066,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
       ),
     )
 
+    const paidHandler = vi.fn()
+    eventBus.on('invoice.paid', paidHandler)
+
     const res = await markPaid(
       makeRequest(
         `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
@@ -1081,6 +1084,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     )
 
     expect(res.status).toBe(200)
+    // 500 EUR is still owed: invoice.paid means fully paid, so a partial
+    // never fires it (lib/invoices/paid-events.ts).
+    expect(paidHandler).not.toHaveBeenCalled()
 
     // The persisted ledger math is the assertion that matters: both values in
     // EUR, never 5 748,35 and never a negative remainder.

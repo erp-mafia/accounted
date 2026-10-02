@@ -47,7 +47,10 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
     events: [
       { type: 'invoice.created', description: 'draft invoice created' },
       { type: 'invoice.sent', description: 'invoice marked sent (email delivered or external)' },
-      { type: 'invoice.paid', description: 'invoice fully paid' },
+      {
+        type: 'invoice.paid',
+        description: 'invoice fully paid, whichever way it was settled (mark-paid, bank match, voucher link); never on a partial payment',
+      },
       { type: 'credit_note.created', description: 'credit note issued' },
     ],
   },
@@ -57,7 +60,10 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
       { type: 'supplier.created' },
       { type: 'supplier_invoice.registered' },
       { type: 'supplier_invoice.approved' },
-      { type: 'supplier_invoice.paid' },
+      {
+        type: 'supplier_invoice.paid',
+        description: 'supplier invoice fully paid, whichever way it was settled; never on a partial payment',
+      },
       { type: 'supplier_invoice.credited' },
       { type: 'supplier_invoice.uncredited', description: 'credit reversal' },
     ],

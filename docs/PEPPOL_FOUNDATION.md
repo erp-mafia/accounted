@@ -88,7 +88,7 @@ The contract with Qvalia (certified Swedish Access Point + SMP, partner model) w
 
 - recipient lookup: `GET /partner/{partnerRegNo}/peppol/lookup/{scheme:id}?docTypeRoot=Invoice`;
 - submission: `POST /partner/{partnerRegNo}/transaction/{accountRegNo}/invoices/outgoing` with the staged UBL XML (`content-type: application/xml`); the returned `integrationId` is the provider submission id; a `409` (same document id and receiver) is recovered to the existing `integrationId` only when Qvalia's stored copy carries the same seller endpoint, otherwise it stays a duplicate error;
-- webhooks: `POST /api/webhooks/peppol/qvalia`, authenticated by the shared secret Accounted configures as Qvalia's outbound auth header (Qvalia did not sign webhooks when the adapter was built; see the September update below); the same event can arrive more than once and is deduplicated on `eventType + globalTransactionId + status.status`; `status.status` is declared free text, so the mapping is tolerant and unknown wording never advances beyond `submission_accepted`;
+- webhooks: `POST /api/webhooks/peppol/qvalia`, authenticated by Qvalia's HMAC-SHA256 signature (`X-Qvalia-Signature` over `<t>.<raw body>`, timing-safe, 5-minute window on `t`) once `QVALIA_WEBHOOK_SIGNING_SECRET` is set; until then by the shared secret Accounted configures as Qvalia's outbound auth header, with a warning logged per request (Qvalia did not sign webhooks when the adapter was built; see the September update below); the same event can arrive more than once and is deduplicated on `eventType + globalTransactionId + status.status`, the key the status poll also writes; `status.status` is declared free text, so the mapping is tolerant and unknown wording never advances beyond `submission_accepted`;
 - evidence: the message-log status and Qvalia's stored XML copy, recorded as `qvalia_message_record`.
 
 #### Qvalia API update (docs re-read 2026-09-21)
@@ -106,7 +106,9 @@ Qvalia reworked the parts of its API that the notes above, and the pre-contract 
 
 One limit is explicit in the same docs and shapes our design: a failed webhook delivery (non-2xx, 10 s timeout, unreachable endpoint) is not retried, and a missed event is lost. The status poll below therefore stays as the safety net even after webhooks are switched on.
 
-Adapter follow-ups (not built): verify `X-Qvalia-Signature` instead of the shared-secret header, dedupe on `eventId`, send `Idempotency-Key` on submit, handle `document_delayed`, and treat the documented terminal `error` status as final.
+Built 2026-09-29 (#3191): `X-Qvalia-Signature` verification, required whenever `QVALIA_WEBHOOK_SIGNING_SECRET` is set (the shared-secret header is then ignored). Dedupe deliberately stays on `eventType + globalTransactionId + status.status` rather than `eventId`: the status poll writes the same key, so a webhook and a poll for one transition remain one event.
+
+Adapter follow-ups (not built): send `Idempotency-Key` on submit, handle `document_delayed`, and treat the documented terminal `error` status as final.
 
 Configuration is environment-only (`PEPPOL_TRANSPORT_PROVIDER=qvalia` plus `QVALIA_API_KEY`, `QVALIA_PARTNER_REG_NO`, `QVALIA_BASE_URL`, `QVALIA_WEBHOOK_SECRET`, optional `QVALIA_ACCOUNT_REG_NO`, `QVALIA_WEBHOOK_HEADER`, `QVALIA_AUTH_SCHEME`; see `.env.example`). `src/lib/init.ts` registers the adapter when the credentials are present; the product only sends when the provider is also selected. `scripts/peppol/qvalia-probe.ts` is the first-contact probe against the sandbox (auth scheme, child accounts, registered Peppol IDs, lookup, send).
 

@@ -270,6 +270,7 @@ import {
   buildMigrateRequests,
   mergeMigrationResults,
 } from '@/extensions/general/arcim-migration/lib/migrate-plan'
+import { canSkipMappingStep } from '@/extensions/general/arcim-migration/lib/mapping-step'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ProviderMigrationProgress from './ProviderMigrationProgress'
 import { MIGRATION_RESOURCES, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
@@ -3385,11 +3386,9 @@ export default function ArcimMigrationWorkspace({
         setMigrationOptions(prev => ({ ...prev, importSIEData: false }))
       }
 
-      const needsVatReview = enrichedMappings.some(mapping =>
-        mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
-      )
-      // Auto-skip only when there is neither account mapping nor VAT review work.
-      if ((data.mappingStats.unmapped === 0 && !needsVatReview) || data.allImported) {
+      // Auto-skip only when the page has nothing to ask: no blank target, no
+      // VAT review, and no class 9 account suggested onto 2999 OBS-konto.
+      if (canSkipMappingStep(enrichedMappings, { unmapped: data.mappingStats.unmapped, allImported: data.allImported })) {
         setStep('options')
       }
     } catch (err) {

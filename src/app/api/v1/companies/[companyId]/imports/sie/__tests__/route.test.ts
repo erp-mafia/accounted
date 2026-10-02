@@ -82,9 +82,9 @@ const VALID_SIE = [
   '}',
 ].join('\n')
 
-function makeRequest(options?: Record<string, unknown>): Request {
+function makeRequest(options?: Record<string, unknown>, content = VALID_SIE): Request {
   const fd = new FormData()
-  fd.append('file', new File([VALID_SIE], 'bok.se', { type: 'application/octet-stream' }))
+  fd.append('file', new File([content], 'bok.se', { type: 'application/octet-stream' }))
   if (options) fd.append('options', JSON.stringify(options))
   return new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/imports/sie`, {
     method: 'POST',
@@ -93,8 +93,8 @@ function makeRequest(options?: Record<string, unknown>): Request {
   })
 }
 
-function callRoute(options?: Record<string, unknown>) {
-  return POST(makeRequest(options), {
+function callRoute(options?: Record<string, unknown>, content?: string) {
+  return POST(makeRequest(options, content), {
     params: Promise.resolve({ companyId: COMPANY_ID }),
   })
 }
@@ -172,5 +172,30 @@ describe('POST /imports/sie', () => {
     // Undefined lets job preparation pick a series the file's own vouchers
     // do not use, instead of a hardcoded default that could collide.
     expect(options.openingBalanceSeries).toBeUndefined()
+  })
+
+  // #3312: the dashboard upload's class 9 decision, not suggestMappings alone.
+  const WITH_OBS = VALID_SIE.replace('#KONTO 6110 "Kontorsmaterial"', '#KONTO 6110 "Kontorsmaterial"\n#KONTO 9999 "OBS-konto"') +
+    '\n#VER A 2 20240120 "Okänd inbetalning"\n{\n#TRANS 1930 {} 500.00\n#TRANS 9999 {} -500.00\n}'
+
+  it('maps a class 9 account carrying amounts to 2999 instead of refusing it as unmapped', async () => {
+    const res = await callRoute(undefined, WITH_OBS)
+
+    expect(res.status).toBe(202)
+    const mappings = submitSIEJobMock.mock.calls[0][4] as Array<{ sourceAccount: string; targetAccount: string; matchType: string }>
+    expect(mappings.find((m) => m.sourceAccount === '9999')).toMatchObject({ targetAccount: '2999', matchType: 'class' })
+  })
+
+  it('replaces a stored class 9 target for an account carrying amounts', async () => {
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      sie_account_mappings: { data: [{ source_account: '9999', source_name: 'OBS-konto', target_account: '9999', confidence: 1, match_type: 'exact' }], error: null },
+    }))
+
+    const res = await callRoute(undefined, WITH_OBS)
+
+    expect(res.status).toBe(202)
+    const mappings = submitSIEJobMock.mock.calls[0][4] as Array<{ sourceAccount: string; targetAccount: string }>
+    expect(mappings.find((m) => m.sourceAccount === '9999')?.targetAccount).toBe('2999')
   })
 })

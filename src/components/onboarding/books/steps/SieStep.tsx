@@ -10,6 +10,8 @@ import { useCompanySettings } from '@/components/settings/useSettings'
 import { BRANCH_PROVIDERS } from '@/lib/onboarding-journey/branch'
 import { SIE_FIRST_PROVIDERS } from '@/lib/onboarding-books/reducer'
 import { defaultOpeningBalanceSeries } from '@/lib/import/opening-balance-defaults'
+import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
+import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
 import type { AccountMapping, ImportPreview, SIEAccount, SIEHeader } from '@/lib/import/types'
 import { InkText } from '@/components/onboarding/journey/ink'
 import type { TheaterApi } from '../engines/theater-engine'
@@ -149,27 +151,22 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const nYears = yearsOf(ready).length || ready.length
   const totalVouchers = ready.reduce((s, f) => s + (f.parsed?.stats.totalVouchers ?? 0), 0)
   const totalAccounts = ready.reduce((s, f) => s + (f.parsed?.stats.totalAccounts ?? 0), 0)
-  const unmapped = useMemo(() => {
-    const seen = new Set<string>()
-    const out: SIEAccount[] = []
-    for (const f of ready) for (const m of f.parsed!.mappings) {
-      if (!m.targetAccount && !seen.has(m.sourceAccount)) {
-        seen.add(m.sourceAccount)
-        const acc = f.parsed!.accounts.find((a) => a.number === m.sourceAccount)
-        out.push({ number: m.sourceAccount, name: acc?.name ?? m.sourceName })
-      }
+  // Accounts to create (1000-8999 numbers the chart lacks) and accounts no
+  // chart can hold, across every file. The second kind is never created or
+  // mapped onto itself: the job refused that target (#3312).
+  const { unmapped, unresolved } = useMemo(() => {
+    const create = new Map<string, SIEAccount>()
+    const blocked = new Set<string>()
+    for (const f of ready) {
+      const resolved = resolveOnboardingMappings(f.parsed!.mappings, f.parsed!.accounts)
+      for (const account of resolved.create) if (!create.has(account.number)) create.set(account.number, account)
+      for (const number of resolved.unresolved) blocked.add(number)
     }
-    return out
+    return { unmapped: [...create.values()], unresolved: [...blocked].sort() }
   }, [ready])
   // Class 9 accounts with amounts are routed to 2999 OBS-konto by the parse
   // route (sie-preview-mappings.ts); this flow has no mapping page, so say so.
-  const obsAccounts = useMemo(() => {
-    const seen = new Set<string>()
-    for (const f of ready) for (const m of f.parsed!.mappings) {
-      if (m.targetAccount === '2999' && m.matchType === 'class' && /^9\d{3}$/.test(m.sourceAccount)) seen.add(m.sourceAccount)
-    }
-    return Array.from(seen).sort()
-  }, [ready])
+  const obsAccounts = useMemo(() => obsAccountsOf(ready.flatMap((f) => f.parsed!.mappings)), [ready])
   const hasIb = ready.some((f) => (f.parsed?.preview.openingBalanceTotal ?? 0) > 0)
   const ib = ibOn ?? hasIb
   const ibAmount = ready.reduce((s, f) => s + (f.parsed?.preview.openingBalanceTotal ?? 0), 0)
@@ -182,8 +179,9 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     list.push({ text: t('fact_vouchers', { count: totalVouchers }) })
     list.push(unmapped.length === 0 ? { text: t('fact_accounts_known', { count: totalAccounts }) } : { text: t('fact_accounts_new', { count: totalAccounts, created: unmapped.length }) })
     if (obsAccounts.length > 0) list.push({ text: t('fact_obs_to_2999', { accounts: obsAccounts.join(', ') }) })
+    if (unresolved.length > 0) list.push({ text: t('accounts_outside_bas', { count: unresolved.length, accounts: unresolved.join(', ') }), warn: true })
     return list
-  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, obsAccounts, t])
+  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, obsAccounts, unresolved, t])
 
   /* ── import ──────────────────────────────────────────────────────── */
   const lines: TheaterLine[] = [
@@ -231,6 +229,10 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     at(1400, () => { setShown(2); apiRef.current?.spawnAccounts() })
     const voucherSeries = settings?.default_voucher_series || 'A'
     try {
+      // Nothing is written for a file with an account no chart can hold.
+      if (unresolved.length > 0) {
+        throw new Error(t('accounts_outside_bas', { count: unresolved.length, accounts: unresolved.join(', ') }))
+      }
       // Unmapped accounts get created from the file; the mapping then points them at themselves.
       if (unmapped.length > 0) {
         const res = await fetch('/api/import/sie/create-accounts', {
@@ -257,7 +259,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
         setJobPhase('preparing')
         const f = ordered[i]
         const p = f.parsed!
-        const mappings = p.mappings.map((mp) => (mp.targetAccount ? mp : { ...mp, targetAccount: mp.sourceAccount, targetName: mp.sourceName, matchType: 'exact' as const, confidence: 1, isOverride: true }))
+        const mappings = resolveOnboardingMappings(p.mappings, p.accounts).mappings
         const fd = new FormData()
         fd.append('file', f.file)
         fd.append('mappings', JSON.stringify(mappings))

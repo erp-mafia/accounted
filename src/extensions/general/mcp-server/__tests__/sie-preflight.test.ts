@@ -34,6 +34,7 @@ const VALID_SIE = [
 const UNBALANCED_SIE = VALID_SIE.replace('#TRANS 3001 {} -1000.00', '#TRANS 3001 {} -900.00')
 
 type MockConfig = {
+  storedMappings?: unknown[]
   companyOrg?: string | null
   duplicateFile?: { id: string; imported_at: string } | null
   duplicatePeriod?: Record<string, unknown> | null
@@ -64,6 +65,8 @@ function mockSupabase(config: MockConfig = {}) {
                     error: null,
                   })
                 }
+              } else if (table === 'sie_account_mappings') {
+                resolve({ data: config.storedMappings ?? [], error: null })
               } else {
                 resolve({ data: [], error: null })
               }
@@ -115,6 +118,18 @@ describe('gnubok_sie_preflight', () => {
     expect(mappings.length).toBeGreaterThan(0)
     expect(mappings[0]).toHaveProperty('sourceAccount')
     expect(mappings[0]).toHaveProperty('targetAccount')
+  })
+
+  // #3312: an agent passes these mappings straight to gnubok_import_sie, so
+  // they must be the upload's decision, or the job refuses the import.
+  it('maps a class 9 account carrying amounts to 2999, also over a stored 9xxx mapping', async () => {
+    const withObs = VALID_SIE.replace('#KONTO 3001 "Försäljning"', '#KONTO 3001 "Försäljning"\n#KONTO 9999 "OBS-konto"') +
+      `\n#VER A 2 ${YEAR}0120 "Okänd inbetalning"\n{\n#TRANS 1930 {} 500.00\n#TRANS 9999 {} -500.00\n}`
+    for (const storedMappings of [[], [{ source_account: '9999', source_name: 'OBS-konto', target_account: '9999', confidence: 1, match_type: 'exact' }]]) {
+      const result = await run({ file_content: withObs }, { storedMappings })
+      const mappings = result.mappings as Array<Record<string, unknown>>
+      expect(mappings.find((m) => m.sourceAccount === '9999')).toMatchObject({ targetAccount: '2999', targetName: 'OBS-konto' })
+    }
   })
 
   it('flags an org-number mismatch as another company\'s bookkeeping', async () => {

@@ -110,3 +110,81 @@ describe('vat-treatments resource', () => {
     ])
   })
 })
+
+describe('capabilities resource: payroll:write', () => {
+  type CapabilitiesResult = {
+    pays_salaries: boolean
+    capabilities: Array<{ tool: string; scope: string; state_blocked: boolean; reason: string | null }>
+  }
+
+  async function readPayroll(settings: Record<string, unknown> | null, companyRow: unknown = null) {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'period-1', is_closed: false, locked_at: null, opening_balances_set: true, period_end: '2099-12-31' } })
+    enqueue({ data: settings })
+    enqueue({ data: companyRow })
+    const r = findResource('Accounted://capabilities')!
+    const result = (await r.read({
+      supabase: supabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      scopes: ['payroll:write'],
+    })) as CapabilitiesResult
+    const payroll = result.capabilities.find((c) => c.tool === 'gnubok_create_salary_run')!
+    return { result, payroll, findCalls }
+  }
+
+  // Same rule as the dashboard's payroll section (offersPayroll): on by
+  // default for a juridisk person, opt-in via pays_salaries for an enskild firma.
+  it.each([
+    ['aktiebolag', false, false],
+    ['aktiebolag', true, false],
+    ['ideell_forening', false, false],
+    ['ideell_forening', true, false],
+    ['enskild_firma', false, true],
+    ['enskild_firma', true, false],
+  ] as const)('%s with pays_salaries=%s -> blocked=%s', async (entityType, paysSalaries, blocked) => {
+    const { result, payroll, findCalls } = await readPayroll({
+      bookkeeping_locked_through: null,
+      vat_registered: true,
+      pays_salaries: paysSalaries,
+      entity_type: entityType,
+    })
+    expect(payroll.scope).toBe('payroll:write')
+    expect(payroll.state_blocked).toBe(blocked)
+    expect(payroll.reason === null).toBe(!blocked)
+    // The raw flag is still reported as stored.
+    expect(result.pays_salaries).toBe(paysSalaries)
+    // A resolved settings form needs no second read.
+    expect(findCalls('companies', 'select')).toHaveLength(0)
+  })
+
+  it('falls back to the canonical companies row when settings carry no form', async () => {
+    const { payroll, findCalls } = await readPayroll(
+      { bookkeeping_locked_through: null, vat_registered: true, pays_salaries: false, entity_type: null },
+      { entity_type: 'aktiebolag' },
+    )
+    expect(findCalls('companies', 'select')).toHaveLength(1)
+    expect(payroll.state_blocked).toBe(false)
+  })
+
+  it('leaves an unresolvable form to the flag instead of failing the resource', async () => {
+    const off = await readPayroll({ bookkeeping_locked_through: null, vat_registered: true, pays_salaries: false, entity_type: null }, null)
+    expect(off.payroll.state_blocked).toBe(true)
+    const on = await readPayroll({ bookkeeping_locked_through: null, vat_registered: true, pays_salaries: true, entity_type: null }, null)
+    expect(on.payroll.state_blocked).toBe(false)
+  })
+
+  it('propagates a failed companies read instead of reporting payroll as blocked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'period-1', is_closed: false, locked_at: null, opening_balances_set: true, period_end: '2099-12-31' } })
+    enqueue({ data: { bookkeeping_locked_through: null, vat_registered: true, pays_salaries: false, entity_type: null } })
+    enqueue({ data: null, error: { message: 'connection reset' } })
+    const r = findResource('Accounted://capabilities')!
+    await expect(r.read({
+      supabase: supabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      scopes: ['payroll:write'],
+    })).rejects.toThrow('Failed to load company entity type')
+  })
+})
