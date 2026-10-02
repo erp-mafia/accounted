@@ -576,9 +576,12 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             <View style={styles.logoSlot}>
               {logoUrl ? (
                 <Image src={logoUrl} style={styles.logo} />
-              ) : (company.invoice_show_company_name ?? true) ? (
+              ) : (
+                // Without a logo the slot always carries the company name: the
+                // fixed layout has no switch for it (the settings control was
+                // removed with the company-name placement setting).
                 <Text style={styles.slotName} hyphenationCallback={wrapDescriptionWords}>{company.company_name}</Text>
-              ) : null}
+              )}
             </View>
             <View style={styles.titleBlock}>
               <Text style={styles.title}>{names.title}</Text>
