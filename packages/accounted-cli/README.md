@@ -83,6 +83,10 @@ A long call (the audit package) runs as a task on the server. The CLI prints the
 - No proxy support (`HTTPS_PROXY` is ignored).
 - Windows PowerShell 5.1 can strip the quotes inside an argument and turns å, ä and ö into `?` when piping. Put the JSON in a UTF-8 file and pass `'@args.json'` (quoted, or PowerShell reads `@` as splatting).
 
+## Releasing
+
+Published to npm by the `Publish packages to npm` workflow (`.github/workflows/npm-publish.yml`), never by hand. Bump the version in both `package.json` and `lib/version.mjs` (a test checks that they match; the server logs the version as part of the client name), then merge to `main`: the workflow publishes any version that is not on npm yet, with provenance. The `NPM_TOKEN` secret needs write access to `accounted` (see Releasing in `packages/accounted-mcp/README.md`).
+
 ## License
 
 MIT
