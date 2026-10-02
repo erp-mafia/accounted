@@ -132,7 +132,8 @@ function revenueAccountWithoutRutaFinding(
       'Avser kontot inte försäljning, sätt momssats 0 % på kontot.',
     detail:
       'Deklarationen tar med ett intäktskonto (klass 3) när kontot har en momskod, en ' +
-      'momssats eller en fast ruta enligt BAS, till exempel 3001 i ruta 05. De här kontona ' +
+      'momssats på 25, 12 eller 6 % eller en fast ruta enligt BAS, till exempel 3001 i ' +
+      'ruta 05. De här kontona ' +
       'har ingetdera, och deklarationen gissar inte ruta 05 eftersom kontot lika gärna kan ' +
       'avse momsfri försäljning. Utgående moms följer däremot kontonumret (2611/2621/2631 ' +
       'till ruta 10-12), så moms att betala (ruta 49) påverkas inte, bara ' +
