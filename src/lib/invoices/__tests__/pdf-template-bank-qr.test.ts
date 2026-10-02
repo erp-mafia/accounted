@@ -5,13 +5,15 @@
  * payload the printed page implies: the "Att betala" amount (after ROT/RUT,
  * the remainder on a partly paid invoice), the printed giro and reference.
  */
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import type { ReactElement, ReactNode } from 'react'
+import QRCode from 'qrcode'
 import { Font, Path, pdf, renderToBuffer } from '@react-pdf/renderer'
 import layoutDocument from '@react-pdf/layout'
 import {
   InvoicePDF,
   PAYMENT_QR_PT,
+  PAYMENT_QR_ROW_STEP_PT,
   PAYMENT_QR_SECTION_MIN_HEIGHT_PT,
   PAYMENT_QR_STEP_PT,
   type InvoicePdfInvoice,
@@ -190,12 +192,28 @@ describe('invoice PDF: bank-app payment QR', () => {
   it('takes the corner, or the next free slot after the Swish and payment-link QRs', () => {
     const company = qrCompany()
     const png = 'data:image/png;base64,iVBORw0KGgo='
-    expect(styleOf(qrBox(render(sentInvoice(), company))).right).toBe(15)
-    expect(styleOf(qrBox(render(sentInvoice(), company, { swishQrDataUrl: png }))).right).toBe(15 + PAYMENT_QR_STEP_PT)
-    expect(
-      styleOf(qrBox(render(sentInvoice(), company, { swishQrDataUrl: png, paymentLinkQrDataUrl: png }))).right,
-    ).toBe(15 + 2 * PAYMENT_QR_STEP_PT)
-    expect(styleOf(qrBox(render(sentInvoice(), company))).width).toBe(PAYMENT_QR_PT)
+    const alone = styleOf(qrBox(render(sentInvoice(), company)))
+    expect([alone.right, alone.top, alone.width]).toEqual([15, 15, PAYMENT_QR_PT])
+    const afterSwish = styleOf(qrBox(render(sentInvoice(), company, { swishQrDataUrl: png })))
+    expect([afterSwish.right, afterSwish.top]).toEqual([15 + PAYMENT_QR_STEP_PT, 15])
+  })
+
+  it('starts a second row under the Swish QR when two codes already fill the first', () => {
+    const png = 'data:image/png;base64,iVBORw0KGgo='
+    const tree = render(sentInvoice(), qrCompany(), { swishQrDataUrl: png, paymentLinkQrDataUrl: png })
+    const box = styleOf(qrBox(tree))
+    expect([box.right, box.top]).toEqual([15, 15 + PAYMENT_QR_ROW_STEP_PT])
+  })
+
+  it('reserves the QR column so the payment rows end before it', () => {
+    const png = 'data:image/png;base64,iVBORw0KGgo='
+    const section = (tree: ReactNode) =>
+      styleOf(elements(tree).find((el) => textLeaves(el.props.children).includes('Betalningsinformation') && el.props.wrap === false)!)
+    expect(section(render(sentInvoice(), qrCompany())).paddingRight).toBe(15 + PAYMENT_QR_STEP_PT)
+    expect(section(render(sentInvoice(), qrCompany(), { swishQrDataUrl: png })).paddingRight).toBe(15 + 2 * PAYMENT_QR_STEP_PT)
+    const three = section(render(sentInvoice(), qrCompany(), { swishQrDataUrl: png, paymentLinkQrDataUrl: png }))
+    expect(three.paddingRight).toBe(15 + 2 * PAYMENT_QR_STEP_PT)
+    expect(three.minHeight).toBe(PAYMENT_QR_SECTION_MIN_HEIGHT_PT + PAYMENT_QR_ROW_STEP_PT)
   })
 
   it('leaves the payment box exactly as before when there is no bank QR', () => {
@@ -240,21 +258,65 @@ function chainTo(node: LaidOutNode, type: string, chain: LaidOutNode[] = []): La
   return null
 }
 
+/** Every node under `node` with its left and right edge relative to `node`. */
+function horizontalExtents(node: LaidOutNode, offset = 0, out: Array<{ node: LaidOutNode; left: number; right: number }> = []) {
+  for (const child of node.children ?? []) {
+    const left = offset + (child.box?.left ?? 0)
+    const ink = Math.max(child.box?.width ?? 0, ...((child as { lines?: Array<{ xAdvance?: number }> }).lines ?? []).map((l) => l.xAdvance ?? 0))
+    out.push({ node: child, left, right: left + ink })
+    horizontalExtents(child, left, out)
+  }
+  return out
+}
+
 describe('invoice PDF: bank-app QR geometry', () => {
-  it('keeps the symbol and its caption inside the payment box', { timeout: 30_000 }, async () => {
-    const pages = await layOut(render(sentInvoice(), qrCompany()))
-    const chain = pages.map((page) => chainTo(page, 'SVG')).find(Boolean)
-    expect(chain).toBeTruthy()
-    const svg = chain![chain!.length - 1]
-    const qrView = chain![chain!.length - 2]
-    const section = [...chain!].reverse().find((n) => n.type === 'VIEW' && textOf(n).includes('Betalningsinformation'))
-    expect(section).toBeDefined()
-    expect(svg.box!.width).toBeCloseTo(PAYMENT_QR_PT, 0)
-    expect(svg.box!.height).toBeCloseTo(PAYMENT_QR_PT, 0)
-    expect(section!.box!.height).toBeGreaterThanOrEqual(PAYMENT_QR_SECTION_MIN_HEIGHT_PT - 0.5)
-    // The QR box is a direct child of the section: its top is relative to it.
-    expect(qrView.box!.top + qrView.box!.height).toBeLessThanOrEqual(section!.box!.height - 10)
+  let png = ''
+  beforeAll(async () => {
+    png = await QRCode.toDataURL('https://example.test/pay', { margin: 1, width: 240, errorCorrectionLevel: 'M' })
   })
+
+  const longValues = qrCompany({
+    bank_name: 'Svenska Handelsbanken AB (publ), kontoret vid Stora torget i Norrköping',
+    clearing_number: '6789',
+    account_number: '123 456 789 012 345',
+  })
+  const longLink = sentInvoice({ payment_link_url: 'https://pay.example.test/checkout/session/abcdefghijklmnopqrstuvwxyz0123' })
+
+  for (const [name, extra, row] of [
+    ['alone', {}, 0],
+    ['after the Swish QR', { swishQrDataUrl: 'png' }, 0],
+    ['on the second row', { swishQrDataUrl: 'png', paymentLinkQrDataUrl: 'png' }, 1],
+  ] as const) {
+    it(`keeps the symbol, its caption and every payment row apart (${name})`, { timeout: 30_000 }, async () => {
+      const qrs = Object.fromEntries(Object.entries(extra).map(([key]) => [key, png]))
+      const pages = await layOut(render(longLink, longValues, qrs))
+      const chain = pages.map((page) => chainTo(page, 'SVG')).find(Boolean)
+      expect(chain).toBeTruthy()
+      const svg = chain![chain!.length - 1]
+      const qrView = chain![chain!.length - 2]
+      const section = [...chain!].reverse().find((n) => n.type === 'VIEW' && textOf(n).includes('Betalningsinformation'))
+      expect(section).toBeDefined()
+      expect(svg.box!.width).toBeCloseTo(PAYMENT_QR_PT, 0)
+      expect(svg.box!.height).toBeCloseTo(PAYMENT_QR_PT, 0)
+      expect(section!.box!.height).toBeGreaterThanOrEqual(
+        PAYMENT_QR_SECTION_MIN_HEIGHT_PT + row * PAYMENT_QR_ROW_STEP_PT - 0.5,
+      )
+      // The QR box is a direct child of the section: its box is relative to it.
+      expect(qrView.box!.top + qrView.box!.height).toBeLessThanOrEqual(section!.box!.height - 10)
+
+      // Every text outside the QR boxes ends left of the leftmost QR.
+      const extents = horizontalExtents(section!)
+      const qrBoxes = (section!.children ?? []).filter((child) => child !== qrView && child.type === 'VIEW' && child.box && child.box.width === PAYMENT_QR_PT)
+      const leftmostQr = Math.min(qrView.box!.left, ...qrBoxes.map((b) => b.box!.left))
+      const inQrBox = new Set<LaidOutNode>()
+      for (const box of [qrView, ...qrBoxes]) for (const { node } of horizontalExtents(box)) inQrBox.add(node)
+      const texts = extents.filter(({ node }) => (node.type === 'TEXT' || node.type === 'LINK') && !inQrBox.has(node))
+      expect(texts.length).toBeGreaterThan(3)
+      for (const { node, right } of texts) {
+        expect(right, `"${textOf(node).slice(0, 40)}" runs into the QR column`).toBeLessThanOrEqual(leftmostQr)
+      }
+    })
+  }
 
   it('renders a real PDF with the QR drawn as a vector path', { timeout: 30_000 }, async () => {
     const buffer = await renderToBuffer(render(sentInvoice(), qrCompany()))
