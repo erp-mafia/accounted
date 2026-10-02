@@ -40,7 +40,9 @@ vi.mock('@react-pdf/renderer', () => ({
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: vi.fn().mockReturnValue('mock-pdf-element'),
   brandingFromCompanySettings: vi.fn().mockReturnValue({}),
-  SHOW_SWISH_ON_INVOICE: false,
+  // As in production: the real QR builders run, so the paid re-render's
+  // missing pay-again QR is proven, not switched off by the mock.
+  SHOW_SWISH_ON_INVOICE: true,
 }))
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 
@@ -248,6 +250,26 @@ describe('POST /api/invoices/[id]/send-payment-confirmation', () => {
     expect(mockSupabase.from).not.toHaveBeenCalledWith('invoice_deliveries')
     expect(mockSupabase.from).not.toHaveBeenCalledWith('journal_entries')
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('attaches no pay-again QR: neither Swish nor the payment link on the paid re-render', async () => {
+    // The confirmation used to re-render the PAID invoice with a Swish QR
+    // locked at the full amount and the payment-link QR: a customer who had
+    // just paid got a code to pay again.
+    enqueue({ data: { ...paidInvoice, payment_link_url: 'https://pay.example.test/inv-1' }, error: null })
+    enqueue({ data: { ...company, swish: '1234567890', invoice_show_swish: true }, error: null })
+
+    const { status } = await parseJsonResponse(await post())
+
+    expect(status).toBe(200)
+    expect(InvoicePDF).toHaveBeenCalledTimes(1)
+    expect(InvoicePDF).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invoice: expect.objectContaining({ status: 'paid' }),
+        swishQrDataUrl: null,
+        paymentLinkQrDataUrl: null,
+      }),
+    )
   })
 
   it('returns 502 when the provider refuses the email', async () => {

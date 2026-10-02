@@ -46,15 +46,13 @@ import {
   invoicePrintsPlusgiro,
   invoiceShowsOcrReference,
 } from '@/lib/invoices/ocr-reference'
+import { isInvoicePayableStatus } from '@/lib/invoices/amount-due'
 
 /** UsingQR format version (key uqr). Every example in revision 2 uses 1. */
 export const USINGQR_VERSION = 1
 
 /** Quiet zone around the symbol, in modules (spec 1.2: at least 4). */
 export const BANK_PAYMENT_QR_QUIET_ZONE = 4
-
-/** Statuses whose PDF must never ask for a payment. */
-const NON_PAYABLE_STATUSES = new Set(['paid', 'cancelled', 'credited'])
 
 export interface BankPaymentQrCompany {
   invoice_show_payment_qr?: boolean | null
@@ -80,7 +78,10 @@ export interface BankPaymentQrInvoice {
 export interface BankPaymentQrInput {
   company: BankPaymentQrCompany
   invoice: BankPaymentQrInvoice
-  /** What the PDF prints as "Att betala": the remaining amount on a partly paid invoice. */
+  /**
+   * What the PDF prints as "Att betala": invoiceAmountDue (lib/invoices/amount-due),
+   * the remaining amount on a partly paid invoice, the same figure the Swish QR encodes.
+   */
   amountDue: number
   /** Document language: the OCR reference is printed (and encoded) only on a Swedish invoice. */
   lang: 'sv' | 'en'
@@ -125,8 +126,8 @@ function asciiJson(value: unknown): string {
  */
 export function buildBankPaymentQrPayload({ company, invoice, amountDue, lang }: BankPaymentQrInput): string | null {
   if (!(company.invoice_show_payment_qr ?? false)) return null
-  if ((invoice.document_type || 'invoice') !== 'invoice' || invoice.credited_invoice_id) return null
-  if (invoice.status && NON_PAYABLE_STATUSES.has(invoice.status)) return null
+  // The same gate as the Swish and payment-link QRs (lib/invoices/amount-due).
+  if (!isInvoicePayableStatus(invoice)) return null
   if ((invoice.currency ?? 'SEK') !== 'SEK') return null
 
   const due = roundOre(amountDue)

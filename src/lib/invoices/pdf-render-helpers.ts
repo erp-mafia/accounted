@@ -4,7 +4,8 @@
  * Three responsibilities:
  *   1. Build the branding object from company settings.
  *   2. Resolve the company logo into a format @react-pdf/renderer can draw.
- *   3. Build the optional Swish payment QR.
+ *   3. Build the optional Swish and payment-link QRs (gated on what the
+ *      invoice still asks for, lib/invoices/amount-due).
  *
  * Why the logo needs resolving (issue #772: "Logotyp kommer inte med på
  * fakturor"): @react-pdf/renderer's <Image> only decodes JPG and PNG, but the
@@ -23,7 +24,7 @@ import QRCode from 'qrcode'
 import type { CompanySettings, Currency, Invoice, InvoicePaymentAccount } from '@/types'
 import { brandingFromCompanySettings, SHOW_SWISH_ON_INVOICE, type InvoiceBranding } from '@/lib/invoices/pdf-template'
 import { buildSwishQrPayload } from '@/lib/payments/swish'
-import { getAmountToPay } from '@/lib/invoices/rounding'
+import { invoiceAmountDue, isInvoicePayableStatus } from '@/lib/invoices/amount-due'
 import { createLogger } from '@/lib/logger'
 import { isUnsafeUrlError, readBodyWithCap, safeFetch } from '@/lib/http/safe-fetch'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
@@ -258,16 +259,29 @@ export async function prepareInvoicePdfRender(
 
 /**
  * Build the payment-link QR for an invoice as a PNG data URL, or null when the
- * invoice carries no payment_link_url or it isn't a payable document (credit
- * notes, proformas and delivery notes show no payment box). The URL was
- * https-validated at write time (lib/api/schemas.ts); the QR simply encodes it
- * locally with the `qrcode` lib: no call to any payment provider.
+ * invoice carries no payment_link_url or no longer asks for a payment:
+ *   - not a payment request (isInvoicePayableStatus): credit notes, proformas,
+ *     quotes, delivery notes, and paid, cancelled or credited invoices. The
+ *     betalningsbekräftelse re-renders a PAID invoice, and a pay-again QR on
+ *     it invites a second payment;
+ *   - nothing left to pay (a deduction covering the whole invoice);
+ *   - partly paid: a link cannot carry the remainder. Its amount, if it has
+ *     one, was fixed when it was created (the Stripe link is minted at send
+ *     for the full customer share), so scanning it would ask for the full
+ *     amount again. The bank-app and Swish QRs encode the remainder instead.
+ * The URL was https-validated at write time (lib/api/schemas.ts); the QR
+ * simply encodes it locally with the `qrcode` lib: no call to any payment
+ * provider. `company` supplies öresavrundning for the amount-due check, the
+ * same company the PDF renders with.
  */
-export async function buildPaymentLinkQrDataUrl(invoice: Invoice): Promise<string | null> {
+export async function buildPaymentLinkQrDataUrl(
+  invoice: Invoice,
+  company: Pick<CompanySettings, 'ore_rounding'> | null | undefined,
+): Promise<string | null> {
   const url = invoice.payment_link_url?.trim()
   if (!url) return null
-  const docType = invoice.document_type || 'invoice'
-  if (docType !== 'invoice' || invoice.credited_invoice_id) return null
+  if (!isInvoicePayableStatus(invoice) || invoice.status === 'partially_paid') return null
+  if (invoiceAmountDue(invoice, company) <= 0) return null
   try {
     return await QRCode.toDataURL(url, { margin: 1, width: 240, errorCorrectionLevel: 'M' })
   } catch (err) {
@@ -281,13 +295,17 @@ export async function buildPaymentLinkQrDataUrl(invoice: Invoice): Promise<strin
 
 /**
  * Build the Swish payment QR for an invoice as a PNG data URL, or null when:
- * Swish display is off, the document isn't a payable invoice (credit notes,
- * proformas and delivery notes collect no payment), there's no/invalid Swish
- * number, the invoice isn't in SEK (Swish is SEK-only), or the amount to pay
- * is not positive. The encoded amount is the customer-facing "Att betala"
- * from getAmountToPay: the rounded total minus any ROT/RUT deduction, the
- * same figure the PDF totals block and the invoice email state. The Swish payload locks the amount (editmask 0),
- * so encoding anything else makes the customer overpay with no way to correct
+ * Swish display is off, the invoice no longer asks for a payment (credit
+ * notes, proformas, quotes and delivery notes collect none; paid, cancelled
+ * and credited invoices are settled: the betalningsbekräftelse re-renders a
+ * PAID invoice and must not carry a pay-again QR), there's no/invalid Swish
+ * number, the invoice isn't in SEK (Swish is SEK-only), or nothing is left to
+ * pay. The encoded amount is invoiceAmountDue: the customer-facing "Att
+ * betala" from getAmountToPay (the rounded total minus any ROT/RUT
+ * deduction, the same figure the PDF totals block and the invoice email
+ * state), or the remainder on a partly paid invoice, the same figure the
+ * bank-app QR encodes. The Swish payload locks the amount (editmask 0), so
+ * encoding anything else makes the customer overpay with no way to correct
  * it in the app. A fully deducted invoice (toPay = 0) therefore renders no QR.
  * Generated locally with the `qrcode` lib: no call to any Swish API. Pass the
  * result to InvoicePDF's `swishQrDataUrl` prop; the template gates rendering
@@ -303,17 +321,16 @@ export async function buildSwishQrDataUrl(
   // Swish display off is the normal "no QR" case: stay quiet. Every other
   // skip is logged so a missing QR is diagnosable instead of silent.
   if (!(company.invoice_show_swish ?? false)) return null
-  // Non-payable documents: the PDF hides the whole payment box for them, and
-  // a locked payment QR on a kreditfaktura (a refund document, "Er tillgodo")
-  // must stay impossible even if a template regression ever exposed the
-  // corner. Same gate as buildPaymentLinkQrDataUrl; quiet like display-off.
-  const docType = invoice.document_type || 'invoice'
-  if (docType !== 'invoice' || invoice.credited_invoice_id) return null
+  // Not a payment request: a locked payment QR on a kreditfaktura (a refund
+  // document, "Er tillgodo") or on a paid, cancelled or credited invoice must
+  // stay impossible even where the template still shows the payment box.
+  // Same gate as the bank-app and payment-link QRs; quiet like display-off.
+  if (!isInvoicePayableStatus(invoice)) return null
   if ((invoice.currency ?? 'SEK') !== 'SEK') {
     log.info('swish QR skipped: invoice not in SEK', { invoiceId: invoice.id, currency: invoice.currency })
     return null
   }
-  const amount = getAmountToPay(invoice, company).toPay
+  const amount = invoiceAmountDue(invoice, company)
   const payload = buildSwishQrPayload(company.swish, amount, invoice.invoice_number ?? '')
   if (!payload) {
     log.warn('swish QR skipped: invalid number or non-positive amount', {
