@@ -584,7 +584,7 @@
     }
   },
   "kernelImports": {
-    "count": 26,
+    "count": 27,
     "files": {
       "lib/bookkeeping/engine.ts": [
         "lib/import/sie-job-contract",
@@ -640,7 +640,8 @@
       ],
       "lib/core/documents/document-service.ts": [
         "lib/documents/deletion",
-        "lib/documents/preview"
+        "lib/documents/preview",
+        "lib/documents/upload-types"
       ]
     }
   }
