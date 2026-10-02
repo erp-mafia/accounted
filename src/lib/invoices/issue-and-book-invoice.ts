@@ -9,7 +9,11 @@ import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import type { CustomIssuanceLine } from '@/lib/invoices/issuance-custom-lines'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import {
+  prepareInvoicePdfRender,
+  buildSwishQrDataUrl,
+  buildPaymentLinkQrDataUrl,
+} from '@/lib/invoices/pdf-render-helpers'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
@@ -99,7 +103,12 @@ export async function archiveIssuedInvoicePdf(args: {
       renderableInvoice.currency,
       { paymentAccountRequired, payee: renderableInvoice.payment_details ?? null },
     )
+    // Both QRs, exactly as the send route renders them: the archived underlag
+    // must be the document the customer holds. Without the link QR, an
+    // invoice with a typed-in payment link printed its "Betala online" row
+    // but archived no code for it, while the preview showed one.
     const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
+    const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice, renderCompany)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: renderableInvoice,
@@ -109,6 +118,7 @@ export async function archiveIssuedInvoicePdf(args: {
         originalInvoiceNumber: args.originalInvoiceNumber,
         branding,
         swishQrDataUrl,
+        paymentLinkQrDataUrl,
       }),
     )
 
