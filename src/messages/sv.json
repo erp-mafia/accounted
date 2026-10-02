@@ -5062,7 +5062,7 @@
     "peppol_status_business_rejected": "Avvisad av mottagaren",
     "peppol_status_no_route": "Mottagaren saknar Peppol-registrering",
     "peppol_status_failed": "Misslyckades",
-    "peppol_access_required": "Begär åtkomst till Peppol under Inställningar > Fakturering, så aktiverar vi det för bolaget.",
+    "peppol_access_required": "Begär åtkomst till Peppol under Inställningar > Kopplingar > E-faktura via Peppol, så aktiverar vi det för bolaget.",
     "peppol_send_limit_reached": "Bolagets Peppol-sändningar är slut. Hör av dig till support för fler.",
     "peppol_failed_attn": "Peppol-leveransen misslyckades: <mask>{reason}</mask>.",
     "peppol_failed_attn_no_reason": "Peppol-leveransen misslyckades. Operatören angav ingen orsak.",

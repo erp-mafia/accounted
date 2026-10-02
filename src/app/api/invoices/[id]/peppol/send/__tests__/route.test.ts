@@ -873,8 +873,8 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     it.each([
       [
         'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED',
-        'Fakturan kunde inte skickas via Peppol ännu: Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Fakturering > E-faktura via Peppol, eller kontakta support.',
-        "The invoice could not be sent via Peppol yet: The company's Peppol id is not registered with the access point. Switch on receiving under Settings > Invoicing > E-invoicing via Peppol, or contact support.",
+        'Fakturan kunde inte skickas via Peppol ännu: Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Kopplingar > E-faktura via Peppol, eller kontakta support.',
+        "The invoice could not be sent via Peppol yet: The company's Peppol id is not registered with the access point. Switch on receiving under Settings > Connections > E-invoicing via Peppol, or contact support.",
       ],
       [
         'CONNECTOR_SCOPE_MISSING',

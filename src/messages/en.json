@@ -5062,7 +5062,7 @@
     "peppol_status_business_rejected": "Rejected by the recipient",
     "peppol_status_no_route": "Recipient has no Peppol registration",
     "peppol_status_failed": "Failed",
-    "peppol_access_required": "Request Peppol access under Settings > Invoicing and we will enable it for the company.",
+    "peppol_access_required": "Request Peppol access under Settings > Connections > E-invoicing via Peppol and we will enable it for the company.",
     "peppol_send_limit_reached": "The company has used its Peppol sends. Contact support for more.",
     "peppol_failed_attn": "The Peppol delivery failed: <mask>{reason}</mask>.",
     "peppol_failed_attn_no_reason": "The Peppol delivery failed. The access point gave no reason.",
