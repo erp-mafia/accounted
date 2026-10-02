@@ -65,15 +65,15 @@ describe('legacyListEditorHref', () => {
 })
 
 describe('isFullBleedEditorPath', () => {
-  it('matches the new and edit editor routes', () => {
+  it('matches the new, edit and credit editor routes', () => {
     expect(isFullBleedEditorPath('/invoices/new')).toBe(true)
     expect(isFullBleedEditorPath('/invoices/8a1c/edit')).toBe(true)
+    expect(isFullBleedEditorPath('/invoices/8a1c/credit')).toBe(true)
   })
 
-  it('leaves the list, the detail page and the credit page padded', () => {
+  it('leaves the list and the detail page padded', () => {
     expect(isFullBleedEditorPath('/invoices')).toBe(false)
     expect(isFullBleedEditorPath('/invoices/8a1c')).toBe(false)
-    expect(isFullBleedEditorPath('/invoices/8a1c/credit')).toBe(false)
     expect(isFullBleedEditorPath('/invoices/recurring/new')).toBe(false)
   })
 })

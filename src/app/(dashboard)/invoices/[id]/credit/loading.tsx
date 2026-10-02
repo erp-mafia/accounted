@@ -1,6 +1,6 @@
-import { InvoiceEditorSkeleton } from '@/components/common/DetailPageSkeleton'
+import { InvoiceEditorShellSkeleton } from '@/components/invoices/editor/InvoiceEditorShellSkeleton'
 
-/** Route-level fallback for the credit-note segment: the editor's own silhouette. */
+/** Route-level fallback for the credit page: the editor shell's own silhouette. */
 export default function Loading() {
-  return <InvoiceEditorSkeleton />
+  return <InvoiceEditorShellSkeleton />
 }

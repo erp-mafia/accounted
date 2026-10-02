@@ -74,8 +74,13 @@ export function legacyListEditorHref(searchParams: URLSearchParams): string | nu
 }
 
 // The editor owns the whole dashboard panel like a workspace (form left,
-// live PDF right), so MainContainer renders these routes full-bleed.
-const FULL_BLEED_EDITOR_PATHS = [/^\/invoices\/new\/?$/, /^\/invoices\/[^/]+\/edit\/?$/]
+// live PDF right), so MainContainer renders these routes full-bleed: new,
+// edit, and the credit page that shares the shell.
+const FULL_BLEED_EDITOR_PATHS = [
+  /^\/invoices\/new\/?$/,
+  /^\/invoices\/[^/]+\/edit\/?$/,
+  /^\/invoices\/[^/]+\/credit\/?$/,
+]
 
 export function isFullBleedEditorPath(pathname: string): boolean {
   return FULL_BLEED_EDITOR_PATHS.some((pattern) => pattern.test(pathname))
