@@ -1681,6 +1681,19 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en: 'Customer has no email address.',
     remediation: { description: 'Add an email address on the customer record before sending.' },
   },
+  // customer_id is null, usually because the customer was deleted while the
+  // draft existed (crm#263). Without a buyer there is no invoice to issue or
+  // render (ML 17 kap 24 §).
+  INVOICE_CUSTOMER_MISSING: {
+    httpStatus: 409,
+    message_sv: 'Fakturan saknar kund. Välj en kund på utkastet under Redigera, eller ta bort utkastet.',
+    message_en: 'The invoice has no customer. Choose a customer for the draft under Edit, or delete the draft.',
+    remediation: {
+      description:
+        'The invoice has no customer (customer_id is null, usually because the customer was deleted). Set customer_id on the draft (gnubok_update_invoice, or PATCH the invoice) or delete the draft (gnubok_delete_draft_invoice). An invoice is never issued or rendered without a buyer.',
+      tool: 'gnubok_update_invoice',
+    },
+  },
   INVOICE_SEND_TOO_MANY_RECIPIENTS: {
     httpStatus: 400,
     message_sv: 'Ett fakturautskick får ha högst 20 mottagare totalt.',
@@ -4138,6 +4151,48 @@ const CUSTOMER: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Kunden har fakturor och kan inte tas bort.',
     message_en: 'Customer cannot be deleted while invoices reference it.',
+  },
+  // A hard delete refused because rows still point at the customer and the
+  // database would silently null them (ON DELETE SET NULL), crm#263.
+  // lib/customers/delete-guard.ts picks the code; details.dependents has
+  // every count.
+  CUSTOMER_HAS_ISSUED_INVOICES: {
+    httpStatus: 409,
+    message_sv:
+      'Kunden kan inte tas bort eftersom den finns på fakturor som ska sparas i sju år, även makulerade. Fakturorna behöver kundens namn och adress.',
+    message_en:
+      "The customer cannot be deleted because it is on invoices that must be kept for seven years, cancelled ones included. The invoices need the customer's name and address.",
+    remediation: {
+      description:
+        'An invoice row stores no copy of the buyer, so a customer on an issued or numbered invoice (cancelled included) is kept for the retention period (ML 17 kap 24 §, BFL 7 kap 2 §). To take it out of the roster, archive it instead: DELETE /api/v1/companies/{companyId}/customers/{id} sets archived_at once no invoice is open.',
+    },
+  },
+  CUSTOMER_HAS_DRAFT_INVOICES: {
+    httpStatus: 409,
+    message_sv: 'Kunden har fakturautkast. Ta bort utkasten först, sedan kan kunden tas bort.',
+    message_en: 'The customer has draft invoices. Delete the drafts first, then delete the customer.',
+    remediation: {
+      description:
+        'Unnumbered drafts point at this customer and would lose it. Delete them first (gnubok_delete_draft_invoice, or DELETE /api/v1/companies/{companyId}/invoices/{id}), then retry. details.dependents.draft_invoices says how many.',
+      tool: 'gnubok_delete_draft_invoice',
+    },
+  },
+  CUSTOMER_HAS_SALES_ORDERS: {
+    httpStatus: 409,
+    message_sv: 'Kunden har kundorder. Ta bort dem först, sedan kan kunden tas bort.',
+    message_en: 'The customer has sales orders. Delete them first, then delete the customer.',
+    remediation: {
+      description:
+        'Sales orders point at this customer and would lose it. Delete them first (a confirmed order is cancelled before it can be deleted), then retry.',
+    },
+  },
+  CUSTOMER_HAS_RECURRING_INVOICES: {
+    httpStatus: 409,
+    message_sv: 'Kunden har en återkommande faktura. Ta bort den först, sedan kan kunden tas bort.',
+    message_en: 'The customer has a recurring invoice. Delete it first, then delete the customer.',
+    remediation: {
+      description: 'A recurring invoice schedule points at this customer. Delete the schedule first, then retry.',
+    },
   },
   CUSTOMER_NO_PERSONAL_NUMBER: {
     httpStatus: 404,

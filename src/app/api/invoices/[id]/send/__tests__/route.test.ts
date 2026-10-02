@@ -316,6 +316,24 @@ describe('POST /api/invoices/[id]/send', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_NO_CUSTOMER_EMAIL')
   })
 
+  it('returns 409 INVOICE_CUSTOMER_MISSING for a draft whose customer was deleted (crm#263)', async () => {
+    // invoices.customer_id is ON DELETE SET NULL: the join comes back null.
+    enqueue({
+      data: { ...makeInvoice({ id: 'inv-1', items: [] }), customer_id: null, customer: null },
+      error: null,
+    })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_CUSTOMER_MISSING')
+    expect(body.error.message).toContain('Fakturan saknar kund')
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toEqual([])
+  })
+
   it('returns 400 when the stored customer email is malformed', async () => {
     enqueue({
       data: makeInvoice({

@@ -31,6 +31,7 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { INVOICE_PDF_COLUMNS } from '@/lib/api/v1/invoice-columns'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
 // The ciphertext is fetched here, for the render only: the template derives
@@ -59,6 +60,7 @@ registerEndpoint({
     'Drafts (no invoice_number yet) render with an "utkast" filename. The PDF carries no F-series number: do not treat it as a finalized invoice.',
     'PDF rendering can take several hundred milliseconds for invoices with many line items. Cache on the client if requesting repeatedly.',
     'Credit notes embed the original invoice\'s löpnummer per ML 17 kap 22-23§: if the original was hard-deleted (not possible via Accounted but theoretically via a manual DB edit), the reference is omitted.',
+    'An invoice without a customer (customer_id null, e.g. its customer was deleted) has no buyer to print: 409 INVOICE_CUSTOMER_MISSING. Set customer_id on the draft or delete it.',
   ],
   example: {
     response: {
@@ -113,6 +115,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     const typed = invoice as unknown as Invoice & {
       customer?: Customer
       items?: InvoiceItem[]
+    }
+
+    // No buyer to print (customer deleted, crm#263): refuse instead of a
+    // render that throws on the missing customer.
+    if (invoiceLacksCustomer(typed)) {
+      return v1ErrorResponseFromCode('INVOICE_CUSTOMER_MISSING', ctx.log, { requestId: ctx.requestId })
     }
 
     // company_settings is required by the PDF template (header, bank info,

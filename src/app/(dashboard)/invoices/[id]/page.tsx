@@ -751,7 +751,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  // The invoice has no customer (deleted while the draft existed, crm#263):
+  // nobody to number, send or issue it to. The server refuses as well
+  // (INVOICE_CUSTOMER_MISSING); this says so before a dialog opens.
+  function refuseWithoutCustomer(): boolean {
+    if (invoice?.customer) return false
+    toast({
+      title: t('customer_deleted'),
+      description: t('customer_missing_action'),
+      variant: 'destructive',
+    })
+    return true
+  }
+
   function openSendDialog(mode: 'email' | 'manual') {
+    if (refuseWithoutCustomer()) return
     setSendDialogMode(mode)
     setShowSendDialog(true)
   }
@@ -1401,6 +1415,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // the real number is allocated atomically on confirm and may differ by one if
   // another invoice is created in between.
   async function openFinalizeDialog() {
+    if (refuseWithoutCustomer()) return
     setNextNumberPreview(null)
     setShowFinalizeDialog(true)
     try {
@@ -1514,8 +1529,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     return null
   }
 
+  // Null when the customer was deleted (invoices.customer_id is ON DELETE SET
+  // NULL): the page must still render so the draft can be fixed or deleted.
   const customer = invoice.customer
-  const customerHasEmail = !!customer.email
+  const customerHasEmail = !!customer?.email
   const docType = ((invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice') as InvoiceDocumentType
   const isProforma = docType === 'proforma'
   const isQuote = docType === 'quote'
@@ -1701,7 +1718,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 : { label: statusLabel('sent'), exception: false }
 
   const metaParts = [
-    customer.name,
+    customer?.name,
     t('created_at', { date: formatDate(invoice.created_at) }),
     latestCompletedDelivery?.sent_at
       ? t('sent_on', { date: formatDate(latestCompletedDelivery.sent_at) })
@@ -2142,7 +2159,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           invoice is what it is. A non-momsregistrerad seller charges nothing
           and has nothing to explain. After a successful check the invoice is
           refetched so the sentence flips to what the lines still carry. */}
-      {isEditableDraft && vatRegistered !== false && (
+      {isEditableDraft && vatRegistered !== false && customer && (
         <VatTreatmentNotice
           customer={customer}
           lineVatRates={invoice.items
@@ -2190,43 +2207,53 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           on the left, the facts on the right. */}
       <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
         <DetailSection kicker={t('customer_card_title')}>
-          <DefRow label={t('def_customer')}>
-            <Link href={`/customers/${customer.id}`} className="hover:underline">
-              {customer.name}
-            </Link>
-          </DefRow>
-          {customer.customer_type !== 'individual' && customer.org_number && (
-            <DefRow label={t('def_org_number')}>
-              <span className="tabular-nums">{customer.org_number}</span>
+          {customer ? (
+            <>
+              <DefRow label={t('def_customer')}>
+                <Link href={`/customers/${customer.id}`} className="hover:underline">
+                  {customer.name}
+                </Link>
+              </DefRow>
+              {customer.customer_type !== 'individual' && customer.org_number && (
+                <DefRow label={t('def_org_number')}>
+                  <span className="tabular-nums">{customer.org_number}</span>
+                </DefRow>
+              )}
+              {customer.customer_type !== 'individual' && customer.vat_number && (
+                <DefRow label={t('def_vat_number')}>{customer.vat_number}</DefRow>
+              )}
+              <DefRow label={t('def_email')}>
+                {customer.email ? (
+                  <a href={`mailto:${customer.email}`} className="hover:underline">
+                    {customer.email}
+                  </a>
+                ) : (
+                  <DefEmpty />
+                )}
+              </DefRow>
+              {customer.phone && <DefRow label={t('def_phone')}>{customer.phone}</DefRow>}
+              <DefRow label={t('def_address')}>
+                {customer.address_line1 || customer.city ? (
+                  <div>
+                    {customer.address_line1 && <p>{customer.address_line1}</p>}
+                    {customer.address_line2 && <p>{customer.address_line2}</p>}
+                    <p>
+                      {[customer.postal_code, customer.city].filter(Boolean).join(' ')}
+                      {customer.country && customer.country !== 'SE' && `, ${getCountryName(customer.country, locale === 'en' ? 'en' : 'sv')}`}
+                    </p>
+                  </div>
+                ) : (
+                  <DefEmpty />
+                )}
+              </DefRow>
+            </>
+          ) : (
+            // The customer was deleted while the invoice pointed at it
+            // (crm#263): say so instead of failing the whole page.
+            <DefRow label={t('def_customer')}>
+              <span className="text-muted-foreground">{t('customer_deleted')}</span>
             </DefRow>
           )}
-          {customer.customer_type !== 'individual' && customer.vat_number && (
-            <DefRow label={t('def_vat_number')}>{customer.vat_number}</DefRow>
-          )}
-          <DefRow label={t('def_email')}>
-            {customer.email ? (
-              <a href={`mailto:${customer.email}`} className="hover:underline">
-                {customer.email}
-              </a>
-            ) : (
-              <DefEmpty />
-            )}
-          </DefRow>
-          {customer.phone && <DefRow label={t('def_phone')}>{customer.phone}</DefRow>}
-          <DefRow label={t('def_address')}>
-            {customer.address_line1 || customer.city ? (
-              <div>
-                {customer.address_line1 && <p>{customer.address_line1}</p>}
-                {customer.address_line2 && <p>{customer.address_line2}</p>}
-                <p>
-                  {[customer.postal_code, customer.city].filter(Boolean).join(' ')}
-                  {customer.country && customer.country !== 'SE' && `, ${getCountryName(customer.country, locale === 'en' ? 'en' : 'sv')}`}
-                </p>
-              </div>
-            ) : (
-              <DefEmpty />
-            )}
-          </DefRow>
           {invoice.your_reference && (
             <DefRow label={t('your_reference_label')}>
               {invoice.your_reference.split(',').map((ref) => ref.trim()).join(', ')}

@@ -49,6 +49,7 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -178,6 +179,11 @@ export const POST = withRouteContext(
       })
     }
 
+    // The customer was deleted while the draft pointed at it (crm#263):
+    // there is nobody to send it to, and reading its email would throw.
+    if (invoiceLacksCustomer(invoice)) {
+      return errorResponseFromCode('INVOICE_CUSTOMER_MISSING', opLog, { requestId })
+    }
     const customer = invoice.customer as Customer
     if (!customer.email?.trim() || !EMAIL_PATTERN.test(customer.email.trim())) {
       return errorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', opLog, {

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Invoice } from '@/types'
@@ -29,7 +30,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data: invoice, error: fetchError } = await supabase
       .from('invoices')
-      .select('id, status, invoice_number, document_type, is_self_billed')
+      .select('id, status, invoice_number, document_type, is_self_billed, customer_id')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -52,6 +53,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       invoice.is_self_billed
     ) {
       return errorResponseFromCode('INVOICE_FINALIZE_NOT_DRAFT', log, { requestId })
+    }
+
+    // A number is only spent on an invoice with a buyer: a draft whose
+    // customer was deleted (crm#263) stays unnumbered, so it can still be
+    // given a customer or deleted outright.
+    if (invoiceLacksCustomer(invoice)) {
+      return errorResponseFromCode('INVOICE_CUSTOMER_MISSING', log, { requestId })
     }
 
     try {

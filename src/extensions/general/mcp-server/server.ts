@@ -126,6 +126,7 @@ import {
 } from '@/lib/invoices/vat-rules'
 import { DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/invoices/rot-rut-rules'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { resolveSupplierInvoiceExchangeRate } from '@/lib/currency/supplier-invoice-rate'
 import { getBranding } from '@/lib/branding/service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
@@ -10313,6 +10314,8 @@ export const tools: McpTool[] = [
 
       const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
 
+      // The customer was deleted while the draft pointed at it (crm#263).
+      if (invoiceLacksCustomer(invoice)) throw registryError('INVOICE_CUSTOMER_MISSING')
       const customer = invoice.customer as Customer
       if (!customer.email) throw new Error('Customer has no email address. Update customer details first.')
 
