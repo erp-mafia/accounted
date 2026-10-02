@@ -163,6 +163,7 @@ import {
   type EditorPaymentSummaryInput,
 } from '@/lib/invoices/editor/payment-summary'
 import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { formatSwishForDisplay } from '@/lib/invoices/payment-rows'
 import { EditorSection } from '@/components/invoices/editor/EditorSection'
 import { DetailsChips } from '@/components/invoices/editor/DetailsChips'
 import { PaymentSummary } from '@/components/invoices/editor/PaymentSummary'
@@ -2866,7 +2867,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const printedPayee = {
     bankgiro: paymentCompany?.bankgiro?.trim() || null,
     plusgiro: paymentCompany?.plusgiro?.trim() || null,
-    swish: paymentCompany?.swish?.trim() || null,
+    // Grouped the way the PDF and the email print it ("123 118 11 89").
+    swish: formatSwishForDisplay(paymentCompany?.swish?.trim() || null),
     bankAccount:
       paymentSummary?.methods.find((row) => row.key === 'bank_account')?.value ?? null,
   }
