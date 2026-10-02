@@ -56,6 +56,7 @@ export const SE_PACK_TERRITORY = [
   // form. Only the se-* profiles: the registry beside them (forms/index.ts,
   // forms/types.ts) is the jurisdiction-agnostic seam and stays BAS-free.
   'lib/company/forms/se-aktiebolag.ts',
+  'lib/company/forms/se-ekonomisk-forening.ts',
   'lib/company/forms/se-enskild-firma.ts',
   'lib/company/forms/se-ideell-forening.ts',
   // Swedish year-end: årsredovisning and iXBRL, periodiseringsfond, bolagsskatt, EF.
