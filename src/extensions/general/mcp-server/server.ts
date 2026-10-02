@@ -4027,7 +4027,7 @@ async function resolveReportDimensionFilter(
 const REPORT_DIMENSIONS_FILTER_SCHEMA = {
   type: 'object',
   additionalProperties: { type: 'string' },
-  description: 'Filter: SIE dim no → value (code OR name, resolved server-side), e.g. {"6":"P001"}. Opening balances are scoped to it too: its tagged IB lines or prior tagged history (a project carries its balance; 26xx and annually reset dimensions open at 0).',
+  description: 'Filter: SIE dim no → value (code OR name), e.g. {"6":"P001"}. IB is scoped to it too: its tagged IB lines or prior tagged history (a project carries its balance; 26xx and annually reset dimensions open at 0).',
 } as const
 
 // Optional custom date range on the report tools. Historically from_date /
