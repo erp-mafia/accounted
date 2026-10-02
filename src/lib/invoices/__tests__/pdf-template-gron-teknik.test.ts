@@ -4,8 +4,10 @@
  * checked 2026-09-30): the total and the reduction incl. moms, the cost of
  * the installation (arbete och material) apart from övriga kostnader, the
  * type of work, the F-skatt statement, the buyer, and the fastighets-
- * beteckning or the förening's orgnr with the lägenhetsnummer. ROT/RUT
- * invoices render exactly as before.
+ * beteckning or the förening's orgnr with the lägenhetsnummer. The total
+ * incl. moms, the förening orgnr and the seller payout notice are shared with
+ * ROT/RUT (#3385); the installation cost split and the base notice are grön
+ * teknik's own.
  */
 import { describe, expect, it } from 'vitest'
 import type { ReactElement, ReactNode } from 'react'
@@ -221,15 +223,19 @@ describe('invoice PDF: grön teknik', () => {
     expect(text).toContain('Green technology, Installation av solceller: Montage solceller')
   })
 
-  it('leaves a ROT invoice as it was: no total incl. moms row, no bostadsrättsförening row', () => {
+  it('shares the total incl. moms, the förening orgnr and the payout notice with ROT, nothing grön teknik only', () => {
     const rotItems = [
       item({ deduction_type: 'rot', work_type: 'EL', deduction_amount: 7500, housing_designation: null, apartment_number: '1201', brf_org_number: '799900-0040' }),
     ]
     const text = render(gronInvoice({ deduction_total: 7500, subtotal: 20000, vat_amount: 5000, total: 25000 }), rotItems)
     expect(text).toContain('Skattereduktion ROT/RUT:')
-    expect(text).not.toContain('Totalt inkl. moms:')
-    expect(text).not.toContain('Bostadsrättsföreningens org.nr:')
+    expect(text).toContain('Totalt inkl. moms:')
+    expect(text).toContain('Bostadsrättsföreningens org.nr:')
+    expect(text).toContain('799900-0040')
+    expect(text).toContain('Säljaren begär utbetalningen från Skatteverket när köparen har betalat sin del')
+    expect(text).not.toContain('Skattereduktion grön teknik:')
     expect(text).not.toContain('Arbete och material:')
+    expect(text).not.toContain(GRON_TEKNIK_BASE_NOTICE)
     expect(text).toContain('Endast arbetskostnad har inkluderats')
     expect(text).toContain('ROT, EL: Montage solceller')
   })

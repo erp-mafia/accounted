@@ -29,7 +29,7 @@ function textLeaves(node: ReactNode, out: string[] = []): string[] {
   return out
 }
 
-function renderText(invoice: InvoicePdfInvoice): string {
+function renderText(invoice: InvoicePdfInvoice, language?: 'sv' | 'en'): string {
   const items: InvoiceItem[] = [
     {
       id: 'item-1',
@@ -55,6 +55,7 @@ function renderText(invoice: InvoicePdfInvoice): string {
     customer: makeCustomer(),
     items,
     company: makeCompanySettings(),
+    language,
   })
   return textLeaves(tree).join('\n')
 }
@@ -109,5 +110,38 @@ describe('invoice PDF deduction box personnummer', () => {
 
     expect(text).not.toContain('Personnummer:')
     expect(text).not.toContain('2385')
+  })
+})
+
+// #3385: under fakturamodellen the company (seller) requests the payout from
+// Skatteverket once the buyer has paid their share; the buyer never applies
+// (swedish-invoice-compliance, invoice-rules.md section 8). The invoice also
+// states the total incl. moms next to the reduction.
+describe('invoice PDF deduction box: fakturamodellen', () => {
+  it('says the seller requests the payout, never the buyer', () => {
+    const text = renderText(rutInvoice({}))
+
+    expect(text).toContain('Säljaren begär utbetalningen från Skatteverket när köparen har betalat sin del (fakturamodellen).')
+    expect(text).not.toContain('Köparen ansöker')
+  })
+
+  it('says the same on an English invoice', () => {
+    const text = renderText(rutInvoice({}), 'en')
+
+    expect(text).toContain('The seller requests the payout from Skatteverket once the customer has paid their share (fakturamodellen).')
+    expect(text).not.toContain('The customer claims the deduction')
+  })
+
+  it('prints the total incl. moms before the reduction and the amount to pay', () => {
+    const lines = renderText(rutInvoice({})).split('\n')
+    const total = lines.indexOf('Totalt inkl. moms:')
+    const reduction = lines.indexOf('Skattereduktion ROT/RUT:')
+    const toPay = lines.indexOf('Att betala:')
+
+    expect(total).toBeGreaterThan(-1)
+    expect(lines[total + 1]).toMatch(/2\s500,00 SEK/)
+    expect(reduction).toBeGreaterThan(total)
+    expect(toPay).toBeGreaterThan(reduction)
+    expect(renderText(rutInvoice({}), 'en')).toContain('Total incl. VAT:')
   })
 })
