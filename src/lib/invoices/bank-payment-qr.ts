@@ -41,7 +41,11 @@ import {
   validateBankgiroNumber,
   validatePlusgiroNumber,
 } from '@/lib/bankgiro/luhn'
-import { invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'
+import {
+  invoicePrintsBankgiro,
+  invoicePrintsPlusgiro,
+  invoiceShowsOcrReference,
+} from '@/lib/invoices/ocr-reference'
 
 /** UsingQR format version (key uqr). Every example in revision 2 uses 1. */
 export const USINGQR_VERSION = 1
@@ -96,11 +100,11 @@ function compactDate(value: string | null | undefined): string | null {
  */
 function payeeAccount(company: BankPaymentQrCompany): { pt: 'BG' | 'PG'; acc: string } | null {
   const bankgiro = company.bankgiro?.trim()
-  if (bankgiro && (company.invoice_show_bankgiro ?? true) && validateBankgiroNumber(bankgiro)) {
+  if (bankgiro && invoicePrintsBankgiro(company) && validateBankgiroNumber(bankgiro)) {
     return { pt: 'BG', acc: formatBankgiroNumber(bankgiro) }
   }
   const plusgiro = company.plusgiro?.trim()
-  if (plusgiro && (company.invoice_show_plusgiro ?? true) && validatePlusgiroNumber(plusgiro)) {
+  if (plusgiro && invoicePrintsPlusgiro(company) && validatePlusgiroNumber(plusgiro)) {
     return { pt: 'PG', acc: formatPlusgiroNumber(plusgiro) }
   }
   return null

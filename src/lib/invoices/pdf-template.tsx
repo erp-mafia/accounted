@@ -14,7 +14,11 @@ import {
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
-import { invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'
+import {
+  invoicePrintsBankgiro,
+  invoicePrintsPlusgiro,
+  invoiceShowsOcrReference,
+} from '@/lib/invoices/ocr-reference'
 import { bankPaymentQrSymbol, buildBankPaymentQrPayload } from '@/lib/invoices/bank-payment-qr'
 import {
   BUNDLED_INVOICE_FONT_FAMILIES,
@@ -1732,13 +1736,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 </Text>
               </View>
             )}
-            {company.bankgiro && (company.invoice_show_bankgiro ?? true) && (
+            {invoicePrintsBankgiro(company) && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.bankgiro}</Text>
                 <Text style={styles.paymentValue}>{company.bankgiro}</Text>
               </View>
             )}
-            {company.plusgiro && (company.invoice_show_plusgiro ?? true) && (
+            {invoicePrintsPlusgiro(company) && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.plusgiro}</Text>
                 <Text style={styles.paymentValue}>{company.plusgiro}</Text>

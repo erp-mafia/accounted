@@ -3,7 +3,11 @@ import { formatDate, getCompanyDisplayName } from '@/lib/utils'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { customerGreetingName } from '@/lib/invoices/customer-greeting-name'
-import { invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'
+import {
+  invoicePrintsBankgiro,
+  invoicePrintsPlusgiro,
+  invoiceShowsOcrReference,
+} from '@/lib/invoices/ocr-reference'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from './user-text'
 
@@ -276,10 +280,10 @@ export function invoiceEmailPaymentRows(
   if (company.clearing_number && company.account_number) {
     rows.push({ label: L.account, value: `${company.clearing_number}-${company.account_number}` })
   }
-  if (company.bankgiro && (company.invoice_show_bankgiro ?? true)) {
+  if (company.bankgiro && invoicePrintsBankgiro(company)) {
     rows.push({ label: L.bankgiro, value: company.bankgiro })
   }
-  if (company.plusgiro && (company.invoice_show_plusgiro ?? true)) {
+  if (company.plusgiro && invoicePrintsPlusgiro(company)) {
     rows.push({ label: L.plusgiro, value: company.plusgiro })
   }
   if (company.swish && (company.invoice_show_swish ?? false)) {

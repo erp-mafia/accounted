@@ -745,12 +745,29 @@ describe('payment reference matches the PDF payment box', () => {
     expect(generateInvoiceEmailText({ invoice, customer, company: offCompany })).toContain('Meddelande: 1042')
   })
 
-  it('hides a bankgiro the company chose not to print on the invoice', () => {
+  it('hides a bankgiro the company chose not to print, and with it the OCR (nothing to pay it to)', () => {
     const hidden = makeCompanySettings({ ...company, bankgiro: '123-4567', invoice_show_bankgiro: false })
     const html = generateInvoiceEmailHtml({ invoice, customer, company: hidden })
     expect(html).not.toContain('Bankgiro:')
-    // The PDF still prints the OCR row in this case, so the email does too.
+    // The PDF prints no OCR row without a printed giro, so the email falls
+    // back to the invoice number as a plain message, like the PDF.
+    expect(html).not.toContain('OCR/Referens:')
+    expect(html).toContain('Meddelande:')
+    expect(generateInvoiceEmailText({ invoice, customer, company: hidden })).toContain('Meddelande: 1042')
+  })
+
+  it('keeps the OCR when the bankgiro is hidden but a plusgiro prints', () => {
+    const plusgiro = makeCompanySettings({
+      ...company,
+      bankgiro: '123-4567',
+      invoice_show_bankgiro: false,
+      plusgiro: '12 34 56-7',
+    })
+    const html = generateInvoiceEmailHtml({ invoice, customer, company: plusgiro })
+    expect(html).not.toContain('Bankgiro:')
+    expect(html).toContain('Plusgiro:')
     expect(html).toContain('OCR/Referens:')
+    expect(html).not.toContain('Meddelande:')
   })
 
   it('never shows an OCR reference to an English-language customer', () => {
