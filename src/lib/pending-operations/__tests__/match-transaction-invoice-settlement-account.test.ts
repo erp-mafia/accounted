@@ -651,7 +651,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     // Staging refuses this now too (planTransactionInvoiceMatch, shared), but
     // an op staged before that, or one whose invoice changed since, still hits
     // the same guard here with the same threshold.
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
       data: {
@@ -689,8 +689,19 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
     expect(result.error).toContain('Transaktionsbeloppet är större än fakturans återstående belopp')
+    expect(result.code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
     expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+    // The op row keeps the code and the amounts for the approver and agent.
+    const rejected = findCalls('pending_operations', 'update').at(-1)?.[0] as {
+      status: string
+      result_data: Record<string, unknown>
+    }
+    expect(rejected.status).toBe('rejected')
+    expect(rejected.result_data).toMatchObject({
+      error_code: 'MATCH_AMOUNT_EXCEEDS_REMAINING',
+      details: { currency: 'SEK', transaction_amount: 814, remaining_amount: 812.40, excess: 1.60 },
+    })
   })
 })

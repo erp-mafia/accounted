@@ -3484,7 +3484,16 @@ async function commitMatchTransactionInvoice(
   // transaction untouched and never burns a voucher number.
   const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice)
   if (!matchPlan.ok) {
-    return { error: getErrorEntry(matchPlan.code)?.message_sv ?? matchPlan.code, status: 400 }
+    return {
+      error: getErrorEntry(matchPlan.code)?.message_sv ?? matchPlan.code,
+      errorCode: matchPlan.code,
+      status: 400,
+      // The amounts the stage-time refusal names, so an op staged before that
+      // guard (or whose invoice changed since) is just as actionable here.
+      ...(matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING'
+        ? { data: { currency: matchPlan.currency, ...matchPlan.details } }
+        : {}),
+    }
   }
   const { fx } = matchPlan
   const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = matchPlan.plan
