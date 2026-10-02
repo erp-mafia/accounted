@@ -16,7 +16,8 @@ import type { ConnectorService } from './ledger'
  * per-minute quota.
  */
 
-export type UpstreamService = ConnectorService
+/** Peppol is brokered by the Accounted Connect service, not by a proxy in this repo. */
+export type UpstreamService = Exclude<ConnectorService, 'peppol'>
 
 interface Budget {
   minuteMax: number
@@ -33,14 +34,6 @@ export function budgetFor(service: UpstreamService): Budget {
     return {
       minuteMax: intFromEnv('CONNECT_BANK_RPM_BUDGET', 90), // ~30% of EB's 300/min
       hourMax: intFromEnv('CONNECT_BANK_RPH_BUDGET', 3000), // ~30% of EB's 10 000/h
-    }
-  }
-  if (service === 'peppol') {
-    // Peppol is low-volume (invoices, not polling), so a modest ceiling well
-    // under Qvalia's limits is plenty; tune via env if a busy byrå needs more.
-    return {
-      minuteMax: intFromEnv('CONNECT_PEPPOL_RPM_BUDGET', 60),
-      hourMax: intFromEnv('CONNECT_PEPPOL_RPH_BUDGET', 1000),
     }
   }
   return {

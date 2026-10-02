@@ -15,6 +15,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
+import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
 import {
   FileText,
   ImageIcon,
@@ -24,7 +25,6 @@ import {
   Plus,
   Trash2,
   RefreshCw,
-  Loader2,
   Lock,
   AlertTriangle,
   Inbox,
@@ -266,8 +266,13 @@ export default function JournalEntryAttachments({
 
     setReplacingDocId(docId)
     try {
+      const prepared = await prepareForMultipartUpload(file)
+      if (!prepared.ok) {
+        toast({ title: t('replace_failed'), description: prepared.message, variant: 'destructive' })
+        return
+      }
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', prepared.file)
       const res = await fetch(`/api/documents/${docId}/versions`, {
         method: 'POST',
         body: fd,
@@ -318,7 +323,6 @@ export default function JournalEntryAttachments({
           <Button
             variant="outline"
             size="sm"
-            className="h-7 text-xs"
             onClick={() => setShowInboxPicker(true)}
           >
             <Inbox className="h-3 w-3 mr-1" />
@@ -327,7 +331,6 @@ export default function JournalEntryAttachments({
           <Button
             variant="outline"
             size="sm"
-            className="h-7 text-xs"
             onClick={() => setShowUpload(!showUpload)}
           >
             <Plus className="h-3 w-3 mr-1" />
@@ -397,24 +400,20 @@ export default function JournalEntryAttachments({
                     <>
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 shrink-0 min-h-[44px] min-w-[44px]"
+                        size="icon-sm"
+                        className="shrink-0"
                         onClick={() => handleOpenReplacePicker(doc.id)}
-                        disabled={isReplacing}
+                        loading={isReplacing}
                         title={t('replace')}
                         aria-label={t('replace')}
                       >
-                        {isReplacing ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-3 w-3" />
-                        )}
+                        {!isReplacing && <RefreshCw className="h-3 w-3" />}
                       </Button>
 
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 shrink-0 min-h-[44px] min-w-[44px]"
+                        size="icon-sm"
+                        className="shrink-0"
                         onClick={() => handleRequestRemove(doc)}
                         title={t('remove')}
                         aria-label={t('remove')}
@@ -426,8 +425,8 @@ export default function JournalEntryAttachments({
 
                   <Button
                     variant="ghost"
-                    size="sm"
-                    className="h-6 w-6 p-0 shrink-0 min-h-[44px] min-w-[44px]"
+                    size="icon-sm"
+                    className="shrink-0"
                     onClick={() => handleDownload(doc.id)}
                     title={t('download')}
                     aria-label={t('download')}
@@ -515,13 +514,10 @@ export default function JournalEntryAttachments({
                 onClick={() => {
                   if (blockedDoc) handleDetach(blockedDoc)
                 }}
-                disabled={blockedDoc !== null && detachingDocId === blockedDoc.id}
+                loading={blockedDoc !== null && detachingDocId === blockedDoc.id}
               >
                 {blockedDoc !== null && detachingDocId === blockedDoc.id ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('detaching')}
-                  </>
+                  t('detaching')
                 ) : (
                   t('detach_cta')
                 )}
@@ -531,13 +527,10 @@ export default function JournalEntryAttachments({
               onClick={() => {
                 if (blockedDoc) handleOpenReplacePicker(blockedDoc.id)
               }}
-              disabled={blockedDoc !== null && replacingDocId === blockedDoc.id}
+              loading={blockedDoc !== null && replacingDocId === blockedDoc.id}
             >
               {blockedDoc !== null && replacingDocId === blockedDoc.id ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('replace_uploading')}
-                </>
+                t('replace_uploading')
               ) : (
                 t('remove_blocked_replace_cta')
               )}

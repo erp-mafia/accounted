@@ -23,14 +23,19 @@ vi.mock('@/lib/email/service', () => ({ getEmailService: vi.fn() }))
 // short-circuit it in tests since the queued mock-supabase is shaped for the
 // route's existing fetch chain, not an extra pre-flight read. Mirrors the same
 // mock on the sibling /api/invoices/[id]/send route.
-vi.mock('@/lib/sandbox/guard', () => ({
+// The rules moved into lib/salary/payslips/send.ts, which asks
+// isSandboxCompany / hasCapability; the route maps a refusal to the same
+// sandbox and capability envelopes as before (the real response builders).
+vi.mock('@/lib/sandbox/guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/sandbox/guard')>()),
   guardSandbox: vi.fn().mockResolvedValue(null),
   isSandboxCompany: vi.fn().mockResolvedValue(false),
-  sandboxBlockedResponse: vi.fn(),
 }))
 
-vi.mock('@/lib/entitlements/has-capability', () => ({
+vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/entitlements/has-capability')>()),
   requireCapability: vi.fn().mockResolvedValue(null),
+  hasCapability: vi.fn().mockResolvedValue(true),
 }))
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appUrl: 'https://app.example.test' }),
@@ -81,6 +86,15 @@ const RUN = {
   payment_date: '2026-06-25',
 }
 
+const SWITCHES_SHOWN = { salary_payslip_show_employer_cost: true, salary_payslip_show_breakdown: true }
+const ISSUED_SHOWN = {
+  payslip_sections_issued_at: '2026-06-24T08:00:00.000Z',
+  payslip_show_employer_cost: true,
+  payslip_show_breakdown: true,
+}
+/** The first send of a run: the switches read, then the snapshot written. */
+const ISSUE_SECTIONS = [{ data: SWITCHES_SHOWN }, { data: ISSUED_SHOWN }]
+
 describe('POST /api/salary/runs/[id]/payslips/send', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -110,10 +124,8 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     // The demo ships a booked salary run, which puts "Skicka lönebesked" one
     // click from an anonymous visitor. Without this gate the route reaches the
     // live mail provider and bounces off the production sending domain.
-    const { guardSandbox } = await import('@/lib/sandbox/guard')
-    vi.mocked(guardSandbox).mockResolvedValueOnce(
-      NextResponse.json({ sandbox_blocked: true }, { status: 403 }),
-    )
+    const { isSandboxCompany } = await import('@/lib/sandbox/guard')
+    vi.mocked(isSandboxCompany).mockResolvedValueOnce(true)
     const { supabase } = createQueuedMockSupabase()
     authed(supabase)
     const sendEmail = mockEmail({ success: true, messageId: 'm-1' })
@@ -122,14 +134,13 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
 
     expect(response.status).toBe(403)
+    expect((await response.json()).sandbox_blocked).toBe(true)
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
   it('returns 403 when the company lacks the email_send capability', async () => {
-    const { requireCapability } = await import('@/lib/entitlements/has-capability')
-    vi.mocked(requireCapability).mockResolvedValueOnce(
-      NextResponse.json({ capability_blocked: true }, { status: 403 }),
-    )
+    const { hasCapability } = await import('@/lib/entitlements/has-capability')
+    vi.mocked(hasCapability).mockResolvedValueOnce(false)
     const { supabase } = createQueuedMockSupabase()
     authed(supabase)
     mockEmail({ success: true })
@@ -137,6 +148,7 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
     expect(response.status).toBe(403)
+    expect((await response.json()).capability_blocked).toBe(true)
   })
 
   it('returns 404 when the run does not exist', async () => {
@@ -214,6 +226,7 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
           },
         ],
       },
+      ...ISSUE_SECTIONS,
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' })
@@ -264,6 +277,7 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
           },
         ],
       },
+      ...ISSUE_SECTIONS,
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' })
@@ -294,6 +308,7 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
           },
         ],
       },
+      ...ISSUE_SECTIONS,
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' })
@@ -306,5 +321,112 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     expect(body.data.sent).toBe(0)
     expect(body.data.errors).toHaveLength(1)
     expect(body.data.errors?.[0]).toContain('rate limited')
+  })
+  describe('payslip sections fixed at first send', () => {
+    const EMPLOYEES = {
+      data: [
+        {
+          employee_id: 'emp-1',
+          employee: { first_name: 'Anna', last_name: 'A', email: 'anna@example.test' },
+        },
+      ],
+    }
+
+    it('writes the effective sections onto the run before the first email, once', async () => {
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      authed(supabase)
+      const sendEmail = mockEmail({ success: true, messageId: 'msg-1' })
+      enqueueMany([
+        { data: RUN },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        EMPLOYEES,
+        // Employer cost hidden: the breakdown goes with it.
+        { data: { salary_payslip_show_employer_cost: false, salary_payslip_show_breakdown: true } },
+        {
+          data: {
+            payslip_sections_issued_at: '2026-06-24T08:00:00.000Z',
+            payslip_show_employer_cost: false,
+            payslip_show_breakdown: false,
+          },
+        },
+      ])
+
+      const response = await POST(
+        createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' }),
+        createMockRouteParams({ id: 'run-1' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(sendEmail).toHaveBeenCalledTimes(1)
+      const [row] = findCall('salary_runs', 'update') as [Record<string, unknown>]
+      expect(row).toMatchObject({ payslip_show_employer_cost: false, payslip_show_breakdown: false })
+      expect(typeof row.payslip_sections_issued_at).toBe('string')
+      // Only a run without a snapshot matches: a concurrent first send
+      // cannot overwrite the one that won.
+      expect(findCall('salary_runs', 'is')).toEqual(['payslip_sections_issued_at', null])
+    })
+
+    it('never rewrites the snapshot of a run already sent, whatever the switches say now', async () => {
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      authed(supabase)
+      const sendEmail = mockEmail({ success: true, messageId: 'msg-2' })
+      enqueueMany([
+        { data: { ...RUN, ...ISSUED_SHOWN } },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        EMPLOYEES,
+        { data: { salary_payslip_show_employer_cost: false, salary_payslip_show_breakdown: false } },
+      ])
+
+      const response = await POST(
+        createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' }),
+        createMockRouteParams({ id: 'run-1' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(sendEmail).toHaveBeenCalledTimes(1)
+      expect(findCall('salary_runs', 'update')).toBeUndefined()
+    })
+
+    it('sends nothing when the switches cannot be read', async () => {
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      authed(supabase)
+      const sendEmail = mockEmail({ success: true })
+      enqueueMany([
+        { data: RUN },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        EMPLOYEES,
+        { data: null, error: { message: 'timeout' } },
+      ])
+
+      const response = await POST(
+        createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' }),
+        createMockRouteParams({ id: 'run-1' }),
+      )
+
+      expect(response.status).toBe(500)
+      expect(sendEmail).not.toHaveBeenCalled()
+      expect(rotateLinkForEmployee).not.toHaveBeenCalled()
+      expect(findCall('salary_runs', 'update')).toBeUndefined()
+    })
+
+    it('does not issue the run when no employee has an email address', async () => {
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      authed(supabase)
+      mockEmail({ success: true })
+      enqueueMany([
+        { data: RUN },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        { data: [{ employee_id: 'emp-1', employee: { first_name: 'Anna', last_name: 'A', email: null } }] },
+      ])
+
+      const response = await POST(
+        createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' }),
+        createMockRouteParams({ id: 'run-1' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(findCall('salary_runs', 'update')).toBeUndefined()
+      expect(findCall('company_settings', 'select')).toBeUndefined()
+    })
   })
 })

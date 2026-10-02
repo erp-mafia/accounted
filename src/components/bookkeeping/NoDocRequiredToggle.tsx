@@ -146,7 +146,7 @@ export default function NoDocRequiredToggle({
                 <option value={t('no_doc_required_suggestion_tax_payment')} />
                 <option value={t('no_doc_required_suggestion_salary')} />
               </datalist>
-              <Button size="sm" variant="outline" className="h-8" onClick={handleSaveReason} disabled={saving}>
+              <Button size="sm" variant="outline" onClick={handleSaveReason} disabled={saving}>
                 {t('no_doc_required_save_reason')}
               </Button>
             </div>

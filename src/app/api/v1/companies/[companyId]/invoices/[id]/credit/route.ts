@@ -51,13 +51,13 @@ const CreditNoteRequest = z.object({
 })
 
 const ORIGINAL_INVOICE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions, deduction_reclaimed_total, journal_entry_id, paid_at, paid_amount'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, vat_treatment_override, delivery_country, your_reference, our_reference, invoice_marking, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions, deduction_reclaimed_total, journal_entry_id, paid_at, paid_amount'
 
 // default_dimensions stays in this projection: the inserted credit-note row is
 // handed to createCreditNoteJournalEntry, which reads the bag off the row so
 // the reversing JE nets against the same dimension cells as the original.
 const CREDIT_NOTE_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, vat_treatment_override, delivery_country, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
 
 const ORIGINAL_ITEMS_COLUMNS =
   'sort_order, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, dimensions'
@@ -274,6 +274,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       vat_rate: original.vat_rate,
       moms_ruta: original.moms_ruta,
       reverse_charge_text: original.reverse_charge_text ?? null,
+      // The same supply (#2906): goods delivered abroad reverse on 3105 / 3108.
+      vat_treatment_override: original.vat_treatment_override ?? null,
+      delivery_country: original.delivery_country ?? null,
       your_reference: original.your_reference ?? null,
       our_reference: original.our_reference ?? null,
       // Same buyer routing on the kreditfaktura as the original.

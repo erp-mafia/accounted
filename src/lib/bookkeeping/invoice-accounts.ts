@@ -54,8 +54,19 @@ export class InvoiceFxRateMissingError extends Error {
  *
  * For 'exempt': AB uses 3004 (Försäljning inom Sverige, momsfri),
  * EF uses 3100 (Momsfria intäkter, mapped to R2 in NE engine).
+ *
+ * `goodsDeliveryCountry` is the invoice's delivery_country (#2906): set only
+ * when the invoice stated a goods delivery abroad, and then the zero-rated
+ * treatments book the goods accounts, which is what puts the sale in the
+ * right momsdeklaration box: 3108 (ruta 35, periodisk sammanställning goods)
+ * instead of 3308 (ruta 39), 3105 (ruta 36) instead of 3305 (ruta 40). A
+ * row without it (every invoice before #2906, every service) is unchanged.
  */
-export function getRevenueAccount(vatTreatment: VatTreatment, entityType: EntityType = 'enskild_firma'): string {
+export function getRevenueAccount(
+  vatTreatment: VatTreatment,
+  entityType: EntityType = 'enskild_firma',
+  goodsDeliveryCountry: string | null = null,
+): string {
   switch (vatTreatment) {
     case 'standard_25':
       return '3001' // Försäljning 25%
@@ -64,9 +75,11 @@ export function getRevenueAccount(vatTreatment: VatTreatment, entityType: Entity
     case 'reduced_6':
       return '3003' // Försäljning 6%
     case 'reverse_charge':
-      return '3308' // Försäljning tjänst EU
+      // Varor till annat EU-land, momsfri / Försäljning tjänst EU
+      return goodsDeliveryCountry ? '3108' : '3308'
     case 'export':
-      return '3305' // Försäljning tjänst Export
+      // Försäljning varor till land utanför EU / Försäljning tjänst Export
+      return goodsDeliveryCountry ? '3105' : '3305'
     case 'exempt':
       return byEntityType(entityType, {
         aktiebolag: '3004',

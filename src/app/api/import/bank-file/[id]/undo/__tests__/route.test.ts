@@ -17,7 +17,7 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
-const { supabase, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -32,6 +32,13 @@ vi.mock('@/lib/company/context', () => ({
 const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
+}))
+
+// The owner/admin pre-check of the shared service
+// (lib/import/bank-file/undo-operation.ts); the RPC re-checks at commit.
+const requireCompanyAdminMock = vi.fn()
+vi.mock('@/lib/operations/access', () => ({
+  requireCompanyAdmin: (...args: unknown[]) => requireCompanyAdminMock(...args),
 }))
 
 const undoBankFileImportMock = vi.fn()
@@ -49,6 +56,9 @@ describe('DELETE /api/import/bank-file/[id]/undo', () => {
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
     requireWriteMock.mockResolvedValue({ ok: true })
+    requireCompanyAdminMock.mockResolvedValue(null)
+    // The service reads the import before undoing it (status gate).
+    enqueue({ data: { id: 'import-1', status: 'completed' }, error: null })
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -171,7 +181,7 @@ describe('DELETE /api/import/bank-file/[id]/undo', () => {
       deletedTransactions: 0,
       skippedBooked: 0,
       skippedMatchHistory: 0,
-      error: 'Kan bara ångra slutförda importer (status: processing)',
+      error: 'Kunde inte ångra importen: statement timeout',
     })
 
     const response = await DELETE(
@@ -191,8 +201,34 @@ describe('DELETE /api/import/bank-file/[id]/undo', () => {
     expect(body.error.code).toBe('BANK_FILE_UNDO_FAILED')
     expect(body.error.message).toBe('Bankfilsimporten kunde inte ångras.')
     expect(body.error.message_en).toBe('Failed to undo bank file import.')
-    expect(body.error.details?.reason).toBe(
-      'Kan bara ångra slutförda importer (status: processing)',
+    expect(body.error.details?.reason).toBe('Kunde inte ångra importen: statement timeout')
+  })
+
+  // Behaviour change (wave 3): a non-completed import is refused by the
+  // shared service with its own 409 code before the RPC runs, instead of the
+  // generic BANK_FILE_UNDO_FAILED 400 carrying the RPC's reason.
+  it('refuses an import that is not completed with BANK_FILE_UNDO_NOT_COMPLETED (409)', async () => {
+    reset()
+    enqueue({ data: { id: 'import-1', status: 'processing' }, error: null })
+    const response = await DELETE(
+      createMockRequest('/api/import/bank-file/import-1/undo', { method: 'DELETE' }),
+      routeParams(),
     )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BANK_FILE_UNDO_NOT_COMPLETED')
+    expect(undoBankFileImportMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a member before any write (owner/admin pre-check)', async () => {
+    requireCompanyAdminMock.mockResolvedValue({ ok: false, code: 'FORBIDDEN', messageSv: 'x' })
+    const response = await DELETE(
+      createMockRequest('/api/import/bank-file/import-1/undo', { method: 'DELETE' }),
+      routeParams(),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('BANK_FILE_UNDO_FORBIDDEN')
+    expect(undoBankFileImportMock).not.toHaveBeenCalled()
   })
 })

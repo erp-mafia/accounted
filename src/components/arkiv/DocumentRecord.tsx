@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,6 +15,9 @@ import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import { primaryFields, schemaForType } from '@/lib/documents/extract/schemas'
 import { formatCurrency, formatDateLong } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { DefList, DefRow, Section, SourceLink, inlineHref } from './DefList'
 import { DocumentDecision } from './DocumentDecision'
 import { useFieldLabel } from './useFieldLabel'
@@ -28,6 +32,7 @@ import { useFieldLabel } from './useFieldLabel'
  */
 export function DocumentRecord({ documentId, initialPage = null }: { documentId: string; initialPage?: number | null }) {
   const t = useTranslations('arkiv')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const fieldLabel = useFieldLabel()
   const [view, setView] = useState<DocumentRecordView | null>(null)
@@ -35,9 +40,12 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
   const [showAll, setShowAll] = useState(false)
   const [text, setText] = useState<DocumentTextView | null>(null)
   const [textOpen, setTextOpen] = useState(false)
-  // A person can say the document is something else at any time, not only while Arkiv still has a question about it.
-  const [changingType, setChangingType] = useState(false)
+  // A person can say the document is something else at any time, not only while Arkiv still has a question about it;
+  // a document held at the door gets its one question here too.
+  const [deciding, setDeciding] = useState<'held' | 'type' | null>(null)
   const { toast } = useToast()
+  const router = useRouter()
+  const { dialogProps: deleteDialogProps, confirm: confirmDelete } = useDestructiveConfirm()
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/arkiv/documents/${documentId}`)
@@ -86,20 +94,54 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
     }
   }, [load])
 
+  // Offered only where the server would take it (view.deletable, canDeleteDocument): a document tied to a verifikat
+  // is räkenskapsinformation and stays. The server still has the last word, so a refusal shows its own message.
+  // An agreement read from the document goes with it (agreements.source_document_id cascades), so the confirm says so.
+  const handleDelete = async (fileName: string, agreementTitle: string | null) => {
+    const ok = await confirmDelete(
+      {
+        title: t('record_delete_title', { name: fileName }),
+        description: agreementTitle
+          ? `${t('record_delete_description')} ${t('record_delete_agreement', { title: agreementTitle })}`
+          : t('record_delete_description'),
+        confirmLabel: t('record_delete_confirm'),
+        cancelLabel: tCommon('cancel'),
+      },
+      async () => {
+        const res = await fetch(`/api/documents/${documentId}`, { method: 'DELETE' }).catch(() => null)
+        if (!res?.ok) {
+          const body = res ? await res.json().catch(() => null) : null
+          toast({ title: t('record_delete_failed'), description: body ? getErrorMessage(body, { locale: locale as ErrorLocale }) : undefined, variant: 'destructive' })
+          throw new Error(String(res?.status ?? 'network'))
+        }
+      },
+    )
+    if (!ok) return
+    toast({ title: t('record_deleted') })
+    router.push('/arkiv')
+    router.refresh()
+  }
+
   if (failed) return <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>
   if (!view) return <Skeleton className="h-40 w-full" />
 
   const typeLabel = view.doc_type && (DOC_TYPES as readonly string[]).includes(view.doc_type) ? t(`types.${view.doc_type}` as never) : t('type_unknown')
+  const signals = view.classification?.signals ?? []
+  // What the classifier noticed (a scan without a text layer, several documents in one file) belongs with the other facts about the file.
   const meta = [
     typeLabel,
     view.file_name !== view.title ? view.file_name : null,
     formatDateLong(view.created_at, locale),
     view.page_count ? t('decision_pages', { count: view.page_count }) : null,
+    ...signals.map((s) => t(`signal_${s}` as never)),
   ]
     .filter(Boolean)
     .join(' · ')
-  const signals = view.classification?.signals ?? []
   const multiPage = (view.page_count ?? 0) > 1
+  const hasLinks = !!view.journal_entry || !!view.agreement || view.links.length > 0
+  const MONEY_FIELD = /amount|total|price|fee|rent|salary|balance|principal|premium/
+  const fieldValue = (f: { field: string; value: unknown }) =>
+    typeof f.value === 'number' && MONEY_FIELD.test(f.field) ? formatCurrency(f.value, 'SEK', { minimumFractionDigits: 2 }) : String(f.value)
   const allFields = (view.record?.fields ?? []).filter((f) => f.value != null)
   const primary = primaryFields(schemaForType(view.record?.schema_type))
   const fields = showAll ? allFields : allFields.filter((f) => primary.has(f.field) || f.under_review)
@@ -119,27 +161,37 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
         title={view.title}
         description={meta}
         action={
+          // The viewer below has its own "open in a new tab" link, so the header asks the document's one open question,
+          // with a quiet delete beside it for a document nothing is booked on (crm#230).
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => setChangingType(true)}>
-              {t('record_change_type')}
-            </Button>
-            <Button asChild size="sm">
-              <a href={inlineHref(view.document_id, null)} target="_blank" rel="noreferrer">
-                {t('record_open_document')}
-              </a>
-            </Button>
+            {view.deletable ? (
+              <Button size="sm" variant="ghost" onClick={() => void handleDelete(view.file_name, view.agreement?.title ?? null)}>
+                {t('record_delete')}
+              </Button>
+            ) : null}
+            {view.admission_state === 'held' ? (
+              <Button size="sm" onClick={() => setDeciding('held')}>
+                {t('graph_waiting_held')}
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" onClick={() => setDeciding('type')}>
+                {/* A booked document is not a question: the verifikat already says what it is. */}
+                {(view.doc_type && view.doc_type !== 'other') || view.journal_entry ? t('record_change_type') : t('linked_say_what')}
+              </Button>
+            )}
           </div>
         }
       />
+      <DestructiveConfirmDialog {...deleteDialogProps} />
       <DocumentDecision
         doc={
-          changingType
-            ? { document_id: view.document_id, file_name: view.file_name, created_at: view.created_at, page_count: view.page_count, doc_type: view.doc_type, question: 'type', summary: view.classification?.summary ?? null }
+          deciding
+            ? { document_id: view.document_id, file_name: view.file_name, created_at: view.created_at, page_count: view.page_count, doc_type: view.doc_type, question: deciding, summary: view.classification?.summary ?? null, suggested_type: view.classification?.suggested_type ?? null, mime_type: view.mime_type }
             : null
         }
-        onClose={() => setChangingType(false)}
+        onClose={() => setDeciding(null)}
         onSaved={(message) => {
-          setChangingType(false)
+          setDeciding(null)
           toast({ title: message })
           load()
             .then(setView)
@@ -147,26 +199,23 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
         }}
         onFailed={() => toast({ title: t('action_failed'), variant: 'destructive' })}
       />
-      {(view.classification?.summary || signals.length > 0) && (
+      {view.classification?.summary && (
         <Section title={t('record_classification')}>
-          {view.classification?.summary ? <p className="m-0 text-[13px]">{view.classification.summary}</p> : null}
-          {signals.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {signals.map((s) => (
-                <Badge key={s} variant="outline" title={t(`signal_${s}_help` as never)}>
-                  {t(`signal_${s}` as never)}
-                </Badge>
-              ))}
-            </div>
-          )}
+          {/* Written by a model, so it says so: the document itself, beside it, is the source (founder: raw first). */}
+          <p className="m-0 text-[13px]">{view.classification.summary}</p>
+          <p className="mt-1 text-[12.5px] text-muted-foreground">{t('record_classification_note')}</p>
         </Section>
       )}
 
-      <div className="grid gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
+        {/* The document itself, first: what was read from it sits beside it. */}
+        <div className="lg:sticky lg:top-4 lg:self-start">
+          <DocumentViewerPane documentId={view.document_id} fileName={view.file_name} mime={view.mime_type ?? 'application/octet-stream'} page={initialPage} className="h-[72vh]" />
+        </div>
+        <div className="space-y-8">
+        {view.record && (
         <Section title={t('record_fields')} help={t('record_fields_help')}>
-          {!view.record ? (
-            <p className="text-[13px] text-muted-foreground">{t('record_no_record')}</p>
-          ) : (
+          {(
             <DefList className="text-[13px]">
               {fields.map((f) => {
                 const fact = factOfField.get(f.field)
@@ -176,7 +225,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
                     label={fieldLabel(f.field)}
                     source={multiPage && f.page ? <SourceLink href={inlineHref(view.document_id, f.page)} label={t('source_page_short_only', { page: f.page })} /> : undefined}
                   >
-                    {String(f.value)}
+                    {fieldValue(f)}
                     {f.under_review ? (
                       <Badge variant="warning" className="ml-2">
                         {t('record_under_review')}
@@ -219,15 +268,14 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
                     <td className={`${TD_CLASS} whitespace-normal pl-0`}>{li.description}</td>
                     <td className={`${TD_CLASS} text-right tabular-nums`}>{li.quantity ?? ''}</td>
                     <td className={`${TD_CLASS} text-right tabular-nums`}>{li.vat_rate != null ? `${li.vat_rate} %` : ''}</td>
-                    <td className={`${TD_CLASS} pr-0 text-right tabular-nums`}>{li.line_total != null ? formatCurrency(li.line_total, 'SEK') : ''}</td>
+                    <td className={`${TD_CLASS} pr-0 text-right tabular-nums`}>{li.line_total != null ? formatCurrency(li.line_total, 'SEK', { minimumFractionDigits: 2 }) : ''}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
         </Section>
-
-        <div className="space-y-8">
+        )}
           {loose.length > 0 && (
             <Section title={t('record_facts')} help={t('facts_help')}>
               <DefList className="text-[13px]">
@@ -250,14 +298,20 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
                     {view.read.lane === 'history_tied' ? ` ${t('record_text_lane_tied')}` : ''}
                   </p>
                 ) : null}
-                <button
-                  type="button"
-                  disabled={reading}
-                  className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50"
-                  onClick={() => void loadText()}
-                >
+                <Button size="sm" variant="outline" loading={reading} onClick={() => void loadText()}>
                   {reading ? t('record_text_reading') : view.read.state === 'read' ? t('record_text_show') : t('record_text_read_now')}
-                </button>
+                </Button>
+                {/* A read the model does takes seconds: say what is happening, and show where the text will land. */}
+                {reading && view.read.state !== 'read' ? (
+                  <>
+                    <p className="text-[12.5px] text-muted-foreground">{t('record_text_reading_hint', { count: view.page_count ?? 0 })}</p>
+                    <div className="space-y-2 pt-1">
+                      <Skeleton className="h-4 w-full" />
+                      <Skeleton className="h-4 w-5/6" />
+                      <Skeleton className="h-4 w-2/3" />
+                    </div>
+                  </>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-4">
@@ -283,6 +337,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
               </div>
             )}
           </Section>
+          {hasLinks && (
           <Section title={t('record_links')}>
             <DefList className="text-[13px]">
               {view.journal_entry && (
@@ -313,9 +368,9 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
                     {l.basis !== 'proven' ? <span className="ml-2 text-xs text-muted-foreground">{t('link_guessed')}</span> : null}
                   </DefRow>
                 ))}
-              {!view.journal_entry && !view.agreement && view.links.length === 0 ? <p className="m-0 py-2 text-[13px] text-muted-foreground">{t('record_no_links')}</p> : null}
             </DefList>
           </Section>
+          )}
         </div>
       </div>
     </div>

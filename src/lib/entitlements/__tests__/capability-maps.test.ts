@@ -34,9 +34,11 @@ const DISPATCH_ONLY_MCP_TOOLS = new Set<string>([
 ])
 
 describe('MCP_TOOL_CAPABILITY_MAP', () => {
-  it('gates exactly the paid MCP tools (3 external-service staging tools + the AI OCR tools)', () => {
+  it('gates exactly the paid MCP tools (the external-service staging tools + the AI OCR tools)', () => {
     expect(MCP_TOOL_CAPABILITY_MAP).toEqual({
       gnubok_send_invoice: CAPABILITY.email_send,
+      // salary-runs.send-payslips emails employees: the same paid chokepoint.
+      gnubok_send_payslips: CAPABILITY.email_send,
       gnubok_vat_declaration_submit: CAPABILITY.skatteverket,
       gnubok_agi_submit: CAPABILITY.skatteverket,
       gnubok_connect_bank: CAPABILITY.bank_sync,
@@ -59,9 +61,10 @@ describe('MCP_TOOL_CAPABILITY_MAP', () => {
 })
 
 describe('PAID_OPERATION_CAPABILITY_MAP', () => {
-  it('gates exactly the three paid pending-operation types', () => {
+  it('gates exactly the paid pending-operation types', () => {
     expect(PAID_OPERATION_CAPABILITY_MAP).toEqual({
       send_invoice: CAPABILITY.email_send,
+      send_payslips: CAPABILITY.email_send,
       submit_vat_declaration: CAPABILITY.skatteverket,
       submit_agi: CAPABILITY.skatteverket,
     })

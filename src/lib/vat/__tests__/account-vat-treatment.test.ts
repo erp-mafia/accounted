@@ -4,6 +4,7 @@ import {
   isVatTreatmentAllowedForAccountClass,
   resolveVatTreatmentRuta,
   suggestVatTreatment,
+  vatRateFromLabel,
   vatTreatmentsForAccountClass,
 } from '../account-vat-treatment'
 
@@ -253,5 +254,98 @@ describe('suggestVatTreatment', () => {
       treatment: 'vmb', rate: null,
     })
     expect(defaultRateForVatTreatment('vmb', 3)).toBeNull()
+  })
+})
+
+describe('a label that names a Swedish sats', () => {
+  it('reads a fee account with a rate as a domestic sale at that rate', () => {
+    // Company-numbered 35xx accounts: in no static ruta map, so without a
+    // suggestion the basis reached no ruta while the moms still did.
+    expect(suggestVatTreatment('3543', 'Faktureringavgift 12%')).toEqual({
+      treatment: 'reduced_12', rate: 0.12,
+    })
+    expect(suggestVatTreatment('3544', 'Faktureringavgift 6%')).toEqual({
+      treatment: 'reduced_6', rate: 0.06,
+    })
+    expect(suggestVatTreatment('3545', 'Fakturerade frakter 25 %')).toEqual({
+      treatment: 'standard_25', rate: 0.25,
+    })
+  })
+
+  it('keeps reading a sales label with a spaced rate', () => {
+    expect(suggestVatTreatment('3002', 'Försäljning 12 %')).toEqual({
+      treatment: 'reduced_12', rate: 0.12,
+    })
+  })
+
+  it('accepts procent and a trailing moms', () => {
+    expect(suggestVatTreatment('3590', 'Övriga intäkter 25 procent moms')).toEqual({
+      treatment: 'standard_25', rate: 0.25,
+    })
+    expect(suggestVatTreatment('3591', 'Serviceavgift 6% moms')).toEqual({
+      treatment: 'reduced_6', rate: 0.06,
+    })
+  })
+
+  it('lets the exempt, export and reverse-charge rules win over the percentage', () => {
+    expect(suggestVatTreatment('3004', 'Momsfri försäljning 25%')).toEqual({
+      treatment: 'exempt', rate: 0,
+    })
+    expect(suggestVatTreatment('3305', 'Försäljning tjänster export 25%')).toEqual({
+      treatment: 'export_services', rate: 0,
+    })
+    expect(suggestVatTreatment('3231', 'Försäljning omvänd moms 25%')).toEqual({
+      treatment: 'reverse_charge_domestic', rate: 0,
+    })
+  })
+
+  it('leaves a rate label with an unresolved non-domestic marker for review', () => {
+    expect(suggestVatTreatment('3541', 'Faktureringsavgift EU 25%')).toBeNull()
+    expect(suggestVatTreatment('3542', 'Faktureringsavgift export 25%')).toBeNull()
+    expect(suggestVatTreatment('3549', 'Faktureringsavgift 0% / 25%')).toBeNull()
+  })
+
+  it('leaves a rate label with an exempt wording other than momsfri for review', () => {
+    expect(suggestVatTreatment('3009', 'Försäljning undantagen moms 25%')).toBeNull()
+    expect(suggestVatTreatment('3990', 'Övr intäkter ej momspliktiga 25%')).toBeNull()
+    expect(suggestVatTreatment('3991', 'Intäkter ej moms 12%')).toBeNull()
+    expect(suggestVatTreatment('3992', 'Momsbefriad försäljning 6%')).toBeNull()
+  })
+
+  it('does not suggest ruta 05 for premises rental with a rate but no frivillig marker', () => {
+    // Premises rental carries moms only under frivillig skattskyldighet,
+    // which is ruta 08; the frivillig rule handles labels that say so.
+    expect(suggestVatTreatment('3911', 'Hyra lokal 25%')).toBeNull()
+    expect(suggestVatTreatment('3912', 'Uthyrning lokaler 25%')).toBeNull()
+    expect(suggestVatTreatment('3913', 'Frivillig uthyrning lokal 25%')).toEqual({
+      treatment: 'rental_voluntary', rate: 0.25,
+    })
+    // Renting out equipment is an ordinary taxable supply.
+    expect(suggestVatTreatment('3914', 'Uthyrning maskiner 25%')).toEqual({
+      treatment: 'standard_25', rate: 0.25,
+    })
+  })
+
+  it('does not guess a purchase treatment from a rate alone', () => {
+    // The treatment model has no domestic purchase treatment: a domestic
+    // purchase has no base ruta, and its moms reaches ruta 48 via 2641.
+    expect(suggestVatTreatment('4010', 'Inköp varor 12%')).toBeNull()
+    expect(suggestVatTreatment('5460', 'Förbrukningsmaterial 25 %')).toBeNull()
+  })
+})
+
+describe('vatRateFromLabel', () => {
+  it('reads one sats in any common spelling', () => {
+    expect(vatRateFromLabel('Faktureringavgift 12%')).toBe(0.12)
+    expect(vatRateFromLabel('Försäljning 6 % moms')).toBe(0.06)
+    expect(vatRateFromLabel('Intäkter 25 Procent')).toBe(0.25)
+  })
+
+  it('names no sats for a decimal, two rates, or none', () => {
+    expect(vatRateFromLabel('Ränta 0,6 %')).toBeNull()
+    expect(vatRateFromLabel('Provision 1.25%')).toBeNull()
+    expect(vatRateFromLabel('Livsmedel 12% och övrigt 25%')).toBeNull()
+    expect(vatRateFromLabel('Faktureringsavgifter')).toBeNull()
+    expect(vatRateFromLabel('Försäljning 16%')).toBeNull()
   })
 })

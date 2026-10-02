@@ -389,7 +389,7 @@ describe('POST :id/categorize', () => {
           { data: [{ id: TX_ID }], error: null }, // CAS update select
         ],
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        cash_accounts: { data: { ledger_account: '1940' }, error: null },
+        cash_accounts: { data: { ledger_account: '1940', currency: 'SEK' }, error: null },
       }),
     )
 

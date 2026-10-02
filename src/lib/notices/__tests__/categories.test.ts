@@ -244,7 +244,7 @@ describe('detectSkvDisconnected', () => {
       id: 'skv_disconnected:needs_reconsent@2026-08-18T03:00:00Z',
       category: 'skv_disconnected',
       severity: 'error',
-      actionHref: '/settings/tax',
+      actionHref: '/settings/skatteverket',
     })
     expect(findCall('skatteverket_tokens', 'eq')).toEqual(['user_id', USER])
   })

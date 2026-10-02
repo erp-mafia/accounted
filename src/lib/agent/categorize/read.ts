@@ -52,6 +52,7 @@ export async function readTransaction(
     opts.underlag ?? (await gatherUnderlag(supabase, companyId, tx.id, opts.documentId ?? tx.document_id))
   const candidates = await gatherCandidates(supabase, companyId, tx)
   const selection = await selectAccount({
+    companyId,
     transaction: {
       merchantName: tx.merchant_name,
       description: tx.description,

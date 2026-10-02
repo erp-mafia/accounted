@@ -13,7 +13,7 @@ The first slice implemented the invoice profile. The second slice added an immut
 
 `POST /api/invoices/{id}/peppol` now stores the exact generated XML as an immutable staged delivery. Staging assigns a stable UUID idempotency key, stores the recipient, profile identifiers, filename, SHA-256, retention date, and an append-only local audit event. It explicitly returns `network_submitted: false`. Repeating the request for the same invoice and XML returns the existing staged record.
 
-`GET /api/invoices/{id}/peppol/deliveries` returns a minimized status timeline projection without exposing XML, raw webhooks, or provider evidence. The invoice page can prepare a delivery; since 2026-08-21 its send control performs the network send through `POST /api/invoices/{id}/peppol/send` for companies holding a Peppol access grant (aktiebolag senders, standard invoices only; see "Access point: Qvalia" below).
+`GET /api/invoices/{id}/peppol/deliveries` returns a minimized status timeline projection without exposing XML, raw webhooks, or provider evidence. The invoice page can prepare a delivery; since 2026-08-21 its send control performs the network send through `POST /api/invoices/{id}/peppol/send` for companies holding a Peppol access grant (senders with an organisationsnummer, which is every legal form except enskild firma; standard invoices only; see "Access point: Qvalia" below).
 
 The provider-neutral `PeppolTransport` boundary separates:
 
@@ -27,9 +27,9 @@ Core registers an adapter only when provider credentials are present in the envi
 The export supports:
 
 - numbered standard sales invoices, not credit notes, self-billing, proformas, or delivery notes;
-- Swedish limited-company sellers and organization-number buyers identified with scheme `0007`;
+- Swedish sellers and buyers with an organization number (every legal form whose org number is not a personnummer), identified with scheme `0007`;
 - SEK invoices with Swedish standard VAT categories at 6, 12, or 25 percent;
-- Bankgiro or Plusgiro credit transfers using payment means code `30` and an OCR reference;
+- credit transfers using payment means code `30` and an OCR reference, paid to the first valid of Bankgiro, Plusgiro, or IBAN (with the BIC as `FinancialInstitutionBranch` when one is on file);
 - mixed supported VAT rates, text-line omission, and UNECE unit mappings for Accounted's invoice units;
 - Accounted's SEK rounding as `PayableRoundingAmount`;
 - buyer reference, address, VAT, F-tax, payment, totals, and line reconciliation checks;
@@ -37,7 +37,7 @@ The export supports:
 
 Unsupported input is rejected with structured, field-addressable errors. The generator never emits partial XML after a failed preflight.
 
-Sole-trader sellers and personnummer-derived `0007` identifiers are rejected. They require a separately configured `0088` GLN so the export does not publish personal identity data as a Peppol participant identifier.
+Sellers whose legal form uses the owner's personnummer as org number (enskild firma) and personnummer-derived `0007` identifiers are rejected. They require a separately configured `0088` GLN so the export does not publish personal identity data as a Peppol participant identifier.
 
 The local preflight is not a replacement for the official validation stack. Before network delivery, every document must pass the UBL XSD, EN 16931 Schematron rules, and the Peppol BIS Billing rules for the active release. The selected access-point provider must perform that validation as part of submission. Accounted should also run the same release-pinned artifacts before calling the provider so failures can be explained before transport.
 
@@ -88,7 +88,7 @@ The contract with Qvalia (certified Swedish Access Point + SMP, partner model) w
 
 - recipient lookup: `GET /partner/{partnerRegNo}/peppol/lookup/{scheme:id}?docTypeRoot=Invoice`;
 - submission: `POST /partner/{partnerRegNo}/transaction/{accountRegNo}/invoices/outgoing` with the staged UBL XML (`content-type: application/xml`); the returned `integrationId` is the provider submission id; a `409` (same document id and receiver) is recovered to the existing `integrationId` only when Qvalia's stored copy carries the same seller endpoint, otherwise it stays a duplicate error;
-- webhooks: `POST /api/webhooks/peppol/qvalia`, authenticated by the shared secret Accounted configures as Qvalia's outbound auth header (Qvalia did not sign webhooks when the adapter was built; see the September update below); the same event can arrive more than once and is deduplicated on `eventType + globalTransactionId + status.status`; `status.status` is declared free text, so the mapping is tolerant and unknown wording never advances beyond `submission_accepted`;
+- webhooks: `POST /api/webhooks/peppol/qvalia`, authenticated by Qvalia's HMAC-SHA256 signature (`X-Qvalia-Signature` over `<t>.<raw body>`, timing-safe, 5-minute window on `t`) once `QVALIA_WEBHOOK_SIGNING_SECRET` is set; until then by the shared secret Accounted configures as Qvalia's outbound auth header, with a warning logged per request (Qvalia did not sign webhooks when the adapter was built; see the September update below); the same event can arrive more than once and is deduplicated on `eventType + globalTransactionId + status.status`, the key the status poll also writes; `status.status` is declared free text, so the mapping is tolerant and unknown wording never advances beyond `submission_accepted`;
 - evidence: the message-log status and Qvalia's stored XML copy, recorded as `qvalia_message_record`.
 
 #### Qvalia API update (docs re-read 2026-09-21)
@@ -106,7 +106,9 @@ Qvalia reworked the parts of its API that the notes above, and the pre-contract 
 
 One limit is explicit in the same docs and shapes our design: a failed webhook delivery (non-2xx, 10 s timeout, unreachable endpoint) is not retried, and a missed event is lost. The status poll below therefore stays as the safety net even after webhooks are switched on.
 
-Adapter follow-ups (not built): verify `X-Qvalia-Signature` instead of the shared-secret header, dedupe on `eventId`, send `Idempotency-Key` on submit, handle `document_delayed`, and treat the documented terminal `error` status as final.
+Built 2026-09-29 (#3191): `X-Qvalia-Signature` verification, required whenever `QVALIA_WEBHOOK_SIGNING_SECRET` is set (the shared-secret header is then ignored). Dedupe deliberately stays on `eventType + globalTransactionId + status.status` rather than `eventId`: the status poll writes the same key, so a webhook and a poll for one transition remain one event.
+
+Adapter follow-ups (not built): send `Idempotency-Key` on submit, handle `document_delayed`, and treat the documented terminal `error` status as final.
 
 Configuration is environment-only (`PEPPOL_TRANSPORT_PROVIDER=qvalia` plus `QVALIA_API_KEY`, `QVALIA_PARTNER_REG_NO`, `QVALIA_BASE_URL`, `QVALIA_WEBHOOK_SECRET`, optional `QVALIA_ACCOUNT_REG_NO`, `QVALIA_WEBHOOK_HEADER`, `QVALIA_AUTH_SCHEME`; see `.env.example`). `src/lib/init.ts` registers the adapter when the credentials are present; the product only sends when the provider is also selected. `scripts/peppol/qvalia-probe.ts` is the first-contact probe against the sandbox (auth scheme, child accounts, registered Peppol IDs, lookup, send).
 

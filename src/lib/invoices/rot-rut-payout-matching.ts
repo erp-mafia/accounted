@@ -21,6 +21,7 @@
  * import the target-state helper too.
  */
 
+import type { DeductionType } from '@/types'
 import { roundOre } from '@/lib/money'
 
 /**
@@ -44,7 +45,7 @@ export const OPEN_ROT_RUT_PAYOUT_STATUSES = [
 export interface RotRutPayoutRequestCandidate {
   id: string
   name: string
-  deduction_type: 'rot' | 'rut'
+  deduction_type: DeductionType
   status: string
   requested_total: number | string
   decided_total: number | string | null

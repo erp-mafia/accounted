@@ -6,6 +6,7 @@ Tax-free domestic traktamente requires a tjänsteresa with overnight stay, desti
 
 | Period | Hel dag | Halv dag | Nattraktamente |
 |---|---|---|---|
+| 2023 | 260 SEK | 130 SEK | 130 SEK |
 | 2024-2025 | 290 SEK | 145 SEK | 145 SEK |
 | 2026 | 300 SEK | 150 SEK | 150 SEK |
 
@@ -17,20 +18,29 @@ Departure before 12:00 or return after 19:00 = hel dag. Otherwise halv dag. Inte
 
 After 3 consecutive months at the same location: rate drops to 70% of maximibelopp. After 2 years: drops to 50%. A break of ≥4 weeks resets the counter.
 
-### Meal reductions (2025, traktamente = 290 SEK)
+### Meal reductions
 
-| Meals provided | Reduction | Remaining |
-|---|---|---|
-| Frukost only | 58 SEK (20%) | 232 SEK |
-| Lunch or middag | 102 SEK (35.2%) | 188 SEK |
-| Lunch and middag | 203 SEK (70%) | 87 SEK |
-| All three meals | 261 SEK (90%) | 29 SEK |
+Percentage rules are stable across years; only the kronor amounts shift with the maximibelopp.
+
+| Meals provided | % reduction | 2025 reduction (290) | 2026 reduction (300) |
+|---|---|---|---|
+| Frukost only | 20% | 58 SEK | 60 SEK |
+| Lunch or middag | 35% | 102 SEK | 105 SEK |
+| Lunch and middag | 70% | 203 SEK | 210 SEK |
+| All three meals | 90% | 261 SEK | 270 SEK |
 
 When meals are provided and traktamente reduced, a kostförmån for the free meal is also triggered (both apply simultaneously). Meals included in transport tickets do not trigger a reduction.
 
 ### International traktamente
 
-Uses country-specific normalbelopp published annually by Skatteverket. Same 3-month, 2-year, and meal reduction percentage rules apply.
+Uses country-specific normalbelopp published annually by Skatteverket. Same 3-month and 2-year rules apply. Meal reductions differ from domestic trips and are a percentage of the normalbelopp:
+
+| Meals provided | % reduction abroad (domestic) |
+|---|---|
+| Frukost only | 15% (20%) |
+| Lunch or middag | 35% (35%) |
+| Lunch and middag | 70% (70%) |
+| All three meals | 85% (90%) |
 
 ## Utlägg vs kostnadsersättning
 
@@ -48,8 +58,10 @@ For purchases >4,000 SEK including moms, the employer's name must appear on the 
 
 Unchanged 2024-2026:
 - Own car: 25 SEK/mil (2.50 SEK/km)
-- Förmånsbil (petrol/diesel): 12 SEK/mil
-- Förmånsbil (electric/hybrid): 9.50 SEK/mil
+- Förmånsbil not fully electric (petrol, diesel, plug-in hybrid etc.): 12 SEK/mil
+- Förmånsbil fully electric: 9.50 SEK/mil
+
+Förmånsbil amounts apply only when the employee pays all fuel for the trips (IL 12:5). From 2026-07-01, an employee with a plug-in hybrid förmånsbil keeps the 12 SEK/mil fuel deduction even when charging with electricity the employer provides at the workplace (IL 12:5 third paragraph, SFS 2026:464).
 
 Amounts exceeding schabloner are taxed as salary with full arbetsgivaravgifter. All reimbursements require a körjournal with dates, mileage readings, destinations, and business purpose. Retention: 7 years per bokföringslagen.
 

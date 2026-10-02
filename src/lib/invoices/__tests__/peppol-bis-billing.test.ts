@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
+import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { roundOre, sumOre } from '@/lib/money'
-import type { InvoiceItem } from '@/types'
+import type { EntityType, InvoiceItem } from '@/types'
 import {
   generatePeppolBisBillingInvoice,
   PEPPOL_BIS_BILLING_CUSTOMIZATION_ID,
@@ -515,5 +516,167 @@ describe('generatePeppolBisBillingInvoice', () => {
       if (result.ok) continue
       expect(result.issues.map(({ code }) => code)).toContain('DOCUMENT_TYPE_UNSUPPORTED')
     }
+  })
+
+  // Founder decision 2026-09-29: with no valid bankgiro or plusgiro the
+  // invoice is paid to the IBAN (with the BIC when there is one).
+  describe('payee precedence: bankgiro, then plusgiro, then IBAN', () => {
+    const IBAN = 'SE4550000000058398257466'
+
+    function paymentMeans(xml: string): string {
+      const end = '</cac:PaymentMeans>'
+      return xml.slice(xml.indexOf('<cac:PaymentMeans>'), xml.indexOf(end) + end.length)
+    }
+
+    it('pays to the IBAN, with the BIC as BT-86, when the company has no bankgiro or plusgiro', () => {
+      const input = makeValidInput()
+      input.company = makeCompanySettings({
+        ...input.company,
+        bankgiro: null,
+        iban: 'se45 5000 0000 0583 9825 7466',
+        bic: 'ESSESESS',
+      })
+
+      const result = generatePeppolBisBillingInvoice(input)
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(paymentMeans(result.xml)).toBe([
+        '<cac:PaymentMeans>',
+        '    <cbc:PaymentMeansCode>30</cbc:PaymentMeansCode>',
+        `    <cbc:PaymentID>${generateOcrReference('F-2026-42')}</cbc:PaymentID>`,
+        '    <cac:PayeeFinancialAccount>',
+        `      <cbc:ID>${IBAN}</cbc:ID>`,
+        '      <cac:FinancialInstitutionBranch>',
+        '        <cbc:ID>ESSESESS</cbc:ID>',
+        '      </cac:FinancialInstitutionBranch>',
+        '    </cac:PayeeFinancialAccount>',
+        '  </cac:PaymentMeans>',
+      ].join('\n'))
+    })
+
+    it('leaves out FinancialInstitutionBranch for an IBAN without a valid BIC', () => {
+      for (const bic of [null, 'ESSE']) {
+        const input = makeValidInput()
+        input.company = makeCompanySettings({ ...input.company, bankgiro: null, iban: IBAN, bic })
+
+        const result = generatePeppolBisBillingInvoice(input)
+
+        expect(result.ok).toBe(true)
+        if (!result.ok) continue
+        expect(paymentMeans(result.xml)).toContain(`<cbc:ID>${IBAN}</cbc:ID>`)
+        expect(paymentMeans(result.xml)).toContain('<cbc:PaymentMeansCode>30</cbc:PaymentMeansCode>')
+        expect(paymentMeans(result.xml)).not.toContain('FinancialInstitutionBranch')
+      }
+    })
+
+    it('prefers the bankgiro over an IBAN', () => {
+      const input = makeValidInput()
+      input.company = makeCompanySettings({ ...input.company, iban: IBAN, bic: 'ESSESESS' })
+
+      const result = generatePeppolBisBillingInvoice(input)
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(paymentMeans(result.xml)).toContain('<cbc:ID>9912346</cbc:ID>')
+      expect(paymentMeans(result.xml)).toContain('<cbc:ID>SE:BANKGIRO</cbc:ID>')
+      expect(result.xml).not.toContain(IBAN)
+      expect(result.xml).not.toContain('ESSESESS')
+    })
+
+    it('prefers the plusgiro over an IBAN', () => {
+      const input = makeValidInput()
+      input.company = makeCompanySettings({
+        ...input.company,
+        bankgiro: null,
+        plusgiro: '4567-4',
+        iban: IBAN,
+        bic: 'ESSESESS',
+      })
+
+      const result = generatePeppolBisBillingInvoice(input)
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(paymentMeans(result.xml)).toContain('<cbc:ID>45674</cbc:ID>')
+      expect(paymentMeans(result.xml)).toContain('<cbc:ID>SE:PLUSGIRO</cbc:ID>')
+      expect(result.xml).not.toContain(IBAN)
+    })
+
+    it('falls through a bankgiro that fails its check digit to the IBAN', () => {
+      const input = makeValidInput()
+      input.company = makeCompanySettings({ ...input.company, bankgiro: '991-2345', iban: IBAN, bic: null })
+
+      const result = generatePeppolBisBillingInvoice(input)
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(paymentMeans(result.xml)).toContain(`<cbc:ID>${IBAN}</cbc:ID>`)
+      expect(result.xml).not.toContain('SE:BANKGIRO')
+    })
+
+    it('refuses an IBAN that fails its checksum when there is no giro to fall back on', () => {
+      const input = makeValidInput()
+      input.company = makeCompanySettings({
+        ...input.company,
+        bankgiro: null,
+        iban: 'SE4550000000058398257467',
+        bic: 'ESSESESS',
+      })
+
+      const result = generatePeppolBisBillingInvoice(input)
+
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      const issue = result.issues.find(({ code }) => code === 'PAYMENT_ACCOUNT_REQUIRED')
+      expect(issue?.messageSv).toBe('Ett giltigt Bankgiro, Plusgiro eller IBAN krävs för svensk Peppol-export.')
+      expect(issue?.messageEn).toBe('A valid Bankgiro, Plusgiro or IBAN is required for Swedish Peppol export.')
+    })
+  })
+
+  // Founder decision 2026-09-29: every legal form with an organisationsnummer
+  // sends; only a form whose org number is the owner's personnummer waits for
+  // a GLN. The gate reads that capability, never a list of forms.
+  describe('sender legal form', () => {
+    it.each<[string, string, string]>([
+      ['ideell_forening', '802002-1237', 'SE802002123701'],
+      // Not in EntityType yet (PLANNED_LEGAL_FORMS, #2652): a form the
+      // registry does not know is not refused by name either.
+      ['ekonomisk_forening', '769600-1234', 'SE769600123401'],
+    ])('lets a %s send under its organisationsnummer', (form, orgNumber, vatNumber) => {
+      const input = makeValidInput()
+      input.company = makeCompanySettings({
+        ...input.company,
+        entity_type: form as EntityType,
+        org_number: orgNumber,
+        vat_number: vatNumber,
+      })
+
+      const result = generatePeppolBisBillingInvoice(input)
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.sender).toEqual({ scheme: '0007', identifier: orgNumber.replace('-', '') })
+    })
+
+    it('refuses an enskild firma with the GLN explanation', () => {
+      const input = makeValidInput()
+      input.company = makeCompanySettings({
+        ...input.company,
+        entity_type: 'enskild_firma',
+        org_number: '800101-1231',
+      })
+
+      const result = generatePeppolBisBillingInvoice(input)
+
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      const issue = result.issues.find(({ code }) => code === 'SUPPLIER_ENTITY_TYPE_UNSUPPORTED')
+      expect(issue?.messageSv).toBe(
+        'Enskild firma har ägarens personnummer som organisationsnummer och behöver därför ett separat GLN som Peppol-identifierare. GLN kan inte konfigureras ännu.',
+      )
+      expect(issue?.messageEn).toMatch(/personal identity number as its organisation number, so it needs a separate GLN/)
+      expect(`${issue?.messageSv} ${issue?.messageEn}`).not.toMatch(/aktiebolag|limited compan/i)
+    })
   })
 })

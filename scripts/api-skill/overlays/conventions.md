@@ -61,6 +61,13 @@ endpoint). If an expansion fails the response still succeeds and names the
 failed parts in `meta.partial_expansions`; check it before trusting expanded
 fields.
 
+**Report query parameters.** A report read never answers an unfiltered report
+to a dimension filter it cannot apply: `dim_no`, `dim_code`, `dimensions`,
+`project` or `cost_center` on a report that does not document them is
+`400 VALIDATION_ERROR`. Any other query parameter a report does not document
+is not applied, and the response names it in the `X-Ignored-Query-Params`
+header: check that header when a filter seems to have had no effect.
+
 **Async operations.** Long-running actions (fiscal-period lock/close/year-end,
 imports) return `202` with an operation id; poll `GET /api/v1/operations/{id}`
 until `status` is `succeeded`/`failed`. The response shape is identical

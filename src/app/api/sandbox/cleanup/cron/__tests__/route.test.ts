@@ -1,10 +1,12 @@
 /**
  * Tests for the sandbox cleanup cron route: the run loops small RPC batches
  * (each PostgREST statement gets its own 8s window; a function-level
- * statement_timeout cannot lift it), stops when a batch makes no progress,
- * aggregates totals across batches, accepts the legacy bare-integer return
- * shape, and logs failures at error level: the failure mode this route
- * chain fixes was months of silently swallowed cleanup errors.
+ * statement_timeout cannot lift it), skips past failed users with the offset
+ * the RPC reports (20260927220000; before it, ten failing users at the head
+ * of the queue stopped every run after one batch), stops when the backlog is
+ * empty, aggregates totals across batches, accepts the older return shapes,
+ * and logs failures at error level: the failure mode this route chain fixes
+ * was months of silently swallowed cleanup errors.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -88,7 +90,67 @@ describe('GET /api/sandbox/cleanup/cron', () => {
     expect(h.logError).not.toHaveBeenCalled()
   })
 
-  it('stops when a batch yields only failures, and logs at error level', async () => {
+  it('skips past failed users with the reported offset instead of stopping', async () => {
+    h.rpc
+      .mockResolvedValueOnce({
+        data: { cleaned: 0, failed: 10, orphans_removed: 0, attempted: 10, next_offset: 10 },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: { cleaned: 9, failed: 1, orphans_removed: 0, attempted: 10, next_offset: 11 },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: { cleaned: 0, failed: 0, orphans_removed: 0, attempted: 0, next_offset: 11 },
+        error: null,
+      })
+
+    const res = await GET(cronRequest())
+    const body = await res.json()
+
+    expect(h.rpc).toHaveBeenCalledTimes(3)
+    // The first call never names p_offset, so a deploy that lands before the
+    // migration still resolves to the two-argument function.
+    expect(h.rpc).toHaveBeenNthCalledWith(1, 'cleanup_expired_sandbox_users', {
+      p_max_age_hours: 24,
+      p_limit: 10,
+    })
+    expect(h.rpc).toHaveBeenNthCalledWith(2, 'cleanup_expired_sandbox_users', {
+      p_max_age_hours: 24,
+      p_limit: 10,
+      p_offset: 10,
+    })
+    expect(h.rpc).toHaveBeenNthCalledWith(3, 'cleanup_expired_sandbox_users', {
+      p_max_age_hours: 24,
+      p_limit: 10,
+      p_offset: 11,
+    })
+    expect(body).toEqual({ success: true, cleaned: 9, failed: 11, orphans_removed: 0, batches: 3 })
+    expect(h.logError).toHaveBeenCalledWith(
+      'sandbox cleanup completed with failures',
+      expect.objectContaining({ failed: 11 }),
+    )
+  })
+
+  it('keeps going while only orphans are removed, and stops once nothing is attempted', async () => {
+    h.rpc
+      .mockResolvedValueOnce({
+        data: { cleaned: 0, failed: 0, orphans_removed: 3, attempted: 0, next_offset: 0 },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: { cleaned: 0, failed: 0, orphans_removed: 0, attempted: 0, next_offset: 0 },
+        error: null,
+      })
+
+    const res = await GET(cronRequest())
+    const body = await res.json()
+
+    expect(h.rpc).toHaveBeenCalledTimes(2)
+    expect(body.orphans_removed).toBe(3)
+  })
+
+  it('with the older summary shape, stops when a batch yields only failures and logs at error level', async () => {
     h.rpc.mockResolvedValueOnce(batch(0, 4, 0))
 
     const res = await GET(cronRequest())

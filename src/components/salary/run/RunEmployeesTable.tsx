@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { FileDown, Loader2, Receipt, Trash2 } from 'lucide-react'
+import { FileDown, Receipt, Trash2 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
@@ -254,20 +254,16 @@ export function RunEmployeesTable({
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-8 px-3 text-xs text-muted-foreground hover:text-foreground"
+                            className="text-muted-foreground hover:text-foreground"
                             onClick={e => {
                               e.stopPropagation()
                               onAddExpenseClaims(sre.employee_id, name)
                             }}
-                            disabled={addingClaims}
+                            loading={addingClaims}
                             title={t('add_expense_claims_title')}
                             aria-label={t('add_expense_claims_aria', { name })}
                           >
-                            {addingClaims ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <Receipt className="mr-2 h-4 w-4" />
-                            )}
+                            {!addingClaims && <Receipt className="mr-2 h-4 w-4" />}
                             <span className="tabular-nums">
                               {t('add_expense_claims', {
                                 count: openClaims.count,
@@ -291,21 +287,17 @@ export function RunEmployeesTable({
                         {canRemoveEmployee && (
                           <Button
                             variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            size="icon-sm"
+                            className="text-muted-foreground hover:text-destructive"
                             onClick={e => {
                               e.stopPropagation()
                               onRemoveEmployee(sre.employee_id, name)
                             }}
-                            disabled={removing}
+                            loading={removing}
                             aria-label={t('remove_employee_aria', { name })}
                             title={t('remove_employee_title')}
                           >
-                            {removing ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
-                            )}
+                            {!removing && <Trash2 className="h-4 w-4" />}
                           </Button>
                         )}
                       </span>

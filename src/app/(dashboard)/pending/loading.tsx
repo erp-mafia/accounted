@@ -13,21 +13,19 @@ export default function PendingLoading() {
         <Skeleton className="h-9 w-28 rounded-full" />
       </div>
 
-      {/* Per-operation cards with approve/reject actions */}
-      <div className="space-y-3">
+      {/* Hairline operation rows (kicker, title, approve/reject pills),
+          the shape the list renders: no boxed cards. */}
+      <div>
         {[1, 2, 3, 4].map((i) => (
-          <div
-            key={i}
-            className="flex items-center gap-4 rounded-lg border border-border p-4"
-          >
+          <div key={i} className="flex items-start gap-3 border-b border-border px-1 py-4">
             <Skeleton className="h-7 w-7 shrink-0 rounded-full" />
             <div className="flex-1 space-y-2">
-              <Skeleton className="h-4 w-64" />
               <Skeleton className="h-3 w-40" />
-            </div>
-            <div className="flex items-center gap-2">
-              <Skeleton className="h-8 w-24 rounded-full" />
-              <Skeleton className="h-8 w-24 rounded-full" />
+              <Skeleton className="h-4 w-64" />
+              <div className="flex items-center gap-2 pt-1">
+                <Skeleton className="h-6 w-24 rounded-full" />
+                <Skeleton className="h-6 w-20 rounded-full" />
+              </div>
             </div>
           </div>
         ))}

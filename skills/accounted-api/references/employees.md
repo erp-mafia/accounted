@@ -94,6 +94,7 @@ Creates a new employee for the company. Requires Idempotency-Key (UUID). Support
 - For A-skatt employees who are not sidoinkomst, tax_table_number is required (29-42).
 - salary_type drives which salary field is required: monthly_salary for monthly, hourly_rate for hourly.
 - The response masks personnummer; never echo back the supplied value. Detail endpoint (deliberate drill-in) returns the full value.
+- vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -333,7 +334,7 @@ Example response `200`:
 **Update an employee.**
 `scope:payroll:write · risk:low · idempotent · dry-run`
 
-Partial update of an employee. Only the fields supplied in the body are changed. Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.
+Partial update of an employee. Only the fields supplied in the body are changed: an omitted key is left unchanged, and an explicit null clears a nullable field (employment_end, salary amounts, tax table and municipality, bank details, contact details, Växa-stöd and jämkning dates). Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.
 
 **Use when:** You need to change tax configuration, bank details, salary amount, or contact info on an existing employee.
 **Do not use for:** Changing personnummer (not supported: create a new employee if the natural-person identity changes, which is a rare edge case). Soft-deleting (use DELETE).
@@ -341,7 +342,9 @@ Partial update of an employee. Only the fields supplied in the body are changed.
 **Pitfalls:**
 - personnummer in the body is ignored by this endpoint. To change it you must DELETE and recreate.
 - salary_type changes require the matching salary field in the same request: switching to monthly without monthly_salary returns 400.
+- A cleared field is checked against the stored row: nulling monthly_salary on a monthly employee, tax_table_number on an A-skatt employee without sidoinkomst, vaxa_stod_start while Växa-stöd is on, or only one of clearing_number/bank_account_number returns 400. To end an ongoing employment set employment_end; to reopen it send employment_end: null.
 - tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.
+- vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -357,32 +360,32 @@ Request body:
   personnummer?: string,
   employment_type?: "employee" | "company_owner" | "board_member",
   employment_start?: string,
-  employment_end?: string,
+  employment_end?: string | null,
   employment_degree?: number,
   hours_per_week?: number,
   workdays_per_week?: number,
   salary_type?: "monthly" | "hourly",
-  monthly_salary?: number,
-  hourly_rate?: number,
-  tax_table_number?: number,
+  monthly_salary?: number | null,
+  hourly_rate?: number | null,
+  tax_table_number?: number | null,
   tax_column?: number,
-  tax_municipality?: string,
+  tax_municipality?: string | null,
   is_sidoinkomst?: boolean,
   f_skatt_status?: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified",
-  clearing_number?: string,
-  bank_account_number?: string,
+  clearing_number?: string | null,
+  bank_account_number?: string | null,
   vacation_rule?: "procentregeln" | "sammaloneregeln" | "none" | "semesterersattning",
   vacation_days_per_year?: number,
   semestertillagg_rate?: number,
   vacation_pay_rate?: number | null,
-  email?: string,
-  phone?: string,
-  address_line1?: string,
-  postal_code?: string,
-  city?: string,
+  email?: string | null,
+  phone?: string | null,
+  address_line1?: string | null,
+  postal_code?: string | null,
+  city?: string | null,
   vaxa_stod_eligible?: boolean,
-  vaxa_stod_start?: string,
-  vaxa_stod_end?: string,
+  vaxa_stod_start?: string | null,
+  vaxa_stod_end?: string | null,
   jamkning_percentage?: number | null,
   jamkning_valid_from?: string | null,
   jamkning_valid_to?: string | null,
@@ -1909,12 +1912,13 @@ Example response `200`:
 **Get the company payroll settings.**
 `scope:payroll:read · risk:low · idempotent`
 
-Returns the payroll settings that drive new salary runs: pay day (salary_pay_day), avvikelseperiod (salary_deviation_period: which month a run reads absence and worked days from), salary payment file format (preferred_payment_format), the bank whose upload instructions are pre-selected (salary_default_bank), öresavrundning of net pay (salary_net_rounding), the calculation conventions (salary_calculation_policy: partial_month, sick_rate, long_leave, leave_context, net_rounding, one_off_tax_rounding, every key always present) and the voucher series salary runs book into (salary_voucher_series). A company that has no settings row yet answers with the defaults the engine would apply (pay day 25, same_month, pain001, no bank, no rounding, every convention at its default, series A).
+Returns the payroll settings that drive new salary runs: pay day (salary_pay_day), avvikelseperiod (salary_deviation_period: which month a run reads absence and worked days from), salary payment file format (preferred_payment_format), the bank whose upload instructions are pre-selected (salary_default_bank), öresavrundning of net pay (salary_net_rounding), whether the employee's payslip copy prints Arbetsgivarkostnad (salary_payslip_show_employer_cost) and Beräkningsunderlag (salary_payslip_show_breakdown), the calculation conventions (salary_calculation_policy: partial_month, sick_rate, long_leave, leave_context, net_rounding, one_off_tax_rounding, every key always present) and the voucher series salary runs book into (salary_voucher_series). A company that has no settings row yet answers with the defaults the engine would apply (pay day 25, same_month, pain001, no bank, no rounding, both payslip sections shown, every convention at its default, series A).
 
 **Use when:** You are provisioning or auditing a customer for payroll and need to know how new salary runs will be dated, which month their deviations are read from, which calculation conventions the engine applies, which payment file the bank expects, or which voucher series the salary vouchers land in.
 **Do not use for:** Invoice payment and contact details (PATCH /api/v1/companies/{companyId}/settings). Per-run values such as payment_date or deviation window (GET /salary-runs/{id}: they are snapshotted on the run). The conventions a calculated run actually used (GET /salary-runs/{id}: calculation_params.salary_calculation_policy). Employee-level pay settings (GET /employees/{id}).
 
 **Pitfalls:**
+- salary_payslip_show_employer_cost and salary_payslip_show_breakdown only change the payslip copy the employee receives (the emailed payslip link, and GET /salary-runs/{id}/payslips/{employeeId}/pdf?audience=employee). The employer view (the same PDF endpoint without audience) always prints both sections. The breakdown steps carry the employer cost figures, so salary_payslip_show_employer_cost=false also hides Beräkningsunderlag on the employee copy, whatever salary_payslip_show_breakdown says (its stored value is kept and applies again once the employer cost is shown). Both default to true. A change applies to runs whose payslips have not yet gone to employees: the first send or employee-copy download of a run fixes its sections on the run, and payslips already handed out keep the content they were issued with.
 - salary_deviation_period is snapshotted onto each salary run at creation: changing it never moves a run that already exists. Set it before the first run of a new month. Switching later makes the next run's deviation window overlap the previous run's window, and that run is refused with 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP (pass explicit deviation_period_start/end on that one run to bridge the switch).
 - salary_pay_day only drives the default payment_date of NEW runs (the day of the pay month, 1-28 so it exists in every month). Existing runs keep their payment_date; override per run on POST /salary-runs.
 - salary_voucher_series is an alias for company_settings.default_voucher_series_per_source_type.salary_payment. Writes MERGE that one key into the per-source-type map; the other source types keep their letters. The default company layout books salaries on K.
@@ -1939,6 +1943,8 @@ Response `200`:
     preferred_payment_format: "pain001" | "bg_lb",
     salary_default_bank: "swedbank" | "seb" | "handelsbanken" | "nordea" | "other" | null,
     salary_net_rounding: boolean,
+    salary_payslip_show_employer_cost: boolean,
+    salary_payslip_show_breakdown: boolean,
     salary_calculation_policy: { partial_month?: "workdays" | "annual_calendar_days", sick_rate?: "daily_divisor" | "annual_hourly", long_leave?: "workdays" | "calendar_after_five_workdays", leave_context?: "all_registered" | "through_deviation_end", net_rounding?: "up" | "nearest", one_off_tax_rounding?: "truncate" | "nearest" },
     salary_voucher_series: string
   },
@@ -1964,6 +1970,8 @@ Example response `200`:
     "preferred_payment_format": "pain001",
     "salary_default_bank": "swedbank",
     "salary_net_rounding": true,
+    "salary_payslip_show_employer_cost": true,
+    "salary_payslip_show_breakdown": false,
     "salary_calculation_policy": {
       "partial_month": "annual_calendar_days",
       "sick_rate": "annual_hourly",
@@ -1988,7 +1996,7 @@ Example response `200`:
 **Partially update the company payroll settings.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Patches the payroll settings: salary_pay_day (1-28), salary_deviation_period (same_month | previous_month), preferred_payment_format (pain001 | bg_lb), salary_default_bank (swedbank | seb | handelsbanken | nordea | other | null), salary_net_rounding (boolean), salary_calculation_policy (an object with any of partial_month: workdays | annual_calendar_days, sick_rate: daily_divisor | annual_hourly, long_leave: workdays | calendar_after_five_workdays, leave_context: all_registered | through_deviation_end, net_rounding: up | nearest, one_off_tax_rounding: truncate | nearest; merged key by key into the stored policy) and salary_voucher_series (one letter A-Z). All fields optional; at least one must be supplied; unknown fields are rejected. Upserts: a company without a settings row gets one created with the supplied values and DB defaults for the rest. Returns the full resource after the write. Idempotent (mandatory Idempotency-Key). Dry-runnable: ?dry_run=true returns the merged resource without writing.
+Patches the payroll settings: salary_pay_day (1-28), salary_deviation_period (same_month | previous_month), preferred_payment_format (pain001 | bg_lb), salary_default_bank (swedbank | seb | handelsbanken | nordea | other | null), salary_net_rounding (boolean), salary_payslip_show_employer_cost (boolean), salary_payslip_show_breakdown (boolean), salary_calculation_policy (an object with any of partial_month: workdays | annual_calendar_days, sick_rate: daily_divisor | annual_hourly, long_leave: workdays | calendar_after_five_workdays, leave_context: all_registered | through_deviation_end, net_rounding: up | nearest, one_off_tax_rounding: truncate | nearest; merged key by key into the stored policy) and salary_voucher_series (one letter A-Z). All fields optional; at least one must be supplied; unknown fields are rejected. Upserts: a company without a settings row gets one created with the supplied values and DB defaults for the rest. Returns the full resource after the write. Idempotent (mandatory Idempotency-Key). Dry-runnable: ?dry_run=true returns the merged resource without writing.
 
 **Use when:** You are onboarding a customer for payroll over the API (set the pay day, avvikelseperiod, calculation conventions, payment file format, bank and voucher series before the first run), a customer changes bank or pay day, or a customer migrated from Fortnox needs the same partial-month, sick-pay and long-leave conventions as their old payslips.
 **Do not use for:** Invoice payment and contact details (PATCH /api/v1/companies/{companyId}/settings). Changing the payment date or deviation window of an existing run (PATCH /salary-runs/{id}, or explicit deviation_period_start/end on POST). Changing the conventions of a run that is already calculated (recalculate the draft, or :correct a booked run). Tax and legal profile changes (not on the public API).
@@ -1996,6 +2004,7 @@ Patches the payroll settings: salary_pay_day (1-28), salary_deviation_period (sa
 **Pitfalls:**
 - Idempotency-Key is mandatory; calls without it return 400.
 - At least one field must be supplied; an empty body returns 400. Unknown fields return 400 (strict body), also inside salary_calculation_policy.
+- salary_payslip_show_employer_cost and salary_payslip_show_breakdown only change the payslip copy the employee receives (the emailed payslip link, and GET /salary-runs/{id}/payslips/{employeeId}/pdf?audience=employee). The employer view (the same PDF endpoint without audience) always prints both sections. The breakdown steps carry the employer cost figures, so salary_payslip_show_employer_cost=false also hides Beräkningsunderlag on the employee copy, whatever salary_payslip_show_breakdown says (its stored value is kept and applies again once the employer cost is shown). Both default to true. A change applies to runs whose payslips have not yet gone to employees: the first send or employee-copy download of a run fixes its sections on the run, and payslips already handed out keep the content they were issued with.
 - salary_deviation_period is snapshotted onto each salary run at creation: changing it never moves a run that already exists. Set it before the first run of a new month. Switching later makes the next run's deviation window overlap the previous run's window, and that run is refused with 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP (pass explicit deviation_period_start/end on that one run to bridge the switch).
 - salary_pay_day only drives the default payment_date of NEW runs (the day of the pay month, 1-28 so it exists in every month). Existing runs keep their payment_date; override per run on POST /salary-runs.
 - salary_voucher_series is an alias for company_settings.default_voucher_series_per_source_type.salary_payment. Writes MERGE that one key into the per-source-type map; the other source types keep their letters. The default company layout books salaries on K.
@@ -2019,6 +2028,8 @@ Request body:
   preferred_payment_format?: "bg_lb" | "pain001",
   salary_default_bank?: "swedbank" | "seb" | "handelsbanken" | "nordea" | "other" | null,
   salary_net_rounding?: boolean,
+  salary_payslip_show_employer_cost?: boolean,
+  salary_payslip_show_breakdown?: boolean,
   salary_calculation_policy?: {
     partial_month?: "workdays" | "annual_calendar_days",
     sick_rate?: "daily_divisor" | "annual_hourly",
@@ -2058,6 +2069,8 @@ Response `200`:
     preferred_payment_format: "pain001" | "bg_lb",
     salary_default_bank: "swedbank" | "seb" | "handelsbanken" | "nordea" | "other" | null,
     salary_net_rounding: boolean,
+    salary_payslip_show_employer_cost: boolean,
+    salary_payslip_show_breakdown: boolean,
     salary_calculation_policy: { partial_month?: "workdays" | "annual_calendar_days", sick_rate?: "daily_divisor" | "annual_hourly", long_leave?: "workdays" | "calendar_after_five_workdays", leave_context?: "all_registered" | "through_deviation_end", net_rounding?: "up" | "nearest", one_off_tax_rounding?: "truncate" | "nearest" },
     salary_voucher_series: string
   },
@@ -2083,6 +2096,8 @@ Example response `200`:
     "preferred_payment_format": "pain001",
     "salary_default_bank": "swedbank",
     "salary_net_rounding": true,
+    "salary_payslip_show_employer_cost": true,
+    "salary_payslip_show_breakdown": false,
     "salary_calculation_policy": {
       "partial_month": "annual_calendar_days",
       "sick_rate": "annual_hourly",

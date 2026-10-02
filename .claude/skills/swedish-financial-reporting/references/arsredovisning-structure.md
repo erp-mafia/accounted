@@ -10,6 +10,8 @@
 7. Kassaflödesanalys
 8. Flerårsöversikt
 9. K2 vs K3 key differences
+10. K2 changes from BFNAR 2025:2
+11. Hållbarhetsrapport (CSRD)
 
 ---
 
@@ -74,7 +76,7 @@ Notes governed by ÅRL 5 kap. §§ 4-24 (all companies) and §§ 25-49 (större 
 - **Eventualförpliktelser** (ÅRL 5:15 §)
 - **Exceptionella intäkter/kostnader** if material (ÅRL 5:19 §)
 - **Koncernförhållanden** (kap. 19): ränteintäkter/kostnader avseende koncernföretag, moderföretag (namn, org.nr, säte)
-- **Väsentliga händelser efter räkenskapsårets slut** (ÅRL 5:22 §)
+- **Väsentliga händelser efter räkenskapsårets slut** (ÅRL 5:22 §, punkt 18.20): arten och den ekonomiska effekten; if the effect cannot be estimated, say so (punkt 18.20A). For AB this includes that a kontrollbalansräkning has been or must be prepared (punkt 18.22)
 - **Lån till ledande befattningshavare** if applicable (ÅRL 5:12 §)
 - **Övergångsupplysning** first year applying K2 (punkt 18.1)
 
@@ -111,12 +113,13 @@ Governed by ÅRL 6 kap. 1-4 §§.
 ### K2 mandatory rubriker for AB (punkt 4.9):
 - Verksamheten (art och inriktning, säte)
 - Väsentliga händelser under räkenskapsåret
-- Väsentliga händelser efter räkenskapsårets slut (note: in K2 this goes in förvaltningsberättelsen, not as a separate note)
 - Flerårsöversikt
 - Förändring av eget kapital (always in förvaltningsberättelsen under K2)
 - Förslag till resultatdisposition (per ABL 18:4 §, ÅRL 6:2 §)
 
 Also required: disclosure if kontrollbalansräkning prepared/should be (ABL 25:13 §), name changes, important external dependencies.
+
+Väsentliga händelser efter räkenskapsårets slut are NOT a förvaltningsberättelse rubrik under K2: they are disclosed in a note (ÅRL 5:22 §, punkt 18.20, 18.20A, 18.22; see section 4).
 
 ### K3 additions (punkt 3.7-3.14):
 - Ägare with >10% of shares/votes must be disclosed
@@ -194,14 +197,51 @@ Rättvisande översikt over longer period, normally 4-5 years. No specific manda
 | Uppskjuten skatt | Forbidden | Required |
 | Verkligt värde | Not allowed | Allowed per ÅRL |
 | Nyttjandeperiod inventarier | May use 5-year schablon | Must assess actual |
-| Periodiseringsregler | Simplified (<20% variation, <5,000 kr) | Case-by-case |
+| Periodiseringsregler | Simplified: each inkomst/utgift or förskott <7,000 kr per invoice (punkt 2.4/2.4A; <5,000 kr for FY beginning before 2026); recurring non-personnel costs varying at most 20%, no amount limit (punkt 7.9); not if the combined effect is material (punkt 2.4B) | Case-by-case |
 | Uppskrivningar | Only byggnader & mark (to taxeringsvärde) | All fixed assets per ÅRL |
 | Leasing | All operating | Financial recognized on BS (koncern) |
 
 ### Who can use K2
 Mindre företag (not exceeding 50 employees / 40 MSEK balansomslutning / 80 MSEK nettoomsättning), excluding publika AB and moderföretag preparing koncernredovisning.
 
-**New from FY starting after 2025-12-31**: bostadsrättsföreningar, companies with kryptotillgångar, filialer utomlands, incitamentsprogram, or emitterade konvertibla skuldebrev may NOT use K2.
+**New from FY starting after 2025-12-31** (BFNAR 2025:2, punkt 1.1A-1.1C): the following may NOT use K2:
+- Bostadsrättsföreningar and bostadsföreningar, regardless of size (1.1A e). They apply K3, which has a new chapter 38 for bostadsrättsföreningar (BFNAR 2025:3).
+- Companies with filialer utomlands (1.1A f)
+- Companies that acquired goods or services against aktierelaterade ersättningar (1.1A g)
+- Companies with issued skuldebrev that can be settled with egetkapitalinstrument (e.g. konvertibla skuldebrev) or similar sammansatta finansiella instrument (1.1A h)
+- Companies with kryptotillgångar, unless only occasionally used or received as payment (1.1A i)
+- Companies with a material uppskjuten skatteskuld, or whose buildings generate at least 75% of nettoomsättningen (1.1B). 1.1B does not apply to companies that exceed at most one of >3 employees, >1.5 MSEK balansomslutning, >3 MSEK nettoomsättning (1.1C), nor to companies that applied K2 the previous year and are not normally covered by 1.1B.
 
 ### Who must use K3
-All större företag not applying IFRS. K3 is huvudregelverk (default) for all companies preparing årsredovisning.
+All större företag not applying IFRS. K3 is huvudregelverk (default) for all companies preparing årsredovisning. A company that has to leave K2 because of the 2026 exclusions may apply K3 kap. 35 without the restriction in punkt 35.1 (BFNAR 2025:3, övergångsbestämmelse 2).
+
+---
+
+## 10. K2 changes from BFNAR 2025:2 (FY beginning after 2025-12-31)
+
+Besides the scope and accrual rules above:
+
+| Area | Rule |
+|---|---|
+| Balansräkning | New post *Övriga immateriella anläggningstillgångar* (förvärvade tomträtter). *Kontokredit* replaces *Checkräkningskredit* (long-term and short-term). |
+| Tilläggsköpeskilling | On sale of inkråm (punkt 6.32A) or andelar (punkt 8.4B): income in the year the amount has been fixed |
+| Kapitalförsäkring | Withdrawal: the part corresponding to the policy's increase in value is income (punkt 8.4C); carrying amount reduced only by the part of the withdrawal that takes the value below the carrying amount (punkt 11.13A) |
+| Hyra/leasing | A price reduction received because use of the object is restricted is recognised in the period the restriction relates to (punkt 7.10) |
+| Rättelse av fel | Correct in the next årsredovisning by restating the opening balance for assets, liabilities and equity; alternatively via the resultaträkning (or balansräkning if only balance-sheet items are affected) (punkt 2.12) |
+| Pågående arbete, alternativregeln | Per contract: positive balance as asset, negative balance as liability *Pågående arbete för annans räkning* (punkt 6.24), with note on aktiverade utgifter and fakturerat belopp for both (punkt 18.12). Under huvudregeln/löpande räkning, asset and liability balances may be netted only for the same customer and the same periods. |
+| Accruals | 7,000 kr limit incl. förskott (punkt 2.4, 2.4A), aggregate materiality (punkt 2.4B) |
+
+**Årsbokslut**: BFNAR 2026:1 amends BFNAR 2017:3 (e.g. the 7,000 kr accrual limit) for FY beginning after 2026-12-31; may be applied to a FY ending 2026-12-31 or later.
+
+---
+
+## 11. Hållbarhetsrapport (CSRD)
+
+A hållbarhetsrapport is a separate section of the förvaltningsberättelse (ÅRL 6 kap. 10 §). K2 AB may include voluntary sustainability information under the rubrik *Hållbarhet* (punkt 4.9).
+
+### Enacted
+- **Thresholds (ÅRL 6:10 first paragraph)**: more than one of >250 average employees, >280 MSEK balansomslutning, >550 MSEK nettoomsättning, in each of the two latest FYs. Listed companies: more than one of >10 employees, >5 MSEK, >10 MSEK (second paragraph). Parent companies: group level (ÅRL 7:31 a).
+- **Timing (Lag 2025:1297, "stop the clock")**: large companies listed on a regulated market with >500 employees already report from FY beginning after 2024-06-30 (Lag 2024:347). Other large companies/groups (wave 2): first FY beginning after 2026-12-31. Listed small and medium-sized companies: first FY beginning after 2027-12-31. Companies already required to report under the old rules continue to apply them until then.
+
+### Proposed only (not enacted)
+- **SOU 2026:27 (Omnibus)**: requirement only for companies and parent companies with, in each of the two latest FYs, >1,000 average employees **and** >4.9 billion SEK nettoomsättning; listed SMEs no longer required. Proposed in force 2027-01-01.

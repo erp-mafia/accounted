@@ -3,6 +3,9 @@ import { lockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export const POST = withRouteContext(
   'period.lock',

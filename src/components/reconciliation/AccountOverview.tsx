@@ -19,6 +19,7 @@ import type {
   ReconciliationItemBucket,
   ReconciliationStatus,
 } from '@/lib/reconciliation/schemas'
+import { dropProposedLedgerDuplicates } from '@/lib/reconciliation/overview-rows'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
 import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } from './SignoffDialog'
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
@@ -29,6 +30,14 @@ import { InfoTooltip } from '@/components/ui/info-tooltip'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+
+const SkattekontoMatchDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoMatchDialog').then(
+      (module) => module.SkattekontoMatchDialog,
+    ),
   { loading: DialogLoadingSkeleton },
 )
 
@@ -90,6 +99,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const [busy, setBusy] = useState<string | null>(null)
   const [unfolded, setUnfolded] = useState<Set<ReconciliationItemBucket>>(new Set())
   const [bookRow, setBookRow] = useState<ReconciliationItem | null>(null)
+  // Row the book dialog handed to the match flow (a ledger twin exists). Kept
+  // as the converted row so the match dialog's fetch effect sees a stable object.
+  const [matchRow, setMatchRow] = useState<SkattekontoTransactionWithSuggestion | null>(null)
   const [signoffOpen, setSignoffOpen] = useState(false)
   const [matcher, setMatcher] = useState<MatcherMatch[] | null>(null)
   const [bridgeOpen, setBridgeOpen] = useState(false)
@@ -139,7 +151,8 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const byBucket = useMemo(() => {
     const map = new Map<ReconciliationItemBucket, ReconciliationItem[]>()
     for (const b of BUCKET_ORDER) map.set(b, [])
-    for (const item of items?.items ?? []) map.get(item.bucket)?.push(item)
+    // A verifikat its proposals fully explain shows in its pair only, not again as missing on the other side.
+    for (const item of dropProposedLedgerDuplicates(items?.items ?? [])) map.get(item.bucket)?.push(item)
     return map
   }, [items])
 
@@ -199,14 +212,15 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         item.proposal.journal_entry_id,
       ]
       const data = await postJson(`${base}/links`, {
-        pairs: [{ external_ids: [item.item_id], journal_entry_ids: journalEntryIds }],
+        // A combined skattekonto proposal links every row of its group at once.
+        pairs: [{ external_ids: item.proposal.external_ids ?? [item.item_id], journal_entry_ids: journalEntryIds }],
       })
       if (data) {
         const skipped = data.skipped as Array<{ message: string }>
         if (skipped.length > 0) {
           toast({ title: t('toast_failed'), description: skipped[0].message, variant: 'destructive' })
         } else {
-          toast({ title: t('toast_matched', { applied: 1 }) })
+          toast({ title: t('toast_matched', { applied: (data.applied as unknown[] | undefined)?.length ?? 1 }) })
         }
         await refresh()
       }
@@ -252,8 +266,12 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         const results = (data.results ?? []) as SkattekontoBatchRowResult[]
         const ok = results.filter((r) => r.ok).length
         const failed = results.length - ok
+        // Rows whose event the ledger already holds were skipped, not lost:
+        // say so, and that they are linked rather than booked.
+        const twins = results.filter((r) => r.error_code === 'LEDGER_TWIN_EXISTS').length
         toast({
           title: failed > 0 ? t('toast_book_partial', { ok, failed }) : t('toast_booked', { count: ok }),
+          ...(twins > 0 ? { description: t('toast_book_twins', { count: twins }) } : {}),
           variant: failed > 0 && ok === 0 ? 'destructive' : undefined,
         })
         await refresh()
@@ -449,7 +467,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             <Skeleton className="ml-auto h-3 w-16" />
           </div>
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-6 border-b border-border/60 py-3.5">
+            <div key={i} className="flex items-center gap-6 border-b border-border py-3.5">
               <Skeleton className="h-3.5 w-20" />
               <Skeleton className="h-3.5 w-48" />
               <Skeleton className="ml-auto h-3.5 w-20" />
@@ -631,7 +649,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
               </div>
               <div
                 className={cn(
-                  'mt-1 text-[20px] font-semibold leading-tight tabular-nums',
+                  'mt-1 text-xl font-semibold leading-tight tabular-nums',
                   tile.tone === 'ok' && 'text-success',
                   tile.tone === 'attn' && 'text-warning',
                 )}
@@ -639,11 +657,11 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
               >
                 {tile.value}
               </div>
-              {tile.sub && <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{tile.sub}</div>}
+              {tile.sub && <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{tile.sub}</div>}
             </div>
           ))}
         </div>
-        <p className={cn('text-[13.5px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
+        <p className={cn('text-[13px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
           {verdict}
           {verdictUnexplained && <span className="ml-1 text-warning">{verdictUnexplained}</span>}
           <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3 text-[12.5px]')}>
@@ -780,7 +798,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                             <button
                               type="button"
                               onClick={toggle}
-                              className="normal-case tracking-normal text-[12px] font-normal text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+                              className="normal-case tracking-normal text-[12.5px] font-normal text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
                             >
                               {folded ? t('show_all', { count: rows.length }) : t('hide')}
                             </button>
@@ -814,7 +832,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             </tbody>
           </table>
           {items.has_more && (
-            <p className="px-4 pt-3 text-[12px] text-muted-foreground">{t('truncated', { count: ITEMS_LIMIT })}</p>
+            <p className="px-4 pt-3 text-[12.5px] text-muted-foreground">{t('truncated', { count: ITEMS_LIMIT })}</p>
           )}
         </div>
       )}
@@ -854,6 +872,19 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             setBookRow(null)
             void refresh()
           }}
+          onMatch={() => {
+            if (bookRow) setMatchRow(toDialogRow(bookRow))
+            setBookRow(null)
+          }}
+        />
+      )}
+
+      {isSkv && (
+        <SkattekontoMatchDialog
+          row={matchRow}
+          open={matchRow !== null}
+          onClose={() => setMatchRow(null)}
+          onMatched={() => void refresh()}
         />
       )}
 

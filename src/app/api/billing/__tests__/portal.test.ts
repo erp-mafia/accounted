@@ -154,6 +154,7 @@ describe('POST /api/billing/portal', () => {
       expect(portalCreate).toHaveBeenCalledWith({
         customer: 'cus_1',
         return_url: 'https://app.accounted.test/settings/billing',
+        locale: 'sv',
       })
     })
 
@@ -179,6 +180,43 @@ describe('POST /api/billing/portal', () => {
       expect(portalCreate).toHaveBeenCalledWith(
         expect.objectContaining({ return_url: 'https://app.accounted.test/settings/billing' }),
       )
+    })
+  })
+
+  // Stripe's hosted portal speaks the app's language, not the browser's.
+  describe('locale', () => {
+    function portalWithCookie(cookie?: string) {
+      enqueue({ data: { stripe_customer_id: 'cus_1' } })
+      portalCreate.mockResolvedValue({ url: 'https://stripe.test/portal' })
+      return POST(
+        createMockRequest('/api/billing/portal', {
+          method: 'POST',
+          ...(cookie ? { headers: { cookie } } : {}),
+        }),
+        routeParams,
+      )
+    }
+
+    it('opens in English when the app is in English', async () => {
+      const { status } = await parseJsonResponse(
+        await portalWithCookie('gnubok-company-id=company-1; gnubok-locale=en'),
+      )
+
+      expect(status).toBe(200)
+      expect(portalCreate).toHaveBeenCalledWith(expect.objectContaining({ locale: 'en' }))
+    })
+
+    it('opens in Swedish when the app is in Swedish', async () => {
+      await portalWithCookie('gnubok-locale=sv')
+      expect(portalCreate).toHaveBeenCalledWith(expect.objectContaining({ locale: 'sv' }))
+    })
+
+    it('falls back to Swedish without a locale cookie or with an unsupported one', async () => {
+      await portalWithCookie()
+      await portalWithCookie('gnubok-locale=de')
+
+      expect(portalCreate).toHaveBeenNthCalledWith(1, expect.objectContaining({ locale: 'sv' }))
+      expect(portalCreate).toHaveBeenNthCalledWith(2, expect.objectContaining({ locale: 'sv' }))
     })
   })
 })

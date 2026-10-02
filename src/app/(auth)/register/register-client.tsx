@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Check, Loader2, Mail, ArrowLeft, ExternalLink, Eye, EyeOff } from 'lucide-react'
+import { Check, Mail, ArrowLeft, ExternalLink, Eye, EyeOff } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
@@ -693,12 +693,9 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
               </div>
               {/* Also disabled while Back's /cancel is in flight: submitting
                   then would race the cookie clear (recoverable, but pointless). */}
-              <Button type="submit" className="w-full h-11" disabled={isLoading || isCancelling}>
+              <Button type="submit" size="lg" className="w-full" loading={isLoading} disabled={isCancelling}>
                 {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('creating')}
-                  </>
+                  t('creating')
                 ) : (
                   t('create_account')
                 )}
@@ -882,14 +879,12 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
             />
             <Button
               type="submit"
-              className="w-full h-11"
-              disabled={isLoading || isTurnstileSubmissionBlocked(captchaToken)}
+              size="lg" className="w-full"
+              loading={isLoading}
+              disabled={isTurnstileSubmissionBlocked(captchaToken)}
             >
               {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('creating')}
-                </>
+                t('creating')
               ) : (
                 t('create_account')
               )}
@@ -916,7 +911,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-10 w-full gap-2"
+                    className="w-full gap-2"
                     onClick={() => switchMethod('bankid')}
                   >
                     <Image
@@ -942,7 +937,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-10 w-full gap-2"
+                    className="w-full gap-2"
                     onClick={() => switchMethod('email')}
                   >
                     <Mail className="h-4 w-4 text-muted-foreground" aria-hidden="true" />

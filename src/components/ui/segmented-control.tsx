@@ -61,7 +61,7 @@ export function SegmentedControl<T extends string>({
         >
           {opt.label}
           {typeof opt.count === 'number' && opt.count > 0 && (
-            <span data-ph-mask="" className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
+            <span data-ph-mask="" className="rounded-full bg-secondary px-1.5 text-[11px] font-medium tabular-nums">
               {opt.count}
             </span>
           )}

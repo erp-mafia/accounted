@@ -6,6 +6,7 @@ import { sectorNameKey, sectorDescriptionKey } from '@/lib/extensions/i18n'
 import type { SectorSlug } from '@/lib/extensions/types'
 import ExtensionCard from '@/components/extensions/ExtensionCard'
 import Link from 'next/link'
+import { PageHeader } from '@/components/ui/page-header'
 
 export default async function SectorExtensionsPage({
   params,
@@ -29,6 +30,8 @@ export default async function SectorExtensionsPage({
 
   return (
     <div>
+      <PageHeader title={sectorName} />
+
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-6">
         <Link href="/extensions" className="hover:text-foreground transition-colors">
@@ -43,10 +46,7 @@ export default async function SectorExtensionsPage({
         <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary flex-shrink-0">
           <Icon className="h-6 w-6 text-foreground" />
         </div>
-        <div>
-          <h1 className="font-display text-2xl leading-8 tracking-tight">{sectorName}</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{sectorDescription}</p>
-        </div>
+        <p className="text-sm text-muted-foreground self-center">{sectorDescription}</p>
       </div>
 
       {/* Extensions grid */}

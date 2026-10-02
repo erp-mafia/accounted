@@ -4,6 +4,11 @@
  * List the company's bank/cash accounts (cash_accounts) including the
  * bank-reported balance (booked + available) and when it was fetched.
  * The balance figures come from the PSD2 provider, not from the ledger.
+ *
+ * POST /api/v1/companies/{companyId}/cash-accounts
+ *
+ * Create a bank account by hand (operation cash-accounts.create; contract,
+ * docs and rules in src/lib/operations/cash-accounts.ts).
  */
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
@@ -11,6 +16,8 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
 import { listForCompany } from '@/lib/cash-accounts/service'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { cashAccountsCreate } from '@/lib/operations/cash-accounts'
 
 const CashAccount = z.object({
   cash_account_id: z.string(),
@@ -116,3 +123,5 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
   },
 )
+
+export const POST = v1OperationHandler(cashAccountsCreate)

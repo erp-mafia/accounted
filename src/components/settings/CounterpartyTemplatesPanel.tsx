@@ -3,11 +3,12 @@
 import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
-import { Loader2, Trash2, Users, ChevronDown, Pencil } from 'lucide-react'
+import { Trash2, Users, ChevronDown, Pencil } from 'lucide-react'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import type { CategorizationTemplate } from '@/types'
@@ -140,8 +141,10 @@ export function CounterpartyTemplatesPanel() {
   return (
     <SettingsGroup label={t('title')} help={t('description')}>
       {isLoading ? (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div aria-busy className="space-y-3 py-3">
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-4 w-full" />
+          ))}
         </div>
       ) : templates.length === 0 ? (
         <EmptyState
@@ -197,12 +200,12 @@ export function CounterpartyTemplatesPanel() {
                 <div className="space-y-3 px-1 pb-3">
                   {/* Account lines */}
                   <div>
-                    <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{t('booking_label')}</p>
+                    <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('booking_label')}</p>
                     {isMultiLine ? (
                       <div className="space-y-1">
                         {tt.line_pattern!.map((lp, i) => (
                           <div key={i} className="flex items-center gap-2 text-xs">
-                            <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+                            <span className="w-14 shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">
                               {lp.side === 'debit' ? t('debit_label') : t('credit_label')}
                             </span>
                             <span className="font-mono">{formatAccountWithName(lp.account)}</span>
@@ -218,11 +221,11 @@ export function CounterpartyTemplatesPanel() {
                     ) : (
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 text-xs">
-                          <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">{t('debit_label')}</span>
+                          <span className="w-14 shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">{t('debit_label')}</span>
                           <span className="font-mono">{formatAccountWithName(tt.debit_account)}</span>
                         </div>
                         <div className="flex items-center gap-2 text-xs">
-                          <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">{t('credit_label')}</span>
+                          <span className="w-14 shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">{t('credit_label')}</span>
                           <span className="font-mono">{formatAccountWithName(tt.credit_account)}</span>
                         </div>
                       </div>
@@ -282,10 +285,9 @@ export function CounterpartyTemplatesPanel() {
                       <Button
                         type="submit"
                         size="sm"
-                        disabled={savingId === tt.id || editName.trim().length < 2}
-                        className="h-7 text-xs"
+                        disabled={editName.trim().length < 2}
+                        loading={savingId === tt.id}
                       >
-                        {savingId === tt.id ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : null}
                         {t('rename_save')}
                       </Button>
                       <Button
@@ -294,7 +296,6 @@ export function CounterpartyTemplatesPanel() {
                         size="sm"
                         onClick={cancelRename}
                         disabled={savingId === tt.id}
-                        className="h-7 text-xs"
                       >
                         {t('rename_cancel')}
                       </Button>
@@ -306,7 +307,6 @@ export function CounterpartyTemplatesPanel() {
                       size="sm"
                       onClick={() => startRename(tt)}
                       disabled={deletingId === tt.id}
-                      className="h-7 text-xs"
                     >
                       <Pencil className="mr-1.5 h-3 w-3" />
                       {t('rename_button')}
@@ -315,14 +315,10 @@ export function CounterpartyTemplatesPanel() {
                       variant="outline"
                       size="sm"
                       onClick={() => handleDelete(tt.id)}
-                      disabled={deletingId === tt.id}
-                      className="h-7 text-xs text-destructive hover:text-destructive"
+                      loading={deletingId === tt.id}
+                      className="text-destructive hover:text-destructive"
                     >
-                      {deletingId === tt.id ? (
-                        <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                      ) : (
-                        <Trash2 className="mr-1.5 h-3 w-3" />
-                      )}
+                      {deletingId !== tt.id && <Trash2 className="mr-1.5 h-3 w-3" />}
                       {t('delete_button')}
                     </Button>
                   </div>

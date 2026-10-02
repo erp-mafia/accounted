@@ -18,10 +18,11 @@ mkdir Accounted && cd Accounted
 
 # Compose file + env template
 curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/.env.docker.example
 
-# Cron sidecar (Dockerfile + schedule)
+# Env template + cron sidecar (Dockerfile + schedule)
 mkdir -p docker
+curl -fsSL -o docker/.env.example \
+  https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/.env.example
 curl -fsSL -o docker/cron.Dockerfile \
   https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/cron.Dockerfile
 curl -fsSL -o docker/crontab.self-hosted \
@@ -31,7 +32,7 @@ curl -fsSL -o docker/crontab.self-hosted \
 ### 2. Configure your environment
 
 ```bash
-cp .env.docker.example .env
+cp docker/.env.example .env
 ```
 
 Open `.env` and fill in the **required** values:
@@ -101,9 +102,10 @@ overlay from the same Accounted tag or full commit as the base Compose file:
 
 ```bash
 ACCOUNTED_REF=replace-with-the-same-tag-or-full-commit
-curl -fsSLo docker-compose.resources.yml \
-  "https://raw.githubusercontent.com/erp-mafia/accounted/${ACCOUNTED_REF}/docker-compose.resources.yml"
-docker compose -f docker-compose.yml -f docker-compose.resources.yml up -d
+mkdir -p docker
+curl -fsSLo docker/compose.resources.yml \
+  "https://raw.githubusercontent.com/erp-mafia/accounted/${ACCOUNTED_REF}/docker/compose.resources.yml"
+docker compose -f docker-compose.yml -f docker/compose.resources.yml up -d
 ```
 
 Compose only applies the files named in each invocation. Keep the resource
@@ -111,10 +113,10 @@ overlay in every later `up` command, after any other overlay. For example:
 
 ```bash
 # HTTPS with Caddy
-docker compose -f docker-compose.yml -f docker-compose.caddy.yml -f docker-compose.resources.yml up -d
+docker compose -f docker-compose.yml -f docker/compose.caddy.yml -f docker/compose.resources.yml up -d
 
 # Local image build
-docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.resources.yml up --build -d
+docker compose -f docker-compose.yml -f docker/compose.build.yml -f docker/compose.resources.yml up --build -d
 ```
 
 Do not use this overlay if Container Manager rejects either key or the Docker
@@ -146,8 +148,9 @@ NEXT_PUBLIC_APP_URL=https://gnubok.example.com
 ### 3. Download the overlay + Caddyfile
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.caddy.yml
 mkdir -p docker
+curl -fsSL -o docker/compose.caddy.yml \
+  https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/compose.caddy.yml
 curl -fsSL -o docker/Caddyfile \
   https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/Caddyfile
 ```
@@ -155,7 +158,7 @@ curl -fsSL -o docker/Caddyfile \
 ### 4. Start with the overlay
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+docker compose -f docker-compose.yml -f docker/compose.caddy.yml up -d
 ```
 
 Caddy obtains a cert on first boot (takes ~10 s). Visit `https://gnubok.example.com`.
@@ -233,9 +236,15 @@ IMAGE_TAG=3e4b5dd@sha256:abcdef...
 
 Semver tags (`1.2.3`, `1.2`, `1`) are published only when a `v*.*.*` git tag is cut. No such tag exists yet, so until the first tagged release the commit SHA is the only immutable pin.
 
-Apply updates:
+Apply updates, refreshing the compose file as well: `docker compose pull`
+updates only the image, and `docker-compose.yml` sometimes has to change with it
+(a compose file from before [#3164](https://github.com/erp-mafia/accounted/issues/3164)
+mounts `/app/.next` as a 400 MB tmpfs that newer images no longer fit in; the
+container then stops at start with an error saying so). Keep local changes in a
+`docker-compose.override.yml` so the download never overwrites them.
 
 ```bash
+curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.yml
 docker compose pull
 docker compose up -d
 ```
@@ -252,11 +261,11 @@ If you prefer to build locally instead of pulling the pre-built image:
 # Clone the repo
 git clone https://github.com/erp-mafia/accounted.git
 cd accounted
-cp .env.docker.example .env
+cp docker/.env.example .env
 # Fill in .env
 
 # Build and start
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
+docker compose -f docker-compose.yml -f docker/compose.build.yml up --build -d
 ```
 
 ---
@@ -274,7 +283,7 @@ The cron container waits for the app's healthcheck to pass before starting. It c
 
 ### How NEXT_PUBLIC_* injection works
 
-The image is built with placeholder values (e.g. `__NEXT_PUBLIC_SUPABASE_URL__`) baked into the JavaScript bundles. At container start, `docker-entrypoint.sh` runs as `root`, `sed`-substitutes the placeholders with your runtime env vars, then runs `chmod -R a-w /app/.next/static` and drops privileges with `su-exec nextjs:nodejs` before exec'ing Node. The served JS bundle is owned by `root` and read-only by the time the application starts: a runtime RCE in the Node process cannot rewrite what other users will receive.
+The image is built with placeholder values (e.g. `__NEXT_PUBLIC_SUPABASE_URL__`) baked into the JavaScript bundles. The container's root filesystem is read-only, so at every start `docker-entrypoint.sh`, running unprivileged as `nextjs`, empties the writable mounts, copies the bundle from the image into them (`/app/.next` is the `next_runtime` named volume, `/app/public` a small tmpfs), `sed`-substitutes the placeholders with your runtime env vars, and removes the write bits from the served files before exec'ing Node. The volume holds nothing but that copy, so it needs no backup. It is a volume rather than a tmpfs because the bundle outgrew any fixed tmpfs size, and tmpfs pages count against the container's memory limit ([#3164](https://github.com/erp-mafia/accounted/issues/3164)).
 
 ---
 

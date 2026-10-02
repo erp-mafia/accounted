@@ -36,7 +36,7 @@ export function AccountLogo({ account, className }: { account: ReconciliationAcc
     <span
       aria-hidden
       className={cn(
-        'flex h-5 w-5 shrink-0 items-center justify-center rounded-sm bg-secondary text-[9px] font-semibold tracking-tight text-secondary-foreground tabular-nums',
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-sm bg-secondary text-[11px] font-semibold tracking-tight text-secondary-foreground tabular-nums',
         className,
       )}
     >

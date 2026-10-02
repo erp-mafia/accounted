@@ -19,7 +19,7 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate, cn, isValidExchangeRate } from '@/lib/utils'
-import { Loader2, Search, X, Plus, Check, AlertTriangle, Link2 } from 'lucide-react'
+import { Search, X, Plus, Check, AlertTriangle, Link2 } from 'lucide-react'
 import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
 
@@ -594,14 +594,11 @@ export default function MatchAllocationDialog({
                       type="button"
                       size="sm"
                       onClick={handleLinkToExplaining}
-                      disabled={linking || submitting}
+                      disabled={submitting}
+                      loading={linking}
                       className="sm:flex-1"
                     >
-                      {linking ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <Link2 className="mr-2 h-4 w-4" />
-                      )}
+                      {!linking && <Link2 className="mr-2 h-4 w-4" />}
                       {t('already_booked_link', { labels: explainingLabels })}
                     </Button>
                   ) : (
@@ -807,9 +804,9 @@ export default function MatchAllocationDialog({
             // Confirm requires sum == tx_abs exactly (within rounding).
             // Anything else lets the JE diverge from the bank line and
             // breaks reconciliation. PR #607 round-1 review fix.
-            disabled={submitting || linking || !balanced || overshoot || explainingBlocks}
+            disabled={linking || !balanced || overshoot || explainingBlocks}
+            loading={submitting}
           >
-            {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {t('confirm')}
           </Button>
         </DialogFooter>

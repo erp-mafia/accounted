@@ -257,6 +257,20 @@ export function KassaflodesanalysPDF({
             <Text style={styles.label}>Betald inkomstskatt</Text>
             <Text style={styles.amount}>{formatAmount(report.lopande.skatt_betald)}</Text>
           </View>
+          {report.lopande.koncernbidrag !== 0 && (
+            <View style={styles.row}>
+              <Text style={styles.label}>Koncernbidrag</Text>
+              <Text style={styles.amount}>{formatAmount(report.lopande.koncernbidrag)}</Text>
+            </View>
+          )}
+          {report.lopande.ovriga_poster !== 0 && (
+            <View style={styles.row}>
+              <Text style={styles.label}>
+                Övriga poster (konto {report.unclassified_accounts.join(', ')})
+              </Text>
+              <Text style={styles.amount}>{formatAmount(report.lopande.ovriga_poster)}</Text>
+            </View>
+          )}
           <View style={styles.subtotalRow}>
             <Text style={styles.subtotalLabel}>
               Kassaflöde från den löpande verksamheten
@@ -280,6 +294,14 @@ export function KassaflodesanalysPDF({
               {formatAmount(report.investerings.avyttring_anlaggningar)}
             </Text>
           </View>
+          {report.investerings.kortfristiga_placeringar !== 0 && (
+            <View style={styles.row}>
+              <Text style={styles.label}>Förändring av kortfristiga placeringar</Text>
+              <Text style={styles.amount}>
+                {formatAmount(report.investerings.kortfristiga_placeringar)}
+              </Text>
+            </View>
+          )}
           <View style={styles.subtotalRow}>
             <Text style={styles.subtotalLabel}>
               Kassaflöde från investeringsverksamheten
@@ -294,7 +316,7 @@ export function KassaflodesanalysPDF({
         <View style={styles.section}>
           <Text style={styles.sectionHeading}>Finansieringsverksamheten</Text>
           <View style={styles.row}>
-            <Text style={styles.label}>Förändring av lån (långfristiga skulder)</Text>
+            <Text style={styles.label}>Förändring av lån</Text>
             <Text style={styles.amount}>{formatAmount(report.finansierings.delta_lan)}</Text>
           </View>
           <View style={styles.row}>

@@ -41,16 +41,16 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronsUpDown,
-  Loader2,
+  Trash2,
 } from 'lucide-react'
 import DimensionValueForm, {
   type DimensionValueFormInput,
 } from '@/components/dimensions/DimensionValueForm'
 import {
-  PROJECT_DIM_NO,
   type DimensionDto,
   type DimensionValueDto,
 } from '@/components/dimensions/types'
+import { placementOf, planDimensionReorder } from '@/components/dimensions/dimension-order'
 
 type SortColumn = 'code' | 'name' | 'status' | 'start_date' | 'end_date'
 type SortDir = 'asc' | 'desc'
@@ -65,12 +65,12 @@ function compareStrings(a: string, b: string): number {
 }
 
 /**
- * Register for dimension values (kostnadsställen & projekt): the
- * customers-page register recipe hosted behind one segmented tab per registry
- * dimension. Archive rides the edit form's aktiv switch (PATCH is_active);
- * delete lives only in the edit dialog and surfaces the DB retention
- * trigger's Swedish "…arkivera det istället" message when the value is
- * referenced by posted lines.
+ * Register for the dimensions (kostnadsställe, projekt and custom ones) and
+ * their values: the customers-page register recipe hosted behind one
+ * segmented tab per registry dimension. Values and dimensions follow the same
+ * recipe: archive rides the edit form's aktiv switch (PATCH is_active), and
+ * delete lives only in the edit dialog and surfaces the DB guard's Swedish
+ * message when posted lines still reference the value or dimension.
  */
 export default function DimensionsManager() {
   const t = useTranslations('dimensions')
@@ -99,8 +99,8 @@ export default function DimensionsManager() {
   const [dialog, setDialog] = useState<DialogState>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [newDimDialogOpen, setNewDimDialogOpen] = useState(false)
-  const [confirmDeleteDimOpen, setConfirmDeleteDimOpen] = useState(false)
-  const [isDeletingDim, setIsDeletingDim] = useState(false)
+  const [editDimDialogOpen, setEditDimDialogOpen] = useState(false)
+  const [isUpdatingDim, setIsUpdatingDim] = useState(false)
   const [isCreatingDimension, setIsCreatingDimension] = useState(false)
 
   useEffect(() => {
@@ -119,7 +119,9 @@ export default function DimensionsManager() {
     () => dimensions.find((d) => d.id === activeDimId) ?? null,
     [dimensions, activeDimId],
   )
-  const isProjectTab = activeDim?.sie_dim_no === PROJECT_DIM_NO
+  // Values carry start/end dates on accumulating dimensions only, the same
+  // rule DimensionValueForm and the API apply.
+  const showDates = activeDim ? !activeDim.resets_annually : false
 
   // Parent (#UNDERDIM) of the active tab's dimension, when it has one.
   const parentDimName = useMemo(() => {
@@ -273,32 +275,86 @@ export default function DimensionsManager() {
     }
   }
 
+  // Rename, archive and reorder through PATCH /api/dimensions/[id]. The
+  // edited dimension goes first, its own fields and new sort_order in one
+  // PATCH, so a refused rename writes nothing; the neighbours a move
+  // renumbers follow (dimension-order.ts). The registry refreshes after a
+  // partial failure too, so the tabs show what was actually saved.
+  async function handleUpdateDimension(input: EditDimensionFormInput) {
+    if (!activeDim) return
+    // Pin the tab: a move must not hand the default first tab to another
+    // dimension while the user is looking at this one.
+    setActiveDimId(activeDim.id)
+    const reorder = planDimensionReorder(dimensions, activeDim.id, input.after)
+    const own: Record<string, unknown> = {}
+    // The route refuses renaming the system pair (1, 6); the form never
+    // offers it, and this keeps an unchanged name out of the body entirely.
+    if (!activeDim.is_system && input.name !== activeDim.name) own.name = input.name
+    if (input.is_active !== activeDim.is_active) own.is_active = input.is_active
+    const ownOrder = reorder.find((write) => write.id === activeDim.id)
+    if (ownOrder) own.sort_order = ownOrder.sort_order
+    const patches = [
+      ...(Object.keys(own).length > 0 ? [{ id: activeDim.id, body: own }] : []),
+      ...reorder
+        .filter((write) => write.id !== activeDim.id)
+        .map((write) => ({ id: write.id, body: { sort_order: write.sort_order } })),
+    ]
+    if (patches.length === 0) {
+      setEditDimDialogOpen(false)
+      return
+    }
+    setIsUpdatingDim(true)
+    // The PATCHes are sequential, not atomic: when a later one fails the
+    // earlier ones stay saved, so the user is told the order may be mixed.
+    let saved = 0
+    try {
+      for (const patch of patches) {
+        const res = await fetch(`/api/dimensions/${patch.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch.body),
+        })
+        const json = await res.json().catch(() => null)
+        if (!res.ok) throw json ?? new Error()
+        saved++
+      }
+      toast({ title: t('dim_updated_title') })
+      setEditDimDialogOpen(false)
+    } catch (err) {
+      const reason = getErrorMessage(err, { locale: errorLocale })
+      toast({
+        title: t('save_failed_title'),
+        description: saved > 0 ? `${reason} ${t('dim_update_partial')}` : reason,
+        variant: 'destructive',
+      })
+    } finally {
+      setIsUpdatingDim(false)
+    }
+    await loadDimensions()
+  }
+
   // Remove a custom dimension nobody has booked on (issue #2219). The DB
   // registry guard refuses the delete with a Swedish P0001 when any posted
   // line carries the number; the route passes that message through, so the
-  // toast says exactly which dimension and why.
+  // toast says exactly which dimension and why. Runs inside the edit
+  // dialog's confirm, which shows its own pending state.
   async function handleDeleteDimension() {
     if (!activeDim || activeDim.is_system) return
-    setIsDeletingDim(true)
-    try {
-      const res = await fetch(`/api/dimensions/${activeDim.id}`, { method: 'DELETE' })
-      if (!res.ok) {
-        const json = await res.json().catch(() => null)
-        toast({
-          title: t('delete_failed_title'),
-          description: getErrorMessage(json, { locale: errorLocale }),
-          variant: 'destructive',
-        })
-        return
-      }
-      toast({ title: t('dimension_deleted_title') })
-      setConfirmDeleteDimOpen(false)
-      setActiveDimId(null)
-      setSearchTerm('')
-      await loadDimensions()
-    } finally {
-      setIsDeletingDim(false)
+    const res = await fetch(`/api/dimensions/${activeDim.id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const json = await res.json().catch(() => null)
+      toast({
+        title: t('delete_failed_title'),
+        description: getErrorMessage(json, { locale: errorLocale }),
+        variant: 'destructive',
+      })
+      return
     }
+    toast({ title: t('dimension_deleted_title') })
+    setEditDimDialogOpen(false)
+    setActiveDimId(null)
+    setSearchTerm('')
+    await loadDimensions()
   }
 
   async function handleDeleteValue() {
@@ -404,10 +460,15 @@ export default function DimensionsManager() {
               label: (
                 // data-ph-mask: dimension names are user data; the wrapper
                 // keeps the segment button's inline gap between name and count.
+                // An archived dimension keeps its tab (its values stay on
+                // posted lines) and carries the same chip as an archived value.
                 <span data-ph-mask="" className="inline-flex items-center gap-1.5">
                   {dim.name}
                   {dim.values.length > 0 && (
                     <span className="text-muted-foreground tabular-nums">{dim.values.length}</span>
+                  )}
+                  {!dim.is_active && (
+                    <Badge variant="outline" className="font-normal">{t('status_archived')}</Badge>
                   )}
                 </span>
               ),
@@ -429,15 +490,15 @@ export default function DimensionsManager() {
             >
               {t('new_dimension')}
             </button>
-            {activeDim && !activeDim.is_system && (
+            {activeDim && (
               <button
                 type="button"
                 className={cn(QUIET_LINK_CLASS, 'disabled:pointer-events-none disabled:opacity-50')}
-                disabled={!canWrite || isDeletingDim}
+                disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-                onClick={() => setConfirmDeleteDimOpen(true)}
+                onClick={() => setEditDimDialogOpen(true)}
               >
-                {t('delete_dimension')}
+                {t('edit_dimension')}
               </button>
             )}
             <Button
@@ -483,7 +544,7 @@ export default function DimensionsManager() {
               <tr>
                 <SortableHeader column="code" label={t('col_code')} />
                 <SortableHeader column="name" label={t('col_name')} className="w-full" />
-                {isProjectTab && (
+                {showDates && (
                   <>
                     <SortableHeader
                       column="start_date"
@@ -513,7 +574,7 @@ export default function DimensionsManager() {
                   <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
                     <span className="block truncate">{value.name}</span>
                   </td>
-                  {isProjectTab && (
+                  {showDates && (
                     <>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
                         {value.start_date ? formatDate(value.start_date) : ''}
@@ -555,20 +616,32 @@ export default function DimensionsManager() {
         </DialogContent>
       </Dialog>
 
-      {/* New dimension dialog — the content (and thus the form state)
-          unmounts on close, so each open starts from a blank form. */}
-      {activeDim && !activeDim.is_system && (
-        <DestructiveConfirmDialog
-          open={confirmDeleteDimOpen}
-          onOpenChange={setConfirmDeleteDimOpen}
-          title={t('delete_dimension_confirm_title')}
-          description={t('delete_dimension_confirm_description', { name: activeDim.name })}
-          confirmLabel={t('delete_confirm_label')}
-          cancelLabel={t('delete_cancel_label')}
-          onConfirm={handleDeleteDimension}
-        />
-      )}
+      {/* Edit dimension dialog (name, placement, aktiv, delete) for the
+          active tab. The content unmounts on close, so each open starts
+          from the dimension's saved state. */}
+      <Dialog
+        open={editDimDialogOpen}
+        onOpenChange={(open) => !open && setEditDimDialogOpen(false)}
+      >
+        <DialogContent className="sm:max-w-lg max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{t('edit_dimension_title')}</DialogTitle>
+          </DialogHeader>
+          {activeDim && (
+            <EditDimensionForm
+              key={activeDim.id}
+              dimension={activeDim}
+              dimensions={dimensions}
+              isSaving={isUpdatingDim}
+              onSubmit={handleUpdateDimension}
+              onDelete={activeDim.is_system ? undefined : handleDeleteDimension}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
+      {/* New dimension dialog: the content (and thus the form state)
+          unmounts on close, so each open starts from a blank form. */}
       <Dialog
         open={newDimDialogOpen}
         onOpenChange={(open) => !open && setNewDimDialogOpen(false)}
@@ -736,11 +809,153 @@ function NewDimensionForm({
       </div>
 
       <div className="flex justify-end pt-2">
-        <Button type="submit" disabled={isSaving}>
-          {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button type="submit" loading={isSaving}>
           {t('form_create')}
         </Button>
       </div>
+    </form>
+  )
+}
+
+/** Select value for "first in the list"; every other option is a dimension id. */
+const PLACEMENT_FIRST = 'first'
+
+interface EditDimensionFormInput {
+  /** Trimmed; ignored for a system dimension, which cannot be renamed. */
+  name: string
+  is_active: boolean
+  /** Id of the dimension to list right before this one; null = first. */
+  after: string | null
+}
+
+/**
+ * Edit form for a registry dimension, the value form's recipe one level up:
+ * name (custom dimensions only: the route refuses renaming the system pair
+ * 1/6), placement in the register order, the aktiv switch for archiving,
+ * and delete for custom dimensions behind a confirm.
+ */
+function EditDimensionForm({
+  dimension,
+  dimensions,
+  isSaving,
+  onSubmit,
+  onDelete,
+}: {
+  dimension: DimensionDto
+  /** The registry in display order: populates the placement select. */
+  dimensions: DimensionDto[]
+  isSaving: boolean
+  onSubmit: (input: EditDimensionFormInput) => void | Promise<void>
+  /** Custom dimensions only. The caller performs the DELETE and toasts a refusal. */
+  onDelete?: () => void | Promise<void>
+}) {
+  const t = useTranslations('dimensions')
+  const [name, setName] = useState(dimension.name)
+  const [isActive, setIsActive] = useState(dimension.is_active)
+  const [after, setAfter] = useState(
+    () => placementOf(dimensions, dimension.id) ?? PLACEMENT_FIRST,
+  )
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+
+  const others = dimensions.filter((d) => d.id !== dimension.id)
+
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const trimmedName = name.trim()
+    if (!dimension.is_system && (!trimmedName || trimmedName.length > 60)) {
+      setNameError(t('dim_form_name_invalid'))
+      return
+    }
+    setNameError(null)
+    void onSubmit({
+      name: trimmedName,
+      is_active: isActive,
+      after: after === PLACEMENT_FIRST ? null : after,
+    })
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="edit-dimension-name">{t('form_name_label')}</Label>
+          <Input
+            id="edit-dimension-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={dimension.is_system}
+            autoComplete="off"
+          />
+          {dimension.is_system && (
+            <p className="text-xs text-muted-foreground">{t('dim_form_system_name_help')}</p>
+          )}
+          {nameError && <p className="text-xs text-destructive">{nameError}</p>}
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="edit-dimension-placement">{t('dim_form_placement_label')}</Label>
+          <Select value={after} onValueChange={setAfter}>
+            <SelectTrigger id="edit-dimension-placement">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={PLACEMENT_FIRST}>{t('dim_form_placement_first')}</SelectItem>
+              {others.map((dim) => (
+                <SelectItem key={dim.id} value={dim.id}>
+                  {t('dim_form_placement_after', { name: dim.name })}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">{t('dim_form_placement_help')}</p>
+        </div>
+      </div>
+
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="edit-dimension-active">{t('dim_form_active_label')}</Label>
+          <p className="text-xs text-muted-foreground max-w-md">
+            {t('dim_form_active_help')}
+          </p>
+        </div>
+        <Switch
+          id="edit-dimension-active"
+          checked={isActive}
+          onCheckedChange={setIsActive}
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-3 pt-2">
+        {onDelete ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="text-destructive hover:text-destructive"
+            disabled={isSaving}
+            onClick={() => setConfirmDeleteOpen(true)}
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            {t('delete_dimension')}
+          </Button>
+        ) : (
+          <span />
+        )}
+        <Button type="submit" loading={isSaving}>
+          {t('form_save')}
+        </Button>
+      </div>
+
+      {onDelete && (
+        <DestructiveConfirmDialog
+          open={confirmDeleteOpen}
+          onOpenChange={setConfirmDeleteOpen}
+          title={t('delete_dimension_confirm_title')}
+          description={t('delete_dimension_confirm_description', { name: dimension.name })}
+          confirmLabel={t('delete_confirm_label')}
+          cancelLabel={t('delete_cancel_label')}
+          onConfirm={onDelete}
+        />
+      )}
     </form>
   )
 }

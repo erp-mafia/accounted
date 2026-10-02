@@ -144,7 +144,6 @@ export function ActivateAccountsDialog({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-8 text-xs"
                       onClick={() => onCreateUnknown(r.account_number)}
                     >
                       <Plus className="mr-1 h-3 w-3" />
@@ -161,12 +160,9 @@ export function ActivateAccountsDialog({
           <Button variant="outline" onClick={onCancel} disabled={submitting}>
             Avbryt
           </Button>
-          <Button onClick={handleConfirm} disabled={!canConfirm}>
+          <Button onClick={handleConfirm} disabled={!canConfirm} loading={submitting}>
             {submitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Aktiverar...
-              </>
+              'Aktiverar...'
             ) : (
               <>
                 <Plus className="mr-2 h-4 w-4" />

@@ -472,6 +472,25 @@ describe('skatteverket OAuth callback', () => {
       )
     })
 
+    it("carries the proxy's nonce on the popup script and in its own CSP", async () => {
+      // A self-hosted `next start` delivers only the proxy's CSP header
+      // (src/proxy.ts): the script must carry the nonce that header trusts.
+      stateIs(flowOn(APP, { redirectUri: `${APP}/api/extensions/ext/skatteverket/callback` }))
+      const proxyNonce = 'cHJveHktbm9uY2UtMTIzNDU2Nzg='
+      const request = new Request(callbackRequest(APP, `code=abc&state=${STATE}`).url, {
+        headers: { 'x-nonce': proxyNonce },
+      })
+
+      const response = await callbackRoute().handler(request)
+
+      expect(response.headers.get('content-security-policy')).toContain(
+        `script-src 'nonce-${proxyNonce}'`,
+      )
+      const html = await response.text()
+      expect(html).toContain(`<script nonce="${proxyNonce}">`)
+      expect(html).toContain('skatteverket-oauth-success')
+    })
+
     it('shows the provider denial directly', async () => {
       stateIs(flowOn(APP))
 

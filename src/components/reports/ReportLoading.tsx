@@ -22,7 +22,7 @@ export function ReportBodyLoading() {
       <div className="space-y-3">
         <Skeleton className="h-3 w-48" />
         {[0, 1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className="flex items-center justify-between border-b border-border/60 py-2">
+          <div key={i} className="flex items-center justify-between border-b border-border py-2">
             <Skeleton className="h-3.5 w-56" />
             <Skeleton className="h-3.5 w-20" />
           </div>

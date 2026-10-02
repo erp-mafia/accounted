@@ -62,6 +62,8 @@ export interface ExtractionInput {
 export interface OwnCompanyIdentity {
   orgNumber: string | null
   name: string | null
+  /** The company itself, so the extraction call is metered to it (ai_usage_events). */
+  companyId?: string | null
 }
 
 export type ExtractionSkipped = ExtractionSkipReason | 'unsupported_media'
@@ -81,7 +83,7 @@ export interface ExtractionOutput {
 // amount/date fields keep strict parsing on purpose: a malformed amount
 // SHOULD reject the output rather than store garbage.
 const DocumentKind = z
-  .enum(['receipt', 'supplier_invoice', 'government_letter', 'other'])
+  .enum(['receipt', 'supplier_invoice', 'credit_note', 'government_letter', 'other'])
   .nullable()
   .catch(null)
 const PaymentMethod = z
@@ -141,6 +143,10 @@ export const ExtractionSchema = z.object({
     // field still validate.
     servicePeriodStart: z.string().nullable().optional(),
     servicePeriodEnd: z.string().nullable().optional(),
+    // On a credit note: the number of the invoice it credits, which is how
+    // the inbox finds the invoice to credit (issue #2980). A reference, not
+    // an amount: .catch(null) so a malformed value never fails the parse.
+    creditedInvoiceNumber: z.string().nullable().catch(null).optional(),
   }),
   lineItems: z.array(
     z.object({
@@ -315,6 +321,7 @@ export async function fetchOwnCompanyIdentity(
     return {
       orgNumber: (data?.org_number as string | null) ?? null,
       name: (data?.name as string | null) ?? null,
+      companyId,
     }
   } catch (err) {
     // Fail open, but visibly: a persistent lookup failure (RLS misconfig,
@@ -323,7 +330,7 @@ export async function fetchOwnCompanyIdentity(
       company_id: companyId,
       error: err instanceof Error ? err.message : String(err),
     })
-    return { orgNumber: null, name: null }
+    return { orgNumber: null, name: null, companyId }
   }
 }
 
@@ -348,7 +355,7 @@ const SYSTEM_PROMPT = `You extract invoice and receipt fields from a single docu
 Return ONLY a single JSON object that matches this schema exactly. No prose, no markdown fences, no commentary.
 
 {
-  "documentKind": "receipt" | "supplier_invoice" | "government_letter" | "other" | null,
+  "documentKind": "receipt" | "supplier_invoice" | "credit_note" | "government_letter" | "other" | null,
   "merchantCategory": "restaurant" | "cafe" | "taxi" | "parking" | "fuel" | "grocery" | "hotel" | "other" | null,
   "legibility": "good" | "partial" | "unreadable",
   "purchaseTime": string | null,   // "HH:MM" 24h, receipts only
@@ -370,7 +377,8 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
     "paymentReference": string | null, // OCR / payment reference
     "currency": string,                // ISO 4217 (SEK, USD, EUR, ...). Default "SEK" only if truly indeterminate.
     "servicePeriodStart": string | null, // ISO date: start of the service/coverage window the invoice charges for
-    "servicePeriodEnd": string | null    // ISO date: end of that window
+    "servicePeriodEnd": string | null,   // ISO date: end of that window
+    "creditedInvoiceNumber": string | null // credit notes only: the number of the invoice it credits
   },
   "lineItems": [
     {
@@ -400,7 +408,7 @@ VAT rate convention: BOTH lineItems[].vatRate AND vatBreakdown[].rate use the sa
 
 Rules:
 - Output JSON only. The first character must be '{' and the last must be '}'.
-- documentKind: "receipt" = point-of-sale proof of a COMPLETED payment (kassakvitto, kortkvitto, taxi/parking slip, webshop order confirmation marked paid). "supplier_invoice" = a request for payment (has due date, OCR/payment reference, bankgiro, "Att betala senast"). "government_letter" = correspondence from a myndighet (Skatteverket, Bolagsverket, Försäkringskassan...). "other" = contracts, statements, reports. null only when truly indeterminate.
+- documentKind: "receipt" = point-of-sale proof of a COMPLETED payment (kassakvitto, kortkvitto, taxi/parking slip, webshop order confirmation marked paid). "supplier_invoice" = a request for payment (has due date, OCR/payment reference, bankgiro, "Att betala senast"). "credit_note" = a kreditfaktura, kreditnota or credit note that reduces or cancels an earlier invoice ("Kreditfaktura", "Krediterar faktura", "Er tillgodo", negative amounts): never "supplier_invoice", even though it looks like one. "government_letter" = correspondence from a myndighet (Skatteverket, Bolagsverket, Försäkringskassan...). "other" = contracts, statements, reports. null only when truly indeterminate.
 - supplier: ALWAYS the party that ISSUED the document and charges or receives the money (the seller, the bank, the myndighet). NEVER the customer or recipient: blocks labeled "Kund", "Kunduppgifter", "Fakturamottagare", "Mottagare", "Kundens ex", "Er referens" or a delivery/billing address describe the RECEIVING company, and none of their fields (name, org number, address) may be used for supplier. On bank documents (avtal, bankintyg, kontoutdrag) the bank is the supplier even when the customer's company details are printed more prominently than the bank's. If only the customer's identity is readable, leave every supplier field null.
 - merchantCategory: judge from the merchant name and line items (a receipt from "Prinsen" listing food and wine is "restaurant" even without the word). Use "other" when unsure. null for non-receipts.
 - legibility: "good" = all key amounts and the merchant are readable. "partial" = some key fields are cut off, blurry, or unreadable. "unreadable" = the document is mostly illegible (too blurry/dark/small). Judge the IMAGE quality, not whether fields exist on the document.
@@ -411,6 +419,8 @@ Rules:
 - Currency: detect from the document (symbol $/€/kr or explicit code). Use the ISO 4217 code. Do NOT default to SEK if the document clearly shows another currency.
 - "total" is the amount the buyer must pay (look for "Att betala", "Total", "Amount paid", "Amount due", "Balance"). Prefer this over Subtotal.
 - Dates: convert any format to YYYY-MM-DD. If the document only shows month/year, leave null.
+- creditedInvoiceNumber: only on a credit note, the number of the original invoice it refers to ("Krediterar faktura 10234", "Avser faktura", "Original invoice"), exactly as printed. null on every other document and when no invoice number is referenced. invoiceNumber stays the credit note's own number.
+- Credit note amounts: give totals and lineItems with the sign printed on the document (negative when printed negative).
 - servicePeriodStart/servicePeriodEnd: only when the document explicitly states the period the charge covers ("Avtalsperiod", "Period", "Försäkringstid", "Subscription period", coverage dates). Never infer from invoice/due dates. Month-only boundaries map to the first resp. last day of the month.
 - Bankgiro/Plusgiro: only set when the document is for a Swedish supplier on a Swedish bank rail. Do not invent.
 - Org.nr: only set when it is an actual Swedish organisation number (10 digits, Luhn-valid). For US/EU companies leave null even if they list an EIN/VAT number.
@@ -446,6 +456,7 @@ export function emptyResult(): InvoiceExtractionResult {
       currency: 'SEK',
       servicePeriodStart: null,
       servicePeriodEnd: null,
+      creditedInvoiceNumber: null,
     },
     lineItems: [],
     totals: { subtotal: null, vatAmount: null, total: null, roundingAmount: null },
@@ -619,6 +630,7 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
         currency: { type: 'string' },
         servicePeriodStart: nullable('string'),
         servicePeriodEnd: nullable('string'),
+        creditedInvoiceNumber: nullable('string'),
       },
       required: [
         'invoiceNumber',
@@ -628,6 +640,7 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
         'currency',
         'servicePeriodStart',
         'servicePeriodEnd',
+        'creditedInvoiceNumber',
       ],
     },
     lineItems: {
@@ -719,6 +732,7 @@ export async function extractInvoiceFields(
     const baseMaxTokens = readAiConfig().extractionMaxTokens
     const request = {
       document: toDocumentInput(input),
+      meter: { feature: 'inbox_extract', companyId: input.ownCompany?.companyId ?? null },
       system: SYSTEM_PROMPT,
       instruction: EXTRACTION_INSTRUCTION,
       jsonSchema: EXTRACTION_JSON_SCHEMA,

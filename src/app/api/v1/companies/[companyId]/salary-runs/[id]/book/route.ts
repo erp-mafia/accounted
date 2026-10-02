@@ -3,18 +3,28 @@
  *
  * The engine-touching verb. Mirrors the dashboard's `/book` route: loads the
  * run + employees + line items, calls `createSalaryRunEntries()` (which posts
- * 2-4 verifikationer via the bookkeeping engine), then optimistic-lock
- * UPDATEs status `paid` → `booked` with the journal entry foreign keys.
+ * 2-4 verifikationer via the bookkeeping engine), then UPDATEs status
+ * `paid` → `booked` with the journal entry foreign keys.
  *
  * BFL 5 kap + 6 §§: the verifikation must reflect the actual cash movement
  * (payment_date). createSalaryRunEntries assigns voucher numbers atomically
  * via the `commit_journal_entry` RPC; immutability triggers prevent any
  * later edit.
  *
+ * Booking claim (accounted#3251): the status precheck below is a read, so a
+ * concurrent call passes it too. Before posting, the call claims the run in
+ * the database (claimSalaryRunBooking, shared with the dashboard and MCP
+ * doors); a concurrent call gets 409 SALARY_RUN_BOOKING_IN_PROGRESS and posts
+ * nothing, and only the claim holder can flip the run to `booked`.
+ *
  * Strict-mode v1: an engine throw aborts BEFORE the salary_runs status
- * mutation. There is no partial-state recovery banner; the caller sees a
- * clean error and the run remains in `paid` so they can fix the underlying
- * cause (e.g. unlock the period) and retry.
+ * mutation, and every verifikat passes the engine's checks before the first
+ * one is numbered (createJournalEntries), so a refusal posts nothing: the run
+ * remains in `paid` and the caller fixes the cause (e.g. unlock the period)
+ * and retries. A posting that stops partway on a transient failure leaves the
+ * vouchers posted so far; the retry adopts them instead of posting them twice,
+ * and a posted voucher of the run that does not match is refused as
+ * SALARY_RUN_PARTIALLY_BOOKED.
  *
  * Period-lock pre-check: we check `payment_date` against the company's lock
  * date and fiscal period status BEFORE invoking the engine, so the response
@@ -35,6 +45,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import {
   createSalaryRunEntries,
+  SalaryRunPartiallyBookedError,
   salaryRunDataFromRows,
   type SalaryRosterRow,
   type SalaryRunRow,
@@ -45,6 +56,11 @@ import {
   settleExpenseClaimsForBookedRun,
 } from '@/lib/salary/expense-claim-lines'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
+import {
+  claimSalaryRunBooking,
+  markClaimedRunBooked,
+  releaseSalaryRunBooking,
+} from '@/lib/salary/book-run'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
 import { refreshRunYtd } from '@/lib/salary/ytd'
@@ -56,7 +72,7 @@ const SalaryRunBooked = z.object({
   booked_at: z.string(),
   booked_by: z.string().uuid().nullable(),
   salary_entry_id: z.string().uuid(),
-  avgifter_entry_id: z.string().uuid(),
+  avgifter_entry_id: z.string().uuid().nullable(),
   vacation_entry_id: z.string().uuid().nullable(),
   pension_entry_id: z.string().uuid().nullable(),
   entry_ids: z.array(z.string().uuid()),
@@ -71,7 +87,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id/book',
   summary: 'Post the verifikationer for a paid salary run.',
   description:
-    'Creates 2-4 journal entries (1: salary brutto/tax/net; 2: arbetsgivaravgifter; 3 if applicable: semesterlöneskuld accrual; 4 if applicable: pension + SLP from löneväxling), then advances status `paid` → `booked` with all the entry IDs recorded on the salary_runs row. Strict-mode: any engine failure aborts BEFORE the status flip: the run stays in `paid` so the caller can fix the cause (locked period, missing BAS account, etc.) and retry.',
+    'Creates 1-4 journal entries (1: salary brutto/tax/net; 2 if the run has any: arbetsgivaravgifter; 3 if applicable: semesterlöneskuld accrual; 4 if applicable: pension + SLP from löneväxling), then advances status `paid` → `booked` with all the entry IDs recorded on the salary_runs row. Strict-mode: any engine failure aborts BEFORE the status flip, and all entries are validated before the first is posted, so a refusal (locked period, missing BAS account, required or archived dimension value, etc.) posts nothing: the run stays in `paid` so the caller can fix the cause and retry.',
   useWhen:
     'You\'ve marked a salary run as paid and want to post the BFL-required verifikationer. This is the final lifecycle verb before AGI generation; after :book, the run can no longer be edited and corrections must use the (forthcoming) `:correct` verb.',
   doNotUseFor:
@@ -81,7 +97,9 @@ registerEndpoint({
     'payment_date must fall in an open fiscal period: locked period returns 400 PERIOD_LOCKED with `fiscal_period_id` and a hint of what unlock action is needed.',
     'BFL 5 kap immutability: once `:book` succeeds the verifikationer cannot be edited or deleted. Corrections require `:correct` (Phase 5 PR-3) which does a storno-then-rebook.',
     'The salary verifikation is the primary one; its voucher_number appears in the response audit block. The avgifter, vacation, and pension entries get separate voucher numbers (returned as `entry_ids`).',
-    'Strict-mode: if the engine fails partway, the salary_runs row stays in `paid`. There is no "partial booking": the engine either commits all entries or the entire booking fails.',
+    'A run without arbetsgivaravgifter (only utlägg repaid, or only payees without avgifter such as F-skatt holders) posts no avgifter entry: avgifter_entry_id is null.',
+    'Strict-mode: every entry is validated before the first is posted, so a refusal posts nothing and the run stays in `paid`. If posting stops partway on a transient failure, calling :book again adopts the entries already posted (when they match the run exactly) and posts only the missing ones, never twice. A posted entry of the run that does not match returns 409 SALARY_RUN_PARTIALLY_BOOKED with details.voucher_numbers: reverse those, then retry.',
+    'One booking per run at a time: while another :book call (or a dashboard or MCP booking) for the same run is in flight, this call returns 409 SALARY_RUN_BOOKING_IN_PROGRESS and posts nothing. Do not retry at once after a client timeout: wait, GET the run, and call :book again only if it is still `paid`.',
   ],
   example: {
     response: {
@@ -213,7 +231,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           would_advance_status_to: 'booked',
           would_post_entries: [
             'salary (gross + tax withholding + net payment)',
-            'arbetsgivaravgifter',
+            // Through the booking's own mapper (overrides, F-skatt rows), so
+            // a run without avgifter previews no avgifter entry either.
+            ...(salaryRunDataFromRows(run as SalaryRunRow, employees as SalaryRosterRow[]).employees.some(
+              (employee) => Math.round(employee.avgifter_amount * 100) !== 0,
+            )
+              ? ['arbetsgivaravgifter']
+              : []),
             ...(totalVacation > 0 || totalVacationAvgifter > 0 ? ['vacation accrual'] : []),
             ...((employees as Array<{ line_items: Array<{ item_type: string; amount: number }> | null }>).some(
               (employee) =>
@@ -226,38 +250,59 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
               ? ['pension provision and SLP']
               : []),
           ],
-          note: 'A live call posts 2-4 verifikationer atomically via createSalaryRunEntries. Voucher numbers are assigned at commit time.',
+          note: 'A live call validates all 2-4 verifikationer before posting the first (createSalaryRunEntries). Voucher numbers are assigned at commit time.',
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
 
-    // 4. Engine call. Strict-mode: any throw aborts before status flip.
+    // 4. Claim the run for this call. Exactly one of two concurrent calls
+    //    gets the claim; the other posts nothing.
+    const bookingClaim = await claimSalaryRunBooking(ctx.supabase, ctx.companyId!, salaryRunId)
+    if (!bookingClaim.ok) {
+      if (bookingClaim.reason === 'db_error') {
+        return v1ErrorResponse(bookingClaim.dbError, ctx.log, { requestId: ctx.requestId })
+      }
+      if (bookingClaim.reason === 'in_progress') {
+        return v1ErrorResponseFromCode('SALARY_RUN_BOOKING_IN_PROGRESS', ctx.log, { requestId: ctx.requestId })
+      }
+      if (bookingClaim.currentStatus === null) {
+        return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+      }
+      return v1ErrorResponseFromCode('SALARY_RUN_BOOK_NOT_PAID', ctx.log, {
+        requestId: ctx.requestId,
+        details: { current_status: bookingClaim.currentStatus },
+      })
+    }
+
+    // A booking that does not reach `booked` hands the run back, so the
+    // caller can retry at once instead of waiting out the claim's expiry.
+    const releaseClaim = () =>
+      releaseSalaryRunBooking(ctx.supabase, ctx.companyId!, salaryRunId, bookingClaim.claimId, ctx.log)
+
+    // 5. Engine call. Strict-mode: any throw aborts before status flip.
     // Rows -> engine input through the one mapper every booking surface and
     // the journal preview share (salaryRunDataFromRows): review overrides,
     // the F-skatt avgifter rules and employee dimensions reach the ledger
     // identically no matter which surface books the run.
-    let salaryEntry: { id: string; voucher_number: string }
-    let avgifterEntry: { id: string }
-    let vacationEntry: { id: string } | null
-    let pensionEntry: { id: string } | null
+    let vouchers: Awaited<ReturnType<typeof createSalaryRunEntries>>
     try {
-      const result = await createSalaryRunEntries(
+      vouchers = await createSalaryRunEntries(
         ctx.supabase,
         ctx.companyId!,
         ctx.userId,
         salaryRunDataFromRows(run as SalaryRunRow, employees as SalaryRosterRow[]),
       )
-      // Narrow to just the fields the route consumes: id + voucher_number
-      // for the primary salary entry, id for the others. The full
-      // JournalEntry shape is broader than what the audit block needs.
-      salaryEntry = result.salaryEntry as unknown as { id: string; voucher_number: string }
-      avgifterEntry = result.avgifterEntry
-      vacationEntry = result.vacationEntry
-      pensionEntry = result.pensionEntry
     } catch (err) {
+      await releaseClaim()
       if (isBookkeepingError(err)) {
         return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+      }
+      if (err instanceof SalaryRunPartiallyBookedError) {
+        return v1ErrorResponseFromCode(err.code, ctx.log, {
+          requestId: ctx.requestId,
+          details: err.details,
+        })
       }
       ctx.log.error('salary booking failed', err as Error, {
         salaryRunId,
@@ -269,63 +314,32 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
+    // The audit block needs only id + voucher_number of the primary salary
+    // entry; the full JournalEntry shape is broader.
+    const salaryEntry = vouchers.salaryEntry as unknown as { id: string; voucher_number: string }
 
-    // 5. Optimistic-lock the status flip on status='paid'. Concurrent calls
-    //    would have re-posted JEs (a real bug: we'd have orphans), but
-    //    the engine's atomicity makes that a no-op race that just won't
-    //    commit the second status flip.
-    const entryIds = [salaryEntry.id, avgifterEntry.id]
-    const updates: Record<string, unknown> = {
-      status: 'booked',
-      salary_entry_id: salaryEntry.id,
-      avgifter_entry_id: avgifterEntry.id,
-      booked_at: new Date().toISOString(),
-      booked_by: ctx.userId,
-    }
-    if (vacationEntry) {
-      updates.vacation_entry_id = vacationEntry.id
-      entryIds.push(vacationEntry.id)
-    }
-    if (pensionEntry) {
-      updates.pension_entry_id = pensionEntry.id
-      entryIds.push(pensionEntry.id)
-    }
-
-    const { data: bookedRun, error: updateError } = await ctx.supabase
-      .from('salary_runs')
-      .update(updates)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', salaryRunId)
-      .eq('status', 'paid')
-      .select(BOOK_RESPONSE_COLUMNS)
-      .maybeSingle()
-
-    if (updateError) {
-      // The engine already committed; the row update failed. This is a
-      // partial-state we cannot recover automatically. Surface loudly so
-      // an operator notices and runs a manual reconciliation (the
-      // verifikationer exist and have voucher numbers; the salary_runs
-      // row just doesn't point at them yet).
-      ctx.log.error('salary_runs status flip failed after engine commit', updateError as Error, {
-        salaryRunId,
-        companyId: ctx.companyId,
-        entryIds,
-      })
-      return v1ErrorResponse(updateError, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!bookedRun) {
-      // Race: the row's status changed between fetch and update. The
-      // engine has committed; we cannot un-commit. Log loudly.
-      ctx.log.error('salary_runs row missing after engine commit', new Error('race'), {
-        salaryRunId,
-        companyId: ctx.companyId,
-        entryIds,
-      })
-      return v1ErrorResponseFromCode('SALARY_RUN_BOOK_FAILED', ctx.log, {
+    // 6. paid -> booked, only for the claim holder: status and claim token are
+    //    filtered in the same UPDATE, which also clears the claim. A failure
+    //    here comes after the engine committed; markClaimedRunBooked logs it
+    //    with the entry ids, and a retry adopts the posted vouchers.
+    const flipped = await markClaimedRunBooked(
+      ctx.supabase,
+      { companyId: ctx.companyId!, userId: ctx.userId, salaryRunId, log: ctx.log },
+      bookingClaim.claimId,
+      vouchers,
+      BOOK_RESPONSE_COLUMNS,
+    )
+    if (!flipped.ok) {
+      await releaseClaim()
+      if (flipped.dbError) {
+        return v1ErrorResponse(flipped.dbError, ctx.log, { requestId: ctx.requestId })
+      }
+      return v1ErrorResponseFromCode(flipped.code, ctx.log, {
         requestId: ctx.requestId,
-        details: { reason: 'row missing after engine commit', entry_ids: entryIds },
+        details: flipped.details,
       })
     }
+    const { run: bookedRun, entryIds } = flipped.data
 
     // Utlägg repaid with this salary: mark the claims paid with a payout
     // batch pointing at the salary verifikat (mirrors lib/salary/book-run.ts;
@@ -391,7 +405,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const bookedAt = (bookedRun as { booked_at: string }).booked_at
 
     return ok(
-      { ...(bookedRun as Record<string, unknown>), entry_ids: entryIds },
+      { ...bookedRun, entry_ids: entryIds },
       {
         requestId: ctx.requestId,
         audit: {

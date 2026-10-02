@@ -44,7 +44,11 @@ const USER_ID = '930abb54-c5ef-4ae0-b274-30fb16e9a295'
 
 // A Proxy-based supabase stub: every chained builder method returns the chain,
 // and awaiting it resolves to the configured { data, error } for the table.
-function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: unknown }>) {
+function makeFlexibleSupabase(
+  byTable: Record<string, { data?: unknown; error?: unknown }>,
+  calls: Array<{ method: string; args: unknown[] }> = [],
+  tableCalls: Array<{ table: string; method: string; args: unknown[] }> = [],
+) {
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_t, prop) {
@@ -52,7 +56,11 @@ function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: 
           return (resolve: (v: unknown) => void) =>
             resolve(byTable[table] ?? { data: null, error: null })
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          calls.push({ method: String(prop), args })
+          tableCalls.push({ table, method: String(prop), args })
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
@@ -165,11 +173,85 @@ describe('GET /api/v1/companies', () => {
     expect(body.data).toEqual([])
   })
 
+  it('filters the listing by the key company allowlist when the key has one', async () => {
+    const tableCalls: Array<{ table: string; method: string; args: unknown[] }> = []
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: '8fd5b1f4-0000-4000-8000-000000000001',
+      apiKeyId: 'ak_1',
+      apiKeyName: 'Restricted key',
+      scopes: ['companies:read'],
+      mode: 'live',
+      allowedCompanyIds: ['8fd5b1f4-0000-4000-8000-000000000001'],
+    })
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({ company_members: { data: [membershipRow()], error: null } }, [], tableCalls),
+    )
+
+    const res = await listCompanies(makeRequest(), staticRouteContext())
+
+    expect(res.status).toBe(200)
+    // On the membership query itself, not the display-name lookup.
+    expect(tableCalls).toContainEqual({
+      table: 'company_members',
+      method: 'in',
+      args: ['company_id', ['8fd5b1f4-0000-4000-8000-000000000001']],
+    })
+  })
+
+  it('adds no allowlist filter for an unrestricted key', async () => {
+    const tableCalls: Array<{ table: string; method: string; args: unknown[] }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({ company_members: { data: [membershipRow()], error: null } }, [], tableCalls),
+    )
+
+    const res = await listCompanies(makeRequest(), staticRouteContext())
+
+    expect(res.status).toBe(200)
+    // The membership query is not narrowed (the display-name lookup on
+    // company_settings is its own `in`, over the listed companies).
+    expect(tableCalls.some((c) => c.table === 'company_members' && c.method === 'in')).toBe(false)
+  })
+
   it('returns 401 for a missing bearer token (auth still enforced)', async () => {
     const res = await listCompanies(
       new Request('https://x.test/api/v1/companies'),
       staticRouteContext(),
     )
     expect(res.status).toBe(401)
+  })
+})
+
+describe('GET /api/v1/companies display name', () => {
+  it('returns the name edited in Inställningar, not the onboarding snapshot: feedback seq 592092', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: [membershipRow()], error: null },
+        company_settings: {
+          data: [{ company_id: '8fd5b1f4-0000-4000-8000-000000000001', company_name: 'Acme Renamed AB' }],
+          error: null,
+        },
+      }),
+    )
+
+    const res = await listCompanies(makeRequest(), staticRouteContext())
+    const body = await res.json()
+
+    expect(body.data[0].name).toBe('Acme Renamed AB')
+  })
+
+  it('keeps companies.name when the settings read fails', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: [membershipRow()], error: null },
+        company_settings: { data: null, error: { message: 'boom' } },
+      }),
+    )
+
+    const res = await listCompanies(makeRequest(), staticRouteContext())
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.data[0].name).toBe('Acme AB')
   })
 })

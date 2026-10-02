@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { AlertCircle, CheckCircle2, FileClock, Loader2, LockKeyhole, Save } from 'lucide-react'
+import { AlertCircle, CheckCircle2, FileClock, LockKeyhole, Save } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Select,
   SelectContent,
@@ -306,8 +307,11 @@ export function AnnualReportStudio({
 
   if (loading || !profile || !compliance) {
     return (
-      <div className="flex min-h-24 items-center justify-center px-1 py-6 text-sm text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {t('loading')}
+      <div className="space-y-3 px-1 py-6" aria-busy="true" aria-label={t('loading')}>
+        <Skeleton className="h-4 w-1/3" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-5/6" />
+        <Skeleton className="h-4 w-2/3" />
       </div>
     )
   }
@@ -337,7 +341,7 @@ export function AnnualReportStudio({
             [t('step_signatures'), versions.some((version) => version.status === 'signed')],
             [t('step_filing'), versions.some((version) => ['filed', 'registered'].includes(version.status))],
           ].map(([label, complete], index) => (
-            <div key={String(label)} className="flex items-center gap-2 border-b border-border/60 px-1 py-2 text-sm">
+            <div key={String(label)} className="flex items-center gap-2 border-b border-border px-1 py-2 text-sm">
               {complete ? (
                 <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
               ) : (
@@ -498,8 +502,8 @@ export function AnnualReportStudio({
           )}
 
           <div className="flex justify-end">
-            <Button onClick={() => void saveProfile()} disabled={saving}>
-              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            <Button onClick={() => void saveProfile()} loading={saving}>
+              {!saving && <Save className="mr-2 h-4 w-4" />}
               {t('save_scope')}
             </Button>
           </div>
@@ -541,7 +545,7 @@ export function AnnualReportStudio({
               </ul>
             </div>
           )}
-          <div className="flex flex-wrap justify-end gap-3 border-t border-border/60 pt-4">
+          <div className="flex flex-wrap justify-end gap-3 border-t border-border pt-4">
             <Button
               variant="outline"
              
@@ -562,12 +566,12 @@ export function AnnualReportStudio({
               <CheckCircle2 className="mr-2 h-4 w-4" />
               {profile.narrative_confirmed_at ? t('content_confirmed') : t('confirm_content')}
             </Button>
-            <Button variant="outline" onClick={() => void createVersion('snapshot')} disabled={creatingVersion !== null}>
-              {creatingVersion === 'snapshot' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileClock className="mr-2 h-4 w-4" />}
+            <Button variant="outline" onClick={() => void createVersion('snapshot')} disabled={creatingVersion !== null} loading={creatingVersion === 'snapshot'}>
+              {creatingVersion !== 'snapshot' && <FileClock className="mr-2 h-4 w-4" />}
               {t('create_snapshot')}
             </Button>
-            <Button onClick={() => void createVersion('finalize')} disabled={creatingVersion !== null || blockingIssues.length > 0 || hasUnsavedNarrative}>
-              {creatingVersion === 'finalize' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LockKeyhole className="mr-2 h-4 w-4" />}
+            <Button onClick={() => void createVersion('finalize')} disabled={creatingVersion !== null || blockingIssues.length > 0 || hasUnsavedNarrative} loading={creatingVersion === 'finalize'}>
+              {creatingVersion !== 'finalize' && <LockKeyhole className="mr-2 h-4 w-4" />}
               {t('lock_version')}
             </Button>
           </div>
@@ -598,9 +602,13 @@ export function AnnualReportStudio({
                     <p className="text-xs text-muted-foreground">{version.content_hash.slice(0, 12)}</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant={version.status === 'registered' ? 'success' : version.status === 'draft' ? 'outline' : 'secondary'}>
-                      {t(`status_${version.status}`)}
-                    </Badge>
+                    {version.status === 'registered' ? (
+                      <span className="text-xs text-muted-foreground">{t(`status_${version.status}`)}</span>
+                    ) : (
+                      <Badge variant={version.status === 'draft' ? 'outline' : 'secondary'}>
+                        {t(`status_${version.status}`)}
+                      </Badge>
+                    )}
                     <Button variant="outline" size="sm" asChild>
                       <a href={`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf?version=${version.id}`} target="_blank" rel="noopener noreferrer">
                         {t('open_pdf')}

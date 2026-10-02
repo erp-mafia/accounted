@@ -33,6 +33,7 @@ import {
 } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger, type Logger } from '@/lib/logger'
+import { shouldExposeTimingHeaders } from '@/lib/observability/timing-headers'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 
@@ -193,11 +194,17 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       if (response instanceof Response && !response.headers.get('X-Request-Id')) {
         response.headers.set('X-Request-Id', requestId)
       }
-      // Per-phase breakdown, visible in browser devtools (Timing tab) and in
-      // the op-completed log: separates the wrapper's own overhead (auth
-      // round trip + company resolution) from the handler's real work, so
-      // latency regressions can be attributed without guessing.
-      if (response instanceof Response && !response.headers.get('Server-Timing')) {
+      // Per-phase breakdown in the op-completed log (always) and, outside
+      // production, in browser devtools (Timing tab): separates the wrapper's
+      // own overhead (auth round trip + company resolution) from the
+      // handler's real work, so latency regressions can be attributed without
+      // guessing. Production keeps only the log line: the header would tell
+      // any caller how the pipeline is built (lib/observability/timing-headers).
+      if (
+        response instanceof Response &&
+        shouldExposeTimingHeaders() &&
+        !response.headers.get('Server-Timing')
+      ) {
         response.headers.set(
           'Server-Timing',
           `auth;dur=${authMs}, company;dur=${companyMs}, handler;dur=${handlerMs}`,

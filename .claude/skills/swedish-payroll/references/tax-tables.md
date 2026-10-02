@@ -16,8 +16,8 @@ Each table contains 6 columns for different employee categories:
 | 2 | Pensioners 66+ |
 | 3 | Workers 66+ with förhöjt jobbskatteavdrag |
 | 4 | Sjuk-/aktivitetsersättning recipients under 66 |
-| 5 | Varies by year per SKVFS |
-| 6 | Pre-65 retirement pensions for born 1951+ |
+| 5 | Other pension-qualifying income than salary (e.g. a-kassa, own arbetsskadelivränta) for people born 1938 or later |
+| 6 | Pensions and other income that is not a base for allmän pensionsavgift and gives no jobbskatteavdrag, for people under 66 at year start |
 
 ## Implementation workflow
 
@@ -37,8 +37,12 @@ Jämkning is a Skatteverket decision adjusting withholding up or down from the t
 
 For secondary income (all employers other than the main one), withhold a flat 30% regardless of salary level.
 
+## SINK
+
+Särskild inkomstskatt för utomlands bosatta (SINK) is a final withholding tax on pay to people not resident in Sweden: 22.5% from 2026 (25% in 2025).
+
 Employees may request förhöjt skatteavdrag (higher withholding) from their main employer without any Skatteverket decision. Lower withholding always requires a jämkning.
 
 ## State income tax
 
-The brytpunkt is 660,400 SEK/year (~55,033 SEK/month) for 2026 at 20% above the threshold. This is already built into the published tax tables, so no separate employer calculation is needed.
+The brytpunkt is 660,400 SEK/year (~55,033 SEK/month) for 2026 at 20% above the threshold (skiktgräns 643,000 SEK after grundavdrag; brytpunkt 760,500 SEK for people who had turned 66 at year start). This is already built into the published tax tables, so no separate employer calculation is needed.

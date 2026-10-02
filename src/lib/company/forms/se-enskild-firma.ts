@@ -17,6 +17,7 @@ export const SE_ENSKILD_FIRMA: LegalFormProfile = {
     closing: '2010',
     closingName: 'Eget kapital',
     priorYearCarry: null,
+    retained: '2010',
     hasOwners: true,
     settlement: { withdrawal: '2013', contribution: '2018' },
     memberCapital: false,

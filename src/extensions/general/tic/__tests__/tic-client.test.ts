@@ -177,6 +177,31 @@ describe('tic-client', () => {
       expect(result).toEqual(current)
     })
 
+    it('prefers an active registration over a newer ceased one despite a stale isCeased', async () => {
+      const restarted = {
+        companyId: 1,
+        registrationNumber: '1982083002390001',
+        names: [{ nameOrIdentifier: 'Restarted Firm', companyNamingType: 'legalName' }],
+        legalEntityType: 'Enskild näringsidkare',
+        registrationDate: 936748800,
+        isCeased: true,
+        activityStatus: 'isActive',
+      }
+      const closed = {
+        ...restarted,
+        companyId: 2,
+        registrationNumber: '1982083002390002',
+        registrationDate: 1239667200,
+        activityStatus: 'isNoLongerActive',
+      }
+      vi.mocked(fetch).mockResolvedValue(
+        new Response(JSON.stringify({ found: 2, hits: [{ document: closed }, { document: restarted }], facet_counts: [] }))
+      )
+
+      const result = await searchCompanyByOrgNumber('820830-0239')
+      expect(result?.registrationNumber).toBe('1982083002390001')
+    })
+
     it('falls back to the most recent registration when every match is ceased', async () => {
       const older = {
         companyId: 1,

@@ -195,7 +195,7 @@ export function SignoffDialog({
               onChange={(e) => setDate(e.target.value)}
               className="tabular-nums"
             />
-            {previewing && <p className="text-[12px] text-muted-foreground">{t('signoff_preview_pending')}</p>}
+            {previewing && <p className="text-[12.5px] text-muted-foreground">{t('signoff_preview_pending')}</p>}
           </div>
           {askExternalBalance && (
             <div className="space-y-1.5">
@@ -208,7 +208,7 @@ export function SignoffDialog({
                 placeholder="0,00"
                 className="tabular-nums"
               />
-              <p className="text-[12px] text-muted-foreground">
+              <p className="text-[12.5px] text-muted-foreground">
                 {ledgerBalance != null
                   ? t('signoff_external_balance_help', { amount: formatCurrency(ledgerBalance, currency) })
                   : t('signoff_external_balance_optional')}

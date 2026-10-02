@@ -170,6 +170,15 @@ export function resultClosingAccounts(entityType: EntityType): ResultClosingAcco
 }
 
 /**
+ * Account earlier years' results are balanced to after the annual meeting's
+ * decision (balanserat resultat): AB 2091, förening 2067; an enskild firma
+ * keeps them on 2010.
+ */
+export function retainedResultAccount(entityType: EntityType): string {
+  return legalFormProfile(entityType).equity.retained
+}
+
+/**
  * Account for money settled with the owner (EF: egna uttag/insättningar, AB:
  * skuld till aktieägare). A förening has no owner; a member who pays or is
  * paid is a plain short-term counterparty on 2890.

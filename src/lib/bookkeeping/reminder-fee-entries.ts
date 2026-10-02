@@ -23,9 +23,16 @@
  *   - Source type is 'reminder_fee' (see migration
  *     20260526120300_drojsmalsranta_paminnelseavgift.sql which adds it
  *     to the journal_entries.source_type CHECK constraint).
+ *   - Both legs carry the reminded invoice's default_dimensions, the same
+ *     propagation the invoice payment uses (createInvoicePaymentJournalEntry):
+ *     the fee is revenue of that invoice, so it lands in the invoice's
+ *     project or cost center, 1510 nets per dimension, and a required
+ *     dimension rule on 3990 is satisfied whenever the invoice was tagged.
+ *     Default/fixed rules still apply on top in the engine.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createJournalEntry, findFiscalPeriod } from './engine'
+import { coerceDimensionsBag } from './dimension-resolver'
 import { createLogger } from '@/lib/logger'
 import type { CreateJournalEntryInput, JournalEntry } from '@/types'
 
@@ -44,6 +51,8 @@ export interface CreateReminderFeeEntryInput {
   feeAmount: number
   /** Date used as entry_date (typically the reminder send date). */
   asOfDate: string
+  /** The reminded invoice's default_dimensions, stamped on both legs. */
+  invoiceDefaultDimensions?: Record<string, string> | null
 }
 
 export interface CreateReminderFeeEntryResult {
@@ -54,8 +63,9 @@ export interface CreateReminderFeeEntryResult {
  * Book the statutory påminnelseavgift as a journal entry.
  *
  * Returns the new journal_entry_id on success. Returns `null` if no
- * open fiscal period exists for `asOfDate` (the caller should treat
- * this as "skip booking, log a warning, continue sending the email").
+ * open fiscal period exists for `asOfDate`: nothing is booked, so the
+ * caller must not charge the fee (the reminder processor then sends the
+ * reminder without it).
  *
  * Throws on hard failures (account missing from chart, period locked,
  * balance trigger rejection). Callers wrap in try/catch so a single
@@ -108,6 +118,13 @@ export async function createReminderFeeEntry(
         line_description: description,
       },
     ],
+  }
+
+  const dimensions = coerceDimensionsBag(input.invoiceDefaultDimensions)
+  if (dimensions) {
+    // A copy per line, as the invoice payment does: a shared bag object would
+    // let one line's mutation leak into the other.
+    for (const line of entryInput.lines) line.dimensions = { ...dimensions }
   }
 
   const entry: JournalEntry = await createJournalEntry(supabase, companyId, userId, entryInput)

@@ -8,14 +8,16 @@ import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
-import { Download, Loader2, ChevronDown } from 'lucide-react'
+import { PaymentBankList } from '@/components/salary/PaymentBankList'
+import { Download, ChevronDown } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import { cn, formatDateTime } from '@/lib/utils'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
+import { parseSalaryPaymentFormat, type SalaryPaymentFileFormat } from '@/lib/salary/payment/payment-format'
 
-type PaymentFormat = 'bg_lb' | 'pain001'
+type PaymentFormat = SalaryPaymentFileFormat
 
 interface PaymentFilePanelProps {
   salaryRunId: string
@@ -162,6 +164,7 @@ export function PaymentFilePanel({
           <p className="mt-2">
             <span className="font-medium">{FORMAT_LABEL.bg_lb}</span>: {t('format_description_bg_lb')}
           </p>
+          <p className="mt-2">{t('bank_list_help')}</p>
           <p className="mt-2 text-muted-foreground">{t('open_payments_note')}</p>
         </HelpPopover>
       }
@@ -181,7 +184,12 @@ export function PaymentFilePanel({
             <SettingsSelect
               aria-label={t('format_label')}
               value={format}
-              onChange={(e) => setFormat(e.target.value as PaymentFormat)}
+              onChange={(e) => {
+                // The select value is DOM text: narrow it to a known format
+                // before it drives any URL, and ignore anything else.
+                const next = parseSalaryPaymentFormat(e.target.value)
+                if (next) setFormat(next)
+              }}
               wrapperClassName="-my-1"
             >
               <option value="pain001">{FORMAT_LABEL.pain001}</option>
@@ -189,6 +197,10 @@ export function PaymentFilePanel({
             </SettingsSelect>
           </DefRow>
         )}
+
+        {/* The banklista of the chosen format: the payment file builder's
+            own payee lines, so the list and the file cannot disagree. */}
+        <PaymentBankList salaryRunId={salaryRunId} format={format} />
       </div>
 
       {!readOnly && (
@@ -226,12 +238,8 @@ export function PaymentFilePanel({
               />
               {t('instructions_toggle')}
             </button>
-            <Button onClick={handleDownload} disabled={downloading}>
-              {downloading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="mr-2 h-4 w-4" />
-              )}
+            <Button onClick={handleDownload} loading={downloading}>
+              {!downloading && <Download className="mr-2 h-4 w-4" />}
               {t('download')}
             </Button>
           </div>

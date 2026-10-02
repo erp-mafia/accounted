@@ -16,6 +16,7 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { FyPicker } from '@/components/common/FyPicker'
+import { CloseImportedYearsOffer } from '@/components/import/CloseImportedYearsOffer'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
@@ -496,13 +497,10 @@ export default function UnderlagImportWizard() {
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isLoading || !fiscalPeriodId}
+                disabled={!fiscalPeriodId}
+                loading={isLoading}
               >
-                {isLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <FileUp className="h-4 w-4" />
-                )}
+                {!isLoading && <FileUp className="h-4 w-4" />}
                 {t('underlag_pick_files')}
               </Button>
               <Button
@@ -617,8 +615,7 @@ export default function UnderlagImportWizard() {
           </div>
 
           <div className="flex items-center gap-3">
-            <Button onClick={runAttach} disabled={isLoading || selectedRows.length === 0}>
-              {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+            <Button onClick={runAttach} disabled={selectedRows.length === 0} loading={isLoading}>
               {isLoading
                 ? t('underlag_running', { done: attached, total: selectedRows.length })
                 : t('underlag_run', { count: selectedRows.length })}
@@ -667,6 +664,10 @@ export default function UnderlagImportWizard() {
                 description={t('underlag_all_ok_body')}
               />
             )}
+
+            {/* The underlag are linked: this is where closing the imported
+                years belongs. Closing earlier would have refused the links. */}
+            <CloseImportedYearsOffer />
 
             <Button onClick={reset}>{t('underlag_new_import')}</Button>
           </CardContent>

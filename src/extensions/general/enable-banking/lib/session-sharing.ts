@@ -526,48 +526,6 @@ export interface SessionRenewalResult {
 }
 
 /**
- * Point a company's stored accounts at the uids the renewed session issued.
- *
- * Several ASPSPs mint fresh account uids on every re-authorization. The company
- * that clicked "renew" gets remapped by the callback's own IBAN matching, but a
- * sibling still holds the previous session's uids, and
- * GET /accounts/{uid}/transactions against a superseded uid fails. So the
- * quarterly renewal would keep breaking exactly the companies this feature
- * exists to keep alive, one layer further down.
- *
- * The sibling's own choices (which accounts are enabled, which ledger each
- * books to) are preserved: only the uid moves. An account whose IBAN is absent
- * from the new session is left untouched rather than dropped, since silently
- * discarding a mapped account is worse than a visible sync error.
- */
-export function remapAccountUids(
-  accounts: readonly StoredAccount[],
-  sessionAccounts: readonly { uid: string; iban?: string | null }[],
-): { accounts: StoredAccount[]; remapped: number; unmatched: number } {
-  const uidByIban = new Map<string, string>()
-  for (const account of sessionAccounts) {
-    const iban = normalizeIban(account.iban)
-    if (iban) uidByIban.set(iban, account.uid)
-  }
-
-  let remapped = 0
-  let unmatched = 0
-  const out = accounts.map(account => {
-    const iban = normalizeIban(account.iban)
-    const newUid = iban ? uidByIban.get(iban) : undefined
-    if (!newUid) {
-      unmatched += 1
-      return account
-    }
-    if (newUid === account.uid) return account
-    remapped += 1
-    return { ...account, uid: newUid }
-  })
-
-  return { accounts: out, remapped, unmatched }
-}
-
-/**
  * Carry a renewed consent across to every company sharing the old session.
  *
  * One re-authorization is what the user performed, so one re-authorization is
@@ -588,90 +546,53 @@ export async function fanOutSessionRenewal(
     consentExpires: string | null
     excludeConnectionId: string
     /** Accounts the renewed session returned, for remapping sibling uids. */
-    sessionAccounts?: readonly { uid: string; iban?: string | null }[]
+    sessionAccounts: readonly { uid: string; iban?: string | null; currency: string }[]
   },
 ): Promise<SessionRenewalResult> {
   const { oldSessionId, newSessionId, consentExpires, excludeConnectionId, sessionAccounts } = input
   if (!oldSessionId || oldSessionId === newSessionId) return { movedCount: 0 }
 
-  const { data: siblings, error: siblingError } = await supabase
-    .from('bank_connections')
-    .select('id, status, accounts_data')
-    .eq('session_id', oldSessionId)
-    .neq('id', excludeConnectionId)
-    .neq('status', 'revoked')
-
-  if (siblingError) {
-    log.error('failed to load siblings for session renewal', { error: siblingError.message })
+  let siblings: Array<{ id: string; company_id: string }>
+  try {
+    siblings = await fetchAllRows(range => supabase
+      .from('bank_connections')
+      .select('id, company_id')
+      .eq('session_id', oldSessionId)
+      .neq('id', excludeConnectionId)
+      .neq('status', 'revoked')
+      .order('id')
+      .range(range.from, range.to))
+  } catch (error) {
+    log.error('failed to load siblings for session renewal', { error: error instanceof Error ? error.message : String(error) })
     return { movedCount: 0 }
   }
-  if (!siblings || siblings.length === 0) return { movedCount: 0 }
+  if (siblings.length === 0) return { movedCount: 0 }
 
   let movedCount = 0
-  for (const sibling of siblings as Array<{
-    id: string
-    status: string
-    accounts_data: StoredAccount[] | null
-  }>) {
-    // Payloads stay object literals (never a built-up Record) so the
-    // no-phantom-columns guard can actually verify the column names.
-    // A session was the only thing a dead sibling was missing, so bring it
-    // back. 'pending_selection' is left alone: that company still owes an
-    // account selection, and flipping it to active would skip the picker.
-    const isDead = sibling.status === 'expired' || sibling.status === 'error'
-    const { error: updateError } = isDead
-      ? await supabase
-          .from('bank_connections')
-          .update({
-            session_id: newSessionId,
-            consent_expires: consentExpires,
-            status: 'active',
-            error_message: null,
-          })
-          .eq('id', sibling.id)
-      : await supabase
-          .from('bank_connections')
-          .update({ session_id: newSessionId, consent_expires: consentExpires })
-          .eq('id', sibling.id)
-
-    if (updateError) {
-      log.error('failed to move sibling onto renewed session', {
+  for (const sibling of siblings) {
+    const { data, error } = await supabase.rpc('renew_shared_bank_connection', {
+      p_company_id: sibling.company_id,
+      p_connection_id: sibling.id,
+      p_source_connection_id: excludeConnectionId,
+      p_old_session_id: oldSessionId,
+      p_new_session_id: newSessionId,
+      p_consent_expires: consentExpires,
+      p_session_accounts: sessionAccounts,
+    })
+    if (error || !data?.applied) {
+      log.warn('shared session renewal was not applied', {
         connectionId: sibling.id,
-        error: updateError.message,
+        error: error?.message,
+        reason: data?.reason,
       })
       continue
     }
     movedCount += 1
-
-    // Re-pointing the uids is a separate write, and deliberately so: it only
-    // happens when the ASPSP actually reissued them, and keeping it out of the
-    // payload above means neither write needs a dynamically built object.
-    if (sessionAccounts && sessionAccounts.length > 0) {
-      const { accounts, remapped, unmatched } = remapAccountUids(
-        sibling.accounts_data ?? [],
-        sessionAccounts,
-      )
-      if (unmatched > 0) {
-        // The renewed consent no longer covers an account this company books
-        // to. Worth surfacing: it usually means the user unticked it at the
-        // bank, and that company's next sync will report the gap.
-        log.warn('renewed session does not cover every account a company uses', {
-          connectionId: sibling.id,
-          unmatched,
-        })
-      }
-      if (remapped > 0) {
-        const { error: remapError } = await supabase
-          .from('bank_connections')
-          .update({ accounts_data: accounts })
-          .eq('id', sibling.id)
-        if (remapError) {
-          log.error('failed to re-point sibling accounts at the renewed session', {
-            connectionId: sibling.id,
-            error: remapError.message,
-          })
-        }
-      }
+    if (data.unmatched > 0) {
+      log.warn('renewed session does not cover every account a company uses', {
+        connectionId: sibling.id,
+        unmatched: data.unmatched,
+      })
     }
   }
 

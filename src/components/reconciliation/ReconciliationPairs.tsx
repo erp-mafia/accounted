@@ -10,7 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { ReconciliationAccount, ReconciliationItem } from '@/lib/reconciliation/schemas'
@@ -181,19 +181,19 @@ export function PairRow({
   let primary: React.ReactNode = null
   if (can('match') && item.proposal) {
     primary = (
-      <Button size="sm" variant="outline" className="h-7 px-3.5 text-xs" onClick={onMatch} disabled={anyBusy} aria-busy={busy}>
+      <Button size="sm" variant="outline" onClick={onMatch} disabled={anyBusy} aria-busy={busy}>
         {t('row_match')}
       </Button>
     )
   } else if (can('book') && isSkv) {
     primary = (
-      <Button size="sm" variant="outline" className="h-7 px-3.5 text-xs" onClick={onBook} disabled={anyBusy}>
+      <Button size="sm" variant="outline" onClick={onBook} disabled={anyBusy}>
         {t('row_book')}
       </Button>
     )
   } else if (can('book') && openHref) {
     primary = (
-      <Button size="sm" variant="outline" className="h-7 px-3.5 text-xs" asChild>
+      <Button size="sm" variant="outline" asChild>
         <Link href={openHref}>{t('row_book')}</Link>
       </Button>
     )
@@ -248,8 +248,8 @@ export function PairRow({
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 hover:text-foreground"
+                  size="icon-sm"
+                  className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
                   aria-label={t('v2_more')}
                   disabled={anyBusy}
                 >

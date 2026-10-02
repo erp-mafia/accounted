@@ -8,7 +8,7 @@ import { recordHumanClassification } from '@/lib/documents/classify/classify'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { withdrawDerivedAgreement } from '@/lib/arkiv/agreements/store'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 // Classification emits document.classified; the inbox extension's handler must be wired to route it.
@@ -47,7 +47,8 @@ export const POST = withRouteContext('document.classification', async (request, 
   if (withdrawn.status === 'error') return NextResponse.json({ error: withdrawn.reason }, { status: 500 })
   const out = await recordHumanClassification(service, id, ctx.user.id, { docType: parsed.data.doc_type, relevance: 'relevant' })
   if (out.status !== 'classified') return NextResponse.json({ error: 'reason' in out ? out.reason : 'Kunde inte spara.' }, { status: 500 })
-  await enqueueDocumentJob(service, ctx.companyId, id, 'extract')
+  // The brain reads the record out of the retyped document; the shelf keeps the type and the pages.
+  if (isArkivBrainEnabled(ctx.companyId)) await enqueueDocumentJob(service, ctx.companyId, id, 'extract')
   ctx.log.info('document type set by person', { doc: id, type: parsed.data.doc_type, withdrawn: withdrawn.status === 'withdrawn' ? withdrawn.agreementId : null })
   return NextResponse.json({ data: { document_id: id, doc_type: parsed.data.doc_type } })
 })

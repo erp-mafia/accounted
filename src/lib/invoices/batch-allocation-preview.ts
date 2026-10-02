@@ -7,18 +7,29 @@ import { roundOre } from '@/lib/money'
  * Mirrors supabase/migrations/20260824120000_match_batch_allocate_ore_settlement.sql
  * line for line: the same allocation order (sorted by the invoice id text),
  * the same öresavrundning band (a sub-krona difference clears the whole
- * remaining off 1510/2440 and lands on 3740), the same cross-currency legs
- * (booked SEK on 1510/2440, the difference on 7960/3960) and the same bank
- * leg: the RPC books 1930 for every batch, whatever cash account the row
- * belongs to. When that migration changes, this file changes with it; the
- * pg-real suite (tests/pg/match-batch-allocate.pg.test.ts) is the authority.
+ * remaining off 1510/2440 and lands on 3740) and the same cross-currency legs
+ * (booked SEK on 1510/2440, the difference on 7960/3960). The bank leg is the
+ * caller's `bankAccount`: since 20260921180432 the RPC books it on
+ * capture_bank_booking_context's settlement account (the transaction's own
+ * cash account, else the only enabled one in its currency, else 1930), which
+ * is resolveSettlementAccount's answer (lib/bookkeeping/settlement-account.ts).
+ * This file used to hardcode 1930 after that patch and previewed a bank leg
+ * the RPC no longer posts (issue #3097). Since 20260929015251 the RPC names a
+ * single invoice in the header ("Utbetalning leverantörsfaktura <number>,
+ * <supplier>", as the single-invoice match routes do) and keeps
+ * "Samlingsbetalning <date>" for two or more. When the RPC changes, this file
+ * changes with it; the pg-real suites (tests/pg/match-batch-allocate.pg.test.ts,
+ * tests/pg/match-batch-preview-parity.pg.test.ts,
+ * tests/pg/match-batch-allocate-series-description.pg.test.ts) are the
+ * authority.
  *
  * Why a projection and not a dry run: the RPC posts inside one transaction
  * and has no read-only mode, and an API customer's review flow needs the
  * exact konto, debet, kredit and date before `approve_pending_operation`
  * runs, not after. Line descriptions here are neutral on purpose (GDPR
  * Art. 25, same posture as the rest of preview_data): the RPC writes invoice
- * numbers and supplier names on its own lines, the preview does not.
+ * numbers and supplier names on its own lines and on a single invoice's
+ * header; the preview does not.
  */
 
 export interface BatchAllocationPreviewTransaction {
@@ -54,6 +65,11 @@ export interface BatchAllocationPreviewLine {
 
 export interface BatchAllocationPreview {
   entry_date: string
+  /**
+   * The verifikat header. Two or more invoices: exactly the RPC's text. One
+   * invoice: the RPC's wording without the invoice number and counterparty it
+   * appends ("Utbetalning leverantörsfaktura").
+   */
   description: string
   lines: BatchAllocationPreviewLine[]
   /** Debits equal credits to the öre. Always true for a batch the RPC accepts. */
@@ -67,7 +83,6 @@ export interface BatchAllocationPreview {
   fx: 'none' | 'included' | 'computed_at_commit'
 }
 
-const BANK_ACCOUNT = '1930'
 const AR_ACCOUNT = '1510'
 const AP_ACCOUNT = '2440'
 const ORE_ROUNDING_ACCOUNT = '3740'
@@ -85,11 +100,16 @@ function usableRate(rate: number | null | undefined): rate is number {
 
 export function buildBatchAllocationPreview(input: {
   transaction: BatchAllocationPreviewTransaction
+  /**
+   * The ledger account of the bank leg: resolveSettlementAccount() for the
+   * transaction's cash_account_id and currency, the account the RPC books.
+   */
+  bankAccount: string
   allocations: readonly BatchAllocationPreviewAllocation[]
   /** Keyed by invoice id or supplier invoice id. */
   invoices: ReadonlyMap<string, BatchAllocationPreviewInvoice> | Record<string, BatchAllocationPreviewInvoice>
 }): BatchAllocationPreview {
-  const { transaction, allocations } = input
+  const { transaction, allocations, bankAccount } = input
   if (allocations.length === 0) throw new Error('allocations must not be empty')
   const lookup = (id: string): BatchAllocationPreviewInvoice | undefined =>
     input.invoices instanceof Map ? input.invoices.get(id) : (input.invoices as Record<string, BatchAllocationPreviewInvoice>)[id]
@@ -181,16 +201,21 @@ export function buildBatchAllocationPreview(input: {
 
   lines.push(
     isCustomer
-      ? { account_number: BANK_ACCOUNT, description: `Inbetalning ${entryDate}`, debit: txAbs, credit: 0 }
-      : { account_number: BANK_ACCOUNT, description: `Utbetalning ${entryDate}`, debit: 0, credit: txAbs },
+      ? { account_number: bankAccount, description: `Inbetalning ${entryDate}`, debit: txAbs, credit: 0 }
+      : { account_number: bankAccount, description: `Utbetalning ${entryDate}`, debit: 0, credit: txAbs },
   )
 
   const debits = roundOre(lines.reduce((sum, l) => sum + l.debit, 0))
   const credits = roundOre(lines.reduce((sum, l) => sum + l.credit, 0))
 
+  // One invoice: the RPC appends "<number>, <counterparty>" to this wording;
+  // the preview leaves both out, like the neutral line descriptions.
+  const singleInvoiceDescription = isCustomer ? 'Inbetalning kundfaktura' : 'Utbetalning leverantörsfaktura'
+  const batchDescription = `${isCustomer ? 'Samlingsinbetalning' : 'Samlingsbetalning'} ${entryDate}`
+
   return {
     entry_date: entryDate,
-    description: `${isCustomer ? 'Samlingsinbetalning' : 'Samlingsbetalning'} ${entryDate}`,
+    description: sorted.length === 1 ? singleInvoiceDescription : batchDescription,
     lines,
     balanced: Math.abs(debits - credits) < 0.005,
     fx,

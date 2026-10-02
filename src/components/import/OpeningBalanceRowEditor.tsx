@@ -6,6 +6,7 @@ import { makeNotice } from '@/lib/import/notices'
 import Fuse, { type IFuseOptions } from 'fuse.js'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
 import { Plus, Trash2, AlertTriangle, Scale } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getBasLoaded } from '@/lib/bookkeeping/bas-lazy'
@@ -292,12 +293,16 @@ export default function OpeningBalanceRowEditor({
                   {activeAutocomplete === row.id && autocompleteResults.length > 0 && (
                     <div
                       ref={autocompleteRef}
-                      className="absolute z-50 top-full left-3 mt-1 w-72 max-h-48 overflow-y-auto rounded-lg border bg-popover shadow-md"
+                      className={cn(
+                        'absolute z-50 top-full left-3 mt-1 w-72 max-h-48 overflow-y-auto',
+                        POPOVER_SURFACE_CLASS,
+                        POPOVER_ENTER_CLASS,
+                      )}
                     >
                       {autocompleteResults.map((item) => (
                         <button
                           key={item.account_number}
-                          className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm hover:bg-accent transition-colors"
+                          className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm hover:bg-secondary/60 transition-colors"
                           onMouseDown={(e) => {
                             e.preventDefault()
                             selectAutocompleteItem(row.id, item)
@@ -358,8 +363,7 @@ export default function OpeningBalanceRowEditor({
                 <td className="px-3 py-1.5">
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
+                    size="icon-sm"
                     onClick={() => deleteRow(row.id)}
                   >
                     <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />

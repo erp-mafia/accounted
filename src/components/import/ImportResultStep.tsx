@@ -3,13 +3,12 @@
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { ImportStatRow } from '@/components/import/ImportStatRow'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import {
   CheckCircle,
   XCircle,
   AlertCircle,
-  FileText,
   ExternalLink,
   RotateCcw,
   Info,
@@ -246,75 +245,48 @@ export default function ImportResultStep({
         </Card>
       )}
 
-      {/* Statistics */}
+      {/* Statistics: flat label/value pairs. Fiscal year and IB outcomes
+          are normal states, so they read as plain text, not chips. */}
       {result.success && !showReveal && (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <FileText className="h-4 w-4" />
-                <span className="text-sm">Verifikationer skapade</span>
-              </div>
-              <p className="text-2xl font-display tabular-nums">{result.journalEntriesCreated}</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-sm">{t('result_accounts_created')}</span>
-              </div>
-              <p className="text-2xl font-display tabular-nums">{result.accountsCreated ?? 0}</p>
-              {result.accountsRenamed !== undefined && result.accountsRenamed > 0 && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {result.accountsRenamed === 1
+        <ImportStatRow
+          stats={[
+            { key: 'vouchers', label: 'Verifikationer skapade', value: result.journalEntriesCreated },
+            {
+              key: 'accounts',
+              label: t('result_accounts_created'),
+              value: result.accountsCreated ?? 0,
+              note:
+                result.accountsRenamed !== undefined && result.accountsRenamed > 0
+                  ? result.accountsRenamed === 1
                     ? '1 konto fick sitt namn från källsystemet'
-                    : `${result.accountsRenamed} konton fick sina namn från källsystemet`}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-sm">Räkenskapsår</span>
-              </div>
-              <div className="text-2xl font-display">
-                {result.fiscalPeriodId ? (
-                  <Badge variant="success">Skapat</Badge>
-                ) : (
-                  <Badge variant="secondary">Befintligt</Badge>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-sm">Ingående balanser</span>
-              </div>
-              <div className="text-2xl font-display">
-                {result.openingBalanceEntryId ? (
-                  <Badge variant="success">Importerade</Badge>
-                ) : result.details?.openingBalanceSkipped === 'prior_activity' ? (
-                  <Badge variant="secondary">Härledda</Badge>
-                ) : (
-                  <Badge variant="secondary">Inga</Badge>
-                )}
-              </div>
-              {/* The file's #IB was deliberately not booked: the company already
-                  has posted entries, so this year's IB is the prior year's UB.
-                  Said here, not as a warning (#2462). */}
-              {!result.openingBalanceEntryId && result.details?.openingBalanceSkipped === 'prior_activity' && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Från föregående års utgående balans, eftersom bolaget redan har bokförda verifikationer.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+                    : `${result.accountsRenamed} konton fick sina namn från källsystemet`
+                  : undefined,
+            },
+            {
+              key: 'fiscal_year',
+              label: 'Räkenskapsår',
+              value: result.fiscalPeriodId ? 'Skapat' : 'Befintligt',
+              plain: true,
+            },
+            {
+              key: 'opening_balances',
+              label: 'Ingående balanser',
+              value: result.openingBalanceEntryId
+                ? 'Importerade'
+                : result.details?.openingBalanceSkipped === 'prior_activity'
+                  ? 'Härledda'
+                  : 'Inga',
+              plain: true,
+              // The file's #IB was deliberately not booked: the company already
+              // has posted entries, so this year's IB is the prior year's UB.
+              // Said here, not as a warning (#2462).
+              note:
+                !result.openingBalanceEntryId && result.details?.openingBalanceSkipped === 'prior_activity'
+                  ? 'Från föregående års utgående balans, eftersom bolaget redan har bokförda verifikationer.'
+                  : undefined,
+            },
+          ]}
+        />
       )}
 
       {/* Errors */}
@@ -464,12 +436,12 @@ export default function ImportResultStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <div className="flex flex-col gap-2 sm:flex-row">
-          <Button variant="outline" className="min-h-11" onClick={onNewImport}>
+          <Button variant="outline" onClick={onNewImport}>
             <RotateCcw className="mr-2 h-4 w-4" />
             Ny import
           </Button>
           {result.success && result.importId && onUndo && (
-            <Button variant="outline" className="min-h-11 text-destructive hover:text-destructive" onClick={handleUndoClick}>
+            <Button variant="outline" className="text-destructive hover:text-destructive" onClick={handleUndoClick}>
               <Undo2 className="mr-2 h-4 w-4" />
               Ångra import
             </Button>
@@ -478,13 +450,13 @@ export default function ImportResultStep({
         <div className="flex flex-col gap-2 sm:flex-row">
           {result.success && (
             <>
-              <Button variant="outline" className="min-h-11" asChild>
+              <Button variant="outline" asChild>
                 <Link href="/bookkeeping">
                   Visa bokföring
                   <ExternalLink className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
-              <Button className="min-h-11" asChild>
+              <Button asChild>
                 <Link href="/reports">
                   Visa rapporter
                   <ExternalLink className="ml-2 h-4 w-4" />

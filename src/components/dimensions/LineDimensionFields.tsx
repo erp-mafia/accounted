@@ -49,9 +49,11 @@ export default function LineDimensionFields({
   const { dimensions: registry } = useDimensions()
 
   const fields = useMemo(() => {
-    const active = registry.filter((d) => d.is_active)
-    if (active.length === 0) return FALLBACK_FIELDS
-    return [...active]
+    // Only an empty registry (loading or failed) falls back: a loaded one
+    // whose dimensions are all archived shows none, as archiving promises.
+    if (registry.length === 0) return FALLBACK_FIELDS
+    return registry
+      .filter((d) => d.is_active)
       .sort((a, b) => a.sort_order - b.sort_order || a.sie_dim_no - b.sie_dim_no)
       .map((d) => ({ sieDimNo: String(d.sie_dim_no), label: d.name }))
   }, [registry])

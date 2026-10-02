@@ -6,6 +6,9 @@
  *
  * An exact source entry date selects its fiscal year, including cross-year
  * booking. Providers without one retain the conservative invoice-date corridor.
+ * A series-less ref (Visma names the voucher number only) that several series
+ * carry is narrowed by that corridor and then by the AP/AR amount; anything
+ * short of one survivor stays ambiguous.
  * Duplicate, reversed, open-source cash and amount-mismatched evidence is
  * reported for review. No journal entry or line is written here.
  */
@@ -161,6 +164,8 @@ function emptyCounts(): RegistrationLinkCounts {
 
 type Resolution =
   | { outcome: 'resolved'; entryId: string }
+  /** Several dated verifikat; the AP/AR amount decides once the lines are read. */
+  | { outcome: 'candidates'; entryIds: string[]; reason: string }
   | { outcome: 'noRef' | 'refNotFetched' | 'unresolved' | 'ambiguous'; reason: string }
 
 /**
@@ -191,8 +196,9 @@ function checkEntryDate(row: VoucherRow, input: MigratedInvoiceLinkInput): Resol
 /**
  * One invoice's ref against the company's migrated verifikat, scoped to the
  * fiscal year of the invoice date and to the date corridor around it.
- * Series-less refs (a bare "329") search every series in that year and are
- * accepted only on a single hit.
+ * Series-less refs (a bare "329") search every series in that year: one hit
+ * is checked against the date corridor, several are narrowed by it and hand
+ * the survivors to the amount check.
  */
 function resolveInput(
   index: VoucherIndex,
@@ -219,7 +225,17 @@ function resolveInput(
     if (hits.length === 0) {
       return { outcome: 'unresolved', reason: `no migrated verifikat carries source number ${ref.number} in that fiscal year` }
     }
-    return { outcome: 'ambiguous', reason: `source number ${ref.number} matches ${hits.length} series in that fiscal year` }
+    // A ledger with several series (kundfakturor in K, their payments in I)
+    // carries the same number more than once a year. The payment voucher
+    // sits weeks later and books the receivable on the other side, so the
+    // date corridor and then the AP/AR amount single out the registration.
+    const dated = hits.filter((v) => checkEntryDate(v, input).outcome === 'resolved')
+    if (dated.length === 1) return { outcome: 'resolved', entryId: dated[0].id }
+    if (dated.length === 0) {
+      return { outcome: 'unresolved', reason: `source number ${ref.number} matches ${hits.length} series in that fiscal year, none dated with the invoice` }
+    }
+    return { outcome: 'candidates', entryIds: dated.map((v) => v.id),
+      reason: `source number ${ref.number} matches ${dated.length} series dated with the invoice` }
   }
 
   const entryId = resolveDatedRef(index, periods, { series: ref.series, number: ref.number, date: referenceDate })
@@ -293,22 +309,30 @@ export async function linkMigratedRegistrationVouchers(
   // 2. Resolve refs in memory. Two inputs landing on one verifikat is a
   //    contest neither side can win without guessing: both stay NULL.
   const resolved: { input: MigratedInvoiceLinkInput; entryId: string }[] = []
+  const contested: { input: MigratedInvoiceLinkInput; entryIds: string[]; reason: string }[] = []
   const claimants = new Map<string, MigratedInvoiceLinkInput[]>()
+  const claim = (input: MigratedInvoiceLinkInput, entryId: string) => {
+    resolved.push({ input, entryId })
+    const list = claimants.get(entryId)
+    if (list) list.push(input)
+    else claimants.set(entryId, [input])
+  }
   for (const input of invoices) {
     const resolution = resolveInput(index, periods, input)
+    if (resolution.outcome === 'candidates') {
+      contested.push({ input, entryIds: resolution.entryIds, reason: resolution.reason })
+      continue
+    }
     if (resolution.outcome !== 'resolved') {
       report(input, resolution.outcome, resolution.reason)
       continue
     }
-    resolved.push({ input, entryId: resolution.entryId })
-    const list = claimants.get(resolution.entryId)
-    if (list) list.push(input)
-    else claimants.set(resolution.entryId, [input])
+    claim(input, resolution.entryId)
   }
 
-  if (resolved.length === 0) return { ...counts, reports }
+  if (resolved.length === 0 && contested.length === 0) return { ...counts, reports }
 
-  const entryIds = [...claimants.keys()]
+  const entryIds = [...new Set([...claimants.keys(), ...contested.flatMap((c) => c.entryIds)])]
 
   // 3. Corroboration reads: entry status, the AP/AR lines, and the invoices
   //    that already point at these entries. All company-scoped.
@@ -348,6 +372,25 @@ export async function linkMigratedRegistrationVouchers(
       arNetDebitByEntry.set(line.journal_entry_id, roundOre((arNetDebitByEntry.get(line.journal_entry_id) ?? 0) + debit - credit))
     }
   }
+
+  // 3b. Several dated candidates for one series-less ref: the verifikat that
+  //     books the invoice total on the AP/AR side is the registration voucher.
+  //     A payment voucher with the same number nets the other way, so it drops
+  //     out here; two registrations with the total stay ambiguous.
+  for (const { input, entryIds: ids, reason } of contested) {
+    const expected = typeof input.totalSek === 'number' && Number.isFinite(input.totalSek) ? roundOre(input.totalSek) : null
+    const booked = input.kind === 'supplier' ? apNetCreditByEntry : arNetDebitByEntry
+    const corroborated = expected === null ? [] : ids.filter((id) => {
+      const net = booked.get(id)
+      return net !== undefined && Math.abs(net - expected) <= ORE_TOLERANCE
+    })
+    if (corroborated.length !== 1) {
+      report(input, 'ambiguous', `${reason}; ${corroborated.length} of them carry the invoice total`)
+      continue
+    }
+    claim(input, corroborated[0])
+  }
+  if (resolved.length === 0) return { ...counts, reports }
 
   // Invoice ids already referencing each entry, on either register.
   const referencedBy = new Map<string, string[]>()

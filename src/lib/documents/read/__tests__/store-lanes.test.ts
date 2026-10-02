@@ -24,11 +24,11 @@ const readOk = (pages: Array<[number, 'pdf_text' | 'claude_vision']>) => ({ ok: 
 beforeEach(() => {
   reset()
   vi.clearAllMocks()
-  process.env.ARKIV_COMPANY_IDS = 'co-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'co-1'
   asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('%PDF-')]), error: null, resolvedPath: 'p' })
 })
 afterEach(() => {
-  delete process.env.ARKIV_COMPANY_IDS
+  delete process.env.ARKIV_BRAIN_COMPANY_IDS
 })
 
 describe('planForDocument', () => {
@@ -38,8 +38,9 @@ describe('planForDocument', () => {
     expect(planForDocument({ ...base, created_at: daysAgo(90) }, now)).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: 1, tier: 'extraction' })
     expect(planForDocument({ ...base, created_at: daysAgo(90), pages_read_at: 'x', read_error: 'partial:budget', doc_type: 'agreement.loan' }, now)).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: null, tier: 'extraction' })
     expect(planForDocument({ ...base, created_at: daysAgo(90), pages_read_at: 'x', read_error: 'partial:budget', doc_type: 'receipt' }, now)).toBeNull()
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect(planForDocument({ ...base, created_at: daysAgo(90) }, now)).toEqual({ lane: 'history_loose', allowModel: false, maxModelPages: 1, tier: 'extraction' })
+    // The shelf is on for every company: a company nobody listed is read the same way.
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
+    expect(planForDocument({ ...base, created_at: daysAgo(90) }, now)).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: 1, tier: 'extraction' })
   })
 })
 
@@ -58,15 +59,30 @@ describe('readAndStoreDocument, the meter', () => {
 })
 
 describe('readUnreadDocuments, the lanes and the budget', () => {
-  it('reads the unread batch by lane: text only for tied history, one model page for loose history', async () => {
+  const unreadBatch = [{ ...base, id: 'tied', created_at: daysAgo(60), journal_entry_id: 'je' }, { ...base, id: 'loose', created_at: daysAgo(60) }, { ...base, id: 'new', created_at: daysAgo(1) }]
+
+  it('reads the unread batch by lane without a budget: history from text layers only, a recent document in full', async () => {
     asMock(readDocumentBytes).mockResolvedValue(readOk([[1, 'pdf_text']]))
-    enqueue({ data: [{ ...base, id: 'tied', created_at: daysAgo(60), journal_entry_id: 'je' }, { ...base, id: 'loose', created_at: daysAgo(60) }, { ...base, id: 'new', created_at: daysAgo(1) }] })
+    enqueue({ data: [] }) // retry batch, asked for first
+    enqueue({ data: unreadBatch })
     for (let i = 0; i < 9; i++) enqueue({}) // three reads, three writes each
-    enqueue({ data: [] }) // retry batch
     const onRead = vi.fn(async () => undefined)
     const counts = await readUnreadDocuments(supabase, 10, { now, onRead })
     expect(counts).toEqual({ processed: 3, read: 3, skipped: 0, errors: 0 })
     expect(onRead.mock.calls.map((c) => (c as unknown as [{ id: string }, { pages: number }])[0].id)).toEqual(['tied', 'loose', 'new'])
+    expect(asMock(readDocumentBytes).mock.calls.map((c) => c[2])).toEqual([
+      { allowModel: false, maxModelPages: null, tier: 'extraction' },
+      { allowModel: false, maxModelPages: 1, tier: 'extraction' },
+      { allowModel: true, maxModelPages: null },
+    ])
+  })
+
+  it('gives loose history its one model page only under a budget', async () => {
+    asMock(readDocumentBytes).mockResolvedValue(readOk([[1, 'pdf_text']]))
+    enqueue({ data: [] }) // retry batch
+    enqueue({ data: unreadBatch })
+    for (let i = 0; i < 9; i++) enqueue({})
+    await readUnreadDocuments(supabase, 10, { now, budgetPagesPerDay: 4 })
     expect(asMock(readDocumentBytes).mock.calls.map((c) => c[2])).toEqual([
       { allowModel: false, maxModelPages: null, tier: 'extraction' },
       { allowModel: true, maxModelPages: 1, tier: 'extraction' },
@@ -77,16 +93,16 @@ describe('readUnreadDocuments, the lanes and the budget', () => {
   it('leaves gated voucher-tied history alone without a budget, and spends the budget on it when there is one', async () => {
     asMock(readDocumentBytes).mockResolvedValue(readOk([[1, 'claude_vision'], [2, 'claude_vision']]))
     const tied = { ...base, id: 'tied', created_at: daysAgo(60), journal_entry_id: 'je', pages_read_at: 'x', read_error: 'ai_gated', mime_type: 'image/jpeg' }
+    enqueue({ data: [tied] }) // retry batch, asked for first
     enqueue({ data: [] }) // unread batch
-    enqueue({ data: [tied] }) // retry batch
     expect(await readUnreadDocuments(supabase, 10, { now })).toEqual({ processed: 0, read: 0, skipped: 0, errors: 0 })
     expect(readDocumentBytes).not.toHaveBeenCalled()
 
     reset()
-    enqueue({ data: [] })
-    enqueue({ data: [tied, { ...tied, id: 'tied-2' }] })
+    enqueue({ data: [tied, { ...tied, id: 'tied-2' }] }) // retry batch
     enqueue({ data: { units: 3 } }) // vision pages spent today
     for (let i = 0; i < 3; i++) enqueue({}) // one read: delete, insert, stamp
+    enqueue({ data: [] }) // unread batch, asked for last
     expect(await readUnreadDocuments(supabase, 10, { now, budgetPagesPerDay: 4 })).toEqual({ processed: 1, read: 1, skipped: 0, errors: 0 })
     expect(readDocumentBytes).toHaveBeenCalledTimes(1)
     expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'image/jpeg', { allowModel: true, maxModelPages: null, tier: 'extraction' })
@@ -97,18 +113,25 @@ describe('readUnreadDocuments, the lanes and the budget', () => {
     ])
   })
 
-  it('finishes a loose history document that turned out to be an acting type, and skips one that did not', async () => {
+  it('finishes a loose history document that turned out to be an acting type under a budget, and skips one that did not', async () => {
     asMock(readDocumentBytes).mockResolvedValue(readOk([[1, 'claude_vision']]))
-    enqueue({ data: [] })
-    enqueue({
-      data: [
-        { ...base, id: 'loan', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'partial:ai_gated', doc_type: 'agreement.loan' },
-        { ...base, id: 'receipt', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'partial:ai_gated', doc_type: 'receipt' },
-        { ...base, id: 'untyped', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'ai_gated' },
-      ],
-    })
+    const retryRows = [
+      { ...base, id: 'loan', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'partial:ai_gated', doc_type: 'agreement.loan' },
+      { ...base, id: 'receipt', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'partial:ai_gated', doc_type: 'receipt' },
+      { ...base, id: 'untyped', created_at: daysAgo(60), pages_read_at: 'x', read_error: 'ai_gated' },
+    ]
+    enqueue({ data: retryRows })
+    enqueue({ data: [] }) // unread batch
+    // Without a budget the background never spends a model page on history: a question reads it.
+    expect(await readUnreadDocuments(supabase, 10, { now })).toMatchObject({ processed: 0, read: 0 })
+    expect(readDocumentBytes).not.toHaveBeenCalled()
+
+    reset()
+    enqueue({ data: retryRows })
+    enqueue({ data: { units: 0 } }) // vision pages spent today
     for (let i = 0; i < 6; i++) enqueue({})
-    expect(await readUnreadDocuments(supabase, 10, { now })).toMatchObject({ processed: 2, read: 2 })
+    enqueue({ data: [] }) // unread batch, asked for last
+    expect(await readUnreadDocuments(supabase, 10, { now, budgetPagesPerDay: 10 })).toMatchObject({ processed: 2, read: 2 })
     expect(asMock(readDocumentBytes).mock.calls.map((c) => c[2])).toEqual([
       { allowModel: true, maxModelPages: null, tier: 'extraction' },
       { allowModel: true, maxModelPages: 1, tier: 'extraction' },

@@ -5,13 +5,14 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import dynamic from 'next/dynamic'
-import { AlertTriangle, Download, FileDown, FileUp, Loader2, Receipt } from 'lucide-react'
+import { AlertTriangle, Download, FileDown, FileUp, Receipt } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { HelpPopover } from '@/components/ui/help-popover'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -29,8 +30,18 @@ import { computeRefusedShares } from '@/lib/invoices/rot-rut-reclaim'
 import { expectedRotRutPayoutAmount } from '@/lib/invoices/rot-rut-payout-matching'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import {
+  DEDUCTION_TYPE_LABELS,
+  DEDUCTION_TYPE_LABEL_KEYS,
+  isDeductionType,
+  type DeductionType,
+} from '@/lib/invoices/rot-rut-rules'
+import { readyTileOf } from '@/lib/invoices/rot-rut-overview'
 
 const RotRutPayoutDialog = dynamic(() => import('@/components/invoices/RotRutPayoutDialog'), {
+  ssr: false,
+})
+const RotRutLinkVoucherDialog = dynamic(() => import('@/components/invoices/RotRutLinkVoucherDialog'), {
   ssr: false,
 })
 
@@ -48,7 +59,7 @@ interface RequestItem {
 interface PayoutRequest {
   id: string
   name: string
-  deduction_type: 'rot' | 'rut'
+  deduction_type: DeductionType
   status: RequestStatus
   requested_total: number | string
   decided_total: number | string | null
@@ -71,13 +82,13 @@ interface BeslutImportResult {
   results: Array<{ namn: string; status: string; error?: string }>
 }
 
-const STATUS_VARIANT: Record<RequestStatus, 'secondary' | 'outline' | 'success' | 'warning' | 'destructive'> = {
+// Chips mark exceptions (design.md convention 5): a file not yet uploaded, a
+// partial grant and a rejection deviate; uploaded, granted and cancelled are
+// normal states and render as muted text.
+const EXCEPTION_VARIANT: Partial<Record<RequestStatus, 'warning' | 'destructive'>> = {
   generated: 'warning',
-  submitted: 'outline',
-  paid: 'success',
   partially_paid: 'warning',
   rejected: 'destructive',
-  cancelled: 'secondary',
 }
 
 /** Days between an ISO timestamp and now, floored at 0. */
@@ -132,6 +143,7 @@ function refusedState(
 
 export default function RotRutOverviewPage() {
   const t = useTranslations('rot_rut_overview')
+  const tInvoices = useTranslations('invoices')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -142,14 +154,32 @@ export default function RotRutOverviewPage() {
   const loadSequence = useRef(0)
 
   const [requests, setRequests] = useState<PayoutRequest[]>([])
-  const [eligibleCounts, setEligibleCounts] = useState<{ rot: number; rut: number }>({ rot: 0, rut: 0 })
+  const [eligibleCounts, setEligibleCounts] = useState<Record<DeductionType, number>>({
+    rot: 0,
+    rut: 0,
+    gron_teknik: 0,
+  })
+  // Paid grön teknik invoices still inside their request window: shown apart
+  // from "Redo att begäras" (see readyTileOf).
+  const [gronTeknikOpen, setGronTeknikOpen] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
+  const [linkingRequest, setLinkingRequest] = useState<PayoutRequest | null>(null)
 
   // The file dialog is driven by ?new=1 so the browser back button closes it
   // (same pattern as /invoices and /invoices/recurring).
   const showNewRequest = searchParams.has('new')
+  // ?type= opens the dialog on that list (the invoice page links grön teknik
+  // there). Otherwise ROT, unless grön teknik is the only kind ready.
+  const typeParam = searchParams.get('type')
+  const dialogInitialType: DeductionType = isDeductionType(typeParam)
+    ? typeParam
+    : eligibleCounts.rot === 0 && eligibleCounts.rut === 0 && eligibleCounts.gron_teknik > 0
+      ? 'gron_teknik'
+      : 'rot'
+  // ?invoice= (from the invoice page) opens the dialog on that invoice's row.
+  const focusInvoiceId = searchParams.get('invoice')
   const openNewRequest = () => router.push('/invoices/rot-rut?new=1', { scroll: false })
   const closeNewRequest = () => router.replace('/invoices/rot-rut', { scroll: false })
 
@@ -157,10 +187,11 @@ export default function RotRutOverviewPage() {
     const sequence = ++loadSequence.current
     setIsLoading(true)
     try {
-      const [requestsRes, rotRes, rutRes] = await Promise.all([
+      const [requestsRes, rotRes, rutRes, gronTeknikRes] = await Promise.all([
         fetch('/api/rot-rut/payout-requests'),
         fetch('/api/rot-rut/eligible?type=rot'),
         fetch('/api/rot-rut/eligible?type=rut'),
+        fetch('/api/rot-rut/eligible?type=gron_teknik'),
       ])
       if (!requestsRes.ok) {
         const description = await getResponseErrorMessage(requestsRes, 'invoice', locale)
@@ -172,9 +203,14 @@ export default function RotRutOverviewPage() {
       const body = (await requestsRes.json()) as { data: PayoutRequest[] }
       const rot = rotRes.ok ? ((await rotRes.json()) as { data: { eligible: unknown[] } }).data.eligible.length : 0
       const rut = rutRes.ok ? ((await rutRes.json()) as { data: { eligible: unknown[] } }).data.eligible.length : 0
+      const gronTeknikEligible = gronTeknikRes.ok
+        ? ((await gronTeknikRes.json()) as { data: { eligible: Array<{ past_deadline?: boolean }> } }).data
+            .eligible
+        : []
       if (sequence !== loadSequence.current) return
       setRequests(body.data)
-      setEligibleCounts({ rot, rut })
+      setEligibleCounts({ rot, rut, gron_teknik: gronTeknikEligible.length })
+      setGronTeknikOpen(gronTeknikEligible.filter((candidate) => !candidate.past_deadline).length)
     } catch (error) {
       if (sequence !== loadSequence.current) return
       toast({
@@ -373,13 +409,26 @@ export default function RotRutOverviewPage() {
     }
   }
 
-  const readyCount = eligibleCounts.rot + eligibleCounts.rut
+  const readyTile = readyTileOf({ rot: eligibleCounts.rot, rut: eligibleCounts.rut, gronTeknikOpen })
 
   return (
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
-        description={t('description')}
+        help={
+          <HelpPopover>
+            <div className="space-y-2">
+              <p>{t('description')}</p>
+              <p>
+                <span className="font-medium">{t('tile_at_skv')}:</span> {t('tile_at_skv_help')}
+              </p>
+              <p>
+                <span className="font-medium">{t('tile_awaiting')}:</span> {t('tile_awaiting_help')}
+              </p>
+              <p>{t('gron_teknik_help')}</p>
+            </div>
+          </HelpPopover>
+        }
         action={
           <div className="flex flex-wrap gap-2">
             <input
@@ -392,17 +441,18 @@ export default function RotRutOverviewPage() {
                 if (file) void importBeslut(file)
               }}
             />
-            <Button
+            <Button size="sm"
               type="button"
               variant="outline"
-              disabled={!canWrite || importing}
+              disabled={!canWrite}
+              loading={importing}
               onClick={() => fileInputRef.current?.click()}
               title={!canWrite ? t('viewer_disabled_tooltip') : t('import_beslut_help')}
             >
-              {importing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileUp className="mr-2 h-4 w-4" />}
+              {!importing && <FileUp className="mr-2 h-4 w-4" />}
               {t('import_beslut')}
             </Button>
-            <Button type="button" onClick={openNewRequest} disabled={!canWrite}>
+            <Button size="sm" type="button" onClick={openNewRequest} disabled={!canWrite}>
               <FileDown className="mr-2 h-4 w-4" />
               {t('new_request')}
             </Button>
@@ -410,17 +460,17 @@ export default function RotRutOverviewPage() {
         }
       />
 
-      {/* Summary tiles: what sits at Skatteverket, what waits, what came back refused. */}
+      {/* Summary tiles: what sits at Skatteverket, what waits, what came back
+          refused. The static definitions live behind the "?" (convention 7);
+          only lines that carry figures stay on the tiles. */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border p-4">
           <p className="text-xs text-muted-foreground">{t('tile_at_skv')}</p>
           <p className="mt-1 font-display text-2xl tabular-nums">{formatCurrency(summary.atSkv)}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{t('tile_at_skv_help')}</p>
         </div>
         <div className="rounded-lg border p-4">
           <p className="text-xs text-muted-foreground">{t('tile_awaiting')}</p>
           <p className="mt-1 font-display text-2xl tabular-nums">{summary.awaitingDecision}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{t('tile_awaiting_help')}</p>
         </div>
         <div className="rounded-lg border p-4">
           <p className="text-xs text-muted-foreground">{t('tile_refused')}</p>
@@ -431,10 +481,22 @@ export default function RotRutOverviewPage() {
         </div>
         <div className="rounded-lg border p-4">
           <p className="text-xs text-muted-foreground">{t('tile_ready')}</p>
-          <p className="mt-1 font-display text-2xl tabular-nums">{readyCount}</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t('tile_ready_help', { rot: eligibleCounts.rot, rut: eligibleCounts.rut })}
-          </p>
+          <p className="mt-1 font-display text-2xl tabular-nums">{readyTile.ready}</p>
+          {readyTile.parts.length > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {readyTile.parts
+                .map((part) => `${part.count} ${DEDUCTION_TYPE_LABELS[part.kind].short}`)
+                .join(' · ')}
+            </p>
+          )}
+          {/* Grön teknik is requested in Skatteverkets e-tjänst, which we
+              cannot see: never "ready", only what is still inside its
+              request window (the "?" says why). */}
+          {readyTile.gronTeknikOpen > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('tile_ready_gron_teknik', { count: readyTile.gronTeknikOpen })}
+            </p>
+          )}
         </div>
       </div>
 
@@ -453,8 +515,8 @@ export default function RotRutOverviewPage() {
           onAction={canWrite ? openNewRequest : undefined}
         />
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_name')}</th>
@@ -482,13 +544,13 @@ export default function RotRutOverviewPage() {
                     ? request.submitted_at ?? request.created_at
                     : null
                 return (
-                  <tr key={request.id}>
+                  <tr key={request.id} className="group transition-colors duration-150 hover:bg-secondary/35">
                     <td className={TD_CLASS}>
                       <details>
                         <summary className="cursor-pointer list-none">
                           <span className="font-medium">{request.name}</span>
                           <span className="ml-2 text-xs text-muted-foreground">
-                            {request.deduction_type.toUpperCase()} · {t('cases', { count: request.items.length })}
+                            {tInvoices(DEDUCTION_TYPE_LABEL_KEYS[request.deduction_type] ?? 'rot_rut_type_rot')} · {t('cases', { count: request.items.length })}
                           </span>
                         </summary>
                         <ul className="mt-2 space-y-1 text-xs">
@@ -509,9 +571,13 @@ export default function RotRutOverviewPage() {
                     </td>
                     <td className={TD_CLASS}>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge variant={STATUS_VARIANT[request.status]} className="font-normal">
-                          {t(`status_${request.status}`)}
-                        </Badge>
+                        {EXCEPTION_VARIANT[request.status] ? (
+                          <Badge variant={EXCEPTION_VARIANT[request.status]} className="font-normal">
+                            {t(`status_${request.status}`)}
+                          </Badge>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">{t(`status_${request.status}`)}</span>
+                        )}
                         {request.settlement_journal_entry_id && (
                           <Link href={`/bookkeeping/${request.settlement_journal_entry_id}`} className={`${QUIET_LINK_CLASS} text-xs`}>
                             {t('settled_link')}
@@ -554,26 +620,37 @@ export default function RotRutOverviewPage() {
                     </td>
                     <td className={`${TD_CLASS} text-right`}>
                       <div className="flex flex-wrap justify-end gap-1.5">
+                        {/* The next step (Markera uppladdad, Bokför nekat
+                            belopp) stays visible; download and cancel wait
+                            for hover so a long list is not a wall of
+                            buttons (touch keeps them visible). */}
                         {request.file_document_id && (
-                          <Button type="button" size="sm" variant="ghost" disabled={isBusy} onClick={() => void downloadArchivedFile(request)}>
+                          <Button type="button" size="sm" variant="ghost" className={HOVER_REVEAL_CLASS} disabled={isBusy} onClick={() => void downloadArchivedFile(request)}>
                             <Download className="mr-1.5 h-3.5 w-3.5" />
                             {t('download')}
                           </Button>
                         )}
                         {request.status === 'generated' && canWrite && (
                           <>
-                            <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => void patchRequest(request, 'cancelled')}>
+                            <Button type="button" size="sm" variant="outline" className={HOVER_REVEAL_CLASS} disabled={isBusy} onClick={() => void patchRequest(request, 'cancelled')}>
                               {t('cancel_request')}
                             </Button>
-                            <Button type="button" size="sm" disabled={isBusy} onClick={() => void patchRequest(request, 'submitted')}>
-                              {isBusy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                            <Button type="button" size="sm" loading={isBusy} onClick={() => void patchRequest(request, 'submitted')}>
                               {t('mark_uploaded')}
                             </Button>
                           </>
                         )}
+                        {!request.settlement_journal_entry_id &&
+                          request.status !== 'generated' &&
+                          request.status !== 'cancelled' &&
+                          request.status !== 'rejected' &&
+                          canWrite && (
+                            <Button type="button" size="sm" variant="ghost" disabled={isBusy} onClick={() => setLinkingRequest(request)}>
+                              {t('link_voucher_action')}
+                            </Button>
+                          )}
                         {state.needsReclaim && canWrite && (
-                          <Button type="button" size="sm" disabled={isBusy} onClick={() => void reclaim(request)}>
-                            {isBusy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                          <Button type="button" size="sm" loading={isBusy} onClick={() => void reclaim(request)}>
                             {t('book_refused')}
                           </Button>
                         )}
@@ -589,9 +666,28 @@ export default function RotRutOverviewPage() {
 
       <DestructiveConfirmDialog {...dialogProps} />
 
+      {linkingRequest && (
+        <RotRutLinkVoucherDialog
+          request={{
+            id: linkingRequest.id,
+            name: linkingRequest.name,
+            expected: expectedRotRutPayoutAmount(linkingRequest),
+          }}
+          onOpenChange={(open) => {
+            if (!open) setLinkingRequest(null)
+          }}
+          onLinked={() => {
+            setLinkingRequest(null)
+            void load()
+          }}
+        />
+      )}
+
       {showNewRequest && (
         <RotRutPayoutDialog
           open
+          initialType={dialogInitialType}
+          focusInvoiceId={focusInvoiceId}
           onOpenChange={(open) => {
             if (!open) {
               closeNewRequest()

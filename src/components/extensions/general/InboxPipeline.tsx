@@ -45,7 +45,7 @@ export function InboxPipeline({
             )}
           >
             <span className="truncate">{t(`pipe_${s}`)}</span>
-            {AUTO.has(s) && <span className="text-[10.5px] text-muted-foreground">{t('pipe_auto')}</span>}
+            {AUTO.has(s) && <span className="text-[11px] text-muted-foreground">{t('pipe_auto')}</span>}
             <span
               className={cn('font-medium tabular-nums', s === 'missing' && counts[s] > 0 ? 'text-warning' : 'text-foreground')}
               data-ph-mask

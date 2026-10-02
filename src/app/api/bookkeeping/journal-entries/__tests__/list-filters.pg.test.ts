@@ -9,6 +9,8 @@ import { seedCompany } from '@/tests/pg/fixtures'
 //   - exclude_draft: drafts kept off the committed list (own "Utkast" surface).
 //   - collapse_corrections: a correction group renders as ONE row: the live
 //     correction; the storno and the reversed original it replaced are hidden.
+//     A pure storno (no correction) stays visible with its original (#3149,
+//     migration 20260927201017).
 //   - series: voucher-series filter; pushed into the RPC so total_count reflects
 //     the filtered set (the route used to post-filter and recompute count from
 //     one page, breaking pagination, #798).
@@ -133,6 +135,29 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
     expect(ids).not.toContain(storno)
     expect(ids).not.toContain(original)
     expect(Number(filtered[0]!.total_count)).toBe(2)
+  })
+
+  it('keeps a pure storno (no correction) visible under collapse_corrections (#3149)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+
+    // Two-row group: a duplicate was reversed and never replaced. The storno is
+    // the only row that carries its voucher number, so folding it showed a hole
+    // in the series (the customer's "where is A44").
+    const duplicate = await insertEntry({ userId, companyId, fiscalPeriodId, status: 'reversed', sourceType: 'manual', voucherNumber: 43, withLines: true, description: 'Duplicate' })
+    const pureStorno = await insertEntry({ userId, companyId, fiscalPeriodId, status: 'posted', sourceType: 'storno', voucherNumber: 44, reversesId: duplicate, withLines: true, description: 'Storno of duplicate' })
+    // Three-row group beside it: still folds to the live correction.
+    const original = await insertEntry({ userId, companyId, fiscalPeriodId, status: 'reversed', sourceType: 'manual', voucherNumber: 45, withLines: true, description: 'Original' })
+    const storno = await insertEntry({ userId, companyId, fiscalPeriodId, status: 'posted', sourceType: 'storno', voucherNumber: 46, reversesId: original, withLines: true, description: 'Storno' })
+    const correction = await insertEntry({ userId, companyId, fiscalPeriodId, status: 'posted', sourceType: 'correction', voucherNumber: 47, correctionOfId: original, withLines: true, description: 'Correction' })
+
+    const collapsed = await callRpc(companyId, fiscalPeriodId, { collapse: true, sortDate: 'asc' })
+    const ids = collapsed.map((r) => r.entry.id)
+    expect(ids).toEqual([duplicate, pureStorno, correction])
+    expect(ids).not.toContain(original)
+    expect(ids).not.toContain(storno)
+    // The series reads 43, 44, 47: no hole where the pure storno sits.
+    expect(collapsed.map((r) => r.entry.voucher_number)).toEqual([43, 44, 47])
+    expect(Number(collapsed[0]!.total_count)).toBe(3)
   })
 
   it('still returns drafts when status=draft is requested explicitly', async () => {

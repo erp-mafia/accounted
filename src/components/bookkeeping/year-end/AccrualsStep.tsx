@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ArrowRight, Loader2, Plus, Trash2 } from 'lucide-react'
+import { ArrowRight, Plus, Trash2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -310,11 +310,9 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
         <Button variant="outline" size="sm" onClick={onBack} disabled={posting}>
           ← Tillbaka
         </Button>
-        <Button onClick={handleCommit} disabled={posting}>
+        <Button onClick={handleCommit} loading={posting}>
           {posting ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
-            </>
+            'Bokför…'
           ) : (
             <>
               Fortsätt <ArrowRight className="ml-1 h-4 w-4" />
@@ -345,7 +343,7 @@ function ManualEntryEditor({
           {entry.kind === 'manual_prepaid_expense' && 'Förutbetald kostnad'}
           {entry.kind === 'manual_accrued_expense' && 'Upplupen kostnad'}
         </p>
-        <Button variant="ghost" size="sm" aria-label="Ta bort post" onClick={onRemove} className="h-7 px-2">
+        <Button variant="ghost" size="icon-sm" aria-label="Ta bort post" onClick={onRemove}>
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>

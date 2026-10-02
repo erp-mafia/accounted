@@ -1,3 +1,5 @@
+import { supportsUnderlagImport, type UnderlagImportProvider } from '@/lib/providers/underlag-import'
+
 export const ARCIM_DOCUMENT_IMPORT_ENDPOINT =
   '/api/extensions/ext/arcim-migration/import-documents'
 
@@ -82,6 +84,14 @@ export interface ArcimDocumentImportResult {
   skipped: number
   unmatched: number
   failed: number
+  /**
+   * Underlag whose verifikat sits in a klarmarkerat or locked year: the
+   * database refuses those links until the year is reopened, so they are
+   * neither failures nor retryable as they stand.
+   */
+  locked: number
+  /** The fiscal years behind `locked` ("2024", "2022/2023"), oldest first. */
+  lockedPeriods: string[]
   dryRun: boolean
   unmatchedSamples: { uploadId: string; voucher: string; date: string }[]
   /** Attachments in the provider's whole list (not just this call). */
@@ -112,6 +122,9 @@ export function mergeArcimDocumentImportResults(
     skipped: accumulated.skipped + next.skipped,
     unmatched: accumulated.unmatched + next.unmatched,
     failed: accumulated.failed + next.failed,
+    locked: accumulated.locked + next.locked,
+    // Labels sort the same way the server sorts them: oldest year first.
+    lockedPeriods: [...new Set([...accumulated.lockedPeriods, ...next.lockedPeriods])].sort(),
     unmatchedSamples: [...accumulated.unmatchedSamples, ...next.unmatchedSamples].slice(
       0,
       MAX_UNMATCHED_SAMPLES,
@@ -167,6 +180,8 @@ export type ArcimDocumentImportPhase =
 
 export interface ArcimDocumentImportState {
   phase: ArcimDocumentImportPhase
+  /** The provider this panel runs for: named in the copy, target of a retry. */
+  provider: UnderlagImportProvider | null
   found: number
   result: ArcimDocumentImportResult | null
   problem: ArcimDocumentImportProblem | null
@@ -174,6 +189,7 @@ export interface ArcimDocumentImportState {
 
 export const INITIAL_ARCIM_DOCUMENT_IMPORT_STATE: ArcimDocumentImportState = {
   phase: 'hidden',
+  provider: null,
   found: 0,
   result: null,
   problem: null,
@@ -202,9 +218,9 @@ export type ArcimDocumentImportAction =
 export function resolveArcimDocumentFollowUpProvider(
   previewProvider: string | null | undefined,
   selectedProvider: string | null | undefined,
-): 'fortnox' | null {
+): UnderlagImportProvider | null {
   const provider = previewProvider ?? selectedProvider
-  return provider === 'fortnox' ? provider : null
+  return supportsUnderlagImport(provider) ? provider : null
 }
 
 /**
@@ -220,17 +236,18 @@ export function arcimDocumentImportReducer(
     case 'reset':
       return INITIAL_ARCIM_DOCUMENT_IMPORT_STATE
     case 'discovery-started':
-      if (action.provider !== 'fortnox' || !action.migrationSucceeded) {
+      if (!supportsUnderlagImport(action.provider) || !action.migrationSucceeded) {
         return INITIAL_ARCIM_DOCUMENT_IMPORT_STATE
       }
-      return { phase: 'discovering', found: 0, result: null, problem: null }
+      return { phase: 'discovering', provider: action.provider, found: 0, result: null, problem: null }
     case 'discovery-succeeded':
-      if (action.result.provider !== 'fortnox') {
+      if (!supportsUnderlagImport(action.result.provider)) {
         return INITIAL_ARCIM_DOCUMENT_IMPORT_STATE
       }
       if (action.result.scanned <= 0) {
         return {
           phase: 'empty',
+          provider: action.result.provider,
           found: 0,
           result: action.result,
           problem: null,
@@ -238,6 +255,7 @@ export function arcimDocumentImportReducer(
       }
       return {
         phase: 'offered',
+        provider: action.result.provider,
         found: action.result.scanned,
         result: action.result,
         problem: null,
@@ -245,6 +263,7 @@ export function arcimDocumentImportReducer(
     case 'discovery-failed':
       return {
         phase: 'discovery-error',
+        provider: state.provider,
         found: 0,
         result: null,
         problem: action.problem,
@@ -260,6 +279,7 @@ export function arcimDocumentImportReducer(
     case 'import-succeeded':
       return {
         phase: 'complete',
+        provider: state.provider,
         found: state.found || action.result.total || action.result.scanned,
         result: action.result,
         problem: null,
@@ -306,9 +326,11 @@ function problemFromPayload(payload: unknown): ArcimDocumentImportProblem {
 
 type WireDocumentImportResult = Omit<
   ArcimDocumentImportResult,
-  'total' | 'partial' | 'nextCursor'
+  'total' | 'partial' | 'nextCursor' | 'locked' | 'lockedPeriods'
 > &
-  Partial<Pick<ArcimDocumentImportResult, 'total' | 'partial' | 'nextCursor'>>
+  Partial<
+    Pick<ArcimDocumentImportResult, 'total' | 'partial' | 'nextCursor' | 'locked' | 'lockedPeriods'>
+  >
 
 function isDocumentImportResult(value: unknown): value is WireDocumentImportResult {
   if (!value || typeof value !== 'object') return false
@@ -325,12 +347,19 @@ function isDocumentImportResult(value: unknown): value is WireDocumentImportResu
   )
 }
 
-/** Older servers answer without the resume fields: a single complete slice. */
+/**
+ * Older servers answer without the resume fields (a single complete slice) and
+ * without the locked-year count (nothing was told apart as locked).
+ */
 function normalizeDocumentImportResult(
   result: WireDocumentImportResult,
 ): ArcimDocumentImportResult {
   return {
     ...result,
+    locked: typeof result.locked === 'number' ? result.locked : 0,
+    lockedPeriods: Array.isArray(result.lockedPeriods)
+      ? result.lockedPeriods.filter((label): label is string => typeof label === 'string')
+      : [],
     total: typeof result.total === 'number' ? result.total : result.scanned,
     partial: result.partial === true,
     nextCursor:

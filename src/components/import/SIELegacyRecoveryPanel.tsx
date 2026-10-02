@@ -61,7 +61,7 @@ export default function SIELegacyRecoveryPanel({ importId, filename, onClose, on
             <div className="space-y-3" role="alert">
               <p className="text-sm">{t('loadError')}</p>
               <p className="text-sm text-muted-foreground">{error}</p>
-              <Button variant="outline" className="min-h-10" onClick={() => {
+              <Button variant="outline" onClick={() => {
                 setError(null)
                 setAssessment(null)
                 setAttempt(value => value + 1)
@@ -127,7 +127,7 @@ export default function SIELegacyRecoveryPanel({ importId, filename, onClose, on
           )}
         </SlideOverBody>
         <SlideOverFooter>
-          <SlideOverClose asChild><Button variant="outline" className="min-h-10">{t('close')}</Button></SlideOverClose>
+          <SlideOverClose asChild><Button variant="outline">{t('close')}</Button></SlideOverClose>
         </SlideOverFooter>
       </SlideOverContent>
     </SlideOver>

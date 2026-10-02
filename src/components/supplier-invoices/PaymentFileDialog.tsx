@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
-import { AlertTriangle, Download, Loader2 } from 'lucide-react'
+import { AlertTriangle, Download } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
@@ -249,7 +249,7 @@ export default function PaymentFileDialog({
                   </thead>
                   <tbody>
                     {preview.eligible.map((line) => (
-                      <tr key={line.id} className="border-b border-border/60 align-middle">
+                      <tr key={line.id} className="border-b border-border align-middle">
                         <td className="max-w-0 w-1/3 py-2 pr-3">
                           <span className="block truncate">{line.supplier_name}</span>
                           <span className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
@@ -258,7 +258,7 @@ export default function PaymentFileDialog({
                               <Badge
                                 key={warning}
                                 variant={warning === 'already_batched' ? 'warning' : 'outline'}
-                                className="px-1.5 py-0 text-[10px] font-normal"
+                                className="px-1.5 py-0 text-[11px] font-normal"
                               >
                                 {t(`warning_${warning}`)}
                               </Badge>
@@ -351,12 +351,8 @@ export default function PaymentFileDialog({
               >
                 {t('cancel')}
               </Button>
-              <Button onClick={handleCreate} disabled={!canCreate}>
-                {creating ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="mr-2 h-4 w-4" />
-                )}
+              <Button onClick={handleCreate} disabled={!canCreate} loading={creating}>
+                {!creating && <Download className="mr-2 h-4 w-4" />}
                 {t('create_and_download')}
               </Button>
             </div>

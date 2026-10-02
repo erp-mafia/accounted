@@ -31,6 +31,9 @@ import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { buildDispositionsProposal } from '@/lib/bokslut/dispositions-proposal-builder'
 import type { ProposedDisposition } from '@/lib/bokslut/types'
 import type { JournalEntry } from '@/types'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * The schablonintäkt rate (IL 30 kap 6a §) defaults per fiscal year via

@@ -39,7 +39,8 @@ vi.mock('../lib/provider-client', () => {
         | 'credentials'
         | 'company-not-found'
         | 'integration-not-activated'
-        | 'company-key-not-found' = 'credentials',
+        | 'company-key-not-found'
+        | 'plan-no-api' = 'credentials',
     ) {
       super(message)
     }
@@ -134,6 +135,8 @@ describe('POST /import-documents', () => {
       skipped: 0,
       unmatched: 1,
       failed: 0,
+      locked: 2,
+      lockedPeriods: ['2024'],
       dryRun: true,
       unmatchedSamples: [],
     })
@@ -142,11 +145,16 @@ describe('POST /import-documents', () => {
     const { status, body } = await parseJsonResponse<{
       success: boolean
       dryRun: boolean
-      result: { scanned: number }
+      result: { scanned: number; locked: number; lockedPeriods: string[] }
     }>(response)
 
     expect(status).toBe(200)
-    expect(body).toMatchObject({ success: true, dryRun: true, result: { scanned: 4 } })
+    // The locked-year count reaches the wizard, which names the years to reopen (crm#251).
+    expect(body).toMatchObject({
+      success: true,
+      dryRun: true,
+      result: { scanned: 4, locked: 2, lockedPeriods: ['2024'] },
+    })
     expect(importProviderDocuments).toHaveBeenCalledWith(
       expect.objectContaining({
         companyId: 'company-1',
@@ -273,6 +281,23 @@ describe('POST /submit-token Bokio error mapping', () => {
     expect(body.error.code).toBe('BOKIO_COMPANY_NOT_FOUND')
     expect(body.error.message).toContain('företags-ID')
     expect(body.error.message_en).toContain('company ID')
+  })
+
+  it('reports a Bokio plan without API access as a plan problem, not rejected credentials', async () => {
+    ;(submitProviderToken as Mock).mockRejectedValue(
+      new ProviderTokenInvalidError('Bokio plan has no API access (HTTP 403)', 'plan-no-api'),
+    )
+
+    const response = await submitTokenHandler(submitTokenRequest(), buildContext())
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en?: string }
+    }>(response)
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('BOKIO_PLAN_NO_API')
+    expect(body.error.message).toContain('Plus, Premium och Business')
+    expect(body.error.message).not.toContain('avvisade autentiseringen')
+    expect(body.error.message_en).toContain('Plus, Premium and Business')
   })
 
   it('keeps an unclassified provider/configuration failure generic', async () => {

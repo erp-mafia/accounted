@@ -118,10 +118,38 @@ function nthBankingDayOfMonth(year: number, month: number, n: number): number {
   return 28
 }
 
-function getFiscalYearLabel(fiscalYearEndMonth: number, fiscalYearEndYear: number): string {
+/**
+ * The räkenskapsår label a yearly deadline carries as its tax_period and
+ * title: `YYYY` for a calendar year, `YYYY-1/YYYY` for a broken one. Keyed
+ * by the calendar year the räkenskapsår ENDS in, like every yearly VAT
+ * period in the app.
+ */
+export function getFiscalYearLabel(fiscalYearEndMonth: number, fiscalYearEndYear: number): string {
   return fiscalYearEndMonth === 12
     ? `${fiscalYearEndYear}`
     : `${fiscalYearEndYear - 1}/${fiscalYearEndYear}`
+}
+
+/**
+ * Month (1-12) the company's räkenskapsår ends, or null when it cannot be
+ * known. A form bound to the calendar year (enskild firma, BFL 3 kap 1 §)
+ * ends in December whatever fiscal_year_start_month says; every other form
+ * ends the month before its configured start month.
+ *
+ * Helårsmoms is declared per beskattningsår, which is the räkenskapsår
+ * (SFL 26 kap 10-11 §§), so this month is what places a yearly VAT period:
+ * the generator's label, the filing record's key and the period's last day.
+ */
+export function fiscalYearEndMonthFor(settings: {
+  entity_type?: EntityType | string | null
+  fiscal_year_start_month?: number | null
+}): number | null {
+  if (isEntityType(settings.entity_type) && fiscalYearLockedToCalendar(settings.entity_type)) {
+    return 12
+  }
+  const start = settings.fiscal_year_start_month
+  if (start == null || !Number.isInteger(start) || start < 1 || start > 12) return null
+  return start === 1 ? 12 : start - 1
 }
 
 function getAnnualVatDeadline(
@@ -220,18 +248,9 @@ export function getVatDeadlineForPeriod(
     return null
   }
 
-  const configuredFiscalYearStartMonth = settings.fiscal_year_start_month != null
-    && settings.fiscal_year_start_month >= 1
-    && settings.fiscal_year_start_month <= 12
-    ? settings.fiscal_year_start_month
-    : null
-  if (!calendarYearOnly && configuredFiscalYearStartMonth === null) {
-    return null
-  }
-  const fiscalYearStartMonth = calendarYearOnly ? 1 : configuredFiscalYearStartMonth!
-  const fiscalYearEndMonth = calendarYearOnly
-    ? 12
-    : (fiscalYearStartMonth === 1 ? 12 : fiscalYearStartMonth - 1)
+  const fiscalYearEndMonth = fiscalYearEndMonthFor(settings)
+  if (fiscalYearEndMonth === null) return null
+  const fiscalYearStartMonth = fiscalYearEndMonth === 12 ? 1 : fiscalYearEndMonth + 1
   const deadline = getAnnualVatDeadline(fiscalYearEndMonth, year, {
     entity_type: settings.entity_type,
     fiscal_year_start_month: fiscalYearStartMonth,
@@ -782,16 +801,20 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // ROT/RUT begäran om utbetalning: the payout request for deductions given
-  // during year Y must reach Skatteverket by 31 January of year Y+1
-  // (Lag 2009:194 8 §). Missing the date forfeits the payout on account
-  // 1513, so this is the one deadline where lateness costs the principal,
-  // not a fee. Keyed on PAYMENT years (buyer paid), never invoice dates:
-  // rows only exist for years present in rot_rut_payment_years.
+  // Begäran om utbetalning (ROT/RUT and grön teknik): the payout request for
+  // deductions given during year Y must reach Skatteverket by 31 January of
+  // year Y+1 (Lag 2009:194 8 § for ROT/RUT; for grön teknik Skatteverket:
+  // "senast den 31 januari året efter att din kund betalade för
+  // installationen"). Missing the date forfeits the payout on account 1513,
+  // so this is the one deadline where lateness costs the principal, not a
+  // fee. Keyed on PAYMENT years (buyer paid), never invoice dates: rows only
+  // exist for years present in rot_rut_payment_years, which counts every
+  // deduction kind. The type keeps its name (identity is
+  // tax_deadline_type:tax_period, so the title can change safely).
   {
     type: 'rot_rut_begaran',
-    titleTemplate: 'ROT/RUT-begäran om utbetalning {periodLabel}',
-    description: 'Begäran om utbetalning för ROT/RUT-avdrag till Skatteverket',
+    titleTemplate: 'Begäran om utbetalning ROT/RUT och grön teknik {periodLabel}',
+    description: 'Begäran om utbetalning för ROT/RUT-avdrag och skattereduktion för grön teknik till Skatteverket',
     condition: (s) => s.rot_rut_enabled,
     priority: 'critical',
     linkedReportType: null,

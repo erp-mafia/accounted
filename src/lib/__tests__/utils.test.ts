@@ -42,6 +42,18 @@ describe('formatCurrency', () => {
   it('still honours a real currency code', () => {
     expect(formatCurrency(10, 'EUR')).toContain('€')
   })
+
+  it('degrades to the number plus the raw value for an invalid code instead of throwing', () => {
+    // A webshop plugin wrote the HTML-encoded "kr" symbol into an order's
+    // currency; Intl throws RangeError on it and took the Orders page down.
+    expect(() => formatCurrency(1250, '&#107;&#114;')).not.toThrow()
+    expect(formatCurrency(1250, '&#107;&#114;')).toBe(
+      `${new Intl.NumberFormat('sv-SE').format(1250)} &#107;&#114;`,
+    )
+    expect(formatCurrency(10.5, 'KR', { minimumFractionDigits: 2 })).toBe(
+      `${new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2 }).format(10.5)} KR`,
+    )
+  })
 })
 
 describe('withTimeout', () => {

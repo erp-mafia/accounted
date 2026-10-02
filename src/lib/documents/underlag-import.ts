@@ -101,7 +101,14 @@ export interface UnderlagPlan {
   no_source_refs: boolean
 }
 
-function isPeriodLocked(period: FiscalPeriodRow | undefined): boolean {
+/**
+ * enforce_period_lock_documents' condition (migration 20240101000017, never
+ * changed): a document cannot be linked to a verifikat whose fiscal period is
+ * closed or locked. The company lock date does not apply to documents. Shared
+ * with gnubok_link_documents_to_vouchers so both receipt-migration previews
+ * predict the same refusal.
+ */
+export function isPeriodLocked(period: Pick<FiscalPeriodRow, 'is_closed' | 'locked_at'> | undefined): boolean {
   return period ? period.is_closed || period.locked_at !== null : false
 }
 

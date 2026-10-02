@@ -3,7 +3,7 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
@@ -302,16 +302,12 @@ export default function BankSyncNowButton() {
         <Button
           variant="outline"
           size="sm"
-          className="h-7 gap-1.5 px-2.5 text-xs"
-          disabled={isBusy || !hasBankSync}
+          disabled={!hasBankSync}
+          loading={isBusy}
           title={gateTitle}
           onClick={() => runFor(conn)}
         >
-          {isBusy ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
+          {!isBusy && <RefreshCw className="mr-2 h-3.5 w-3.5" />}
           <span>{singleLabel}</span>
         </Button>
         {upsellNote}
@@ -326,15 +322,11 @@ export default function BankSyncNowButton() {
         <Button
           variant="outline"
           size="sm"
-          className="h-7 gap-1.5 px-2.5 text-xs"
-          disabled={isBusy || !hasBankSync}
+          disabled={!hasBankSync}
+          loading={isBusy}
           title={gateTitle}
         >
-          {isBusy ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
+          {!isBusy && <RefreshCw className="mr-2 h-3.5 w-3.5" />}
           <span>{syncLabel}</span>
         </Button>
       </DropdownMenuTrigger>

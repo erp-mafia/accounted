@@ -30,6 +30,18 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }))
 
+const decodeHeicMock = vi.fn()
+vi.mock('@/lib/documents/read/image', () => ({
+  HEIC_MIME_TYPES: ['image/heic', 'image/heif'],
+  decodeHeicToJpeg: (...args: unknown[]) => decodeHeicMock(...args),
+}))
+
+const ensurePreviewMock = vi.fn()
+vi.mock('@/lib/documents/preview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/documents/preview')>()),
+  ensurePreview: (...args: unknown[]) => ensurePreviewMock(...args),
+}))
+
 import { GET } from '../route'
 import { NextResponse } from 'next/server'
 
@@ -51,8 +63,8 @@ function makeDoc(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function makeReq() {
-  return new Request('http://localhost/api/documents/doc-1/inline')
+function makeReq(query = '') {
+  return new Request(`http://localhost/api/documents/doc-1/inline${query}`)
 }
 
 beforeEach(() => {
@@ -60,6 +72,7 @@ beforeEach(() => {
   reset()
   requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
   downloadMock.mockResolvedValue({ data: new Blob(['%PDF-1.4']), error: null })
+  ensurePreviewMock.mockResolvedValue(null)
 })
 
 describe('GET /api/documents/[id]/inline', () => {
@@ -114,6 +127,56 @@ describe('GET /api/documents/[id]/inline', () => {
     // PDF is natively inline-safe: the sandboxing CSP would break Chrome's
     // built-in viewer, so it must be absent here.
     expect(res.headers.get('Content-Security-Policy')).toBeNull()
+  })
+
+  it('serves a photo its kept preview, small and cacheable, and the file itself on ?original=1', async () => {
+    enqueue({ data: makeDoc({ file_name: 'IMG_7484.heic', mime_type: 'image/heic', file_size_bytes: 2_500_000 }), error: null })
+    ensurePreviewMock.mockResolvedValue(Buffer.from('PREVIEW'))
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('image/jpeg')
+    expect(res.headers.get('Content-Disposition')).toContain('filename="IMG_7484.jpg"')
+    expect(res.headers.get('Cache-Control')).toBe('private, max-age=3600')
+    expect(await res.text()).toBe('PREVIEW')
+    expect(ensurePreviewMock).toHaveBeenCalledWith(expect.anything(), { id: 'doc-1', company_id: 'company-1', mime: 'image/heic', storage_path: 'documents/user-1/doc-1.pdf' })
+    expect(downloadMock).not.toHaveBeenCalled()
+
+    // A large JPEG gets one too; a small one is served as it is.
+    enqueue({ data: makeDoc({ file_name: 'kvitto.jpg', mime_type: 'image/jpeg', file_size_bytes: 4_900_000 }), error: null })
+    await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    expect(ensurePreviewMock).toHaveBeenCalledTimes(2)
+    enqueue({ data: makeDoc({ file_name: 'liten.jpg', mime_type: 'image/jpeg', file_size_bytes: 80_000 }), error: null })
+    await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    expect(ensurePreviewMock).toHaveBeenCalledTimes(2)
+
+    // Open in a new tab: the file itself.
+    enqueue({ data: makeDoc({ file_name: 'kvitto.jpg', mime_type: 'image/jpeg', file_size_bytes: 4_900_000 }), error: null })
+    downloadMock.mockResolvedValue({ data: new Blob(['ORIGINAL']), error: null })
+    const original = await GET(makeReq('?original=1'), createMockRouteParams({ id: 'doc-1' }))
+    expect(await original.text()).toBe('ORIGINAL')
+    expect(ensurePreviewMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('serves an iPhone HEIC photo decoded to JPEG, named .jpg, and the original when the decoder gives up', async () => {
+    enqueue({ data: makeDoc({ file_name: 'IMG_7484.heic', mime_type: 'image/heic' }), error: null })
+    downloadMock.mockResolvedValue({ data: new Blob([new Uint8Array([0x00, 0x00, 0x00, 0x18])]), error: null })
+    decodeHeicMock.mockResolvedValue(Buffer.from('JPEGDATA'))
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('image/jpeg')
+    expect(res.headers.get('Content-Disposition')).toContain('filename="IMG_7484.jpg"')
+    expect(res.headers.get('Content-Security-Policy')).toBeNull()
+    expect(await res.text()).toBe('JPEGDATA')
+    expect(decodeHeicMock).toHaveBeenCalledTimes(1)
+
+    // A legacy row with no mime type still resolves by its extension.
+    enqueue({ data: makeDoc({ file_name: 'IMG_7485.HEIC', mime_type: null }), error: null })
+    decodeHeicMock.mockRejectedValue(new Error('not a HEIF'))
+    const fallback = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    expect(fallback.status).toBe(200)
+    expect(fallback.headers.get('Content-Type')).toBe('image/heic')
+    expect(fallback.headers.get('Content-Disposition')).toContain('filename="IMG_7485.HEIC"')
   })
 
   it('serves raster images without the sandboxing CSP', async () => {

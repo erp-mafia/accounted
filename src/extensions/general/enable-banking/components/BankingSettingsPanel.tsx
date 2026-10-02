@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { CheckCircle, Loader2, Upload } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { createClient } from '@/lib/supabase/client'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -36,6 +37,7 @@ import {
   sortConnectionsByPrecedence,
 } from '../lib/connection-state'
 import { sameBankWarning } from '../lib/connection-warning'
+import { hasSelectableAccounts } from '../lib/claimed-accounts'
 import type { BankConnection } from '@/types'
 import type { StoredAccount } from '../types'
 
@@ -365,8 +367,15 @@ export default function BankingSettingsPanel() {
     // connection to the bank, renewing that row is almost always what the
     // user means. A second fresh row leaves the old one stuck in "Åtgärd
     // krävs" and risks duplicate transactions on the re-import.
+    // A connection waiting for account selection with nothing to pick is not
+    // one to renew or finish, so it does not count here: the connect route
+    // replaces it with this login.
     const existing = bankConnections.find(
-      (c) => c.status !== 'revoked' && c.status !== 'pending' && c.bank_name === bank.name,
+      (c) =>
+        c.status !== 'revoked' &&
+        c.status !== 'pending' &&
+        c.bank_name === bank.name &&
+        !(c.status === 'pending_selection' && !hasSelectableAccounts(c.accounts_data as StoredAccount[] | null)),
     )
     if (existing?.status === 'pending_selection') {
       // Already authorized, accounts never chosen: neither "renew" nor
@@ -551,7 +560,10 @@ export default function BankingSettingsPanel() {
           error: data.error,
           connectionId,
         })
-        throw new Error(data.error)
+        // Routes answer with either a plain string or the canonical envelope
+        // ({ error: { code, message } }); the envelope's message is Swedish.
+        const message = typeof data.error === 'string' ? data.error : data.error?.message
+        throw new Error(message || 'Synkronisering misslyckades')
       }
 
       console.log('[enable-banking] Sync completed', {
@@ -604,10 +616,11 @@ export default function BankingSettingsPanel() {
   }
 
   // Start over for an attempt the bank never answered (abandoned 'pending'
-  // row). A fresh connect, not a reconnect: the reconnect path parks a
-  // failed retry as a permanent 'error' card, while the connect route
-  // sweeps the stale pending row before it starts. The bank identity comes
-  // off the row itself (provider slug ends with the country code).
+  // row), or for a waiting connection that leaves nothing to pick. A fresh
+  // connect, not a reconnect: the reconnect path parks a failed retry as a
+  // permanent 'error' card, while the connect route sweeps the stale pending
+  // row, or replaces the waiting one, before it starts. The bank identity
+  // comes off the row itself (provider slug ends with the country code).
   function handleRetryConnect(connection: BankConnection) {
     const country = connection.provider?.split('-').pop()?.toUpperCase() || 'SE'
     void startFreshConnect(
@@ -700,8 +713,10 @@ export default function BankingSettingsPanel() {
       )
     }
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div className="space-y-3 py-2" aria-busy="true">
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-10 w-full" />
+        ))}
       </div>
     )
   }
@@ -779,7 +794,6 @@ export default function BankingSettingsPanel() {
           <DialogFooter className="gap-2 sm:gap-0">
             <Button
               variant="outline"
-              className="min-h-11 w-full sm:w-auto"
               onClick={() => {
                 const intercept = sameBankIntercept
                 setSameBankIntercept(null)
@@ -790,7 +804,6 @@ export default function BankingSettingsPanel() {
               Anslut som ny
             </Button>
             <Button
-              className="min-h-11 w-full sm:w-auto"
               onClick={() => {
                 const intercept = sameBankIntercept
                 setSameBankIntercept(null)
@@ -815,7 +828,20 @@ export default function BankingSettingsPanel() {
           bankName={pickerConnection.bank_name}
           accounts={pickerAccounts}
           isInitialSelection={pickerConnection.status === 'pending_selection'}
-          onSaved={() => fetchConnections()}
+          onReauthorize={() => {
+            setPickerConnectionId(null)
+            handleRetryConnect(pickerConnection)
+          }}
+          onSaved={() => {
+            // Sync stopped on a stale account selection: the save is the fix,
+            // so sync right away instead of leaving the row saying it stopped
+            // until the next cron run. Success clears the stored message.
+            if (pickerConnection.status === 'active' && pickerConnection.error_message) {
+              void handleSyncTransactions(pickerConnection.id)
+            } else {
+              fetchConnections()
+            }
+          }}
         />
       )}
 
@@ -920,15 +946,9 @@ export default function BankingSettingsPanel() {
                   size="sm"
                   onClick={() => handleReuseConnection(offer)}
                   disabled={!!attachingConnectionId}
+                  loading={attachingConnectionId === offer.connection_id}
                 >
-                  {attachingConnectionId === offer.connection_id ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Kopplar
-                    </>
-                  ) : (
-                    'Återanvänd'
-                  )}
+                  {attachingConnectionId === offer.connection_id ? 'Kopplar' : 'Återanvänd'}
                 </Button>
               </SettingsRowEnd>
             </SettingsRow>

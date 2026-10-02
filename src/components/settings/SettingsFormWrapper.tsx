@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Loader2, Check, Lock } from 'lucide-react'
+import { Check, Lock } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -120,7 +120,7 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
           lets rows scroll away underneath without a hard edge. */}
       <div
         className={cn(
-          'sticky bottom-0 flex items-center gap-4 bg-gradient-to-t from-background via-background/95 to-transparent px-1 transition-opacity duration-200',
+          'sticky bottom-0 flex items-center gap-4 bg-gradient-to-t from-background via-background/95 to-transparent px-1 transition-opacity duration-150',
           barVisible
             ? 'mt-2 pb-3 pt-6 opacity-100'
             : 'pointer-events-none h-0 overflow-hidden py-0 opacity-0',
@@ -129,16 +129,14 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
       >
         <Button
           type="submit"
-          disabled={isSaving || !canWrite}
+          disabled={!canWrite}
+          loading={isSaving}
           size="sm"
           tabIndex={barVisible ? 0 : -1}
           title={!canWrite ? t('wrapper_readonly_tooltip') : undefined}
         >
           {isSaving ? (
-            <>
-              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              {t('wrapper_saving')}
-            </>
+            t('wrapper_saving')
           ) : !canWrite ? (
             <>
               <Lock className="mr-2 h-3.5 w-3.5" />
@@ -149,7 +147,7 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
           )}
         </Button>
         {saved ? (
-          <span className="flex items-center gap-2 text-sm text-muted-foreground animate-in fade-in duration-200">
+          <span className="flex items-center gap-2 text-sm text-muted-foreground animate-in fade-in duration-150">
             <Check className="h-3.5 w-3.5" />
             {t('wrapper_saved')}
           </span>

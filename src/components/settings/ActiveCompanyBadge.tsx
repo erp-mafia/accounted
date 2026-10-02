@@ -8,14 +8,13 @@ import { Badge } from '@/components/ui/badge'
 import { useByraSettingsScope } from './useSettingsNavItems'
 
 /**
- * Quiet chip naming the active company. Settings surfaces (the routed modal
- * and the full-page fallback) cover or dim the sidebar's CompanySwitcher, so
- * without this the user edits company-scoped settings with no visible answer
- * to "which company am I on?" (support feedback 2026-07-19).
+ * Quiet chip naming the active company in the settings top bar, so the user
+ * editing company-scoped settings always sees which company they hit
+ * (support feedback 2026-07-19).
  *
  * Byrå scope (?ctx=byra): no chip. The cockpit sits above the companies and
  * only account-level sections show, so naming a technically-active client
- * here would read as "you are inside this company" (mirrors SettingsModal).
+ * here would read as "you are inside this company".
  */
 export function ActiveCompanyBadge({ className }: { className?: string }) {
   const { company } = useCompany()

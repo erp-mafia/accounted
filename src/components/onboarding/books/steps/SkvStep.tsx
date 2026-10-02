@@ -8,6 +8,7 @@ import { InkText } from '@/components/onboarding/journey/ink'
 import { fmtKr } from '../engines/cash-draw'
 import { SkvHandshake } from '../ui/SkvHandshake'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
 
 const RETURN_TO = '/onboarding/books?station=skv'
 const AUTHORIZE_URL = `/api/extensions/ext/skatteverket/authorize?return_to=${encodeURIComponent(RETURN_TO)}`
@@ -174,13 +175,13 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
       ) : null}
       <div className="jny-qactions">
         {phase === 'done' ? (
-          <button type="button" className="jny-btn" onClick={() => dispatch({ type: 'TO_DONE' })}>
+          <Button size="lg" onClick={() => dispatch({ type: 'TO_DONE' })}>
             {t('to_done')}
-          </button>
+          </Button>
         ) : open ? (
-          <button type="button" className={`jny-btn-quiet${bodyCls}`} onClick={() => dispatch({ type: 'SKV_SKIP' })}>
+          <Button variant="ghost" size="sm" className={`text-muted-foreground${bodyCls}`} onClick={() => dispatch({ type: 'SKV_SKIP' })}>
             {t('skv_skip')}
-          </button>
+          </Button>
         ) : null}
       </div>
     </div>

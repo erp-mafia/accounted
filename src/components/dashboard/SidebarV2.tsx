@@ -53,7 +53,7 @@ export function SidebarV2({
   const countBubble = (n: number) => (
     <span
       data-ph-mask
-      className="ml-auto flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground"
+      className="ml-auto flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground"
     >
       {n > 99 ? '99+' : n}
     </span>
@@ -72,7 +72,7 @@ export function SidebarV2({
         {!opts?.sub && Icon && (renderIcon ? renderIcon(item, iconClass) : <Icon className={iconClass} />)}
         <span className="flex-1 truncate">{label(item.labelKey)}</span>
         {item.betaBadge ? (
-          <span className="ml-auto rounded-full bg-muted/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground/70">
+          <span className="ml-auto rounded-full bg-muted/60 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
             {betaLabel}
           </span>
         ) : (
@@ -115,7 +115,7 @@ export function SidebarV2({
         {subs.length > 0 && (
           <div
             className={cn(
-              'grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none',
+              'grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none',
               active ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
             )}
             aria-hidden={!active}
@@ -145,7 +145,7 @@ export function SidebarV2({
           {company.length > 0 && (
             <div className="mb-4">
               {groupLabel && (
-                <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                   {groupLabel}
                 </div>
               )}

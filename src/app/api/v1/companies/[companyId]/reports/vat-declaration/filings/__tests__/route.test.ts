@@ -1,5 +1,5 @@
 /**
- * Tests for the v1 VAT filing record routes (issue #2746):
+ * Tests for the v1 VAT filing record routes (issues #2746, #2786):
  *   GET    .../reports/vat-declaration/filings
  *   POST   .../reports/vat-declaration/filings
  *   DELETE .../reports/vat-declaration/filings
@@ -28,6 +28,8 @@ const store = vi.hoisted(() => ({
   listVatFilings: vi.fn(),
   markVatPeriodFiled: vi.fn(),
   unmarkVatPeriodFiled: vi.fn(),
+  previewMarkVatPeriodFiled: vi.fn(),
+  previewUnmarkVatPeriodFiled: vi.fn(),
 }))
 vi.mock('@/lib/vat/filing-record-store', () => store)
 
@@ -69,9 +71,23 @@ const RECORD = {
   year: 2026,
   period: 2,
   tax_period: '2026-Q2',
+  period_start: '2026-04-01',
+  period_end: '2026-06-30',
   filed_on: '2026-08-10',
   source: 'manual',
   reference: null,
+}
+
+// Helårsmoms for the räkenskapsår 2025-07-01 - 2026-06-30 (#2786).
+const YEARLY_RECORD = {
+  ...RECORD,
+  period_type: 'yearly',
+  year: 2026,
+  period: 1,
+  tax_period: '2025/2026',
+  period_start: '2025-07-01',
+  period_end: '2026-06-30',
+  filed_on: '2026-08-20',
 }
 
 function req(
@@ -181,9 +197,7 @@ describe('v1 VAT filing records', () => {
 
   it('POST answers 409 when the store loses a concurrent update', async () => {
     authOk(['bookkeeping:write'])
-    store.markVatPeriodFiled.mockRejectedValue(
-      Object.assign(new Error('row changed while it was being marked'), { code: 'CONFLICT' }),
-    )
+    store.markVatPeriodFiled.mockResolvedValue({ ok: false, code: 'CONFLICT' })
     const res = await POST(req(BASE, { method: 'POST', body: validBody }), params())
     expect(res.status).toBe(409)
     expect((await res.json()).error.code).toBe('CONFLICT')
@@ -198,21 +212,99 @@ describe('v1 VAT filing records', () => {
     expect(body.error.code).toBe('VAT_FILING_PERIOD_NOT_ENDED')
   })
 
-  it('POST dry-run previews without writing, and still applies the date rules', async () => {
+  it('POST dry-run answers the store preview without writing, refusals included', async () => {
     authOk(['bookkeeping:write'])
+    const wouldMark = {
+      ...validBody,
+      tax_period: '2026-Q2',
+      period_start: '2026-04-01',
+      period_end: '2026-06-30',
+      reference: null,
+    }
+    store.previewMarkVatPeriodFiled.mockResolvedValueOnce({
+      ok: true,
+      would_mark: wouldMark,
+      effect: 'create',
+      current: null,
+    })
     const preview = await POST(req(BASE, { method: 'POST', body: validBody, dryRun: true }), params())
     expect(preview.status).toBe(200)
     const body = await preview.json()
     expect(body.data.dry_run).toBe(true)
-    expect(body.data.preview.would_mark).toMatchObject(validBody)
+    expect(body.data.preview).toEqual({ would_mark: wouldMark, effect: 'create', current: null })
     expect(store.markVatPeriodFiled).not.toHaveBeenCalled()
 
+    store.previewMarkVatPeriodFiled.mockResolvedValueOnce({ ok: false, code: 'VAT_FILING_DATE_IN_FUTURE' })
     const future = await POST(
       req(BASE, { method: 'POST', body: { ...validBody, filed_on: '2099-01-01' }, dryRun: true }),
       params(),
     )
     expect(future.status).toBe(400)
     expect((await future.json()).error.code).toBe('VAT_FILING_DATE_IN_FUTURE')
+    expect(store.markVatPeriodFiled).not.toHaveBeenCalled()
+  })
+
+  it('POST records a helårsmoms filing for a räkenskapsår, named by the year it ends', async () => {
+    authOk(['bookkeeping:write'])
+    store.markVatPeriodFiled.mockResolvedValue({ ok: true, record: YEARLY_RECORD, created: true, changed: true })
+    const body = { period_type: 'yearly', year: 2026, period: 1, filed_on: '2026-08-20' }
+    const res = await POST(req(BASE, { method: 'POST', body }), params())
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ ...YEARLY_RECORD, created: true, changed: true })
+    expect(store.markVatPeriodFiled).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, {
+      periodType: 'yearly',
+      year: 2026,
+      period: 1,
+      filedOn: '2026-08-20',
+      reference: undefined,
+      userId: 'user-1',
+    })
+  })
+
+  it('POST 400 for a yearly period other than 1', async () => {
+    authOk(['bookkeeping:write'])
+    const res = await POST(
+      req(BASE, { method: 'POST', body: { period_type: 'yearly', year: 2026, period: 6, filed_on: '2026-08-20' } }),
+      params(),
+    )
+    expect(res.status).toBe(400)
+    expect(store.markVatPeriodFiled).not.toHaveBeenCalled()
+  })
+
+  it('DELETE dry-run refuses a Skatteverket-confirmed räkenskapsår like the real call', async () => {
+    authOk(['bookkeeping:write'])
+    store.previewUnmarkVatPeriodFiled.mockResolvedValueOnce({
+      ok: false,
+      code: 'VAT_FILING_CONFIRMED_BY_SKATTEVERKET',
+    })
+    const res = await DELETE(
+      req(`${BASE}?period_type=yearly&year=2026&period=1`, { method: 'DELETE', dryRun: true }),
+      params(),
+    )
+    expect(res.status).toBe(409)
+    expect(store.previewUnmarkVatPeriodFiled).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, {
+      periodType: 'yearly',
+      year: 2026,
+      period: 1,
+    })
+    expect(store.unmarkVatPeriodFiled).not.toHaveBeenCalled()
+  })
+
+  it('DELETE dry-run names the record it would unmark', async () => {
+    authOk(['bookkeeping:write'])
+    store.previewUnmarkVatPeriodFiled.mockResolvedValueOnce({
+      ok: true,
+      would_unmark: { period_type: 'yearly', year: 2026, period: 1, tax_period: '2025/2026' },
+      current: YEARLY_RECORD,
+    })
+    const res = await DELETE(
+      req(`${BASE}?period_type=yearly&year=2026&period=1`, { method: 'DELETE', dryRun: true }),
+      params(),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.current).toEqual(YEARLY_RECORD)
+    expect(store.unmarkVatPeriodFiled).not.toHaveBeenCalled()
   })
 
   it('DELETE 400 on a malformed query', async () => {

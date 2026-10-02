@@ -108,6 +108,8 @@ export interface TransactionForSelect {
 }
 
 export interface SelectAccountInput {
+  /** For ai_usage_events. */
+  companyId?: string | null
   transaction: TransactionForSelect
   /** Extracted receipt/invoice text (supplier, line items, amounts). Optional but improves novel cases. */
   underlag?: string
@@ -296,6 +298,7 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
     Array.from({ length: samples }, () =>
       service.generateStructured({
         tier: input.tier ?? 'assistant',
+        meter: { feature: 'categorize_select_account', companyId: input.companyId ?? null },
         system: SYSTEM_PROMPT,
         prompt,
         maxTokens: input.maxTokens ?? DEFAULT_MAX_TOKENS,

@@ -13,6 +13,13 @@ const detectMocks = vi.hoisted(() => ({
   other: vi.fn(),
 }))
 
+// The Skatteverket predicate reads a column end-user roles cannot, so the
+// aggregate hands it a service-role client instead of the caller's.
+const serviceClient = vi.hoisted(() => ({ service: true }))
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: vi.fn(() => serviceClient),
+}))
+
 vi.mock('../categories', () => ({
   detectNoFiscalYear: detectMocks.noFiscalYear,
   detectBrokenBankConnections: detectMocks.broken,
@@ -104,8 +111,14 @@ describe('getCompanyNotices', () => {
   it('passes the caller identity through to the per-user predicates', async () => {
     const now = new Date('2026-08-19T12:00:00Z')
     await getCompanyNotices(supabase, 'company-1', { userId: 'user-1', now })
-    expect(detectMocks.skv).toHaveBeenCalledWith(supabase, 'user-1', 'company-1', now)
+    expect(detectMocks.skv).toHaveBeenCalledWith(serviceClient, 'user-1', 'company-1', now)
     expect(detectMocks.expiring).toHaveBeenCalledWith(supabase, 'company-1', now)
+  })
+
+  it('reads the Skatteverket token row on the service role, never the session client', async () => {
+    await getCompanyNotices(supabase, 'company-1', { userId: 'user-1' })
+    expect(detectMocks.skv.mock.calls[0][0]).toBe(serviceClient)
+    expect(detectMocks.skv.mock.calls[0][0]).not.toBe(supabase)
   })
 })
 

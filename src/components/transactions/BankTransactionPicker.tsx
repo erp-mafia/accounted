@@ -150,7 +150,7 @@ export default function BankTransactionPicker({
                   key={tx.id}
                   type="button"
                   onClick={() => onPick(tx.id)}
-                  className="w-full text-left rounded-lg border p-3 hover:border-primary/50 hover:bg-muted/30 transition-colors"
+                  className="w-full text-left rounded-lg border p-3 hover:border-primary/50 hover:bg-secondary/60 transition-colors"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">

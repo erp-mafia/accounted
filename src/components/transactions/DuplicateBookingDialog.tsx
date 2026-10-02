@@ -6,7 +6,7 @@ import { useTranslations, useLocale } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
@@ -299,13 +299,11 @@ export default function DuplicateBookingDialog({
                       correct resolution (matching would double-count the bank
                       side, booking would double-count the ledger side). */}
                   {canIgnore && (
-                    <Button variant="outline" onClick={handleIgnore} disabled={busy}>
-                      {ignoring && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    <Button variant="outline" onClick={handleIgnore} disabled={busy} loading={ignoring}>
                       {t('dialog_duplicate_ignore')}
                     </Button>
                   )}
-                  <Button onClick={handleMatch} disabled={busy}>
-                    {matching && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  <Button onClick={handleMatch} disabled={busy} loading={matching}>
                     {t('dialog_duplicate_match')}
                   </Button>
                 </>

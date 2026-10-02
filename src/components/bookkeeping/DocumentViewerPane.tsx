@@ -25,7 +25,7 @@ function isImageType(type: string | null, fileName?: string | null): boolean {
   // Legacy uploads sometimes leave mime_type null or application/octet-stream:
   // fall back to the filename extension.
   if (type === null || type === 'application/octet-stream') {
-    return /\.(jpe?g|png|gif|webp|svg)$/i.test(fileName ?? '')
+    return /\.(jpe?g|png|gif|webp|svg|heic|heif)$/i.test(fileName ?? '')
   }
   return false
 }
@@ -47,6 +47,8 @@ interface DocumentViewerPaneProps {
   downloadUrl?: string | null
   /** Optional filename: used for mime sniffing on legacy/octet-stream files. */
   fileName?: string | null
+  /** Open a PDF at this page (1-based): the browser plugin honours #page=N. */
+  page?: number | null
   className?: string
 }
 
@@ -55,6 +57,7 @@ export default function DocumentViewerPane({
   mime: mimeProp = null,
   downloadUrl: downloadUrlProp = null,
   fileName = null,
+  page = null,
   className,
 }: DocumentViewerPaneProps) {
   const t = useTranslations('document_viewer')
@@ -110,8 +113,9 @@ export default function DocumentViewerPane({
     )
   }
 
-  const inlineSrc = `/api/documents/${documentId}/inline`
-  const newTabHref = downloadUrl ?? inlineSrc
+  const inlineSrc = `/api/documents/${documentId}/inline${page && page > 1 ? `#page=${page}` : ''}`
+  // The pane shows a sized preview of a photo; a new tab opens the file itself, from the same origin.
+  const newTabHref = downloadUrl ?? `/api/documents/${documentId}/inline?original=1`
   const showAsImage = isImageType(mime, fileName)
   const showAsPdf = isPdfType(mime, fileName)
 

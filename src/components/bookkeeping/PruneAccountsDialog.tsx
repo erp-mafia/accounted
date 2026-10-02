@@ -13,12 +13,13 @@ import {
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
-import { Loader2, Search, Trash2 } from 'lucide-react'
+import { Search, Trash2 } from 'lucide-react'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface PruneCandidate {
@@ -242,7 +243,7 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
               </span>
               <span className="min-w-0 flex-1 truncate">{c.account_name}</span>
               {!c.is_active && (
-                <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">
+                <span className="ml-auto text-[11px] uppercase tracking-wider text-muted-foreground shrink-0">
                   {t('prune_inactive_badge')}
                 </span>
               )}
@@ -263,9 +264,12 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
         </DialogHeader>
 
         {loading ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
-            {t('prune_loading')}
+          <div className="space-y-3 py-4" aria-busy="true" aria-label={t('prune_loading')}>
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-5/6" />
+            <Skeleton className="h-4 w-4/6" />
+            <Skeleton className="h-4 w-5/6" />
           </div>
         ) : candidates.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">{t('prune_empty')}</p>
@@ -324,13 +328,10 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
           <Button
             variant="destructive"
             onClick={handlePrune}
-            disabled={loading || isDeleting || selected.size === 0}
+            disabled={loading || selected.size === 0}
+            loading={isDeleting}
           >
-            {isDeleting ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-            )}
+            {!isDeleting && <Trash2 className="mr-1.5 h-3.5 w-3.5" />}
             {t('prune_confirm', { count: selected.size })}
           </Button>
         </DialogFooter>

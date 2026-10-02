@@ -120,3 +120,41 @@ describe('createReminderFeeEntry', () => {
     expect(mockedCreateEntry).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * The fee is revenue of the reminded invoice: both legs carry the invoice's
+ * default_dimensions, the same propagation the invoice payment uses, so a
+ * required rule on 3990 is met whenever the invoice was tagged and 1510
+ * nets per dimension. Default/fixed rules still apply on top in the engine.
+ */
+describe('createReminderFeeEntry: the reminded invoice\'s dimensions', () => {
+  const base = {
+    invoiceId: 'inv-1',
+    invoiceNumber: 'F2026001',
+    companyId: 'company-1',
+    userId: 'user-1',
+    feeAmount: 60,
+    asOfDate: '2026-05-26',
+  }
+
+  it('stamps a tagged invoice\'s bag on both legs, one copy per line', async () => {
+    await createReminderFeeEntry({} as never, {
+      ...base,
+      invoiceDefaultDimensions: { '6': 'P001', '1': 'KS01' },
+    })
+
+    const input = mockedCreateEntry.mock.calls[0][3] as CreateJournalEntryInput
+    const debit = input.lines.find((l) => l.account_number === '1510')!
+    const credit = input.lines.find((l) => l.account_number === '3990')!
+    expect(debit.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(credit.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(debit.dimensions).not.toBe(credit.dimensions)
+  })
+
+  it.each([undefined, null, {}])('leaves the fee of an untagged invoice untagged (%s)', async (bag) => {
+    await createReminderFeeEntry({} as never, { ...base, invoiceDefaultDimensions: bag })
+
+    const input = mockedCreateEntry.mock.calls[0][3] as CreateJournalEntryInput
+    for (const line of input.lines) expect('dimensions' in line).toBe(false)
+  })
+})

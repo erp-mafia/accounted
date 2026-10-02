@@ -14,7 +14,8 @@ vi.mock('@/lib/company/context', () => ({
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
-vi.mock('@/lib/salary/payment/pain001-generator', () => ({
+vi.mock('@/lib/salary/payment/pain001-generator', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/payment/pain001-generator')>()),
   generatePain001: vi.fn(() => '<Document/>'),
 }))
 vi.mock('@/lib/salary/payment/effective-net', () => ({

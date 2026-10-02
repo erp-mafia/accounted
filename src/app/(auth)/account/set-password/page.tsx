@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, KeyRound } from 'lucide-react'
+import { KeyRound } from 'lucide-react'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 
@@ -169,15 +169,8 @@ function SetPasswordContent() {
                 className="h-11"
               />
             </div>
-            <Button type="submit" className="w-full h-11" disabled={isLoading}>
-              {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Sparar...
-                </>
-              ) : (
-                'Spara lösenord'
-              )}
+            <Button type="submit" size="lg" className="w-full" loading={isLoading}>
+              {isLoading ? 'Sparar...' : 'Spara lösenord'}
             </Button>
           </form>
         </div>

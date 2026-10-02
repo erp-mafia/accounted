@@ -90,7 +90,7 @@ function Lane({
           >
             <span className="flex items-center gap-1.5">
               <span className="truncate">{c.label}</span>
-              {auto(c.key) && <span className="text-[10.5px]">{t('auto')}</span>}
+              {auto(c.key) && <span className="text-[11px]">{t('auto')}</span>}
             </span>
             <span className={cn('font-medium tabular-nums', c.warn && c.count > 0 ? 'text-warning' : 'text-foreground')} data-ph-mask>
               {c.count || '–'}

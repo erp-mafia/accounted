@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { SIE_RESERVED_DIMENSIONS } from '@/lib/reports/sie-export'
+import { isValidRegistryCode } from './sie-object-balances'
 import type { ParsedSIEFile } from './types'
 
 /**
@@ -14,9 +15,16 @@ import type { ParsedSIEFile } from './types'
  * unknown customs fall back to "Dimension N", exactly mirroring the export's
  * orphan synthesis so a parse→import→re-export round-trip is lossless.
  *
- * Rows created here carry `created_by_import_id` so `undo_sie_import` can
- * remove registry values that the undone import introduced (and that nothing
- * else references): the lockstep the plan requires.
+ * Rows created here carry `created_by_import_id` as provenance. Undoing the
+ * import keeps them: the undo every door runs (request_sie_import_undo, then
+ * undo_sie_import_chunk) is a batch storno, so the imported verifikat stay in
+ * the ledger as reversed and their reversal lines copy each line's
+ * dimensions. Both still reference these codes, and the registry must keep
+ * declaring them (SIE #OBJEKT, report column names). The registry cleanup
+ * belonged to the older delete-based undo_sie_import (migration
+ * 20260702154500), which no door calls any more; only reset_fiscal_year
+ * still removes import-created rows that no posted or reversed line
+ * references.
  */
 
 export interface DimensionImportSummary {
@@ -29,11 +37,6 @@ export interface DimensionImportSummary {
   /** True when this import flipped company_settings.dimensions_enabled on. */
   toggleEnabled: boolean
   warnings: string[]
-}
-
-/** dimension_values.code DB CHECK: 1-40 chars, none of `"{}`. */
-function isValidRegistryCode(code: string): boolean {
-  return code.length >= 1 && code.length <= 40 && !/["{}]/.test(code)
 }
 
 export function collectSIEDimensionUsage(parsed: ParsedSIEFile): {
@@ -95,6 +98,16 @@ export function collectSIEDimensionUsage(parsed: ParsedSIEFile): {
         ensureValue(dimNo, code)
       }
     }
+  }
+  // Objects referenced by #OIB/#OUB (issue #3313): the IB entry tags its
+  // lines with them, so the registry must know them before it posts. A code
+  // the registry cannot hold is left out here rather than reported as
+  // invalid: the IB split skips that row with its own preview note, and an
+  // object balance must never fail an import that ignored it until now.
+  for (const row of [...(parsed.objectOpeningBalances ?? []), ...(parsed.objectClosingBalances ?? [])]) {
+    const dimNo = Number(row.dimNo)
+    if (!Number.isInteger(dimNo) || dimNo < 1 || !isValidRegistryCode(row.code)) continue
+    ensureValue(dimNo, row.code)
   }
 
   return { dims, values, taggedLines, invalidCodes }

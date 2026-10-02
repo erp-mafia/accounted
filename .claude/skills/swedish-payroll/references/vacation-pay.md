@@ -4,9 +4,9 @@
 
 ### Sammalöneregeln (§16a Semesterlagen)
 
-Default for monthly-salaried employees. Regular salary continues during vacation, plus a semestertillägg of minimum 0.43% of monthly salary per vacation day (many CBAs use 0.8%). An additional 12% of variable pay (OB, overtime, bonuses) earned during the intjänandeår is divided by earned days and paid per taken day.
+Default for monthly-salaried employees. Regular salary continues during vacation, plus a semestertillägg of minimum 0.43% of monthly salary per vacation day (many CBAs use 0.8%). An additional 12% of variable pay (OB, overtime, bonuses) that fell due during the semesterår is paid no later than one month after the semesterår ends (§16a third paragraph, §26). Kollektivavtal may regulate this differently.
 
-### Procentregeln (§16)
+### Procentregeln (§16b)
 
 Applies to hourly employees, those with >10% variable pay, or when sammalöneregeln cannot be used. Semesterlön = 12% of total semesterlönegrundande income during the intjänandeår. For entitlements beyond 25 days, add 0.48 percentage points per extra day (e.g., 30 days = 14.4%).
 
@@ -44,4 +44,4 @@ Upon termination, all untaken days must be paid as semesterersättning within 1 
 
 ## Semesterlönegrundande frånvaro
 
-Certain absences count as if worked for vacation accrual purposes: sjukfrånvaro (first 180 days), föräldraledighet (first 120 days for first child, 60 for additional), studieledighet with stipend, and more. See Semesterlagen §17-17b for complete list.
+Certain absences count as if worked for vacation accrual purposes: sjukfrånvaro (first 180 days), föräldraledighet (up to 120 days per child, 180 for a single parent; SemL 17 a §), studieledighet with stipend, and more. See Semesterlagen §17-17b for complete list.

@@ -27,6 +27,8 @@ import { BrioxApiError } from '@/lib/providers/briox/client'
 import {
   BokioClient,
   BokioApiError,
+  bokioErrorCode,
+  isBokioPricePlanError,
   normalizeBokioAccessToken,
 } from '@/lib/providers/bokio/client'
 import { WintClient, WintApiError } from '@/lib/providers/wint/client'
@@ -66,7 +68,10 @@ export class ProviderTokenInvalidError extends Error {
       // integration (no scopes granted to the service provider).
       | 'integration-not-activated'
       // BL: no company could be bound to the User-Key at all.
-      | 'company-key-not-found' = 'credentials',
+      | 'company-key-not-found'
+      // Bokio: the company's price plan has no API access (Basic, or an
+      // expired plan). The token can be fine; the fix is the plan.
+      | 'plan-no-api' = 'credentials',
   ) {
     super(message)
     this.name = 'ProviderTokenInvalidError'
@@ -840,6 +845,22 @@ export async function submitProviderToken(
         // not available to this company-scoped token. Other statuses can be a
         // provider/API failure and must not be blamed on the pasted token.
         if (error.statusCode === 401 || error.statusCode === 403) {
+          // Status and Bokio's error code only, so refusals can be counted by
+          // cause: never the token, and never the body, which is free text.
+          log.warn('Bokio refused the integration token probe', {
+            consentId,
+            status: error.statusCode,
+            bokioErrorCode: bokioErrorCode(error.body),
+          })
+          // A plan without API access (Basic, or an expired plan) answers 403
+          // on every company endpoint. The token may be fine, so say what
+          // actually unblocks it instead of "check the credentials".
+          if (isBokioPricePlanError(error)) {
+            throw new ProviderTokenInvalidError(
+              'Bokio plan has no API access (HTTP 403)',
+              'plan-no-api',
+            )
+          }
           throw new ProviderTokenInvalidError(
             `Bokio rejected the integration token (HTTP ${error.statusCode})`,
           )

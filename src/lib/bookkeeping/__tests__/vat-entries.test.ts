@@ -2,10 +2,16 @@ import { describe, it, expect } from 'vitest'
 import {
   getVatRate,
   generateSalesVatLines,
-  generateReverseChargeLines,
+  generateReverseChargePurchaseLines,
+  generateReverseChargeBasisLines,
+  costAccountReportsRcBasis,
+  reverseChargeKindForSupplierType,
+  reverseChargeKindRuta,
+  REVERSE_CHARGE_KINDS,
   generateInputVatLine,
   extractNetAmount,
   extractVatAmount,
+  type ReverseChargeKind,
 } from '../vat-entries'
 
 describe('getVatRate', () => {
@@ -109,10 +115,15 @@ describe('generateSalesVatLines', () => {
   })
 })
 
-describe('generateReverseChargeLines: EU/non-EU (isDomestic=false)', () => {
+// The fiktiv pair is private: every producer gets it from the complete set,
+// so it can never be posted without the basis pair (#2919). Its first two
+// lines are the fiktiv pair, the last two the basis pair.
+const rc = (base: number, rate: number, kind: ReverseChargeKind, basisBase?: number) =>
+  generateReverseChargePurchaseLines({ base, rate, kind, basisBase })
+
+describe('generateReverseChargePurchaseLines: fiktiv pair, EU/non-EU (2645)', () => {
   it('debits 2645 and credits 2614 at 25%', () => {
-    const lines = generateReverseChargeLines(1000, 0.25, false)
-    expect(lines).toHaveLength(2)
+    const lines = rc(1000, 0.25, 'eu_services')
     expect(lines[0].account_number).toBe('2645')
     expect(lines[0].debit_amount).toBe(250)
     expect(lines[0].credit_amount).toBe(0)
@@ -122,7 +133,7 @@ describe('generateReverseChargeLines: EU/non-EU (isDomestic=false)', () => {
   })
 
   it('debits 2645 and credits 2624 at 12%', () => {
-    const lines = generateReverseChargeLines(1000, 0.12, false)
+    const lines = rc(1000, 0.12, 'non_eu_services')
     expect(lines[0].account_number).toBe('2645')
     expect(lines[0].debit_amount).toBe(120)
     expect(lines[1].account_number).toBe('2624')
@@ -130,7 +141,7 @@ describe('generateReverseChargeLines: EU/non-EU (isDomestic=false)', () => {
   })
 
   it('debits 2645 and credits 2634 at 6%', () => {
-    const lines = generateReverseChargeLines(1000, 0.06, false)
+    const lines = rc(1000, 0.06, 'eu_goods')
     expect(lines[0].account_number).toBe('2645')
     expect(lines[0].debit_amount).toBe(60)
     expect(lines[1].account_number).toBe('2634')
@@ -138,10 +149,9 @@ describe('generateReverseChargeLines: EU/non-EU (isDomestic=false)', () => {
   })
 })
 
-describe('generateReverseChargeLines: domestic (isDomestic=true, ML 16 kap)', () => {
+describe('generateReverseChargePurchaseLines: fiktiv pair, domestic (2647, ML 16 kap)', () => {
   it('debits 2647 (not 2645) and credits 2614 at 25%', () => {
-    const lines = generateReverseChargeLines(1000, 0.25, true)
-    expect(lines).toHaveLength(2)
+    const lines = rc(1000, 0.25, 'domestic_services')
     expect(lines[0].account_number).toBe('2647')
     expect(lines[0].debit_amount).toBe(250)
     expect(lines[1].account_number).toBe('2614')
@@ -149,7 +159,7 @@ describe('generateReverseChargeLines: domestic (isDomestic=true, ML 16 kap)', ()
   })
 
   it('debits 2647 and credits 2624 at 12%', () => {
-    const lines = generateReverseChargeLines(1000, 0.12, true)
+    const lines = rc(1000, 0.12, 'domestic_services')
     expect(lines[0].account_number).toBe('2647')
     expect(lines[0].debit_amount).toBe(120)
     expect(lines[1].account_number).toBe('2624')
@@ -157,7 +167,7 @@ describe('generateReverseChargeLines: domestic (isDomestic=true, ML 16 kap)', ()
   })
 
   it('debits 2647 and credits 2634 at 6%', () => {
-    const lines = generateReverseChargeLines(1000, 0.06, true)
+    const lines = rc(1000, 0.06, 'domestic_services')
     expect(lines[0].account_number).toBe('2647')
     expect(lines[0].debit_amount).toBe(60)
     expect(lines[1].account_number).toBe('2634')
@@ -165,24 +175,93 @@ describe('generateReverseChargeLines: domestic (isDomestic=true, ML 16 kap)', ()
   })
 })
 
-describe('generateReverseChargeLines: defaults & invariants', () => {
-  it('defaults to vatRate=0.25 and isDomestic=false when omitted', () => {
-    const lines = generateReverseChargeLines(1000)
-    expect(lines[0].account_number).toBe('2645')
-    expect(lines[1].account_number).toBe('2614')
-    expect(lines[0].debit_amount).toBe(250)
-    expect(lines[1].credit_amount).toBe(250)
+describe('generateReverseChargePurchaseLines: basis pair and invariants', () => {
+  it('defaults to 25 % and emits the basis pair on the whole base', () => {
+    const lines = generateReverseChargePurchaseLines({ base: 1000, kind: 'eu_services' })
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['2645', 250, 0],
+      ['2614', 0, 250],
+      ['4535', 1000, 0],
+      ['4598', 0, 1000],
+    ])
   })
 
-  it('keeps debit-credit pair balanced for every rate × isDomestic combination', () => {
+  it.each([
+    ['eu_goods', ['4515', '4516', '4517']],
+    ['eu_services', ['4535', '4536', '4537']],
+    ['non_eu_services', ['4531', '4532', '4533']],
+    ['domestic_services', ['4425', '4426', '4427']],
+  ] as const)('puts the %s basis on the per-rate account', (kind, accounts) => {
+    ;[0.25, 0.12, 0.06].forEach((rate, i) => {
+      expect(rc(1000, rate, kind)[2].account_number).toBe(accounts[i])
+      expect(rc(1000, rate, kind)[3].account_number).toBe('4598')
+    })
+  })
+
+  it('maps each kind to its momsdeklaration box', () => {
+    expect(reverseChargeKindRuta('eu_goods')).toBe('ruta20')
+    expect(reverseChargeKindRuta('eu_services')).toBe('ruta21')
+    expect(reverseChargeKindRuta('non_eu_services')).toBe('ruta22')
+    expect(reverseChargeKindRuta('domestic_services')).toBe('ruta24')
+  })
+
+  it('emits the basis only for basisBase: none at 0, a share when part is already on a basis account', () => {
+    expect(rc(1000, 0.25, 'eu_services', 0).map((l) => l.account_number)).toEqual(['2645', '2614'])
+    const partial = rc(1000, 0.25, 'eu_services', 400)
+    expect(partial[0].debit_amount).toBe(250) // fiktiv moms stays on the whole base
+    expect(partial[2]).toMatchObject({ account_number: '4535', debit_amount: 400 })
+    expect(partial[3]).toMatchObject({ account_number: '4598', credit_amount: 400 })
+  })
+
+  it('returns nothing for a zero or negative base', () => {
+    expect(rc(0, 0.25, 'eu_services')).toEqual([])
+    expect(rc(-10, 0.25, 'eu_services')).toEqual([])
+  })
+
+  it('balances for every rate and kind', () => {
     for (const rate of [0.25, 0.12, 0.06]) {
-      for (const isDomestic of [true, false]) {
-        const lines = generateReverseChargeLines(1000, rate, isDomestic)
-        expect(lines[0].debit_amount).toBe(lines[1].credit_amount)
-        expect(lines[0].credit_amount).toBe(0)
-        expect(lines[1].debit_amount).toBe(0)
+      for (const kind of REVERSE_CHARGE_KINDS) {
+        const lines = rc(1234.56, rate, kind)
+        expect(lines).toHaveLength(4)
+        const debit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+        const credit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+        expect(Math.round(debit * 100) / 100).toBe(Math.round(credit * 100) / 100)
       }
     }
+  })
+
+  it('keeps generateReverseChargeBasisLines (credit-note mirror) on the supplier-type mapping', () => {
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'eu_business')[0].account_number).toBe('4535')
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'non_eu_business')[0].account_number).toBe('4531')
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'swedish_business')[0].account_number).toBe('4425')
+    expect(reverseChargeKindForSupplierType('non_eu_business')).toBe('non_eu_services')
+  })
+})
+
+describe('costAccountReportsRcBasis', () => {
+  it('without a chart row, treats the 44xx/45xx range as reporting the basis (pure producers)', () => {
+    expect(costAccountReportsRcBasis('4535')).toBe(true)
+    expect(costAccountReportsRcBasis('4538')).toBe(true)
+    expect(costAccountReportsRcBasis('6540')).toBe(false)
+    expect(costAccountReportsRcBasis('5420')).toBe(false)
+  })
+
+  it('with a chart row, follows the declaration: a configured treatment decides', () => {
+    // Pattern B: a cost account configured to feed ruta 21 itself.
+    expect(costAccountReportsRcBasis('6540', 'reverse_charge_eu_services')).toBe(true)
+    expect(costAccountReportsRcBasis('4056', 'reverse_charge_eu_goods')).toBe(true)
+    expect(costAccountReportsRcBasis('4400', 'reverse_charge_domestic')).toBe(true)
+    // Configured, but not to a basis box: the pair is still needed.
+    expect(costAccountReportsRcBasis('4535', 'standard_25')).toBe(false)
+    expect(costAccountReportsRcBasis('6540', 'standard_25')).toBe(false)
+  })
+
+  it('with an unconfigured chart row, only the static BAS basis accounts report', () => {
+    expect(costAccountReportsRcBasis('4535', null)).toBe(true)
+    expect(costAccountReportsRcBasis('4531', null)).toBe(true)
+    // A company-numbered 45xx without a treatment feeds no box at all.
+    expect(costAccountReportsRcBasis('4538', null)).toBe(false)
+    expect(costAccountReportsRcBasis('6540', null)).toBe(false)
   })
 })
 

@@ -8,7 +8,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFetch } from '@/lib/hooks/use-fetch'
 import { useFormat } from '@/lib/hooks/use-format'
-import type { AiClient } from '@/lib/onboarding/ai-clients'
+import { aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
 import { AI_TASK_HREF, AI_TASK_LABEL_KEY, listAiTasks } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
@@ -17,14 +17,15 @@ import { InkText } from '@/components/onboarding/journey/ink'
 import { Confetti } from '../ui/Confetti'
 import { AgentChips } from '../ui/AgentChips'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
 
 /** Null when the status is unavailable: the chips keep what they last showed. */
-async function fetchAiStatus(signal: AbortSignal): Promise<AiClient[] | null> {
+async function fetchAiStatus(signal: AbortSignal): Promise<AiConnection | null> {
   try {
     const res = await fetch('/api/onboarding/ai-status', { signal })
     if (!res.ok) return null
-    const json = (await res.json()) as { data: { connected: AiClient[] } }
-    return json.data.connected
+    const json = (await res.json()) as { data: { connected: AiClient[]; agentConnected?: boolean } }
+    return aiConnectionFromWire(json.data.connected, json.data.agentConnected)
   } catch {
     return null
   }
@@ -50,13 +51,14 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const { findings, state } = ctx
   const hasAi = useCapability(CAPABILITY.ai)
   const [preferredClient, setPreferredClient] = useState<AiClient>()
-  const [polledConnected, setPolledConnected] = useState<AiClient[] | null>(null)
+  const [polled, setPolled] = useState<AiConnection | null>(null)
   const [open, setOpen] = useState(false)
   const { data: worklist, loading, error, refetch } = useFetch<{ data: WorklistCounts }, WorklistCounts>(
     '/api/worklist/counts',
     { select: (body) => body.data },
   )
-  const connected = polledConnected ?? findings?.ai.connected ?? []
+  const connection = polled ?? aiConnectionFromWire(findings?.ai.connected ?? [], findings?.ai.agentConnected)
+  const connected = connection.clients
   const connectionKey = connected.join(',')
   const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
 
@@ -77,7 +79,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   useEffect(() => {
     const poller = createAiStatusPoller({
       fetchStatus: fetchAiStatus,
-      onStatus: setPolledConnected,
+      onStatus: setPolled,
       isHidden: () => document.visibilityState === 'hidden',
     })
     pollerRef.current = poller
@@ -127,21 +129,21 @@ export function DoneStep({ ctx, onLeave, leaving }: {
 
       <h2 className="agent-title">{t('ai_title')}</h2>
       <p className="agent-lead">{t('ai_lead')}</p>
-      <AgentChips connected={connected} onConnect={onConnect} />
+      <AgentChips connection={connection} onConnect={onConnect} />
 
       {error ? (
         <p className="found-note" role="alert">
           {t('ai_handoff_failed')}{' '}
-          <button type="button" className="jny-btn-quiet" onClick={refetch} disabled={loading}>
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={refetch} disabled={loading}>
             {t('ai_handoff_retry')}
-          </button>
+          </Button>
         </p>
       ) : tasks.length > 0 && (
         <div className="found">
-          <button type="button" className="found-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          <Button variant="ghost" className="found-toggle gap-2 text-muted-foreground" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
             {t('tasks_found', { count: tasks.length })}
             <ChevronDown size={14} aria-hidden="true" className="chev" />
-          </button>
+          </Button>
           {open && (
             <ul className="found-list">
               {tasks.map((task) => (
@@ -151,9 +153,9 @@ export function DoneStep({ ctx, onLeave, leaving }: {
                     <span className="n">{task.count}</span>
                   </span>
                   <span className="a">
-                    <button type="button" className="open" disabled={leaving} onClick={() => onLeave('done', AI_TASK_HREF[task.category])}>
+                    <Button variant="outline" size="sm" disabled={leaving} onClick={() => onLeave('done', AI_TASK_HREF[task.category])}>
                       {t('task_open')}
-                    </button>
+                    </Button>
                     <AiTaskAction
                       clients={connected}
                       task={task}
@@ -171,10 +173,10 @@ export function DoneStep({ ctx, onLeave, leaving }: {
 
       {/* The door is a quiet link, not the primary: the chips and the found rows are what this step is for (founder direction 2026-09-14). */}
       <div className="done-door">
-        <button type="button" className="jny-btn-quiet" disabled={leaving} onClick={() => onLeave('done')}>
+        <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
           {t('open_app', { appName })}
           <ChevronRight size={13} aria-hidden="true" />
-        </button>
+        </Button>
       </div>
     </div>
   )

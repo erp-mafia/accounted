@@ -23,6 +23,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber, vatValidationColumns } from '@/lib/vat/vies-client'
+import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
 import { COUNTRY_CONSISTENCY_MESSAGES, checkCountryConsistency } from '@/lib/vat/country-codes'
 
 /** The stored fields the country-vs-type rule and the personnummer guards read. */
@@ -566,6 +567,9 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         details: { resource: 'customer' },
       })
     }
+
+    // Open drafts to this customer re-derive their VAT header from it.
+    await syncDraftVatHeadersForCustomer(ctx.supabase, ctx.companyId!, customerId)
 
     return ok(maskCustomerRow(data as Record<string, unknown> & { personal_number?: string | null }), { requestId: ctx.requestId })
   },

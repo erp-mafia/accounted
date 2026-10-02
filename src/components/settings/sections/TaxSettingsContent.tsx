@@ -8,21 +8,24 @@ import { TaxAssessmentNoticesPanel } from '@/components/settings/TaxAssessmentNo
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
-import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
-import { SkatteverketConnectPanel } from '@/components/settings/SkatteverketConnectPanel'
+import Link from 'next/link'
+import { Button } from '@/components/ui/button'
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsSectionHeader,
+} from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
-import { useToast } from '@/components/ui/use-toast'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import type { CompanySettings } from '@/types'
 
 export function TaxSettingsContent() {
   const { settings, isLoading, updateSettings, refetch } = useSettings()
-  const t = useTranslations('settings_skatteverket')
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const searchParams = useSearchParams()
   const router = useRouter()
-  const { toast } = useToast()
 
   const hasSkatteverketExtension = ENABLED_EXTENSION_IDS.has('skatteverket')
 
@@ -68,33 +71,20 @@ export function TaxSettingsContent() {
     }
   }, [])
 
-  // Skatteverket OAuth callback: the connect flow returns to /settings/tax with
-  // a status query param (returnTo set in SkatteverketConnectPanel).
+  // The Skatteverket connection moved to its own page under Kopplingar
+  // (2026-09-24). A connect flow started before the move still returns here
+  // with its status param: hand it on so the toast shows where it belongs.
   useEffect(() => {
-    const connected = searchParams.get('skv_connected')
-    const error = searchParams.get('skv_error')
-    if (connected === 'true') {
-      toast({ title: t('connected_title'), description: t('connected_description') })
-      router.replace('/settings/tax')
-    } else if (error) {
-      let msg: string
-      try {
-        msg = decodeURIComponent(error)
-      } catch {
-        msg = error
-      }
-      toast({ title: t('connect_failed_title'), description: msg, variant: 'destructive' })
-      router.replace('/settings/tax')
+    if (searchParams.has('skv_connected') || searchParams.has('skv_error')) {
+      router.replace(`/settings/skatteverket?${searchParams.toString()}`)
     }
-  }, [searchParams, router, toast, t])
+  }, [searchParams, router])
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
 
   function handleSave(formData: FormData) {
     const vatRegistered = formData.get('vat_registered') === 'true'
-    const paysSalaries = formData.get('pays_salaries') === 'true'
-    const employerRegistered = formData.get('employer_registered') === 'true'
 
     const updates: Record<string, unknown> = {
       f_skatt: formData.get('f_skatt') === 'true',
@@ -125,12 +115,6 @@ export function TaxSettingsContent() {
       tax_contact_name: (formData.get('tax_contact_name') as string) || null,
       tax_contact_phone: (formData.get('tax_contact_phone') as string) || null,
       tax_contact_email: (formData.get('tax_contact_email') as string) || null,
-      fiscal_year_start_month: parseInt(formData.get('fiscal_year_start_month') as string) || 1,
-      pays_salaries: paysSalaries,
-      employer_registered: employerRegistered,
-      // The seasonal switch stays mounted inside its reveal, but the
-      // employer_registered gate still forces false when not registered.
-      employer_seasonal: employerRegistered && formData.get('employer_seasonal') === 'true',
       preliminary_tax_monthly: parseFloat(formData.get('preliminary_tax_monthly') as string) || null,
       kontrolluppgifter_enabled: formData.get('kontrolluppgifter_enabled') === 'true',
       rot_rut_enabled: formData.get('rot_rut_enabled') === 'true',
@@ -158,10 +142,19 @@ export function TaxSettingsContent() {
     <div>
       <SettingsSectionHeader title={tNav('tax')} intro={tIntro('tax')} />
 
-      {/* Connection panel first: the skattekonto and momsdeklaration pages
-          send users here specifically to (re)connect; below the long tax
-          form it sat out of view. */}
-      {showSkatteverket && <SkatteverketConnectPanel />}
+      {/* The connection itself lives under Kopplingar; pages that send users
+          here to (re)connect find the way on from this first row. */}
+      {showSkatteverket && (
+        <SettingsGroup label={tNav('skatteverket')}>
+          <SettingsRow label={tNav('skatteverket_row')} help={tIntro('skatteverket')}>
+            <SettingsRowEnd>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/settings/skatteverket">{tNav('manage_connection')}</Link>
+              </Button>
+            </SettingsRowEnd>
+          </SettingsRow>
+        </SettingsGroup>
+      )}
 
       <SettingsFormWrapper onSave={handleSave} className="space-y-0">
         <TaxSettingsForm

@@ -2,10 +2,11 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Check } from 'lucide-react'
+import { Bot, Check } from 'lucide-react'
 import { useBranding } from '@/lib/branding/brand-context'
-import { AI_CLIENTS, aiConnectAction, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, aiConnectAction, openAiConnector, unknownAgentOnly, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { AiConnectorDialog } from '@/components/onboarding/AiConnectorDialog'
+import { Button } from '@/components/ui/button'
 
 /**
  * The Klart step's connectors: one chip per client (Claude, ChatGPT, Grok),
@@ -15,10 +16,13 @@ import { AiConnectorDialog } from '@/components/onboarding/AiConnectorDialog'
  * URLs as Settings and the Hem checklist. A client that has completed the
  * OAuth sign-in (the Done step polls /api/onboarding/ai-status) turns its
  * chip into a green Ansluten mark. Founder direction 2026-09-14: no card,
- * all three visible, the connect action a pill like everything else.
+ * all three visible, the connect action a pill like everything else. An
+ * agent connected with a key that names none of the three (an older key,
+ * Cursor) shows as one generic connected agent instead of three offers that
+ * would each fail with "a connector with this URL already exists".
  */
-export function AgentChips({ connected, onConnect }: {
-  connected: AiClient[]
+export function AgentChips({ connection, onConnect }: {
+  connection: AiConnection
   onConnect?: (client: AiClient) => void
 }) {
   const t = useTranslations('books')
@@ -37,6 +41,22 @@ export function AgentChips({ connected, onConnect }: {
     }
   }
 
+  if (unknownAgentOnly(connection)) {
+    return (
+      <div className="agent-chips">
+        <span className="agent-chip is-on">
+          <Bot size={14} aria-hidden="true" />
+          <span className="n">{t('ai_agent')}</span>
+          <span className="st" role="status">
+            <Check size={12} aria-hidden="true" />
+            {t('ai_connected')}
+          </span>
+        </span>
+      </div>
+    )
+  }
+
+  const connected = connection.clients
   return (
     <div className="agent-chips">
       <AiConnectorDialog action={connectAction} onClose={() => setConnectAction(null)} onOpen={() => { if (connectClient) onConnect?.(connectClient) }} />
@@ -53,9 +73,9 @@ export function AgentChips({ connected, onConnect }: {
                 {t('ai_connected')}
               </span>
             ) : (
-              <button type="button" className="go" onClick={() => connect(c.id)} aria-label={`${t('ai_connect')} ${c.name}`}>
+              <Button variant="secondary" size="sm" onClick={() => connect(c.id)} aria-label={`${t('ai_connect')} ${c.name}`}>
                 {t('ai_connect')}
-              </button>
+              </Button>
             )}
           </span>
         )

@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
-  Loader2,
   Search,
   Tags,
   Undo2,
@@ -37,6 +36,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { dimensionDisplayName } from '@/components/dimensions/dimension-label'
+import { useDimensions } from '@/lib/reference-data/hooks'
 
 /** Line DTO inside a voucher from GET /api/dimensions/tagging/lines. */
 interface TaggingLine {
@@ -70,12 +71,6 @@ interface ApplyResult {
 const ACCOUNT_RE = /^\d{4}$/
 /** POST /api/dimensions/tagging/apply accepts at most 500 line_ids per call. */
 const APPLY_CHUNK = 500
-
-function dimensionLabel(sieDimNo: string): string {
-  if (sieDimNo === '1') return 'KS'
-  if (sieDimNo === '6') return 'Proj'
-  return `Dim ${sieDimNo}`
-}
 
 /** Stable grouping key for a dimensions map (sorted entries). */
 function mapKey(dims: Record<string, string>): string {
@@ -146,6 +141,10 @@ export default function BulkTagWorkbench() {
   const [vouchers, setVouchers] = useState<TaggingVoucher[] | null>(null)
   const [totalCapped, setTotalCapped] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  // Tag chips carry each dimension's registry name, as every other surface
+  // does (session-cached: the pickers below read the same entry).
+  const { dimensions: registry } = useDimensions()
+  const dimensionLabel = (sieDimNo: string) => dimensionDisplayName(registry, sieDimNo)
 
   // Selection (line-id based: the retag RPC is per line), expansion + apply
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -552,12 +551,8 @@ export default function BulkTagWorkbench() {
                 Visa annullerade
               </Label>
             </div>
-            <Button onClick={() => void loadVouchers()} disabled={isLoading}>
-              {isLoading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Search className="mr-2 h-4 w-4" />
-              )}
+            <Button onClick={() => void loadVouchers()} loading={isLoading}>
+              {!isLoading && <Search className="mr-2 h-4 w-4" />}
               Hämta verifikat
             </Button>
           </div>
@@ -631,8 +626,7 @@ export default function BulkTagWorkbench() {
                         />
                         <Button
                           variant="ghost"
-                          size="icon"
-                          className="h-6 w-6"
+                          size="icon-sm"
                           onClick={(e) => {
                             e.stopPropagation()
                             toggleExpanded(voucher.journal_entry_id)
@@ -685,7 +679,7 @@ export default function BulkTagWorkbench() {
                           key={mapKey(bag)}
                           data-ph-mask=""
                           variant="outline"
-                          className="px-1.5 py-0 text-[10px] font-normal"
+                          className="px-1.5 py-0 text-[11px] font-normal"
                         >
                           {Object.entries(bag)
                             .sort(([a], [b]) => Number(a) - Number(b))
@@ -696,7 +690,7 @@ export default function BulkTagWorkbench() {
                       {partial && (
                         <Badge
                           variant="secondary"
-                          className="px-1.5 py-0 text-[10px] font-normal"
+                          className="px-1.5 py-0 text-[11px] font-normal"
                         >
                           Delvis taggad
                         </Badge>
@@ -749,7 +743,7 @@ export default function BulkTagWorkbench() {
                                   key={dimNo}
                                   data-ph-mask=""
                                   variant="outline"
-                                  className="px-1.5 py-0 text-[10px] font-normal"
+                                  className="px-1.5 py-0 text-[11px] font-normal"
                                 >
                                   {dimensionLabel(dimNo)}{' '}
                                   <span className="ml-1 font-mono">{code}</span>
@@ -777,7 +771,7 @@ export default function BulkTagWorkbench() {
 
       {/* Apply panel: fixed footer bar while a selection is active */}
       {selected.size > 0 && (
-        <div className="fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-40 w-[calc(100vw-2rem)] max-w-2xl -translate-x-1/2 rounded-lg border border-border bg-background p-4 shadow-lg md:bottom-6">
+        <div className="fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-40 w-[calc(100vw-2rem)] max-w-2xl -translate-x-1/2 rounded-lg border border-border bg-background p-4 shadow-[var(--shadow-md)] md:bottom-6">
           {missingPairLineIds.length > 0 && (
             <div className="mb-4 flex flex-col gap-3 rounded-lg border border-border bg-secondary/40 p-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-2">
@@ -844,12 +838,8 @@ export default function BulkTagWorkbench() {
                   disabled={isApplying}
                   className="flex-1"
                 />
-                <Button onClick={() => void handleApply()} disabled={!canApply}>
-                  {isApplying ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Tags className="mr-2 h-4 w-4" />
-                  )}
+                <Button onClick={() => void handleApply()} disabled={!canApply} loading={isApplying}>
+                  {!isApplying && <Tags className="mr-2 h-4 w-4" />}
                   Tagga {selectedVoucherCount} verifikat
                 </Button>
               </div>

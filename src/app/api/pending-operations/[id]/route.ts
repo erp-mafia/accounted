@@ -7,7 +7,7 @@ import { buildMappingResultFromCategory, getCategoryAccountMapping } from '@/lib
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
-import { getVatRate } from '@/lib/bookkeeping/vat-entries'
+import { getVatRate, isReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import type { EntityType, Transaction, TransactionCategory, VatTreatment } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -157,6 +157,13 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       newVatAmount = carriesRateVat ? previous : null
     }
 
+    // The staged reverse-charge basis box survives an edit that keeps
+    // reverse_charge, so the re-derived preview posts what the commit will.
+    const newReverseChargeKind =
+      newVatTreatment === 'reverse_charge' && isReverseChargeKind(oldParams.reverse_charge_kind)
+        ? oldParams.reverse_charge_kind
+        : undefined
+
     let mapping
     try {
       mapping = buildMappingResultFromCategory(
@@ -167,6 +174,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
         newVatTreatment,
         newVatAmount,
         vatRegistered,
+        newReverseChargeKind,
       )
     } catch (err) {
       return NextResponse.json(
@@ -228,6 +236,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       ...oldParams,
       category: newCategory,
       vat_treatment: newVatTreatment ?? null,
+      reverse_charge_kind: newReverseChargeKind ?? null,
       vat_amount: newVatAmount,
     }
 

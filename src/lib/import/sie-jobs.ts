@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { userFacing } from '@/lib/errors/user-facing'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AccountMapping, ImportResult, ParsedSIEFile, SIEVoucher } from './types'
 import { calculateFileHash, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, isBalanceSheetAccount, parseSIEFile } from './sie-parser'
@@ -30,8 +31,24 @@ export interface SIEJobInput {
   fiscalYear?: {start:string;end:string}
 }
 
+/**
+ * Every message this class carries is a finished Swedish sentence naming the
+ * file, the setting or the choice the reader has to change. Under the generic
+ * VALIDATION_ERROR code it is marked user-facing: without that the registry
+ * answers the code with "Förfrågan innehåller ogiltiga uppgifter" and the
+ * specific half is lost. A code with its own registry entry
+ * (SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS) is left unmarked so it keeps that
+ * bilingual text, the same split sieJobValidationResponse makes.
+ */
 export class SIEJobValidationError extends Error {
-  constructor(message: string, readonly code: string = 'VALIDATION_ERROR', readonly details?: Record<string, unknown>) { super(message) }
+  constructor(
+    message: string,
+    readonly code: string = 'VALIDATION_ERROR',
+    readonly details?: Record<string, unknown>,
+  ) {
+    super(message)
+    if (code === 'VALIDATION_ERROR') userFacing(this, code)
+  }
 }
 
 /** Accounted's financial reports classify targets by BAS classes 1-8. */
@@ -68,10 +85,31 @@ export function validateSIEReportingMappings(parsed: ParsedSIEFile, accountMap: 
   assertSIEReportingAccounts(targets)
 }
 
-function jobDatabaseError(error:{code?:string;message:string}):Error {
+/**
+ * A SIE job RPC answered with a SQLSTATE: the database ran the call and
+ * refused it, so its transaction rolled back and nothing started. `code` is
+ * the application code every door answers with; the raw SQLSTATE stays on
+ * `pgCode` for the logs.
+ */
+export class SIEJobDatabaseError extends Error {
+  constructor(message: string, readonly code: string | undefined, readonly pgCode: string | undefined) { super(message) }
+}
+
+// 55000 alone does not say which guard refused: start_sie_import_job raises it
+// for six reasons. A refusal whose raised sentence has its own registry entry
+// keeps that meaning instead of the generic CONFLICT.
+const JOB_REFUSALS: Record<string,string> = {
+  'Existing SIE import requires reviewed replacement or reconciliation':'SIE_IMPORT_PERIOD_ALREADY_IMPORTED',
+  'Legacy SIE import requires reviewed reconciliation before replacement':'SIE_IMPORT_LEGACY_REVIEW_REQUIRED',
+}
+
+export function jobDatabaseError(error:{code?:string;message:string}):SIEJobDatabaseError {
+  // 55P03 (lock not available) frees itself: the same request succeeds on a
+  // retry, which is what TRANSIENT_ERROR says. It is never an existing import.
   const codes:Record<string,string> = {P0002:'NOT_FOUND','42501':'DB_PERMISSION_DENIED','22P02':'VALIDATION_ERROR',
-    '22023':'VALIDATION_ERROR','23505':'CONFLICT','55000':'CONFLICT','55P03':'CONFLICT'}
-  return Object.assign(new Error(error.message),{code:codes[error.code ?? ''] ?? error.code})
+    '22023':'VALIDATION_ERROR','23505':'CONFLICT','55000':'CONFLICT','55P03':'TRANSIENT_ERROR'}
+  const refusal = error.code === '55000' && Object.hasOwn(JOB_REFUSALS,error.message) ? JOB_REFUSALS[error.message] : undefined
+  return new SIEJobDatabaseError(error.message,refusal ?? codes[error.code ?? ''] ?? error.code,error.code)
 }
 
 export function acceptsSIEJobs(): boolean { return process.env.SIE_IMPORT_JOBS === 'true' }

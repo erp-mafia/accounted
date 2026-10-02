@@ -8,6 +8,13 @@
  * körjournal would produce, and a bonus is a wage. Recalculation keeps these
  * rows (run-calculation.ts treats every non-derived line as manual).
  *
+ * The calculated types are deliberately absent too (Övertid 50/100 %, the OB
+ * tillägg and the absence rows, calculated-line-items.ts): every calculation
+ * deletes and re-derives them from worked hours, premium rules and absence,
+ * so a hand-entered one silently vanished from the pay (#3185). A one-off
+ * övertid or OB amount goes on Övertid or Övrigt, which carry the same flags
+ * and account; the line commands refuse the calculated types from every door.
+ *
  * Utlägg are deliberately absent: an expense claim reaches the payslip
  * through "Lägg till utlägg" on the run page, linked to the claim
  * (expense-claim-lines.ts), so it is settled when the run is booked. A free
@@ -24,12 +31,6 @@ export type ManualPayslipLineType =
   | 'bonus'
   | 'commission'
   | 'overtime'
-  | 'overtime_50'
-  | 'overtime_100'
-  | 'ob_weekday_evening'
-  | 'ob_weekend'
-  | 'ob_night'
-  | 'ob_holiday'
   | 'other'
   | 'correction'
   | 'gross_deduction_other'
@@ -105,12 +106,6 @@ export const MANUAL_PAYSLIP_LINE_SPECS: Record<ManualPayslipLineType, ManualLine
   bonus: { label: 'Bonus', flags: WAGE, sign: 'addition' },
   commission: { label: 'Provision', flags: WAGE, sign: 'addition' },
   overtime: { label: 'Övertid', flags: WAGE, sign: 'addition', unit: 'timmar' },
-  overtime_50: { label: 'Övertid 50 %', flags: WAGE, sign: 'addition', unit: 'timmar' },
-  overtime_100: { label: 'Övertid 100 %', flags: WAGE, sign: 'addition', unit: 'timmar' },
-  ob_weekday_evening: { label: 'OB-tillägg kväll', flags: WAGE, sign: 'addition', unit: 'timmar' },
-  ob_weekend: { label: 'OB-tillägg helg', flags: WAGE, sign: 'addition', unit: 'timmar' },
-  ob_night: { label: 'OB-tillägg natt', flags: WAGE, sign: 'addition', unit: 'timmar' },
-  ob_holiday: { label: 'OB-tillägg storhelg', flags: WAGE, sign: 'addition', unit: 'timmar' },
   other: { label: 'Övrigt', flags: WAGE, sign: 'addition' },
   correction: { label: 'Korrigering', flags: WAGE, sign: 'signed' },
   gross_deduction_other: { label: 'Bruttolöneavdrag', flags: GROSS_DEDUCTION, sign: 'deduction' },

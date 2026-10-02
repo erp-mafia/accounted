@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 
 interface HelpPopoverProps {
   /** Popover body: the page's help text (i18n `help_*` keys per namespace). */
@@ -22,6 +23,7 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ top: 0, left: 0 })
+  const panelId = useId()
 
   const updatePosition = useCallback(() => {
     if (!triggerRef.current || !panelRef.current) return
@@ -35,7 +37,12 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
 
   useEffect(() => {
     if (!open) return
-    const raf = requestAnimationFrame(() => updatePosition())
+    // Move focus into the panel so keyboard and screen-reader users land on
+    // the help text instead of staying on the trigger.
+    const raf = requestAnimationFrame(() => {
+      updatePosition()
+      panelRef.current?.focus({ preventScroll: true })
+    })
     return () => cancelAnimationFrame(raf)
   }, [open, updatePosition])
 
@@ -52,7 +59,10 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
       }
     }
     function handleKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') {
+        setOpen(false)
+        triggerRef.current?.focus()
+      }
     }
     document.addEventListener('mousedown', handleClick)
     document.addEventListener('keydown', handleKey)
@@ -69,8 +79,12 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
         aria-label={tNav('help')}
         className={cn(
+          // The ::after pseudo-element widens the hit area to 45px for touch
+          // without changing the 17px visual.
+          'relative after:absolute after:-inset-[14px]',
           'inline-flex h-[17px] w-[17px] items-center justify-center rounded-full border border-border',
           'text-[11px] leading-none text-muted-foreground transition-colors duration-150',
           'hover:border-foreground/30 hover:text-foreground',
@@ -84,7 +98,9 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
         createPortal(
           <div
             ref={panelRef}
+            id={panelId}
             role="note"
+            tabIndex={-1}
             data-help-popover=""
             // Inside a modal dialog the panel is DOM-outside DialogContent:
             // data-dialog-companion keeps a click in it from dismissing the
@@ -92,7 +108,7 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
             data-dialog-companion=""
             // data-ph-unmask: page help is static i18n chrome in session replays.
             data-ph-unmask=""
-            className="pointer-events-auto fixed z-[60] w-[300px] rounded-lg border border-border bg-popover p-4 text-[13px] leading-relaxed text-foreground shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
+            className={cn('pointer-events-auto fixed z-[60] w-[300px] p-4 outline-none text-[13px] leading-relaxed', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}
             style={{ top: pos.top, left: pos.left }}
           >
             {children}

@@ -22,7 +22,8 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
 }))
 
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
-import { computeVatCloseCheck, tools } from '../server'
+import { BANK_ROWS_MISSING_HINT, computeVatCloseCheck, tools } from '../server'
+import { toToolError } from '../tool-result'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const PERIOD = { period_type: 'monthly', year: 2026, period: 1 }
@@ -277,6 +278,101 @@ describe('gnubok_vat_close_check: reconciliation scope', () => {
   })
 })
 
+/**
+ * crm#185: an SIE import booked 1930 for January to May, the bank connection
+ * only returned rows from June. Every bank row is matched and the verifikat
+ * without a bank row explain the whole difference, so Stäm av let the month
+ * be signed off while this gate still blocked, with a message that named no
+ * way out. The gate stays; the message and hint now name the situation.
+ */
+describe('gnubok_vat_close_check: verifikat without bank rows', () => {
+  const PRIMARY_1930 = {
+    id: '11111111-1111-4111-8111-111111111111',
+    currency: 'SEK',
+    is_primary: true,
+    ledger_account: '1930',
+  }
+  const GENERIC_HINT =
+    'Granska via gnubok_get_reconciliation_status och matcha: moms beräknas från huvudboken så differenser döljer fel.'
+
+  async function bankBlockerFor(status: Record<string, unknown>) {
+    getReconciliationStatusMock.mockResolvedValue({ is_reconciled: false, ...status } as never)
+    const { supabase } = mockSupabase([PRIMARY_1930])
+    const result = await computeVatCloseCheck(PERIOD, COMPANY_ID, supabase)
+    return result.blockers.find((b) => b.kind === 'bank_unreconciled')!
+  }
+
+  it('names the missing bank rows and the action that clears them, keeping the gate', async () => {
+    const blocker = await bankBlockerFor({
+      difference: -45210.5,
+      unmatched_transaction_count: 0,
+      unmatched_gl_line_count: 12,
+      unexplained_difference: 0,
+    })
+
+    expect(blocker).toMatchObject({
+      kind: 'bank_unreconciled',
+      severity: 'high',
+      count: 12,
+      message: '12 verifikat på 1930 saknar banktransaktion: banken har inga rader för de datumen',
+      hint: BANK_ROWS_MISSING_HINT,
+    })
+  })
+
+  it('keeps the severity rule: a small difference stays medium', async () => {
+    const blocker = await bankBlockerFor({
+      difference: 49.9,
+      unmatched_transaction_count: 0,
+      unmatched_gl_line_count: 1,
+      unexplained_difference: 0.004,
+    })
+
+    expect(blocker.severity).toBe('medium')
+    expect(blocker.hint).toBe(BANK_ROWS_MISSING_HINT)
+  })
+
+  it.each([
+    [
+      'a bank row is still unmatched',
+      { difference: -300, unmatched_transaction_count: 1, unmatched_gl_line_count: 2, unexplained_difference: 0 },
+    ],
+    [
+      'the residual is not explained by the unmatched verifikat',
+      { difference: -300, unmatched_transaction_count: 0, unmatched_gl_line_count: 2, unexplained_difference: 0.01 },
+    ],
+    [
+      'the residual is unknown (foreign account)',
+      { difference: -300, unmatched_transaction_count: 0, unmatched_gl_line_count: 2, unexplained_difference: null },
+    ],
+    [
+      'no verifikat lacks a bank row',
+      { difference: -300, unmatched_transaction_count: 0, unmatched_gl_line_count: 0, unexplained_difference: -300 },
+    ],
+  ])('keeps the generic message when %s', async (_case, status) => {
+    const blocker = await bankBlockerFor(status)
+
+    expect(blocker.severity).toBe('high')
+    expect(blocker.message).toBe(
+      `Bankavstämning visar differens -300.00 kr (${status.unmatched_transaction_count} omatchade banktransaktioner, ${status.unmatched_gl_line_count} omatchade huvudbokslinjer på 1930)`,
+    )
+    expect(blocker.hint).toBe(GENERIC_HINT)
+  })
+
+  it('hint names the bank file import, reachable tools, and what does not clear the gate', () => {
+    expect(BANK_ROWS_MISSING_HINT).toContain('Importera, Bankfil')
+    expect(BANK_ROWS_MISSING_HINT).toContain('Stäm av')
+    expect(BANK_ROWS_MISSING_HINT).toContain('ingenting bokförs på nytt')
+    expect(BANK_ROWS_MISSING_HINT).toContain('kategorisera dem inte')
+    expect(BANK_ROWS_MISSING_HINT).toContain('Underlag')
+    expect(BANK_ROWS_MISSING_HINT).toContain('signerad avstämning')
+    const named = BANK_ROWS_MISSING_HINT.match(/gnubok_[a-z0-9_]+/g) ?? []
+    expect(named).toEqual(['gnubok_create_transactions', 'gnubok_reconcile_match'])
+    // Canonical ids only: the accounted_ projection rewrites exact registered
+    // names, so a name that is not a tool would reach the agent as-is.
+    for (const name of named) expect(tools.some((t) => t.name === name)).toBe(true)
+  })
+})
+
 describe('gnubok_get_reconciliation_status: same shared resolution', () => {
   it('resolves the same scope arguments as the close check', async () => {
     const cashAccount = {
@@ -311,6 +407,17 @@ describe('gnubok_get_reconciliation_status: same shared resolution', () => {
     await expect(
       reconStatusTool.execute({ account_number: '9999' }, COMPANY_ID, 'user-1', supabase),
     ).rejects.toThrow(/Okänt kassakonto 9999/)
+    // Coded, never UNKNOWN_ERROR ("Försök igen"): no retry finds the account.
+    const err = await reconStatusTool
+      .execute({ account_number: '9999' }, COMPANY_ID, 'user-1', mockSupabase([null, null]).supabase)
+      .then(() => null, (e: unknown) => e)
+    const envelope = toToolError(err, { toolName: 'gnubok_get_reconciliation_status' }).error
+    expect(envelope).toMatchObject({
+      code: 'CASH_ACCOUNT_NOT_FOUND',
+      retryable: false,
+      remediation: { tool: 'gnubok_list_cash_accounts' },
+    })
+    expect(envelope.remediation?.description).toContain('account_key "skattekonto"')
     expect(getReconciliationStatusMock).not.toHaveBeenCalled()
     // A NAMED account must never silently resolve to the primary one: the
     // caller asked about 9999, so a status labelled 9999 carrying another

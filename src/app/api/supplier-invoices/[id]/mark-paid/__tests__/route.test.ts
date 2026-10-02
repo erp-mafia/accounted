@@ -169,6 +169,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(mockCreateSupplierInvoicePaymentEntry).toHaveBeenCalled()
     const invoiceUpdate = findCalls('supplier_invoices', 'update').at(-1)?.[0]
     expect(invoiceUpdate).toMatchObject({ paid_at: '2026-05-12T12:00:00Z' })
+    expect(paidHandler).toHaveBeenCalledTimes(1)
     expect(paidHandler).toHaveBeenCalledWith(
       expect.objectContaining({
         supplierInvoice: expect.objectContaining({ paid_at: '2026-05-12T12:00:00Z' }),
@@ -207,6 +208,9 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     enqueue({ data: [{ id: 'si-1' }], error: null })
     enqueue({ data: null, error: null })
 
+    const paidHandler = vi.fn()
+    eventBus.on('supplier_invoice.paid', paidHandler)
+
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
       body: { amount: 5000 },
@@ -227,6 +231,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     // Issue #1259: a partially paid invoice is still matchable, so its sibling
     // suggestions must survive.
     expect(vi.mocked(clearSettledInvoiceSuggestions)).not.toHaveBeenCalled()
+    // 5 000 is still owed: supplier_invoice.paid means fully paid.
+    expect(paidHandler).not.toHaveBeenCalled()
   })
 
   it('uses cash method journal entry when configured', async () => {
@@ -721,18 +727,20 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     enqueue({ data: [bankRow({ amount: -1000 })], error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
       body: {},
     })
     const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
-    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
+    // Past the guard (no duplicate), the 2440 clearing has no SEK to clear:
+    // no rate and no registration verifikat. Refused instead of booking
+    // 1 000 EUR as 1 000 kr (#2955).
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_FX_RATE_MISSING')
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
   })
 
   it('EUR invoice: a 1 000 EUR bank row still matches in its own currency', async () => {

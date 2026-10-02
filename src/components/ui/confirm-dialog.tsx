@@ -12,7 +12,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Loader2 } from 'lucide-react'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -91,10 +90,9 @@ export function ConfirmDialog({
           <Button
             variant={destructive ? 'destructive' : 'default'}
             onClick={() => void handleConfirm()}
-            disabled={pending}
+            loading={pending}
             className={cn(pending && 'cursor-wait')}
           >
-            {pending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
             {confirmLabel}
           </Button>
         </DialogFooter>

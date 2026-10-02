@@ -14,6 +14,9 @@ import {
   TaxDepreciationPeriodLockedError,
   TaxDepreciationValidationError,
 } from '@/lib/bokslut/assets/tax-depreciation-service'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 const CommitSchema = z.object({
   /** Optional whitelist: when supplied, only assets in this list are posted.

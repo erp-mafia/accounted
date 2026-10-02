@@ -1,4 +1,9 @@
-import { HOSTED_MAX_UPLOAD_BYTES, isShrinkableImage } from './upload-size'
+import {
+  HOSTED_MAX_UPLOAD_BYTES,
+  exceedsHostedUploadLimit,
+  isShrinkableImage,
+  tooLargeMessage,
+} from './upload-size'
 
 /**
  * Re-encode an oversized photo in the browser so it fits the platform's
@@ -69,4 +74,21 @@ export async function shrinkImageForUpload(
 function jpegName(name: string): string {
   const base = name.replace(/\.[^.]+$/, '') || 'underlag'
   return `${base}.jpg`
+}
+
+export type PreparedUpload = { ok: true; file: File } | { ok: false; message: string }
+
+/**
+ * The gate every multipart document upload goes through before it leaves the
+ * browser. A file over the platform ceiling is shrunk when it is a photo; one
+ * that still does not fit is refused here, with its size, instead of being
+ * sent into a 413 that no route ever sees (crm#203: a phone photo replacing a
+ * voucher's underlag failed as a bare "network error").
+ */
+export async function prepareForMultipartUpload(file: File): Promise<PreparedUpload> {
+  const prepared = exceedsHostedUploadLimit(file.size) ? await shrinkImageForUpload(file) : file
+  if (exceedsHostedUploadLimit(prepared.size)) {
+    return { ok: false, message: tooLargeMessage(prepared.size) }
+  }
+  return { ok: true, file: prepared }
 }

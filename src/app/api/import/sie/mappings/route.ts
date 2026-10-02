@@ -5,6 +5,9 @@ import { validateBody } from '@/lib/api/validate'
 import { saveMappings } from '@/lib/import/sie-import'
 import type { AccountMapping } from '@/lib/import/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 // Mirrors what saveMappings() (lib/import/sie-import.ts) reads off each
 // element: sourceAccount/sourceName/targetAccount/confidence/matchType land

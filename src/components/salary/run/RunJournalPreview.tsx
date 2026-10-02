@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
-import { Calculator, Loader2 } from 'lucide-react'
+import { Calculator, FileText } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 
 export interface EntryPreviewLine {
@@ -47,9 +47,12 @@ interface RunJournalPreviewProps {
   // the kicker line: recalculation sits on the output it refreshes.
   onRecalculate?: () => void
   recalculating?: boolean
+  // Booked runs: the Lönesammanställning PDF, the underlag filed with the
+  // vouchers listed below, downloads from the same kicker line.
+  underlagHref?: string
 }
 
-export function RunJournalPreview({ preview, onRecalculate, recalculating }: RunJournalPreviewProps) {
+export function RunJournalPreview({ preview, onRecalculate, recalculating, underlagHref }: RunJournalPreviewProps) {
   const t = useTranslations('salary_run')
 
   const entries = [
@@ -64,13 +67,16 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating }: Run
       kicker={preview.booked ? t('journal_booked_title') : t('journal_preview_title')}
       aside={
         onRecalculate ? (
-          <Button variant="outline" size="sm" onClick={onRecalculate} disabled={recalculating} className="-my-1">
-            {recalculating ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Calculator className="mr-2 h-4 w-4" />
-            )}
+          <Button variant="outline" size="sm" onClick={onRecalculate} loading={recalculating} className="-my-1">
+            {!recalculating && <Calculator className="mr-2 h-4 w-4" />}
             {t('action_recalculate')}
+          </Button>
+        ) : underlagHref ? (
+          <Button variant="outline" size="sm" asChild className="-my-1">
+            <a href={underlagHref} target="_blank" rel="noopener noreferrer" title={t('journal_download_underlag_title')}>
+              <FileText className="mr-2 h-4 w-4" />
+              {t('journal_download_underlag')}
+            </a>
           </Button>
         ) : undefined
       }

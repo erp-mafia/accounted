@@ -2,10 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { unstable_serialize } from 'swr'
 import { buildReferenceFallback } from '../seed'
 import { refKeys } from '../keys'
-import type { CashAccount, CompanySettings, FiscalPeriod } from '@/types'
+import type { CompanySettings, FiscalPeriod } from '@/types'
+import type { CashAccountWithBank } from '@/lib/cash-accounts/labels'
 
 const periods = [{ id: 'p1' }] as unknown as FiscalPeriod[]
-const cash = [{ id: 'a1' }] as unknown as CashAccount[]
+const cash = [{ id: 'a1' }] as unknown as CashAccountWithBank[]
 const settings = { company_id: 'c1', company_name: 'Bolaget AB' } as unknown as CompanySettings
 
 describe('buildReferenceFallback', () => {

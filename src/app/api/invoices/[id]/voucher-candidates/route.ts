@@ -3,6 +3,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findMatchingVouchersForInvoice } from '@/lib/invoices/voucher-matching'
 import type { Invoice, Customer } from '@/types'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * GET /api/invoices/[id]/voucher-candidates

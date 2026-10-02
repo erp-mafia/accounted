@@ -7,6 +7,8 @@ import {
   calculateAvgPaymentDays,
   calculateVatLiability,
   fetchTopSupplierInvoices,
+  fetchPaidInvoicesInRange,
+  kpiReceivablesAsOf,
   type KpiSupplierInvoiceRow,
 } from '../kpi'
 import { VAT_INPUT_ACCOUNTS, VAT_OUTPUT_ACCOUNTS } from '../vat-declaration'
@@ -106,6 +108,48 @@ describe('calculateCashPosition', () => {
       makeTrialBalanceRow({ account_number: '1930', closing_debit: 0, closing_credit: 5000 }),
     ]
     expect(calculateCashPosition(rows)).toBe(-5000)
+  })
+
+  it('uses the account override instead of 19xx when one is set', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '1930', closing_debit: 50000 }),
+      makeTrialBalanceRow({ account_number: '1940', closing_debit: 10000 }),
+      makeTrialBalanceRow({ account_number: '1680', closing_debit: 700 }),
+    ]
+    expect(calculateCashPosition(rows, ['1930', '1680'])).toBe(50700)
+  })
+
+  it('treats an empty override list as no override', () => {
+    const rows = [makeTrialBalanceRow({ account_number: '1930', closing_debit: 50000 })]
+    expect(calculateCashPosition(rows, [])).toBe(50000)
+  })
+})
+
+describe('kpiReceivablesAsOf', () => {
+  it('returns the range end when it has passed', () => {
+    expect(kpiReceivablesAsOf('2025-12-31', '2026-09-26')).toBe('2025-12-31')
+  })
+
+  it('returns undefined (live state) for a range ending today or later', () => {
+    expect(kpiReceivablesAsOf('2026-09-26', '2026-09-26')).toBeUndefined()
+    expect(kpiReceivablesAsOf('2026-12-31', '2026-09-26')).toBeUndefined()
+  })
+})
+
+describe('fetchPaidInvoicesInRange', () => {
+  it('filters on payments inside the range, end date inclusive, paginated on id', async () => {
+    const { createQueuedMockSupabase } = await import('@/tests/helpers')
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ invoice_date: '2025-12-01', paid_at: '2025-12-31T10:00:00Z' }] })
+
+    const rows = await fetchPaidInvoicesInRange(supabase as never, 'company-1', '2025-01-01', '2025-12-31')
+
+    expect(rows).toHaveLength(1)
+    expect(findCalls('invoices', 'eq')).toContainEqual(['status', 'paid'])
+    expect(findCalls('invoices', 'gte')).toContainEqual(['paid_at', '2025-01-01'])
+    // Exclusive next day, so a payment on the last day counts.
+    expect(findCalls('invoices', 'lt')).toContainEqual(['paid_at', '2026-01-01'])
+    expect(findCalls('invoices', 'order')).toContainEqual(['id', { ascending: true }])
   })
 })
 

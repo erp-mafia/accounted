@@ -47,14 +47,32 @@ export interface SupplierCreditNoteContext {
   arrivalNumber: number
   /** ISO yyyy-MM-dd: the credit note's invoice and due date. */
   date: string
+  /**
+   * The supplier's own number for the credit note, when there is a document
+   * (ML 17 kap 22 §: every kreditfaktura carries its own number). Without one
+   * the row takes KREDIT-<original number>.
+   */
+  supplierCreditNoteNumber?: string | null
+  /** The supplier's credit note document: the underlag the row points at. */
+  documentId?: string | null
+}
+
+/** The number a credit note row carries: the supplier's own, else KREDIT-<original>. */
+export function supplierCreditNoteNumber(
+  originalNumber: string,
+  supplierNumber: string | null | undefined,
+): string {
+  const own = supplierNumber?.trim()
+  return own ? own : `KREDIT-${originalNumber}`
 }
 
 /**
  * The supplier_invoices row for a credit note that reverses `original`.
  *
- * One builder for the three creation paths (dashboard route, MCP executor,
- * v1 API) so the resting status, the zero remaining amount and the copied
- * amounts cannot drift between them.
+ * One builder behind creditSupplierInvoice (./credit.ts), the service the
+ * dashboard route, the v1 route and the MCP executor all call, so the
+ * resting status, the zero remaining amount and the copied amounts cannot
+ * drift between them.
  */
 export function buildSupplierCreditNoteRow(
   original: SupplierCreditNoteSource,
@@ -65,7 +83,7 @@ export function buildSupplierCreditNoteRow(
     company_id: ctx.companyId,
     supplier_id: original.supplier_id,
     arrival_number: ctx.arrivalNumber,
-    supplier_invoice_number: `KREDIT-${original.supplier_invoice_number}`,
+    supplier_invoice_number: supplierCreditNoteNumber(original.supplier_invoice_number, ctx.supplierCreditNoteNumber),
     invoice_date: ctx.date,
     due_date: ctx.date,
     status: SUPPLIER_CREDIT_NOTE_STATUS,
@@ -86,6 +104,7 @@ export function buildSupplierCreditNoteRow(
     // Copy the original's dimension bag so the reversal nets against the
     // same dimension cells in reports (dimensions PR7).
     default_dimensions: original.default_dimensions ?? {},
+    document_id: ctx.documentId ?? null,
   }
 }
 

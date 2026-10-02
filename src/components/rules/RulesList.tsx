@@ -8,7 +8,8 @@ import { MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -135,11 +136,13 @@ export default function RulesList() {
           </thead>
           <tbody>
             {isLoading ? (
-              <tr>
-                <td colSpan={7} className={cn(TD_CLASS, 'text-muted-foreground')}>
-                  {t('loading')}
-                </td>
-              </tr>
+              [1, 2, 3].map((i) => (
+                <tr key={i} aria-busy>
+                  <td colSpan={7} className={cn(TD_CLASS, '!pl-0')}>
+                    <Skeleton className="h-4 w-64" />
+                  </td>
+                </tr>
+              ))
             ) : error ? (
               <tr>
                 <td colSpan={7} className={cn(TD_CLASS, 'py-8 text-muted-foreground')}>
@@ -166,7 +169,13 @@ export default function RulesList() {
                     {r.corrections || '–'}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
-                    <ModeChip mode={r.mode} />
+                    {/* Chips mark exceptions: a suggestion waiting for you or
+                        a paused rule. A working rule reads as muted text. */}
+                    {r.mode === 'proposed' || r.mode === 'paused' ? (
+                      <ModeChip mode={r.mode} />
+                    ) : (
+                      <span className="text-muted-foreground">{t(`mode_${r.mode}`)}</span>
+                    )}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
                     {r.last_seen_date ? formatDate(r.last_seen_date) : '–'}
@@ -176,8 +185,8 @@ export default function RulesList() {
                       <DropdownMenuTrigger asChild>
                         <Button
                           variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground"
+                          size="icon-sm"
+                          className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
                           aria-label={t('more')}
                           disabled={busyId === r.id}
                         >
@@ -202,7 +211,6 @@ export default function RulesList() {
           </tbody>
         </table>
       </div>
-      <p className="mt-3 max-w-[70ch] text-[12.5px] text-muted-foreground">{t('ladder_note')}</p>
     </div>
   )
 }

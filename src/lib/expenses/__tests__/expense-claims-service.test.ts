@@ -501,7 +501,13 @@ describe('createPayoutBatch', () => {
       payout_date: '2026-09-05',
       cash_account: '1935',
     })
-    expect(result).toEqual({ ok: false, code: 'BATCH_INSERT_FAILED', detail: 'Perioden är låst' })
+    // The RPC error rides along so the doors can classify the trigger (PERIOD_LOCKED).
+    expect(result).toEqual({
+      ok: false,
+      code: 'BATCH_INSERT_FAILED',
+      detail: 'Perioden är låst',
+      error: { message: 'Perioden är låst', code: 'P0001' },
+    })
   })
 })
 

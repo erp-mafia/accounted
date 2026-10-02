@@ -1,6 +1,6 @@
 import { sleep } from '@/lib/utils'
-import crypto from 'crypto'
 import { z } from 'zod'
+import { requestCspNonce } from '@/lib/security/csp'
 import { parseEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
@@ -11,7 +11,7 @@ import {
   AGI_KONTROLLERA_MAX_BYTES,
 } from '@/lib/salary/agi/kontrollera-schemas'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
-import { requireCapability } from '@/lib/entitlements/has-capability'
+import { capabilityBlockedResponse, requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
 import { skatteverketConnectorMode, startConnectorAuthorization } from './lib/connector-mode'
@@ -45,6 +45,11 @@ import {
 } from './lib/declaration-prep'
 import { submitVatDeclarationChain } from './lib/vat-submit'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
+import {
+  VAT_FILING_DEADLINE_TYPES,
+  vatFilingFiscalYearEndMonth,
+  vatFilingTaxPeriod,
+} from '@/lib/vat/filing-record'
 import { getSystemAuthMode, isSystemAuthConfigured, getOmbudOrgNumber, getSystemCertInfo } from './lib/system-auth/config'
 import {
   getConnection,
@@ -72,10 +77,16 @@ import {
   agiGetKvittenser,
   agiLasPeriod,
   agiLasUppPeriod,
-  agiKontrolleraHU,
-  agiKontrolleraIU,
 } from './lib/agi-client'
-import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
+import {
+  previewSkattekontoSync,
+  runSkattekontoSync,
+  runValidateAgiUppgift,
+  syncSkattekontoNow,
+  validateAgiUppgift,
+} from './lib/core-actions'
+import type { SkvActionFailure } from '@/lib/skatteverket/extension-actions'
+import { SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
 import { fetchVatDeclarationStatus } from './lib/declaration-status'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
 import { promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
@@ -114,8 +125,11 @@ const SKV_SESSION_MISSING_MESSAGE =
 // Body for POST /skattekonto/transaktioner/bokfor-batch. Capped at 200 ids:
 // a full year of skattekonto events fits comfortably, and the sequential
 // draft+commit loop stays well inside the dispatcher's time budget.
+// allow_duplicate_ids: rows to book even though the ledger already holds a
+// verifikat for the event (LEDGER_TWIN_EXISTS); an explicit per-row choice.
 const SkattekontoBokforBatchSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(200),
+  allow_duplicate_ids: z.array(z.string().uuid()).max(200).optional(),
 })
 
 /**
@@ -505,8 +519,11 @@ export const skatteverketExtension: Extension = {
           JSON.stringify(value ?? '').replace(/</g, '\\u003c')
 
         // CSP allows only the nonce-carrying inline script; everything else
-        // is blocked. Cache-Control: no-store because the callback URL
-        // carries a one-shot authorization code and must never be cached.
+        // is blocked. The nonce is the proxy's for this request, so the
+        // script also runs under the proxy's CSP header (the only one a
+        // self-hosted `next start` delivers). Cache-Control: no-store because
+        // the callback URL carries a one-shot authorization code and must
+        // never be cached.
         const responseHeaders = (nonce: string) => ({
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Security-Policy':
@@ -524,7 +541,7 @@ export const skatteverketExtension: Extension = {
         // history: navigating Back from the landing page must not re-run the
         // callback into a guaranteed state error.
         const respondWithSuccess = (fallbackPath: string) => {
-          const nonce = crypto.randomUUID()
+          const nonce = requestCspNonce(request.headers)
           const html = `<!DOCTYPE html><html><body><script nonce="${nonce}">
             if (window.opener) {
               window.opener.postMessage({ type: 'skatteverket-oauth-success' }, ${jsLiteral(responseOrigin)});
@@ -551,7 +568,7 @@ export const skatteverketExtension: Extension = {
           fallbackPath: string,
           options: { closeTab?: boolean } = {},
         ) => {
-          const nonce = crypto.randomUUID()
+          const nonce = requestCspNonce(request.headers)
           const escapedReason = reason
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
@@ -2203,42 +2220,16 @@ export const skatteverketExtension: Extension = {
           )
         }
 
+        // The SKV call and its audit row live in lib/core-actions.ts, shared
+        // with the v1 operation (skatteverket.agi-validate-*).
         try {
-          const result = await agiKontrolleraHU(ctx.supabase, ctx.userId, ctx.companyId, parsed.data)
-          if (!result.ok) {
-            await writeSkatteverketAudit(ctx, {
-              endpoint: 'agi.kontrollera.hu',
-              agRegistreradId: parsed.data.agRegistreradId,
-              redovisningsperiod: parsed.data.redovisningsPeriod,
-              outcome: result.status === 401 || result.status === 403 ? 'auth_error' : 'skv_error',
-              responseStatus: result.status,
-              requestSizeBytes: rawBytes,
-              errorMessage: result.error,
-            })
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
-          }
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.hu',
-            agRegistreradId: parsed.data.agRegistreradId,
-            redovisningsperiod: parsed.data.redovisningsPeriod,
-            outcome: 'ok',
-            responseStatus: result.status,
-            skvStatus: result.data?.status ?? null,
-            requestSizeBytes: rawBytes,
+          const result = await runValidateAgiUppgift(ctx, {
+            uppgift: 'huvuduppgift',
+            payload: parsed.data,
           })
+          if (!result.ok) return skvActionFailureResponse(result)
           return NextResponse.json({ data: result.data })
         } catch (err) {
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.hu',
-            agRegistreradId: parsed.data.agRegistreradId,
-            redovisningsperiod: parsed.data.redovisningsPeriod,
-            outcome: 'internal_error',
-            requestSizeBytes: rawBytes,
-            errorMessage: err instanceof Error ? err.message : String(err),
-          })
           return handleSkvError(err)
         }
       },
@@ -2311,42 +2302,16 @@ export const skatteverketExtension: Extension = {
           )
         }
 
+        // The SKV call and its audit row live in lib/core-actions.ts, shared
+        // with the v1 operation (skatteverket.agi-validate-*).
         try {
-          const result = await agiKontrolleraIU(ctx.supabase, ctx.userId, ctx.companyId, parsed.data)
-          if (!result.ok) {
-            await writeSkatteverketAudit(ctx, {
-              endpoint: 'agi.kontrollera.iu',
-              agRegistreradId: parsed.data.agRegistreradId,
-              redovisningsperiod: parsed.data.redovisningsPeriod,
-              outcome: result.status === 401 || result.status === 403 ? 'auth_error' : 'skv_error',
-              responseStatus: result.status,
-              requestSizeBytes: rawBytes,
-              errorMessage: result.error,
-            })
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
-          }
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.iu',
-            agRegistreradId: parsed.data.agRegistreradId,
-            redovisningsperiod: parsed.data.redovisningsPeriod,
-            outcome: 'ok',
-            responseStatus: result.status,
-            skvStatus: result.data?.status ?? null,
-            requestSizeBytes: rawBytes,
+          const result = await runValidateAgiUppgift(ctx, {
+            uppgift: 'individuppgift',
+            payload: parsed.data,
           })
+          if (!result.ok) return skvActionFailureResponse(result)
           return NextResponse.json({ data: result.data })
         } catch (err) {
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.iu',
-            agRegistreradId: parsed.data.agRegistreradId,
-            redovisningsperiod: parsed.data.redovisningsPeriod,
-            outcome: 'internal_error',
-            requestSizeBytes: rawBytes,
-            errorMessage: err instanceof Error ? err.message : String(err),
-          })
           return handleSkvError(err)
         }
       },
@@ -2531,6 +2496,7 @@ export const skatteverketExtension: Extension = {
           booked.map(r => ({
             id: r.id,
             transaktionsdatum: r.transaktionsdatum,
+            transaktionstext: r.transaktionstext,
             belopp_skatteverket: Number(r.belopp_skatteverket),
             journal_entry_id: r.journal_entry_id,
           })),
@@ -2579,10 +2545,10 @@ export const skatteverketExtension: Extension = {
           // writes back to their row, never to the caller's (#1673). A row
           // flagged needs_reconsent cannot heal on its own, so answer the
           // reconnect prompt directly instead of burning a refresh call.
-          const resolved = await resolveCompanyReadAuth(ctx)
-          if (!resolved.ok) return readAuthFailureResponse(resolved.reason)
-          const result = await syncSkattekonto(ctx, resolved.auth)
-          return NextResponse.json({ data: result })
+          // Shared with the v1 operation skattekonto.sync (lib/core-actions.ts).
+          const result = await runSkattekontoSync(ctx)
+          if (!result.ok) return skvActionFailureResponse(result)
+          return NextResponse.json({ data: result.data })
         } catch (err) {
           return handleSkvError(err)
         }
@@ -2627,6 +2593,7 @@ export const skatteverketExtension: Extension = {
             ctx.companyId,
             ctx.userId,
             ids,
+            { allowDuplicateIds: parsed.data.allow_duplicate_ids ?? [] },
           )
           return NextResponse.json({ data: result })
         } catch (err) {
@@ -2655,12 +2622,36 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: 'Saknar transaktions-id' }, { status: 400 })
         }
 
+        // Optional body { allow_duplicate: true }: draft even though the
+        // ledger already holds a verifikat for the event. No body (the
+        // historical call) keeps the guard on.
+        const rawBody = await request.text().catch(() => '')
+        let allowDuplicate = false
+        if (rawBody.trim()) {
+          let body: unknown
+          try {
+            body = JSON.parse(rawBody)
+          } catch {
+            return NextResponse.json({ error: 'Ogiltig JSON i förfrågan.' }, { status: 400 })
+          }
+          const allow = (body as { allow_duplicate?: unknown } | null)?.allow_duplicate
+          if (allow !== undefined && typeof allow !== 'boolean') {
+            return NextResponse.json(
+              { error: 'Ogiltiga parametrar: allow_duplicate måste vara true eller false.' },
+              { status: 400 },
+            )
+          }
+          allowDuplicate = allow === true
+        }
+
         try {
           const entry = await bokforSkattekontoTransaction(
             ctx.supabase,
             ctx.companyId,
             ctx.userId,
             id,
+            undefined,
+            { allowDuplicate },
           )
           return NextResponse.json({ data: { entry } })
         } catch (err) {
@@ -2669,11 +2660,16 @@ export const skatteverketExtension: Extension = {
               err.code === 'TRANSACTION_NOT_FOUND' ? 404
               : err.code === 'ALREADY_BOOKED' ? 409
               : err.code === 'ROW_IGNORED' ? 409
+              : err.code === 'LEDGER_TWIN_EXISTS' ? 409
               : err.code === 'PERIOD_LOCKED' ? 423
               : err.code === 'NO_COUNTER_ACCOUNT' ? 422
               : 400
             return NextResponse.json(
-              { error: err.message, code: err.code },
+              {
+                error: err.message,
+                code: err.code,
+                ...(err.ledgerTwins ? { ledger_twins: err.ledgerTwins } : {}),
+              },
               { status },
             )
           }
@@ -2731,9 +2727,9 @@ export const skatteverketExtension: Extension = {
         if (!id) {
           return NextResponse.json({ error: 'Saknar transaktions-id' }, { status: 400 })
         }
-        let body: { journal_entry_id?: string }
+        let body: { journal_entry_id?: string; also_transaction_ids?: unknown }
         try {
-          body = (await request.json()) as { journal_entry_id?: string }
+          body = (await request.json()) as { journal_entry_id?: string; also_transaction_ids?: unknown }
         } catch {
           return NextResponse.json({ error: 'Ogiltig request body' }, { status: 400 })
         }
@@ -2743,12 +2739,27 @@ export const skatteverketExtension: Extension = {
             { status: 400 },
           )
         }
+        // A combined candidate (crm#128) names the other rows that settle the
+        // verifikat together with this one; they are linked all or nothing.
+        const also = body.also_transaction_ids
+        if (
+          also !== undefined &&
+          (!Array.isArray(also) ||
+            also.length > 49 ||
+            !also.every((v): v is string => typeof v === 'string' && v.length > 0))
+        ) {
+          return NextResponse.json(
+            { error: 'also_transaction_ids måste vara en lista med högst 49 transaktions-id.' },
+            { status: 400 },
+          )
+        }
         try {
           await matchSkattekontoToEntry(
             ctx.supabase,
             ctx.companyId,
             id,
             body.journal_entry_id,
+            (also as string[] | undefined) ?? [],
           )
           return NextResponse.json({ data: { ok: true } })
         } catch (err) {
@@ -2870,6 +2881,13 @@ export const skatteverketExtension: Extension = {
     // momsdeklarationer (inlamnat) and beslut (beslutat). Contract in
     // lib/skatteverket/declaration-status.ts.
     fetchVatDeclarationStatus,
+    // AGI pre-validation and the manual skattekonto sync for the v1
+    // operations (lib/operations/skatteverket.ts). Contract in
+    // lib/skatteverket/extension-actions.ts; the routes above call the same
+    // functions.
+    validateAgiUppgift,
+    syncSkattekontoNow,
+    previewSkattekontoSync,
   },
 }
 
@@ -2924,38 +2942,30 @@ function parseQueryParams(
 }
 
 /**
- * Build the deadline generator's tax_period string (`YYYY-MM` monthly,
- * `YYYY-QN` quarterly) from the picker params. Yearly periods use the
- * fiscal-year label and need company settings; see yearlyVatTaxPeriod.
+ * The deadline generator's tax_period for the picker params, from the one
+ * definition of a VAT period key (lib/vat/filing-record.ts). A yearly label
+ * (`YYYY`, or `YYYY-1/YYYY` for a broken räkenskapsår; year = the year it
+ * ends) depends on the company's fiscal year, hence the settings read.
  */
-function vatTaxPeriod(periodType: VatPeriodType, year: number, period: number): string | null {
-  if (periodType === 'monthly') return `${year}-${String(period).padStart(2, '0')}`
-  if (periodType === 'quarterly') return `${year}-Q${period}`
-  return null
-}
-
-/**
- * The moms_yearly row's tax_period is the generator's fiscal-year label:
- * `YYYY` for calendar fiscal years and `YYYY-1/YYYY` for broken ones (year
- * = the FY-end year). Derived from company settings because the picker only
- * carries the year.
- */
-async function yearlyVatTaxPeriod(ctx: ExtensionContext, year: number): Promise<string> {
+async function vatTaxPeriod(
+  ctx: ExtensionContext,
+  periodType: VatPeriodType,
+  year: number,
+  period: number,
+): Promise<string> {
   const { data } = await ctx.supabase
     .from('company_settings')
-    .select('fiscal_year_start_month')
+    .select('entity_type, fiscal_year_start_month')
     .eq('company_id', ctx.companyId)
     .maybeSingle()
-  const startMonth = data?.fiscal_year_start_month ?? 1
-  return startMonth === 1 ? `${year}` : `${year - 1}/${year}`
+  return vatFilingTaxPeriod(periodType, year, period, vatFilingFiscalYearEndMonth(data))
 }
 
 /**
  * Complete the moms deadline for the period identified by the request's
- * optional periodType/year/period query params. Both monthly and quarterly
- * types are passed for sub-annual periods: company settings decide which one
- * exists, the other is a no-op. Best-effort by design (completeTaxDeadline
- * never throws).
+ * optional periodType/year/period query params. Every moms deadline type is
+ * passed: the cadences' tax_period formats never overlap, so the label alone
+ * picks the row. Best-effort by design (completeTaxDeadline never throws).
  */
 async function completeVatDeadlineFromRequest(
   request: Request,
@@ -2966,19 +2976,20 @@ async function completeVatDeadlineFromRequest(
   const periodType = url.searchParams.get('periodType') as VatPeriodType | null
   const year = Number(url.searchParams.get('year'))
   const period = Number(url.searchParams.get('period'))
-  if (!periodType || !Number.isFinite(year) || !Number.isFinite(period) || !year || !period) {
+  if (
+    (periodType !== 'monthly' && periodType !== 'quarterly' && periodType !== 'yearly') ||
+    !Number.isFinite(year) ||
+    !Number.isFinite(period) ||
+    !year ||
+    !period
+  ) {
     return
   }
-  const taxPeriod =
-    periodType === 'yearly'
-      ? await yearlyVatTaxPeriod(ctx, year)
-      : vatTaxPeriod(periodType, year, period)
-  if (!taxPeriod) return
   await completeTaxDeadline(
     ctx.supabase,
     ctx.companyId,
-    periodType === 'yearly' ? ['moms_yearly'] : ['moms_monthly', 'moms_quarterly'],
-    taxPeriod,
+    [...VAT_FILING_DEADLINE_TYPES],
+    await vatTaxPeriod(ctx, periodType, year, period),
     newStatus
   )
 }
@@ -3002,6 +3013,24 @@ async function loadAGIXml(
 /**
  * Convert Skatteverket errors to appropriate HTTP responses.
  */
+/**
+ * A shared-service failure (lib/core-actions.ts) in the envelope these
+ * dashboard routes always answered: the paywall 403, the SKV auth codes the
+ * reconnect UI reads (via handleSkvError), and Skatteverket's own status and
+ * felkod for a refused kontrollera call.
+ */
+function skvActionFailureResponse(failure: SkvActionFailure): NextResponse {
+  if (failure.code === 'SKATTEVERKET_CAPABILITY_BLOCKED') return capabilityBlockedResponse(CAPABILITY.skatteverket)
+  const details = failure.details ?? {}
+  const skvCode = details.skv_code as SkatteverketAuthError['code'] | undefined
+  if (skvCode) return handleSkvError(new SkatteverketAuthError(failure.error, skvCode))
+  const status = typeof details.skv_status === 'number' ? details.skv_status : failure.http_status
+  return NextResponse.json(
+    { error: failure.error, code: details.skv_kod ?? failure.code },
+    { status },
+  )
+}
+
 function handleSkvError(err: unknown): NextResponse {
   if (err instanceof SkatteverketAuthError) {
     // MISSING_SCOPE returns 401: the existing token works, but it doesn't
@@ -3091,8 +3120,17 @@ async function commitBookSkattekontoRows(
     }
   }
 
+  // Rows the reviewer approved booking although the ledger already holds a
+  // verifikat for the event (staged with allow_duplicate / allow_duplicate_ids).
+  const rawAllow = params.allow_duplicate_ids
+  const allowDuplicateIds = Array.isArray(rawAllow)
+    ? rawAllow.filter((v): v is string => typeof v === 'string' && ids.includes(v))
+    : []
+
   try {
-    const result = await bokforSkattekontoTransactionsBatch(supabase, companyId, userId, ids)
+    const result = await bokforSkattekontoTransactionsBatch(supabase, companyId, userId, ids, {
+      allowDuplicateIds,
+    })
     return { ok: true, ...result }
   } catch (err) {
     // bokforSkattekontoTransactionsBatch catches per-row errors itself; a

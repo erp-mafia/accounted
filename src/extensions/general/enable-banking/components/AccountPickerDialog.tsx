@@ -22,8 +22,9 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { ChevronRight, Loader2 } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { CURRENCY_LEDGER_DEFAULTS } from '@/lib/cash-accounts/ledger-slots'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -36,6 +37,7 @@ import {
   resolveGapFillStart,
 } from '../lib/date-suggestions'
 import { describeClaimedElsewhere, partitionByClaim } from '../lib/claimed-accounts'
+import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
 import type { StoredAccount } from '../types'
 import {
   BankSyncProgressDialog,
@@ -53,6 +55,9 @@ interface AccountPickerDialogProps {
   // confirm.
   isInitialSelection: boolean
   onSaved: () => void
+  // Start a new login at the same bank. Offered only when a waiting
+  // connection leaves nothing to pick; the login replaces it.
+  onReauthorize?: () => void
 }
 
 interface ChartAccount {
@@ -63,16 +68,12 @@ interface ChartAccount {
 type LookbackMode = 'gap-fill' | 'fast' | 'fiscal-year' | 'custom'
 type CustomSubMode = 'date' | 'previous-fiscal-year'
 
-// Suggested BAS account per currency. The mapping engine falls back to 1930
-// when ledger_account is unset, so the SEK case is just an explicit hint.
-// Foreign-currency accounts default to the BAS-recommended numbers; if the
-// company hasn't created them yet, the user must pick or seed them first.
-const CURRENCY_DEFAULTS: Record<string, string> = {
-  SEK: '1930',
-  EUR: '1932',
-  USD: '1933',
-  GBP: '1934',
-}
+// Suggested BAS account per currency, the table the server allocates from.
+// The mapping engine falls back to 1930 when ledger_account is unset, so the
+// SEK case is just an explicit hint. Foreign-currency accounts default to the
+// BAS-recommended numbers; if the company hasn't created them yet, the user
+// must pick or seed them first.
+const CURRENCY_DEFAULTS = CURRENCY_LEDGER_DEFAULTS
 
 export function AccountPickerDialog({
   open,
@@ -82,6 +83,7 @@ export function AccountPickerDialog({
   accounts,
   isInitialSelection,
   onSaved,
+  onReauthorize,
 }: AccountPickerDialogProps) {
   const { toast } = useToast()
   // Memoise so the client has a stable reference across re-renders. Without this,
@@ -96,10 +98,15 @@ export function AccountPickerDialog({
   // (one SEB consent covers every company the signer represents). They are
   // kept out of the main list so the picker shows THIS company's accounts,
   // and live behind a collapsed disclosure: still reachable, never pre-checked.
-  const { own: ownAccounts, claimedElsewhere } = useMemo(
-    () => partitionByClaim(accounts),
-    [accounts],
-  )
+  // A card account that only mirrors the main account (Svea's
+  // SVEA_MQ_Debit_B2B) is not a choice at all, on or off, in either list: one
+  // muted line says why, and the selection save keeps it off whatever is sent
+  // (and turns off one switched on before that rule). It is taken out before
+  // the claim split, so no claim flag can put it behind the disclosure.
+  const { ownAccounts, claimedElsewhere, mirrorCards } = useMemo(() => {
+    const { own, claimedElsewhere } = partitionByClaim(accounts.filter((a) => !isMirrorCardAccount(a)))
+    return { ownAccounts: own, claimedElsewhere, mirrorCards: accounts.filter(isMirrorCardAccount) }
+  }, [accounts])
   const [claimedOpen, setClaimedOpen] = useState(false)
   // Server-side save rejection (validation / ledger conflict). Shown inline in
   // the dialog: a rejected save persisted nothing and started no sync, so the
@@ -173,7 +180,7 @@ export function AccountPickerDialog({
   useEffect(() => {
     if (open) {
       const initial = new Set<string>(
-        accounts.filter(a => a.enabled !== false).map(a => a.uid)
+        accounts.filter(a => a.enabled !== false && !isMirrorCardAccount(a)).map(a => a.uid)
       )
       setSelected(initial)
       setSaveError(null)
@@ -188,10 +195,13 @@ export function AccountPickerDialog({
       // yet. The currency default is suggested at most once — two SEK accounts
       // both pre-filled with 1930 would collide on the UNIQUE
       // (company_id, ledger_account) constraint at save; the second account is
-      // left blank so the user picks a distinct slot.
+      // left blank so the user picks a distinct slot. A card account that is
+      // never a choice must not use up the SEK suggestion ahead of the main
+      // account it mirrors.
       const initialLedger: Record<string, string> = {}
       const suggested = new Set<string>()
       for (const a of accounts) {
+        if (isMirrorCardAccount(a)) continue
         const fromStored = a.ledger_account
         const fromDefault = CURRENCY_DEFAULTS[a.currency] ?? ''
         const pick = fromStored ?? (suggested.has(fromDefault) ? '' : fromDefault)
@@ -456,11 +466,10 @@ export function AccountPickerDialog({
         // validation): nothing was persisted and no sync started. Surface the
         // server's message inside the still-open picker; the progress modal's
         // failed state would wrongly claim "we retry in the background".
-        setSaveError(
-          typeof data?.error === 'string' && data.error
-            ? data.error
-            : 'Kunde inte spara kontoval'
-        )
+        // Route validation answers { error: string }; database refusals
+        // answer the structured envelope { error: { code, message } }.
+        const message = typeof data?.error === 'string' ? data.error : data?.error?.message
+        setSaveError(typeof message === 'string' && message ? message : 'Kunde inte spara kontoval')
         if (isInitialSelection) setProgressOpen(false)
         return
       }
@@ -574,7 +583,7 @@ export function AccountPickerDialog({
     return (
       <div
         key={account.uid}
-        className="flex items-center gap-3 p-3 hover:bg-muted/50"
+        className="flex items-center gap-3 p-3 hover:bg-secondary/35"
       >
         {/* Toggle area: label + Checkbox (a Radix Checkbox renders as
             its own <button role="checkbox">, so wrapping it in another
@@ -617,16 +626,6 @@ export function AccountPickerDialog({
             {!account.claimed_by_company_id && account.deselected_elsewhere && (
               <p className="text-xs text-muted-foreground">
                 Tidigare bortvald: markera för att synka i detta bolag
-              </p>
-            )}
-            {/* Known card sub-account that mirrors the main account (Svea's
-                BOKIO_Debit_Business): every purchase already arrives on the
-                main account, so syncing this one only adds an opposite-sign
-                "Okänd transaktion" twin per purchase (issue #2565). Unchecked
-                by default, still selectable. */}
-            {!account.claimed_by_company_id && account.mirror_card_account && (
-              <p className="text-xs text-muted-foreground">
-                Kortkonto som speglar huvudkontot: köpen finns redan där. Hämtas inte om du inte markerar det.
               </p>
             )}
           </div>
@@ -1005,15 +1004,38 @@ export function AccountPickerDialog({
               to another company (the text below says so and points at the
               disclosure), or the consent simply carries no accounts (a failed
               connect, or nothing ticked at the bank), where a claim would be
-              a false statement. */}
+              a false statement. Either way there is no choice to finish here,
+              only a new login, which replaces this waiting connection. */}
           {sortedAccounts.length === 0 && (
-            <p className="p-3 text-xs text-muted-foreground">
-              {claimedElsewhere.length > 0
-                ? 'Inga konton att välja: alla konton i den här bankkopplingen synkas redan i andra bolag.'
-                : 'Bankkopplingen innehåller inga konton. Förnya anslutningen och välj konton hos banken.'}
-            </p>
+            <div className="space-y-2 p-3">
+              <p className="text-xs text-muted-foreground">
+                {claimedElsewhere.length > 0
+                  ? 'Inga konton att välja: alla konton i den här bankkopplingen synkas redan i andra bolag. Logga in igen och välj det här bolaget hos banken.'
+                  : 'Bankkopplingen innehåller inga konton att synka. Logga in igen och välj konton hos banken.'}
+              </p>
+              {isInitialSelection && onReauthorize && (
+                <Button type="button" variant="outline" size="sm" onClick={onReauthorize}>
+                  Logga in igen
+                </Button>
+              )}
+            </div>
           )}
         </div>
+
+        {/* Card account that only mirrors the main account (Svea's
+            SVEA_MQ_Debit_B2B, issue #2565): every purchase already arrives on
+            the main account, so syncing it would only add an opposite-sign
+            twin per purchase. Never a choice, so one line instead of a row.
+            One switched on before the save refused it still syncs until this
+            save turns it off, and the line says so rather than hiding it. */}
+        {mirrorCards.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {mirrorCards.length === 1 ? 'Kortkontot' : 'Kortkontona'}{' '}
+            {mirrorCards.map((a) => a.name).join(', ')}{' '}
+            {mirrorCards.some((a) => a.enabled !== false) ? 'stängs av när du sparar' : 'hämtas inte'}
+            : kortköpen finns redan på huvudkontot.
+          </p>
+        )}
 
         {/* Accounts another of the user's companies already books (one SEB
             consent covers every company the signer represents). Collapsed by
@@ -1061,12 +1083,9 @@ export function AccountPickerDialog({
           >
             Avbryt
           </Button>
-          <Button type="button" onClick={handleSave} disabled={isSaving || noneSelected}>
+          <Button type="button" onClick={handleSave} disabled={noneSelected} loading={isSaving}>
             {isSaving ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {isInitialSelection ? 'Sparar och hämtar transaktioner…' : 'Sparar…'}
-              </>
+              isInitialSelection ? 'Sparar och hämtar transaktioner…' : 'Sparar…'
             ) : (
               'Spara val'
             )}

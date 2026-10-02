@@ -1,10 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Loader2, Lock, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Lock, Plus, Trash2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -13,6 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/ui/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -72,6 +74,8 @@ interface ManualEntry {
   /** Editable accounts (pre-filled from template). */
   primaryAccount: string
   secondaryAccount: string
+  /** Kostnadsställe/projekt for the result leg (the secondary account). */
+  dimensions?: Record<string, string>
 }
 
 function uid() {
@@ -82,8 +86,8 @@ function suggestionKey(s: PeriodiseringSuggestion): string {
   return `${s.source_invoice_id}|${s.source_type}`
 }
 
-function confidenceVariant(c: PeriodiseringConfidence): 'success' | 'secondary' | 'outline' {
-  if (c === 'high') return 'success'
+// High confidence is the normal case and renders as muted text, not a chip.
+function confidenceVariant(c: PeriodiseringConfidence): 'secondary' | 'outline' {
   if (c === 'medium') return 'secondary'
   return 'outline'
 }
@@ -277,6 +281,8 @@ export default function PeriodiseringWizardPage() {
         if (!m.description.trim()) continue
         const tpl = PERIODISERING_TEMPLATES.find((t) => t.kind === m.templateKind)
         if (!tpl) continue
+        // The route puts the bag on the result leg (the secondary account).
+        const dims = m.dimensions && Object.keys(m.dimensions).length > 0 ? { dimensions: m.dimensions } : {}
         switch (tpl.side) {
           case 'prepaid':
             items.push({
@@ -285,6 +291,7 @@ export default function PeriodiseringWizardPage() {
               expense_account: m.secondaryAccount,
               prepaid_account: m.primaryAccount,
               description: m.description,
+              ...dims,
             })
             break
           case 'accrued':
@@ -294,6 +301,7 @@ export default function PeriodiseringWizardPage() {
               expense_account: m.secondaryAccount,
               accrued_account: m.primaryAccount,
               description: m.description,
+              ...dims,
             })
             break
           case 'deferred_revenue':
@@ -303,6 +311,7 @@ export default function PeriodiseringWizardPage() {
               revenue_account: m.secondaryAccount,
               deferred_account: m.primaryAccount,
               description: m.description,
+              ...dims,
             })
             break
           case 'accrued_interest':
@@ -312,6 +321,7 @@ export default function PeriodiseringWizardPage() {
               expense_account: m.secondaryAccount,
               accrued_account: m.primaryAccount,
               description: m.description,
+              ...dims,
             })
             break
           case 'accrued_utility':
@@ -321,6 +331,7 @@ export default function PeriodiseringWizardPage() {
               expense_account: m.secondaryAccount,
               accrued_account: m.primaryAccount,
               description: m.description,
+              ...dims,
             })
             break
         }
@@ -374,16 +385,16 @@ export default function PeriodiseringWizardPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <h1 className="font-display text-2xl leading-8 tracking-tight">
-          {closingYear ? `Periodisering: Bokslut ${closingYear}` : 'Periodisering'}
-        </h1>
-        <Button variant="outline" asChild>
-          <Link href="/bookkeeping/year-end">
-            <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
-          </Link>
-        </Button>
-      </div>
+      <PageHeader
+        title={closingYear ? `Periodisering: Bokslut ${closingYear}` : 'Periodisering'}
+        action={
+          <Button size="sm" variant="outline" asChild>
+            <Link href="/bookkeeping/year-end">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
+            </Link>
+          </Button>
+        }
+      />
 
       {periods === null && !periodsError && (
         <Card>
@@ -722,9 +733,13 @@ function AutoStep({
                     >
                       {s.source_label}
                     </Label>
-                    <Badge variant={confidenceVariant(s.confidence)}>
-                      {confidenceLabel(s.confidence)}
-                    </Badge>
+                    {s.confidence === 'high' ? (
+                      <span className="text-xs text-muted-foreground">{confidenceLabel(s.confidence)}</span>
+                    ) : (
+                      <Badge variant={confidenceVariant(s.confidence)}>
+                        {confidenceLabel(s.confidence)}
+                      </Badge>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground">{s.reason}</p>
                   <div className="flex items-center gap-4 pt-1 text-xs">
@@ -787,10 +802,10 @@ function ManualStep({
                 variant="outline"
                 size="sm"
                 onClick={() => onAdd(t)}
-                className="justify-start text-left h-auto py-2 px-3"
+                className="justify-start text-left h-auto px-3"
               >
                 <Plus className="mr-2 h-3.5 w-3.5 shrink-0" />
-                <span className="flex-1 min-w-0">
+                <span className="flex-1 min-w-0 py-2">
                   <span className="block font-medium">{t.name}</span>
                   <span className="block text-xs text-muted-foreground truncate">{t.hint}</span>
                 </span>
@@ -833,6 +848,10 @@ function ManualEntryEditor({
   onChange: (patch: Partial<ManualEntry>) => void
   onRemove: () => void
 }) {
+  // Kostnadsställe/projekt for the result leg, shown only when the company
+  // uses dimensions (read before the early return: hooks run every render).
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const template = PERIODISERING_TEMPLATES.find((t) => t.kind === entry.templateKind)
   if (!template) return null
   const primaryLabel =
@@ -848,7 +867,7 @@ function ManualEntryEditor({
     <div className="rounded-lg border border-border p-3 space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">{template.name}</p>
-        <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 px-2" aria-label="Ta bort">
+        <Button variant="ghost" size="icon-sm" onClick={onRemove} aria-label="Ta bort">
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -889,6 +908,21 @@ function ManualEntryEditor({
             className="h-8"
           />
         </div>
+        {dimensionsEnabled && (
+          <div className="col-span-2">
+            <LineDimensionFields
+              dimensions={entry.dimensions}
+              onChange={(dimNo, code) => {
+                const next = { ...(entry.dimensions ?? {}) }
+                const trimmed = code?.trim()
+                if (trimmed) next[dimNo] = trimmed
+                else delete next[dimNo]
+                onChange({ dimensions: next })
+              }}
+              inputClassName="h-8"
+            />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -970,12 +1004,18 @@ function ReviewStep({
           ))}
           {validManual.map((m) => {
             const tpl = PERIODISERING_TEMPLATES.find((t) => t.kind === m.templateKind)
+            // The tags the result leg will carry, e.g. "KS01 · P001".
+            const dims = Object.entries(m.dimensions ?? {})
+              .filter(([, v]) => v)
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([, v]) => v)
+              .join(' · ')
             return (
               <ReviewLine
                 key={m.id}
                 label={`${tpl?.name ?? 'Periodisering'}: ${m.description}`}
                 amount={parseFloat(m.amount)}
-                note={tpl?.name}
+                note={[tpl?.name, dims].filter(Boolean).join(' · ')}
               />
             )
           })}
@@ -1004,7 +1044,8 @@ function ReviewStep({
         </Button>
         <Button
           onClick={onPost}
-          disabled={!canWrite || posting || totalCount === 0 || postSummary !== null}
+          disabled={!canWrite || totalCount === 0 || postSummary !== null}
+          loading={canWrite && posting}
           title={!canWrite ? 'Endast användare med skrivrättigheter kan posta periodiseringar.' : undefined}
         >
           {!canWrite ? (
@@ -1012,9 +1053,7 @@ function ReviewStep({
               <Lock className="mr-2 h-4 w-4" /> Posta alla
             </>
           ) : posting ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
-            </>
+            'Bokför…'
           ) : (
             'Posta alla'
           )}

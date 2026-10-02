@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
+import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
 
 export interface KommunRate {
   kommun: string
@@ -165,7 +166,7 @@ export default function MunicipalityCombobox({
       {isOpen && filtered.length > 0 && (
         <div
           ref={listRef}
-          className="absolute z-50 top-full left-0 mt-1 w-full max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md"
+          className={`absolute z-50 top-full left-0 mt-1 w-full max-h-[300px] overflow-y-auto ${POPOVER_SURFACE_CLASS} ${POPOVER_ENTER_CLASS}`}
         >
           {filtered.map((k, i) => {
             const isHighlighted = i === highlightedIndex
@@ -175,7 +176,7 @@ export default function MunicipalityCombobox({
                 type="button"
                 data-highlighted={isHighlighted}
                 className={`w-full text-left px-3 py-1.5 text-sm cursor-pointer flex items-baseline justify-between gap-2 ${
-                  isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
+                  isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/60'
                 }`}
                 onMouseDown={(e) => {
                   e.preventDefault()

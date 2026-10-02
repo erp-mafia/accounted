@@ -6,7 +6,6 @@ import {
   mcpServerUrl,
   sideDoorServerUrl,
   SIDE_DOORS,
-  claudeStepDone,
   completionPatchBody,
   vatDeadlineLine,
 } from '../checklist'
@@ -110,19 +109,6 @@ describe('completionPatchBody', () => {
     // import in that state. Without a path the route answers 400 and the
     // completion effect used to retry it forever.
     expect(completionPatchBody(null)).toEqual({ completed: true, path: 'migration' })
-  })
-})
-
-describe('claudeStepDone', () => {
-  it('is done once an OAuth-minted MCP key row exists', () => {
-    expect(claudeStepDone({ oauthKeyCount: 1 })).toBe(true)
-    expect(claudeStepDone({ oauthKeyCount: 3 })).toBe(true)
-  })
-
-  it('stays open without a key row, including a null head count', () => {
-    expect(claudeStepDone({ oauthKeyCount: 0 })).toBe(false)
-    expect(claudeStepDone({ oauthKeyCount: null })).toBe(false)
-    expect(claudeStepDone({ oauthKeyCount: undefined })).toBe(false)
   })
 })
 

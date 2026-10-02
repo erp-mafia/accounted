@@ -1,3 +1,7 @@
+---
+areas: [moms]
+---
+
 # Dropshipping och kedjetransaktioner: beslutsschema
 
 ## Dimensioner
@@ -75,7 +79,7 @@ Exempel: Säljaren listar på Amazon, varan skickas från Kina till tysk konsume
 - **5 kap. 5 § ML** tillämpas: Amazon anses ha köpt och sålt eftersom (i) säljaren är icke-EU-etablerad alt. det är distansförsäljning av importerade varor ≤ 150 EUR via elektroniskt gränssnitt.
 - Amazon redovisar moms i destinationslandet via sitt IOSS.
 - **Säljarens fiktiva leverans till Amazon är undantagen** (10 kap. ML, art. 136a): säljaren har ingen omsättning att redovisa i SE för denna transaktion.
-- Bokföring hos säljaren: marketplace-payout (1580-AMZ) kommer netto. Provisioner Amazon bokas på 6050. Försäljning bokas på t.ex. 3990 (övrig försäljning) eller ej alls, beroende på K2/K3-tolkning: flagga för byråstandard.
+- Bokföring hos säljaren: marketplace-payout (1686-AMZ) kommer netto. Provisioner Amazon bokas på 6050. Försäljning bokas på t.ex. 3990 (övrig försäljning) eller ej alls, beroende på K2/K3-tolkning: flagga för byråstandard.
 
 ### Scenario F: Direktleverans där säljaren har VAT-nr i avgångslandet
 Exempel: Svensk säljare har även registrerat sig i Polen (lokal momsreg). Leverantör i Polen, kund i Tyskland.

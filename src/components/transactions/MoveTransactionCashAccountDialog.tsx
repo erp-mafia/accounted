@@ -11,7 +11,6 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { CashAccount } from '@/types'
 
@@ -131,16 +130,14 @@ export default function MoveTransactionCashAccountDialog({
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={isSaving}
-            className="min-h-11 w-full sm:w-auto"
           >
             {t('move_account_cancel')}
           </Button>
           <Button
             onClick={() => void persist()}
             disabled={!canSave}
-            className="min-h-11 w-full sm:w-auto"
+            loading={isSaving}
           >
-            {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {t('move_account_save')}
           </Button>
         </DialogFooter>

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import type { FactRow } from '@/lib/arkiv/facts/store'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -32,7 +32,7 @@ const querySchema = z.object({
 })
 
 export const GET = withRouteContext('arkiv.facts', async (request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const parsed = validateQuery(request, querySchema)
   if (!parsed.success) return parsed.response
   const subjectId = parsed.data.subject_kind === 'company' ? ctx.companyId : parsed.data.subject_id

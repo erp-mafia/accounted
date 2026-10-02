@@ -2,7 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { generateTrialBalance } from './trial-balance'
+import { resultatrapportRows, signedAmount } from './resultatrapport'
+import { excludeYearEndChain, fetchReversedYearEndEntryIds } from './trial-balance'
 import type {
   DimensionPnlColumn,
   DimensionPnlGroup,
@@ -28,24 +29,25 @@ const CLASS_LABELS: Record<number, string> = {
  * Value-as-column P&L matrix over ONE SIE dimension: every registered value
  * with activity becomes a column, plus an explicit "(Utan dimension)" bucket.
  *
- * Reconciliation is by construction, not by convention: the Totalt column
- * comes from the SAME generateTrialBalance pass resultatrapport uses (same
- * options including closingEntry, same filterPnl scope, same sign convention),
- * and the untagged bucket is the residual Totalt − tagged columns. Columns
- * therefore always sum exactly to resultatrapport: including edge cases
- * the line pass cannot see (e.g. P&L opening remnants when a prior year was
- * never closed), which land in "(Utan dimension)" where they belong.
+ * Reconciliation is by construction, not by convention: the Totalt column is
+ * the resultatrapport's own current-window rows and sign (resultatrapportRows
+ * and signedAmount, imported rather than restated), and the untagged bucket
+ * is the residual Totalt − tagged columns. The tagged pass reads the same
+ * entries as the trial balance behind Totalt (same window, no opening-balance
+ * entry, no year-end entries or their storno chain via the shared
+ * excludeYearEndChain), so the columns sum exactly to the resultatrapport for
+ * the same window.
  */
 export async function generateDimensionPnl(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
   sieDimNo: string,
-  // No fromDate: the matrix uses closing-balance semantics (cumulative from
-  // period_start) to reconcile with resultatrapport, so a lower bound cannot
-  // be honoured: accepting one and labelling the report with it would be a
-  // lie (#862 review). toDate caps the window on both sides identically.
-  options?: { toDate?: string }
+  // The resultatrapport's window: amounts are the activity inside
+  // [fromDate, toDate], each bound defaulting to the period's own. Callers
+  // validate both against the period (parseReportDateRange on the routes,
+  // parseReportRangeArgs in the MCP tool), exactly as for resultatrapport.
+  options?: { fromDate?: string; toDate?: string }
 ): Promise<DimensionPnlReport> {
   // The dim number is interpolated into a PostgREST jsonb path expression
   // below (`dimensions->>N`). Both entry points (route, MCP tool) validate,
@@ -57,7 +59,7 @@ export async function generateDimensionPnl(
 
   const { data: period } = await supabase
     .from('fiscal_periods')
-    .select('period_start, period_end')
+    .select('period_start, period_end, opening_balance_entry_id')
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
     .single()
@@ -66,15 +68,19 @@ export async function generateDimensionPnl(
     throw new Error('Fiscal period not found')
   }
 
-  // ── Totalt column: identical inputs to resultatrapport ─────────
-  // closingEntry must match resultatrapport exactly or the two stop
-  // reconciling, and a closed year reads zero without it (see resultatrapport
-  // and DECISIONS.md archive 2026-07-29).
-  const tb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
-    closingEntry: 'exclude-all-year-end',
-    toDate: options?.toDate,
-  })
-  const pnlRows = filterPnl(tb.rows)
+  // ── Totalt column: the resultatrapport for this window ─────────
+  // Read from resultatrapport.ts, not restated here: window, year-end
+  // exclusion, class 3-8 scope and sign are one definition, so the two
+  // reports cannot drift apart again (they did once, when resultatrapport
+  // moved from closing to window amounts). The reversed year-end roots feed
+  // the tagged pass's matching exclusion below.
+  const [pnlRows, reversedYearEndIds] = await Promise.all([
+    resultatrapportRows(supabase, companyId, fiscalPeriodId, {
+      fromDate: options?.fromDate,
+      toDate: options?.toDate,
+    }),
+    fetchReversedYearEndEntryIds(supabase, companyId),
+  ])
   const totalByAccount = new Map<string, TrialBalanceRow>()
   for (const r of pnlRows) totalByAccount.set(r.account_number, r)
 
@@ -101,9 +107,13 @@ export async function generateDimensionPnl(
   }
 
   // ── Tagged lines: one pass over lines carrying this dimension ──
-  // Mirrors trial-balance closing semantics: the fiscal_period_id join scopes
-  // to the period and toDate caps the window: both sides of the matrix
-  // cover period_start..toDate, so the buckets sum to the Totalt column.
+  // The entries the trial balance behind Totalt sums, and no others: this
+  // period, posted or reversed, inside the window, without the
+  // opening-balance entry (IB, not activity) and without year-end entries
+  // and their storno chain. A set dropped on one side only would land in its
+  // value column with the opposite amount in "(Utan dimension)": a retagged
+  // year-end depreciation read KS01 −50 000 and untagged +50 000 against a
+  // Totalt of 0, disagreeing with the filtered resultatrapport.
   const taggedLines = await fetchEntryLines<{
     id: string
     account_number: string
@@ -119,11 +129,17 @@ export async function generateDimensionPnl(
         .eq('fiscal_period_id', fiscalPeriodId)
         .in('status', ['posted', 'reversed'])
 
+      if (options?.fromDate) {
+        query = query.gte('entry_date', options.fromDate)
+      }
       if (options?.toDate) {
         query = query.lte('entry_date', options.toDate)
       }
+      if (period.opening_balance_entry_id) {
+        query = query.neq('id', period.opening_balance_entry_id)
+      }
 
-      return query
+      return excludeYearEndChain(query, reversedYearEndIds)
     },
     // Key-existence via the extracted text field: dims 1/6 ride the partial
     // expression indexes (idx_jel_dimensions_dim1/dim6).
@@ -213,9 +229,9 @@ export async function generateDimensionPnl(
   const netPerColumn = Array.from({ length: columnCount }, (_, i) =>
     round2(accountRows.reduce((s, r) => s + r.values[i], 0))
   )
-  // Same aggregation as resultatrapport's net_result_current: sum of the
-  // per-account rounded signed amounts over the filterPnl scope.
-  const netTotal = round2(pnlRows.reduce((s, r) => s + round2(signedAmount(r)), 0))
+  // resultatrapport's net_result_current, computed the way it computes it:
+  // the rounded sum of signedAmount over the same rows.
+  const netTotal = round2(pnlRows.reduce((s, r) => s + signedAmount(r), 0))
 
   return {
     dimension: {
@@ -226,25 +242,12 @@ export async function generateDimensionPnl(
     groups,
     net_per_column: netPerColumn,
     net_total: netTotal,
-    // The label reflects actual coverage: always cumulative from
-    // period_start (closing-balance semantics), capped at toDate.
+    // The window the amounts cover, as resultatrapport labels it.
     period: {
-      start: period.period_start,
+      start: options?.fromDate ?? period.period_start,
       end: options?.toDate ?? period.period_end,
     },
   }
-}
-
-// Same scope as resultatrapport's filterPnl, 8999 included (#2455): the
-// Totalt column must reconcile with that report's "Beräknat resultat".
-function filterPnl(rows: TrialBalanceRow[]): TrialBalanceRow[] {
-  return rows.filter((r) => r.account_class >= 3 && r.account_class <= 8)
-}
-
-// credit − debit: revenue positive, expenses negative: resultatrapport's
-// exact sign convention, so cells compare 1:1 with that report.
-function signedAmount(row: TrialBalanceRow): number {
-  return row.closing_credit - row.closing_debit
 }
 
 // Canonical form matching normalizeLineDimensions: trimmed, non-empty.

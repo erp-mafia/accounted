@@ -181,7 +181,7 @@ export function QuestionCard({
 
   return (
     <div className={cn('border-b border-border px-1', compact ? 'py-2.5' : 'py-3')}>
-      <div className="text-[13.5px]">{sentence}</div>
+      <div className="text-[13px]">{sentence}</div>
       {why ? <div className="mt-0.5 text-[12.5px] text-muted-foreground">{why}</div> : null}
       {then ? (
         <div className="mt-2 text-[12.5px]">{then}</div>
@@ -264,7 +264,7 @@ function FindingQuestion({
   }
   return (
     <div className={cn('border-b border-border px-1', compact ? 'py-2.5' : 'py-3')}>
-      <div className="text-[13.5px]">
+      <div className="text-[13px]">
         {text}
         {href ? (
           external ? (

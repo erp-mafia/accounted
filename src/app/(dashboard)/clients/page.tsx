@@ -38,7 +38,7 @@ export default async function ClientsPage() {
         title={t('title')}
         action={
           <div className="flex items-center gap-2">
-            <Button variant="ghost" className="text-muted-foreground" asChild>
+            <Button size="sm" variant="ghost" className="text-muted-foreground" asChild>
               <Link href="/clients/access">{t('access_link')}</Link>
             </Button>
             {canCreate && <NewClientCompanyButton />}

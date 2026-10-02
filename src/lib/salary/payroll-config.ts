@@ -41,7 +41,26 @@ export interface PayrollConfig {
 }
 
 /**
- * Load payroll configuration for a given year.
+ * The year's statutory payroll figures (arbetsgivaravgifter, prisbasbelopp,
+ * traktamente, bilförmån's statslåneränta, ...) are not in
+ * salary_payroll_config. Each year's row ships as a migration once the
+ * figures are officially set, so this means the year has not been added yet:
+ * nothing the caller can fix, and nothing to retry. Carries a registered code
+ * so every door reports it by name instead of "Något gick fel".
+ */
+export class PayrollConfigMissingError extends Error {
+  readonly code = 'SALARY_PAYROLL_CONFIG_MISSING'
+
+  constructor(readonly year: number) {
+    super(`Payroll rates for ${year} are not loaded yet; payroll, trips and allowances dated ${year} cannot be calculated until they are.`)
+    this.name = 'PayrollConfigMissingError'
+  }
+}
+
+/**
+ * Load payroll configuration for a given year. Throws PayrollConfigMissingError
+ * when the year has no row, and the database error itself when the read fails,
+ * so a connection problem is never reported as missing rates.
  */
 export async function loadPayrollConfig(
   supabase: SupabaseClient,
@@ -51,11 +70,10 @@ export async function loadPayrollConfig(
     .from('salary_payroll_config')
     .select('*')
     .eq('config_year', year)
-    .single()
+    .maybeSingle()
 
-  if (error || !data) {
-    throw new Error(`Payroll configuration not found for year ${year}`)
-  }
+  if (error) throw error
+  if (!data) throw new PayrollConfigMissingError(year)
 
   return {
     configYear: data.config_year,

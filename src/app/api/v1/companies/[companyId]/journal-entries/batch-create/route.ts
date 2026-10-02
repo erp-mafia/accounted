@@ -22,14 +22,15 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
-import { CreateJournalEntrySchema } from '@/lib/api/schemas'
+import { CreateApiJournalEntrySchema } from '@/lib/api/schemas'
 import { createDraftEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import type { Logger } from '@/lib/logger'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const BulkRequest = z.object({
-  journal_entries: z.array(CreateJournalEntrySchema).min(1).max(50),
+  // Same caller-authorable source_type labels as the single POST.
+  journal_entries: z.array(CreateApiJournalEntrySchema).min(1).max(50),
   all_or_nothing: z.boolean().optional().default(false),
 })
 
@@ -64,6 +65,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory and covers the WHOLE batch.',
     'all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.',
     'Each entry must balance independently. Per-item JOURNAL_ENTRY_NOT_BALANCED appears in the results array.',
+    'source_type follows the single POST: "manual" by default, a business source type or "import" (history replayed from another system). An engine-owned, rule-exempt type (e.g. opening_balance, storno, accrual, system) fails the whole batch with 400 VALIDATION_ERROR.',
   ],
   example: {
     request: {
@@ -106,7 +108,7 @@ async function createOne(
   companyId: string,
   userId: string,
   index: number,
-  input: z.infer<typeof CreateJournalEntrySchema>,
+  input: z.infer<typeof CreateApiJournalEntrySchema>,
   dryRun: boolean,
   log: Logger,
 ): Promise<ResultItem> {

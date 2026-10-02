@@ -34,7 +34,10 @@ describe('invoice VAT-rate gates agree with buildInvoiceWriteData', () => {
     const source = fs.readFileSync(path.join(REPO_ROOT, relative), 'utf8')
 
     it(`${relative} gates on getPermittedVatRates`, () => {
-      expect(source).toContain('getPermittedVatRates(')
+      // The builder reaches it through resolveInvoiceVatRules (#2906), which
+      // returns getPermittedVatRates() whenever the customer decides; pinned
+      // below.
+      expect(source).toMatch(/getPermittedVatRates\(|resolveInvoiceVatRules\(/)
     })
 
     it(`${relative} does not gate on the picker default`, () => {
@@ -44,6 +47,14 @@ describe('invoice VAT-rate gates agree with buildInvoiceWriteData', () => {
       expect(source).not.toContain('getAvailableVatRates')
     })
   }
+})
+
+describe('the per-invoice resolver keeps the customer gate (#2906)', () => {
+  it('resolveInvoiceVatRules gates on getPermittedVatRates', () => {
+    const source = fs.readFileSync(path.join(REPO_ROOT, 'lib/invoices/vat-rules.ts'), 'utf8')
+    const body = source.slice(source.indexOf('export function resolveInvoiceVatRules('))
+    expect(body).toContain('getPermittedVatRates(')
+  })
 })
 
 /**

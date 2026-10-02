@@ -142,6 +142,8 @@ export function BankConnectionStatus({
         return { kind: 'badge', label: 'Välj konton', variant: 'warning' }
       case 'error':
         return { kind: 'badge', label: 'Fel', variant: 'destructive' }
+      case 'needs_configuration':
+        return { kind: 'badge', label: 'Synkningen har stannat', variant: 'warning' }
       case 'expired':
         return { kind: 'badge', label: 'Utgånget samtycke', variant: 'warning' }
       case 'expiring':
@@ -159,6 +161,7 @@ export function BankConnectionStatus({
   function renderPrimaryAction() {
     switch (uiState) {
       case 'pending_selection':
+      case 'needs_configuration':
         return onManageAccounts ? (
           <Button size="sm" onClick={() => onManageAccounts(connection.id)}>
             Välj konton
@@ -166,8 +169,7 @@ export function BankConnectionStatus({
         ) : null
       case 'error':
         return (
-          <Button size="sm" onClick={() => onSync(connection.id)} disabled={isSyncing}>
-            {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+          <Button size="sm" onClick={() => onSync(connection.id)} loading={isSyncing}>
             Försök igen
           </Button>
         )
@@ -183,8 +185,7 @@ export function BankConnectionStatus({
       case 'stale':
       case 'never_synced':
         return (
-          <Button size="sm" onClick={() => onSync(connection.id)} disabled={isSyncing}>
-            {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+          <Button size="sm" onClick={() => onSync(connection.id)} loading={isSyncing}>
             Synka nu
           </Button>
         )
@@ -197,9 +198,8 @@ export function BankConnectionStatus({
             size="sm"
             className="text-muted-foreground hover:text-foreground"
             onClick={() => onSync(connection.id)}
-            disabled={isSyncing}
+            loading={isSyncing}
           >
-            {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
             Synka
           </Button>
         )
@@ -267,7 +267,7 @@ export function BankConnectionStatus({
                 </DropdownMenuItem>
               ) : (
                 <>
-                  {onManageAccounts && (
+                  {onManageAccounts && uiState !== 'needs_configuration' && (
                     <DropdownMenuItem onSelect={() => onManageAccounts(connection.id)}>
                       Välj konton
                     </DropdownMenuItem>
@@ -318,7 +318,7 @@ export function BankConnectionStatus({
 
       {/* Error detail: the page-level .attn owns the ochre sentence; the
           row's own message stays quiet. */}
-      {uiState === 'error' && connection.error_message && (
+      {(uiState === 'error' || uiState === 'needs_configuration') && connection.error_message && (
         <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
           {connection.error_message}
         </p>
@@ -373,7 +373,7 @@ export function BankConnectionStatus({
                       </span>
                       {truncated && (
                         <Badge variant="outline">
-                          Bankens API returnerade kortare period än begärt: använd SIE-import för äldre data
+                          Bankens API returnerade kortare period än begärt: importera äldre bankhistorik som bankfil (Importera, Bankfil)
                         </Badge>
                       )}
                     </div>
@@ -394,7 +394,7 @@ export function BankConnectionStatus({
                       {account.name || account.iban || 'Okänt konto'}
                     </span>
                     {isDisabled && (
-                      <Badge variant="outline" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      <Badge variant="outline" className="text-[11px] uppercase tracking-wide text-muted-foreground">
                         Synkas ej
                       </Badge>
                     )}
@@ -406,7 +406,7 @@ export function BankConnectionStatus({
                     {!isExpired && account.balance !== undefined && (
                       <span className="ml-auto inline-flex shrink-0 items-baseline gap-2">
                         {account.balance_updated_at && (
-                          <span className="text-[10px] text-muted-foreground">
+                          <span className="text-[11px] text-muted-foreground">
                             {formatBalanceAge(account.balance_updated_at)}
                           </span>
                         )}

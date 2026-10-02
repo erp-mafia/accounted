@@ -24,7 +24,8 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
 }))
 
 const { createAssetDepreciationEntry } = await import('../engine')
-const { AssetDepreciationRefusedError, BookkeepingDatabaseError } = await import('../errors')
+const { AssetDepreciationRefusedError, AssetOpeningChangedError, BookkeepingDatabaseError } = await import('../errors')
+const { getStructuredError, errorResponse } = await import('@/lib/errors/get-structured-error')
 
 type Result = { data?: unknown; error?: unknown }
 
@@ -47,7 +48,10 @@ const INPUT = {
     { account_number: '1229', debit_amount: 0, credit_amount: 20000 },
   ],
 }
-const LINK = { asset_id: 'asset-1', planned_depreciation: 20000 }
+const LINK = {
+  asset_id: 'asset-1', planned_depreciation: 20000,
+  opening_accumulated_depreciation: 60000, opening_depreciation_date: '2024-12-31',
+}
 
 /**
  * Per-table result queues behind a chain-shape-agnostic proxy, recording every
@@ -136,6 +140,8 @@ describe('createAssetDepreciationEntry', () => {
       p_entry_id: 'draft-1',
       p_fiscal_period_id: 'period-1',
       p_planned_depreciation: 20000,
+      p_expected_opening_amount: 60000,
+      p_expected_opening_date: '2024-12-31',
       p_actor_type: null,
       p_actor_label: null,
     })
@@ -158,6 +164,19 @@ describe('createAssetDepreciationEntry', () => {
     expect(err).toBeInstanceOf(AssetDepreciationRefusedError)
     expect(err.reason).toBe('already_posted')
     expect(err.code).toBe('ASSET_DEPRECIATION_REFUSED')
+    expectDraftCancelled(calls)
+    expect(committedEvents()).toHaveLength(0)
+  })
+
+  it('requires recalculation after an opening edit and cancels the unposted draft', async () => {
+    const { supabase, calls } = makeSupabase({
+      rpc: { error: { code: 'PT409', message: 'ASSET_OPENING_CHANGED' } },
+    })
+    const err = await createAssetDepreciationEntry(supabase, 'co', 'user-1', INPUT, LINK).catch((e) => e)
+    expect(err).toBeInstanceOf(AssetOpeningChangedError)
+    expect(err).not.toBeInstanceOf(AssetDepreciationRefusedError)
+    expect(getStructuredError(err)).toMatchObject({ code: 'ASSET_OPENING_CHANGED', retryable: false })
+    expect(errorResponse(err, { error: vi.fn() }).status).toBe(409)
     expectDraftCancelled(calls)
     expect(committedEvents()).toHaveLength(0)
   })

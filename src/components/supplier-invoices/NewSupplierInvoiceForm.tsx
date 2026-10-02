@@ -2453,14 +2453,12 @@ export default function NewSupplierInvoiceForm({
                   disabled + lock treatment: authorization, not validation. */}
               <Button
                 type="submit"
-                disabled={isSubmitting || !canWrite}
+                disabled={!canWrite}
+                loading={isSubmitting}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {isSubmitting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('registering')}
-                  </>
+                  t('registering')
                 ) : !canWrite ? (
                   <>
                     <Lock className="mr-2 h-4 w-4" />
@@ -2608,12 +2606,9 @@ export default function NewSupplierInvoiceForm({
             <Button variant="outline" onClick={() => setShowNewSupplier(false)}>
               {t('cancel')}
             </Button>
-            <Button onClick={handleCreateSupplier} disabled={isCreatingSupplier}>
+            <Button onClick={handleCreateSupplier} loading={isCreatingSupplier}>
               {isCreatingSupplier ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('creating')}
-                </>
+                t('creating')
               ) : (
                 t('create_supplier_button')
               )}

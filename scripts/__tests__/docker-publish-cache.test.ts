@@ -27,7 +27,7 @@ function dockerStages(dockerfile: string) {
 }
 
 describe('docker-publish.yml layer cache vs. Dockerfile apk upgrade', () => {
-  const stages = dockerStages(read('Dockerfile'))
+  const stages = dockerStages(read('docker/Dockerfile'))
   const shipped = stages[stages.length - 1]
   const workflow = read('.github/workflows/docker-publish.yml')
 

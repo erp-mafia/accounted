@@ -1,5 +1,5 @@
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
+import { bankBookingContext, booksBankLineInBankDirection } from '@/lib/bookkeeping/bank-booking-context'
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
@@ -16,6 +16,7 @@ import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { formatCurrency } from '@/lib/utils'
 import type { Transaction } from '@/types'
 
 ensureInitialized()
@@ -186,6 +187,23 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const settlementAccount = await resolveSettlementAccount(
       supabase, companyId, repointCashAccountId ?? transaction.cash_account_id, log, transaction.currency,
     )
+
+    // The commit trigger refuses a bank line on the wrong side with a bare
+    // name; say which account and which side while no draft exists yet.
+    if (!booksBankLineInBankDirection(lines, settlementAccount, transaction.amount)) {
+      const withdrawal = transaction.amount < 0
+      const amount = formatCurrency(Math.abs(transaction.amount), transaction.currency)
+      return errorResponseFromCode('TRANSACTION_BOOK_BANK_LINE_DIRECTION', log, {
+        requestId,
+        messageSv: withdrawal
+          ? `Transaktionen är ett uttag på ${amount} från bankkontot, så konto ${settlementAccount} ska stå i kredit. Lägg beloppet i kredit på ${settlementAccount}, eller kontrollera transaktionen om pengarna i själva verket kom in på kontot.`
+          : `Transaktionen är en insättning på ${amount} till bankkontot, så konto ${settlementAccount} ska stå i debet. Lägg beloppet i debet på ${settlementAccount}, eller kontrollera transaktionen om pengarna i själva verket gick ut från kontot.`,
+        messageEn: withdrawal
+          ? `The transaction is a withdrawal of ${amount} from the bank account, so account ${settlementAccount} must be credited. Credit ${settlementAccount}, or check the transaction if the money in fact came into the account.`
+          : `The transaction is a deposit of ${amount} into the bank account, so account ${settlementAccount} must be debited. Debit ${settlementAccount}, or check the transaction if the money in fact left the account.`,
+        details: { settlement_account: settlementAccount, required_side: withdrawal ? 'credit' : 'debit' },
+      })
+    }
 
     // Create journal entry via the engine
     let journalEntry

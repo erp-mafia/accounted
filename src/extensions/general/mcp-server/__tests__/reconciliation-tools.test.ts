@@ -35,6 +35,7 @@ vi.mock('@/lib/reconciliation/residual', async () => {
 })
 
 import { tools, isDefaultCatalogTool, deriveToolMeta } from '../server'
+import { toToolError } from '../tool-result'
 
 const COMPANY = 'company-1'
 const USER = 'user-1'
@@ -308,6 +309,100 @@ describe('reconciliation MCP tools', () => {
         supabase as never,
       ),
     ).rejects.toThrow(/nothing to stage\. Skipped: PAIR_NOT_CLOSED: Verifikationen saknar rad på 1940/)
+  })
+
+  it('reconcile_match with nothing to stage is coded, never UNKNOWN_ERROR: the shared skip code, else VALIDATION_ERROR', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const refusal = async (args: Record<string, unknown>) => {
+      const err = await tool('gnubok_reconcile_match')
+        .execute(args, COMPANY, USER, supabase as never)
+        .then(() => null, (e: unknown) => e)
+      expect(err).toBeInstanceOf(Error)
+      return toToolError(err, { toolName: 'gnubok_reconcile_match' }).error
+    }
+    const typo = 'ecb5d7ef-e0d1-4da6-ab18-5651c2c8ec9b'
+    const pairArgs = { account_key: 'skattekonto', pairs: [{ external_ids: [ROW], journal_entry_ids: [typo] }] }
+
+    // One reason for every skip is the code itself (feedback seq 740266: a
+    // mistyped journal_entry_id), with the offending id in the message.
+    matchMock.mockResolvedValueOnce({
+      dry_run: true,
+      considered: 1,
+      applied: [],
+      skipped: [
+        {
+          pair: { external_ids: [ROW], journal_entry_ids: [typo] },
+          code: 'ENTRY_NOT_FOUND',
+          message: `Verifikationen ${typo} finns inte i företaget. Kontrollera id:t.`,
+        },
+      ],
+    })
+    let error = await refusal(pairArgs)
+    expect(error.code).toBe('ENTRY_NOT_FOUND')
+    expect(error.retryable).toBe(false)
+    expect(error.message_en).toContain(typo)
+
+    // Mixed reasons: VALIDATION_ERROR, every reason listed.
+    matchMock.mockResolvedValueOnce({
+      dry_run: true,
+      considered: 2,
+      applied: [],
+      skipped: [
+        { pair: { external_ids: [ROW], journal_entry_ids: [typo] }, code: 'ENTRY_NOT_FOUND', message: 'saknas' },
+        { pair: { external_ids: [ENTRY], journal_entry_ids: [typo] }, code: 'ALREADY_LINKED', message: 'redan kopplad' },
+      ],
+    })
+    error = await refusal(pairArgs)
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message_en).toMatch(/ENTRY_NOT_FOUND: saknas \| ALREADY_LINKED: redan kopplad/)
+
+    // use_proposals found nothing: say so instead of a bare "nothing to stage".
+    matchMock.mockResolvedValueOnce({ dry_run: true, considered: 0, applied: [], skipped: [] })
+    error = await refusal({ account_key: 'skattekonto', use_proposals: true })
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message_en).toMatch(/No proposal at or above confidence_threshold 0\.9 on skattekonto/)
+    expect(error.message_en).toContain('gnubok_list_reconciliation_items')
+
+    // An unexpected failure keeps no code, so a timeout still reads as transient.
+    matchMock.mockResolvedValueOnce({
+      dry_run: true,
+      considered: 1,
+      applied: [],
+      skipped: [{ pair: { external_ids: [ROW], journal_entry_ids: [typo] }, code: 'UNKNOWN', message: 'fetch failed' }],
+    })
+    error = await refusal(pairArgs)
+    expect(error.code).toBe('TRANSIENT_ERROR')
+    expect(error.retryable).toBe(true)
+  })
+
+  it('reconcile_match refuses a pair without both id arrays as VALIDATION_ERROR before the engine runs', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const err = await tool('gnubok_reconcile_match')
+      .execute(
+        { account_key: 'skattekonto', pairs: [{ external_ids: [ROW], journal_entry_id: ENTRY }] },
+        COMPANY,
+        USER,
+        supabase as never,
+      )
+      .then(() => null, (e: unknown) => e)
+    const error = toToolError(err, { toolName: 'gnubok_reconcile_match' }).error
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message_en).toMatch(/^Invalid pairs: pairs\.0\.journal_entry_ids: /)
+    expect(matchMock).not.toHaveBeenCalled()
+  })
+
+  it('reconcile_match refuses more pairs than the links routes accept, before any ledger read', async () => {
+    // The stage-time dry run reads every id it is given, so the MCP door takes
+    // the dashboard and v1 routes' limit: at most 200 pairs.
+    const { supabase } = createQueuedMockSupabase()
+    const pairs = Array.from({ length: 201 }, () => ({ external_ids: [ROW], journal_entry_ids: [ENTRY] }))
+    const err = await tool('gnubok_reconcile_match')
+      .execute({ account_key: 'skattekonto', pairs, dry_run: true }, COMPANY, USER, supabase as never)
+      .then(() => null, (e: unknown) => e)
+    const error = toToolError(err, { toolName: 'gnubok_reconcile_match' }).error
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message_en).toMatch(/^Invalid pairs: pairs: /)
+    expect(matchMock).not.toHaveBeenCalled()
   })
 
   it('reconcile_unmatch dry-run returns the low-risk staging preview', async () => {

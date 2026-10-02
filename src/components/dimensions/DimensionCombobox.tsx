@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Loader2, Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
+import { cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   DIMENSION_CODE_PATTERN,
@@ -10,8 +12,9 @@ import {
 } from '@/components/dimensions/types'
 import { useDimensions } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { Badge } from '@/components/ui/badge'
 
-interface DimensionComboboxProps {
+interface DimensionComboboxBaseProps {
   /** SIE dimension number as a string ('1' = kostnadsställe, '6' = projekt). */
   sieDimNo: string
   /** Selected object code, or null when the line carries no value for this dim. */
@@ -20,7 +23,24 @@ interface DimensionComboboxProps {
   disabled?: boolean
   /** Extra classes merged into the trigger Input (callers pass `h-8` for dense rows). */
   className?: string
+  /**
+   * Offer "Skapa ny" for a typed code the registry lacks (default true). A
+   * report filter only reads the registry, so it passes false.
+   */
+  allowCreate?: boolean
 }
+
+/**
+ * Archived values are never suggested for tagging. A report filter must still
+ * reach them (a finished project stays reportable), so it opts in, and then
+ * names the marker an archived value carries in the list: the type makes an
+ * unmarked archived value impossible.
+ */
+type ArchivedValues =
+  | { includeArchived?: false; archivedLabel?: never }
+  | { includeArchived: true; archivedLabel: string }
+
+type DimensionComboboxProps = DimensionComboboxBaseProps & ArchivedValues
 
 /**
  * Searchable picker for dimension values: sibling of
@@ -40,6 +60,9 @@ interface DimensionComboboxProps {
  */
 export default function DimensionCombobox({
   sieDimNo,
+  includeArchived = false,
+  archivedLabel,
+  allowCreate = true,
   value,
   onChange,
   disabled,
@@ -62,8 +85,8 @@ export default function DimensionCombobox({
   )
   const dimensionId = dimension?.id ?? null
   const values = useMemo(
-    () => dimension?.values.filter((v) => v.is_active) ?? [],
-    [dimension],
+    () => dimension?.values.filter((v) => includeArchived || v.is_active) ?? [],
+    [dimension, includeArchived],
   )
   // The committed value's registry row, looked up in the FULL list: an
   // archived code stays readable in history even though it is never offered.
@@ -111,11 +134,11 @@ export default function DimensionCombobox({
   // Inline create is offered when the typed text is a valid new code.
   const createCandidate = useMemo(() => {
     const term = search.trim()
-    if (!term || !dimensionId) return null
+    if (!allowCreate || !term || !dimensionId) return null
     if (!DIMENSION_CODE_PATTERN.test(term)) return null
     if (values.some((v) => v.code.toLowerCase() === term.toLowerCase())) return null
     return term
-  }, [search, values, dimensionId])
+  }, [allowCreate, search, values, dimensionId])
 
   // Keyboard list: matching values first, the create affordance last.
   const optionCount = filteredValues.length + (createCandidate ? 1 : 0)
@@ -293,7 +316,11 @@ export default function DimensionCombobox({
       {isOpen && !disabled && (
         <div
           ref={listRef}
-          className="absolute z-50 top-full left-0 mt-1 min-w-[16rem] w-[max(100%,20rem)] max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md"
+          className={cn(
+            'absolute z-50 top-full left-0 mt-1 min-w-[16rem] w-[max(100%,20rem)] max-h-[300px] overflow-y-auto',
+            POPOVER_SURFACE_CLASS,
+            POPOVER_ENTER_CLASS,
+          )}
         >
           {loadState === 'loading' && (
             <div className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
@@ -320,7 +347,7 @@ export default function DimensionCombobox({
                   type="button"
                   data-highlighted={isHighlighted}
                   className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer flex items-baseline gap-2 ${
-                    isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
+                    isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/60'
                   }`}
                   onMouseDown={(e) => {
                     e.preventDefault()
@@ -332,6 +359,11 @@ export default function DimensionCombobox({
                   <span className="flex-1 min-w-0 break-words text-muted-foreground">
                     {item.name !== item.code ? item.name : ''}
                   </span>
+                  {!item.is_active && archivedLabel ? (
+                    <Badge variant="outline" className="shrink-0 self-center font-normal">
+                      {archivedLabel}
+                    </Badge>
+                  ) : null}
                 </button>
               )
             })}
@@ -342,7 +374,7 @@ export default function DimensionCombobox({
               className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer flex items-center gap-2 border-t border-input ${
                 highlightedIndex === filteredValues.length
                   ? 'bg-primary/10 text-primary'
-                  : 'hover:bg-muted/50'
+                  : 'hover:bg-secondary/60'
               }`}
               onMouseDown={(e) => {
                 e.preventDefault()

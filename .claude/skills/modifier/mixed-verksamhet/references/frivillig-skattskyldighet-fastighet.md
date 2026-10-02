@@ -1,3 +1,7 @@
+---
+areas: [moms]
+---
+
 # Frivillig beskattning för fastighetsupplåtelser
 
 Lagstöd: ML (2023:200) **12 kap** (NML), motsv. ML (1994:200) **9 kap** (GML). Centrala paragrafer: 12 kap 5 § (förutsättningar), 12 kap 10 § (uppförandeskede), 12 kap 12 § (upphörande), 12 kap 18 § (anmälningsskyldighet), 12 kap 20-21 § (uppförandeskede-ansökan). Skatteverkets rättsliga vägledning: "Frivillig beskattning vid lokaluthyrning". Centrala SKV-ställningstaganden: dnr 8-2671490 (2023-12-13) "Begreppet stadigvarande användning"; dnr 8-2349336 (2023-05-12) "Jämkningshandling vid vissa fastighetsöverlåtelser".

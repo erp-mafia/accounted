@@ -15,6 +15,7 @@ import type {
   TICBeneficialOwnerResponse,
 } from './tic-types'
 import { TICAPIError } from './tic-types'
+import { isLensDocumentCeased } from './lens-status'
 
 const TIC_API_TIMEOUT = 15_000
 
@@ -210,8 +211,7 @@ export async function searchCompanyByOrgNumber(
  */
 function pickPreferredRegistration(docs: TICCompanyDocument[]): TICCompanyDocument | null {
   if (docs.length === 0) return null
-  const ceased = (doc: TICCompanyDocument): boolean =>
-    doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
+  const ceased = isLensDocumentCeased
   return docs.reduce((best, doc) => {
     if (ceased(doc) !== ceased(best)) return ceased(doc) ? best : doc
     return (doc.registrationDate ?? 0) > (best.registrationDate ?? 0) ? doc : best

@@ -1291,7 +1291,9 @@ describe('calculateAvgifterRate', () => {
     expect(result.category).toBe('exempt')
   })
 
-  it('returns växa-stöd rate when eligible', () => {
+  it('keeps the full rate for a växa-stöd employee inside the window (Lag 2025:1334)', () => {
+    // Växa-stöd is a refund applied for after filing since 2026, never a
+    // reduced sats: the AGI must carry the full avgifter.
     const result = calculateAvgifterRate(
       makeBasicInput({
         vaxaStodEligible: true,
@@ -1302,8 +1304,8 @@ describe('calculateAvgifterRate', () => {
       2026
     )
 
-    expect(result.rate).toBe(0.1021)
-    expect(result.category).toBe('vaxa_stod')
+    expect(result.rate).toBe(0.3142)
+    expect(result.category).toBe('standard')
   })
 
   // Ungdomsrabatt 2026-2027 (Prop. 2025/26:66). Eligibility test is
@@ -1430,6 +1432,105 @@ describe('calculateSalary: youth cap', () => {
     // 20 000 × 0.2081 = 4 162.00
     expect(result.avgifterAmount).toBeCloseTo(4162, 1)
     expect(result.avgifterCategory).toBe('youth')
+  })
+})
+
+describe('calculateSalary: växa-stöd is a refund, not a reduced sats (Lag 2025:1334)', () => {
+  // From redovisningsperiod 202601 the AGI carries the full avgifter and the
+  // company applies to Skatteverket for the refund afterwards. The engine
+  // declares 31,42 % and only notes the expected refund: the avgifter except
+  // ålderspensionsavgiften (21,21 pp) on the underlag up to the 35 000 kr cap.
+  const vaxa = (overrides = {}) =>
+    makeBasicInput({
+      paymentDate: '2026-09-25',
+      employmentStart: '2025-06-01',
+      vaxaStodEligible: true,
+      vaxaStodStart: '2025-06-01',
+      vaxaStodEnd: '2027-05-31',
+      ...overrides,
+    })
+  const refundStep = (steps: Array<{ label: string }>) => steps.find((s) => s.label.startsWith('Växa-stöd'))
+
+  it('declares the full 31,42 % on 40 000 kr and notes a 7 423,50 kr refund on the capped 35 000 kr', () => {
+    const result = calculateSalary(vaxa({ monthlySalary: 40000 }), config2026, emptyTaxRates)
+
+    expect(result.avgifterRate).toBe(0.3142)
+    expect(result.avgifterCategory).toBe('standard')
+    // 40 000 × 0,3142 = 12 568, no cap split
+    expect(result.avgifterAmount).toBe(12568)
+    // 35 000 × (0,3142 - 0,1021) = 7 423,50
+    expect(result.vaxaStodRefund).toEqual({ amount: 7423.5 })
+    expect(refundStep(result.steps)).toMatchObject({
+      label: 'Växa-stöd: ansök om återbetalning hos Skatteverket',
+      input: { refund_basis: 35000, refund_rate: 0.2121, cap: 35000 },
+      output: 7423.5,
+    })
+    // Nothing else moves: employer cost and semester avgifter use the full sats.
+    expect(result.vacationAccrualAvgifter).toBe(roundOre(result.vacationAccrual * 0.3142))
+    expect(result.totalEmployerCost).toBe(
+      roundOre(result.grossSalary + 12568 + result.vacationAccrual + result.vacationAccrualAvgifter),
+    )
+  })
+
+  it('refunds 21,21 % of the whole underlag below the cap', () => {
+    const result = calculateSalary(vaxa({ monthlySalary: 30000 }), config2026, emptyTaxRates)
+    expect(result.avgifterAmount).toBe(9426)
+    // 30 000 × 0,2121 = 6 363
+    expect(result.vaxaStodRefund).toEqual({ amount: 6363 })
+  })
+
+  it('keeps an open window (no end date) open until the 24th calendar month, as the employee API documents', () => {
+    // Window starts 2025-06: month 24 is 2027-05, month 25 is 2027-06.
+    const inside = calculateSalary(vaxa({ vaxaStodEnd: null, paymentDate: '2027-05-25' }), config2026, emptyTaxRates)
+    expect(inside.vaxaStodRefund).toEqual({ amount: 7423.5 })
+
+    const after = calculateSalary(vaxa({ vaxaStodEnd: null, paymentDate: '2027-06-25' }), config2026, emptyTaxRates)
+    expect(after.avgifterAmount).toBe(12568)
+    expect(after.vaxaStodRefund).toBeNull()
+    expect(refundStep(after.steps)).toBeUndefined()
+  })
+
+  it('notes nothing outside the window or when the employee is not eligible', () => {
+    for (const input of [
+      vaxa({ paymentDate: '2027-06-25' }),
+      vaxa({ vaxaStodStart: '2026-10-01' }),
+      vaxa({ vaxaStodEligible: false }),
+    ]) {
+      const result = calculateSalary(input, config2026, emptyTaxRates)
+      expect(result.avgifterRate).toBe(0.3142)
+      expect(result.vaxaStodRefund).toBeNull()
+      expect(refundStep(result.steps)).toBeUndefined()
+    }
+  })
+
+  it('keeps the youth rate and notes the refund without an amount when ungdomsrabatt applies', () => {
+    const result = calculateSalary(
+      vaxa({ personnummer: 'mock_born_2004', monthlySalary: 20000 }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.avgifterCategory).toBe('youth')
+    expect(result.avgifterAmount).toBe(4162)
+    expect(result.vaxaStodRefund).toEqual({ amount: null })
+    expect(refundStep(result.steps)).toMatchObject({ output: null })
+  })
+
+  it('states no amount for an employment started before 2024-05-01 (a cap the config does not carry)', () => {
+    const result = calculateSalary(
+      vaxa({ employmentStart: '2024-03-01', vaxaStodStart: '2024-03-01', paymentDate: '2026-02-25' }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.avgifterAmount).toBe(12568)
+    expect(result.vaxaStodRefund).toEqual({ amount: null })
+  })
+
+  it('notes nothing for a 67+ employee or an F-skatt payee: nothing beyond ålderspensionsavgiften to refund', () => {
+    for (const input of [vaxa({ personnummer: 'mock_senior_person' }), vaxa({ fSkattStatus: 'f_skatt' })]) {
+      const result = calculateSalary(input, config2026, emptyTaxRates)
+      expect(result.vaxaStodRefund).toBeNull()
+      expect(refundStep(result.steps)).toBeUndefined()
+    }
   })
 })
 

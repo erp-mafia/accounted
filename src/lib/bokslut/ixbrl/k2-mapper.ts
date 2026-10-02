@@ -21,6 +21,11 @@ import {
   type SignReclassificationId,
   type SignReclassificationRule,
 } from '@/lib/reports/sign-reclassification'
+import {
+  AKTIVERAT_ARBETE_RANGES,
+  NETTOOMSATTNING_RANGES,
+  OVRIGA_RORELSEINTAKTER_RANGES,
+} from '@/lib/reports/income-definitions'
 
 export interface TrialBalanceRowLike {
   account_number: string
@@ -61,7 +66,7 @@ const r = (start: string, end: string): Range => ({ start, end })
 
 /** RR: kostnadsslagsindelad (risbs), in uppställningsform order. */
 export const K2_RR_MAPPINGS: PostMapping[] = [
-  { concept: 'Nettoomsattning', balance: 'credit', ranges: [r('3000', '3799')] },
+  { concept: 'Nettoomsattning', balance: 'credit', ranges: [...NETTOOMSATTNING_RANGES] },
   {
     concept: 'ForandringLagerProdukterIArbeteFardigaVarorPagaendeArbetenAnnansRakning',
     balance: 'credit',
@@ -70,8 +75,8 @@ export const K2_RR_MAPPINGS: PostMapping[] = [
     // handelsvaror (4960-4969) to HandelsvarorKostnader per K2 RR.
     ranges: [r('4930', '4959'), r('4970', '4999')],
   },
-  { concept: 'AktiveratArbeteEgenRakning', balance: 'credit', ranges: [r('3800', '3899')] },
-  { concept: 'OvrigaRorelseintakter', balance: 'credit', ranges: [r('3900', '3999')] },
+  { concept: 'AktiveratArbeteEgenRakning', balance: 'credit', ranges: [...AKTIVERAT_ARBETE_RANGES] },
+  { concept: 'OvrigaRorelseintakter', balance: 'credit', ranges: [...OVRIGA_RORELSEINTAKTER_RANGES] },
   {
     concept: 'RavarorFornodenheterKostnader',
     balance: 'debit',

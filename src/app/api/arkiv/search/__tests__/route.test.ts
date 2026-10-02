@@ -19,16 +19,12 @@ const call = (qs: string) => GET(new Request(`http://localhost/api/arkiv/search$
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'company-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
 })
 
 describe('GET /api/arkiv/search', () => {
-  it('is 404 outside the rollout', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await call('?q=hyra'))).status).toBe(404)
-  })
 
   it('is 400 for a query too short, or a kind it does not know', async () => {
     expect((await parseJsonResponse(await call('?q=h'))).status).toBe(400)
@@ -70,6 +66,24 @@ describe('GET /api/arkiv/search', () => {
     expect(findCalls('document_attachments', 'in')).toEqual([['id', [DOC]]])
     expect(findCalls('agreements', 'in')).toEqual([['source_document_id', [DOC]]])
     expect(captureArkivEvent).toHaveBeenCalledWith('arkiv_searched', { companyId: 'company-1', userId: 'user-1', kinds: 'all', query_length: 4, hits: 3 })
+  })
+
+  it('outside the brain searches the documents only, whatever kinds were asked for', async () => {
+    delete process.env.ARKIV_BRAIN_COMPANY_IDS
+    enqueue({ data: [{ document_id: DOC, page_no: 1, file_name: 'Almilånedokument.pdf', headline: 'Kredit från <b>Almi</b>', rank: 1 }] })
+    enqueue({ data: [{ id: DOC, file_name: 'Almilånedokument.pdf', doc_type: 'agreement.loan' }] })
+    const { status, body } = await parseJsonResponse(await call('?q=almi&kinds=fact,agreement,document'))
+    expect(status).toBe(200)
+    expect(body).toEqual({
+      data: {
+        query: 'almi',
+        count: 1,
+        hits: [{ record_ref: `document:${DOC}`, kind: 'document', title: 'Låneavtal', subtitle: 'Almilånedokument.pdf', snippet: 'Kredit från <b>Almi</b>', page: 1, href: `/arkiv/dokument/${DOC}?page=1`, source_href: `/api/documents/${DOC}/inline#page=1` }],
+      },
+    })
+    expect(findCalls('agreements', 'in')).toEqual([])
+    expect(findCalls('company_facts', 'limit')).toEqual([])
+    expect(findCalls('document_extractions', 'in')).toEqual([])
   })
 
   it('passes the kinds and the limit through, and opens a fact where it was read from', async () => {

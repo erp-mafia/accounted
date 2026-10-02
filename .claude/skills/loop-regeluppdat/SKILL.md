@@ -74,6 +74,12 @@ The `.claude/skills/swedish-*` skills are themselves a compliance surface: if a 
 the skill text is now stale. A confirmed change therefore usually yields a ticket with two
 checkboxes: update the code AND update the affected skill.
 
+The Skills page shows `agent_atom_registry.reviewed_at` for Accounted skills. When
+a complete skill review is performed, include the exact atom ID, review date and
+source evidence in the scan log/ticket so a human can record that date with
+`skills:admin reviewed`. Do not imply that a news sweep reviewed every skill.
+Community skills are reviewed only at publication, not maintained by this loop.
+
 ## 4. File tickets (cap: 6 new issues per run)
 
 Fingerprint = the change's official identifier (SFS number, BFNAR number, Skatteverket dnr, or

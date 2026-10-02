@@ -78,7 +78,7 @@ export function DayDetailModal({
                       className="block"
                     >
                       <div
-                        className={`p-3 rounded-lg border transition-colors hover:bg-muted/50 ${
+                        className={`p-3 rounded-lg border transition-colors hover:bg-secondary/60 ${
                           overdue ? 'border-destructive/50 bg-destructive/5' :
                           paid ? 'border-success/50 bg-success/5' :
                           'border-border'
@@ -106,16 +106,16 @@ export function DayDetailModal({
                             <p className="font-medium text-sm">
                               {formatCurrency(invoice.total, invoice.currency)}
                             </p>
-                            <Badge
-                              variant={
-                                overdue ? 'destructive' :
-                                paid ? 'success' :
-                                'secondary'
-                              }
-                              className="text-xs"
-                            >
-                              {overdue ? 'Förfallen' : paid ? 'Betald' : 'Väntande'}
-                            </Badge>
+                            {paid && !overdue ? (
+                              <span className="text-xs text-muted-foreground">Betald</span>
+                            ) : (
+                              <Badge
+                                variant={overdue ? 'destructive' : 'secondary'}
+                                className="text-xs"
+                              >
+                                {overdue ? 'Förfallen' : 'Väntande'}
+                              </Badge>
+                            )}
                           </div>
                         </div>
                       </div>

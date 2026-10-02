@@ -63,6 +63,7 @@ import {
   ROT_RUT_LIST_FILTERS,
   matchesRotRutListFilter,
   parseRotRutListFilter,
+  payoutDialogTypeFor,
   rotRutListStateOf,
   type RotRutListFilter,
   type RotRutListItem,
@@ -195,11 +196,16 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   expired: 'quote_status_expired',
 }
 
-/** A list row: the invoice plus the begäran embed the ROT/RUT column reads. */
-type ListInvoice = Invoice & { rot_rut_items?: RotRutListItem[] | null }
+/** A list row: the invoice plus the begäran and deduction-kind embeds the
+ *  skattereduktion column reads. */
+type ListInvoice = Invoice & {
+  rot_rut_items?: RotRutListItem[] | null
+  deduction_lines?: Array<{ deduction_type: string | null }> | null
+}
 
 const ROT_RUT_STATE_LABEL_KEYS: Record<NonNullable<RotRutListState>, string> = {
   claimable: 'rot_rut_status_claimable',
+  etjanst: 'rot_rut_status_etjanst',
   generated: 'rot_rut_status_generated',
   submitted: 'rot_rut_status_submitted',
   paid: 'rot_rut_status_paid',
@@ -218,6 +224,14 @@ const ROT_RUT_EXCEPTION_VARIANT: Partial<
 > = {
   partially_paid: 'warning',
   rejected: 'destructive',
+}
+
+/** Ids behind the "Peppol misslyckades" chip (GET /api/invoices/peppol-failed). */
+async function fetchPeppolFailedInvoiceIds(): Promise<string[]> {
+  const response = await fetch('/api/invoices/peppol-failed')
+  if (!response.ok) throw new Error(`peppol-failed answered ${response.status}`)
+  const body = (await response.json()) as { data?: unknown }
+  return Array.isArray(body.data) ? body.data.filter((id): id is string => typeof id === 'string') : []
 }
 
 function daysOverdue(dueDateStr: string): number {
@@ -294,6 +308,9 @@ export default function InvoicesPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [invoices, setInvoices] = useState<ListInvoice[]>([])
+  // Issued invoices whose latest Peppol delivery failed: the
+  // "Peppol misslyckades" chip. Same definition as the Att göra row.
+  const [peppolFailedIds, setPeppolFailedIds] = useState<ReadonlySet<string>>(() => new Set())
   // Settings-driven gates from the session-cached settings row
   // (lib/reference-data), derived instead of copied into state.
   const { settings: companySettings } = useCompanySettings()
@@ -421,6 +438,9 @@ export default function InvoicesPage() {
   // The begäran column and its filter share that gate: a company without
   // ROT/RUT never sees an empty column or a picker with nothing to pick.
   const showRotRut = showRotRutAction
+  // An installer who only invoices grön teknik lands on its list, not an
+  // empty ROT one.
+  const rotRutPayoutType = useMemo(() => payoutDialogTypeFor(invoices), [invoices])
 
   // Invoice-register coverage (see lib/invoices/invoice-register-coverage.ts):
   // a migrated or backfilled company has invoices that live only as verifikat,
@@ -453,24 +473,34 @@ export default function InvoicesPage() {
     // hundreds of rows to 3 skeleton stubs and replaying the stagger-enter
     // entrance for a row-scoped action was the "booking feels glitchy" jump.
     if (invoices.length === 0) setIsLoading(true)
-    const [invoicesResult] = await Promise.allSettled([
+    const [invoicesResult, peppolFailedResult] = await Promise.allSettled([
       fetchAllRows<Invoice>(
         ({ from, to }) =>
           supabase
             .from('invoices')
             // The begäran embed feeds the ROT/RUT column and filter; the
-            // items index on invoice_id keeps the reverse join cheap.
+            // items index on invoice_id keeps the reverse join cheap. The
+            // deduction-line embed (kind only, deduction lines only, so
+            // empty on most invoices) tells a grön teknik invoice, requested
+            // in Skatteverkets e-tjänst, from one still to put in a file.
             .select(
-              '*, customer:customers(name), rot_rut_items:rot_rut_payout_request_items(request:rot_rut_payout_requests(id, status, created_at))',
+              '*, customer:customers(name), rot_rut_items:rot_rut_payout_request_items(request:rot_rut_payout_requests(id, status, created_at)), deduction_lines:invoice_items(deduction_type)',
             )
             .eq('company_id', company.id)
+            .not('deduction_lines.deduction_type', 'is', null)
             .order('invoice_date', { ascending: false })
             .order('id', { ascending: false })
             .range(from, to),
         { dedupeBy: (invoice) => invoice.id },
       ),
+      // The chip's ids: the same definition as the Att göra row
+      // (peppol_failed_invoice_ids). Quotes are never sent via Peppol.
+      isQuotesList ? Promise.resolve<string[]>([]) : fetchPeppolFailedInvoiceIds(),
     ])
 
+    // A failed read leaves the chips as they were: they mark an exception,
+    // and the Att göra row carries the same count.
+    if (peppolFailedResult.status === 'fulfilled') setPeppolFailedIds(new Set(peppolFailedResult.value))
     if (invoicesResult.status === 'rejected') {
       toast({
         title: t('load_failed_title'),
@@ -853,6 +883,11 @@ export default function InvoicesPage() {
     if (invoice.status === 'partially_paid') {
       return { label: t('status_partially_paid'), exception: true, variant: 'warning' }
     }
+    // Issued, and the Peppol network did not take it: the likely reason it is
+    // unpaid outranks the overdue count.
+    if (peppolFailedIds.has(invoice.id)) {
+      return { label: t('status_peppol_failed'), exception: true, variant: 'destructive' }
+    }
     if (invoice.status === 'overdue' && invoice.due_date) {
       return {
         label: t('status_overdue_days', { days: Math.max(1, daysOverdue(invoice.due_date)) }),
@@ -880,7 +915,7 @@ export default function InvoicesPage() {
             // The ROT/RUT overview (begäran, beslut, utbetalning, nekat
             // belopp) has its own page; the file dialog still opens from
             // ?rot-rut=1 here for existing links and the Att göra rows.
-            <Button
+            <Button size="sm"
               type="button"
               variant="outline"
               onClick={() => router.push('/invoices/rot-rut')}
@@ -891,7 +926,7 @@ export default function InvoicesPage() {
           )}
           {isQuotesList ? (
             // One way to make a quote, so a plain button: no modes to remember.
-            <Button
+            <Button size="sm"
               type="button"
               onClick={openNewQuote}
               disabled={!canWrite}
@@ -974,8 +1009,8 @@ export default function InvoicesPage() {
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
-                size="icon"
-                className={cn('h-8 w-8 text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
+                size="icon-sm"
+                className={cn('text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
                 aria-label={t('group_picker_aria')}
                 title={t('group_by')}
               >
@@ -1316,6 +1351,7 @@ export default function InvoicesPage() {
         <RotRutPayoutDialog
           open
           canWrite={canWrite}
+          initialType={rotRutPayoutType}
           onOpenChange={(open) => {
             if (!open) closeRotRutPayout()
           }}

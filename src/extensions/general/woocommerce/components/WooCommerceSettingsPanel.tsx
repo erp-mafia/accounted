@@ -14,7 +14,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useFormat } from '@/lib/hooks/use-format'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
-import { History, KeyRound, Link2, Loader2, RefreshCw, ShoppingCart, Unlink } from 'lucide-react'
+import { History, KeyRound, Link2, RefreshCw, ShoppingCart, Unlink } from 'lucide-react'
 import { PaymentMethodMappingForm } from '@/components/orders/PaymentMethodMappingForm'
 import {
   wooRequest,
@@ -24,13 +24,23 @@ import {
   type WooSyncPayload,
 } from '../lib/settings-actions'
 import { MAX_BACKFILL_YEARS } from '../types'
-import type { WooCommerceConnectionStatus, WooCommerceStatusResponse } from '../types'
+import type {
+  WooCommerceConnectionStatus,
+  WooCommerceConnectionStatusView,
+  WooCommerceStatusResponse,
+} from '../types'
+
+/** "#1042 (2026-08-01)": the order number the store shows, plus its date. */
+function skippedOrderLabel(order: { order_number: string; order_date: string | null }): string {
+  return order.order_date ? `#${order.order_number} (${order.order_date})` : `#${order.order_number}`
+}
 
 const STATUS_VARIANT: Record<
   WooCommerceConnectionStatus['status'],
-  'success' | 'secondary' | 'destructive' | 'warning'
+  'secondary' | 'destructive' | 'warning' | null
 > = {
-  active: 'success',
+  // Active is the normal state: muted text, not a chip (chips mark exceptions).
+  active: null,
   pending: 'secondary',
   revoked: 'warning',
   error: 'destructive',
@@ -64,7 +74,7 @@ export default function WooCommerceSettingsPanel() {
   const [loading, setLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
   const [configured, setConfigured] = useState(false)
-  const [connections, setConnections] = useState<WooCommerceConnectionStatus[]>([])
+  const [connections, setConnections] = useState<WooCommerceConnectionStatusView[]>([])
   const [storeUrl, setStoreUrl] = useState('')
   const [manualMode, setManualMode] = useState(false)
   const [consumerKey, setConsumerKey] = useState('')
@@ -200,16 +210,40 @@ export default function WooCommerceSettingsPanel() {
     failedTitle: string,
   ) {
     const summary = syncSummary(payload ?? null)
+    // Orders skipped for an unusable currency get their own sentence on any
+    // counted outcome: syncing again does not bring them in.
+    const withCurrencyNote = (text: string, unknownCurrency: number) =>
+      unknownCurrency > 0
+        ? `${text} ${t('sync_unknown_currency', { count: unknownCurrency })}`
+        : text
     if (summary.reason === 'revoked') {
       toast({ title: failedTitle, description: t('sync_revoked'), variant: 'destructive' })
     } else if (summary.reason === 'partial') {
-      toast({ title: t('sync_partial_title'), description: t('sync_partial', summary.values) })
+      toast({
+        title: t('sync_partial_title'),
+        description: withCurrencyNote(
+          t('sync_partial', summary.values),
+          summary.values.unknownCurrency,
+        ),
+      })
     } else if (summary.reason === 'empty') {
       toast({ title: doneTitle, description: t('sync_done_empty') })
     } else if (summary.reason === 'errors') {
-      toast({ title: doneTitle, description: t('sync_done_feed_errors', summary.values) })
+      toast({
+        title: doneTitle,
+        description: withCurrencyNote(
+          t('sync_done_feed_errors', summary.values),
+          summary.values.unknownCurrency,
+        ),
+      })
     } else if (summary.reason === 'feed') {
-      toast({ title: doneTitle, description: t('sync_done_feed', summary.values) })
+      toast({
+        title: doneTitle,
+        description: withCurrencyNote(
+          t('sync_done_feed', summary.values),
+          summary.values.unknownCurrency,
+        ),
+      })
     } else {
       toast({ title: doneTitle })
     }
@@ -392,6 +426,8 @@ export default function WooCommerceSettingsPanel() {
           // Handlers early-return while ANY request runs (shared busyId), so
           // every card's controls disable; the spinner stays on the busy one.
           const blocked = busyId !== null
+          const skipped = connection.skipped_currency_orders
+          const skippedMore = skipped ? skipped.count - skipped.orders.length : 0
           return (
             <div key={connection.id} className="space-y-4 rounded-lg border border-border p-4">
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -402,9 +438,13 @@ export default function WooCommerceSettingsPanel() {
                       <span className="text-sm font-medium">
                         {connection.store_name || connection.store_url || t('unnamed_store')}
                       </span>
-                      <Badge variant={STATUS_VARIANT[connection.status]}>
-                        {t(`status_${connection.status}`)}
-                      </Badge>
+                      {STATUS_VARIANT[connection.status] ? (
+                        <Badge variant={STATUS_VARIANT[connection.status] ?? undefined}>
+                          {t(`status_${connection.status}`)}
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{t(`status_${connection.status}`)}</span>
+                      )}
                     </div>
                     {connection.store_name && (
                       <p className="mt-1 text-sm text-muted-foreground">{connection.store_url}</p>
@@ -451,12 +491,9 @@ export default function WooCommerceSettingsPanel() {
                         size="sm"
                         onClick={() => handleSyncNow(connection.id)}
                         disabled={blocked}
+                        loading={syncing}
                       >
-                        {syncing ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <RefreshCw className="mr-2 h-4 w-4" />
-                        )}
+                        {!syncing && <RefreshCw className="mr-2 h-4 w-4" />}
                         {syncing ? t('syncing') : t('sync_now')}
                       </Button>
                       <Button
@@ -472,6 +509,24 @@ export default function WooCommerceSettingsPanel() {
                   )
                 )}
               </div>
+
+              {skipped && skipped.count > 0 && (
+                // Orders the sync skipped for an unusable currency stay listed
+                // until a sync imports them: the cursor has moved past them,
+                // so this is the only lasting trace (lib/skipped-orders).
+                <div className="max-w-prose space-y-1 border-t border-border pt-4">
+                  <p className="attn text-[12.5px]">
+                    {t('skipped_orders_attn', { count: skipped.count })}
+                  </p>
+                  <p className="text-sm text-muted-foreground">{t('skipped_orders_help')}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {t('skipped_orders_list', {
+                      orders: skipped.orders.map(skippedOrderLabel).join(', '),
+                    })}
+                    {skippedMore > 0 ? ` ${t('skipped_orders_more', { count: skippedMore })}` : ''}
+                  </p>
+                </div>
+              )}
 
               {isActive && (
                 <div className="flex flex-wrap items-start justify-between gap-4 border-t border-border pt-4">
@@ -529,12 +584,9 @@ export default function WooCommerceSettingsPanel() {
                       size="sm"
                       onClick={() => handleBackfill(connection.id)}
                       disabled={blocked}
+                      loading={backfilling}
                     >
-                      {backfilling ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <History className="mr-2 h-4 w-4" />
-                      )}
+                      {!backfilling && <History className="mr-2 h-4 w-4" />}
                       {backfilling ? t('backfill_running') : t('backfill_submit')}
                     </Button>
                   </div>
@@ -597,13 +649,10 @@ export default function WooCommerceSettingsPanel() {
               <div className="flex items-center gap-2">
                 <Button
                   onClick={handleManualConnect}
-                  disabled={connecting || !storeUrl || !consumerKey || !consumerSecret}
+                  disabled={!storeUrl || !consumerKey || !consumerSecret}
+                  loading={connecting}
                 >
-                  {connecting ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <KeyRound className="mr-2 h-4 w-4" />
-                  )}
+                  {!connecting && <KeyRound className="mr-2 h-4 w-4" />}
                   {connecting ? t('connecting') : t('manual_connect')}
                 </Button>
                 <Button
@@ -619,12 +668,8 @@ export default function WooCommerceSettingsPanel() {
           ) : (
             <div>
               <div className="flex items-center gap-2">
-                <Button onClick={handleConnect} disabled={connecting || !storeUrl}>
-                  {connecting ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Link2 className="mr-2 h-4 w-4" />
-                  )}
+                <Button onClick={handleConnect} disabled={!storeUrl} loading={connecting}>
+                  {!connecting && <Link2 className="mr-2 h-4 w-4" />}
                   {connecting ? t('connecting') : t('connect')}
                 </Button>
                 <Button

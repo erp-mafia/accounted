@@ -688,7 +688,7 @@ function SkatteverketPanelInner({
         <div className="space-y-3">
           <Skeleton className="h-3 w-48" />
           {[0, 1].map((i) => (
-            <div key={i} className="flex items-center justify-between border-b border-border/60 py-2">
+            <div key={i} className="flex items-center justify-between border-b border-border py-2">
               <Skeleton className="h-3.5 w-56" />
               <Skeleton className="h-3.5 w-20" />
             </div>
@@ -1026,13 +1026,9 @@ function SkatteverketPanelInner({
                 variant="outline"
                 onClick={() => handleCheckSubmitted()}
                 disabled={actionLoading !== null}
-                className="gap-2"
+                loading={actionLoading === 'check'}
               >
-                {actionLoading === 'check' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="h-4 w-4" />
-                )}
+                {actionLoading !== 'check' && <CheckCircle2 className="mr-2 h-4 w-4" />}
                 Kontrollera inlämning
               </Button>
             </div>
@@ -1045,13 +1041,9 @@ function SkatteverketPanelInner({
           <Button
             onClick={handleSubmit}
             disabled={!hasData || localBlocked || actionLoading !== null}
-            className="gap-2"
+            loading={actionLoading === 'submit'}
           >
-            {actionLoading === 'submit' ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
+            {actionLoading !== 'submit' && <Send className="mr-2 h-4 w-4" />}
             Skicka till Skatteverket
           </Button>
         </div>

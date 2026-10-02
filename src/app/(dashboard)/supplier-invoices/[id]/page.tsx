@@ -23,7 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Loader2, Pencil, Plus, CalendarClock, MoreHorizontal } from 'lucide-react'
+import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Pencil, Plus, CalendarClock, MoreHorizontal } from 'lucide-react'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
@@ -53,6 +53,7 @@ import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { withLineDimensions, type LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { BASAccount, EntityType } from '@/types'
 
 interface EditableLine {
@@ -60,6 +61,8 @@ interface EditableLine {
   side: 'debit' | 'credit'
   amount: string
   description: string
+  /** Kept through every edit of the row and sent with it (payment-line-dimensions). */
+  dimensions?: LineDimensions
 }
 
 function parseAmount(s: string): number {
@@ -76,13 +79,20 @@ interface PreviewLine {
   debit_amount: number
   credit_amount: number
   description: string
+  /** The bag mark-paid books this line with; absent when untagged. */
+  dimensions?: LineDimensions
 }
 
 interface MarkPaidPreview {
   entry_type: 'clearing' | 'cash'
+  /** Always SEK, whatever the invoice's currency. */
   lines: PreviewLine[]
   invoice_already_booked: boolean
   accounting_method: 'accrual' | 'cash'
+  /** SEK credited to the payment account: what an empty "Betalt i SEK" books. */
+  paid_sek?: number
+  /** The invoice's bag, given to a row the user adds. */
+  document_dimensions?: LineDimensions
 }
 
 // A line is periodiserad when both period dates are set: the cost was parked
@@ -165,7 +175,7 @@ function InlineAccountCell({
           </div>
           {/* Any account in the company's own chart, by number or name: the
               template search covers the common ones, this covers the rest. */}
-          <div className="border-t border-border/70 bg-background px-3 py-2">
+          <div className="border-t border-border bg-background px-3 py-2">
             <AccountCombobox value={manual} accounts={accounts} onChange={setManual} onCommit={pick} />
           </div>
         </CategoryPopover>
@@ -202,6 +212,9 @@ export default function SupplierInvoiceDetailPage() {
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
   const [payTab, setPayTab] = useState<'new' | 'existing'>('new')
   const [payAmount, setPayAmount] = useState('')
+  // Foreign-currency invoice: the SEK that left the account. Empty means the
+  // SEK the preview shows (paid_sek), i.e. no kursdifferens.
+  const [paySek, setPaySek] = useState('')
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0])
   const [paymentAccount, setPaymentAccount] = useState('1930')
   // Chart of accounts for the payment dialog, from the session cache
@@ -230,6 +243,10 @@ export default function SupplierInvoiceDetailPage() {
   const [isFileDialogOpen, setIsFileDialogOpen] = useState(false)
   const [markPaidPreview, setMarkPaidPreview] = useState<MarkPaidPreview | null>(null)
   const [markPaidPreviewFailed, setMarkPaidPreviewFailed] = useState(false)
+  // The refusal the preview returned (its Swedish message and code), shown in
+  // place of the rows: e.g. SI_PAID_SEK_UNRESOLVED or an overpaid foreign
+  // invoice, which the POST would refuse the same way.
+  const [markPaidPreviewError, setMarkPaidPreviewError] = useState<{ message: string; code: string | null } | null>(null)
   const [isEditingLines, setIsEditingLines] = useState(false)
   const [editLines, setEditLines] = useState<EditableLine[]>([])
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
@@ -305,8 +322,18 @@ export default function SupplierInvoiceDetailPage() {
     if (!isPayDialogOpen) {
       setIsEditingLines(false)
       setEditLines([])
+      setPaySek('')
     }
   }, [isPayDialogOpen])
+
+  // A SEK figure typed for one amount says nothing about another.
+  useEffect(() => {
+    setPaySek('')
+  }, [payAmount])
+
+  const isForeignInvoice = !!invoice && invoice.currency !== 'SEK'
+  const paySekNum = parseAmount(paySek)
+  const paySekOverride = isForeignInvoice && paySekNum > 0 ? round2(paySekNum) : undefined
 
   // Mirror the preview into the editable working copy. Only resets when not
   // currently editing: otherwise typing in the inputs would clobber on
@@ -321,6 +348,7 @@ export default function SupplierInvoiceDetailPage() {
             side: isDebit ? 'debit' : 'credit',
             amount: String(isDebit ? l.debit_amount : l.credit_amount),
             description: l.description,
+            ...withLineDimensions(l.dimensions),
           }
         }),
       )
@@ -347,8 +375,19 @@ export default function SupplierInvoiceDetailPage() {
     setEditLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)))
   const removeEditLine = (i: number) =>
     setEditLines((prev) => prev.filter((_, idx) => idx !== i))
+  // A row the user adds belongs to the same payment: it starts with the
+  // invoice's bag.
   const addEditLine = () =>
-    setEditLines((prev) => [...prev, { account_number: '', side: 'debit', amount: '', description: '' }])
+    setEditLines((prev) => [
+      ...prev,
+      {
+        account_number: '',
+        side: 'debit',
+        amount: '',
+        description: '',
+        ...withLineDimensions(markPaidPreview?.document_dimensions),
+      },
+    ])
   const resetEditLines = () => {
     if (!markPaidPreview) return
     setEditLines(
@@ -359,6 +398,7 @@ export default function SupplierInvoiceDetailPage() {
           side: isDebit ? 'debit' : 'credit',
           amount: String(isDebit ? l.debit_amount : l.credit_amount),
           description: l.description,
+          ...withLineDimensions(l.dimensions),
         }
       }),
     )
@@ -371,6 +411,7 @@ export default function SupplierInvoiceDetailPage() {
     if (!isPayDialogOpen || !invoice) {
       setMarkPaidPreview(null)
       setMarkPaidPreviewFailed(false)
+      setMarkPaidPreviewError(null)
       return
     }
     const amountNum = Number(payAmount)
@@ -382,17 +423,26 @@ export default function SupplierInvoiceDetailPage() {
     const ctrl = new AbortController()
     ;(async () => {
       setMarkPaidPreviewFailed(false)
+      setMarkPaidPreviewError(null)
       try {
         const qs = new URLSearchParams({
           amount: String(amountNum),
           payment_account: paymentAccount,
+          ...(paySekOverride !== undefined ? { amount_sek: String(paySekOverride) } : {}),
         })
         const res = await fetch(
           `/api/supplier-invoices/${invoice.id}/mark-paid/preview?${qs.toString()}`,
           { signal: ctrl.signal },
         )
         if (!res.ok) {
-          if (!cancelled) setMarkPaidPreviewFailed(true)
+          const errBody = await res.json().catch(() => null)
+          if (!cancelled) {
+            setMarkPaidPreviewError({
+              message: getErrorMessage(errBody, { statusCode: res.status, context: 'supplier_invoice' }),
+              code: (errBody as { error?: { code?: string } } | null)?.error?.code ?? null,
+            })
+            setMarkPaidPreviewFailed(true)
+          }
           return
         }
         const data = (await res.json()) as MarkPaidPreview
@@ -406,7 +456,7 @@ export default function SupplierInvoiceDetailPage() {
       cancelled = true
       ctrl.abort()
     }
-  }, [isPayDialogOpen, invoice, payAmount, paymentAccount])
+  }, [isPayDialogOpen, invoice, payAmount, paymentAccount, paySekOverride])
 
   async function handleApprove() {
     setProcessingAction('approve')
@@ -498,6 +548,8 @@ export default function SupplierInvoiceDetailPage() {
               debit_amount: l.side === 'debit' ? amount : 0,
               credit_amount: l.side === 'credit' ? amount : 0,
               line_description: l.description?.trim() || undefined,
+              // What the grid holds is what gets booked, the row's bag included.
+              ...withLineDimensions(l.dimensions),
             }
           })
         : undefined
@@ -510,6 +562,8 @@ export default function SupplierInvoiceDetailPage() {
           amount: parseFloat(payAmount),
           payment_date: paymentDate,
           payment_account: paymentAccount,
+          // Edited rows already state every SEK amount.
+          ...(paySekOverride !== undefined && !linesPayload ? { amount_sek: paySekOverride } : {}),
           ...(force ? { force: true } : {}),
           ...(linesPayload ? { lines: linesPayload } : {}),
         }),
@@ -843,14 +897,13 @@ export default function SupplierInvoiceDetailPage() {
             />
           )}
           {canApprove && (
-            <Button
+            <Button size="sm"
               onClick={handleApprove}
               disabled={isProcessing || !canWrite}
+              loading={processingAction === 'approve'}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {processingAction === 'approve' ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : canWrite ? (
+              {processingAction === 'approve' ? null : canWrite ? (
                 <CheckCircle className="mr-2 h-4 w-4" />
               ) : (
                 <Lock className="mr-2 h-4 w-4" />
@@ -859,7 +912,7 @@ export default function SupplierInvoiceDetailPage() {
             </Button>
           )}
           {canAddToFile && (
-            <Button onClick={() => setIsFileDialogOpen(true)} disabled={isProcessing || !canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
+            <Button size="sm" onClick={() => setIsFileDialogOpen(true)} disabled={isProcessing || !canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
               {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
               {t('add_to_payment_file')}
             </Button>
@@ -868,7 +921,7 @@ export default function SupplierInvoiceDetailPage() {
               betald steps back to a secondary so the header keeps one next
               step (an aged-but-unattested invoice can have both). */}
           {canMarkPaid && (
-            <Button
+            <Button size="sm"
               variant={canApprove || canAddToFile ? 'outline' : 'default'}
               onClick={() => setIsPayDialogOpen(true)}
               disabled={isProcessing || !canWrite}
@@ -879,15 +932,14 @@ export default function SupplierInvoiceDetailPage() {
             </Button>
           )}
           {canUncredit && (
-            <Button
+            <Button size="sm"
               variant="outline"
               onClick={handleUncredit}
               disabled={isProcessing || !canWrite}
+              loading={processingAction === 'uncredit'}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {processingAction === 'uncredit' ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : canWrite ? (
+              {processingAction === 'uncredit' ? null : canWrite ? (
                 <Undo2 className="mr-2 h-4 w-4" />
               ) : (
                 <Lock className="mr-2 h-4 w-4" />
@@ -899,10 +951,13 @@ export default function SupplierInvoiceDetailPage() {
           {hasMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label={tCommon('more_options')}>
-                  {processingAction === 'credit' || processingAction === 'delete' ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={tCommon('more_options')}
+                  loading={processingAction === 'credit' || processingAction === 'delete'}
+                >
+                  {processingAction !== 'credit' && processingAction !== 'delete' && (
                     <MoreHorizontal className="h-4 w-4" />
                   )}
                 </Button>
@@ -1150,13 +1205,10 @@ export default function SupplierInvoiceDetailPage() {
                 className="-my-1"
                 onClick={handleBook}
                 disabled={isProcessing || !canWrite}
+                loading={processingAction === 'book'}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
-                {processingAction === 'book' ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : !canWrite ? (
-                  <Lock className="mr-2 h-4 w-4" />
-                ) : null}
+                {processingAction !== 'book' && !canWrite && <Lock className="mr-2 h-4 w-4" />}
                 {t('book_action')}
               </Button>
             </span>
@@ -1246,6 +1298,26 @@ export default function SupplierInvoiceDetailPage() {
                     {t('remaining_to_pay', { amount: formatAmount(invoice.remaining_amount), currency: invoice.currency })}
                   </p>
                 </div>
+                {isForeignInvoice && (
+                  <div className="space-y-2">
+                    <Label htmlFor="payment-amount-sek">{t('paid_sek_label')}</Label>
+                    <Input
+                      id="payment-amount-sek"
+                      inputMode="decimal"
+                      value={paySek}
+                      onChange={(e) => setPaySek(e.target.value)}
+                      placeholder={markPaidPreview?.paid_sek != null ? formatAmount(markPaidPreview.paid_sek) : undefined}
+                      disabled={isEditingLines}
+                      className="w-full sm:w-48 text-right tabular-nums"
+                    />
+                    {markPaidPreview?.paid_sek != null && (
+                      <p className="text-xs text-muted-foreground">
+                        {t('paid_sek_help', { amount: formatCurrency(markPaidPreview.paid_sek, 'SEK') })}
+                        {markPaidPreview.entry_type === 'clearing' && <> {t('paid_sek_difference_note')}</>}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <div className="space-y-2">
                   <Label htmlFor="payment-account">Betalkonto</Label>
                   {areAccountsLoading ? (
@@ -1269,7 +1341,7 @@ export default function SupplierInvoiceDetailPage() {
                   <div className="rounded-lg border p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-medium">Bokföring</p>
-                      {markPaidPreview && (
+                      {markPaidPreview && (!markPaidPreviewFailed || isEditingLines) && (
                         <div className="flex gap-2">
                           {isEditingLines && (
                             <Button variant="ghost" size="sm" onClick={resetEditLines} disabled={isProcessing}>
@@ -1293,13 +1365,22 @@ export default function SupplierInvoiceDetailPage() {
                       )}
                     </div>
 
-                    {markPaidPreviewFailed && !markPaidPreview && (
-                      <p className="text-sm text-muted-foreground">
-                        Kunde inte förhandsgranska bokföringen. Fortsätt eller avbryt.
-                      </p>
+                    {/* A failed preview hides rows left over from other inputs
+                        and says why; the user's own edited rows stay. */}
+                    {markPaidPreviewFailed && !isEditingLines && (
+                      <div className="space-y-2">
+                        <p className="text-sm text-muted-foreground">
+                          {markPaidPreviewError?.message ?? 'Kunde inte förhandsgranska bokföringen. Fortsätt eller avbryt.'}
+                        </p>
+                        {markPaidPreviewError?.code === 'SI_PAID_SEK_UNRESOLVED' && (
+                          <Button variant="outline" size="sm" onClick={() => setPayTab('existing')}>
+                            {t('preview_use_existing_voucher')}
+                          </Button>
+                        )}
+                      </div>
                     )}
 
-                    {markPaidPreview && !isEditingLines && (
+                    {markPaidPreview && !markPaidPreviewFailed && !isEditingLines && (
                       <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
                         <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Konto</div>
                         <div />
@@ -1310,10 +1391,10 @@ export default function SupplierInvoiceDetailPage() {
                             <div className="font-medium">{line.account_number}</div>
                             <div className="text-muted-foreground truncate">{line.description}</div>
                             <div className="text-right">
-                              {line.debit_amount > 0 ? formatCurrency(line.debit_amount, invoice.currency) : ''}
+                              {line.debit_amount > 0 ? formatCurrency(line.debit_amount, 'SEK') : ''}
                             </div>
                             <div className="text-right">
-                              {line.credit_amount > 0 ? formatCurrency(line.credit_amount, invoice.currency) : ''}
+                              {line.credit_amount > 0 ? formatCurrency(line.credit_amount, 'SEK') : ''}
                             </div>
                           </div>
                         ))}
@@ -1370,11 +1451,10 @@ export default function SupplierInvoiceDetailPage() {
                             />
                             <Button
                               variant="ghost"
-                              size="icon"
+                              size="icon-sm"
                               onClick={() => removeEditLine(i)}
                               disabled={editLines.length <= 2}
                               aria-label="Ta bort rad"
-                              className="h-8 w-8"
                             >
                               <Trash2 className="h-3 w-3" />
                             </Button>
@@ -1387,16 +1467,16 @@ export default function SupplierInvoiceDetailPage() {
                             Lägg till rad
                           </Button>
                           <div className="text-xs tabular-nums text-muted-foreground">
-                            Debet {formatCurrency(editValidation.totalDebit, invoice.currency)}
+                            Debet {formatCurrency(editValidation.totalDebit, 'SEK')}
                             {' / '}
-                            Kredit {formatCurrency(editValidation.totalCredit, invoice.currency)}
+                            Kredit {formatCurrency(editValidation.totalCredit, 'SEK')}
                           </div>
                         </div>
 
                         {!editValidation.isBalanced && (
                           <p className="text-xs text-destructive">
                             Debet och kredit måste vara lika och större än noll. Differens:{' '}
-                            {formatCurrency(Math.abs(editValidation.diff), invoice.currency)}
+                            {formatCurrency(Math.abs(editValidation.diff), 'SEK')}
                           </p>
                         )}
                         {editValidation.accountInvalid && (

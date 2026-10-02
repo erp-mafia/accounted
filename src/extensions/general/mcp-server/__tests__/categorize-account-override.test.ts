@@ -88,7 +88,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
     ).rejects.toThrow(/4 digits/)
   })
 
-  it('rejects at staging when the override account is not in the chart', async () => {
+  it('rejects at staging when the override account is not in the chart (TX_CATEGORIZE_INVALID_ACCOUNT, as v1)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() }) // core: transactions
     enqueue({ data: settingsRow }) // core: company_settings
@@ -102,7 +102,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/finns inte i kontoplanen/)
+    ).rejects.toMatchObject({ code: 'TX_CATEGORIZE_INVALID_ACCOUNT', message: expect.stringMatching(/finns inte i kontoplanen/) })
   })
 
   it('rejects at staging when the override account is inactive', async () => {

@@ -84,7 +84,11 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
             Måste åtgärdas innan bokslut
           </SectionHead>
           {blockerItems.map((blocker, i) => (
-            <BlockerRow key={`${blocker.code ?? 'blocker'}-${i}`} blocker={blocker} />
+            <BlockerRow
+              key={`${blocker.code ?? 'blocker'}-${i}`}
+              blocker={blocker}
+              periodId={report.period.id}
+            />
           ))}
         </section>
       )}
@@ -95,7 +99,7 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
             Varningar
           </SectionHead>
           {report.warnings.map((warning, i) => (
-            <p key={i} className="border-b border-border/60 px-1 py-3 text-[13px] leading-5 last:border-b-0">
+            <p key={i} className="border-b border-border px-1 py-3 text-[13px] leading-5 last:border-b-0">
               {warning}
             </p>
           ))}
@@ -112,7 +116,7 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
           {report.reminders.map((reminder) => (
             <div
               key={reminder.code}
-              className="flex items-baseline justify-between gap-3 border-b border-border/60 px-1 py-3 text-[13px] leading-5 text-muted-foreground last:border-b-0"
+              className="flex items-baseline justify-between gap-3 border-b border-border px-1 py-3 text-[13px] leading-5 text-muted-foreground last:border-b-0"
             >
               <p className="flex-1">{reminder.message}</p>
               {reminder.href && (
@@ -142,7 +146,12 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
  * is deliberately link-less too: the remedy is to re-run the check, not to
  * visit a page.
  */
-function BlockerRow({ blocker }: { blocker: DisplayBlocker }) {
+/**
+ * One blocker line with its remediation link, where a surface exists for the
+ * remedy. periodId scopes links into period-oriented lists (the verifikat
+ * list's gap rows) to the räkenskapsår this preflight is for.
+ */
+function BlockerRow({ blocker, periodId }: { blocker: DisplayBlocker; periodId: string }) {
   let href: string | null = null
   let actionLabel: string | null = null
 
@@ -164,10 +173,15 @@ function BlockerRow({ blocker }: { blocker: DisplayBlocker }) {
     // existing surface for reviewing IB against prior-year UB.
     href = '/reports/trial-balance'
     actionLabel = 'Granska ingående balans'
+  } else if (blocker.code === 'UNEXPLAINED_VOUCHER_GAP') {
+    // The verifikat list shows every gap of the year above the table with the
+    // Förklara action; the param scopes the list to this räkenskapsår.
+    href = `/bookkeeping?gaps=${periodId}`
+    actionLabel = 'Förklara luckan'
   }
 
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-border/60 px-1 py-3 text-[13px] leading-5 last:border-b-0">
+    <div className="flex items-baseline justify-between gap-3 border-b border-border px-1 py-3 text-[13px] leading-5 last:border-b-0">
       <p className="flex-1">{blocker.message}</p>
       {href && actionLabel && (
         <Link href={href} className={QUIET_LINK_CLASS}>

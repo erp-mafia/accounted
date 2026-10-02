@@ -27,10 +27,11 @@ vi.mock('@/lib/extensions/context-factory', () => ({
   }),
 }))
 
-// Default to "MFA not enforced" so existing tests authenticate normally;
-// the AAL2-gate regression test below flips this on.
+// Default to "no MFA gate applies" so existing tests authenticate normally;
+// the AAL2-gate regression test below flips the step-up on.
 vi.mock('@/lib/auth/mfa', () => ({
   shouldEnforceMfa: vi.fn(() => false),
+  mfaStepUpApplies: vi.fn(() => false),
 }))
 
 // Drive the paywall gate directly. Keep the module's real exports (the resolver
@@ -50,7 +51,7 @@ vi.mock('@/lib/extensions/sectors', async (importOriginal) => ({
 }))
 
 import { createClient } from '@/lib/supabase/server'
-import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { mfaStepUpApplies, shouldEnforceMfa } from '@/lib/auth/mfa'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { extensionRegistry } from '@/lib/extensions/registry'
@@ -58,6 +59,7 @@ import { GET, POST } from '../route'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockShouldEnforceMfa = vi.mocked(shouldEnforceMfa)
+const mockMfaStepUpApplies = vi.mocked(mfaStepUpApplies)
 const mockRequireCapability = vi.mocked(requireCapability)
 const mockRequiredCapabilityForExtensionId = vi.mocked(requiredCapabilityForExtensionId)
 
@@ -71,6 +73,7 @@ describe('Extension Catch-All Route', () => {
     // clearAllMocks doesn't reset implementations: re-assert the default so the
     // AAL2 test's mockReturnValue(true) can't leak into later cases.
     mockShouldEnforceMfa.mockReturnValue(false)
+    mockMfaStepUpApplies.mockReturnValue(false)
     // Default: capability present (allowed). Gated-extension tests override this.
     mockRequireCapability.mockResolvedValue(null)
     // Default: extension requires no capability, so the gate is a no-op and
@@ -141,8 +144,9 @@ describe('Extension Catch-All Route', () => {
       data: { user: { id: 'user-1', app_metadata: {} } },
       error: null,
     })
-    // MFA is required for this user, but only AAL1 has been reached.
+    // The step-up applies to this user, but only AAL1 has been reached.
     mockShouldEnforceMfa.mockReturnValue(true)
+    mockMfaStepUpApplies.mockReturnValue(true)
     ;(supabase.auth as unknown as { mfa: unknown }).mfa = {
       getAuthenticatorAssuranceLevel: vi
         .fn()

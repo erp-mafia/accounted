@@ -48,6 +48,22 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
   }
 })
 // category mapping is real: gives the route real BAS accounts to validate.
+// One test swaps in a fixed mapping (a plain 2440 supplier payment, which no
+// category or booking template produces today) through this override; every
+// other test delegates to the real builder.
+const { categoryMappingOverride } = vi.hoisted(() => ({
+  categoryMappingOverride: { current: null as null | ((...args: unknown[]) => unknown) },
+}))
+vi.mock('@/lib/bookkeeping/category-mapping', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/bookkeeping/category-mapping')>()
+  return {
+    ...actual,
+    buildMappingResultFromCategory: (...args: Parameters<typeof actual.buildMappingResultFromCategory>) =>
+      categoryMappingOverride.current
+        ? categoryMappingOverride.current(...args)
+        : actual.buildMappingResultFromCategory(...args),
+  }
+})
 
 // Underlag propagation: mocked to assert the wiring (called once per item
 // that actually booked); behavior is unit-tested in
@@ -57,6 +73,22 @@ const { propagateUnderlagMock } = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/transactions/inbox-underlag', () => ({
   propagateUnderlagForBookedTransaction: propagateUnderlagMock,
+}))
+// Booking-time duplicate guard: the DB-backed detector is stubbed ("no
+// duplicate" by default) so it never consumes the queued `transactions`
+// results the tests below script; the detection queries are unit-tested in
+// lib/transactions/__tests__/booking-duplicate-detection.test.ts.
+const { detectDupMock, appendHistoryMock } = vi.hoisted(() => ({
+  detectDupMock: vi.fn(),
+  appendHistoryMock: vi.fn(),
+}))
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/booking-duplicate-detection')>()),
+  detectBookingDuplicate: detectDupMock,
+}))
+vi.mock('@/lib/processing-history/append', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/processing-history/append')>()),
+  appendProcessingHistory: appendHistoryMock,
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
@@ -122,6 +154,9 @@ beforeEach(() => {
   findMissingAccountsMock.mockResolvedValue([])
   reverseEntryMock.mockResolvedValue(undefined)
   createTxJE.mockResolvedValue({ id: 'je-fresh' })
+  detectDupMock.mockReset().mockResolvedValue(null)
+  appendHistoryMock.mockReset().mockResolvedValue('evt-1')
+  categoryMappingOverride.current = null
   mockValidate.mockResolvedValue({
     userId: 'user-1',
     companyId: COMPANY_ID,
@@ -390,7 +425,7 @@ describe('POST batch-categorize', () => {
           error: null,
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        cash_accounts: { data: { ledger_account: '1931' }, error: null },
+        cash_accounts: { data: { ledger_account: '1931', currency: 'SEK' }, error: null },
         fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
       }).supabase,
     )
@@ -508,7 +543,7 @@ describe('POST batch-categorize', () => {
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         cash_accounts: [
           { data: null, error: { message: 'temporary lookup failure' } },
-          { data: { ledger_account: '1931' }, error: null },
+          { data: { ledger_account: '1931', currency: 'SEK' }, error: null },
         ],
         fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
       }).supabase,
@@ -838,4 +873,257 @@ describe('POST batch-categorize', () => {
       expect(mapping.vat_lines).toHaveLength(vatLineCount)
     },
   )
+})
+
+describe('POST batch-categorize double-booking guards (parity with :categorize and the dashboard route)', () => {
+  const URL = `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`
+  const EXISTING_JE = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const candidate = {
+    transaction_id: null,
+    journal_entry_id: EXISTING_JE,
+    voucher_label: 'A12',
+    entry_date: '2026-05-12',
+    description: 'Leverantörsfaktura 100 betald',
+    amount: -100,
+    account_number: '1930',
+    currency: null,
+    amount_in_currency: null,
+    amount_verified: true,
+    unverified_reason: null,
+  }
+  const txRow = (id: string, overrides: Record<string, unknown> = {}) => ({
+    data: {
+      id,
+      company_id: COMPANY_ID,
+      date: '2026-05-12',
+      amount: -100,
+      currency: 'SEK',
+      merchant_name: 'ICA',
+      cash_account_id: null,
+      journal_entry_id: null,
+      ...overrides,
+    },
+    error: null,
+  })
+
+  it('returns 401 without a valid bearer token', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}).supabase)
+
+    const res = await POST(
+      makeRequest(URL, {
+        items: [{ transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } }],
+      }),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(401)
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for an item with force=true but no reviewed candidate id', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }).supabase,
+    )
+
+    const res = await POST(
+      makeRequest(URL, {
+        items: [
+          {
+            transaction_id: TX_A,
+            categorization: { is_business: true, category: 'expense_office', force: true },
+          },
+        ],
+      }),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(400)
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
+  it('refuses an already-booked bank line per item with TRANSACTION_BOOK_POSSIBLE_DUPLICATE while a clean sibling books', async () => {
+    const { supabase, updates } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        txRow(TX_A), // item A fetch: its bank line is already booked by a voucher
+        txRow(TX_B), // item B fetch: clean
+        { data: [{ id: TX_B }], error: null }, // item B CAS update: owned
+      ],
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    detectDupMock.mockResolvedValueOnce(candidate).mockResolvedValueOnce(null)
+
+    const res = await POST(
+      makeRequest(URL, {
+        items: [
+          { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+          { transaction_id: TX_B, categorization: { is_business: true, category: 'expense_office' } },
+        ],
+      }),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.summary).toEqual({ total: 2, succeeded: 1, failed: 1 })
+    expect(body.data.results[0]).toEqual(
+      expect.objectContaining({
+        ok: false,
+        transaction_id: TX_A,
+        error: expect.objectContaining({
+          code: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE',
+          details: { candidate: expect.objectContaining({ journal_entry_id: EXISTING_JE }) },
+        }),
+      }),
+    )
+    expect(body.data.results[1]).toEqual(expect.objectContaining({ ok: true, transaction_id: TX_B }))
+    // Only item B reached the engine and the transaction write.
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+    expect(updates.transactions).toHaveLength(1)
+  })
+
+  it('never dedupes an item against a verifikat booked earlier in the same batch', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [
+          txRow(TX_A),
+          { data: [{ id: TX_A }], error: null },
+          txRow(TX_B),
+          { data: [{ id: TX_B }], error: null },
+        ],
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      }).supabase,
+    )
+    createTxJE.mockResolvedValueOnce({ id: 'je-a' }).mockResolvedValueOnce({ id: 'je-b' })
+
+    const res = await POST(
+      makeRequest(URL, {
+        items: [
+          { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+          { transaction_id: TX_B, categorization: { is_business: true, category: 'expense_office' } },
+        ],
+      }),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(detectDupMock).toHaveBeenCalledTimes(2)
+    expect(detectDupMock.mock.calls[0][3]).toEqual({ excludeTransactionIds: [], excludeJournalEntryIds: [] })
+    expect(detectDupMock.mock.calls[1][3]).toEqual({
+      excludeTransactionIds: [TX_A],
+      excludeJournalEntryIds: ['je-a'],
+    })
+  })
+
+  it('books an item over its candidate with a bound force and records the dismissal', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [txRow(TX_A), { data: [{ id: TX_A }], error: null }],
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      }).supabase,
+    )
+    detectDupMock.mockResolvedValue(candidate)
+
+    const res = await POST(
+      makeRequest(URL, {
+        items: [
+          {
+            transaction_id: TX_A,
+            categorization: {
+              is_business: true,
+              category: 'expense_office',
+              force: true,
+              expected_duplicate_journal_entry_id: EXISTING_JE,
+            },
+          },
+        ],
+      }),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.summary).toEqual({ total: 1, succeeded: 1, failed: 0 })
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+    expect(appendHistoryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'BankTransactionDuplicateDismissed',
+        aggregateId: TX_A,
+        payload: expect.objectContaining({
+          dismissed_journal_entry_id: EXISTING_JE,
+          via: 'api_force',
+        }),
+      }),
+    )
+  })
+
+  it('refuses a plain 244x supplier payment an open supplier invoice covers, unless confirm_no_match', async () => {
+    const supplierSupabase = () =>
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [
+          txRow(TX_A, { amount: -1250, merchant_name: 'Kontorsbolaget' }),
+          { data: [{ id: TX_A }], error: null },
+        ],
+        company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+        suppliers: { data: [{ id: 'sup-1' }], error: null },
+        supplier_invoices: {
+          data: [
+            {
+              id: 'si-1',
+              supplier_invoice_number: 'F-100',
+              invoice_date: '2026-04-30',
+              remaining_amount: 1250,
+              total: 1250,
+              currency: 'SEK',
+              total_sek: 1250,
+              exchange_rate: null,
+              supplier: { name: 'Kontorsbolaget AB' },
+            },
+          ],
+          error: null,
+        },
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      })
+    categoryMappingOverride.current = () => ({
+      rule: null,
+      debit_account: '2440',
+      credit_account: '1930',
+      risk_level: 'NONE',
+      confidence: 1,
+      requires_review: false,
+      default_private: false,
+      vat_lines: [],
+      description: 'Leverantörsbetalning',
+    })
+    const categorization = { is_business: true, category: 'expense_other' }
+
+    mockServiceClient.mockReturnValue(supplierSupabase().supabase)
+    const refused = await POST(
+      makeRequest(URL, { items: [{ transaction_id: TX_A, categorization }] }),
+      batchParams(),
+    )
+    const refusedBody = await refused.json()
+    expect(refusedBody.data.results[0].error.code).toBe('TX_CATEGORIZE_SUGGEST_SI_MATCH')
+    expect(refusedBody.data.results[0].error.details.candidates[0].supplier_invoice_id).toBe('si-1')
+    expect(createTxJE).not.toHaveBeenCalled()
+
+    mockServiceClient.mockReturnValue(supplierSupabase().supabase)
+    const confirmed = await POST(
+      makeRequest(URL, {
+        items: [{ transaction_id: TX_A, categorization: { ...categorization, confirm_no_match: true } }],
+      }),
+      batchParams(),
+    )
+    expect((await confirmed.json()).data.summary).toEqual({ total: 1, succeeded: 1, failed: 0 })
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+  })
 })

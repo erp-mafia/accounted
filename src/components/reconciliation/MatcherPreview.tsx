@@ -98,10 +98,10 @@ export function MatcherPreview({ matches, currency, busy, onApply, onClose }: Ma
                     <span className="tabular-nums" data-ph-mask>
                       {formatVoucher({ voucher_series: m.voucher_series, voucher_number: m.voucher_number })}
                     </span>
-                    <span className="text-[11.5px] tabular-nums text-muted-foreground">{formatDate(m.entry_date)}</span>
+                    <span className="text-[11px] tabular-nums text-muted-foreground">{formatDate(m.entry_date)}</span>
                     <span
                       className={cn(
-                        'whitespace-nowrap rounded-full px-1.5 py-px text-[10.5px]',
+                        'whitespace-nowrap rounded-full px-1.5 py-px text-[11px]',
                         m.confidence >= STRONG_CONFIDENCE
                           ? 'bg-success/10 text-success'
                           : 'bg-muted text-muted-foreground',
@@ -112,7 +112,7 @@ export function MatcherPreview({ matches, currency, busy, onApply, onClose }: Ma
                         : t('confidence', { percent: Math.round(m.confidence * 100) })}
                     </span>
                   </span>
-                  <span className="block truncate text-[12px] text-muted-foreground" data-ph-mask>
+                  <span className="block truncate text-[12.5px] text-muted-foreground" data-ph-mask>
                     {m.entry_description}
                   </span>
                 </td>

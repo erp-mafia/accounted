@@ -32,7 +32,8 @@ import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/invoices/vat-rules'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
-import { Loader2, Mail, Plus, Send, Trash2 } from 'lucide-react'
+import { Mail, Plus, Send, Trash2 } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { Customer, EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
@@ -150,6 +151,7 @@ export default function SendInvoiceDialog({
   // mirror their original and are left alone; a non-momsregistrerad seller
   // charges nothing and has nothing to explain.
   const [validatedCustomer, setValidatedCustomer] = useState<Customer | null>(null)
+  // Null when the customer was deleted (crm#263): nothing to explain then.
   const vatCustomer = validatedCustomer ?? invoice.customer
   const invoiceLineVatRates = useMemo(
     () =>
@@ -160,7 +162,7 @@ export default function SendInvoiceDialog({
   )
   const vatWarnings = useMemo(
     () =>
-      isCreditNote || companySettings?.vat_registered === false
+      isCreditNote || companySettings?.vat_registered === false || !vatCustomer
         ? []
         : explainVatTreatment(vatCustomer, invoiceLineVatRates),
     [isCreditNote, companySettings?.vat_registered, vatCustomer, invoiceLineVatRates],
@@ -287,18 +289,18 @@ export default function SendInvoiceDialog({
   const invalidAdditionalRecipient = [...additionalCc, ...additionalBcc]
     .find((address) => !EMAIL_PATTERN.test(address))
   const fixedRecipients = resolveInvoiceEmailRecipients({
-    to: invoice.customer.email ?? '',
+    to: invoice.customer?.email ?? '',
     configuredCc: fixedCc,
     configuredBcc: fixedBcc,
-    customerCc: invoice.customer.invoice_email_cc_addresses,
-    customerBcc: invoice.customer.invoice_email_bcc_addresses,
+    customerCc: invoice.customer?.invoice_email_cc_addresses,
+    customerBcc: invoice.customer?.invoice_email_bcc_addresses,
   })
   const resolvedRecipients = resolveInvoiceEmailRecipients({
-    to: invoice.customer.email ?? '',
+    to: invoice.customer?.email ?? '',
     configuredCc: fixedCc,
     configuredBcc: fixedBcc,
-    customerCc: invoice.customer.invoice_email_cc_addresses,
-    customerBcc: invoice.customer.invoice_email_bcc_addresses,
+    customerCc: invoice.customer?.invoice_email_cc_addresses,
+    customerBcc: invoice.customer?.invoice_email_bcc_addresses,
     additionalCc,
     additionalBcc,
   })
@@ -435,7 +437,7 @@ export default function SendInvoiceDialog({
 
       if (mode === 'email') {
         onOpenChange(false)
-        const successMessage = data.message || t('send_success_default', { email: invoice.customer.email ?? '' })
+        const successMessage = data.message || t('send_success_default', { email: invoice.customer?.email ?? '' })
         toast({
           title: t(
             shouldBookOnIssue && !data.partial
@@ -449,7 +451,7 @@ export default function SendInvoiceDialog({
           description: data.partial
             ? t('partial_success', { message: successMessage })
             : isCreditNote
-              ? t('credit_send_success', { email: invoice.customer.email ?? '' })
+              ? t('credit_send_success', { email: invoice.customer?.email ?? '' })
               : successMessage,
         })
       } else {
@@ -536,15 +538,18 @@ export default function SendInvoiceDialog({
             {invoice.currency !== 'SEK' && invoice.total_sek && (
               <>{t('description_sek_suffix', { amount: formatCurrency(invoice.total_sek) })}</>
             )}
-            {mode === 'email' && invoice.customer.email && (
+            {mode === 'email' && invoice.customer?.email && (
               <>{t('description_to_email', { email: invoice.customer.email })}</>
             )}
           </DialogDescription>
         </DialogHeader>
 
         {!isInitialized ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <div className="space-y-3 py-2">
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-1/2" />
           </div>
         ) : (
           <div className="space-y-4">
@@ -570,7 +575,7 @@ export default function SendInvoiceDialog({
                   <div className="flex items-start justify-between gap-2">
                     <p>
                       <span className="font-medium">{t('recipient_to_label')}:</span>{' '}
-                      {invoice.customer.email}
+                      {invoice.customer?.email}
                     </p>
                     {/* Convention 7: the why of fixed CC/BCC and the extra
                         address rules live behind the "?": only the actual
@@ -646,8 +651,8 @@ export default function SendInvoiceDialog({
                         <Button
                           type="button"
                           variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0 min-h-[44px] min-w-[44px] shrink-0 -mr-1 -mt-1"
+                          size="icon-sm"
+                          className="shrink-0 -mr-1 -mt-1"
                           onClick={() => removeLine(index)}
                           disabled={editLines.length <= 2}
                           aria-label={t('remove_row')}
@@ -744,8 +749,8 @@ export default function SendInvoiceDialog({
                       <Button
                         type="button"
                         variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        size="icon-sm"
+                        className="text-muted-foreground hover:text-destructive"
                         onClick={() => removeLine(index)}
                         disabled={editLines.length <= 2}
                         aria-label={t('remove_row')}
@@ -770,7 +775,7 @@ export default function SendInvoiceDialog({
                 {/* Balance indicator */}
                 <div className="flex items-center justify-between border-t pt-3">
                   {isBalanced ? (
-                    <Badge variant="success">{t('balanced_badge')}</Badge>
+                    <span className="text-xs text-muted-foreground">{t('balanced_badge')}</span>
                   ) : (
                     <Badge variant="destructive">
                       {t('unbalanced_badge', { delta: formatCurrency(Math.abs(totalDebit - totalCredit)) })}
@@ -791,7 +796,7 @@ export default function SendInvoiceDialog({
                   entryDate={invoice.invoice_date}
                   description={t(isCreditNote ? 'credit_voucher_description' : 'voucher_description', {
                     numberSpace: invoice.invoice_number ? ` ${invoice.invoice_number}` : '',
-                    customerSuffix: invoice.customer.name ? `, ${invoice.customer.name}` : '',
+                    customerSuffix: invoice.customer?.name ? `, ${invoice.customer.name}` : '',
                   })}
                   lines={proposedLines}
                   totalDebit={totalDebit}
@@ -811,14 +816,14 @@ export default function SendInvoiceDialog({
                           : 'explain_cash',
                     )
                   : mode === 'email'
-                    ? t('explain_email', { email: invoice.customer.email ?? '' })
+                    ? t('explain_email', { email: invoice.customer?.email ?? '' })
                     : t('explain_manual')}
               </p>
             )}
           </div>
         )}
 
-        {vatWarnings.length > 0 && (
+        {vatCustomer && vatWarnings.length > 0 && (
           <div className="space-y-3">
             <VatTreatmentNotice
               customer={vatCustomer}
@@ -854,20 +859,18 @@ export default function SendInvoiceDialog({
             variant="outline"
             onClick={handleClose}
             disabled={isSubmitting}
-            className="w-full sm:w-auto min-h-11"
           >
             {t(isCreditNote ? 'later' : 'cancel')}
           </Button>
           <Button
             onClick={handleConfirm}
+            loading={isSubmitting}
             disabled={
-              isSubmitting ||
               !isInitialized ||
               (editable && (!isBalanced || hasOrphanAmounts)) ||
               (mode === 'email' && (isSandbox || !canEmail || !!recipientError)) ||
               (needsSwedishVatAcknowledgement && !swedishVatAcknowledged)
             }
-            className="w-full sm:w-auto min-h-11"
             title={
               mode === 'email' && isSandbox
                 ? 'E-postutskick är avstängt i sandlådan'
@@ -876,13 +879,11 @@ export default function SendInvoiceDialog({
                   : undefined
             }
           >
-            {isSubmitting ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : mode === 'email' ? (
+            {!isSubmitting && (mode === 'email' ? (
               <Mail className="mr-2 h-4 w-4" />
             ) : (
               <Send className="mr-2 h-4 w-4" />
-            )}
+            ))}
             {t(
               isCreditRepair
                 ? 'complete_credit_bookkeeping'

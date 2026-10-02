@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { CreateJournalEntryInput, JournalEntry } from '@/types'
-import { roundOre } from '@/lib/money'
+import type { CreateJournalEntryInput, DeductionType, JournalEntry } from '@/types'
+import { ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX, roundOre } from '@/lib/money'
+import { DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
 import { createJournalEntry, findFiscalPeriod } from './engine'
 
 /**
@@ -20,6 +21,16 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
  * rot_rut_payout_requests.settlement_journal_entry_id on every request the
  * voucher settles; source_id carries the first of them.
  *
+ * A fully paid begäran also clears the öre its invoices carried on 1513 but
+ * the whole-kronor BegartBelopp left out (oreRounding, lib/invoices/
+ * rot-rut-receivable.ts): the leg credits 1513 with the full receivable and
+ * 3740 Öresavrundning is debited the difference, so the bank leg stays the
+ * paid amount:
+ *
+ *   Debit  19xx bank account                 [paid]
+ *   Debit  3740 Öresavrundning               [oreRounding]
+ *   Credit 1513 Skattereduktion rot/rut      [paid + oreRounding]
+ *
  * At partial approval (delvis beviljad) the paid amount clears here and the
  * remainder stays on 1513 until the user corrects it (kundfordran/kundförlust
  * depending on the outcome with the buyer): deliberately manual, never
@@ -28,19 +39,37 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
 export interface RotRutPayoutLeg {
   requestId: string
   requestName: string
-  deductionType: 'rot' | 'rut'
+  deductionType: DeductionType
   /** What Skatteverket paid for this begäran (kr). */
   amount: number
+  /**
+   * The öre the invoices carry on 1513 beyond the paid kronor, under a krona
+   * per invoice. Credited to 1513 on top of amount and debited to 3740. Omit
+   * or 0 for none.
+   */
+  oreRounding?: number
+  /** Invoices in the begäran: bounds oreRounding (< 1 kr each). Defaults to 1. */
+  invoiceCount?: number
 }
 
+/**
+ * The deduction as named inside the voucher text: one kind reads as its own
+ * (DEDUCTION_TYPE_LABELS.noun: 'ROT-avdrag', 'RUT-avdrag', 'skattereduktion
+ * grön teknik'); ROT and RUT together keep 'ROT/RUT-avdrag'; any other mix
+ * is the plain 'skattereduktion'.
+ */
 function deductionLabel(legs: Array<Pick<RotRutPayoutLeg, 'deductionType'>>): string {
   const types = new Set(legs.map((leg) => leg.deductionType))
-  if (types.size === 1) return types.has('rut') ? 'RUT' : 'ROT'
-  return 'ROT/RUT'
+  if (types.size === 1) {
+    const [only] = [...types]
+    return (DEDUCTION_TYPE_LABELS[only] ?? DEDUCTION_TYPE_LABELS.rot).noun
+  }
+  if ([...types].every((type) => type === 'rot' || type === 'rut')) return 'ROT/RUT-avdrag'
+  return 'skattereduktion'
 }
 
 function payoutDescription(label: string, names: string[]): string {
-  return `Utbetalning ${label}-avdrag från Skatteverket (${names.join(', ')})`
+  return `Utbetalning ${label} från Skatteverket (${names.join(', ')})`
 }
 
 export async function createRotRutPayoutSetEntry(
@@ -66,7 +95,20 @@ export async function createRotRutPayoutSetEntry(
   const legs = params.legs.map((leg) => ({
     ...leg,
     amount: roundOre(leg.amount),
+    oreRounding: roundOre(leg.oreRounding ?? 0),
   }))
+  // Rounding is the truncation remainder: under a krona per invoice, so a leg
+  // may reach a krona or more across several invoices (getRequestReceivable
+  // enforces the per-invoice bound). Never negative, never more per leg than
+  // the invoices it covers could leave.
+  const badRounding = legs.find(
+    (leg) =>
+      leg.oreRounding < 0 ||
+      leg.oreRounding >= ORE_ROUNDING_SETTLEMENT_MAX * Math.max(leg.invoiceCount ?? 1, 1),
+  )
+  if (badRounding) {
+    throw new Error(`Invalid öre rounding ${badRounding.oreRounding} on begäran ${badRounding.requestName}`)
+  }
   const total = roundOre(legs.reduce((sum, leg) => sum + leg.amount, 0))
   const bankAccount = params.bankAccount ?? '1930'
   const description = payoutDescription(
@@ -87,10 +129,18 @@ export async function createRotRutPayoutSetEntry(
         credit_amount: 0,
         line_description: description,
       },
+      ...legs
+        .filter((leg) => leg.oreRounding > 0)
+        .map((leg) => ({
+          account_number: ORE_ROUNDING_ACCOUNT,
+          debit_amount: leg.oreRounding,
+          credit_amount: 0,
+          line_description: `Öresavrundning ${deductionLabel([leg])} (${leg.requestName})`,
+        })),
       ...legs.map((leg) => ({
         account_number: '1513',
         debit_amount: 0,
-        credit_amount: leg.amount,
+        credit_amount: roundOre(leg.amount + leg.oreRounding),
         // A single begäran keeps the voucher text on both legs (as before);
         // a bundle names its own begäran on each 1513 leg.
         line_description:
@@ -112,9 +162,13 @@ export async function createRotRutPayoutEntry(
   params: {
     requestId: string
     requestName: string
-    deductionType: 'rot' | 'rut'
+    deductionType: DeductionType
     paymentDate: string
     amount: number
+    /** See RotRutPayoutLeg.oreRounding. */
+    oreRounding?: number
+    /** See RotRutPayoutLeg.invoiceCount. */
+    invoiceCount?: number
     /** BAS 19xx account the payout landed on. Defaults to 1930. */
     bankAccount?: string
   },
@@ -128,6 +182,8 @@ export async function createRotRutPayoutEntry(
         requestName: params.requestName,
         deductionType: params.deductionType,
         amount: params.amount,
+        oreRounding: params.oreRounding,
+        invoiceCount: params.invoiceCount,
       },
     ],
   })
@@ -161,7 +217,7 @@ export async function createRotRutReclaimEntry(
   params: {
     requestId: string
     requestName: string
-    deductionType: 'rot' | 'rut'
+    deductionType: DeductionType
     bookingDate: string
     /** One leg per invoice with a refused share; at least one, all > 0. */
     legs: RotRutReclaimLeg[]
@@ -178,10 +234,11 @@ export async function createRotRutReclaimEntry(
     throw new Error(`No open fiscal period found for booking date ${params.bookingDate}`)
   }
 
-  const label = params.deductionType === 'rut' ? 'RUT' : 'ROT'
-  const description = `Nekat ${label}-avdrag från Skatteverket (${params.requestName})`
+  // 'Nekat ROT-avdrag', 'Nekat RUT-avdrag' or 'Nekad skattereduktion grön teknik'.
+  const refused = (DEDUCTION_TYPE_LABELS[params.deductionType] ?? DEDUCTION_TYPE_LABELS.rot).refused
+  const description = `${refused} från Skatteverket (${params.requestName})`
   const legDescription = (leg: RotRutReclaimLeg) =>
-    `Nekat ${label}-avdrag faktura ${leg.invoiceNumber ?? leg.invoiceId}`
+    `${refused} faktura ${leg.invoiceNumber ?? leg.invoiceId}`
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,

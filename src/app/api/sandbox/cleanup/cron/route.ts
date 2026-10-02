@@ -13,10 +13,15 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
  * 2026-08-07, same finding as the SIE import RPCs). One teardown costs
  * ~220ms with the account_id index, so the run loops SMALL batches: each
  * rpc() call is its own statement with its own 8s window, and the loop
- * stops when a batch makes no progress (nothing left, or only failing
- * users remain) or the route's time budget nears. Capacity per night is
- * MAX_BATCHES * BATCH_LIMIT users; the nightly intake is a small fraction
- * of that.
+ * stops when a batch attempts nothing (the backlog is empty) or the route's
+ * time budget nears. Capacity per night is MAX_BATCHES * BATCH_LIMIT users;
+ * the nightly intake is a small fraction of that.
+ *
+ * A user whose teardown fails keeps its place at the head of the queue, so
+ * the RPC reports next_offset and the next batch starts after the failures
+ * (migration 20260927220000). Before that, ten failing users filled every
+ * batch and stopped the run after its first call: from 2026-09-23 the cron
+ * removed nothing while the backlog grew past a thousand.
  */
 export const maxDuration = 300
 
@@ -39,6 +44,10 @@ export const GET = withCronContext('cron.sandbox_cleanup', async (_request, ctx)
 
   const started = Date.now()
   const totals = { cleaned: 0, failed: 0, orphans_removed: 0, batches: 0 }
+  // Failed users stay at the head of the queue; skip past them. Sent only
+  // once the RPC has reported one, so a deploy that lands before the
+  // migration keeps calling the two-argument function.
+  let offset = 0
 
   for (let i = 0; i < MAX_BATCHES; i++) {
     if (Date.now() - started > TIME_BUDGET_MS) break
@@ -46,6 +55,7 @@ export const GET = withCronContext('cron.sandbox_cleanup', async (_request, ctx)
     const { data, error } = await supabase.rpc('cleanup_expired_sandbox_users', {
       p_max_age_hours: 24,
       p_limit: BATCH_LIMIT,
+      ...(offset > 0 ? { p_offset: offset } : {}),
     })
 
     if (error) {
@@ -70,10 +80,16 @@ export const GET = withCronContext('cron.sandbox_cleanup', async (_request, ctx)
     totals.orphans_removed += batch.orphans_removed
     totals.batches += 1
 
-    // No progress means only permanently-failing users (retried nightly and
-    // reported below) or an empty backlog: looping further would spin on the
-    // same rows.
-    if (batch.cleaned + batch.orphans_removed === 0) break
+    const nextOffset = typeof data === 'object' && data !== null ? data.next_offset : undefined
+    if (typeof nextOffset === 'number') {
+      // Nothing attempted and no orphan removed: the backlog is empty.
+      if (Number(data.attempted ?? 0) + batch.orphans_removed === 0) break
+      offset = nextOffset
+    } else if (batch.cleaned + batch.orphans_removed === 0) {
+      // Pre-20260927220000 function: without an offset the next call would
+      // pick the same failing users again.
+      break
+    }
   }
 
   // Per-user failures used to be swallowed as Postgres WARNINGs, which is how

@@ -28,7 +28,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { calculateSalary, monthlyBaseSalary } from './calculation-engine'
 import { SalaryCalculationPolicySchema } from './calculation-policy'
-import { isAutomaticVacationLine, VACATION_COMPENSATION_SOURCE } from './calculated-line-items'
+import {
+  DERIVED_ABSENCE_TYPES,
+  DERIVED_PREMIUM_TYPES,
+  isCalculatedLine,
+  VACATION_COMPENSATION_SOURCE,
+} from './calculated-line-items'
 import { validateOneOffTaxLine } from './one-off-tax'
 import {
   benefitPaymentRefusalDetails,
@@ -37,7 +42,12 @@ import {
   doubleBenefitAdjustmentWarning,
   resolveTaxableBenefits,
 } from './benefit-payments'
-import { loadPayrollConfig, serializePayrollConfig } from './payroll-config'
+import {
+  loadPayrollConfig,
+  PayrollConfigMissingError,
+  serializePayrollConfig,
+  type PayrollConfig,
+} from './payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
 import { loadAndDeriveAbsence } from './derive-absence-line-items'
 import { monthWindow, runDeviationWindow } from './deviation-period'
@@ -47,33 +57,10 @@ import { computePremiumLines } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
 import { dailyDivisor, degreeAdjustedMonthlySalary, hourlyDivisor, scheduledHoursPerDay } from './work-schedule'
+import { vaxaStodRefundWarning } from './vaxa-stod'
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
 import type { SalaryLineItemType, ShiftPremiumRule, ShiftPremiumItemType } from '@/types'
-
-/** Item types that the calculator derives from per-day absence records. */
-const DERIVED_ABSENCE_TYPES: SalaryLineItemType[] = [
-  'sick_karens',
-  'sick_day2_14',
-  'sick_day15_plus',
-  'vab',
-  'parental_leave',
-  'unpaid_leave',
-]
-
-/**
- * Item types that the calculator derives from shift_premium_rules + worked
- * days. These are wiped at the start of each per-employee pass and
- * regenerated so the displayed line items always match the latest rules.
- */
-const DERIVED_PREMIUM_TYPES: ShiftPremiumItemType[] = [
-  'overtime_50',
-  'overtime_100',
-  'ob_weekday_evening',
-  'ob_weekend',
-  'ob_night',
-  'ob_holiday',
-]
 
 /**
  * Effective hourly rate used as the base for shift-premium computation.
@@ -160,8 +147,18 @@ export async function runSalaryCalculation(
 
   const paymentYear = parseInt(run.payment_date.split('-')[0])
 
-  // 2. Load year config.
-  const config = await loadPayrollConfig(supabase, paymentYear)
+  // 2. Load year config. A year without rates is a known state (the row ships
+  //    when the figures are official), reported by name like a missing tax
+  //    table; anything else is a real failure and propagates.
+  let config: PayrollConfig
+  try {
+    config = await loadPayrollConfig(supabase, paymentYear)
+  } catch (err) {
+    if (err instanceof PayrollConfigMissingError) {
+      return { ok: false, code: err.code, details: { paymentYear } }
+    }
+    throw err
+  }
 
   // 2b. Company-level öresavrundning toggle: round each net payout up to a
   //     whole krona (banks that reject öre in salary files). maybeSingle: a
@@ -400,6 +397,7 @@ export async function runSalaryCalculation(
   const lakarintygEmployees: string[] = []
   const fkReportingEmployees: string[] = []
   const doubleBenefitAdjustments: string[] = []
+  const vaxaStodRefundEmployees: string[] = []
 
   // 8. Per-employee calculation loop.
   for (const sre of runEmployees) {
@@ -749,17 +747,11 @@ export async function runSalaryCalculation(
 
     // 8e. Assemble the in-memory line item set fed to calculateSalary.
     const manualLineItems = (sre.line_items || [])
-      .filter((li: Record<string, unknown>) => {
-        if (DERIVED_ABSENCE_TYPES.includes(li.item_type as SalaryLineItemType)) return false
-        if (DERIVED_PREMIUM_TYPES.includes(li.item_type as ShiftPremiumItemType)) return false
-        if (li.source_benefit_id) return false
-        if (li.source_recurring_line_id) return false
-        // Only the engine's own semesterersättning row is re-derived; a
-        // manually entered one is a wage the operator decided on.
-        if (isAutomaticVacationLine(li)) return false
-        if (li.item_type === 'oresavrundning') return false
-        return true
-      })
+      // Everything the calculation derives is re-derived above; the rest are
+      // manual lines (only the engine's own semesterersättning row counts as
+      // derived: a manually entered one is a wage the operator decided on).
+      // The line commands refuse hand edits to exactly these rows.
+      .filter((li: Record<string, unknown>) => !isCalculatedLine(li))
       .map((li: Record<string, unknown>) => ({
         itemType: li.item_type as SalaryLineItemType,
         amount: li.amount as number,
@@ -879,6 +871,7 @@ export async function runSalaryCalculation(
       config,
       taxRates.map((r) => ({ ...r })),
     )
+    if (result.vaxaStodRefund) vaxaStodRefundEmployees.push(employeeName)
 
     // Aggregated absence counts derived from per-day records.
     const sickDays = absenceResult.aggregated.sickDays
@@ -1071,6 +1064,8 @@ export async function runSalaryCalculation(
   }
   const doubleAdjustmentWarning = doubleBenefitAdjustmentWarning(doubleBenefitAdjustments)
   if (doubleAdjustmentWarning) warnings.push(doubleAdjustmentWarning)
+  const vaxaStodWarning = vaxaStodRefundWarning(vaxaStodRefundEmployees)
+  if (vaxaStodWarning) warnings.push(vaxaStodWarning)
 
   opLog.info('salary calculation complete', {
     requestId,

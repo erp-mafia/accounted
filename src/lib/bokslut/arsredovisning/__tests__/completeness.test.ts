@@ -11,6 +11,7 @@ import {
 } from '../completeness'
 import { mapTrialBalancesToK2 } from '../../ixbrl/k2-mapper'
 import { buildBrRows, buildRrRows } from '../statement-rows'
+import { K3_CASH_FLOW_TAX_ALLOCATION_WARNING } from '../build-data'
 
 const eligibility: AnnualReportEligibilityResult = {
   k2_eligible: true,
@@ -172,6 +173,25 @@ describe('validateAnnualReportCompleteness', () => {
     value.report.accounting_framework = 'k3'
     const result = validateAnnualReportCompleteness(value)
     expect(result.issues.some((issue) => issue.code === 'AR-K3-DRAFT-ONLY')).toBe(true)
+  })
+
+  it.each(['signing', 'filing'] as const)('blocks %s after a tax-allocation failure for a larger K3 company', (stage) => {
+    const value = input(stage)
+    value.report.accounting_framework = 'k3'
+    value.eligibility = { ...eligibility, size_classification: 'larger' }
+    value.report.kassaflodesanalys = undefined
+    value.report.warnings = [K3_CASH_FLOW_TAX_ALLOCATION_WARNING]
+    value.report.kassaflodesanalys_omission = {
+      rule: 'forbidden', requested: false, confirmed: false, omitted: false,
+    }
+    const result = validateAnnualReportCompleteness(value)
+    expect(result.ok).toBe(false)
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'AR-K3-DRAFT-ONLY', severity: 'error',
+    }))
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'AR-SOURCE-WARNING', message: K3_CASH_FLOW_TAX_ALLOCATION_WARNING,
+    }))
   })
 
   it('reports a cash-flow omission the law does not allow, and nothing when honoured', () => {
@@ -424,5 +444,105 @@ describe('validateAnnualReportCompleteness: ekonomisk förening', () => {
       report: foreningReport('Oförändrat medlemsantal.'),
     })
     expect(result.issues.map((issue) => issue.code)).toContain('AR-AUDITOR-REPORT-MISSING')
+  })
+})
+
+// Feedback seq 740922: a K2 aktiebolag closed its year with eget kapital
+// 68 021,75 against a registered aktiekapital of 150 000, and its board drew
+// up the kontrollbalansräkning after balansdagen. The validation warns (ABL 25
+// kap. 13 §) and leaves kontrollbalans_required alone: that flag prints
+// "upprättats under räkenskapsåret", which would be false here.
+describe('kontrollbalansräkning warning (ABL 25 kap. 13 §)', () => {
+  const CODE = 'AR-EQUITY-BELOW-HALF-SHARE-CAPITAL'
+
+  function withEquity(equity: number, shareCapital: number | null, framework: 'k2' | 'k3' = 'k2') {
+    const value = input('draft')
+    value.report.accounting_framework = framework
+    value.report.forvaltningsberattelse.kontrollbalans_required = false
+    value.report.balansrakning.equity_liabilities = [
+      ...(shareCapital === null
+        ? []
+        : [{
+            label: 'Aktiekapital',
+            current: shareCapital,
+            previous: null,
+            indent: 2,
+            semantic_key: 'balance_sheet_share_capital' as const,
+          }]),
+      { label: 'Årets resultat', current: 20, previous: null },
+      {
+        label: 'Summa eget kapital',
+        current: equity,
+        previous: null,
+        is_total: true,
+        semantic_key: 'balance_sheet_equity_total' as const,
+      },
+    ]
+    return value
+  }
+
+  it('warns below half the registered aktiekapital, naming the rule and where to disclose', () => {
+    const value = withEquity(68022, 150000)
+    const result = validateAnnualReportCompleteness(value)
+    const warning = result.issues.find((issue) => issue.code === CODE)
+
+    expect(warning?.severity).toBe('warning')
+    expect(warning?.section).toBe('management_report')
+    expect(warning?.message).toMatch(/\(68\s022 kr\)/)
+    expect(warning?.message).toMatch(/\(150\s000 kr\)/)
+    expect(warning?.message).toContain('kontrollbalansräkning (ABL 25 kap. 13 §)')
+    expect(warning?.remediation).toContain('förvaltningsberättelsen')
+    expect(warning?.remediation).toContain('efter balansdagen')
+    expect(warning?.remediation).toContain('K2 punkt 18.22')
+    // A warning: the draft still validates, and the flag is not touched.
+    expect(result.ok).toBe(true)
+    expect(result.warning_count).toBeGreaterThanOrEqual(1)
+    expect(value.report.forvaltningsberattelse.kontrollbalans_required).toBe(false)
+  })
+
+  it('warns on negative equity too', () => {
+    const result = validateAnnualReportCompleteness(withEquity(-12000, 25000))
+    expect(result.issues.some((issue) => issue.code === CODE)).toBe(true)
+  })
+
+  it('does not warn at exactly half or above', () => {
+    for (const equity of [75000, 75000.004, 150000, 1_000_000]) {
+      const result = validateAnnualReportCompleteness(withEquity(equity, 150000))
+      expect(result.issues.some((issue) => issue.code === CODE), `equity ${equity}`).toBe(false)
+    }
+    const justBelow = validateAnnualReportCompleteness(withEquity(74999.99, 150000))
+    expect(justBelow.issues.some((issue) => issue.code === CODE)).toBe(true)
+  })
+
+  it('does not warn without an aktiekapital to test against', () => {
+    for (const shareCapital of [null, 0]) {
+      const result = validateAnnualReportCompleteness(withEquity(-5000, shareCapital))
+      expect(result.issues.some((issue) => issue.code === CODE)).toBe(false)
+    }
+  })
+
+  it('points a K3 report to punkt 3.11', () => {
+    const result = validateAnnualReportCompleteness(withEquity(68022, 150000, 'k3'))
+    const warning = result.issues.find((issue) => issue.code === CODE)
+    expect(warning?.remediation).toContain('K3 punkt 3.11')
+    expect(warning?.remediation).not.toContain('18.22')
+  })
+
+  it('reads the rows the statement builder produces (the reported company\'s balance sheet)', () => {
+    const value = input('draft')
+    const full = [
+      { account_number: '1930', account_name: 'Bank', closing_debit: 68021.75, closing_credit: 0 },
+      { account_number: '2081', account_name: 'Aktiekapital', closing_debit: 0, closing_credit: 150000 },
+      { account_number: '2091', account_name: 'Balanserat resultat', closing_debit: 36787.5, closing_credit: 0 },
+      { account_number: '2093', account_name: 'Erhållna aktieägartillskott', closing_debit: 0, closing_credit: 1460000 },
+      { account_number: '2099', account_name: 'Årets resultat', closing_debit: 1505190.75, closing_credit: 0 },
+    ]
+    const mapping = mapTrialBalancesToK2({ full, preClosing: full }, null)
+    value.report.balansrakning.equity_liabilities = buildBrRows(mapping).equityLiabilities
+
+    const warning = validateAnnualReportCompleteness(value).issues.find((issue) => issue.code === CODE)
+
+    expect(warning?.message).toMatch(/\(68\s022 kr\)/)
+    expect(warning?.message).toMatch(/\(150\s000 kr\)/)
   })
 })

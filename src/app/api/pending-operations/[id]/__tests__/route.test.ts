@@ -6,7 +6,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 // The route runs through the real withRouteContext wrapper: mock its auth,
 // company-resolution and write-permission dependencies (getActiveCompanyId,
@@ -303,7 +303,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
       },
     })
     enqueue({ data: { entity_type: 'aktiebolag' } })
-    enqueue({ data: { ledger_account: '1931' } })
+    enqueue({ data: { ledger_account: '1931', currency: 'SEK' } })
     enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
 
     const res = await PATCH(
@@ -354,8 +354,94 @@ describe('PATCH /api/pending-operations/[id]', () => {
     // 6th arg = vat_amount override, carried over from the staged params
     // (vat_treatment persists too, only the category changed)
     expect(mappingMock).toHaveBeenCalledWith(
-      'expense_office', expect.anything(), true, 'enskild_firma', 'reduced_12', 42.43, null,
+      'expense_office', expect.anything(), true, 'enskild_firma', 'reduced_12', 42.43, null, undefined,
     )
+  })
+
+  // #2919: the staged basis box (ruta 22 here) must survive an edit that keeps
+  // reverse charge, or the re-derived preview would show ruta 21 while the
+  // commit books ruta 22.
+  it('keeps a staged reverse_charge_kind while the treatment stays reverse_charge', async () => {
+    accountMappingMock.mockReturnValueOnce({
+      debitAccount: '6540',
+      creditAccount: '1930',
+      vatTreatment: 'reverse_charge',
+      vatDebitAccount: '2641',
+      vatCreditAccount: null,
+    })
+    enqueue({
+      data: {
+        id: 'op-1',
+        company_id: 'company-1',
+        operation_type: 'categorize_transaction',
+        status: 'pending',
+        params: {
+          transaction_id: 'tx-1',
+          category: 'expense_software',
+          vat_treatment: 'reverse_charge',
+          reverse_charge_kind: 'non_eu_services',
+        },
+        preview_data: {},
+        title: '',
+      },
+    })
+    enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -250, currency: 'SEK' } })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
+
+    const res = await PATCH(
+      createMockRequest('/api/pending-operations/op-1', {
+        method: 'PATCH',
+        body: { category: 'expense_professional_services' },
+      }),
+      createMockRouteParams({ id: 'op-1' }),
+    )
+    expect(res.status).toBe(200)
+    expect(mappingMock).toHaveBeenCalledWith(
+      'expense_professional_services', expect.anything(), true, 'aktiebolag', 'reverse_charge', null, null,
+      'non_eu_services',
+    )
+  })
+
+  it('drops the staged reverse_charge_kind when the edit leaves reverse charge', async () => {
+    enqueue({
+      data: {
+        id: 'op-1',
+        company_id: 'company-1',
+        operation_type: 'categorize_transaction',
+        status: 'pending',
+        params: {
+          transaction_id: 'tx-1',
+          category: 'expense_software',
+          vat_treatment: 'reverse_charge',
+          reverse_charge_kind: 'non_eu_services',
+        },
+        preview_data: {},
+        title: '',
+      },
+    })
+    enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -250, currency: 'SEK' } })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
+
+    const res = await PATCH(
+      createMockRequest('/api/pending-operations/op-1', {
+        method: 'PATCH',
+        body: { vat_treatment: 'standard_25' },
+      }),
+      createMockRouteParams({ id: 'op-1' }),
+    )
+    expect(res.status).toBe(200)
+    expect(mappingMock).toHaveBeenCalledWith(
+      'expense_software', expect.anything(), true, 'aktiebolag', 'standard_25', null, null, undefined,
+    )
+    const update = (findCall('pending_operations', 'update') as unknown[] | undefined)?.[0] as
+      | { params?: Record<string, unknown> }
+      | undefined
+    expect(update?.params?.vat_treatment).toBe('standard_25')
+    expect(update?.params?.reverse_charge_kind).toBeNull()
   })
 
   it('drops a stale vat_amount override when the new treatment is VAT-less', async () => {
@@ -396,7 +482,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     )
     expect(res.status).toBe(200)
     expect(mappingMock).toHaveBeenCalledWith(
-      'expense_bank_fees', expect.anything(), true, 'enskild_firma', undefined, null, null,
+      'expense_bank_fees', expect.anything(), true, 'enskild_firma', undefined, null, null, undefined,
     )
   })
 

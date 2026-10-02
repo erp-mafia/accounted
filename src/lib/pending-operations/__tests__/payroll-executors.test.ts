@@ -201,6 +201,49 @@ describe('commitPendingOperation: set_run_salary', () => {
   })
 })
 
+describe('commitPendingOperation: set_run_salary (hours_worked)', () => {
+  it('writes the per-run hours through the shared service', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3 } }) // draft gate
+    enqueue({ data: { id: 'sre-2', employee_id: 'emp-2', salary_type: 'hourly', employment_degree: 100, monthly_salary: 0, hours_worked: null } })
+    enqueue({ data: [] }) // no calendar days
+    enqueue({ data: { hourly_rate: 200 } }) // employees.hourly_rate
+    enqueue({ data: null }) // sre update
+    enqueue({ data: null }) // Timlön line update
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'set_run_salary',
+      params: { salary_run_id: 'run-1', employee_id: 'emp-2', hours_worked: 160 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      salary_run_id: 'run-1',
+      employee_id: 'emp-2',
+      previous_hours_worked: null,
+      hours_worked: 160,
+    })
+  })
+
+  it('rejects both fields at once with 400', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'set_run_salary',
+      params: { salary_run_id: 'run-1', employee_id: 'emp-2', monthly_salary: 1000, hours_worked: 10 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+  })
+})
+
 describe('commitPendingOperation: update_salary_run', () => {
   const RUN_ROW = {
     id: 'run-1',
@@ -571,6 +614,52 @@ describe('commitPendingOperation: book_salary_run', () => {
     expect(result.http_status).toBe(409)
     expect(result.error).toMatch(/redan bokförd/)
   })
+
+  it('keeps the op pending on 409 SALARY_RUN_BOOKING_IN_PROGRESS: nothing was posted, so it can be approved again (#3251)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // release back to pending
+
+    mockAdvanceAndBook.mockResolvedValue({ ok: false, code: 'SALARY_RUN_BOOKING_IN_PROGRESS' })
+
+    const op = makePendingOp({
+      operation_type: 'book_salary_run',
+      risk_level: 'high',
+      params: { salary_run_id: 'run-1' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.operation_status).toBe('pending')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('SALARY_RUN_BOOKING_IN_PROGRESS')
+    expect(result.error).toMatch(/håller redan på att bokföras/)
+    const updates = findCalls('pending_operations', 'update')
+    expect(updates).toContainEqual([{ status: 'pending' }])
+    expect(updates.some((args) => (args[0] as { status?: string }).status === 'rejected')).toBe(false)
+  })
+
+  it('answers 409 with the vouchers to reverse when the run has posted vouchers that do not match', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const { SalaryRunPartiallyBookedError } = await import('@/lib/salary/salary-entries')
+    mockAdvanceAndBook.mockRejectedValue(
+      new SalaryRunPartiallyBookedError([{ id: 'je-7', voucher_series: 'L', voucher_number: 7 }]),
+    )
+
+    const op = makePendingOp({
+      operation_type: 'book_salary_run',
+      risk_level: 'high',
+      params: { salary_run_id: 'run-1' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toContain('(L7)')
+  })
 })
 
 describe('commitPendingOperation: delete_absence', () => {
@@ -815,6 +904,73 @@ describe('commitPendingOperation: update_employee', () => {
 
     expect(result.status).toBe('committed')
     expect(result.data).toMatchObject({ employee_id: 'emp-1' })
+  })
+
+  it('writes an explicit null so a cleared slutdatum reaches the row (#3008)', async () => {
+    const { encryptPersonnummer } = await import('@/lib/salary/personnummer')
+    const encrypted = encryptPersonnummer('190001010000')
+
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'emp-1',
+        first_name: 'Anna',
+        last_name: 'Andersson',
+        personnummer: encrypted,
+        employment_start: '2024-01-15',
+        employment_end: '2026-06-30',
+        salary_type: 'monthly',
+        monthly_salary: 35000,
+        tax_table_number: 33,
+        is_sidoinkomst: false,
+        f_skatt_status: 'a_skatt',
+        vaxa_stod_eligible: false,
+        jamkning_percentage: null,
+        is_active: true,
+      },
+    }) // fetch existing
+    enqueue({
+      data: { id: 'emp-1', first_name: 'Anna', last_name: 'Andersson', personnummer: encrypted, is_active: true },
+    }) // update
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'update_employee',
+      params: { employee_id: 'emp-1', patch: { employment_end: null } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCall('employees', 'update')).toEqual([{ employment_end: null }])
+  })
+
+  it('refuses clearing only one bank field on the merged row, with the bank sentence', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'emp-1',
+        salary_type: 'monthly',
+        monthly_salary: 35000,
+        tax_table_number: 33,
+        is_sidoinkomst: false,
+        f_skatt_status: 'a_skatt',
+        vaxa_stod_eligible: false,
+        clearing_number: '6000',
+        bank_account_number: '12345678',
+      },
+    }) // fetch existing
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'update_employee',
+      params: { employee_id: 'emp-1', patch: { bank_account_number: null } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(result.error).toBe('Kontonummer krävs när clearingnummer har angetts')
   })
 
   it('upserts opening balances atomically (set_employee_opening_balances)', async () => {

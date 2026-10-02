@@ -104,10 +104,12 @@ describe('Turnstile integration contract', () => {
 
   it('keeps the public key, CSP, and Docker runtime contract in sync', () => {
     const envExample = readRepoFile('.env.example')
-    const dockerEnvExample = readRepoFile('.env.docker.example')
-    const dockerfile = readRepoFile('Dockerfile')
+    const dockerEnvExample = readRepoFile('docker/.env.example')
+    const dockerfile = readRepoFile('docker/Dockerfile')
     const entrypoint = readRepoFile('docker/docker-entrypoint.sh')
-    const nextConfig = readRepoFile('next.config.ts')
+    // The CSP (both the proxy's nonce policy and next.config.ts's static one)
+    // is built in one place.
+    const csp = readRepoFile('src/lib/security/csp.ts')
 
     expect(envExample).toContain('NEXT_PUBLIC_TURNSTILE_SITE_KEY=')
     expect(dockerEnvExample).toContain('NEXT_PUBLIC_TURNSTILE_SITE_KEY=')
@@ -115,9 +117,9 @@ describe('Turnstile integration contract', () => {
       'NEXT_PUBLIC_TURNSTILE_SITE_KEY=__NEXT_PUBLIC_TURNSTILE_SITE_KEY__',
     )
     expect(entrypoint).toContain('__NEXT_PUBLIC_TURNSTILE_SITE_KEY__')
-    expect(nextConfig).toContain('https://challenges.cloudflare.com')
-    expect(nextConfig).toMatch(/script-src[\s\S]*?turnstileOrigin/)
-    expect(nextConfig).toMatch(/frame-src[\s\S]*?turnstileOrigin/)
+    expect(csp).toContain('https://challenges.cloudflare.com')
+    expect(csp).toMatch(/script-src[\s\S]*?turnstileOrigin/)
+    expect(csp).toMatch(/frame-src[\s\S]*?turnstileOrigin/)
     expect(envExample).not.toContain('TURNSTILE_SECRET_KEY')
     expect(dockerEnvExample).not.toContain('TURNSTILE_SECRET_KEY')
   })

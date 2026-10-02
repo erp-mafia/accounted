@@ -7,6 +7,11 @@ import { Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import {
+  POPOVER_SURFACE_CLASS,
+  POPOVER_ENTER_CLASS,
+  POPOVER_ENTER_UP_CLASS,
+} from '@/components/ui/popover-surface'
+import {
   buildCustomerIndex,
   searchCustomers,
   customerPickerSecondary,
@@ -319,18 +324,23 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
         ...(dropdownPos.top !== undefined ? { top: dropdownPos.top } : { bottom: dropdownPos.bottom }),
       }
     : undefined
+  const panelClass = cn(
+    'fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto',
+    POPOVER_SURFACE_CLASS,
+    dropdownPos?.top === undefined && dropdownPos ? POPOVER_ENTER_UP_CLASS : POPOVER_ENTER_CLASS,
+  )
 
   // min-h-10: a 40px touch target per row, the picker's main use is a phone.
   const rowClass = (highlighted: boolean) =>
     cn(
       'flex min-h-10 w-full cursor-pointer flex-col justify-center px-3 py-2 text-left text-sm',
-      highlighted ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50',
+      highlighted ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/60',
     )
 
   const createRow = onCreateCustomer ? (
     <button
       type="button"
-      className="mt-2 flex w-full items-center gap-2 rounded-sm border border-input bg-card px-2 py-2 text-left text-sm hover:bg-muted/50"
+      className="mt-2 flex w-full items-center gap-2 rounded-sm border border-input bg-card px-2 py-2 text-left text-sm hover:bg-secondary/60"
       onMouseDown={(e) => {
         e.preventDefault()
         close()
@@ -355,7 +365,7 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
       role="listbox"
       data-dialog-companion=""
       data-ph-mask=""
-      className="fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto rounded-lg border border-input bg-card shadow-md"
+      className={panelClass}
       style={portalPanelStyle}
     >
       {showNoneRow && (
@@ -418,7 +428,7 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
     <div
       ref={attachPortalPanel}
       data-dialog-companion=""
-      className="fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto rounded-lg border border-input bg-card p-3 shadow-md"
+      className={cn(panelClass, 'p-3')}
       style={portalPanelStyle}
     >
       <p className="text-sm text-muted-foreground">

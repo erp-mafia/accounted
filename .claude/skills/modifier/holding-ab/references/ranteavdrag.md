@@ -1,3 +1,7 @@
+---
+areas: [bokslut]
+---
+
 # Ränteavdragsbegränsning: utvidgad referens
 
 Ladda när uppgiften rör beräkning av räntenetto, EBITDA-tak, koncerninterna förvärvslån, eller den nya 24 kap 19 a § (2026).

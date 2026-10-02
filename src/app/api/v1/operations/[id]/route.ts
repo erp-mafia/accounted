@@ -7,8 +7,10 @@
  *
  * The operation_id is global (cross-company in the URL) but every read is
  * scoped to the caller's company in `getOperation()`: so two companies'
- * UUIDs can never collide into the wrong tenant. The wrapper has already
- * validated company membership.
+ * UUIDs can never collide into the wrong tenant. The URL names no company,
+ * so the route resolves it from the operation row and runs the wrapper's
+ * company gate on it (`ctx.checkCompanyAccess`): membership and the key's
+ * company allowlist, exactly as a /companies/{companyId}/ URL gets.
  *
  * Webhook alternative (Phase 6): subscribe to `operation.completed` instead
  * of polling.
@@ -95,9 +97,9 @@ export const GET = withApiV1<{ params: Promise<{ id: string }> }>(
 
     // The operations URL has no /companies/:companyId prefix, so the wrapper
     // can't resolve ctx.companyId from a path segment. We fetch by id alone
-    // (service-role bypasses RLS), then verify the operation's company is one
-    // this caller belongs to. Two-step lookup keeps the resource id global
-    // while still hard-scoping reads to the caller's tenancies.
+    // (service-role bypasses RLS), then run the wrapper's company gate on the
+    // operation's company. Two-step lookup keeps the resource id global
+    // while still hard-scoping reads to the companies this key may reach.
     const { data: opRow, error: opErr } = await ctx.supabase
       .from('operations')
       .select('company_id')
@@ -116,21 +118,12 @@ export const GET = withApiV1<{ params: Promise<{ id: string }> }>(
     }
 
     const opCompanyId = (opRow as { company_id: string }).company_id
-    const { data: membership } = await ctx.supabase
-      .from('company_members')
-      .select('company_id')
-      .eq('user_id', ctx.userId)
-      .eq('company_id', opCompanyId)
-      .maybeSingle()
-
-    if (!membership) {
-      // Enumeration hardening: wrong id and cross-tenant id are
-      // indistinguishable from outside.
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-        details: { resource: 'operation' },
-      })
-    }
+    // Enumeration hardening: a wrong id, a cross-tenant id and a company
+    // outside the key's allowlist are indistinguishable from outside.
+    const denied = await ctx.checkCompanyAccess(opCompanyId, {
+      notFoundDetails: { resource: 'operation' },
+    })
+    if (denied) return denied
 
     const row = await getOperation(ctx.supabase, {
       id: operationId,

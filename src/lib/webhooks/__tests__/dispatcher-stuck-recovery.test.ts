@@ -135,6 +135,9 @@ function makeSupabase(opts: {
                   company_id: COMPANY_ID,
                   webhook_url: 'https://receiver.example.com/hook',
                   secret: 'whsec_test',
+                  // A verified endpoint: the ownership gate lets it through.
+                  verified_at: '2026-05-15T12:00:00Z',
+                  verification_grace_ends_at: null,
                 },
               ],
               error: null,

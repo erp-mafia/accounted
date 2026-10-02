@@ -27,9 +27,9 @@ interface FiscalYearEditDialogProps {
   onSaved: () => void
 }
 
-/** Read a user-facing message from either a legacy `{ error: string }` body
- *  (what the fiscal-periods PATCH route returns) or the canonical
- *  `{ error: { message } }` envelope. */
+/** Read a user-facing message from the canonical `{ error: { message } }`
+ *  envelope (what the fiscal-periods PATCH route returns) or a legacy
+ *  `{ error: string }` body. */
 function readApiError(body: unknown, fallback: string): string {
   if (!body || typeof body !== 'object') return fallback
   const error = (body as { error?: unknown }).error
@@ -243,15 +243,8 @@ export function FiscalYearEditDialog({
           <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={isSaving}>
             {t('fy_confirm_cancel')}
           </Button>
-          <Button onClick={handleSave} disabled={!canSave}>
-            {isSaving ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {t('fy_edit_saving')}
-              </>
-            ) : (
-              t('fy_edit_save')
-            )}
+          <Button onClick={handleSave} disabled={!canSave} loading={isSaving}>
+            {isSaving ? t('fy_edit_saving') : t('fy_edit_save')}
           </Button>
         </DialogFooter>
       </DialogContent>

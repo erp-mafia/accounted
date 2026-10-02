@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { ImportNotices } from '@/components/import/ImportNotices'
+import { ImportStatRow } from '@/components/import/ImportStatRow'
 import { noticesFromParseIssues } from '@/lib/import/notices'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { ArrowLeft, ArrowRight, AlertTriangle, Calendar, FileText, Scale } from 'lucide-react'
+import { ArrowLeft, ArrowRight, AlertTriangle } from 'lucide-react'
 import { formatCurrency, cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
@@ -73,46 +74,31 @@ export default function SkattekontoFilePreviewStep({
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <FileText className="h-4 w-4" />
-              <span className="text-sm">{t('skattekonto_preview_rows')}</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{stats.parsed_rows}</p>
-            {stats.skipped_rows > 0 && (
-              <p className="text-xs text-muted-foreground mt-1">
-                {t('skattekonto_preview_skipped', { count: stats.skipped_rows })}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <Calendar className="h-4 w-4" />
-              <span className="text-sm">{t('skattekonto_preview_period')}</span>
-            </div>
-            <p className="text-sm font-medium tabular-nums">
-              {date_from || '-'} – {date_to || '-'}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <Scale className="h-4 w-4" />
-              <span className="text-sm">{t('skattekonto_preview_closing_saldo')}</span>
-            </div>
-            <p className="text-lg font-display tabular-nums">
-              {closing_saldo !== null ? formatCurrency(closing_saldo) : '-'}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Summary: flat label/number pairs, no boxed tiles */}
+      <ImportStatRow
+        stats={[
+          {
+            key: 'rows',
+            label: t('skattekonto_preview_rows'),
+            value: stats.parsed_rows,
+            note:
+              stats.skipped_rows > 0
+                ? t('skattekonto_preview_skipped', { count: stats.skipped_rows })
+                : undefined,
+          },
+          {
+            key: 'period',
+            label: t('skattekonto_preview_period'),
+            value: `${date_from || '-'} - ${date_to || '-'}`,
+            plain: true,
+          },
+          {
+            key: 'closing',
+            label: t('skattekonto_preview_closing_saldo'),
+            value: closing_saldo !== null ? formatCurrency(closing_saldo) : '-',
+          },
+        ]}
+      />
 
       {orgNumberMismatch && (
         <Card className="border-destructive/40">

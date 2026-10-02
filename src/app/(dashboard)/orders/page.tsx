@@ -19,7 +19,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -222,41 +222,36 @@ export default function OrdersPage() {
     <div className="space-y-8">
       <PageHeader title={t('title')} />
 
+      {/* Toolbar: the status views live behind one filter chip, like the
+          invoice lists; the store scope sits far right and only when there
+          is more than one store to choose between. */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex flex-wrap items-center gap-1">
-          {tabs.map(({ key, label }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => {
-                setTab(key)
+        <ContextPicker
+          items={tabs.map(({ key, label }) => ({ id: key, label }))}
+          value={tab}
+          onChange={(id) => {
+            setTab(id as StatusTab)
+            setPage(0)
+          }}
+          triggerLabel={tabs.find(({ key }) => key === tab)?.label ?? t('tab_all')}
+          ariaLabel={t('col_status')}
+        />
+        {(multiStore || storeScope) && (
+          <div className="ml-auto">
+            <ContextPicker
+              items={storeItems}
+              value={storeScope ?? 'all'}
+              onChange={(id) => {
+                setStoreScope(id === 'all' ? null : id)
                 setPage(0)
               }}
-              className={cn(
-                'rounded-full px-3 py-[5px] text-[13px] transition-colors duration-150',
-                tab === key
-                  ? 'bg-secondary text-foreground'
-                  : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="ml-auto">
-          <ContextPicker
-            items={storeItems}
-            value={storeScope ?? 'all'}
-            onChange={(id) => {
-              setStoreScope(id === 'all' ? null : id)
-              setPage(0)
-            }}
-            triggerLabel={
-              activeStore ? activeStore.store_label || activeStore.store_scope : t('all_stores')
-            }
-            ariaLabel={t('store_picker_aria')}
-          />
-        </div>
+              triggerLabel={
+                activeStore ? activeStore.store_label || activeStore.store_scope : t('all_stores')
+              }
+              ariaLabel={t('store_picker_aria')}
+            />
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -271,6 +266,16 @@ export default function OrdersPage() {
           <Button variant="outline" size="sm" onClick={() => void load()}>
             {t('retry')}
           </Button>
+        </div>
+      ) : visibleRows.length === 0 && (tab !== 'all' || storeScope) ? (
+        // Filtered to nothing: the orders exist, so no connect-your-shop CTA.
+        // A live region so a filter change that empties the list is announced.
+        <div role="status" aria-live="polite">
+          <EmptyState
+            icon={ShoppingCart}
+            title={t('empty_filtered_title')}
+            description={t('empty_filtered_description')}
+          />
         </div>
       ) : visibleRows.length === 0 ? (
         <EmptyState
@@ -582,12 +587,15 @@ function OrderRow({
           Skapa faktura moves into the overflow menu instead of vanishing. */}
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
         <div className="flex items-center justify-end gap-1">
+          {/* Hover-revealed (touch keeps it visible): the status chip
+              already says which rows wait, so a button on every row only
+              repeats it. */}
           {bookable ? (
-            <Button variant="outline" size="sm" onClick={onBook}>
+            <Button variant="outline" size="sm" className={HOVER_REVEAL_CLASS} onClick={onBook}>
               {t('action_book')}
             </Button>
           ) : invoiceable ? (
-            <Button variant="outline" size="sm" onClick={onInvoice}>
+            <Button variant="outline" size="sm" className={HOVER_REVEAL_CLASS} onClick={onInvoice}>
               {t('action_create_invoice')}
             </Button>
           ) : null}
@@ -597,8 +605,8 @@ function OrderRow({
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 shrink-0"
+                  size="icon-sm"
+                  className={cn('shrink-0', HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')}
                   aria-label={t('row_menu_aria', { number: order.order_number })}
                 >
                   <MoreHorizontal className="h-4 w-4 text-muted-foreground" />

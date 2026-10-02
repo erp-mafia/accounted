@@ -13,6 +13,9 @@
  *   - The target salary_run_employee must belong to the given run.
  *   - Money is rounded via roundOre() (never naive Math.round(x*100)/100).
  *   - account_number auto-resolves from the item type when not supplied.
+ *   - A line the calculation owns is never added, edited or deleted by hand
+ *     (SALARY_LINE_CALCULATED): the next calculation, which every run needs
+ *     before booking, would silently undo it (#3185, calculated-line-items.ts).
  *
  * Result-object convention mirrors lib/salary/run-calculation.ts:
  * `{ ok: true, data } | { ok: false, code, details? }` where `code` is a key
@@ -26,6 +29,7 @@ import { getLineItemAccount } from '@/lib/salary/account-mapping'
 import { validateOneOffTaxLine } from '@/lib/salary/one-off-tax'
 import { validateVacationCategoryLine } from '@/lib/salary/vacation-category'
 import { roundOre } from '@/lib/money'
+import { isCalculatedLine, isCalculatedLineType } from '@/lib/salary/calculated-line-items'
 import type { SalaryLineItemType } from '@/types'
 
 export type PayslipLineResult<T> =
@@ -135,16 +139,22 @@ export async function resolveRunEmployee(
   return { ok: true, data: sre as { id: string; employee_id: string } }
 }
 
-/** Load a line and verify it belongs to the given run (via its sre). */
+/** The columns that say whether the calculation owns a line (not part of the row callers see). */
+const PROVENANCE_COLUMNS = 'calculation_source, source_benefit_id, source_recurring_line_id'
+
+/**
+ * Load a line and verify it belongs to the given run (via its sre), and say
+ * whether the calculation owns it.
+ */
 async function loadLineInRun(
   supabase: SupabaseClient,
   companyId: string,
   salaryRunId: string,
   lineId: string,
-): Promise<PayslipLineResult<SalaryLineItemRow>> {
+): Promise<PayslipLineResult<{ line: SalaryLineItemRow; calculated: boolean }>> {
   const { data, error } = await supabase
     .from('salary_line_items')
-    .select(`${LINE_COLUMNS}, salary_run_employee:salary_run_employees(salary_run_id)`)
+    .select(`${LINE_COLUMNS}, ${PROVENANCE_COLUMNS}, salary_run_employee:salary_run_employees(salary_run_id)`)
     .eq('id', lineId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -152,12 +162,36 @@ async function loadLineInRun(
   if (error) {
     return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message } }
   }
-  const row = data as (SalaryLineItemRow & { salary_run_employee?: { salary_run_id: string } | null }) | null
+  const row = data as
+    | (SalaryLineItemRow & {
+        salary_run_employee?: { salary_run_id: string } | null
+        calculation_source?: string | null
+        source_benefit_id?: string | null
+        source_recurring_line_id?: string | null
+      })
+    | null
   if (!row || row.salary_run_employee?.salary_run_id !== salaryRunId) {
     return { ok: false, code: 'SALARY_LINE_NOT_FOUND' }
   }
-  const { salary_run_employee: _sre, ...line } = row
-  return { ok: true, data: line as SalaryLineItemRow }
+  const {
+    salary_run_employee: _sre,
+    calculation_source,
+    source_benefit_id,
+    source_recurring_line_id,
+    ...line
+  } = row
+  const calculated = isCalculatedLine({
+    item_type: line.item_type,
+    calculation_source,
+    source_benefit_id,
+    source_recurring_line_id,
+  })
+  return { ok: true, data: { line: line as SalaryLineItemRow, calculated } }
+}
+
+/** The refusal for a line the calculation owns. */
+function calculatedLineRefusal(details: Record<string, unknown>): PayslipLineResult<never> {
+  return { ok: false, code: 'SALARY_LINE_CALCULATED', details }
 }
 
 export async function createPayslipLine(
@@ -171,6 +205,10 @@ export async function createPayslipLine(
     dryRun?: boolean
   },
 ): Promise<PayslipLineResult<SalaryLineItemRow | (Omit<SalaryLineItemRow, 'id' | 'created_at' | 'updated_at'> & { id: null })>> {
+  if (isCalculatedLineType(args.input.item_type)) {
+    return calculatedLineRefusal({ item_type: args.input.item_type })
+  }
+
   const gate = await assertRunDraft(supabase, args.companyId, args.salaryRunId)
   if (!gate.ok) return gate
 
@@ -241,11 +279,19 @@ export async function updatePayslipLine(
     dryRun?: boolean
   },
 ): Promise<PayslipLineResult<SalaryLineItemRow>> {
+  if (args.patch.item_type !== undefined && isCalculatedLineType(args.patch.item_type)) {
+    return calculatedLineRefusal({ salary_line_item_id: args.lineId, item_type: args.patch.item_type })
+  }
+
   const gate = await assertRunDraft(supabase, args.companyId, args.salaryRunId)
   if (!gate.ok) return gate
 
-  const existing = await loadLineInRun(supabase, args.companyId, args.salaryRunId, args.lineId)
-  if (!existing.ok) return existing
+  const loaded = await loadLineInRun(supabase, args.companyId, args.salaryRunId, args.lineId)
+  if (!loaded.ok) return loaded
+  if (loaded.data.calculated) {
+    return calculatedLineRefusal({ salary_line_item_id: args.lineId, item_type: loaded.data.line.item_type })
+  }
+  const existing = { data: loaded.data.line }
 
   const updates: Record<string, unknown> = { ...args.patch }
   if (typeof updates.amount === 'number') {
@@ -308,6 +354,9 @@ export async function deletePayslipLine(
 
   const existing = await loadLineInRun(supabase, args.companyId, args.salaryRunId, args.lineId)
   if (!existing.ok) return existing
+  if (existing.data.calculated) {
+    return calculatedLineRefusal({ salary_line_item_id: args.lineId, item_type: existing.data.line.item_type })
+  }
 
   if (args.dryRun) {
     return { ok: true, data: { deleted: true, salary_line_item_id: args.lineId } }

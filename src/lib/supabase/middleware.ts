@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr'
 import type { User } from '@supabase/supabase-js'
 import { NextResponse, type NextRequest } from 'next/server'
 import { createLogger } from '@/lib/logger'
+import { shouldExposeTimingHeaders } from '@/lib/observability/timing-headers'
 import {
   PROXY_TIMING_HEADER,
   classifyProxyRequest,
@@ -11,7 +12,7 @@ import {
   timed,
   type ProxyTimings,
 } from '@/lib/supabase/proxy-timing'
-import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { mfaStepUpApplies, shouldEnforceMfa } from '@/lib/auth/mfa'
 import { claimsPinned } from '@/lib/auth/claims'
 import { isMultiUserEnforced } from '@/lib/entitlements/multi-user'
 import { MULTI_USER_GRACE_DAYS } from '@/lib/entitlements/multi-user-state'
@@ -70,14 +71,16 @@ function homeDomainOkValue(userId: string, host: string): string {
 }
 
 /**
- * Auth proxy entry point. Wraps the real work so every response carries a
- * per-phase timing header and emits one structured log line, mirroring what
- * withRouteContext does for API routes: without it the proxy's sequential
- * network calls (getUser, session state, company RPC, MFA lookups) were the
- * one part of a request nobody could measure. Page/RSC/prefetch responses
- * get `Server-Timing` (visible in the browser Timing tab); /api responses
- * get `X-Proxy-Timing` so the route wrapper's own Server-Timing is left
- * alone. Token-carrying paths are collapsed before logging.
+ * Auth proxy entry point. Wraps the real work so every request emits one
+ * structured log line with per-phase timings, mirroring what withRouteContext
+ * does for API routes: without it the proxy's sequential network calls
+ * (getUser, session state, company RPC, MFA lookups) were the one part of a
+ * request nobody could measure. Outside production the same numbers also
+ * travel as a response header (lib/observability/timing-headers.ts):
+ * page/RSC/prefetch responses get `Server-Timing` (visible in the browser
+ * Timing tab); /api responses get `X-Proxy-Timing` so the route wrapper's
+ * own Server-Timing is left alone. Token-carrying paths are collapsed before
+ * logging.
  */
 export async function updateSession(request: NextRequest) {
   const start = Date.now()
@@ -86,10 +89,12 @@ export async function updateSession(request: NextRequest) {
   const totalMs = Date.now() - start
   const pathname = request.nextUrl.pathname
   const kind = classifyProxyRequest(pathname, request.headers)
-  response.headers.set(
-    kind === 'api' ? PROXY_TIMING_HEADER : 'Server-Timing',
-    formatProxyServerTiming(timing, totalMs),
-  )
+  if (shouldExposeTimingHeaders()) {
+    response.headers.set(
+      kind === 'api' ? PROXY_TIMING_HEADER : 'Server-Timing',
+      formatProxyServerTiming(timing, totalMs),
+    )
+  }
   log.info('proxy completed', {
     kind,
     route: proxyRouteTemplate(pathname),
@@ -267,14 +272,15 @@ async function updateSessionInner(
     )
     // `user` is the getUser() result above: server-authenticated, so its
     // factor list is trustworthy. Only a session with something to step up
-    // TO is gated here; forcing enrolment stays the page branch's job, as
+    // TO is gated here, whatever NEXT_PUBLIC_REQUIRE_MFA says (see
+    // mfaStepUpApplies); forcing enrolment stays the page branch's job, as
     // before. The assurance level itself comes from the signature-verified
     // claims and fails CLOSED (see resolveVerifiedAal), never from the
     // cookie's session object.
     if (
       !skipMfaGate &&
       user &&
-      shouldEnforceMfa(user) &&
+      mfaStepUpApplies(user) &&
       userHasVerifiedFactor(user)
     ) {
       const aal = await timed(timing, 'mfaMs', () =>
@@ -471,8 +477,16 @@ async function updateSessionInner(
       resolveCompanyForMiddleware(supabase, user.id, request),
     ))
 
-  // MFA enforcement (application-side only, not RLS)
-  if (shouldEnforceMfa(user)) {
+  // MFA enforcement (application-side only, not RLS). Two obligations: a
+  // user with a verified factor is stepped up to AAL2 whatever
+  // NEXT_PUBLIC_REQUIRE_MFA says (mfaStepUpApplies), and a user without one
+  // is sent to enrol only while the flag requires MFA (shouldEnforceMfa).
+  // The factor list is read off the server-authenticated getUser() result
+  // above, never off the cookie session.
+  const hasVerifiedFactor = userHasVerifiedFactor(user)
+  const stepUpOwed = hasVerifiedFactor && mfaStepUpApplies(user)
+  const enrolmentOwed = !hasVerifiedFactor && shouldEnforceMfa(user)
+  if (stepUpOwed || enrolmentOwed) {
     const aal = await timed(timing, 'mfaMs', () => resolveVerifiedAal(supabase))
 
     // Nothing below applies at AAL2: reaching it requires having verified a
@@ -482,14 +496,13 @@ async function updateSessionInner(
     // instead of the next click (unchanged from the listFactors-era gate,
     // PR #1922).
     if (aal !== 'aal2') {
-      // The factor list is read off the server-authenticated getUser()
-      // result above, never off the cookie session. A cookie edited to hide
-      // the factor used to sail past this bounce, and because the enrolment
-      // check below then found the factor server-side, straight onto the
-      // page at AAL1. Reading it here also drops the listFactors() round
-      // trip that check used to pay: auth-js implements listFactors() as
-      // that very getUser() call.
-      if (userHasVerifiedFactor(user)) {
+      // A cookie edited to hide the factor used to sail past this bounce, and
+      // because the enrolment check below then found the factor server-side,
+      // straight onto the page at AAL1: hence the server-side factor list.
+      // Reading it off getUser() also drops the listFactors() round trip
+      // that check used to pay: auth-js implements listFactors() as that very
+      // getUser() call.
+      if (stepUpOwed) {
         return bounceToAuth(request, supabaseResponse, '/mfa/verify')
       }
 

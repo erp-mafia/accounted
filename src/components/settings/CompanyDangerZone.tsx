@@ -22,7 +22,6 @@ import {
   SettingsRowEnd,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
-import { Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -186,16 +185,10 @@ export function CompanyDangerZone() {
             <Button
               variant="destructive"
               onClick={handleDelete}
-              disabled={confirmText.trim() !== company.name.trim() || isDeleting}
+              disabled={confirmText.trim() !== company.name.trim()}
+              loading={isDeleting}
             >
-              {isDeleting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('danger_deleting')}
-                </>
-              ) : (
-                t('danger_button')
-              )}
+              {isDeleting ? t('danger_deleting') : t('danger_button')}
             </Button>
           </DialogFooter>
         </DialogContent>

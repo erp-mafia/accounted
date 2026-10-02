@@ -1,3 +1,4 @@
+import type { AiMeter } from './meter'
 // Job-shaped AI service interface.
 //
 // Call sites describe WHAT they need (a text answer, a schema-shaped object,
@@ -80,6 +81,8 @@ export interface AiChatTurn {
 
 export interface GenerateTextRequest {
   tier: AiTier
+  /** Who is calling, for ai_usage_events. */
+  meter?: AiMeter
   system?: string
   prompt: string
   maxTokens: number
@@ -111,6 +114,8 @@ export interface GenerateTextResult {
 
 export interface GenerateStructuredRequest {
   tier: AiTier
+  /** Who is calling, for ai_usage_events. */
+  meter?: AiMeter
   system?: string
   prompt: string
   maxTokens: number
@@ -131,6 +136,8 @@ export interface GenerateStructuredResult {
 
 export interface ExtractFromDocumentRequest {
   document: AiDocumentInput
+  /** Who is calling, for ai_usage_events. */
+  meter?: AiMeter
   /** Byte-stable system prompt. The Anthropic-family service marks it as a prompt-cache breakpoint. */
   system: string
   /** Trailing user instruction placed after the document part(s). */

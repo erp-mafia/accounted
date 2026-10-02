@@ -12,7 +12,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2 } from 'lucide-react'
 import { CURRENCIES, type CreateTransactionInput, type Currency } from '@/types'
 
 interface TransactionFormProps {
@@ -146,15 +145,8 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
         />
       </div>
 
-      <Button type="submit" className="w-full" disabled={isLoading}>
-        {isLoading ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            {t('saving')}
-          </>
-        ) : (
-          t('save')
-        )}
+      <Button type="submit" className="w-full" loading={isLoading}>
+        {isLoading ? t('saving') : t('save')}
       </Button>
     </form>
   )

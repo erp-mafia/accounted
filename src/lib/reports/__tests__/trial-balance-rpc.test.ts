@@ -223,6 +223,11 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
     })
 
     expect(rpcArgs()).toMatchObject({ p_from_date: '2024-07-01', p_to_date: null })
+    // Unfiltered: the IB fallback call is exactly what it always was.
+    expect(supabase.rpc).toHaveBeenCalledWith('compute_prior_opening_balances', {
+      p_company_id: 'company-1',
+      p_period_start: '2024-01-01',
+    })
     expect(result.rows[0]).toMatchObject({
       opening_debit: 1250,
       period_credit: 50,
@@ -231,13 +236,16 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
     })
   })
 
-  it('sends the dimension filter and drops company-wide IB for the filtered view', async () => {
+  it('sends the dimension filter to both RPCs: the filtered view opens at the object\'s IB (#3313)', async () => {
     mockResults = {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
+      // The registry: projekt accumulates across years.
+      dimensions: [{ data: [{ sie_dim_no: 6 }], error: null }],
+      // The derived IB, scoped by p_dimensions to the object's tagged lines.
       'rpc:compute_prior_opening_balances': [
-        { data: [{ account_number: '1930', debit: 9000, credit: 0 }], error: null },
+        { data: [{ account_number: '1930', debit: 1200, credit: 0 }], error: null },
       ],
       'rpc:get_trial_balance_aggregates': [
         { data: [{ bucket: 'period', account_number: '1930', debit: 500, credit: 0 }], error: null },
@@ -254,7 +262,12 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
       p_closing_mode: 'exclude-all-year-end',
       p_dimensions: { '6': 'P001' },
     })
-    expect(result.rows[0]).toMatchObject({ opening_debit: 0, period_debit: 500, closing_debit: 500 })
+    expect(supabase.rpc).toHaveBeenCalledWith('compute_prior_opening_balances', {
+      p_company_id: 'company-1',
+      p_period_start: '2024-01-01',
+      p_dimensions: { '6': 'P001' },
+    })
+    expect(result.rows[0]).toMatchObject({ opening_debit: 1200, period_debit: 500, closing_debit: 1700 })
   })
 
   it('treats an empty dimension object as no filter', async () => {

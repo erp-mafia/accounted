@@ -1,7 +1,8 @@
 import { searchCompaniesByName, searchCompanyByOrgNumber } from './tic-client'
+import { isLensDocumentCeased } from './lens-status'
 import type { TICCompanyDocument } from './tic-types'
 import type { CompanyLookupResult, CompanySearchHit } from '@/lib/company-lookup/types'
-import { normalizeOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
+import { normalizeOrgNumber, registrationNumberKey } from '@/lib/invariants/org-number'
 
 /**
  * Shared org-number → CompanyLookupResult lookup, used by both the /lookup
@@ -66,7 +67,7 @@ export function pickCompanyName(names: TICCompanyDocument['names']): string {
 export function mapDocumentToLookupResult(doc: TICCompanyDocument): CompanyLookupResult {
   const companyName = pickCompanyName(doc.names)
 
-  const isCeased = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
+  const isCeased = isLensDocumentCeased(doc)
 
   const address = doc.mostRecentRegisteredAddress
     ? {
@@ -166,8 +167,6 @@ export async function searchCompaniesForLookup(query: string): Promise<CompanySe
  * rather than dead-ending the journey at submit.
  */
 export function lensRegistrationToOrgNumber(registrationNumber: string): string | null {
-  const digits = registrationNumber.replace(/\D/g, '')
-  const candidate = /^(18|19|20)\d{14}$/.test(digits) ? digits.slice(0, 12) : digits
-  const key = orgNumberKey(candidate)
+  const key = registrationNumberKey(registrationNumber.replace(/\D/g, ''))
   return key && normalizeOrgNumber(key) ? key : null
 }

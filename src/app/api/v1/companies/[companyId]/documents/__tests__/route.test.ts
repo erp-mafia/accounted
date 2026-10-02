@@ -190,6 +190,23 @@ describe('POST /api/v1/companies/:companyId/documents', () => {
       journal_entry_id: JE_ID,
       journal_entry_line_id: undefined,
       deferUploadedEvent: true,
+      // Linked on arrival: the verifikat is the booking, no model pass.
+      extractionOwner: 'none',
     })
+  })
+
+  it('leaves extraction on for a document that is not linked to a verifikat', async () => {
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({ ...MEMBER }))
+    uploadDocumentMock.mockResolvedValue(
+      makeDocumentAttachment({ id: 'doc-2', file_name: 'kvitto.pdf', journal_entry_id: null }),
+    )
+
+    const res = await POST(makeUpload({ file: pdf() }), params())
+
+    expect(res.status).toBe(201)
+    expect(uploadDocumentMock).toHaveBeenCalledOnce()
+    const [, , , , metadata] = uploadDocumentMock.mock.calls[0]
+    expect(metadata).not.toHaveProperty('extractionOwner')
+    expect(metadata.deferUploadedEvent).toBe(true)
   })
 })

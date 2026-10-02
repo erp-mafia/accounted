@@ -174,12 +174,9 @@ export default function OpeningBalancePeriodStep({
           <Button variant="ghost" onClick={onBack} disabled={isLoading}>
             Tillbaka
           </Button>
-          <Button onClick={handleExecute} disabled={!canExecute}>
+          <Button onClick={handleExecute} disabled={!canExecute} loading={isLoading}>
             {isLoading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                {periodHasOB ? 'Ersätter...' : 'Bokför...'}
-              </>
+              periodHasOB ? 'Ersätter...' : 'Bokför...'
             ) : periodHasOB ? (
               'Ersätt ingående balanser'
             ) : (

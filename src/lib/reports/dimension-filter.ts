@@ -67,3 +67,52 @@ export function dimensionFilterDisclosure(dimensions?: Record<string, string>): 
     .map(([dimNo, code]) => `dimension ${dimNo}: ${code}`)
   return `Filtrerad (${parts.join(', ')}), ej fullständig rapport`
 }
+
+export interface DimensionFilterPartialView {
+  /** Always false: the figures cover the tagged lines only. */
+  complete: false
+  /** The text the filtered exports print (dimensionFilterDisclosure). */
+  disclosure: string
+  /**
+   * On reports that carry opening balances: the IB is scoped to the filter
+   * as well, i.e. the IB lines tagged with the object (issue #3313). The
+   * year-end close and the SIE import put a project's opening balance on its
+   * own tagged IB line (a year without an IB entry derives it from the
+   * object's prior tagged history); a dimension that resets annually
+   * (kostnadsställe) and the VAT accounts (26xx) open at 0.
+   */
+  opening_balances?: 'dimension_scoped'
+  /**
+   * The pre-#3313 flag (was `false`: IB left out under a filter), kept next
+   * to `opening_balances` so a reader that tests it does not conclude the IB
+   * is still excluded. Always true where `opening_balances` is set.
+   */
+  opening_balances_included?: true
+  /** On reports with a debit = credit check: it says nothing under a filter. */
+  is_balanced_meaningful?: false
+}
+
+/**
+ * Partial-view disclosure for a dimension-filtered report answered as JSON
+ * (v1 REST, MCP). The dashboard marks a filtered report with its chip and the
+ * exports print dimensionFilterDisclosure(); a machine reader has neither,
+ * so the body must say that the figures are not the complete report.
+ * `scopedOpeningBalances`: the report carries IB, scoped to the filter (the
+ * object's tagged IB lines, see DimensionFilterPartialView.opening_balances).
+ * `balanceCheck`: the report's is_balanced is meaningless under a filter,
+ * because tagged lines need not balance (a project's costs carry the tag,
+ * the bank line that paid them does not).
+ */
+export function dimensionFilterPartialView(
+  dimensions: Record<string, string>,
+  options: { scopedOpeningBalances?: boolean; balanceCheck?: boolean } = {},
+): DimensionFilterPartialView {
+  return {
+    complete: false,
+    disclosure: dimensionFilterDisclosure(dimensions) ?? '',
+    ...(options.scopedOpeningBalances
+      ? { opening_balances: 'dimension_scoped' as const, opening_balances_included: true as const }
+      : {}),
+    ...(options.balanceCheck ? { is_balanced_meaningful: false as const } : {}),
+  }
+}

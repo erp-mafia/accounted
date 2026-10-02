@@ -1,5 +1,14 @@
 # Depreciation Methods & Tax Rules
 
+<!-- toc -->
+**Contents**
+
+- [Planenlig avskrivning (Book Depreciation)](#planenlig-avskrivning-book-depreciation)
+- [Överavskrivning (Excess Tax Depreciation)](#överavskrivning-excess-tax-depreciation)
+- [Skattemässig avskrivning (Tax Depreciation)](#skattemässig-avskrivning-tax-depreciation)
+
+<!-- /toc -->
+
 ## Planenlig avskrivning (Book Depreciation)
 
 ÅRL 4 kap. 4 § requires systematic depreciation of all fixed assets with limited useful life.
@@ -25,8 +34,14 @@
 
 ### Depreciation Start
 
-- **K2 (10.23):** From year asset is *put into use* (tas i bruk). Full annual amount regardless of partial year.
-- **K3 (17.19):** From when asset *can* be used (available for use). Buildings under K2 depreciate even before use.
+- **K2 (10.23):** From year asset is *put into use* (tas i bruk). The second stycke *allows* (får) the same amount every year even if the asset was in use only part of the year: an option, not a requirement. Accounted pro-rates by the days in use instead.
+- **K3 (17.18):** From when asset *can* be used (available for use). Buildings under K2 depreciate even before use.
+
+### Fiscal Year Other Than 12 Months (förlängt or förkortat räkenskapsår)
+
+- **K2 (10.23), BFN's kommentar:** "Omfattar räkenskapsåret annan tid än 12 månader behöver avskrivningen justeras utifrån räkenskapsårets längd." This holds whichever option above is chosen: a förlängt 15-month first year carries 15 months of depreciation for an asset held all of it, a förkortat 6-month year carries 6.
+- **Accounted's formula** (every path: linear, opening balance, K3 components): `12-month amount × (days in use / days in the fiscal year) × (months in the fiscal year / 12)`. The last factor is exactly 1 for every 12-month year.
+- **Example:** 12 000 kr over 60 months (2 400 kr per 12 months). Fiscal year 2025-06-01 to 2026-08-31 (15 months): held all year gives 3 000 kr; acquired 2025-09-01 gives 2 396 kr (about 12 months of use). Fiscal year 2025-07-01 to 2025-12-31 (6 months), held all year: 1 200 kr.
 
 ### Component Depreciation (Komponentavskrivning)
 
@@ -52,7 +67,7 @@ When a component is replaced under K3 (17.21-17.22): derecognize old component's
 
 - 7810: Avskrivningar immateriella tillgångar
 - 7820: Avskrivningar byggnader/markanläggningar (7821 byggnader, 7824 markanläggningar)
-- 7830: Avskrivningar maskiner/inventarier (7831-7835 specific types)
+- 7830: Avskrivningar maskiner/inventarier (BAS 2025: 7831-7835 specific types, 7835 = datorer; BAS 2026: only 7831 maskiner och andra tekniska anläggningar and 7832 inventarier, verktyg och installationer, 7833-7835 removed)
 - 7836: Avskrivningar leasade tillgångar
 - 7840: Avskrivningar förbättringsutgifter annans fastighet
 

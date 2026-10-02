@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { eventBus } from '@/lib/events'
+import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { ensureInitialized } from '@/lib/init'
 import {
   createSupplierInvoicePaymentEntry,
@@ -9,6 +9,10 @@ import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import {
+  resolveSupplierPaymentSek,
+  supplierPaymentSekInputIssue,
+} from '@/lib/bookkeeping/supplier-payment-amounts'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
@@ -55,7 +59,18 @@ export const POST = withRouteContext(
       })
     }
 
+    const sekInputIssue = supplierPaymentSekInputIssue({
+      currency: invoice.currency,
+      amountSek: body.amount_sek,
+      exchangeRateDifference: body.exchange_rate_difference,
+      hasLines: !!body.lines,
+    })
+    if (sekInputIssue) {
+      return errorResponseFromCode('VALIDATION_ERROR', opLog, { requestId, details: sekInputIssue })
+    }
+
     const paymentDate = body.payment_date || new Date().toISOString().split('T')[0]
+    // In the invoice's currency, like remaining_amount and the payment row.
     const paymentAmount = body.amount || invoice.remaining_amount
 
     // Duplicate-payment guard: if a bank transaction already looks like this
@@ -147,6 +162,24 @@ export const POST = withRouteContext(
       })
     }
 
+    // The 2440 clearing books SEK: resolve it from the ledger before posting,
+    // never hand the builder the invoice-currency amount (#2955). Custom rows
+    // are SEK already and the cash entry converts on its own.
+    let clearingSek = paymentAmount
+    let exchangeRateDifference = body.exchange_rate_difference
+    if (!body.lines && !useCashEntry) {
+      const sek = await resolveSupplierPaymentSek(supabase, companyId!, invoice as SupplierInvoice, {
+        amount: paymentAmount,
+        amountSek: body.amount_sek,
+        exchangeRateDifference: body.exchange_rate_difference,
+      })
+      if (!sek.ok) {
+        return errorResponseFromCode(sek.code, opLog, { requestId, details: sek.details })
+      }
+      clearingSek = sek.clearingSek
+      exchangeRateDifference = sek.exchangeRateDifference
+    }
+
     let journalEntryId: string | null = null
 
     try {
@@ -188,14 +221,17 @@ export const POST = withRouteContext(
           invoice.supplier?.supplier_type || 'swedish_business',
           invoice.supplier?.name,
           paymentAccount,
+          // Foreign invoice: the SEK that left the account pins the entry to
+          // the payment-date rate, as a bank match does.
+          body.amount_sek,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       } else {
         const journalEntry = await createSupplierInvoicePaymentEntry(
           supabase, companyId!, user.id,
           invoice as SupplierInvoice,
-          paymentAmount, paymentDate,
-          body.exchange_rate_difference,
+          clearingSek, paymentDate,
+          exchangeRateDifference,
           invoice.supplier?.name,
           paymentAccount,
         )
@@ -283,7 +319,7 @@ export const POST = withRouteContext(
         payment_date: paymentDate,
         amount: paymentAmount,
         currency: invoice.currency,
-        exchange_rate_difference: body.exchange_rate_difference || 0,
+        exchange_rate_difference: exchangeRateDifference || 0,
         journal_entry_id: journalEntryId,
         notes: body.notes || null,
       })
@@ -363,19 +399,15 @@ export const POST = withRouteContext(
     // committed and immutable, so the helper logs and returns null on failure.
     await anchorSupplierInvoiceDocument(supabase, companyId!, id)
 
-    try {
-      await eventBus.emit({
-        type: 'supplier_invoice.paid',
-        payload: {
-          supplierInvoice: { ...invoice, paid_at: paidAt ?? invoice.paid_at } as SupplierInvoice,
-          paymentAmount,
-          companyId: companyId!,
-          userId: user.id,
-        },
-      })
-    } catch (err) {
-      opLog.warn('supplier_invoice.paid event emission failed', err as Error)
-    }
+    // supplier_invoice.paid once, when this payment settles the invoice in
+    // full (never on a partial). Best-effort; the helper logs a failure.
+    await emitSupplierInvoicePaidIfSettled({
+      newStatus,
+      supplierInvoice: { ...invoice, paid_at: paidAt ?? invoice.paid_at } as SupplierInvoice,
+      paymentAmount,
+      companyId: companyId!,
+      userId: user.id,
+    })
 
     // Remember the chosen payment account so the next dialog can default to it.
     // Only update when the caller actually picked one: the MCP / agent path

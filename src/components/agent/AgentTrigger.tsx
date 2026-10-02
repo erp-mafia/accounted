@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import { useAgentSheet } from './AgentSheetProvider'
 import { usePathname, useRouter } from 'next/navigation'
 import { Loader2, X } from 'lucide-react'
@@ -9,6 +10,9 @@ import { collapsedStatusLabel } from './agent-status'
 import { routeToIntent } from '@/lib/agent/intents/route-mapping'
 import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { useToast } from '@/components/ui/use-toast'
+import { ToastAction } from '@/components/ui/toast'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 // Floating trigger sits above the page bottom-right, opens the AgentSheet when
 // clicked. Hidden when the sheet is already open so the icon doesn't double up.
@@ -92,11 +96,83 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
     }
   }, [isOpen, hasAi])
 
-  // User opt-out (Inställningar → Assistenten): the sidebar entry stays, the
-  // floating button goes. A collapsed session keeps its reopen handle even
-  // when hidden: it's the only way back to a minimized conversation, and its
-  // existence implies the user is actively using the assistant right now.
-  if (hidden && !collapsed) return null
+  const t = useTranslations('settings_assistant')
+  const errorLocale = useLocale() as ErrorLocale
+  const { toast } = useToast()
+
+  // The pill's own X writes the same user_preferences opt-out as the settings
+  // switch (crm#245: that switch sits on a page the settings rail no longer
+  // lists, so "turn it off in settings" was not a way a user could find). The
+  // override hides or restores the pill at once instead of waiting for
+  // router.refresh() to re-render the layout. It is keyed to the prop value it
+  // was set against, so once the server-rendered prop changes (the refresh, or
+  // the settings switch), the prop is the truth again without an effect.
+  const [hideOverride, setHideOverride] = useState<{ value: boolean; against: boolean } | null>(null)
+  const effectiveHidden =
+    hideOverride && hideOverride.against === hidden ? hideOverride.value : hidden
+
+  async function saveFabHidden(nextHide: boolean): Promise<boolean> {
+    try {
+      const res = await fetch('/api/user/preferences', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hide_assistant_fab: nextHide }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        toast({
+          title: t('fab_save_failed'),
+          description: getErrorMessage(body, { statusCode: res.status, locale: errorLocale }),
+          variant: 'destructive',
+        })
+        return false
+      }
+    } catch (err) {
+      toast({
+        title: t('fab_save_failed'),
+        description: getErrorMessage(err, { locale: errorLocale }),
+        variant: 'destructive',
+      })
+      return false
+    }
+    // Outside the try: a refresh that throws must not report a failed save,
+    // the write has landed by then.
+    router.refresh()
+    return true
+  }
+
+  // Runs from the toast's Ångra, a closure older than the refresh that hid the
+  // pill, so it cannot read the current prop. Undo only follows a saved hide,
+  // so the stored value it overrides is "hidden"; before that refresh lands
+  // the prop is still false and the pill shows either way.
+  async function restoreFab() {
+    setHideOverride({ value: false, against: true })
+    if (!(await saveFabHidden(false))) setHideOverride(null)
+  }
+
+  async function hideFab() {
+    setHideOverride({ value: true, against: hidden })
+    if (!(await saveFabHidden(true))) {
+      setHideOverride(null)
+      return
+    }
+    toast({
+      title: t('fab_hidden_title'),
+      description: t('fab_hidden_description'),
+      action: (
+        <ToastAction altText={t('fab_hidden_undo')} onClick={() => void restoreFab()}>
+          {t('fab_hidden_undo')}
+        </ToastAction>
+      ),
+    })
+  }
+
+  // User opt-out (the pill's X, or Inställningar → Assistenten): the sidebar
+  // entry stays, the floating button goes. A collapsed session keeps its
+  // reopen handle even when hidden: it's the only way back to a minimized
+  // conversation, and its existence implies the user is actively using the
+  // assistant right now.
+  if (effectiveHidden && !collapsed) return null
 
   // Dismissed upsell (non-payer clicked the pill's X, or closed the paywalled
   // sheet): render nothing at all for the rest of the browser session. A
@@ -208,10 +284,11 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   // no resize listener, no layout shift on first paint.
   const visibilityClass = collapsed ? 'flex' : 'hidden md:flex'
 
-  // The upsell pill (fresh state, no capability) carries its own dismiss so a
-  // non-payer is never stuck with an undismissable ad in the corner. Payer and
-  // collapsed states are unchanged: no X there, the pill is functional UI.
-  const dismissible = !hasAi && !collapsed
+  // Every fresh pill carries an X; a collapsed handle never does (it is the way
+  // back to a live session). A non-payer's X dismisses the upsell for this
+  // browser session, so a non-payer is never stuck with an undismissable ad in
+  // the corner. A payer's X sets the persistent opt-out above, with an undo.
+  const dismissible = !collapsed
 
   return (
     // Wrapper div carries the pill shell; the two segments inside are separate
@@ -234,7 +311,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // data-agent-ui: opening the assistant must not dismiss an open
       // non-modal dialog (DialogContent treats this as inside).
       data-agent-ui=""
-      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-lg bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
+      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-[var(--shadow-md)] bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
     >
       <button
         onClick={handleClick}
@@ -264,8 +341,9 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       </button>
       {dismissible && (
         <button
-          onClick={dismissUpsellForSession}
-          aria-label="Dölj tills nästa besök"
+          onClick={hasAi ? () => void hideFab() : dismissUpsellForSession}
+          aria-label={hasAi ? t('fab_hide') : 'Dölj tills nästa besök'}
+          title={hasAi ? t('fab_hide') : undefined}
           className="flex items-center rounded-r-full pl-1 pr-3 text-background/70 hover:text-background hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <X className="h-4 w-4" />

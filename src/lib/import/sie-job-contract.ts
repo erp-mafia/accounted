@@ -105,6 +105,17 @@ export function hashSIEPayload(value: unknown): string {
   return createHash('sha256').update(canonicalJSON(value)).digest('hex')
 }
 
+/**
+ * One entry is larger than a chunk may carry (2 000 lines or 1 MB with the
+ * array brackets): chunkSIEEntries refuses it, failing the whole job.
+ */
+export function exceedsSIEEntryLimits(
+  entry: { lines: unknown[] },
+  entryBytes: number = Buffer.byteLength(JSON.stringify(entry), 'utf8'),
+): boolean {
+  return entry.lines.length > SIE_LIMITS.chunkLines || entryBytes + 2 > SIE_LIMITS.chunkBytes
+}
+
 /** Include the brackets and separators in the actual UTF-8 request budget. */
 export function* chunkSIEEntries<T extends { sourceId: string; lines: unknown[] }>(
   entries: Iterable<T>,
@@ -114,7 +125,7 @@ export function* chunkSIEEntries<T extends { sourceId: string; lines: unknown[] 
   let lines = 0
   for (const entry of entries) {
     const entryBytes = Buffer.byteLength(JSON.stringify(entry), 'utf8')
-    if (entry.lines.length > SIE_LIMITS.chunkLines || entryBytes + 2 > SIE_LIMITS.chunkBytes) {
+    if (exceedsSIEEntryLimits(entry, entryBytes)) {
       throw new Error(`SIE-verifikation ${entry.sourceId} överskrider gränsen på 2 000 rader eller 1 MB.`)
     }
     const separator = chunk.length > 0 ? 1 : 0

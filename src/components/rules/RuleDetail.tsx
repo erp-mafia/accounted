@@ -129,7 +129,7 @@ export default function RuleDetail({ id }: { id: string }) {
           >
             <span
               className={cn(
-                'truncate text-[10.5px] font-semibold uppercase tracking-[0.06em]',
+                'truncate text-[11px] font-semibold uppercase tracking-[0.06em]',
                 i < step ? 'text-success' : i === step ? 'text-foreground' : 'text-muted-foreground',
               )}
             >
@@ -168,11 +168,11 @@ export default function RuleDetail({ id }: { id: string }) {
             </div>
           </div>
 
-          <p className="my-4 max-w-[64ch] text-[13.5px] leading-relaxed text-foreground/85">
+          <p className="my-4 max-w-[64ch] text-[13px] leading-relaxed text-foreground/85">
             <span className="text-muted-foreground">{t('read_lead')}</span> {read}
           </p>
 
-          <h2 className="mb-2 mt-6 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+          <h2 className="mb-2 mt-6 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
             {t('matches_title')}
           </h2>
           <table className="w-full border-collapse text-[13px]">
@@ -253,7 +253,7 @@ export default function RuleDetail({ id }: { id: string }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mb-5">
-      <h2 className="mb-2 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">{title}</h2>
+      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">{title}</h2>
       <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5">{children}</dl>
     </div>
   )

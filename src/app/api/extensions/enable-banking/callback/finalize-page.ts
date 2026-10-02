@@ -19,12 +19,12 @@
  * standalone page this mirrors. Swedish-only, like the rest of the
  * enable-banking extension surfaces.
  *
- * Inline scripts are nonce-bound (ASVS V3.3): the route generates a
- * per-request nonce, stamps it on every <script> tag here, and sets a
- * response-level CSP with script-src 'nonce-...'. The global next.config CSP
- * (which still carries 'unsafe-inline' for the app bundle) also applies;
- * browsers enforce the intersection, so an injected inline script without
- * the nonce is blocked on this response.
+ * Inline scripts are nonce-bound (ASVS V3.3): the route takes the proxy's
+ * per-request nonce (lib/security/csp.ts requestCspNonce), stamps it on every
+ * <script> tag here, and sets a response-level CSP with script-src
+ * 'nonce-...'. The proxy's own CSP carries the same nonce and no
+ * 'unsafe-inline', so whichever of the two headers the browser receives (or
+ * both), an injected inline script without the nonce is blocked.
  */
 
 import { escapeHtml } from '@/lib/email/user-text'

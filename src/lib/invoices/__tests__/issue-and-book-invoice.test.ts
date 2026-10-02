@@ -52,7 +52,7 @@ vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   recordManualInvoiceDelivery: (...args: unknown[]) => mockRecordManualInvoiceDelivery(...args),
 }))
 
-import { issueAndBookInvoice } from '../issue-and-book-invoice'
+import { issueAndBookInvoice, markInvoiceSentAndBook } from '../issue-and-book-invoice'
 import type { CompanySettings } from '@/types'
 
 const log: Logger = {
@@ -148,6 +148,15 @@ describe('issueAndBookInvoice', () => {
     const result = await issue(makeDraft(), unregistered)
 
     expect(result).toEqual({ ok: true, journalEntryId: null, partialFailures: [] })
+  })
+
+  it('refuses a draft whose customer was deleted, before a number is taken (crm#263)', async () => {
+    const result = await issue(makeDraft({ invoice_number: null, customer_id: null, customer: null }))
+
+    expect(result).toEqual({ ok: false, errorCode: 'INVOICE_CUSTOMER_MISSING' })
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toEqual([])
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
   })
 
   it('fails with INVOICE_CREATE_NUMBER_ASSIGN_FAILED when numbering fails', async () => {
@@ -247,5 +256,29 @@ describe('issueAndBookInvoice', () => {
         expect.objectContaining({ step: 'pdf_archive' }),
       ])
     }
+  })
+})
+
+describe('markInvoiceSentAndBook', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+  })
+
+  it('never issues an invoice without a customer, whichever path calls it (crm#263)', async () => {
+    const result = await markInvoiceSentAndBook({
+      supabase: mockSupabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoice: makeDraft({ customer_id: null, customer: null }) as never,
+      settings,
+      log,
+    })
+
+    expect(result).toEqual({ ok: false, errorCode: 'INVOICE_CUSTOMER_MISSING' })
+    // Refused before the status flip: the draft is untouched.
+    expect(findCalls('invoices', 'update')).toEqual([])
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
   })
 })

@@ -11,7 +11,8 @@ import {
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
-import { updateDraftEntry } from '@/lib/bookkeeping/engine'
+import { updateDraftJournalEntry } from '@/lib/core/bookkeeping/journal-entry-edits'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { reanchorOrphanedSupplierInvoiceDocuments } from '@/lib/core/documents/supplier-invoice-underlag'
 
@@ -146,29 +147,30 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 /**
  * PATCH: edit a DRAFT verifikat in place (header + lines). Only drafts are
  * editable; updateDraftEntry rejects committed entries with a 409, and the DB
- * immutability trigger is the backstop.
+ * immutability trigger is the backstop. Rules in
+ * lib/core/bookkeeping/journal-entry-edits.ts, shared with the v1 operation
+ * journal-entries.update-draft.
  */
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.update',
-  async (request, { supabase, companyId, user }, { params }) => {
+  async (request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
     const validation = await validateBody(request, CreateJournalEntrySchema)
     if (!validation.success) return validation.response
 
-    try {
-      const entry = await updateDraftEntry(supabase, companyId, user.id, id, validation.data)
-      return NextResponse.json({ data: entry })
-    } catch (err) {
-      const typed = bookkeepingErrorResponse(err)
-      if (typed) return typed
-      // Untyped errors map to Swedish via getErrorMessage: the raw message is
-      // logged here and must never reach the user verbatim (issue #337).
-      logger.error('failed to update draft journal entry', { entryId: id, error: err })
-      return NextResponse.json(
-        { error: getErrorMessage(err, { context: 'journal_entry' }) },
-        { status: 400 },
-      )
+    const outcome = await updateDraftJournalEntry(
+      { supabase, companyId, userId: user.id, log },
+      id,
+      validation.data,
+    )
+    if (!outcome.ok) {
+      // Typed bookkeeping errors keep the envelope this route has always
+      // answered (the entry form reads its details).
+      const typed = outcome.error ? bookkeepingErrorResponse(outcome.error) : null
+      return typed ?? sessionFailureResponse(outcome, log, requestId)
     }
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

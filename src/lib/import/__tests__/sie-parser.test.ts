@@ -414,14 +414,15 @@ describe('parseSIEFile', () => {
       expect(result.issues.some((i) => i.severity === 'warning' && i.message.toLowerCase().includes('objektlista'))).toBe(true)
     })
 
-    it('surfaces OIB/OUB drops and dimension presence as info issues', () => {
+    it('parses OIB/OUB and surfaces the IB split and dimension presence as info issues (#3313)', () => {
       const sie = [
         '#FLAGGA 0',
         '#SIETYP 4',
         '#RAR 0 20240101 20241231',
         '#DIM 6 "Projekt"',
+        '#IB 0 1930 5000.00',
         '#OIB 0 1930 {6 "P001"} 5000.00',
-        '#OUB 0 1930 {6 "P001"} 7000.00',
+        '#OUB 0 1930 {6 "P001"} 5000.00',
         '#VER A 1 20240115 "Taggad"',
         '{',
         '#TRANS 5010 {6 "P001"} 100.00',
@@ -430,9 +431,18 @@ describe('parseSIEFile', () => {
       ].join('\n')
 
       const result = parseSIEFile(sie)
+      expect(result.objectOpeningBalances).toEqual([
+        { yearIndex: 0, account: '1930', dimNo: '6', code: 'P001', amount: 5000 },
+      ])
+      expect(result.objectClosingBalances).toEqual([
+        { yearIndex: 0, account: '1930', dimNo: '6', code: 'P001', amount: 5000 },
+      ])
       const infos = result.issues.filter((i) => i.severity === 'info').map((i) => i.message)
-      expect(infos.some((m) => m.includes('2 objektbalansrader'))).toBe(true)
+      expect(infos.some((m) => m.includes('hoppades över'))).toBe(false)
+      expect(infos.some((m) => m.startsWith('1 objektbalanser (#OIB) fördelar den ingående balansen per projekt'))).toBe(true)
       expect(infos.some((m) => m.includes('dimensionsdata'))).toBe(true)
+      // The 1930 line of the voucher is untagged, so P001's #OUB matches its #OIB.
+      expect(result.issues.some((i) => i.tag === 'OUB')).toBe(false)
       // Silence preserved for files without any dimension data.
       const plain = parseSIEFile(['#FLAGGA 0', '#SIETYP 4', '#RAR 0 20240101 20241231'].join('\n'))
       expect(plain.issues.some((i) => i.tag === 'DIM' || i.tag === 'OIB')).toBe(false)
@@ -629,6 +639,37 @@ describe('validateSIEFile', () => {
 
     expect(validation.valid).toBe(true)
     expect(validation.errors).toHaveLength(0)
+  })
+
+  it('warns when voucher texts carry characters the exporter already lost (U+FFFD)', () => {
+    const content = [
+      '#FLAGGA 0',
+      '#SIETYP 4',
+      '#FNAMN "Test"',
+      '#RAR 0 20250101 20251231',
+      '#KONTO 1930 "Bank"',
+      '#KONTO 3001 "F\uFFFDrs\uFFFDljning"',
+      '#VER A 1 20250115 "F\uFFFDrs\uFFFDljning januari"',
+      '{',
+      '#TRANS 1930 {} 100.00',
+      '#TRANS 3001 {} -100.00 20250115 "Int\uFFFDkt"',
+      '}',
+      '#VER A 2 20250116 "Bankavgift"',
+      '{',
+      '#TRANS 1930 {} -10.00',
+      '#TRANS 3001 {} 10.00',
+      '}',
+    ].join('\n')
+
+    const validation = validateSIEFile(parseSIEFile(content))
+    const warning = validation.warnings.find((w) => w.includes('saknas redan i filen'))
+    expect(warning).toBeDefined()
+    expect(warning).toMatch(/^1 verifikation har/)
+  })
+
+  it('does not warn about lost characters when voucher texts are intact', () => {
+    const validation = validateSIEFile(parseSIEFile(SIE_WITH_VOUCHERS))
+    expect(validation.warnings.some((w) => w.includes('saknas redan i filen'))).toBe(false)
   })
 
   it('adds error for unbalanced vouchers', () => {
@@ -951,6 +992,16 @@ describe('decodeBuffer: fallback on U+FFFD', () => {
     const buf = new TextEncoder().encode('Företag').buffer
     const result = decodeBuffer(buf, 'utf8')
     expect(result).toBe('Företag')
+  })
+
+  it('keeps a U+FFFD the exporter wrote into a valid UTF-8 file instead of re-reading it as windows1252', () => {
+    // "F\uFFFDrs\uFFFDljning" as a Wint export wrote it: EF BF BD is the
+    // UTF-8 encoding of U+FFFD. Read as windows1252 it became "Fï¿½rsï¿½ljning".
+    const buf = new TextEncoder().encode('#VER A 1 20250501 "F\uFFFDrs\uFFFDljning"').buffer
+    expect(detectEncoding(buf)).toBe('utf8')
+    const result = decodeBuffer(buf, 'utf8')
+    expect(result).toBe('#VER A 1 20250501 "F\uFFFDrs\uFFFDljning"')
+    expect(result).not.toContain('ï¿½')
   })
 })
 

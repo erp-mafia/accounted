@@ -14,11 +14,12 @@ import {
   AlertCircle,
   XCircle,
   ArrowRight,
-  BarChart3,
   Info,
   Briefcase,
 } from 'lucide-react'
 import type { ImportPreview, ParseIssue } from '@/lib/import/types'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { ImportStatRow } from '@/components/import/ImportStatRow'
 
 interface SIEPreviewStepProps {
   preview: ImportPreview
@@ -141,49 +142,27 @@ export default function SIEPreviewStep({
         </CardContent>
       </Card>
 
-      {/* Statistics */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <FileText className="h-4 w-4" />
-              <span className="text-sm">Konton</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{preview.accountCount}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <BarChart3 className="h-4 w-4" />
-              <span className="text-sm">Verifikationer</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{preview.voucherCount}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <span className="text-sm">Transaktionsrader</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{preview.transactionLineCount}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <span className="text-sm">IB, summa debet</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{formatCurrency(preview.openingBalanceTotal)}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Summan av alla debetsaldon i ingående balans, inte ett enskilt kontosaldo.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Statistics: flat label/number pairs, no boxed tiles. The IB
+          clarification sits behind the label's "?". */}
+      <ImportStatRow
+        stats={[
+          { key: 'accounts', label: 'Konton', value: preview.accountCount },
+          { key: 'vouchers', label: 'Verifikationer', value: preview.voucherCount },
+          { key: 'lines', label: 'Transaktionsrader', value: preview.transactionLineCount },
+          {
+            key: 'ib',
+            label: (
+              <>
+                IB, summa debet
+                <HelpPopover className="shrink-0">
+                  Summan av alla debetsaldon i ingående balans, inte ett enskilt kontosaldo.
+                </HelpPopover>
+              </>
+            ),
+            value: formatCurrency(preview.openingBalanceTotal),
+          },
+        ]}
+      />
 
       {/* Trial balance check */}
       <Card className={preview.trialBalance.isBalanced ? 'border-success/50' : 'border-border'}>
@@ -210,7 +189,7 @@ export default function SIEPreviewStep({
             <div>
               <p className="text-sm text-muted-foreground">Status</p>
               {preview.trialBalance.isBalanced ? (
-                <Badge variant="success">Balanserar</Badge>
+                <span className="text-xs text-muted-foreground">Balanserar</span>
               ) : (
                 <Badge variant="secondary">
                   Diff: {formatCurrency(ibDiff)}
@@ -477,10 +456,10 @@ export default function SIEPreviewStep({
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
+        <Button variant="outline" onClick={onBack}>
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={onContinue} disabled={blockContinue}>
+        <Button onClick={onContinue} disabled={blockContinue}>
           {preview.mappingStatus.lowConfidence > 0 || preview.mappingStatus.unmapped > 0
             ? 'Granska mappningar'
             : 'Fortsätt'}

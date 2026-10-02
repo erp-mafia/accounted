@@ -206,16 +206,21 @@ export async function detectExpiringBankConnections(
  * the shared skvStatusNeedsReconnect decision over the row. Connections are
  * per (user, company), so the predicate needs the caller's user id.
  * Refresh-token ciphertext is read only for a null check and never returned.
+ *
+ * `serviceClient` must be a service-role client: the token columns are
+ * withheld from end-user roles, so a session client is refused. userId and
+ * companyId come from the authenticated request, which confines the read to
+ * the caller's own row.
  */
 export async function detectSkvDisconnected(
-  supabase: SupabaseClient,
+  serviceClient: SupabaseClient,
   userId: string,
   companyId: string,
   now: Date = new Date(),
 ): Promise<Notice | null> {
   try {
     if ((process.env.SKATTEVERKET_DISABLED ?? '').toLowerCase() === 'true') return null
-    const { data, error } = await supabase
+    const { data, error } = await serviceClient
       .from('skatteverket_tokens')
       .select('status, expires_at, refresh_token, refresh_count, last_error_at')
       .eq('user_id', userId)
@@ -253,7 +258,7 @@ export async function detectSkvDisconnected(
       severity: 'error',
       messageKey: 'skv_disconnected',
       actionKey: 'skv_disconnected_action',
-      actionHref: '/settings/tax',
+      actionHref: '/settings/skatteverket',
     }
   } catch (err) {
     return logAndNull(

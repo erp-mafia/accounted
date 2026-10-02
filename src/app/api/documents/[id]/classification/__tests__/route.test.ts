@@ -26,7 +26,7 @@ const call = (body: unknown) =>
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'company-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
 })
@@ -44,6 +44,16 @@ describe('POST /api/documents/[id]/classification', () => {
     expect((body as { data: Record<string, unknown> }).data).toEqual({ document_id: DOC, doc_type: 'agreement.loan' })
     expect(recordHumanClassification).toHaveBeenCalledWith({ tag: 'service' }, DOC, 'user-1', { docType: 'agreement.loan', relevance: 'relevant' })
     expect(enqueueDocumentJob).toHaveBeenCalledWith({ tag: 'service' }, 'company-1', DOC, 'extract')
+  })
+
+  it('keeps the type but queues no extraction for a company outside the brain rollout', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
+    enqueue({ data: { id: DOC }, error: null })
+    ;(recordHumanClassification as ReturnType<typeof vi.fn>).mockResolvedValue({ status: 'classified', admission: 'admitted' })
+    const { status } = await parseJsonResponse(await call({ doc_type: 'agreement.loan' }))
+    expect(status).toBe(200)
+    expect(recordHumanClassification).toHaveBeenCalledWith({ tag: 'service' }, DOC, 'user-1', { docType: 'agreement.loan', relevance: 'relevant' })
+    expect(enqueueDocumentJob).not.toHaveBeenCalled()
   })
 
   it('withdraws what the old type derived before re-extracting, and refuses to save half a correction', async () => {

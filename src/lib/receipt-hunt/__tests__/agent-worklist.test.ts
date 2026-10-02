@@ -107,13 +107,13 @@ afterEach(() => {
 })
 
 describe('resolveAgentWorklist', () => {
-  it('merges verifikat and unbooked purchases, ranked on SEK value', async () => {
+  it('puts unbooked purchases before verifikat, each ranked on SEK value', async () => {
     const supabase = mockSupabase(fixture(), { ok: true, total_count: 3, verifikat: VERIFIKAT })
     const result = await resolveAgentWorklist(supabase, 'co-1')
 
-    // 1249 SEK, then USD 90 (950 SEK), then EUR 49 (560 SEK): the foreign
-    // amounts must not sort as if they were kronor.
-    expect(result.items.map((i) => i.journal_entry_id ?? i.transaction_id)).toEqual(['je-si', 'tx-1', 'je-bank'])
+    // The unbooked USD 90 purchase leads although 1249 SEK is larger; then
+    // 1249 SEK before EUR 49 (560 SEK): foreign amounts are ranked in kronor.
+    expect(result.items.map((i) => i.journal_entry_id ?? i.transaction_id)).toEqual(['tx-1', 'je-si', 'je-bank'])
     expect(result.inbox_address).toBe('acme-7f3k@in.example.test')
   })
 

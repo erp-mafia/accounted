@@ -16,7 +16,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { TxColumnId } from '@/lib/transactions/columns-v2'
 import { HUE_DOT_CLASS, accountHue } from '@/lib/bookkeeping/template-group-colors'
-import { AlertCircle, Link2, Loader2, MoreHorizontal } from 'lucide-react'
+import { AlertCircle, Link2, MoreHorizontal } from 'lucide-react'
 import type {
   SkattekontoBookingSuggestion,
   SkattekontoMatchSuggestion,
@@ -137,7 +137,7 @@ export default function SkattekontoInboxCard({
         <span className="row-collapsible flex min-w-0 items-center gap-2">
           <span className="truncate">{row.transaktionstext}</span>
           {matchSuggestion && (
-            <Badge variant="warning" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px]">
+            <Badge variant="warning" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[11px]">
               <AlertCircle className="h-3 w-3" />
               {duplicateLabel}
             </Badge>
@@ -192,23 +192,18 @@ export default function SkattekontoInboxCard({
           <Button
             size="sm"
             variant="outline"
-            className="h-7 px-3.5 text-xs"
             onClick={() => (matchSuggestion ? onMatch(row) : onBokfor(row))}
-            disabled={processing}
+            loading={processing}
           >
-            {processing ? (
-              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-            ) : matchSuggestion ? (
-              <Link2 className="mr-1 h-3 w-3" />
-            ) : null}
+            {!processing && matchSuggestion ? <Link2 className="mr-1 h-3 w-3" /> : null}
             {matchSuggestion ? t('link_to_voucher') : t('book')}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
-                size="icon"
-                className="mr-2 h-7 w-7 text-muted-foreground hover:text-foreground"
+                size="icon-sm"
+                className="mr-2 text-muted-foreground hover:text-foreground"
                 aria-label={t('more_actions_aria')}
                 title={t('more_actions_aria')}
                 disabled={processing}

@@ -11,11 +11,11 @@ const ctx = { supabase, companyId: CO, userId: 'user-1', scopes: [] as never[] }
 
 beforeEach(() => {
   reset()
-  process.env.ARKIV_COMPANY_IDS = CO
+  process.env.ARKIV_BRAIN_COMPANY_IDS = CO
   process.env.RESEND_INBOUND_DOMAIN = 'in.accounted.se'
 })
 afterEach(() => {
-  delete process.env.ARKIV_COMPANY_IDS
+  delete process.env.ARKIV_BRAIN_COMPANY_IDS
   delete process.env.RESEND_INBOUND_DOMAIN
 })
 
@@ -38,7 +38,7 @@ describe('Accounted://arkiv/missing', () => {
     enqueue({ data: { local_part: 'x' } })
     const out = (await arkivMissingResource.read(ctx)) as { intake: { email: string | null }; missing: unknown[] }
     expect(out).toMatchObject({ intake: { email: null }, missing: [] })
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
     expect(await arkivMissingResource.read(ctx)).toMatchObject({ enabled: false })
   })
 })

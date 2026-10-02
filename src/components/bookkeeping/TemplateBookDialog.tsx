@@ -21,7 +21,7 @@ import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { roundOre } from '@/lib/money'
-import { ArrowLeft, Check, Loader2 } from 'lucide-react'
+import { ArrowLeft, Check } from 'lucide-react'
 import type { BookingTemplateLibrary } from '@/types'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -208,7 +208,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
                   {lines.map((l, i) => (
                     <div
                       key={i}
-                      className="flex items-center gap-3 border-b border-border/60 px-3 py-2 text-[13px] last:border-b-0"
+                      className="flex items-center gap-3 border-b border-border px-3 py-2 text-[13px] last:border-b-0"
                     >
                       <span className="w-12 font-mono text-muted-foreground">
                         {l.account_number}
@@ -244,8 +244,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
               <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
                 {t('tpl_cancel')}
               </Button>
-              <Button onClick={() => void handleBook()} disabled={!balanced || submitting}>
-                {submitting && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              <Button onClick={() => void handleBook()} disabled={!balanced} loading={submitting}>
                 {t('tpl_book')}
               </Button>
             </div>

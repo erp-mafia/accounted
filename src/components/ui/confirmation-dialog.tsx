@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
-import { ClipboardCheck, Loader2 } from 'lucide-react'
+import { ClipboardCheck } from 'lucide-react'
 
 interface ConfirmationDialogProps {
   open: boolean
@@ -87,7 +87,6 @@ export function ConfirmationDialog({
               variant="outline"
               onClick={() => onOpenChange(false)}
               disabled={isSubmitting}
-              className="min-h-11 w-full sm:w-auto"
             >
               Tillbaka
             </Button>
@@ -95,17 +94,10 @@ export function ConfirmationDialog({
             <Button
               ref={confirmRef}
               onClick={onConfirm}
-              disabled={isSubmitting || confirmDisabled}
-              className="min-h-11 w-full sm:w-auto"
+              disabled={confirmDisabled}
+              loading={isSubmitting}
             >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Skapar...
-                </>
-              ) : (
-                confirmLabel
-              )}
+              {isSubmitting ? 'Skapar...' : confirmLabel}
             </Button>
           </DialogFooter>
         </div>

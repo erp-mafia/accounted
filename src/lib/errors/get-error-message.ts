@@ -3,7 +3,8 @@
  *
  * Priority chain:
  * 1. Zod validation field errors
- * 2. Postgres error code map
+ * 2. Postgres error code map (a database error envelope never shows the
+ *    database's own text: see databaseErrorMessage)
  * 3. HTTP status code map
  * 4. Context-specific fallback
  * 5. Generic fallback
@@ -24,7 +25,8 @@ import {
   describeMissingInvoicePaymentAccount,
   isInvoicePaymentAccountCurrency,
 } from '@/lib/invoices/payment-accounts'
-import { getErrorEntry, hasErrorEntry } from './structured-errors'
+import { conflictCode, getErrorEntry, hasErrorEntry } from './structured-errors'
+import { FOREIGN_KEY_REFUSAL_CODES, foreignKeyRefusal } from './foreign-key-refusal'
 import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'
 
 type ErrorContext =
@@ -53,27 +55,16 @@ function pick(b: Bilingual, locale: ErrorLocale): string {
   return b[locale] ?? b.sv
 }
 
-// A RESTRICT foreign key names the register that still depends on the row, so
-// the refusal can say what the row is and what to do instead. Keyed by
-// constraint name; consulted only for 23503.
-//
-// depreciation_schedules_journal_entry_id_fkey: delete_last_voucher on a
-// planenlig avskrivning. The database refuses at the DELETE, before anything
-// is removed, and that refusal is deliberate (issue #2779): a posted
-// avskrivning is corrected with storno, not deleted.
-const FOREIGN_KEY_REFUSAL_MAP: Record<string, Bilingual> = {
-  depreciation_schedules_journal_entry_id_fkey: {
-    sv: 'Verifikatet bokför en avskrivning i anläggningsregistret och kan inte raderas. Gör en rättelse (storno) i stället.',
-    en: 'This voucher posts a depreciation in the fixed asset register and cannot be deleted. Make a correction (storno) instead.',
-  },
-}
-
-function matchForeignKeyRefusal(obj: Record<string, unknown>, locale: ErrorLocale): string | null {
-  if (obj.code !== '23503' || typeof obj.message !== 'string') return null
-  for (const [constraint, text] of Object.entries(FOREIGN_KEY_REFUSAL_MAP)) {
-    if (obj.message.includes(`"${constraint}"`)) return pick(text, locale)
-  }
-  return null
+// A refused delete names the register that still depends on the row, so the
+// refusal can say what the row is and what to do instead. The table of
+// mapped constraints, and the agent-facing code and remediation for each,
+// live in ./foreign-key-refusal (one definition for this mapper,
+// getStructuredError and errorResponse). An unmapped refusal still gets the
+// generic 23503 sentence below, never the database's own text.
+function matchForeignKeyRefusal(code: string, message: string, locale: ErrorLocale): string | null {
+  const refusal = foreignKeyRefusal({ code, message })
+  if (!refusal || refusal.message_sv === null) return null
+  return locale === 'en' ? refusal.message_en : refusal.message_sv
 }
 
 // Postgres error codes -> localized messages
@@ -164,8 +155,11 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     'Verifikationen kunde inte hittas.',
   ],
   [
-    /Only posted entries can be deleted/i,
-    'Endast bokförda verifikationer kan raderas.',
+    // delete_last_voucher has raised "Only posted or draft entries can be
+    // deleted (current status: ...)" since 20260528120600; the older wording
+    // stays matched for any caller still on it.
+    /Only posted (or draft )?entries can be deleted/i,
+    'Endast bokförda verifikationer och utkast kan raderas.',
   ],
   [
     /Cannot delete voucher in a closed fiscal period/i,
@@ -202,6 +196,13 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
   ],
 ]
 
+/** A PT409 refusal the database raised by a registered name speaks for itself. */
+function conflictMessage(dbMessage: unknown, locale: ErrorLocale): string {
+  const code = conflictCode(dbMessage)
+  const entry = code === 'CONFLICT' ? undefined : getErrorEntry(code)
+  return entry ? pick({ sv: entry.message_sv, en: entry.message_en }, locale) : pick(POSTGRES_ERROR_MAP.PT409, locale)
+}
+
 /**
  * Check if a message matches a known error pattern and return the Swedish translation.
  * Returns null if no pattern matches.
@@ -216,6 +217,82 @@ function tryMatchKnownError(message: string): string | null {
     }
   }
   return null
+}
+
+/**
+ * A Postgres SQLSTATE (two-character class, three-character subclass) or a
+ * PostgREST PGRSTnnn code. Every SQLSTATE carries a digit, which keeps an
+ * all-letter five-character value (a ROT/RUT work code such as 'BUTIK') from
+ * being read as one. Our own codes are words (/^[A-Z_]+$/), never this shape.
+ */
+function isDatabaseErrorCode(code: unknown): code is string {
+  return typeof code === 'string' && (/^(?=.*\d)[0-9A-Z]{5}$/.test(code) || /^PGRST\d{3}$/.test(code))
+}
+
+/**
+ * Codes whose message the database writes itself: data exceptions (class 22),
+ * integrity constraint violations (23), syntax and access rule violations
+ * (42), and PostgREST's own PGRST codes. That text is English and names
+ * tables, columns, constraints and the rejected values, so it never reaches
+ * the user. Codes our RPCs speak through by default (P0001 raise_exception
+ * and the rest) are not in this set: their message is ours.
+ */
+function isDatabaseAuthoredCode(code: string): boolean {
+  return code.startsWith('PGRST') || ['22', '23', '42'].includes(code.slice(0, 2))
+}
+
+/** A message that opens with a registered code ("CODE" or "CODE: detail"). */
+function registeredCodeMessage(message: string, locale: ErrorLocale): string | null {
+  const code = /^([A-Z][A-Z0-9_]*)(?::|$)/.exec(message)?.[1]
+  const entry = code ? getErrorEntry(code) : undefined
+  return entry ? pick({ sv: entry.message_sv, en: entry.message_en }, locale) : null
+}
+
+/**
+ * What a database error envelope says to the user (issue #2831).
+ *
+ * supabase-js hands back `{ code, message, details, hint }`: the same shape as
+ * an app error envelope, which is why the bare-envelope branch used to return
+ * the database's English text, constraint names included. Here the message
+ * is heard only when it was written for the reader: a constraint with its own
+ * sentence, a registered code (our RPCs raise e.g. "CASH_ACCOUNT_PRIMARY_
+ * INELIGIBLE: disabled" under 23514), a Swedish sentence, or a known pattern.
+ * For a database-authored code anything else gets the code's generic Swedish
+ * sentence, then the status, context and generic fallbacks.
+ *
+ * The known patterns apply to every code: delete_last_voucher raises its
+ * English refusals as P0001, and the patterns written for them (#369) went
+ * unused once the bare-envelope branch returned them first. Beyond these
+ * translations, null for the codes our RPCs speak through (P0001 and the
+ * rest): the caller keeps its handling, so their messages pass as before.
+ */
+function databaseErrorMessage(
+  code: string,
+  message: string,
+  options: GetErrorMessageOptions,
+): string | null {
+  const locale = options.locale ?? 'sv'
+  const text = message.trim()
+  if (text) {
+    const refusal = matchForeignKeyRefusal(code, text, locale)
+    if (refusal) return refusal
+    const registered = registeredCodeMessage(text, locale)
+    if (registered) return registered
+    if (isSwedishDatabaseMessage(text)) return text
+    const known = tryMatchKnownError(text)
+    if (known) return known
+  }
+
+  if (!isDatabaseAuthoredCode(code)) return null
+  const mapped = POSTGRES_ERROR_MAP[code]
+  return mapped ? pick(mapped, locale) : fallbackMessage(options)
+}
+
+/** Steps 4 to 6 of the priority chain: HTTP status, context, generic. */
+function fallbackMessage({ context, statusCode, locale = 'sv' }: GetErrorMessageOptions): string {
+  if (statusCode && HTTP_STATUS_MAP[statusCode]) return pick(HTTP_STATUS_MAP[statusCode], locale)
+  if (context && CONTEXT_FALLBACKS[context]) return pick(CONTEXT_FALLBACKS[context], locale)
+  return pick(GENERIC_FALLBACK, locale)
 }
 
 /**
@@ -289,10 +366,27 @@ export function looksLikeUserFacingSwedish(message: string): boolean {
   if (!text) return false
   if (TECHNICAL_LEAK_PATTERNS.some((p) => p.test(text))) return false
   if (/[åäöÅÄÖ]/.test(text)) return true
+  return hasSwedishWords(text)
+}
+
+function hasSwedishWords(text: string): boolean {
   if (SWEDISH_STRONG_RE.test(text)) return true
   const weak = new Set<string>()
   for (const m of text.matchAll(SWEDISH_WEAK_RE)) weak.add(m[2].toLowerCase())
   return weak.size >= 2
+}
+
+/**
+ * looksLikeUserFacingSwedish for a message the database raised, which is
+ * judged on its own words only. The å/ä/ö shortcut does not apply: our RPCs
+ * raise English prose around Swedish names ("Only byrå team owners and
+ * admins ...", "... is räkenskapsinformation per BFL"), and Postgres quotes
+ * the rejected value verbatim (22P02: invalid input syntax for type uuid:
+ * "Företag"), so quoted text does not count either.
+ */
+function isSwedishDatabaseMessage(text: string): boolean {
+  if (TECHNICAL_LEAK_PATTERNS.some((p) => p.test(text))) return false
+  return hasSwedishWords(text.replace(/"[^"]*"/g, ''))
 }
 
 /**
@@ -410,7 +504,7 @@ export function getErrorMessage(
   error: unknown,
   options: GetErrorMessageOptions = {}
 ): string {
-  const { context, statusCode, locale = 'sv' } = options
+  const { locale = 'sv' } = options
 
   // 1. If it's a string, check if it's already Swedish or matches a known pattern
   if (typeof error === 'string' && error.trim()) {
@@ -425,9 +519,13 @@ export function getErrorMessage(
 
     // Before the bare-envelope branch below: a raw PostgREST error has the
     // same { code, message } shape and would be returned verbatim from there.
-    const foreignKeyRefusal = matchForeignKeyRefusal(obj, locale)
-    if (foreignKeyRefusal) return foreignKeyRefusal
-    if (obj.code === 'PT409') return pick(POSTGRES_ERROR_MAP.PT409, locale)
+    // Keyed on `message` being present too, the shape supabase-js returns:
+    // a route body like { error: 'Swedish sentence', code } is not one.
+    if (obj.code === 'PT409') return conflictMessage(obj.message, locale)
+    if (isDatabaseErrorCode(obj.code) && typeof obj.message === 'string') {
+      const databaseMessage = databaseErrorMessage(obj.code, obj.message, options)
+      if (databaseMessage !== null) return databaseMessage
+    }
 
     // Bare envelope inner-error shape: { code, message, message_en?, ... }.
     // Happens when a caller forwards `result.error` (the inner object) instead
@@ -481,7 +579,20 @@ export function getErrorMessage(
         account_numbers?: unknown
         details?: unknown
       }
-      if (structured.code === 'PT409') return pick(POSTGRES_ERROR_MAP.PT409, locale)
+      if (structured.code === 'PT409') return conflictMessage(structured.message, locale)
+
+      // A refused delete as errorResponse sends it: the envelope already
+      // carries the register's own sentence in both languages (#2831).
+      if (typeof structured.code === 'string' && FOREIGN_KEY_REFUSAL_CODES.has(structured.code)) {
+        const own = locale === 'en' ? structured.message_en : structured.message
+        if (typeof own === 'string' && own.trim()) return own
+      }
+
+      // A database error forwarded inside the envelope is judged the same way.
+      if (isDatabaseErrorCode(structured.code) && typeof structured.message === 'string') {
+        const databaseMessage = databaseErrorMessage(structured.code, structured.message, options)
+        if (databaseMessage !== null) return databaseMessage
+      }
 
       // The canonical envelope keeps Zod issues under error.details. Read
       // them before the generic VALIDATION_ERROR registry message in either locale.
@@ -552,13 +663,16 @@ export function getErrorMessage(
 
       // Name the accounts: the registry sentence alone sent a customer back
       // to a mapping step that does not exist in the onboarding flow (desk
-      // crm#63). The English registry text is returned above unchanged.
+      // crm#63). Every import entry now routes class 9 amounts to 2999 itself
+      // (#3312), so this fires only for a target someone chose in a mapping:
+      // point back at that choice, never at a page outside the user's flow.
+      // The English registry text is returned above unchanged.
       if (structured.code === 'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS') {
         const accounts = (structured.details as { account_numbers?: unknown } | undefined)?.account_numbers
         if (Array.isArray(accounts) && accounts.length > 0) {
           const list = (accounts as string[]).join(', ')
-          const subject = accounts.length === 1 ? `Konto ${list} har` : `Kontona ${list} har`
-          return `${subject} belopp men ligger utanför 1000-8999 och kan inte tas med i balans- och resultatrapporterna. Mappa till ett konto i kontoplanen via Import, SIE-fil (observationskonton i klass 9 hör hemma på 2999 OBS-konto) och försök igen.`
+          const subject = accounts.length === 1 ? `Målkonto ${list} ligger` : `Målkontona ${list} ligger`
+          return `${subject} utanför 1000-8999 och kan inte ta emot belopp i balans- och resultatrapporterna. Välj ett konto i 1000-8999 i kontomappningen och försök igen (observationskonton i klass 9 hör hemma på 2999 OBS-konto).`
         }
       }
 
@@ -635,7 +749,7 @@ export function getErrorMessage(
         if (typeof structured.message === 'string' && structured.message.trim()) {
           return structured.message
         }
-        return 'Ett angivet kostnadsställe/projekt finns inte i dimensionsregistret eller är arkiverat. Skapa värdet i registret först.'
+        return 'Ett angivet dimensionsvärde finns inte i dimensionsregistret eller är arkiverat. Skapa värdet i registret först.'
       }
 
       if (structured.code === 'NO_OPEN_PERIOD_FOR_DATE') {
@@ -764,18 +878,8 @@ export function getErrorMessage(
     if (isSwedishUserMessage(error.message)) return error.message
   }
 
-  // 4. HTTP status code map
-  if (statusCode && HTTP_STATUS_MAP[statusCode]) {
-    return pick(HTTP_STATUS_MAP[statusCode], locale)
-  }
-
-  // 5. Context-specific fallback
-  if (context && CONTEXT_FALLBACKS[context]) {
-    return pick(CONTEXT_FALLBACKS[context], locale)
-  }
-
-  // 6. Generic fallback
-  return pick(GENERIC_FALLBACK, locale)
+  // 4-6. HTTP status code map, context-specific fallback, generic fallback
+  return fallbackMessage(options)
 }
 
 // PSD2 bank-connection OAuth callback errors. The Enable Banking callback

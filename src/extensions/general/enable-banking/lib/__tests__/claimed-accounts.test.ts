@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { describeClaimedElsewhere, partitionByClaim } from '../claimed-accounts'
+import { describeClaimedElsewhere, hasSelectableAccounts, partitionByClaim } from '../claimed-accounts'
 import type { StoredAccount } from '../../types'
 
 function account(over: Partial<StoredAccount> & { uid: string }): StoredAccount {
@@ -55,6 +55,44 @@ describe('partitionByClaim', () => {
     const { own, claimedElsewhere } = partitionByClaim(rows)
     expect(own.map((a) => a.uid)).toEqual(['1', '3'])
     expect(claimedElsewhere.map((a) => a.uid)).toEqual(['2', '4'])
+  })
+})
+
+describe('hasSelectableAccounts', () => {
+  const claimed = account({ uid: 'c', iban: 'SE3', enabled: false, claimed_by_company_id: 'company-b' })
+
+  it('is false when every account is already booked by another company', () => {
+    expect(hasSelectableAccounts([claimed])).toBe(false)
+  })
+
+  it('is false for a consent that carries no accounts at all', () => {
+    expect(hasSelectableAccounts([])).toBe(false)
+    expect(hasSelectableAccounts(null)).toBe(false)
+    expect(hasSelectableAccounts(undefined)).toBe(false)
+  })
+
+  it('is true as soon as one account is this company\'s to pick, checked or not', () => {
+    expect(hasSelectableAccounts([claimed, account({ uid: 'a', iban: 'SE1', enabled: false })])).toBe(true)
+    expect(hasSelectableAccounts([account({ uid: 'b', enabled: false, deselected_elsewhere: true })])).toBe(true)
+  })
+
+  it('is false when the only account is a card account that mirrors the main account', () => {
+    // Never a choice (lib/bank-sync/mirror-card-account.ts): a consent holding
+    // nothing else has nothing to pick, so the next login replaces it.
+    const card = account({ uid: 'd', name: 'SVEA_MQ_Debit_B2B', enabled: false })
+    expect(hasSelectableAccounts([card])).toBe(false)
+    expect(hasSelectableAccounts([card, claimed])).toBe(false)
+    expect(hasSelectableAccounts([card, account({ uid: 'f', name: 'Företagskonto', iban: 'SE4', enabled: false })])).toBe(true)
+  })
+
+  it('never counts a card account as selectable, even one switched on before the rule', () => {
+    // A renewal carrying only such a card would otherwise resume into a
+    // picker whose save refuses the card and has nothing else to save.
+    expect(hasSelectableAccounts([account({ uid: 'g', name: 'BOKIO_Debit_Business', enabled: true })])).toBe(false)
+  })
+
+  it('counts a flagged account that syncs here as selectable, the same way the picker lists it', () => {
+    expect(hasSelectableAccounts([account({ uid: 'e', enabled: true, claimed_by_company_id: 'company-b' })])).toBe(true)
   })
 })
 

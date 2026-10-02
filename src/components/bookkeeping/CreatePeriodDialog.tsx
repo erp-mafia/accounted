@@ -15,7 +15,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2 } from 'lucide-react'
 import { computeSuggestedPeriod, fiscalYearName } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { fiscalPeriodAdvisoryText } from '@/lib/bookkeeping/fiscal-period-warnings'
 import type { FiscalPeriod } from '@/types'
@@ -214,8 +213,7 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
                 Avbryt
               </Button>
-              <Button onClick={handleCreate} disabled={isSubmitting || !name || !periodStart || !periodEnd}>
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              <Button onClick={handleCreate} disabled={!name || !periodStart || !periodEnd} loading={isSubmitting}>
                 Skapa
               </Button>
             </DialogFooter>

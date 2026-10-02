@@ -18,6 +18,12 @@ export function listArgKeys(inputSchema: Record<string, unknown>): string[] {
   return Object.keys(properties as Record<string, unknown>)
 }
 
+/** The top-level keys the schema requires, for the "did you mean" fallback. */
+export function listRequiredArgKeys(inputSchema: Record<string, unknown>): string[] {
+  const required = inputSchema.required
+  return Array.isArray(required) ? required.filter((key): key is string => typeof key === 'string') : []
+}
+
 export function findUnknownArgKeys(
   inputSchema: Record<string, unknown>,
   args: Record<string, unknown>,

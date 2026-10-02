@@ -9,6 +9,14 @@ export interface KPIDefinition {
   defaultVisible: boolean
   format: 'currency' | 'percentage' | 'days'
   colorLogic: 'positive-good' | 'negative-good' | 'neutral'
+  /**
+   * True for a figure computed from the P&L (classes 3-8), which a dimension
+   * filter narrows. The others (cash, VAT, receivables, payment days) stay
+   * company-wide under a filter (lib/reports/kpi-report.ts), so the KPI page
+   * hides them while one is active instead of showing a company figure next
+   * to a project's (dimensionScopedPreferences).
+   */
+  followsDimensionFilter: boolean
 }
 
 export const KPI_DEFINITIONS: KPIDefinition[] = [
@@ -19,6 +27,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
     defaultVisible: true,
     format: 'currency',
     colorLogic: 'positive-good',
+    followsDimensionFilter: true,
   },
   {
     id: 'cashPosition',
@@ -27,6 +36,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
     defaultVisible: true,
     format: 'currency',
     colorLogic: 'positive-good',
+    followsDimensionFilter: false,
   },
   {
     id: 'outstandingReceivables',
@@ -35,6 +45,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
     defaultVisible: true,
     format: 'currency',
     colorLogic: 'neutral',
+    followsDimensionFilter: false,
   },
   {
     id: 'vatLiability',
@@ -44,6 +55,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
     defaultVisible: true,
     format: 'currency',
     colorLogic: 'negative-good',
+    followsDimensionFilter: false,
   },
   {
     id: 'grossMargin',
@@ -52,6 +64,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
     defaultVisible: false,
     format: 'percentage',
     colorLogic: 'positive-good',
+    followsDimensionFilter: true,
   },
   {
     id: 'expenseRatio',
@@ -60,6 +73,7 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
     defaultVisible: false,
     format: 'percentage',
     colorLogic: 'negative-good',
+    followsDimensionFilter: true,
   },
   {
     id: 'avgPaymentDays',
@@ -68,10 +82,21 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
     defaultVisible: false,
     format: 'days',
     colorLogic: 'negative-good',
+    followsDimensionFilter: false,
   },
 ]
 
 export const ALL_KPI_IDS = KPI_DEFINITIONS.map((d) => d.id)
+
+/**
+ * The layout the KPI panes render while a dimension filter is active: the
+ * user's own, minus the company-wide figures. Render-only, never saved: the
+ * stored layout stays what the user chose.
+ */
+export function dimensionScopedPreferences(prefs: KPIPreferences): KPIPreferences {
+  const scoped = new Set(KPI_DEFINITIONS.filter((d) => d.followsDimensionFilter).map((d) => d.id))
+  return { ...prefs, visibleKpis: prefs.visibleKpis.filter((id) => scoped.has(id)) }
+}
 
 export function getDefaultPreferences(): KPIPreferences {
   return {

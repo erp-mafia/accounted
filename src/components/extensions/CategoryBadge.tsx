@@ -14,7 +14,7 @@ const CATEGORY_LABEL_KEY: Record<ExtensionCategory, string> = {
 export default function CategoryBadge({ category }: { category: ExtensionCategory }) {
   const t = useTranslations('extensions')
   return (
-    <Badge variant="outline" className="text-[10px] font-medium">
+    <Badge variant="outline" className="text-[11px] font-medium">
       {t(CATEGORY_LABEL_KEY[category])}
     </Badge>
   )

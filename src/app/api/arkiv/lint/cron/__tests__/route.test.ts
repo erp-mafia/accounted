@@ -20,11 +20,11 @@ beforeEach(() => {
   reset()
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://localhost'
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'key'
-  process.env.ARKIV_COMPANY_IDS = 'co-1,co-2'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'co-1,co-2'
 })
 
 afterEach(() => {
-  delete process.env.ARKIV_COMPANY_IDS
+  delete process.env.ARKIV_BRAIN_COMPANY_IDS
 })
 
 describe('GET /api/arkiv/lint/cron', () => {
@@ -46,7 +46,7 @@ describe('GET /api/arkiv/lint/cron', () => {
   })
 
   it('does nothing when no company is in the rollout', async () => {
-    delete process.env.ARKIV_COMPANY_IDS
+    delete process.env.ARKIV_BRAIN_COMPANY_IDS
     ;(lintCompanies as ReturnType<typeof vi.fn>).mockResolvedValue({})
     const { body } = await parseJsonResponse(await call())
     expect(body).toMatchObject({ ok: true, companies: 0 })

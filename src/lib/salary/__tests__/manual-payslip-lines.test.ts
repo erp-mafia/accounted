@@ -9,6 +9,7 @@ import {
   type ManualLineBody,
 } from '@/lib/salary/manual-payslip-lines'
 import { SalaryLineItemTypeSchema } from '@/lib/api/schemas'
+import { isCalculatedLineType } from '@/lib/salary/calculated-line-items'
 
 const body = (r: ReturnType<typeof buildManualPayslipLine>): ManualLineBody => {
   if (!r.ok) throw new Error(`expected ok, got ${r.reason}`)
@@ -51,11 +52,11 @@ describe('manual payslip line catalogue', () => {
     }
   })
 
-  it('wages (incl. variable pay: övertid, OB, bonus) are taxed, avgift basis and semestergrundande', () => {
+  it('wages (incl. variable pay: övertid, bonus, a one-off OB amount on Övrigt) are taxed, avgift basis and semestergrundande', () => {
     // Semesterlagen: rörliga lönedelar earn semesterlön under both rules
     // (12 % on the variable part under sammalöneregeln, part of the base
     // under procentregeln), see the swedish-payroll vacation-pay reference.
-    for (const type of ['bonus', 'commission', 'overtime', 'overtime_50', 'ob_night', 'ob_holiday', 'other'] as const) {
+    for (const type of ['bonus', 'commission', 'overtime', 'other'] as const) {
       expect(MANUAL_PAYSLIP_LINE_SPECS[type].flags).toEqual({
         is_taxable: true,
         is_avgift_basis: true,
@@ -189,5 +190,11 @@ describe('manualLineCapsFromRunParams', () => {
     expect(manualLineCapsFromRunParams({ milersattning_egen_bil: '25', traktamente_heldag: -1 })).toEqual({})
     expect(manualLineCapsFromRunParams(null)).toEqual({})
     expect(manualLineCapsFromRunParams(undefined)).toEqual({})
+  })
+
+  it('never offers a type the calculation owns: it would vanish at the next calculation (#3185)', () => {
+    for (const type of MANUAL_PAYSLIP_LINE_TYPES) {
+      expect(isCalculatedLineType(type), type).toBe(false)
+    }
   })
 })

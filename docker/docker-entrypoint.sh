@@ -11,7 +11,7 @@ for var in NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY SUPABASE_SERVI
 done
 
 if [ -n "$missing" ]; then
-  printf "ERROR: Missing required environment variables:\n%b\nSee .env.docker.example for reference.\n" "$missing" >&2
+  printf "ERROR: Missing required environment variables:\n%b\nSee docker/.env.example for reference.\n" "$missing" >&2
   exit 1
 fi
 
@@ -27,21 +27,45 @@ if [ -n "$placeholders_found" ]; then
   printf "WARNING: These variables appear to contain placeholder values:\n%bPlease set them to real values before running in production.\n" "$placeholders_found" >&2
 fi
 
-# ─── Populate the writable tmpfs mounts from the baked-in templates ───
-# Under docker-compose's `read_only: true`, /app/.next and /app/public are
-# tmpfs mounts owned by nextjs (uid=1001); this cp fills them in RAM at every
-# startup. /app/server.js, /app/node_modules and /app/package.json stay on the
-# read-only image layer. Running as the unprivileged nextjs user means no
+# ─── Populate the writable mounts from the baked-in templates ───
+# Under docker-compose's `read_only: true`, /app/.next is a named volume and
+# /app/public a tmpfs, both owned by nextjs (uid=1001); this cp fills them at
+# every startup. /app/server.js, /app/node_modules and /app/package.json stay on
+# the read-only image layer. Running as the unprivileged nextjs user means no
 # CAP_CHOWN / CAP_SETUID is needed, so the container works under `cap_drop: ALL`.
 # Without read_only:true the mount points were created empty in the Dockerfile,
 # so the same cp still works.
 #
-# On a non-tmpfs restart the target dirs persist with their write bits removed
-# (see the immutability step below), so restore owner-write first: otherwise the
-# unprivileged cp -R below fails under `set -e`. Under tmpfs the dirs are empty
-# each start, so this is a no-op.
+# The volume outlives the container, so it still holds the previous start's
+# copy, possibly from an older image. Both targets are emptied first, so every
+# start serves exactly this image's bundle, as a fresh tmpfs did, and upgrades
+# do not pile stale chunks onto the disk. That copy had its write bits removed
+# (see the immutability step below), so owner-write is restored first:
+# otherwise the unprivileged delete fails under `set -e`.
 chmod -R u+w /app/.next /app/public 2>/dev/null || true
+find /app/.next /app/public -mindepth 1 -delete
+# Docker copies the image directory's mode into a named volume only when it
+# creates the volume, so a volume first created by an older image (whose
+# /app/.next was 755) would keep that mode forever. The owner can chmod its own
+# mount root without any capability, so every start converges on 750: readable
+# by the nodejs group only, like the uid=1001,mode=750 tmpfs it replaced.
+chmod 750 /app/.next /app/public 2>/dev/null || true
 if [ -d /opt/gnubok-template/.next ]; then
+  # One readable error instead of a cp write error per file, looped by the
+  # restart policy, when the target cannot hold the bundle. The usual cause is
+  # a docker-compose.yml from before #3164 that still mounts /app/.next as a
+  # size-capped tmpfs: `docker compose pull` updates the image, not that file.
+  need_kb=$(du -sk /opt/gnubok-template/.next | cut -f1)
+  free_kb=$(df -Pk /app/.next | awk 'NR == 2 { print $4 }')
+  if [ -n "$free_kb" ] && [ "$need_kb" -gt "$free_kb" ]; then
+    printf "ERROR: /app/.next has %s MB free, but this image's app bundle needs %s MB.\n" \
+      "$((free_kb / 1024))" "$((need_kb / 1024))" >&2
+    printf "If your docker-compose.yml still mounts /app/.next as a tmpfs, replace that\n" >&2
+    printf "mount with the next_runtime volume from the current docker-compose.yml in\n" >&2
+    printf "the repository (docker compose pull updates the image, not that file).\n" >&2
+    printf "Otherwise, free up disk space on the Docker host.\n" >&2
+    exit 1
+  fi
   cp -R /opt/gnubok-template/.next/. /app/.next/
 fi
 if [ -d /opt/gnubok-template/public ]; then
@@ -127,7 +151,7 @@ if [ -n "$SUBST_PATHS" ]; then
 fi
 
 # ─── Make the served bundle immutable (defense in depth) ───
-# nextjs owns these tmpfs files, so a compromised Node process could chmod them
+# nextjs owns these files, so a compromised Node process could chmod them
 # back; dropping the write bits still raises the bar against casual tampering.
 # (Root-owned immutability isn't possible without running the entrypoint as
 # root, which would reintroduce the CAP_CHOWN/CAP_SETUID requirement.)

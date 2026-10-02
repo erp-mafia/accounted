@@ -19,6 +19,14 @@
  * the dashboard's SalarySettingsContent. Replacing the map would silently
  * move every other source type back to series A.
  *
+ * `salary_payslip_show_employer_cost` / `salary_payslip_show_breakdown` decide
+ * whether the payslip copy the EMPLOYEE receives prints Arbetsgivarkostnad
+ * and Beräkningsunderlag (lib/salary/payslips/build-payslip-data). The
+ * employer's own view always prints both. Hiding the employer cost also hides
+ * the breakdown, whose steps carry the employer cost figures. A run whose
+ * payslips already went to employees keeps the sections fixed on it at that
+ * moment (lib/salary/payslips/section-snapshot).
+ *
  * `salary_calculation_policy` (lib/salary/calculation-policy.ts) is a jsonb
  * column read raw and reported parsed, every convention present. A PATCH
  * carries any subset of the conventions and is merged key by key into the
@@ -68,6 +76,8 @@ interface SalarySettingsRow {
   preferred_payment_format: PaymentFormat | null
   salary_default_bank: DefaultBank | null
   salary_net_rounding: boolean | null
+  salary_payslip_show_employer_cost: boolean | null
+  salary_payslip_show_breakdown: boolean | null
   /** Raw jsonb: {} on a fresh row, the full object once written through the API. */
   salary_calculation_policy: Partial<SalaryCalculationPolicy> | null
   default_voucher_series_per_source_type: VoucherSeriesMap | null
@@ -76,7 +86,7 @@ interface SalarySettingsRow {
 /**
  * What a company without a settings row gets: the DB column defaults
  * (migrations 20260703190000, 20260813143000, 20260918120000,
- * 20260919120100) mirrored here so a fresh company reads sensibly before its
+ * 20260919120100, 20260930200000) mirrored here so a fresh company reads sensibly before its
  * first write.
  */
 const SALARY_SETTINGS_DEFAULTS = {
@@ -85,6 +95,8 @@ const SALARY_SETTINGS_DEFAULTS = {
   preferred_payment_format: 'pain001' as PaymentFormat,
   salary_default_bank: null as DefaultBank,
   salary_net_rounding: false,
+  salary_payslip_show_employer_cost: true,
+  salary_payslip_show_breakdown: true,
   salary_calculation_policy: {} as Partial<SalaryCalculationPolicy>,
 }
 
@@ -97,6 +109,8 @@ const SalarySettingsResource = z.object({
   preferred_payment_format: z.enum(['pain001', 'bg_lb']),
   salary_default_bank: z.enum(['swedbank', 'seb', 'handelsbanken', 'nordea', 'other']).nullable(),
   salary_net_rounding: z.boolean(),
+  salary_payslip_show_employer_cost: z.boolean(),
+  salary_payslip_show_breakdown: z.boolean(),
   salary_calculation_policy: SalaryCalculationPolicySchema,
   salary_voucher_series: z.string().regex(VOUCHER_SERIES_RE),
 })
@@ -117,6 +131,8 @@ const V1PatchSalarySettingsSchema = z
     preferred_payment_format: UpdateSettingsSchema.shape.preferred_payment_format,
     salary_default_bank: UpdateSettingsSchema.shape.salary_default_bank,
     salary_net_rounding: UpdateSettingsSchema.shape.salary_net_rounding,
+    salary_payslip_show_employer_cost: UpdateSettingsSchema.shape.salary_payslip_show_employer_cost,
+    salary_payslip_show_breakdown: UpdateSettingsSchema.shape.salary_payslip_show_breakdown,
     salary_calculation_policy: SalaryCalculationPolicyPatchSchema.optional(),
     salary_voucher_series: z
       .string()
@@ -140,6 +156,10 @@ function toSalarySettingsResource(
       row?.preferred_payment_format ?? SALARY_SETTINGS_DEFAULTS.preferred_payment_format,
     salary_default_bank: row?.salary_default_bank ?? SALARY_SETTINGS_DEFAULTS.salary_default_bank,
     salary_net_rounding: row?.salary_net_rounding ?? SALARY_SETTINGS_DEFAULTS.salary_net_rounding,
+    salary_payslip_show_employer_cost:
+      row?.salary_payslip_show_employer_cost ?? SALARY_SETTINGS_DEFAULTS.salary_payslip_show_employer_cost,
+    salary_payslip_show_breakdown:
+      row?.salary_payslip_show_breakdown ?? SALARY_SETTINGS_DEFAULTS.salary_payslip_show_breakdown,
     // Every convention reported, defaults filled: {} on a fresh row reads as
     // the historical engine, the same object :calculate snapshots.
     salary_calculation_policy: SalaryCalculationPolicySchema.parse(
@@ -224,6 +244,16 @@ function mergeSalarySettings(
       current?.salary_net_rounding,
       SALARY_SETTINGS_DEFAULTS.salary_net_rounding,
     ),
+    salary_payslip_show_employer_cost: pick(
+      changes.salary_payslip_show_employer_cost,
+      current?.salary_payslip_show_employer_cost,
+      SALARY_SETTINGS_DEFAULTS.salary_payslip_show_employer_cost,
+    ),
+    salary_payslip_show_breakdown: pick(
+      changes.salary_payslip_show_breakdown,
+      current?.salary_payslip_show_breakdown,
+      SALARY_SETTINGS_DEFAULTS.salary_payslip_show_breakdown,
+    ),
     salary_calculation_policy:
       nextCalculationPolicy(current, changes.salary_calculation_policy) ??
       current?.salary_calculation_policy ??
@@ -243,6 +273,8 @@ const EXAMPLE_RESOURCE = {
   preferred_payment_format: 'pain001',
   salary_default_bank: 'swedbank',
   salary_net_rounding: true,
+  salary_payslip_show_employer_cost: true,
+  salary_payslip_show_breakdown: false,
   salary_calculation_policy: {
     partial_month: 'annual_calendar_days',
     sick_rate: 'annual_hourly',
@@ -262,6 +294,7 @@ const POLICY_PITFALLS = [
 ]
 
 const SHARED_PITFALLS = [
+  'salary_payslip_show_employer_cost and salary_payslip_show_breakdown only change the payslip copy the employee receives (the emailed payslip link, and GET /salary-runs/{id}/payslips/{employeeId}/pdf?audience=employee). The employer view (the same PDF endpoint without audience) always prints both sections. The breakdown steps carry the employer cost figures, so salary_payslip_show_employer_cost=false also hides Beräkningsunderlag on the employee copy, whatever salary_payslip_show_breakdown says (its stored value is kept and applies again once the employer cost is shown). Both default to true. A change applies to runs whose payslips have not yet gone to employees: the first send or employee-copy download of a run fixes its sections on the run, and payslips already handed out keep the content they were issued with.',
   'salary_deviation_period is snapshotted onto each salary run at creation: changing it never moves a run that already exists. Set it before the first run of a new month. Switching later makes the next run\'s deviation window overlap the previous run\'s window, and that run is refused with 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP (pass explicit deviation_period_start/end on that one run to bridge the switch).',
   'salary_pay_day only drives the default payment_date of NEW runs (the day of the pay month, 1-28 so it exists in every month). Existing runs keep their payment_date; override per run on POST /salary-runs.',
   'salary_voucher_series is an alias for company_settings.default_voucher_series_per_source_type.salary_payment. Writes MERGE that one key into the per-source-type map; the other source types keep their letters. The default company layout books salaries on K.',
@@ -274,7 +307,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary/settings',
   summary: 'Get the company payroll settings.',
   description:
-    'Returns the payroll settings that drive new salary runs: pay day (salary_pay_day), avvikelseperiod (salary_deviation_period: which month a run reads absence and worked days from), salary payment file format (preferred_payment_format), the bank whose upload instructions are pre-selected (salary_default_bank), öresavrundning of net pay (salary_net_rounding), the calculation conventions (salary_calculation_policy: partial_month, sick_rate, long_leave, leave_context, net_rounding, one_off_tax_rounding, every key always present) and the voucher series salary runs book into (salary_voucher_series). A company that has no settings row yet answers with the defaults the engine would apply (pay day 25, same_month, pain001, no bank, no rounding, every convention at its default, series A).',
+    'Returns the payroll settings that drive new salary runs: pay day (salary_pay_day), avvikelseperiod (salary_deviation_period: which month a run reads absence and worked days from), salary payment file format (preferred_payment_format), the bank whose upload instructions are pre-selected (salary_default_bank), öresavrundning of net pay (salary_net_rounding), whether the employee\'s payslip copy prints Arbetsgivarkostnad (salary_payslip_show_employer_cost) and Beräkningsunderlag (salary_payslip_show_breakdown), the calculation conventions (salary_calculation_policy: partial_month, sick_rate, long_leave, leave_context, net_rounding, one_off_tax_rounding, every key always present) and the voucher series salary runs book into (salary_voucher_series). A company that has no settings row yet answers with the defaults the engine would apply (pay day 25, same_month, pain001, no bank, no rounding, both payslip sections shown, every convention at its default, series A).',
   useWhen:
     'You are provisioning or auditing a customer for payroll and need to know how new salary runs will be dated, which month their deviations are read from, which calculation conventions the engine applies, which payment file the bank expects, or which voucher series the salary vouchers land in.',
   doNotUseFor:
@@ -304,7 +337,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary/settings',
   summary: 'Partially update the company payroll settings.',
   description:
-    'Patches the payroll settings: salary_pay_day (1-28), salary_deviation_period (same_month | previous_month), preferred_payment_format (pain001 | bg_lb), salary_default_bank (swedbank | seb | handelsbanken | nordea | other | null), salary_net_rounding (boolean), salary_calculation_policy (an object with any of partial_month: workdays | annual_calendar_days, sick_rate: daily_divisor | annual_hourly, long_leave: workdays | calendar_after_five_workdays, leave_context: all_registered | through_deviation_end, net_rounding: up | nearest, one_off_tax_rounding: truncate | nearest; merged key by key into the stored policy) and salary_voucher_series (one letter A-Z). All fields optional; at least one must be supplied; unknown fields are rejected. Upserts: a company without a settings row gets one created with the supplied values and DB defaults for the rest. Returns the full resource after the write. Idempotent (mandatory Idempotency-Key). Dry-runnable: ?dry_run=true returns the merged resource without writing.',
+    'Patches the payroll settings: salary_pay_day (1-28), salary_deviation_period (same_month | previous_month), preferred_payment_format (pain001 | bg_lb), salary_default_bank (swedbank | seb | handelsbanken | nordea | other | null), salary_net_rounding (boolean), salary_payslip_show_employer_cost (boolean), salary_payslip_show_breakdown (boolean), salary_calculation_policy (an object with any of partial_month: workdays | annual_calendar_days, sick_rate: daily_divisor | annual_hourly, long_leave: workdays | calendar_after_five_workdays, leave_context: all_registered | through_deviation_end, net_rounding: up | nearest, one_off_tax_rounding: truncate | nearest; merged key by key into the stored policy) and salary_voucher_series (one letter A-Z). All fields optional; at least one must be supplied; unknown fields are rejected. Upserts: a company without a settings row gets one created with the supplied values and DB defaults for the rest. Returns the full resource after the write. Idempotent (mandatory Idempotency-Key). Dry-runnable: ?dry_run=true returns the merged resource without writing.',
   useWhen:
     'You are onboarding a customer for payroll over the API (set the pay day, avvikelseperiod, calculation conventions, payment file format, bank and voucher series before the first run), a customer changes bank or pay day, or a customer migrated from Fortnox needs the same partial-month, sick-pay and long-leave conventions as their old payslips.',
   doNotUseFor:
@@ -354,7 +387,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // inline literals.
     const { data, error } = await ctx.supabase
       .from('company_settings')
-      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type')
+      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_payslip_show_employer_cost, salary_payslip_show_breakdown, salary_calculation_policy, default_voucher_series_per_source_type')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
 
@@ -399,7 +432,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // insert. Literal projection for the schema guard (see GET).
     const { data: current, error: fetchErr } = await ctx.supabase
       .from('company_settings')
-      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type')
+      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_payslip_show_employer_cost, salary_payslip_show_breakdown, salary_calculation_policy, default_voucher_series_per_source_type')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
 
@@ -431,11 +464,13 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
           preferred_payment_format: changes.preferred_payment_format,
           salary_default_bank: changes.salary_default_bank,
           salary_net_rounding: changes.salary_net_rounding,
+          salary_payslip_show_employer_cost: changes.salary_payslip_show_employer_cost,
+          salary_payslip_show_breakdown: changes.salary_payslip_show_breakdown,
           salary_calculation_policy: nextCalculationPolicy(existing, changes.salary_calculation_policy),
           default_voucher_series_per_source_type: nextVoucherSeriesMap(existing, changes.salary_voucher_series),
         })
         .eq('company_id', ctx.companyId!)
-        .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type')
+        .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_payslip_show_employer_cost, salary_payslip_show_breakdown, salary_calculation_policy, default_voucher_series_per_source_type')
         .maybeSingle()
 
       if (error) {
@@ -478,10 +513,12 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
         preferred_payment_format: changes.preferred_payment_format,
         salary_default_bank: changes.salary_default_bank,
         salary_net_rounding: changes.salary_net_rounding,
+        salary_payslip_show_employer_cost: changes.salary_payslip_show_employer_cost,
+        salary_payslip_show_breakdown: changes.salary_payslip_show_breakdown,
         salary_calculation_policy: nextCalculationPolicy(null, changes.salary_calculation_policy),
         default_voucher_series_per_source_type: seriesMap,
       })
-      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type')
+      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_payslip_show_employer_cost, salary_payslip_show_breakdown, salary_calculation_policy, default_voucher_series_per_source_type')
       .maybeSingle()
 
     if (error) {
@@ -492,7 +529,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
       if ((error as { code?: string }).code === '23505') {
         const { data: raced, error: racedErr } = await ctx.supabase
           .from('company_settings')
-          .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type')
+          .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_payslip_show_employer_cost, salary_payslip_show_breakdown, salary_calculation_policy, default_voucher_series_per_source_type')
           .eq('company_id', ctx.companyId!)
           .maybeSingle()
         if (racedErr) {

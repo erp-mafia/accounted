@@ -161,6 +161,8 @@ const RETAINED = new Set([
   // Company, team and configuration
   'agent_memory.created_by_user_id',
   'agent_profiles.verified_by_user_id',
+  'company_skills.created_by',
+  'community_feedback.user_id', // An upvote on a shared item: one count among others, no personal content.
   'api_keys.sod_acknowledged_by',
   'booking_template_hidden.hidden_by',
   'booking_template_library.created_by',

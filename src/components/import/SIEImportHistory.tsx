@@ -226,7 +226,7 @@ export default function SIEImportHistory() {
                     </Button>
                   )}
                   {!row.job_state && (
-                    <Button variant="outline" size="sm" className="min-h-10" onClick={event => {
+                    <Button variant="outline" size="sm" onClick={event => {
                       reviewTrigger.current = event.currentTarget
                       setReviewImport(row)
                     }}>
@@ -243,11 +243,11 @@ export default function SIEImportHistory() {
       {(total > PAGE_SIZE || offset > 0) && (
         <nav className="mt-4 flex flex-wrap items-center justify-end gap-3" aria-label={t('sie_recovery.pagination')}>
           <span className="text-xs tabular-nums text-muted-foreground">{t('sie_recovery.page', { page: offset / PAGE_SIZE + 1 })}</span>
-          <Button variant="outline" size="sm" className="min-h-10" disabled={offset === 0} onClick={() => {
+          <Button variant="outline" size="sm" disabled={offset === 0} onClick={() => {
             setRows(null)
             setOffset(value => Math.max(0, value - PAGE_SIZE))
           }}>{t('sie_recovery.previous')}</Button>
-          <Button variant="outline" size="sm" className="min-h-10" disabled={offset + PAGE_SIZE >= total} onClick={() => {
+          <Button variant="outline" size="sm" disabled={offset + PAGE_SIZE >= total} onClick={() => {
             setRows(null)
             setOffset(value => value + PAGE_SIZE)
           }}>{t('sie_recovery.next')}</Button>

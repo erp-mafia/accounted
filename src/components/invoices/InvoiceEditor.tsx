@@ -12,6 +12,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { addDays, format } from 'date-fns'
 import { Button } from '@/components/ui/button'
+import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
 import { Input } from '@/components/ui/input'
 import { TagInput } from '@/components/ui/tag-input'
 import { Label } from '@/components/ui/label'
@@ -34,6 +35,7 @@ import {
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
+  defaultGronTeknikWorkType,
   deriveNextStep,
   deriveForvalChips,
   deriveRequiresHousing,
@@ -80,13 +82,18 @@ import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import {
+  DEDUCTION_TYPES,
+  GRON_TEKNIK_WORK_TYPES,
   ROT_WORK_TYPES,
   RUT_WORK_TYPES,
+  articleDeductionPrefill,
   computeDeduction,
   deductionCapWarnings,
+  deductionLineIssues,
   deductionTypeForWorkType,
-  parseArticleHouseworkType,
+  gronTeknikWorkType,
   SCHABLON_WORK_TYPES,
+  type DeductionType,
   type PriorYearDeductions,
 } from '@/lib/invoices/rot-rut-rules'
 import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
@@ -153,7 +160,7 @@ export type InvoiceEditorProps = (
 // Subset of Article fields the line picker needs to pre-fill a row.
 type ArticleOption = Pick<
   Article,
-  'id' | 'article_number' | 'name' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
+  'id' | 'article_number' | 'name' | 'type' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
 >
 
 function RequiredMark() {
@@ -172,12 +179,12 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 // Borderless in-table cell input: quiet at rest, beige on hover, ringed on
 // focus. rounded-sm: nested leaf inside the rows surface (radius ladder).
 const CELL_INPUT_CLASS =
-  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] transition-colors duration-150 hover:bg-secondary/40 focus-visible:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring placeholder:text-muted-foreground/60'
+  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] transition-colors duration-150 hover:bg-secondary/60 focus-visible:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring placeholder:text-muted-foreground/60'
 
 // Ghost cell in the entry row: previews the append default in the italic
 // muted tone, hovers like a cell input so it reads as clickable.
 const ENTRY_GHOST_CLASS =
-  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] italic text-muted-foreground/50 tabular-nums transition-colors duration-150 hover:bg-secondary/40 cursor-text'
+  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] italic text-muted-foreground/50 tabular-nums transition-colors duration-150 hover:bg-secondary/60 cursor-text'
 
 // The add-row links under the table. Quiet links on desktop, inflated to a
 // 40px touch target on coarse pointers: on Android they are the only way into
@@ -194,7 +201,7 @@ const ROW_ICON_BUTTON_CLASS =
 
 // Compact borderless Select trigger for in-table cells (unit, VAT).
 const CELL_SELECT_TRIGGER_CLASS =
-  'h-7 w-auto gap-1 rounded-sm border-transparent bg-transparent px-2 py-1 text-[13px] shadow-none hover:bg-secondary/40 tabular-nums'
+  'h-7 w-auto gap-1 rounded-sm border-transparent bg-transparent px-2 py-1 text-[13px] shadow-none hover:bg-secondary/60 tabular-nums'
 
 // Förval settings row: flat hairline rows, label left, control right.
 const SETTINGS_ROW_CLASS =
@@ -357,8 +364,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         .regex(INVOICE_POSTING_ACCOUNT_REGEX, t('posting_account_invalid'))
         .nullable()
         .optional(),
-      // ROT/RUT-avdrag per line. Optional: null means "no deduction".
-      deduction_type: z.enum(['rot', 'rut']).nullable().optional(),
+      // Skattereduktion per line (ROT, RUT, grön teknik). Optional: null means
+      // "no deduction".
+      deduction_type: z.enum(DEDUCTION_TYPES).nullable().optional(),
       labor_hours: z.number().nonnegative().nullable().optional(),
       work_type: z.string().nullable().optional(),
       housing_designation: z.string().nullable().optional(),
@@ -396,7 +404,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       // ROT/RUT claim completeness, mirrored from CreateInvoiceItemSchema:
       // arbetstyp + arbetstimmar are what the Skatteverket claim needs, and
       // creation is the last moment the line is editable.
-      if (item.deduction_type && rotRutCompletenessAppliesRef.current && item.line_type !== 'text') {
+      if (item.deduction_type === 'gron_teknik' && rotRutCompletenessAppliesRef.current && item.line_type !== 'text') {
+        // Grön teknik: the installation type decides the rate and is required
+        // on every flagged row. Hours are checked per installation type on
+        // the form (a material row may leave them empty), see below.
+        if (!gronTeknikWorkType(item.work_type)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['work_type'], message: t('deduction_gron_teknik_work_type_required') })
+        }
+      } else if (item.deduction_type && rotRutCompletenessAppliesRef.current && item.line_type !== 'text') {
         const workType = item.work_type?.trim() || null
         if (!workType) {
           ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['work_type'], message: t('deduction_work_type_required') })
@@ -480,6 +495,26 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           path: ['valid_until'],
           message: t('validation_valid_until_required'),
         })
+      }
+      // Grön teknik rules that span rows, from the same helper the API
+      // validates with: hours on at least one row per installation type, and
+      // no grön teknik next to ROT/RUT. The per-row checks run on the item.
+      if (rotRutCompletenessAppliesRef.current) {
+        for (const issue of deductionLineIssues(data.items)) {
+          if (issue.code === 'gronTeknikHoursMissing') {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['items', issue.index, 'labor_hours'],
+              message: t('deduction_gron_teknik_hours_required'),
+            })
+          } else if (issue.code === 'gronTeknikMixed') {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['items', issue.index, 'deduction_type'],
+              message: t('deduction_gron_teknik_mixed'),
+            })
+          }
+        }
       }
     })
   }, [t, ta])
@@ -622,8 +657,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const didSeedVatSnapBaseline = useRef(!(isEditMode || isCopyMode))
 
   // Edit mode: the claim card's property fields are restored from the first
-  // rot line (they're stamped onto every rot line server-side at save time).
-  const initialRotLine = initial?.items?.find((i) => i.deduction_type === 'rot') ?? null
+  // line that names the property (ROT or grön teknik: stamped onto every
+  // deduction line server-side at save time).
+  const initialRotLine =
+    initial?.items?.find((i) => i.deduction_type === 'rot' || i.deduction_type === 'gron_teknik') ?? null
 
   const {
     register,
@@ -643,7 +680,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // draft carries a ROT/RUT claim. Create mode keeps the original empty form.
     defaultValues: initial
       ? {
-          customer_id: initial.customer_id,
+          // Null when the draft's customer was deleted (crm#263): start empty
+          // so the user picks one and the required-customer message applies.
+          customer_id: initial.customer_id ?? '',
           invoice_date: initial.invoice_date,
           due_date: initial.due_date,
           valid_until:
@@ -804,8 +843,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const watchValidUntil = watch('valid_until')
   const watchReceivedDate = watch('received_date')
   const watchDeliveryDate = watch('delivery_date')
-  const watchYourReference = watch('your_reference')
-  const watchInvoiceMarking = watch('invoice_marking')
   const watchPaymentLinkUrl = watch('payment_link_url')
   const watchPaymentLinkAuto = watch('payment_link_auto')
   const watchPersonnummer = watch('deduction_personnummer')
@@ -884,18 +921,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // The account override rides along regardless of rate; the engine ignores it
     // for reverse-charge/export and validates it against the chart of accounts.
     setValue(`items.${index}.revenue_account`, a.revenue_account ?? null, { shouldDirty: true })
-    // ROT/RUT: the article's housework_type decides the line's deduction kind
-    // and, when it is a Skatteverket arbetstypskod, its work type too. Legacy
-    // articles carry only the kind (`ROT`/`RUT`): those pre-fill the deduction
-    // and keep a same-kind arbetstyp already chosen on the row. An article
-    // WITHOUT any housework flag re-defaults the row to no deduction, the same
-    // overwrite semantics as description/price above: a material article
-    // picked onto a previously RUT-flagged row must not keep claiming a
-    // deduction on material. Proformas/delivery notes/self-billing have no
+    // Skattereduktion: the article's housework_type decides the line's
+    // deduction kind and, when it is a Skatteverket arbetstypskod, its work
+    // type too. Legacy articles carry only the kind (`ROT`/`RUT`): those
+    // pre-fill the deduction and keep a same-kind arbetstyp already chosen on
+    // the row. An article WITHOUT any housework flag, and a goods (vara)
+    // article with a ROT/RUT flag (ROT/RUT is labor only), re-defaults the
+    // row to no deduction, the same overwrite semantics as description/price
+    // above: a material article picked onto a previously RUT-flagged row must
+    // not keep claiming a deduction on material. A goods article with a grön
+    // teknik installation type does pre-fill it: grön teknik is given on
+    // arbete och material. Proformas/delivery notes/self-billing have no
     // deduction model (their rows keep no ⋮ menu either), so they are left
     // untouched.
     if (isInvoiceDoc) {
-      const { deductionType: kind, workType } = parseArticleHouseworkType(a.housework_type)
+      const { deductionType: kind, workType } = articleDeductionPrefill(a)
       const currentWorkType = getValues(`items.${index}.work_type`) ?? null
       const keepCurrentWorkType =
         kind != null && !workType && deductionTypeForWorkType(currentWorkType) === kind
@@ -963,13 +1003,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           // The typed unit price is in the invoice's currency: without this an
           // EUR invoice line becomes an SEK article with the EUR number.
           currency: getValues('currency'),
-          // Round-trip the ROT/RUT flag so the saved article pre-fills the
+          // Round-trip the deduction flag so the saved article pre-fills the
           // deduction the next time it is picked: the arbetstypskod when the
-          // row has one, otherwise the bare kind.
+          // row has one, otherwise the bare kind (ROT/RUT only: grön teknik
+          // has no bare kind, its rate needs the installation type).
           housework_type: item.deduction_type
             ? deductionTypeForWorkType(item.work_type) === item.deduction_type
               ? item.work_type
-              : item.deduction_type.toUpperCase()
+              : item.deduction_type === 'gron_teknik'
+                ? null
+                : item.deduction_type.toUpperCase()
             : null,
         }),
       })
@@ -1538,7 +1581,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       exchange_rate: number | null
       paid_at: string | null
       invoice_date: string
-      invoice_items: Array<{ deduction_type: 'rot' | 'rut' | null; deduction_amount: number | null }> | null
+      invoice_items: Array<{ deduction_type: DeductionType | null; deduction_amount: number | null }> | null
     }>(({ from, to }) =>
       supabase
         .from('invoices')
@@ -1554,7 +1597,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     )
       .then((data) => {
         if (cancelled) return
-        const totals: PriorYearDeductions = { rot: 0, rut: 0 }
+        // Grön teknik has its own ceiling: its own bucket, never ROT/RUT's.
+        const totals: Required<PriorYearDeductions> = { rot: 0, rut: 0, gron_teknik: 0 }
         for (const inv of data) {
           if (initial?.id && inv.id === initial.id) continue
           if ((inv.paid_at ?? inv.invoice_date ?? '').slice(0, 4) !== invoiceYear) continue
@@ -1564,6 +1608,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           for (const it of inv.invoice_items ?? []) {
             if (!it.deduction_type || !it.deduction_amount) continue
             const sek = isSek ? it.deduction_amount : it.deduction_amount * (rate as number)
+            if (!(it.deduction_type in totals)) continue
             totals[it.deduction_type] += roundOre(sek)
           }
         }
@@ -1580,7 +1625,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // supabase client is stable; initial?.id only changes with the invoice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isInvoiceDoc, company?.id, watchCustomerId, invoiceYear, initial?.id])
-  const deductionByKind = { rot: 0, rut: 0 }
+  const deductionByKind = { rot: 0, rut: 0, gron_teknik: 0 }
   if (isInvoiceDoc) {
     for (const item of watchItems) {
       if (!item.deduction_type) continue
@@ -1589,15 +1634,20 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         quantity: item.quantity || 0,
         discount_percent: item.discount_percent,
         deduction_type: item.deduction_type,
+        // Grön teknik's rate follows the installation type.
+        work_type: item.work_type,
         // Same rate resolution as the VAT totals loop above: the deduction
         // base is the line total inkl. moms (HUSFL 6-9 §§).
         vat_rate: vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0,
       })
       if (item.deduction_type === 'rot') deductionByKind.rot += amount
+      else if (item.deduction_type === 'gron_teknik') deductionByKind.gron_teknik += amount
       else deductionByKind.rut += amount
     }
   }
-  const deductionTotal = Math.round((deductionByKind.rot + deductionByKind.rut) * 100) / 100
+  // (x + 0 is exact, so a ROT/RUT-only form sums exactly as before.)
+  const deductionTotal =
+    Math.round((deductionByKind.rot + deductionByKind.rut + deductionByKind.gron_teknik) * 100) / 100
   // Same helper as the server validator (validateInvoice → deductionCapWarnings):
   // per-kind and shared yearly ceilings, on top of what this customer already
   // has this year. Statutory Swedish text (Skatteverket wording, stays Swedish
@@ -1610,6 +1660,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // the personnummer the server will demand) must appear on the same predicate.
   const hasAnyDeduction = deductionTotal > 0 || (isInvoiceDoc && watchItems.some((i) => Boolean(i.deduction_type)))
   const hasAnyRotLine = isInvoiceDoc && watchItems.some((i) => i.deduction_type === 'rot')
+  // Grön teknik names the property like ROT does, and never shares the
+  // invoice with ROT/RUT (the form refuses the mix).
+  const hasAnyGronTeknikLine = isInvoiceDoc && watchItems.some((i) => i.deduction_type === 'gron_teknik')
+  // The grön teknik base hint (what counts, fixed price, hours) is long, so
+  // it shows once, under the first grön teknik row, not on every flagged row.
+  const firstGronTeknikIndex = isInvoiceDoc ? watchItems.findIndex((i) => i.deduction_type === 'gron_teknik') : -1
   // The kundkort's personnummer reaches this component as ciphertext (direct
   // table read) or as the masked display form (rows from the API), so the
   // editor can only know THAT the customer has one, never render it. Presence
@@ -2257,7 +2313,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // (hasAnyDeduction): a ROT-flagged line with a zero amount renders no
     // card, so the housing field the next-step link would focus does not
     // exist yet.
-    requiresHousing: deriveRequiresHousing({ hasRotLine: hasAnyRotLine, deductionTotal }),
+    requiresHousing: deriveRequiresHousing({
+      hasRotLine: hasAnyRotLine,
+      hasGronTeknikLine: hasAnyGronTeknikLine,
+      deductionTotal,
+    }),
     housingDesignation: watchHousingDesignation || '',
   })
 
@@ -2292,8 +2352,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     validUntil: watchValidUntil || '',
     receivedDate: watchReceivedDate || '',
     deliveryDate: watchDeliveryDate || '',
-    yourReference: watchYourReference || '',
-    invoiceMarking: watchInvoiceMarking || '',
     paymentLink: paymentLinkMode,
     oreRounding,
     dims: hasDimensionValues(defaultDims) ? compactDims(defaultDims) : null,
@@ -2320,10 +2378,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         return t('chip_received', { date: chip.date })
       case 'delivery':
         return t('chip_delivery', { date: chip.date })
-      case 'your_reference':
-        return t('chip_your_reference', { reference: chip.reference })
-      case 'invoice_marking':
-        return t('chip_invoice_marking', { marking: chip.marking })
       case 'payment_link':
         return chip.mode === 'auto' ? t('chip_stripe_auto') : t('chip_payment_link')
       case 'ore_off':
@@ -2456,6 +2510,60 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             >
               + {t('create_customer')}
             </button>
+
+            {/* References are per-invoice data, not defaults: they sit in the
+                visible head next to the customer (crm#136, crm#187), where a
+                draft never hides them behind Ändra förval. Self-billed mode
+                keeps not rendering them, as before. */}
+            {!isSelfBilled && (
+              <div className="mt-5 grid gap-4 sm:grid-cols-3">
+                <div className="min-w-0 space-y-1.5">
+                  <Label className="text-[13px] font-normal">{t('our_reference_label')}</Label>
+                  <Controller
+                    name="our_reference"
+                    control={control}
+                    render={({ field }) => (
+                      <TagInput
+                        value={field.value ?? ''}
+                        onChange={field.onChange}
+                        placeholder={t('our_reference_placeholder')}
+                        className="text-[13px]"
+                      />
+                    )}
+                  />
+                </div>
+                <div className="min-w-0 space-y-1.5">
+                  <Label className="text-[13px] font-normal">{t('your_reference_label')}</Label>
+                  <Controller
+                    name="your_reference"
+                    control={control}
+                    render={({ field }) => (
+                      <TagInput
+                        value={field.value ?? ''}
+                        onChange={field.onChange}
+                        placeholder={t('your_reference_placeholder')}
+                        className="text-[13px]"
+                      />
+                    )}
+                  />
+                </div>
+                {/* Fakturamärkning: one buyer-required marking string
+                    (kostnadsställe/projekt/PO), separate from Er referens.
+                    Plain input, never comma-split. */}
+                <div className="min-w-0 space-y-1.5">
+                  <Label htmlFor="invoice_marking" className="text-[13px] font-normal">
+                    {t('invoice_marking_label')}
+                  </Label>
+                  <Input
+                    id="invoice_marking"
+                    maxLength={200}
+                    placeholder={t('invoice_marking_placeholder')}
+                    className="h-9 px-3 text-[13px]"
+                    {...register('invoice_marking')}
+                  />
+                </div>
+              </div>
+            )}
 
             {isSelfBilled && (
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -2734,7 +2842,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                         <DropdownMenuRadioGroup
                                           value={item?.deduction_type ?? 'none'}
                                           onValueChange={(v) => {
-                                            const next = v === 'none' ? null : (v as 'rot' | 'rut')
+                                            const next = v === 'none' ? null : (v as DeductionType)
                                             setValue(`items.${index}.deduction_type`, next, { shouldDirty: true })
                                             // The arbetstyp lists are per kind: a ROT code
                                             // must not survive a switch to RUT (the select
@@ -2744,7 +2852,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                               next !== null &&
                                               deductionTypeForWorkType(item?.work_type) !== next
                                             ) {
-                                              setValue(`items.${index}.work_type`, null)
+                                              // Grön teknik starts on the installation
+                                              // type the invoice already uses.
+                                              setValue(
+                                                `items.${index}.work_type`,
+                                                next === 'gron_teknik' ? defaultGronTeknikWorkType(watchItems, index) : null,
+                                              )
                                             }
                                             if (next === null) {
                                               setValue(`items.${index}.work_type`, null)
@@ -2763,6 +2876,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                           <DropdownMenuRadioItem value="none" className="py-2">{t('deduction_none')}</DropdownMenuRadioItem>
                                           <DropdownMenuRadioItem value="rot" className="py-2">{t('deduction_rot')}</DropdownMenuRadioItem>
                                           <DropdownMenuRadioItem value="rut" className="py-2">{t('deduction_rut')}</DropdownMenuRadioItem>
+                                          <DropdownMenuRadioItem value="gron_teknik" className="py-2">{t('deduction_gron_teknik')}</DropdownMenuRadioItem>
                                         </DropdownMenuRadioGroup>
                                       </>
                                     )}
@@ -2916,25 +3030,39 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               <div className="px-2 pb-3">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <span className="text-xs font-medium tabular-nums text-muted-foreground">
-                                    {item?.deduction_type === 'rot' ? 'ROT 30%' : 'RUT 50%'}
+                                    {item?.deduction_type === 'gron_teknik'
+                                      ? (() => {
+                                          // The rate follows the installation type, so it is
+                                          // derived from the list, never written into copy.
+                                          const installation = gronTeknikWorkType(item?.work_type)
+                                          return installation
+                                            ? t('deduction_gron_teknik_rate', { percent: Math.round(installation.percent * 100) })
+                                            : t('deduction_gron_teknik')
+                                        })()
+                                      : item?.deduction_type === 'rot' ? 'ROT 30%' : 'RUT 50%'}
                                   </span>
                                   <Controller
                                     name={`items.${index}.work_type`}
                                     control={control}
                                     render={({ field: workField }) => {
-                                      const opts =
-                                        item?.deduction_type === 'rot' ? ROT_WORK_TYPES : RUT_WORK_TYPES
+                                      const isGronTeknik = item?.deduction_type === 'gron_teknik'
+                                      const opts: ReadonlyArray<{ code: string; label: string }> = isGronTeknik
+                                        ? GRON_TEKNIK_WORK_TYPES
+                                        : item?.deduction_type === 'rot' ? ROT_WORK_TYPES : RUT_WORK_TYPES
+                                      const placeholder = isGronTeknik
+                                        ? t('deduction_gron_teknik_work_type_placeholder')
+                                        : t('deduction_work_type_placeholder')
                                       return (
                                         <Select
                                           value={workField.value ?? ''}
                                           onValueChange={(v) => workField.onChange(v || null)}
                                         >
                                           <SelectTrigger
-                                            className="h-8 w-56"
-                                            aria-label={t('deduction_work_type_placeholder')}
+                                            className={isGronTeknik ? 'h-8 w-72' : 'h-8 w-56'}
+                                            aria-label={placeholder}
                                             aria-invalid={Boolean(errors.items?.[index]?.work_type) || undefined}
                                           >
-                                            <SelectValue placeholder={t('deduction_work_type_placeholder')} />
+                                            <SelectValue placeholder={placeholder} />
                                           </SelectTrigger>
                                           <SelectContent>
                                             {opts.map((w) => (
@@ -2972,6 +3100,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       quantity: item?.quantity || 0,
                                       discount_percent: item?.discount_percent,
                                       deduction_type: item?.deduction_type,
+                                      work_type: item?.work_type,
                                       vat_rate: vatRegistered
                                         ? (item?.vat_rate ?? (vatRules?.rate || 25))
                                         : 0,
@@ -2983,18 +3112,33 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                     ) : null
                                   })()}
                                 </div>
-                                {(errors.items?.[index]?.work_type || errors.items?.[index]?.labor_hours) && (
+                                {(errors.items?.[index]?.work_type ||
+                                  errors.items?.[index]?.labor_hours ||
+                                  errors.items?.[index]?.deduction_type) && (
                                   <p className="mt-1 text-sm text-destructive">
-                                    {errors.items?.[index]?.work_type?.message ?? errors.items?.[index]?.labor_hours?.message}
+                                    {errors.items?.[index]?.work_type?.message ??
+                                      errors.items?.[index]?.labor_hours?.message ??
+                                      errors.items?.[index]?.deduction_type?.message}
                                   </p>
                                 )}
-                                {/* Labor-only disclosure (Skatteverket
+                                {/* What the base covers (Skatteverket
                                     fakturamodellen), muted: the page's single
-                                    ochre line is the next-step line. */}
-                                <div className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
-                                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                                  <p>{t('deduction_labor_only_warning')}</p>
-                                </div>
+                                    ochre line is the next-step line. ROT/RUT:
+                                    labor only, on every flagged row as
+                                    before. Grön teknik: labor and material
+                                    on rows of their own, the 97 % fixed-price
+                                    rule and the hours, once, under the first
+                                    grön teknik row. */}
+                                {(item?.deduction_type !== 'gron_teknik' || index === firstGronTeknikIndex) && (
+                                  <div className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
+                                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                    <p>
+                                      {item?.deduction_type === 'gron_teknik'
+                                        ? t('deduction_gron_teknik_base_hint')
+                                        : t('deduction_labor_only_warning')}
+                                    </p>
+                                  </div>
+                                )}
                               </div>
                             )}
 
@@ -3209,7 +3353,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               {/* Suggestion popover: anchored below the whole table wrap so it
                   never clips inside the horizontal scroll container. */}
               {entryOpen && (
-                <div className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-lg border border-input bg-card shadow-md">
+                <div className={cn('absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}>
                   {/* The hint is a sibling of the listbox (listbox children
                       must be options); the input references it via
                       aria-describedby. */}
@@ -3224,7 +3368,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         tabIndex={-1}
                         className={cn(
                           'flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left',
-                          i === entryActiveIdx ? 'bg-secondary/60' : 'hover:bg-secondary/40',
+                          i === entryActiveIdx ? 'bg-secondary/60' : 'hover:bg-secondary/60',
                         )}
                         onPointerDown={(e) => {
                           // pointerdown, not mousedown: on touch the
@@ -3321,7 +3465,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         : t('deduction_personnummer_hint')}
                   </p>
                 </div>
-                {hasAnyRotLine && (
+                {(hasAnyRotLine || hasAnyGronTeknikLine) && (
                   <div className="space-y-2">
                     <Label htmlFor="deduction_housing_designation">
                       {t('deduction_housing_label')}<RequiredMark />
@@ -3363,7 +3507,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             </div>
             <div
               id={settingsPanelId}
-              className="grid transition-[grid-template-rows] duration-200 motion-reduce:transition-none"
+              className="grid transition-[grid-template-rows] duration-300 motion-reduce:transition-none"
               style={{ gridTemplateRows: settingsOpen ? '1fr' : '0fr' }}
             >
               <div className={cn('min-h-0 overflow-hidden', !settingsOpen && 'invisible')} aria-hidden={!settingsOpen}>
@@ -3535,56 +3679,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
                   {!isSelfBilled && (
                     <>
-                      <div className={SETTINGS_ROW_CLASS}>
-                        <Label className="text-[13px] font-normal">{t('our_reference_label')}</Label>
-                        <div className="w-56">
-                          <Controller
-                            name="our_reference"
-                            control={control}
-                            render={({ field }) => (
-                              <TagInput
-                                value={field.value ?? ''}
-                                onChange={field.onChange}
-                                placeholder={t('our_reference_placeholder')}
-                              />
-                            )}
-                          />
-                        </div>
-                      </div>
-                      <div className={SETTINGS_ROW_CLASS}>
-                        <Label className="text-[13px] font-normal">{t('your_reference_label')}</Label>
-                        <div className="w-56">
-                          <Controller
-                            name="your_reference"
-                            control={control}
-                            render={({ field }) => (
-                              <TagInput
-                                value={field.value ?? ''}
-                                onChange={field.onChange}
-                                placeholder={t('your_reference_placeholder')}
-                              />
-                            )}
-                          />
-                        </div>
-                      </div>
-                      {/* Fakturamärkning: one buyer-required marking string
-                          (kostnadsställe/projekt/PO), separate from Er
-                          referens. Plain input, never comma-split. */}
-                      <div className={SETTINGS_ROW_CLASS}>
-                        <Label htmlFor="invoice_marking" className="text-[13px] font-normal">
-                          {t('invoice_marking_label')}
-                        </Label>
-                        <div className="w-56">
-                          <Input
-                            id="invoice_marking"
-                            maxLength={200}
-                            placeholder={t('invoice_marking_placeholder')}
-                            className="h-8 text-[13px]"
-                            {...register('invoice_marking')}
-                          />
-                        </div>
-                      </div>
-
                       {/* Online payment link: manual paste or the Stripe auto
                           toggle. Only real invoices; hidden unless the company
                           opted in, except when the draft already carries a link. */}
@@ -3714,7 +3808,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               )}
               {hasAnyDeduction && (
                 <div className="flex items-baseline justify-between border-b border-border py-2">
-                  <span className="text-muted-foreground">{t('deduction_summary_label')}</span>
+                  <span className="text-muted-foreground">
+                    {hasAnyGronTeknikLine ? t('deduction_summary_label_gron_teknik') : t('deduction_summary_label')}
+                  </span>
                   <span className="tabular-nums">&minus;{formatCurrency(deductionTotal, watchCurrency)}</span>
                 </div>
               )}
@@ -3796,24 +3892,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={isPreviewing || inFlight}
+                  disabled={inFlight}
+                  loading={isPreviewing}
                   onClick={handleSubmit((data) => handlePreviewPDF(data), onInvalidSubmit)}
                 >
-                  {isPreviewing ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Eye className="mr-2 h-4 w-4" />
-                  )}
+                  {!isPreviewing && <Eye className="mr-2 h-4 w-4" />}
                   {isPreviewing ? t('preview_pdf_generating') : t('preview_pdf')}
                 </Button>
               )}
               <Button
                 type="submit"
                 disabled={inFlight || !canWrite}
+                loading={isFormSubmitting && !isSavingDraft}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-                {isFormSubmitting && !isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {primaryLabel}
               </Button>
             </div>
@@ -3858,13 +3951,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             <Button
               variant="outline"
               onClick={() => handlePreviewPDF()}
-              disabled={isPreviewing || isSubmitting}
+              disabled={isSubmitting}
+              loading={isPreviewing}
             >
-              {isPreviewing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Eye className="mr-2 h-4 w-4" />
-              )}
+              {!isPreviewing && <Eye className="mr-2 h-4 w-4" />}
               {isPreviewing ? t('preview_pdf_generating') : t('preview_pdf')}
             </Button>
           }
@@ -3975,12 +4065,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             >
               {t('send_later')}
             </Button>
-            <Button onClick={handleSendNow} disabled={isSending}>
-              {isSending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="mr-2 h-4 w-4" />
-              )}
+            <Button onClick={handleSendNow} loading={isSending}>
+              {!isSending && <Send className="mr-2 h-4 w-4" />}
               {isSending ? t('send_now_sending') : t('send_now')}
             </Button>
           </DialogFooter>

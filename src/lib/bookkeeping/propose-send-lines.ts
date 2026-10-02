@@ -11,7 +11,7 @@ import {
   InvoiceFxRateMissingError,
 } from './invoice-accounts'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
-import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
+import { computeDeduction, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
 import { roundOre } from '@/lib/money'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { EntityType, InvoiceItem, VatTreatment } from '@/types'
@@ -28,6 +28,8 @@ export interface ProposeSendLinesInput {
     currency: string
     exchange_rate?: number | null
     vat_treatment: VatTreatment
+    /** #2906: goods delivered abroad preview on 3105 / 3108, as they book. */
+    delivery_country?: string | null
     credited_invoice_id?: string | null
     items?: InvoiceItem[]
     /**
@@ -160,7 +162,7 @@ function buildSendLines(
 
     if (!hasPerLineVat) {
       // Legacy: single rate from invoice level
-      const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
+      const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
       const subtotal = accountingItems.reduce((sum, item) => sum + item.line_total, 0)
       creditLines.push({
         account_number: revenueAccount,
@@ -194,7 +196,7 @@ function buildSendLines(
         const treatment = rate === 0 && (invoice.vat_treatment === 'reverse_charge' || invoice.vat_treatment === 'export')
           ? invoice.vat_treatment
           : getVatTreatmentForRate(rate)
-        const revenueAccount = getRevenueAccount(treatment, entityType)
+        const revenueAccount = getRevenueAccount(treatment, entityType, invoice.delivery_country)
 
         creditLines.push({
           account_number: revenueAccount,
@@ -217,7 +219,7 @@ function buildSendLines(
     }
   } else if (!invoice.items || invoice.items.length === 0) {
     // Fallback: invoice-level amounts
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
+    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
     const subtotalSek = resolveSekAmount(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
     creditLines.push({
       account_number: revenueAccount,
@@ -249,6 +251,8 @@ function buildSendLines(
       // the proposed 1513/1510 split cannot clear.
       discount_percent: item.discount_percent ?? 0,
       deduction_type: item.deduction_type,
+      // Grön teknik's rate follows the installation type.
+      work_type: item.work_type,
       vat_rate: item.vat_rate,
     })
     const amountSek = roundOre(toSek(deduction))
@@ -258,7 +262,7 @@ function buildSendLines(
       account_number: '1513',
       debit_amount: toFormAmount(amountSek),
       credit_amount: '',
-      line_description: `${item.deduction_type === 'rot' ? 'ROT' : 'RUT'}-avdrag faktura ${invoice.invoice_number ?? ''}`.trim(),
+      line_description: `${DEDUCTION_TYPE_LABELS[item.deduction_type].ledger} faktura ${invoice.invoice_number ?? ''}`.trim(),
     })
   }
 

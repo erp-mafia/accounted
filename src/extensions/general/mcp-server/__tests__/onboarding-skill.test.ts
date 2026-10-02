@@ -5,7 +5,7 @@
  * by hand.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { onboardingSkill } from '../skills/onboarding'
+import { onboardingSkill } from '@/lib/agent-skills/workflows/onboarding'
 
 afterEach(() => vi.unstubAllEnvs())
 

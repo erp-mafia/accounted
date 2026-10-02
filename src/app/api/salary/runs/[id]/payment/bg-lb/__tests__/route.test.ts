@@ -16,11 +16,15 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 vi.mock('@/lib/salary/payment/bg-lb-generator', () => ({
   generateBgLb: vi.fn(() => ({ content: 'LBFILE', filename: 'lb_2026-03.txt' })),
+  // The bank-list reference of each payee; the fixtures carry no
+  // specification number, which the stubbed generator does not check.
+  utbetalningsnummer: vi.fn(() => '000018'),
 }))
 vi.mock('@/lib/salary/payment/effective-net', () => ({
   effectiveNetPayout: vi.fn(() => 20000),
 }))
-vi.mock('@/lib/bankgiro/luhn', () => ({
+vi.mock('@/lib/bankgiro/luhn', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bankgiro/luhn')>()),
   validateBankgiroNumber: vi.fn(() => true),
 }))
 
@@ -105,10 +109,9 @@ describe('GET /api/salary/runs/[id]/payment/bg-lb', () => {
     expect(response.status).toBe(404)
   })
 
-  it('returns 400 naming the employees whose account does not fit the LB field, never the number', async () => {
-    // Invented numbers: the support-ticket shape. A 5-digit clearing with a
-    // 10-digit account needs 11 positions in the 10-wide LB account field; the
-    // toast used to read "Numeriskt fält för långt (11 > 10): 996...".
+  it('carries a 5-digit Swedbank clearing with a 10-digit account: nobody is refused (crm#174)', async () => {
+    // Invented numbers: the support-ticket shape. The old TK54 layout refused
+    // Sara and Sven by name; the TK40 account field is 12 wide.
     const { enqueueMany } = authed()
     enqueueMany([
       { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
@@ -116,11 +119,13 @@ describe('GET /api/salary/runs/[id]/payment/bg-lb', () => {
       { data: { company_name: 'Bolaget AB', bankgiro: '123-4567' } }, // company_settings
       {
         data: [
-          { employee_id: 'e1', employee: { first_name: 'Anna', last_name: 'A', clearing_number: '6000', bank_account_number: '1234567' } },
-          { employee_id: 'e2', employee: { first_name: 'Sara', last_name: 'S', clearing_number: '8327-9', bank_account_number: '9612345678' } },
-          { employee_id: 'e3', employee: { first_name: 'Sven', last_name: 'T', clearing_number: '81059', bank_account_number: '9698765432' } },
+          { employee_id: 'e1', employee: { first_name: 'Anna', last_name: 'A', clearing_number: '6000', bank_account_number: '1234567', specification_number: 1 } },
+          { employee_id: 'e2', employee: { first_name: 'Sara', last_name: 'S', clearing_number: '8327-9', bank_account_number: '9612345678', specification_number: 2 } },
+          { employee_id: 'e3', employee: { first_name: 'Sven', last_name: 'T', clearing_number: '81059', bank_account_number: '9698765432', specification_number: 3 } },
         ],
       }, // salary_run_employees
+      { data: null }, // salary_payment_files insert
+      { data: null }, // salary_runs update (payment_file_generated_at)
     ])
 
     const response = await GET(
@@ -128,16 +133,11 @@ describe('GET /api/salary/runs/[id]/payment/bg-lb', () => {
       createMockRouteParams({ id: 'run-1' }),
     )
 
-    expect(response.status).toBe(400)
-    const text = await response.text()
-    const body = JSON.parse(text)
-    expect(body.error).toBe(
-      'Sara S, Sven T: kontonumret ryms inte i Bankgirot LB-filen (femsiffrigt clearingnummer med tiosiffrigt kontonummer). Skapa betalfilen som ISO 20022 (pain.001) i stället.',
-    )
-    expect(text).not.toContain('9612345678')
-    expect(text).not.toContain('9698765432')
-    expect(text).not.toContain('996')
-    expect(generateBgLb).not.toHaveBeenCalled()
+    expect(response.status).toBe(200)
+    expect(generateBgLb).toHaveBeenCalledTimes(1)
+    const employees = vi.mocked(generateBgLb).mock.calls[0][1]
+    expect(employees.map((e) => e.name)).toEqual(['Anna A', 'Sara S', 'Sven T'])
+    expect(employees.map((e) => e.payeeNumber)).toEqual([1, 2, 3])
   })
 
   it('generates a Bankgirot LB file for an approved run', async () => {

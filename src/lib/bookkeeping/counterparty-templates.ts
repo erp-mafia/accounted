@@ -5,7 +5,9 @@ import {
 } from '@/lib/documents/core-receipt-matcher'
 import {
   generateInputVatLine,
-  generateReverseChargeLines,
+  generateReverseChargePurchaseLines,
+  costAccountReportsRcBasis,
+  DEFAULT_REVERSE_CHARGE_KIND,
   getVatRate,
   isReverseChargeVatAccount,
 } from './vat-entries'
@@ -14,8 +16,15 @@ import {
   vatTreatmentForRegistration,
   type VatRegistration,
 } from './vat-registration'
-import { dimensionsBagKey } from './dimension-resolver'
+import {
+  dimensionsBagKey,
+  normalizeLineDimensions,
+  validateEntryDimensions,
+  type LineDimensions,
+} from './dimension-resolver'
+import { DimensionValidationError, type DimensionValidationIssue } from './dimension-errors'
 import { resolveSekAmount } from './currency-utils'
+import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
 import { createLogger } from '@/lib/logger'
 import type {
   CategorizationTemplate,
@@ -131,6 +140,21 @@ export function normalizeCounterpartyName(raw: string): string {
   // Drop trailing month/initials tokens before merchant-name normalization so
   // "ngrok JW" and "Ngrok Mars" collapse to the same canonical "ngrok".
   return normalizeMerchantName(stripTrailingNoiseTokens(cleaned))
+}
+
+/**
+ * Whether a bank descriptor names a counterparty at all. Some lines carry
+ * only the bank's payment-method wording and a number: Handelsbanken writes
+ * "INTERNET BET 4" on every internet-bank payment, whoever was paid. Such a
+ * line is neither learned as a counterparty nor matched against one: a
+ * template learned from "INTERNET BET 1" sits one edit away from every other
+ * internet payment, so the fuzzy tier offered its account for unrelated
+ * suppliers (PostHog PH 118). The phrases are the catalog matcher's list
+ * (stripBankNoise in ./booking-templates), not a second one; the persisted
+ * key (normalizeCounterpartyName) is untouched.
+ */
+export function namesCounterparty(raw: string): boolean {
+  return /\p{L}/u.test(stripBankMethodPhrases(raw.toLowerCase()))
 }
 
 /**
@@ -328,7 +352,12 @@ export async function findCounterpartyTemplatesBatch(
 
   if (!allTemplates || allTemplates.length === 0) return result
 
-  const templates = allTemplates as CategorizationTemplate[]
+  // A template learned from a line that names no one ("internet bet 1",
+  // stored before namesCounterparty guarded learning) is identity-free: in
+  // the token and fuzzy tiers it would claim any descriptor near its words.
+  const templates = (allTemplates as CategorizationTemplate[]).filter((t) =>
+    namesCounterparty(t.counterparty_name),
+  )
 
   // Build alias lookup: lowercase alias → template. An alias that equals
   // another template's canonical counterparty_name (only reachable through a
@@ -371,7 +400,7 @@ export async function findCounterpartyTemplatesBatch(
     // original keeps every era's keys and aliases aligned (same rationale as
     // buildMerchantHistory in lib/transactions/category-suggestions.ts).
     const rawName = tx.merchant_name || tx.original_description || tx.description
-    if (!rawName) continue
+    if (!rawName || !namesCounterparty(rawName)) continue
 
     const normalized = normalizeCounterpartyName(rawName)
     if (!normalized || normalized.length < 2) continue
@@ -461,7 +490,129 @@ export async function findCounterpartyTemplatesBatch(
     }
   }
 
+  // Every consumer of a match applies its learned bags (the proposals and
+  // their Bokför, the mapping engine, suggestions), so the codes the
+  // registry no longer accepts are dropped here, once, for the matched
+  // templates only.
+  const matched = [...new Map([...result.values()].map((m) => [m.template.id, m.template])).values()]
+  const pruned = new Map(
+    (await pruneLearnedTemplateDimensions(supabase, companyId, matched)).map((t) => [t.id, t]),
+  )
+  for (const [txId, match] of result) {
+    const template = pruned.get(match.template.id)
+    if (template && template !== match.template) result.set(txId, { ...match, template })
+  }
+
   return result
+}
+
+/**
+ * A template picked by id (the categorize doors' counterparty_template_id) as
+ * a match, its learned bags pruned like every other read that applies them.
+ * Null when the id is not an active template of the company.
+ */
+export async function loadCounterpartyTemplateMatch(
+  supabase: SupabaseClient,
+  companyId: string,
+  templateId: string,
+): Promise<CounterpartyTemplateMatch | null> {
+  const { data } = await supabase
+    .from('categorization_templates')
+    .select('*')
+    .eq('id', templateId)
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .maybeSingle()
+  if (!data) return null
+  const [template] = await pruneLearnedTemplateDimensions(supabase, companyId, [data as CategorizationTemplate])
+  return { template, matchMethod: 'exact_alias', confidence: Number(template.confidence) }
+}
+
+/**
+ * The templates without the learned dimension codes the registry no longer
+ * accepts. A learned bag (default_dimensions, a line-pattern entry's bag) is
+ * a suggestion, not a user decision: once its value is archived, or its
+ * dimension or value is gone, applying it would turn the next booking of a
+ * company with dimensions enabled into a DimensionValidationError. Such
+ * codes are dropped with a structured warning; active codes stay.
+ *
+ * "Not accepted" is exactly what the engine rejects: the bags go through
+ * validateEntryDimensions itself (toggle gate, registry, fail-open), so the
+ * two can never disagree. Explicit picks never pass through here and are
+ * still rejected when archived. No bag, no query; nothing dropped, the same
+ * objects back.
+ */
+export async function pruneLearnedTemplateDimensions(
+  supabase: SupabaseClient,
+  companyId: string,
+  templates: CategorizationTemplate[],
+): Promise<CategorizationTemplate[]> {
+  const hasCodes = (bag: LineDimensions | null | undefined): bag is LineDimensions =>
+    !!bag && Object.keys(bag).length > 0
+  const bags = templates.flatMap((t) => [
+    t.default_dimensions,
+    ...(t.line_pattern ?? []).map((entry) => entry.dimensions),
+  ]).filter(hasCodes)
+  if (bags.length === 0) return templates
+
+  let issues: DimensionValidationIssue[]
+  try {
+    await validateEntryDimensions(supabase, companyId, bags.map((dimensions) => ({ dimensions })))
+    return templates
+  } catch (err) {
+    if (!(err instanceof DimensionValidationError)) {
+      // Same posture as the engine's own check: a failed lookup never blocks
+      // a booking, and the engine validates the bag again anyway.
+      log.warn('learned dimension check failed, bags kept', {
+        companyId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return templates
+    }
+    issues = err.issues
+  }
+
+  const reasonFor = (dimNo: string, code: string): DimensionValidationIssue['reason'] | null =>
+    issues.find((i) => i.sie_dim_no === dimNo && (i.code === null || i.code === code))?.reason ?? null
+
+  return templates.map((template) => {
+    const dropped: DimensionValidationIssue[] = []
+    const prune = <T extends LineDimensions | undefined>(bag: T): T | LineDimensions => {
+      if (!hasCodes(bag)) return bag
+      const kept: LineDimensions = {}
+      let changed = false
+      for (const [dimNo, code] of Object.entries(normalizeLineDimensions({ dimensions: bag }))) {
+        const reason = reasonFor(dimNo, code)
+        if (reason) {
+          dropped.push({ sie_dim_no: dimNo, code, reason })
+          changed = true
+        } else {
+          kept[dimNo] = code
+        }
+      }
+      return changed ? kept : bag
+    }
+
+    const defaultDimensions = prune(template.default_dimensions)
+    const linePattern = template.line_pattern?.map((entry) => {
+      const dimensions = prune(entry.dimensions)
+      if (dimensions === entry.dimensions) return entry
+      const { dimensions: _stale, ...rest } = entry
+      return hasCodes(dimensions) ? { ...rest, dimensions } : rest
+    })
+    if (dropped.length === 0) return template
+
+    log.warn('learned dimension codes dropped: no longer active in the registry', {
+      companyId,
+      templateId: template.id,
+      dropped,
+    })
+    return {
+      ...template,
+      default_dimensions: defaultDimensions,
+      line_pattern: linePattern ?? template.line_pattern,
+    }
+  })
 }
 
 // ── Build MappingResult ────────────────────────────────────────
@@ -492,6 +643,22 @@ export function patternDirection(pattern: LinePatternEntry[]): TemplateDirection
   if (debitCount === business.length) return 'expense'
   if (debitCount === 0) return 'income'
   return 'unknown'
+}
+
+/**
+ * The reverse-charge lines a legacy (single-pair) template replays: the
+ * complete set from generateReverseChargePurchaseLines, so a learned
+ * reverse-charge counterparty books the basis pair (ruta 20-24) too. The
+ * template stores no supplier country, so the basis lands on EU services
+ * (the mapping-rule default); a template whose business account is itself a
+ * basis account gets no pair.
+ */
+function learnedReverseChargeLines(tmpl: CategorizationTemplate, absAmount: number) {
+  return generateReverseChargePurchaseLines({
+    base: absAmount,
+    kind: DEFAULT_REVERSE_CHARGE_KIND,
+    basisBase: costAccountReportsRcBasis(tmpl.debit_account) ? 0 : absAmount,
+  })
 }
 
 /**
@@ -545,8 +712,7 @@ export function buildMappingResultFromCounterpartyTemplate(
   const vatLines: VatJournalLine[] = []
   if (isExpense && vatTreatment) {
     if (vatTreatment === 'reverse_charge') {
-      const rcLines = generateReverseChargeLines(absAmount)
-      for (const rcl of rcLines) {
+      for (const rcl of learnedReverseChargeLines(tmpl, absAmount)) {
         vatLines.push({
           account_number: rcl.account_number,
           debit_amount: rcl.debit_amount,
@@ -599,7 +765,8 @@ export function buildMappingResultFromCounterpartyTemplate(
  * accounts swap sides; a refund of an expense also mirrors the VAT legs so
  * the moms follows the correction: deductible input VAT flips to a 2641
  * credit, and a reverse-charge credit note flips both fiktiv legs (credit
- * 2645 / debit 2614) so Ruta 30/48 net back to zero. Income-learned
+ * 2645 / debit 2614) and the basis pair (credit 45xx / debit 4598) so Ruta
+ * 20-24, 30 and 48 net back to zero. Income-learned
  * mismatches book gross; the entry is review-gated either way.
  */
 function buildLegacyMismatchResult(
@@ -613,7 +780,9 @@ function buildLegacyMismatchResult(
   const vatLines: VatJournalLine[] = []
   if (!isExpense && vatTreatment) {
     if (vatTreatment === 'reverse_charge') {
-      for (const rcl of generateReverseChargeLines(absAmount)) {
+      // Both pairs flip, so the refund also takes the basis back out of
+      // ruta 20-24, not only the moms out of ruta 30/48.
+      for (const rcl of learnedReverseChargeLines(tmpl, absAmount)) {
         vatLines.push({
           account_number: rcl.account_number,
           debit_amount: rcl.credit_amount,
@@ -721,7 +890,10 @@ function buildMultiLineMappingResult(
         credit_amount: side(entry.side) === 'credit' ? amount : 0,
         description: '',
         // Dimensions PR7: business lines carry the pattern's learned bag;
-        // VAT/tax/rounding lines stay untagged.
+        // VAT/tax/rounding lines stay untagged. The marker is what lets an
+        // explicit categorize bag tag the same lines, and only them
+        // (buildTransactionEntryLines).
+        ...(entry.type === 'business' ? { business_line: true } : {}),
         ...(entry.type === 'business' && entry.dimensions
           ? { dimensions: entry.dimensions }
           : {}),
@@ -997,7 +1169,9 @@ export async function upsertCounterpartyTemplate(
   // ingest-time phrase strip would fork template identities by era.
   const rawName =
     transaction.merchant_name || transaction.original_description || transaction.description
-  if (!rawName) return
+  // A line that names no one ("INTERNET BET 4") teaches nothing about a
+  // counterparty: the matcher skips it too (namesCounterparty).
+  if (!rawName || !namesCounterparty(rawName)) return
 
   const normalized = normalizeCounterpartyName(rawName)
   if (!normalized || normalized.length < 2) return

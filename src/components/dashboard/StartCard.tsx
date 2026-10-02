@@ -15,6 +15,13 @@ import { START_CARDS, type StartCardName } from './startkort-assets'
 const TITLE_COLOR = '#FAF8F1'
 const BODY_COLOR = 'rgba(247, 244, 236, 0.72)'
 const EYEBROW_COLOR = 'rgba(247, 244, 236, 0.52)'
+// The rest of the self-contained palette, exposed as custom properties on the
+// card root so the action pills and the dismiss button read them by name.
+const CARD_PALETTE = {
+  '--startcard-ink': '#1A1410',
+  '--startcard-cream': '#F7F4EC',
+  '--startcard-dismiss': '#EBE5D3',
+} as CSSProperties
 
 interface StartCardAction {
   label: string
@@ -44,8 +51,8 @@ interface StartCardProps {
 function ActionButton({ action, kind }: { action: StartCardAction; kind: 'primary' | 'secondary' }) {
   const styles =
     kind === 'primary'
-      ? 'bg-white text-[#1A1410] hover:bg-white/90 active:bg-white/90 focus-visible:ring-white/60 focus-visible:ring-offset-transparent'
-      : 'border border-white/30 bg-transparent text-[#F7F4EC] hover:bg-white/10 active:bg-white/10 focus-visible:ring-white/60 focus-visible:ring-offset-transparent'
+      ? 'bg-white text-[var(--startcard-ink)] hover:bg-white/90 active:bg-white/90 focus-visible:ring-white/60 focus-visible:ring-offset-transparent'
+      : 'border border-white/30 bg-transparent text-[var(--startcard-cream)] hover:bg-white/10 active:bg-white/10 focus-visible:ring-white/60 focus-visible:ring-offset-transparent'
   if (action.href) {
     return (
       <Button asChild className={styles}>
@@ -155,7 +162,7 @@ export function StartCard({
   return (
     <div
       className={cn('relative h-[216px] overflow-hidden rounded-xl', className)}
-      style={{ backgroundColor: asset.ground }}
+      style={{ ...CARD_PALETTE, backgroundColor: asset.ground }}
     >
       {layout === 'side-right' ? (
         <div className="absolute inset-y-0 right-0 w-1/2">
@@ -209,7 +216,7 @@ export function StartCard({
           type="button"
           onClick={onDismiss}
           aria-label={dismissLabel}
-          className="absolute right-4 top-3 z-[3] p-1 text-[#EBE5D3]/50 transition-colors duration-150 hover:text-[#EBE5D3]"
+          className="absolute right-4 top-3 z-[3] p-1 text-[var(--startcard-dismiss)]/50 transition-colors duration-150 hover:text-[var(--startcard-dismiss)]"
         >
           <X className="h-4 w-4" />
         </button>
@@ -228,14 +235,14 @@ export function StartCard({
       >
         {eyebrow && (
           <div
-            className="mb-2 text-[10.5px] font-medium uppercase tracking-[0.12em]"
+            className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em]"
             style={{ color: EYEBROW_COLOR }}
           >
             {eyebrow}
           </div>
         )}
         <h2
-          className={cn('font-display text-balance', dense ? 'text-[19px] leading-snug' : 'text-2xl leading-tight')}
+          className={cn('font-display text-balance', dense ? 'text-xl leading-snug' : 'text-2xl leading-tight')}
           style={{ color: TITLE_COLOR }}
         >
           {title}

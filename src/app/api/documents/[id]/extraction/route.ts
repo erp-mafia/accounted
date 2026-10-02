@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import type { Payload } from '@/lib/documents/extract/fields'
 import type { CheckFailure } from '@/lib/documents/extract/merge'
 import { schemaForType, type FieldDef } from '@/lib/documents/extract/schemas'
@@ -30,7 +30,7 @@ export interface ExtractionView {
 type ExtractionRow = Omit<ExtractionView, 'extraction_id' | 'fields'> & { id: string }
 
 export const GET = withRouteContext('document.extraction', async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const { data, error } = await ctx.supabase
     .from('document_extractions')

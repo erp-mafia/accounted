@@ -12,6 +12,7 @@ import {
   InvoiceFxRateMissingError,
 } from './invoice-accounts'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
+import { DEDUCTION_TYPE_LABELS, deductionKindsOf } from '@/lib/invoices/rot-rut-rules'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { EntityType, InvoiceItem, VatTreatment } from '@/types'
@@ -28,6 +29,8 @@ export interface ProposePaymentLinesInput {
     currency: string
     exchange_rate?: number | null
     vat_treatment: VatTreatment
+    /** #2906: goods delivered abroad preview on 3105 / 3108, as they book. */
+    delivery_country?: string | null
     items?: InvoiceItem[]
     /** Per-invoice öresavrundning override; null = inherit the company setting. */
     ore_rounding?: boolean | null
@@ -361,7 +364,7 @@ function proposeCashLines(
 
     if (!hasPerLineVat) {
       // Legacy: single rate from invoice level
-      const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
+      const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
       const subtotal = billableItems.reduce((sum, item) => sum + item.line_total, 0)
       creditLines.push({
         account_number: revenueAccount,
@@ -395,7 +398,7 @@ function proposeCashLines(
         const treatment = rate === 0 && (invoice.vat_treatment === 'reverse_charge' || invoice.vat_treatment === 'export')
           ? invoice.vat_treatment
           : getVatTreatmentForRate(rate)
-        const revenueAccount = getRevenueAccount(treatment, entityType)
+        const revenueAccount = getRevenueAccount(treatment, entityType, invoice.delivery_country)
 
         creditLines.push({
           account_number: revenueAccount,
@@ -418,7 +421,7 @@ function proposeCashLines(
     }
   } else {
     // Fallback: invoice-level amounts
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
+    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
     const subtotalSek = resolveSekAmount(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
     creditLines.push({
       account_number: revenueAccount,
@@ -455,13 +458,18 @@ function proposeCashLines(
     line_description: desc,
   })
   if (deductionSek > 0) {
+    // A grön teknik invoice names its own reduction; ROT, RUT and anything
+    // not known from the items keep the combined text they always had.
+    const kinds = deductionKindsOf(invoice.items ?? [])
+    const label =
+      kinds.length === 1 && kinds[0] === 'gron_teknik' ? DEDUCTION_TYPE_LABELS.gron_teknik.ledger : 'ROT/RUT-avdrag'
     lines.push({
       account_number: '1513',
       debit_amount: toFormAmount(deductionSek),
       credit_amount: '',
       line_description: invoice.invoice_number
-        ? `ROT/RUT-avdrag faktura ${invoice.invoice_number}`
-        : 'ROT/RUT-avdrag faktura',
+        ? `${label} faktura ${invoice.invoice_number}`
+        : `${label} faktura`,
     })
   }
 

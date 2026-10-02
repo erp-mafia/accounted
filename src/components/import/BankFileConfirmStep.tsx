@@ -7,6 +7,7 @@ import { useAccounts } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -88,9 +89,7 @@ export default function BankFileConfirmStep({
             {stats.parsed_rows} transaktioner bearbetas
           </p>
         </div>
-        <div className="w-48 h-1 bg-muted rounded-full overflow-hidden">
-          <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: '60%' }} />
-        </div>
+        <Skeleton className="h-1 w-48 rounded-full" />
       </div>
     )
   }
@@ -205,12 +204,11 @@ export default function BankFileConfirmStep({
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack} disabled={isLoading}>
+        <Button variant="outline" onClick={onBack} disabled={isLoading}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
         <Button
-          className="min-h-11"
           onClick={() => onExecute({
             skip_duplicates: true,
             auto_categorize: false,
@@ -218,13 +216,10 @@ export default function BankFileConfirmStep({
             // named here, and an omitted default imported every row unbound.
             settlement_account: selectedAccount,
           })}
-          disabled={isLoading}
+          loading={isLoading}
         >
           {isLoading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Importerar...
-            </>
+            'Importerar...'
           ) : (
             <>
               <Play className="mr-2 h-4 w-4" />

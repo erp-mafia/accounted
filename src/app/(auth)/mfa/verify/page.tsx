@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, ShieldCheck, LogOut } from 'lucide-react'
+import { ShieldCheck, LogOut } from 'lucide-react'
 import { SupportLink } from '@/components/ui/support-link'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { resolvePostLoginDestination } from '@/lib/company/post-login-landing'
@@ -215,14 +215,12 @@ function MfaVerifyContent() {
             </div>
             <Button
               type="submit"
-              className="w-full h-11"
-              disabled={isLoading || code.length !== 6 || !!lockoutUntil}
+              size="lg" className="w-full"
+              loading={isLoading}
+              disabled={code.length !== 6 || !!lockoutUntil}
             >
               {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('verifying')}
-                </>
+                t('verifying')
               ) : lockoutUntil ? (
                 t('wait_seconds', { seconds: lockoutRemaining })
               ) : (

@@ -8,7 +8,9 @@ import { seedCompany } from './fixtures'
 // CHECK (required ⇔ no value), UNIQUE (company_id, account_number,
 // dimension_id), value_id ON DELETE CASCADE, and the composite
 // (dimension_id, company_id) FK that pins a rule's dimension to the same
-// company.
+// company. Since 20260928200100 the value key is composite too:
+// (value_id, dimension_id, company_id) pins a rule's value to the rule's own
+// dimension and company, under the constraint name PostgREST embeds hint on.
 
 async function seedWithDimensions() {
   const seeded = await seedCompany()
@@ -174,5 +176,57 @@ describe('composite (dimension_id, company_id) FK', () => {
     await expect(
       insertRule({ companyId: b.companyId, dimensionId: aDimId, ruleType: 'required' }),
     ).rejects.toThrow(/foreign key/)
+  })
+})
+
+describe('composite (value_id, dimension_id, company_id) FK', () => {
+  it("rejects a rule whose value belongs to another company", async () => {
+    const a = await seedWithDimensions()
+    const b = await seedWithDimensions()
+    const aDimId = await getDimensionId(a.companyId, 6)
+    const bDimId = await getDimensionId(b.companyId, 6)
+    const bValueId = await insertValue({ companyId: b.companyId, dimensionId: bDimId, code: 'P001' })
+
+    await expect(
+      insertRule({ companyId: a.companyId, dimensionId: aDimId, ruleType: 'default', valueId: bValueId }),
+    ).rejects.toThrow(/account_dimension_rules_value_id_fkey/)
+  })
+
+  it('rejects a rule whose value belongs to another dimension, on INSERT and on re-pointing', async () => {
+    const { companyId } = await seedWithDimensions()
+    const dim1 = await getDimensionId(companyId, 1)
+    const dim6 = await getDimensionId(companyId, 6)
+    const costCenterValueId = await insertValue({ companyId, dimensionId: dim1, code: 'KS01' })
+    const projectValueId = await insertValue({ companyId, dimensionId: dim6, code: 'P001' })
+
+    // A projekt rule that would stamp a kostnadsställe code.
+    await expect(
+      insertRule({ companyId, dimensionId: dim6, ruleType: 'fixed', valueId: costCenterValueId }),
+    ).rejects.toThrow(/account_dimension_rules_value_id_fkey/)
+
+    const ruleId = await insertRule({ companyId, dimensionId: dim6, ruleType: 'fixed', valueId: projectValueId })
+    await expect(
+      getPool().query(`UPDATE public.account_dimension_rules SET value_id = $2 WHERE id = $1`, [
+        ruleId,
+        costCenterValueId,
+      ]),
+    ).rejects.toThrow(/account_dimension_rules_value_id_fkey/)
+  })
+
+  it('stays the one rules-to-values key, under the name the PostgREST embeds hint on', async () => {
+    // src/app/api/dimensions/rules/dto.ts and fetchActiveDimensionRules embed
+    // dimension_values!account_dimension_rules_value_id_fkey: a renamed key
+    // breaks both, and a second key would make unhinted embeds ambiguous.
+    const { rows } = await getPool().query<{ conname: string; def: string }>(
+      `SELECT conname, pg_get_constraintdef(oid) AS def
+         FROM pg_constraint
+        WHERE conrelid = 'public.account_dimension_rules'::regclass
+          AND confrelid = 'public.dimension_values'::regclass`,
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0].conname).toBe('account_dimension_rules_value_id_fkey')
+    expect(rows[0].def).toMatch(
+      /^FOREIGN KEY \(value_id, dimension_id, company_id\) REFERENCES (public\.)?dimension_values\(id, dimension_id, company_id\) ON DELETE CASCADE$/,
+    )
   })
 })

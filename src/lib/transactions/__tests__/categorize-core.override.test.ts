@@ -190,6 +190,34 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     expect(mappingArg.vat_lines).toEqual([])
   })
 
+  // #2919: the approved kind reaches the posted verifikat, and an override
+  // onto a basis account (the cost line reports ruta 22 itself) gets no
+  // second basis pair.
+  it('posts the reverse-charge basis on the approved kind, and none on a basis-account override', async () => {
+    const post = async (accountOverride?: string) => {
+      mockCreateJE.mockClear()
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: txRow({ amount: -250, amount_sek: -250 }) })
+      enqueue({ data: settingsRow })
+      enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+      if (accountOverride) {
+        enqueue({ data: { account_number: accountOverride, account_class: 4, is_active: true, default_vat_treatment: null } })
+      }
+      enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod
+      enqueue({ data: [{ id: TX_ID }] }) // transactions update
+      const result = await categorizeMatchedTransaction(
+        supabase as never, 'user-1', 'company-1', TX_ID,
+        { category: 'expense_software', vatTreatment: 'reverse_charge', reverseChargeKind: 'non_eu_services', accountOverride },
+      )
+      expect(result.error).toBeUndefined()
+      return (mockCreateJE.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> })
+        .vat_lines.map((l) => l.account_number)
+    }
+
+    expect(await post()).toEqual(['2645', '2614', '4531', '4598'])
+    expect(await post('4531')).toEqual(['2645', '2614'])
+  })
+
   it('returns 400 (never posts) when the override was deactivated after staging', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })

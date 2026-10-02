@@ -32,7 +32,11 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { createJournalEntry as mockedCreateJournalEntry } from '@/lib/bookkeeping/engine'
+import {
+  createJournalEntry as mockedCreateJournalEntry,
+  findFiscalPeriod as mockedFindFiscalPeriod,
+  reverseEntry as mockedReverseEntry,
+} from '@/lib/bookkeeping/engine'
 import { eventBus } from '@/lib/events/bus'
 import { POST as matchInvoice } from '../route'
 
@@ -141,6 +145,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
     const calls: RecordedCall[] = []
     const matchedHandler = vi.fn()
     eventBus.on('invoice.match_confirmed', matchedHandler)
+    const paidHandler = vi.fn()
+    eventBus.on('invoice.paid', paidHandler)
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase(
         {
@@ -208,6 +214,61 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
         }),
       }),
     )
+    // The bank match settled the invoice in full: that is the invoice.paid
+    // transition webhook subscribers wait for, reported exactly once.
+    expect(paidHandler).toHaveBeenCalledTimes(1)
+    expect(paidHandler).toHaveBeenCalledWith({
+      invoice: expect.objectContaining({
+        id: INVOICE_ID,
+        status: 'paid',
+        paid_at: '2024-06-15T12:00:00Z',
+        remaining_amount: 0,
+      }),
+      paymentAmount: 12500,
+      paymentDate: '2024-06-15',
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+    })
+  })
+
+  it('a partial bank match confirms the match but does not emit invoice.paid', async () => {
+    const matchedHandler = vi.fn()
+    eventBus.on('invoice.match_confirmed', matchedHandler)
+    const paidHandler = vi.fn()
+    eventBus.on('invoice.paid', paidHandler)
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: { data: { ...TRANSACTION, amount: 5000 }, error: null },
+        invoices: [
+          { data: SENT_INVOICE, error: null },
+          { data: [{ id: INVOICE_ID }], error: null },
+        ],
+        company_settings: {
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+          error: null,
+        },
+        invoice_payments: [
+          { data: [], error: null },
+          { data: { id: 'ip-1' }, error: null },
+        ],
+      }),
+    )
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.invoice_status).toBe('partially_paid')
+    expect(body.data.remaining_amount).toBe(7500)
+    expect(matchedHandler).toHaveBeenCalledTimes(1)
+    expect(paidHandler).not.toHaveBeenCalled()
   })
 
   it('3740 residual: the invoice_payments row carries the applied amount, not the cash received (#2250)', async () => {
@@ -216,6 +277,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
     // AR sub-ledger row must be 999.60 as well (parity with the dashboard
     // route and the pending-operation commit path).
     const calls: RecordedCall[] = []
+    const paidHandler = vi.fn()
+    eventBus.on('invoice.paid', paidHandler)
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase(
         {
@@ -287,6 +350,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
       currency: 'SEK',
       journal_entry_id: 'je-1',
     })
+    // The event reports the amount applied to the invoice, same as the row.
+    expect(paidHandler).toHaveBeenCalledTimes(1)
+    expect(paidHandler).toHaveBeenCalledWith(expect.objectContaining({ paymentAmount: 999.6 }))
   })
 
   it('returns 401 when no bearer token is supplied', async () => {
@@ -346,5 +412,138 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
 
     expect(response.status).toBe(404)
     expect((await response.json()).error.code).toBe('MATCH_INVOICE_NOT_FOUND')
+  })
+})
+
+describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: custom lines', () => {
+  it('books each custom line with its own dimensions', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: { data: TRANSACTION, error: null },
+        invoices: [
+          { data: SENT_INVOICE, error: null },
+          { data: [{ id: INVOICE_ID }], error: null },
+        ],
+        company_settings: {
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+          error: null,
+        },
+        invoice_payments: [
+          { data: [], error: null },
+          { data: { id: 'ip-1' }, error: null },
+        ],
+      }),
+    )
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        {
+          invoice_id: INVOICE_ID,
+          lines: [
+            { account_number: '1930', debit_amount: 12500, credit_amount: 0, dimensions: { '1': 'KS1' } },
+            { account_number: '1510', debit_amount: 0, credit_amount: 12500, dimensions: { '6': 'P1' } },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      source_type: string
+      lines: Array<{ account_number: string; dimensions?: Record<string, string> }>
+    }
+    expect(input.source_type).toBe('invoice_paid')
+    expect(input.lines.map((l) => [l.account_number, l.dimensions])).toEqual([
+      ['1930', { '1': 'KS1' }],
+      ['1510', { '6': 'P1' }],
+    ])
+  })
+})
+
+describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no verifikat, no payment', () => {
+  function businessWrites(calls: RecordedCall[]) {
+    // Only the v1 wrapper's own idempotency reservation may be written.
+    return calls.filter(
+      (c) => c.table !== 'idempotency_keys' && (c.method === 'update' || c.method === 'insert'),
+    )
+  }
+
+  it('refuses a payment date outside an open period before any write, the storno included', async () => {
+    const calls: RecordedCall[] = []
+    ;(mockedFindFiscalPeriod as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          // A categorised row: the match would storno its verifikat first.
+          transactions: { data: { ...TRANSACTION, journal_entry_id: 'je-categorised' }, error: null },
+          invoices: { data: SENT_INVOICE, error: null },
+          company_settings: {
+            data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+            error: null,
+          },
+          invoice_payments: { data: [], error: null },
+        },
+        calls,
+      ),
+    )
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('INVOICE_PAID_NO_FISCAL_PERIOD')
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(businessWrites(calls)).toEqual([])
+  })
+
+  it('fails closed when the payment entry books nothing: the invoice stays unpaid', async () => {
+    const calls: RecordedCall[] = []
+    mockCreateJournalEntry.mockResolvedValueOnce(null)
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          transactions: { data: TRANSACTION, error: null },
+          invoices: [
+            { data: SENT_INVOICE, error: null },
+            { data: [{ id: INVOICE_ID }], error: null },
+          ],
+          company_settings: {
+            data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+            error: null,
+          },
+          invoice_payments: [
+            { data: [], error: null },
+            { data: { id: 'ip-1' }, error: null },
+          ],
+        },
+        calls,
+      ),
+    )
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(500)
+    const body = await response.json()
+    expect(body.error.code).toBe('INVOICE_PAID_BOOK_FAILED')
+    expect(body.error.details).toMatchObject({ reason: 'no_journal_entry_created' })
+    expect(businessWrites(calls)).toEqual([])
   })
 })

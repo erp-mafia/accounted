@@ -70,7 +70,7 @@ const DataListRow = React.forwardRef<HTMLDivElement, DataListRowProps>(
         ref={ref}
         className={cn(
           "transition-colors",
-          selected ? "bg-secondary/50" : "hover:bg-secondary/40",
+          selected ? "bg-secondary/50" : "hover:bg-secondary/35",
           className
         )}
         {...props}
@@ -94,7 +94,7 @@ const DataListRow = React.forwardRef<HTMLDivElement, DataListRowProps>(
         {expandedContent != null && (
           <div
             className={cn(
-              "grid transition-[grid-template-rows] duration-200 motion-reduce:transition-none",
+              "grid transition-[grid-template-rows] duration-300 motion-reduce:transition-none",
               expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
             )}
           >

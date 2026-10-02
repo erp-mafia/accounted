@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
-import { arkivRollout } from '@/lib/arkiv/flag'
+import { arkivBrainRollout } from '@/lib/arkiv/flag'
 import { lintCompanies } from '@/lib/arkiv/lint/run'
 import { markCompanyGraphStale, refreshStaleGraphs } from '@/lib/arkiv/graph/snapshot'
 import { todayIso } from '@/lib/arkiv/agreements/dates'
@@ -29,7 +29,7 @@ async function everyCompany(supabase: ReturnType<typeof createServiceRoleClient>
 export const GET = withCronContext('arkiv.lint', async (_request, ctx) => {
   const supabase = createServiceRoleClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
   try {
-    const rollout = arkivRollout()
+    const rollout = arkivBrainRollout()
     const companies = rollout === 'all' ? await everyCompany(supabase) : rollout
     const results = await lintCompanies(supabase, companies, todayIso())
     const totals = Object.values(results).reduce(

@@ -35,8 +35,8 @@ process.env.NEXT_PUBLIC_SUPABASE_URL = url
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = config.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? config.SUPABASE_ANON_KEY ?? 'synthetic-unused-anon-key'
 process.env.SUPABASE_SERVICE_ROLE_KEY = key
 process.env.PERSONNUMMER_ENCRYPTION_KEY = 'synthetic-provider-load-test-only'
-delete process.env.UPSTASH_REDIS_REST_URL
-delete process.env.UPSTASH_REDIS_REST_TOKEN
+for (const name of ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'KV_REST_API_URL', 'KV_REST_API_TOKEN',
+  'UPSTASH_STORAGE_KV_REST_API_URL', 'UPSTASH_STORAGE_KV_REST_API_TOKEN']) delete process.env[name]
 Object.assign(process.env, { NODE_ENV: 'test' })
 const originalFetch = globalThis.fetch
 const client = () => createServiceRoleClient(url, key, { auth: { persistSession: false, autoRefreshToken: false },

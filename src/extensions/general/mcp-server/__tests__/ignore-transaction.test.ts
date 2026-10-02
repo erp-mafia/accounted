@@ -84,13 +84,13 @@ describe('gnubok_ignore_transaction: validation gates', () => {
     ).rejects.toThrow(/not found/i)
   })
 
-  it('refuses a directly booked row with TX_IGNORE_ALREADY_BOOKED', async () => {
+  it('refuses a directly booked row with TX_IGNORE_ALREADY_BOOKED, as a code and not only in the text', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: TX_ROW })
     enqueue({ data: { ...CORE_ROW, journal_entry_id: 'je-1' } })
     await expect(
       tool.execute({ transaction_id: TX_ID }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/TX_IGNORE_ALREADY_BOOKED/)
+    ).rejects.toMatchObject({ code: 'TX_IGNORE_ALREADY_BOOKED', message: expect.stringMatching(/TX_IGNORE_ALREADY_BOOKED/) })
     expect(findCalls('pending_operations', 'insert')).toEqual([])
   })
 

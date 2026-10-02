@@ -152,6 +152,29 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
       description: 'Use a live key for this endpoint, or pick an endpoint that supports dry-run.',
     },
   },
+  // Webhook endpoint ownership handshake (lib/webhooks/verification.ts).
+  WEBHOOK_NOT_VERIFIED: {
+    httpStatus: 409,
+    message_sv:
+      'Webhookens mottagaradress är inte verifierad. Inga händelser skickas dit förrän den har klarat verifieringen.',
+    message_en:
+      'The webhook endpoint has not passed the ownership verification handshake, so no events are sent to it.',
+    remediation: {
+      description:
+        'Make the endpoint answer the webhook.verification request with 2xx and {"challenge": "<the value sent>"}, then call POST /api/v1/companies/{companyId}/webhooks/{id}/verify.',
+    },
+  },
+  WEBHOOK_VERIFICATION_FAILED: {
+    httpStatus: 422,
+    message_sv:
+      'Webhookens mottagaradress klarade inte verifieringen. Den måste svara med samma challenge-värde som skickades.',
+    message_en:
+      'The webhook endpoint did not pass the verification handshake: it must answer with 2xx and {"challenge": "<the value sent>"} within 10 seconds.',
+    remediation: {
+      description:
+        'Read details.reason, fix the receiver, then call POST /api/v1/companies/{companyId}/webhooks/{id}/verify again.',
+    },
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -198,8 +221,72 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       'The account number already exists in this company chart of accounts but is deactivated.',
     remediation: {
       description:
-        'Reactivate the existing account instead of creating it: POST /api/bookkeeping/accounts/activate with { account_numbers: [number] }.',
+        'Reactivate the existing account instead of creating it: POST /api/v1/companies/{companyId}/accounts/activate with { account_numbers: [number] }, or gnubok_update_account with is_active=true.',
       resource: 'Accounted://chart-of-accounts',
+    },
+  },
+  // Chart of accounts writes (lib/bookkeeping/chart-of-accounts-service.ts,
+  // operations accounts.*): one set of codes for the dashboard, v1 and MCP.
+  ACCOUNT_EXISTS: {
+    httpStatus: 409,
+    message_sv: 'Kontonumret finns redan i din kontoplan.',
+    message_en: 'The account number already exists in this company chart of accounts.',
+    remediation: {
+      description: 'Edit the existing account instead (PATCH /accounts/{number} or gnubok_update_account).',
+      tool: 'gnubok_update_account',
+    },
+  },
+  ACCOUNT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kontot hittades inte.',
+    message_en: 'The account is not in this company chart of accounts.',
+    remediation: {
+      description: 'List the chart with GET /accounts?active=false, or create the account first.',
+      tool: 'gnubok_list_accounts',
+    },
+  },
+  ACCOUNT_DETAILS_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Kontonumret finns inte i BAS 2026: ange kontonamn, kontotyp och normal balans.',
+    message_en:
+      'The account number is not in the BAS 2026 catalogue: account_name, account_type and normal_balance are required.',
+  },
+  ACCOUNT_TYPE_CLASS_CONFLICT: {
+    httpStatus: 400,
+    message_sv: 'Kontotypen passar inte kontoklassen för det här kontonumret.',
+    message_en:
+      'account_type does not fit the account class (the first digit of the number); details.reason names the allowed types.',
+  },
+  ACCOUNT_VAT_TREATMENT_CLASS: {
+    httpStatus: 400,
+    message_sv: 'Momskoden kan inte användas för den här kontoklassen.',
+    message_en:
+      'default_vat_treatment is not valid for this account class: sales treatments go on class 3, reverse-charge purchase treatments on classes 4-6.',
+  },
+  ACCOUNT_VAT_BOX_NOT_VAT_ACCOUNT: {
+    httpStatus: 400,
+    message_sv: 'Momsruta kan bara väljas för momskonton (26xx, inte 2650).',
+    message_en: 'vat_box is only valid on 26xx VAT accounts other than 2650.',
+  },
+  ACCOUNT_NOTHING_TO_UPDATE: {
+    httpStatus: 400,
+    message_sv: 'Inget att uppdatera.',
+    message_en: 'Nothing to update: send at least one account field.',
+  },
+  ACCOUNT_SYSTEM_DELETE: {
+    httpStatus: 400,
+    message_sv: 'Systemkonton kan inte tas bort. Inaktivera kontot istället.',
+    message_en: 'System accounts cannot be deleted. Deactivate the account instead (is_active=false).',
+  },
+  ACCOUNT_IN_USE: {
+    httpStatus: 409,
+    message_sv:
+      'Kontot kan inte tas bort eftersom det används i bokförda verifikationer. Inaktivera det istället.',
+    message_en:
+      'The account has journal lines in this company and cannot be deleted (BFL: verifikat are immutable). Deactivate it instead (is_active=false).',
+    remediation: {
+      description: 'Deactivate the account: PATCH /accounts/{number} with { is_active: false }, or gnubok_update_account.',
+      tool: 'gnubok_update_account',
     },
   },
   JOURNAL_ENTRY_NOT_BALANCED: {
@@ -306,12 +393,12 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   DIMENSION_VALIDATION_FAILED: {
     httpStatus: 400,
     message_sv:
-      'Ett angivet kostnadsställe/projekt finns inte i dimensionsregistret eller är arkiverat. Skapa värdet i registret först.',
+      'Ett angivet dimensionsvärde finns inte i dimensionsregistret eller är arkiverat. Skapa värdet i registret först.',
     message_en:
       'One or more dimension codes on the entry lines are missing from the dimension registry or archived. details.issues lists each offending sie_dim_no/code.',
     remediation: {
       description:
-        'Create the missing dimension value in the register (or re-activate the archived value), then retry. Only companies with dimensions enabled are validated; each issue in details.issues carries sie_dim_no, code and reason (unknown_dimension | unknown_value | archived_value).',
+        'Create the missing dimension value in the register (or re-activate the archived value or dimension), then retry. Only companies with dimensions enabled are validated; each issue in details.issues carries sie_dim_no, code, reason (unknown_dimension | unknown_value | archived_value | archived_dimension) and, when the dimension is registered, dimension_name.',
     },
   },
   MANDATORY_DIMENSION_MISSING: {
@@ -347,6 +434,62 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
         'Read the full chain with gnubok_query_journal (follow correction_of_id/reverses_id to the chain root), compute the net effect across all entries, and stage ONE correction on the live entry that expresses it. Only pass allow_deep_chain=true if stacking another correction is genuinely intended.',
       tool: 'gnubok_query_journal',
     },
+  },
+  // ── Wave 3: journal-entry actions (lib/core/bookkeeping/journal-entry-corrections.ts,
+  // lib/core/bookkeeping/journal-entry-edits.ts, lib/bookkeeping/no-doc-required.ts) ──
+  JOURNAL_RATTELSE_REFUSED: {
+    httpStatus: 409,
+    message_sv: 'Rättelsen kan inte göras i samma verifikat. Använd rättelseverifikat (storno) i stället.',
+    message_en:
+      'The inline rättelse was refused by a bookkeeping rule (the Swedish message names it). Correct the verifikat with storno instead: POST /journal-entries/{id}/correct.',
+    remediation: {
+      description:
+        'Read the message. If the rule cannot be met inside the verifikat (linked underlag, foreign currency, bank-anchored amount, structural entry type), use the storno correction (gnubok_correct_entry) instead.',
+      tool: 'gnubok_correct_entry',
+    },
+    thrown_message_sv: true,
+  },
+  JOURNAL_RATTELSE_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Perioden är stängd eller låst: använd rättelseverifikat (storno).',
+    message_en:
+      'Inline rättelse is only allowed in an open, unlocked period after the company lock date. Past a lock or close, storno is the only lawful correction (BFL 5 kap 5 §).',
+    remediation: {
+      description:
+        'Correct the verifikat with storno (gnubok_correct_entry, POST /journal-entries/{id}/correct). Unlock the period only if the user explicitly asks for it.',
+      tool: 'gnubok_correct_entry',
+    },
+    thrown_message_sv: true,
+  },
+  JOURNAL_RATTELSE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte rätta verifikationen. Försök igen.',
+    message_en: 'The inline rättelse failed unexpectedly. Nothing was changed.',
+    retryable: true,
+  },
+  JOURNAL_RATTELSE_LOG_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte hämta rättelsehistorik.',
+    message_en: 'Could not read the rättelse log.',
+    retryable: true,
+  },
+  JOURNAL_ENTRY_UPDATE_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Utkastet kunde inte sparas.',
+    message_en: 'The draft journal entry could not be saved.',
+    thrown_message_sv: true,
+  },
+  JOURNAL_ENTRY_NOTE_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Anteckningen kunde inte sparas.',
+    message_en: 'The note could not be saved.',
+    thrown_message_sv: true,
+  },
+  NO_DOC_REQUIRED_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Markeringen "Inget underlag krävs" kunde inte sparas.',
+    message_en: 'The "no document required" flag could not be saved.',
+    thrown_message_sv: true,
   },
   NO_OPEN_PERIOD_FOR_DATE: {
     httpStatus: 400,
@@ -449,6 +592,16 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
 // ─────────────────────────────────────────────────────────────────
 
 const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
+  // The route composes the message with the account and the amount; this is
+  // the fallback for an envelope without one.
+  TRANSACTION_BOOK_BANK_LINE_DIRECTION: {
+    httpStatus: 400,
+    message_sv:
+      'Bankkontot står på fel sida i verifikationen. Ett uttag ska stå i kredit på bankkontot och en insättning i debet.',
+    message_en:
+      'The bank ledger is on the wrong side of the voucher: a withdrawal must credit the bank ledger, a deposit must debit it.',
+    thrown_message_sv: true,
+  },
   TRANSACTION_BOOK_POSSIBLE_DUPLICATE: {
     httpStatus: 409,
     message_sv:
@@ -499,6 +652,21 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       'Transaktionens valuta stämmer inte med kontots valuta. En transaktion kan bara flyttas till ett konto i samma valuta.',
     message_en:
       'The transaction currency does not match the target account currency. A transaction can only be moved to an account in the same currency.',
+  },
+  // resolveSettlementAccount: the transaction's cash account is in another
+  // currency than the transaction. The bank-booking guards look the account up
+  // by the transaction's currency and refuse every booking and link on it, so
+  // this is raised before a preview or a staged operation promises one.
+  BANK_BOOKING_CURRENCY_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionens valuta stämmer inte med valutan på bankkontot den hör till, så den kan inte bokföras eller kopplas mot det kontot. Flytta transaktionen till ett bankkonto i samma valuta, eller kontakta supporten om bankkontot har fel valuta.',
+    message_en:
+      "The transaction's currency does not match the currency of its bank account, so it cannot be booked or linked on that account.",
+    remediation: {
+      description:
+        'Retrying does not help: the database refuses every booking and link of this row on that bank account. If the row sits under the wrong bank account, move it to the company account in its currency (transactions.update with account_number); if the bank account itself has the wrong currency, only support can correct it.',
+    },
   },
   TX_CATEGORIZE_INVALID_ACCOUNT: {
     httpStatus: 400,
@@ -919,8 +1087,55 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_CREATE_VAT_RULE_VIOLATION: {
     httpStatus: 400,
-    message_sv: 'Momssatsen är inte tillåten för denna kundtyp.',
-    message_en: 'The VAT rate is not allowed for this customer type.',
+    message_sv: 'Momssatsen är inte tillåten för denna kundtyp eller för fakturans momsbehandling.',
+    message_en: "The VAT rate is not allowed for this customer type or for the invoice's VAT treatment.",
+  },
+  // Per-invoice VAT treatment (#2906): resolveInvoiceVatRules refuses a
+  // treatment the stated facts do not support, instead of issuing 0 %
+  // without them. details carry vat_treatment, delivery_country and why.
+  INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_REQUIRED: {
+    httpStatus: 400,
+    message_sv:
+      'Ange leveransland (delivery_country) för varor som lämnar Sverige. Utan leveransland gäller export och omvänd skattskyldighet bara tjänster, och bara när kunden redan har den behandlingen.',
+    message_en:
+      'Set delivery_country for goods leaving Sweden. Without a delivery country, export and reverse_charge only mean the services treatment, and only where the customer already has it.',
+    remediation: {
+      description:
+        'For goods, send delivery_country (the ISO code of the country the goods are transported to). For services, omit vat_treatment: the customer record decides. See details.customer_vat_treatment.',
+    },
+  },
+  INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Leveranslandet stämmer inte med momsbehandlingen. Export kräver att varorna transporteras ut ur EU; unionsintern leverans kräver transport till ett annat EU-land.',
+    message_en:
+      'The delivery country does not match the VAT treatment. Export requires the goods to leave the EU; an intra-EU supply requires transport to another EU member state.',
+    remediation: {
+      description:
+        'Check delivery_country. Goods to another EU member state: vat_treatment reverse_charge (needs the buyer VAT number). Goods leaving the EU: export. Goods staying in Sweden: standard. details.required names what the treatment needs.',
+    },
+  },
+  INVOICE_VAT_TREATMENT_BUYER_VAT_NUMBER_REQUIRED: {
+    httpStatus: 400,
+    message_sv:
+      'Unionsintern leverans (0 %) kräver köparens momsregistreringsnummer i ett annat EU-land än Sverige, kontrollerat mot VIES (ML 10 kap. 42-43 §§). Utan det ska fakturan ha svensk moms.',
+    message_en:
+      "An intra-EU supply (0 %) requires the buyer's VAT number from an EU member state other than Sweden, validated against VIES (ML 10 kap. 42-43 §§). Without it the invoice carries Swedish VAT.",
+    remediation: {
+      description:
+        'Add the buyer EU VAT number to the customer (it is validated against VIES when saved), or send vat_treatment standard for Swedish VAT (for example a consumer under the distance-sales threshold). details.reason: private_person, missing, not_another_member_state or not_validated.',
+      tool: 'gnubok_update_customer',
+    },
+  },
+  INVOICE_VAT_TREATMENT_NOT_VAT_REGISTERED: {
+    httpStatus: 400,
+    message_sv:
+      'Företaget är inte momsregistrerat, så fakturan kan inte ange egen momsbehandling. Alla rader blir momsfria.',
+    message_en:
+      'The company is not VAT-registered, so the invoice cannot state its own VAT treatment. Every line is VAT-free.',
+    remediation: {
+      description: 'Omit vat_treatment and delivery_country.',
+    },
   },
   INVOICE_CREATE_REVENUE_ACCOUNT_INVALID: {
     httpStatus: 400,
@@ -937,10 +1152,12 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ett balanskonto (klass 1-2) kan bara användas på rader utan moms. Använd ett intäktskonto (3xxx) för momspliktiga rader.',
     message_en: 'A balance-sheet account (class 1-2) can only be used on zero-VAT lines. Use a revenue account (3xxx) for VAT-bearing lines.',
   },
+  // Code name kept for wire stability; it covers every skattereduktion kind
+  // (ROT, RUT, grön teknik), so the text names none of them.
   INVOICE_CREATE_ROT_RUT_VALIDATION: {
     httpStatus: 400,
-    message_sv: 'ROT/RUT-avdraget kunde inte valideras. Kontrollera personnummer och fastighetsbeteckning.',
-    message_en: 'ROT/RUT deduction failed validation. Check personnummer and housing designation.',
+    message_sv: 'Skattereduktionen kunde inte valideras. Kontrollera personnummer, fastighetsbeteckning och raderna med avdrag.',
+    message_en: 'The tax reduction failed validation. Check the personnummer, the property designation and the deduction lines.',
   },
   INVOICE_CREATE_ACCRUAL_INVALID: {
     httpStatus: 400,
@@ -969,8 +1186,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_CREATE_ROT_RUT_PERSONNUMMER_INVALID: {
     httpStatus: 400,
-    message_sv: 'Personnumret för ROT/RUT-avdraget är ogiltigt.',
-    message_en: 'The personnummer provided for the ROT/RUT deduction is invalid.',
+    message_sv: 'Personnumret för skattereduktionen är ogiltigt.',
+    message_en: 'The personnummer provided for the tax reduction is invalid.',
   },
   // Rot/rut begäran om utbetalning (Skatteverkets husavdragstjänst)
   ROT_RUT_REQUEST_NOT_FOUND: {
@@ -1024,6 +1241,35 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The request was already settled by another action. The voucher that was created could not be attached: check the bookkeeping on account 1513.',
   },
+  ROT_RUT_LINK_VOUCHER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Verifikatet hittades inte i det här företaget.',
+    message_en: 'The voucher was not found in this company.',
+  },
+  ROT_RUT_LINK_VOUCHER_NOT_ELIGIBLE: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikatet kan inte kopplas: det måste vara bokfört och får inte vara makulerat, en rättelse eller en ingående balans.',
+    message_en:
+      'The voucher cannot be linked: it must be posted and not reversed, a storno or an opening balance.',
+  },
+  ROT_RUT_LINK_ALREADY_SETTLED: {
+    httpStatus: 409,
+    message_sv: 'Begäran är redan kopplad till ett annat utbetalningsverifikat.',
+    message_en: 'The request is already linked to another payout voucher.',
+  },
+  ROT_RUT_LINK_VOUCHER_IN_USE: {
+    httpStatus: 409,
+    message_sv: 'Verifikatet är redan kopplat till en annan begäran.',
+    message_en: 'The voucher is already linked to another request.',
+  },
+  ROT_RUT_LINK_AMOUNT_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppet på konto 1513 i verifikatet stämmer inte med begäran. Välj verifikatet för just den här utbetalningen, eller alla begäran det betalade.',
+    message_en:
+      'The account 1513 amount on the voucher does not match the request. Pick the voucher for this payout, or every request it paid.',
+  },
   ROT_RUT_MATCH_NOT_INCOME: {
     httpStatus: 400,
     message_sv: 'Endast inbetalningar kan matchas mot en ROT/RUT-utbetalning från Skatteverket.',
@@ -1065,6 +1311,122 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Beloppet stämmer inte med de valda utläggen. Välj de utlägg som överföringen täcker.',
     message_en: 'The amount does not match the selected expense claims. Pick the claims this transfer covers.',
+  },
+  // Expense claims (utlägg): register, delete, payout (lib/expenses/expense-claim-actions.ts).
+  EXPENSE_CLAIM_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Utlägget hittades inte.',
+    message_en: 'Expense claim not found.',
+  },
+  EXPENSE_CLAIM_CLAIMANT_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange vem utlägget avser: välj anställd eller skriv ett namn.',
+    message_en: 'Say who the expense claim is for: pick an employee or give a name.',
+  },
+  EXPENSE_CLAIM_VAT_EXCEEDS_AMOUNT: {
+    httpStatus: 400,
+    message_sv: 'Momsen måste vara mindre än totalbeloppet.',
+    message_en: 'The VAT must be less than the total amount.',
+  },
+  EXPENSE_CLAIM_INVALID_LINES: {
+    httpStatus: 400,
+    message_sv: 'Verifikatraderna är ogiltiga: kontrollera att raderna balanserar och att skuldraden matchar beloppet.',
+    message_en: 'The voucher lines are invalid: they must balance and carry exactly one credit on the liability account equal to the amount.',
+  },
+  EXPENSE_CLAIM_RATE_UNAVAILABLE: {
+    httpStatus: 400,
+    message_sv: 'Ingen växelkurs kunde hämtas för datumet. Ange kursen manuellt och försök igen.',
+    message_en: 'No exchange rate could be fetched for the date. Pass exchange_rate and retry.',
+  },
+  EXPENSE_CLAIM_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Inget öppet räkenskapsår täcker datumet.',
+    message_en: 'No open fiscal year covers the date.',
+  },
+  EXPENSE_CLAIM_DOCUMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Underlaget hittades inte i företaget.',
+    message_en: 'The document was not found in this company.',
+  },
+  EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Inkorgsposten hittades inte i företaget.',
+    message_en: 'The inbox item was not found in this company.',
+  },
+  EXPENSE_CLAIM_SAVE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utlägget kunde inte sparas.',
+    message_en: 'The expense claim could not be saved.',
+  },
+  EXPENSE_CLAIM_LINK_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utlägget bokfördes men kunde inte kopplas till sin verifikation. Kontakta supporten innan du försöker igen.',
+    message_en: 'The expense claim was booked but could not be linked to its voucher. Contact support before retrying.',
+  },
+  EXPENSE_CLAIM_ALREADY_PAID: {
+    httpStatus: 409,
+    message_sv: 'Utlägget är redan utbetalt och kan inte tas bort.',
+    message_en: 'The expense claim is already paid out and cannot be deleted.',
+  },
+  EXPENSE_CLAIM_ON_PAYSLIP: {
+    httpStatus: 409,
+    message_sv: 'Utlägget ligger på ett lönebesked som är under behandling. Ta bort raden från lönebeskedet först.',
+    message_en: 'The expense claim is on a payslip that has left draft. Remove the line from the payslip first.',
+  },
+  EXPENSE_CLAIM_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utlägget kunde inte tas bort.',
+    message_en: 'The expense claim could not be deleted.',
+  },
+  EXPENSE_PAYOUT_NO_CLAIMS: {
+    httpStatus: 400,
+    message_sv: 'Välj minst ett utlägg att betala ut.',
+    message_en: 'Pick at least one expense claim to pay out.',
+  },
+  EXPENSE_PAYOUT_CLAIMS_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Något av utläggen hittades inte.',
+    message_en: 'One or more of the expense claims were not found.',
+  },
+  EXPENSE_PAYOUT_ALREADY_PAID: {
+    httpStatus: 409,
+    message_sv: 'Något av utläggen är redan utbetalt.',
+    message_en: 'One or more of the expense claims are already paid out.',
+  },
+  EXPENSE_PAYOUT_MIXED_CLAIMANTS: {
+    httpStatus: 400,
+    message_sv: 'En utbetalning kan bara avse en person. Dela upp per person.',
+    message_en: 'A payout covers one person only. Split it per person.',
+  },
+  EXPENSE_PAYOUT_MIXED_LIABILITY: {
+    httpStatus: 400,
+    message_sv: 'Utläggen har olika skuldkonton och kan inte betalas ut tillsammans.',
+    message_en: 'The expense claims sit on different liability accounts and cannot be paid out together.',
+  },
+  EXPENSE_PAYOUT_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Inget öppet räkenskapsår täcker utbetalningsdatumet.',
+    message_en: 'No open fiscal year covers the payout date.',
+  },
+  EXPENSE_PAYOUT_ACCOUNT_NOT_IN_CHART: {
+    httpStatus: 400,
+    message_sv: 'Kontot finns inte i kontoplanen.',
+    message_en: 'The account is not active in the chart of accounts.',
+  },
+  EXPENSE_PAYOUT_INVALID_CASH_ACCOUNT: {
+    httpStatus: 400,
+    message_sv: 'Utbetalningen måste göras från ett likvidkonto i 19xx-serien (bank eller kassa).',
+    message_en: 'The payout must come from a cash account in the 19xx range (bank or cash).',
+  },
+  EXPENSE_PAYOUT_ON_PAYSLIP: {
+    httpStatus: 409,
+    message_sv: 'Något av utläggen ligger på ett lönebesked och betalas ut via lön. Ta bort raden från lönebeskedet först.',
+    message_en: 'One or more of the expense claims are on a payslip and are repaid through payroll. Remove the line from the payslip first.',
+  },
+  EXPENSE_PAYOUT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utbetalningen kunde inte bokföras.',
+    message_en: 'The payout could not be booked.',
   },
   // Reclaim: Skatteverkets avslag booked back onto the customer
   ROT_RUT_RECLAIM_NO_BESLUT: {
@@ -1319,6 +1681,19 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en: 'Customer has no email address.',
     remediation: { description: 'Add an email address on the customer record before sending.' },
   },
+  // customer_id is null, usually because the customer was deleted while the
+  // draft existed (crm#263). Without a buyer there is no invoice to issue or
+  // render (ML 17 kap 24 §).
+  INVOICE_CUSTOMER_MISSING: {
+    httpStatus: 409,
+    message_sv: 'Fakturan saknar kund. Välj en kund på utkastet under Redigera, eller ta bort utkastet.',
+    message_en: 'The invoice has no customer. Choose a customer for the draft under Edit, or delete the draft.',
+    remediation: {
+      description:
+        'The invoice has no customer (customer_id is null, usually because the customer was deleted). Set customer_id on the draft (gnubok_update_invoice, or PATCH the invoice) or delete the draft (gnubok_delete_draft_invoice). An invoice is never issued or rendered without a buyer.',
+      tool: 'gnubok_update_invoice',
+    },
+  },
   INVOICE_SEND_TOO_MANY_RECIPIENTS: {
     httpStatus: 400,
     message_sv: 'Ett fakturautskick får ha högst 20 mottagare totalt.',
@@ -1376,6 +1751,66 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kontot hör till en bankkoppling. Slå på eller av det under bankkopplingen i stället.',
     message_en: 'This account belongs to a bank connection. Turn it on or off from the bank connection instead.',
   },
+  // Cash account operations (lib/cash-accounts/manage.ts): the dashboard,
+  // v1 and MCP doors answer these same codes.
+  CASH_ACCOUNT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bankkontot hittades inte.',
+    message_en: 'Bank account not found.',
+  },
+  CASH_ACCOUNT_LEDGER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Bokföringskontot används redan av ett annat bankkonto i företaget. Välj ett annat konto eller låt systemet välja nästa lediga.',
+    message_en: 'The ledger account is already used by another bank account of the company. Pick another one or omit it to get the next free one.',
+  },
+  CASH_ACCOUNT_NO_FREE_LEDGER: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget ledigt bokföringskonto i 1931-1959 för ett nytt bankkonto. Ange ett bokföringskonto (1920-1999) själv.',
+    message_en: 'No free ledger account in 1931-1959 is left for a new bank account. Pass a ledger_account (1920-1999) explicitly.',
+  },
+  CASH_ACCOUNT_IBAN_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Ett annat bankkonto i företaget har redan detta IBAN. Samma bankkonto ska bara finnas en gång: använd det befintliga kontot.',
+    message_en: 'Another bank account of the company already carries this IBAN. One physical account must exist once: use the existing cash account.',
+  },
+  // Removing a bank account (remove_cash_account, #3130): one code per
+  // refusal, each saying what keeps the account and the way out if there is
+  // one. Nothing is removed when any of them is answered.
+  CASH_ACCOUNT_REMOVE_BANK_CONNECTED: {
+    httpStatus: 409,
+    message_sv: 'Kontot hämtas fortfarande via en bankkoppling och kan inte tas bort. Koppla från banken först (kontona och deras transaktioner finns kvar), ta bort kontot och koppla sedan banken igen med bara rätt konton.',
+    message_en: 'The account is still fetched through a bank connection and cannot be removed. Disconnect the bank first (the accounts and their transactions stay), remove the account, then connect the bank again with only the right accounts.',
+  },
+  CASH_ACCOUNT_REMOVE_PRIMARY: {
+    httpStatus: 409,
+    message_sv: 'Det här är företagets primära bankkonto och kan inte tas bort. Välj "Gör primärt" på rätt bankkonto först. Finns inget annat bankkonto: koppla eller lägg till rätt konto först.',
+    message_en: 'This is the company’s primary bank account and cannot be removed. Choose "Make primary" on the right bank account first. If there is no other bank account, connect or add the right one first.',
+  },
+  CASH_ACCOUNT_REMOVE_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Transaktioner på kontot är bokförda eller kopplade till verifikat, fakturor eller betalningar, så kontot kan inte tas bort. Det som är bokfört rättas med ändring eller storno.',
+    message_en: 'Transactions on the account are booked or linked to vouchers, invoices or payments, so the account cannot be removed. Booked items are corrected with a correction or a reversal.',
+  },
+  CASH_ACCOUNT_REMOVE_IGNORED: {
+    httpStatus: 409,
+    message_sv: 'Kontot har ignorerade transaktioner. Att ignorera är ett sparat beslut, så kontot kan inte tas bort medan de finns. Ångra ignoreringen först om kontot ska bort.',
+    message_en: 'The account has ignored transactions. Ignoring is a recorded decision, so the account cannot be removed while they exist. Undo the ignore first if the account should go.',
+  },
+  CASH_ACCOUNT_REMOVE_MATCH_HISTORY: {
+    httpStatus: 409,
+    message_sv: 'Transaktioner på kontot har matchningshistorik som ska sparas, så kontot kan inte tas bort. Ignorera transaktionerna och stäng av kontot i stället, eller kontakta supporten.',
+    message_en: 'Transactions on the account have payment matching history that must be kept, so the account cannot be removed. Ignore the transactions and turn the account off instead, or contact support.',
+  },
+  CASH_ACCOUNT_REMOVE_IN_USE: {
+    httpStatus: 409,
+    message_sv: 'Kontot används på fakturor (betaluppgifter, standardkonto för fakturor eller en skickad faktura) eller i en avstämning och kan inte tas bort.',
+    message_en: 'The account is used on invoices (payment details, the default invoice account or a sent invoice) or in a reconciliation and cannot be removed.',
+  },
+  CASH_ACCOUNT_REMOVE_LEDGER_HISTORY: {
+    httpStatus: 409,
+    message_sv: 'Bokföringskontot som bankkontot bokför på har redan bokförda verifikat, så bankkontot kan inte tas bort.',
+    message_en: 'The ledger account this bank account books on already has posted vouchers, so the bank account cannot be removed.',
+  },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
     // Currency-neutral by necessity (the registry has no details). Surfaces
@@ -1404,6 +1839,19 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 502,
     message_sv: 'E-postleverantören kunde inte skicka meddelandet.',
     message_en: 'The email provider could not deliver the message.',
+  },
+  // POST /api/invoices/[id]/send issues the invoice (status sent + verifikat)
+  // before the email leaves, so a verifikat refusal can stop the send. When
+  // the email itself then fails after a verifikat was posted, the invoice
+  // stays issued (a posted verifikat is never undone) and is delivered by
+  // hand; with nothing booked the draft is put back instead.
+  INVOICE_SEND_ISSUED_NOT_DELIVERED: {
+    httpStatus: 502,
+    message_sv:
+      'Fakturan är utfärdad men e-postmeddelandet kunde inte skickas. Ladda ned fakturan och skicka den till kunden.',
+    message_en:
+      'The invoice is issued (marked sent, and booked where the company books at issue) but the email could not be sent. Download the invoice and deliver it to the customer.',
+    retryable: false,
   },
   INVOICE_SEND_SNAPSHOT_FAILED: {
     httpStatus: 500,
@@ -1723,8 +2171,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   SALES_ORDER_SOURCE_UNSUPPORTED_LINES: {
     httpStatus: 400,
-    message_sv: 'Underlaget innehåller rader som inte kan föras över till en kundorder (ROT/RUT-avdrag, periodisering eller negativt antal). Skapa kundordern manuellt.',
-    message_en: 'The source document has lines that cannot be carried into a sales order (ROT/RUT deduction, accrual period or negative quantity). Create the sales order manually.',
+    message_sv: 'Underlaget innehåller rader som inte kan föras över till en kundorder (skattereduktion som ROT, RUT eller grön teknik, periodisering eller negativt antal). Skapa kundordern manuellt.',
+    message_en: 'The source document has lines that cannot be carried into a sales order (a tax reduction such as ROT, RUT or green technology, an accrual period or a negative quantity). Create the sales order manually.',
   },
   SALES_ORDER_CUSTOMER_VAT_CHANGED: {
     httpStatus: 409,
@@ -1790,6 +2238,39 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 502,
     message_sv: 'Peppol-operatören kunde inte nås just nu. Fakturan har inte skickats; försök igen om en stund.',
     message_en: 'The Peppol access point could not be reached. The invoice has not been sent; try again shortly.',
+  },
+  // The two above once the invoice is issued: a draft is issued (and booked,
+  // under faktureringsmetoden) before the network gets it, so the failure
+  // must not say it was not sent. The send composes the sentence it answers
+  // (booked or not, the access point's reason) in peppolAfterIssueMessages
+  // (lib/invoices/peppol-send-service.ts); these static texts hold for every
+  // case and are what an envelope without that sentence carries.
+  PEPPOL_SUBMISSION_REJECTED_AFTER_ISSUE: {
+    httpStatus: 422,
+    message_sv: 'Fakturan är utfärdad, men Peppol-operatören tog inte emot den. Rätta och skicka igen, eller skicka PDF:en via e-post.',
+    message_en: 'The invoice is issued, but the Peppol access point did not accept it. Correct it and send again, or send the PDF by email.',
+    thrown_message_sv: true,
+  },
+  PEPPOL_SUBMISSION_FAILED_AFTER_ISSUE: {
+    httpStatus: 502,
+    message_sv: 'Fakturan är utfärdad, men kunde inte skickas via Peppol just nu. Försök igen om en stund, eller skicka PDF:en via e-post.',
+    message_en: 'The invoice is issued, but could not be sent via Peppol right now. Try again shortly, or send the PDF by email.',
+    thrown_message_sv: true,
+  },
+  // The access point already holds an invoice with this number for this
+  // receiver (the connector's 409). Its verdict: the delivery ends failed,
+  // and only a resend that replaces a failed submission gets past it.
+  PEPPOL_DUPLICATE_INVOICE_NUMBER: {
+    httpStatus: 409,
+    message_sv: 'Mottagaren har redan en faktura med det här numret via Peppol. Behöver den rättas, kreditera den och skapa en ny faktura.',
+    message_en: 'The recipient already holds an invoice with this number via Peppol. If it needs correcting, credit it and create a new invoice.',
+  },
+  // The buyer refused the invoice (a business response): the same document
+  // is never sent again.
+  PEPPOL_BUSINESS_REJECTED: {
+    httpStatus: 409,
+    message_sv: 'Mottagaren har avvisat fakturan via Peppol. Kreditera den och skapa en ny faktura.',
+    message_en: 'The recipient rejected the invoice via Peppol. Credit it and create a new invoice.',
   },
   // The SMP lookup itself failed (#2484), as opposed to a lookup that
   // answered "not registered": the staged delivery stays staged and nothing
@@ -1960,6 +2441,22 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 502,
     message_sv: 'Svaret från Peppol-tjänsten kunde inte tolkas. Kontakta support om felet kvarstår.',
     message_en: 'The answer from the Peppol service could not be read. Contact support if the problem persists.',
+  },
+  // The access point answered a documented call in a shape the adapter does
+  // not know (PEPPOL_UPSTREAM_SHAPE_CODE): not retryable, asking again gets
+  // the same shape.
+  // A resend that names a submission the access point has not reported as
+  // failed (it is delivered or still in flight): the connector refuses the
+  // overwrite so the buyer never gets the invoice twice.
+  CONNECTOR_PEPPOL_RESEND_NOT_FAILED: {
+    httpStatus: 409,
+    message_sv: 'Peppol-operatören har inte rapporterat den tidigare leveransen som misslyckad, så fakturan skickas inte igen. Vänta på leveransstatusen eller kontakta support.',
+    message_en: 'The Peppol access point has not reported the earlier delivery as failed, so the invoice is not sent again. Wait for the delivery status or contact support.',
+  },
+  CONNECTOR_UPSTREAM_SHAPE: {
+    httpStatus: 502,
+    message_sv: 'Peppol-operatören svarade i ett format som tjänsten inte känner igen. Kontakta support om felet kvarstår.',
+    message_en: 'The Peppol access point answered in a format the service does not recognise. Contact support if the problem persists.',
   },
 }
 
@@ -2165,6 +2662,131 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     message_sv: 'Räkenskapsåret stängdes med ett bokslut i Accounted och kan inte öppnas igen här.',
     message_en: 'The fiscal year was closed with a year-end run in Accounted and cannot be reopened here.',
   },
+  // Creating and editing a räkenskapsår (lib/core/bookkeeping/fiscal-year-service.ts,
+  // operations fiscal-periods.create / .update). The shape rules are BFL 3 kap.
+  // Codes flagged thrown_message_sv carry a Swedish sentence naming the dates
+  // or the neighbouring year; details carry the same facts for agents.
+  FISCAL_PERIOD_INVALID_DATES: {
+    httpStatus: 400,
+    thrown_message_sv: true,
+    message_sv: 'Räkenskapsårets datum är ogiltiga: slutdatumet måste ligga efter startdatumet.',
+    message_en: 'The fiscal year dates are invalid: period_end must be after period_start. details.rule names the rule.',
+  },
+  FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH: {
+    httpStatus: 400,
+    message_sv:
+      'Räkenskapsåret måste börja den 1:a i en månad. Bara företagets första räkenskapsår får börja mitt i en månad (BFL 3 kap. 1 och 3 §§).',
+    message_en:
+      "period_start must be the 1st of a month: only the company's first fiscal year may start mid-month (BFL 3 kap. 1 and 3 §§).",
+  },
+  FISCAL_PERIOD_END_NOT_MONTH_END: {
+    httpStatus: 400,
+    message_sv: 'Räkenskapsåret måste sluta på sista dagen i en månad (BFL 3 kap.).',
+    message_en: 'period_end must be the last day of a month (BFL 3 kap.).',
+  },
+  FISCAL_PERIOD_TOO_LONG: {
+    httpStatus: 400,
+    thrown_message_sv: true,
+    message_sv: 'Ett räkenskapsår får vara högst 18 månader (BFL 3 kap.).',
+    message_en: 'A fiscal year may be at most 18 months (BFL 3 kap.). details.months holds the length requested.',
+  },
+  FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR: {
+    httpStatus: 400,
+    thrown_message_sv: true,
+    message_sv:
+      'Enskild firma måste använda kalenderår: räkenskapsåret slutar 31 december och, efter det första året, börjar det 1 januari (BFL 3 kap.).',
+    message_en:
+      'An enskild firma must use the calendar year: the fiscal year ends on 31 December and, after the first year, starts on 1 January (BFL 3 kap.).',
+  },
+  FISCAL_PERIOD_NOT_CONTIGUOUS: {
+    httpStatus: 400,
+    thrown_message_sv: true,
+    message_sv: 'Räkenskapsåren måste följa direkt på varandra, utan glapp.',
+    message_en:
+      'Fiscal years must be contiguous: a new year starts the day after the preceding year ends and ends the day before the following year starts. details.expected_start / details.expected_end hold the date that fits.',
+  },
+  FISCAL_PERIOD_OVERLAP: {
+    httpStatus: 409,
+    thrown_message_sv: true,
+    message_sv: 'Räkenskapsåret överlappar ett befintligt räkenskapsår.',
+    message_en:
+      'The fiscal year overlaps an existing one (details.overlapping_period_id / overlapping_period_name). Fiscal years never overlap.',
+    remediation: {
+      description:
+        'List the existing years with GET /fiscal-periods (gnubok_list_fiscal_periods) and choose dates that do not overlap any of them.',
+      tool: 'gnubok_list_fiscal_periods',
+    },
+  },
+  FISCAL_PERIOD_UPDATE_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Ett stängt räkenskapsår kan inte ändras.',
+    message_en: 'A closed fiscal year cannot be edited.',
+  },
+  FISCAL_PERIOD_UPDATE_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Ett låst räkenskapsår kan inte ändras. Lås upp det först om det behöver rättas.',
+    message_en: 'A locked fiscal year cannot be edited. Unlock it first if it needs correcting.',
+    remediation: {
+      description: 'Unlock the year (it must be locked, not closed), edit it, and lock it again.',
+      tool: 'gnubok_unlock_period',
+    },
+  },
+  FISCAL_PERIOD_HAS_POSTED_ENTRIES: {
+    httpStatus: 409,
+    thrown_message_sv: true,
+    message_sv:
+      'Datumen kan inte ändras eftersom det finns bokförda verifikationer i räkenskapsåret. Namnet kan fortfarande ändras.',
+    message_en:
+      'The dates cannot change while posted or reversed vouchers exist in the fiscal year (details.entry_count). The name can still be changed.',
+  },
+  FISCAL_PERIOD_CREATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Räkenskapsåret kunde inte skapas. Försök igen.',
+    message_en: 'Failed to create the fiscal year.',
+  },
+  FISCAL_PERIOD_UPDATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Räkenskapsåret kunde inte sparas. Försök igen.',
+    message_en: 'Failed to update the fiscal year.',
+  },
+  // Klarmarkera (markPeriodClosedExternally): a migrated year closed in the
+  // previous bookkeeping system.
+  FISCAL_PERIOD_CLOSE_EXTERNAL_ALREADY_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret är redan stängt.',
+    message_en: 'The fiscal year is already closed.',
+  },
+  FISCAL_PERIOD_CLOSE_EXTERNAL_HAS_CLOSING_ENTRY: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsåret har ett bokslutsverifikat i Accounted: stäng det med det vanliga årsbokslutet i stället.',
+    message_en:
+      'The fiscal year has a closing entry in Accounted: close it through the normal year-end instead.',
+  },
+  FISCAL_PERIOD_CLOSE_EXTERNAL_NOT_ENDED: {
+    httpStatus: 409,
+    message_sv: 'Ett räkenskapsår som inte har tagit slut kan inte klarmarkeras.',
+    message_en: 'A fiscal year that has not ended yet cannot be marked as closed in a previous system.',
+  },
+  FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING: {
+    httpStatus: 409,
+    thrown_message_sv: true,
+    message_sv:
+      'Räkenskapsåret är bokfört i Accounted och ska stängas med det vanliga årsbokslutet, så att resultatet och balanserna förs över.',
+    message_en:
+      'The fiscal year was bookkept in Accounted, not migrated: close it with the normal year-end so the result and balances carry forward.',
+    remediation: {
+      description: 'Run the year-end instead (POST /fiscal-periods/{id}/year-end, gnubok_run_year_end).',
+      tool: 'gnubok_run_year_end',
+    },
+  },
+  FISCAL_PERIOD_CLOSE_EXTERNAL_CHECK_FAILED: {
+    httpStatus: 503,
+    thrown_message_sv: true,
+    retryable: true,
+    message_sv: 'Räkenskapsårets verifikat kunde inte kontrolleras. Året lämnas öppet. Försök igen.',
+    message_en: 'The fiscal year could not be checked, so it was left open. Retry the same request.',
+  },
   FISCAL_YEAR_RESET_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Räkenskapsåret kunde inte hittas.',
@@ -2260,6 +2882,11 @@ const FX: Record<string, StructuredErrorEntry> = {
 }
 
 const REPORT: Record<string, StructuredErrorEntry> = {
+  CASH_FLOW_TAX_ALLOCATION_REQUIRED: {
+    httpStatus: 422,
+    message_sv: 'Kassaflödesanalysen kan inte beräkna betald inkomstskatt säkert från periodens skattebokningar. Inkomstskatt behöver skiljas från övriga skatter i rapportunderlaget. Bokföringen behöver inte ändras.',
+    message_en: 'The cash flow statement cannot reliably calculate income tax paid from this period\'s tax postings. Income tax must be separated from other taxes in the report working papers. No bookkeeping changes are required.',
+  },
   REPORT_PERIOD_REQUIRED: {
     httpStatus: 400,
     message_sv: 'period_id krävs.',
@@ -2274,6 +2901,23 @@ const REPORT: Record<string, StructuredErrorEntry> = {
     httpStatus: 413,
     message_sv: 'Rapporten är för stor för PDF. Ladda ner den som CSV eller Excel i stället.',
     message_en: 'The report is too large for PDF. Download it as CSV or Excel instead.',
+  },
+  // gnubok_audit_package stores its zip in the documents bucket, whose cap per
+  // file (50 MB) sits below the tool's own 80 MB estimate gate: an archive
+  // between the two is built and then refused by Storage. A size limit, not a
+  // fault, so the identical call can never succeed on a retry.
+  AUDIT_PACKAGE_TOO_LARGE: {
+    httpStatus: 413,
+    message_sv:
+      'Revisionspaketet blev för stort för att sparas som fil. Skapa det utan underlag, eller ladda ner det kompletta arkivet med underlag under Importera/Exportera.',
+    message_en:
+      'The audit package is too large to store as a file. Create it without documents (include_documents=false), or download the complete archive with documents in the web app under Import/Export.',
+    remediation: {
+      description:
+        'If include_documents was true, call gnubok_audit_package again with include_documents=false: receipts and other documents are most of the size. For the archive with documents, the user downloads it in the web app under Importera/Exportera, Komplett arkiv (/import#full-archive), which streams the file instead of storing it.',
+      tool: 'gnubok_audit_package',
+    },
+    retryable: false,
   },
 }
 
@@ -2395,6 +3039,59 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
     message_sv: 'Skattedeklarationen kunde inte genereras.',
     message_en: 'Failed to generate tax declaration.',
   },
+  // ── Wave 3: filing reports and the momsredovisning verifikat over v1/MCP
+  // (lib/reports/filing-report-service.ts, lib/reports/vat-settlement-booking.ts) ──
+  TAX_DECL_INK2_WRONG_LEGAL_FORM: {
+    httpStatus: 400,
+    message_sv: 'INK2 lämnas bara av aktiebolag. En enskild firma lämnar NE-bilagan i stället.',
+    message_en: 'INK2 is filed only by an aktiebolag. An enskild firma files the NE-bilaga instead.',
+  },
+  TAX_DECL_NE_WRONG_LEGAL_FORM: {
+    httpStatus: 400,
+    message_sv: 'NE-bilagan lämnas bara av enskild firma. Ett aktiebolag lämnar INK2 i stället.',
+    message_en: 'The NE-bilaga is filed only by an enskild firma. An aktiebolag files INK2 instead.',
+  },
+  VAT_ESKD_SETTINGS_MISSING: {
+    httpStatus: 404,
+    message_sv: 'Företagsinställningar saknas: momsdeklarationsfilen kan inte skapas.',
+    message_en: 'Company settings are missing; the VAT declaration file cannot be created.',
+  },
+  VAT_ESKD_ORG_NUMBER_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Organisationsnummer saknas eller är ogiltigt. Ange ett giltigt organisationsnummer i företagsinställningarna för att skapa momsdeklarationsfilen.',
+    message_en:
+      'The organisation number is missing or invalid. Set a valid organisation number in the company settings to create the VAT declaration file.',
+  },
+  VAT_SETTLEMENT_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Momsen för perioden är redan bokförd. Annullera det verifikatet först om perioden behöver bokföras om.',
+    message_en:
+      'The VAT for this period is already booked. Reverse that journal entry first if the period needs to be booked again.',
+  },
+  VAT_SETTLEMENT_EMPTY: {
+    httpStatus: 400,
+    message_sv: 'Ingen moms att bokföra för perioden.',
+    message_en: 'There is no VAT to book for this period.',
+  },
+  VAT_SETTLEMENT_PROPOSAL_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Bokföringen för perioden har ändrats sedan förslaget togs fram. Hämta ett nytt förslag och granska det innan momsen bokförs.',
+    message_en:
+      'The bookkeeping for the period changed after the proposal was made. Fetch a new proposal and review it before booking the VAT.',
+  },
+  VAT_SETTLEMENT_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Det finns inget öppet räkenskapsår som täcker periodens sista dag.',
+    message_en: 'No open fiscal year covers the last day of the VAT period.',
+  },
+  VAT_SETTLEMENT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Momsen kunde inte bokföras.',
+    message_en: 'Failed to book the VAT settlement.',
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -2465,6 +3162,20 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'En SIE-import för ett överlappande räkenskapsår finns redan.',
     message_en: 'An SIE import for an overlapping fiscal period already exists.',
+  },
+  // start_sie_import_job's guard 'Existing SIE import requires reviewed
+  // replacement or reconciliation' (55000), mapped by jobDatabaseError. The
+  // guard also counts a posted ingående balans, so the sentence names both.
+  SIE_IMPORT_PERIOD_ALREADY_IMPORTED: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret har redan en import eller en bokförd ingående balans. Öppna importhistoriken och ångra den tidigare importen innan du importerar året igen.',
+    message_en: 'This fiscal year already has an import or a posted opening balance. Open import history and undo the earlier import before importing the year again.',
+    retryable: false,
+    remediation: {
+      description: 'Read gnubok_sie_import_status for the earlier import of this fiscal year, undo it (gnubok_undo_sie_import or import history in the app), then import the year again.',
+      tool: 'gnubok_sie_import_status',
+      resource: '/import?mode=sie',
+    },
   },
   SIE_IMPORT_UNMAPPED_ACCOUNTS: {
     httpStatus: 400,
@@ -2577,12 +3288,99 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Det valda bankkontot kan inte användas för den här filen. Inget importerades.',
     message_en: 'The selected bank account cannot be used for this file. Nothing was imported.',
   },
+  // ── Wave 3: bank transaction actions and import undo (lib/transactions/manage.ts,
+  // lib/import/bank-file/undo-operation.ts, lib/import/sie-job-action-service.ts) ──
+  TRANSACTION_DELETE_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är redan bokförd eller kopplad till en verifikation och kan inte raderas. Koppla bort den under Rapporter → Bankavstämning om kopplingen är fel, eller storna verifikationen.',
+    message_en:
+      'The transaction is already booked or linked to a journal entry and cannot be deleted. Unlink it under Reports → Bank reconciliation if the link is wrong, or reverse (storno) the voucher.',
+  },
+  TRANSACTION_DELETE_IMPORTED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen har hämtats från banken eller importerats via fil och kan inte raderas. Du kan ignorera den så att den döljs från listan över transaktioner att bokföra.',
+    message_en:
+      'This transaction was fetched from your bank or imported from a file and cannot be deleted. You can ignore it to hide it from the list of transactions to book.',
+  },
+  TRANSACTION_DELETE_HAS_AUDIT_TRAIL: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen kan inte raderas eftersom den har en kopplad matchningshistorik (räkenskapsinformation, BFL 7 kap.). Matcha den mot en befintlig verifikation, eller ignorera den under Rapporter → Bankavstämning om du inte vill bokföra den.',
+    message_en:
+      'The transaction cannot be deleted because it has linked match-history records (accounting information, BFL ch. 7). Match it to an existing voucher, or ignore it under Reports → Bank reconciliation if you do not want to book it.',
+  },
+  TRANSACTION_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte ta bort transaktionen. Försök igen.',
+    message_en: 'Could not delete the transaction. Please try again.',
+    retryable: true,
+  },
+  TX_EXCHANGE_RATE_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är redan bokförd, så dess växelkurs kan inte ändras här. Bokförda verifikat rättas med storno.',
+    message_en:
+      'The transaction is already booked, so its exchange rate cannot be changed here. Posted vouchers are corrected with storno.',
+  },
+  BANK_FILE_UNDO_NOT_COMPLETED: {
+    httpStatus: 409,
+    message_sv: 'Bara slutförda bankfilsimporter kan ångras.',
+    message_en: 'Only completed bank file imports can be undone.',
+  },
+  SIE_IMPORT_ACTION_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'SIE-importen kan inte ångras eller återupptas just nu: en annan körning pågår, perioden är låst eller en rättelse av ett importerat verifikat behöver granskas först.',
+    message_en:
+      'The SIE import cannot be undone or resumed right now: another run is in progress, the period is locked, or a correction of an imported voucher needs review first.',
+  },
 }
 
 /**
  * Agent-triggered PSD2 sync (v1 bank-connections sync + MCP gnubok_sync_bank).
  * Emitted by extensions/general/enable-banking/lib/trigger-sync.ts.
  */
+// Refusals save_bank_account_selection raises by name. Nothing is saved when
+// one of them fires; the picker shows message_sv as is. The PT409 name stays
+// out of DB_CONFLICTS: other bank routes raise it too and keep CONFLICT.
+const BANK_SELECTION: Record<string, StructuredErrorEntry> = {
+  BANK_CONFIGURATION_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Bankkopplingen eller bankkontona ändrades medan du valde konton. Inget sparades. Öppna kontovalet igen och spara på nytt.',
+    message_en: 'The bank connection or its accounts changed while you were choosing. Nothing was saved. Open the account picker again and save once more.',
+  },
+  BANK_SELECTION_LEDGER_CONFLICT: {
+    httpStatus: 400,
+    message_sv: 'Två bankkonton kan inte bokföras på samma bokföringskonto. Välj olika bokföringskonton. Inget sparades.',
+    message_en: 'Two bank accounts cannot book to the same ledger account. Choose different ledger accounts. Nothing was saved.',
+  },
+  CASH_ACCOUNT_KEEPER_IDENTITY_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Bokföringskontot används redan av ett annat bankkonto (annat IBAN eller annan valuta). Välj ett annat bokföringskonto. Inget sparades.',
+    message_en: 'The ledger account is already used by another bank account (a different IBAN or currency). Choose another ledger account. Nothing was saved.',
+  },
+  CASH_ACCOUNT_LEDGER_CLAIMED: {
+    httpStatus: 409,
+    message_sv: 'Bokföringskontot används redan av ett bankkonto från en annan bankanslutning. Välj ett annat bokföringskonto. Inget sparades.',
+    message_en: 'The ledger account is already used by a bank account from another bank connection. Choose another ledger account. Nothing was saved.',
+  },
+  CASH_ACCOUNT_LEDGER_IN_USE: {
+    httpStatus: 409,
+    message_sv: 'Bankkontot har redan historik på sitt bokföringskonto och kan inte flyttas till ett annat automatiskt. Inget sparades.',
+    message_en: 'The bank account already has history on its ledger account and cannot be moved to another one automatically. Nothing was saved.',
+  },
+  // An unchecked account of another physical account holds the wanted ledger
+  // and has transactions or invoice or reconciliation ties, so it cannot just
+  // give the ledger up.
+  BANK_SELECTION_YIELD_HAS_HISTORY: {
+    httpStatus: 409,
+    message_sv: 'Bokföringskontot hör till ett annat bankkonto som inte synkas men har transaktioner eller används i fakturor eller avstämningar. Välj ett annat bokföringskonto, eller markera först det andra bankkontot, ge det ett annat bokföringskonto och spara. Inget sparades.',
+    message_en: 'The ledger account belongs to another bank account that is not synced but has transactions or is used on invoices or reconciliations. Choose another ledger account, or first select the other bank account, give it another ledger account and save. Nothing was saved.',
+  },
+}
+
 const BANK_SYNC: Record<string, StructuredErrorEntry> = {
   BANK_SYNC_NOT_ACTIVE: {
     httpStatus: 409,
@@ -2771,6 +3569,37 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Korrigeringen av ingående balanser misslyckades.',
     message_en: 'Opening balance correction failed.',
   },
+  // API parity wave 4: manual ingående balanser and the skattekonto file import over v1/MCP.
+  OB_SET_COMPANY_LOCK_DATE: {
+    httpStatus: 409,
+    message_sv:
+      'Bokföringen är låst t.o.m. ett låsdatum som täcker räkenskapsårets första dag, så ingående balanser kan inte bokföras. Flytta låsdatumet under Inställningar → Bokföring och försök igen.',
+    message_en:
+      'The company-wide bookkeeping lock date covers the first day of the fiscal year, so opening balances cannot be booked. Move the lock date under Settings → Bookkeeping and try again.',
+    remediation: {
+      description:
+        'Move the bookkeeping lock date (company_settings.bookkeeping_locked_through) to a date before the period start, then retry.',
+    },
+  },
+  OB_NON_BALANCE_SHEET_ACCOUNT: {
+    httpStatus: 400,
+    message_sv: 'Ingående balanser får bara bokas på balanskonton (klass 1 och 2).',
+    message_en: 'Opening balances may only use balance sheet accounts (class 1 and 2).',
+  },
+  SKATTEKONTO_FILE_ORG_NUMBER_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Kontoutdraget gäller ett annat organisationsnummer än företagets. Kontrollera att det är rätt fil och bekräfta för att importera ändå.',
+    message_en:
+      'The statement names a different organisation number than the company. Check the file, then send confirm_org_number_mismatch=true to import it anyway.',
+  },
+  SKATTEKONTO_FILE_SUM_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Kontoutdraget summerar inte: ingående saldo plus händelserna blir inte utgående saldo. Filen kan vara filtrerad eller ofullständig. Bekräfta för att importera ändå.',
+    message_en:
+      'The statement does not sum: opening saldo plus the events differs from the closing saldo. Send confirm_sum_mismatch=true to import it anyway.',
+  },
 }
 
 const REGISTER_IMPORT: Record<string, StructuredErrorEntry> = {
@@ -2868,6 +3697,18 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
       'Bokio hittade inte företaget. Kontrollera företags-ID:t och att integrationstoken skapades för samma företag.',
     message_en:
       'Bokio could not find the company. Check the company ID and that the integration token was created for the same company.',
+  },
+  BOKIO_PLAN_NO_API: {
+    // 422, same reasoning as PROVIDER_TOKEN_INVALID. Bokio answered 403
+    // price_plan_feature_required: the company's plan has no API access for
+    // private integrations (Basic, or a plan that has expired). The token can
+    // be fine, so this must not tell the user to re-check it. Plan names per
+    // docs.bokio.se/docs/price-plan-requirements (read 2026-09-29).
+    httpStatus: 422,
+    message_sv:
+      'Bokio nekar API-åtkomst eftersom företagets abonnemang inte omfattar egna integrationer. De ingår i Bokios Plus, Premium och Business men inte i Basic, och stängs av när abonnemanget har gått ut. Byt eller förnya abonnemanget i Bokio och försök igen, eller importera bokföringen med SIE-fil och kunder, leverantörer och artiklar med CSV eller Excel under Importera/Exportera.',
+    message_en:
+      "Bokio refuses API access because the company's plan does not include private integrations. They are included in Bokio's Plus, Premium and Business plans but not in Basic, and they stop when the plan has expired. Change or renew the plan in Bokio and try again, or import the bookkeeping with a SIE file, and customers, suppliers and articles with CSV or Excel under Import/Export.",
   },
   BL_INTEGRATION_NOT_ACTIVATED: {
     // 422, same reasoning as PROVIDER_TOKEN_INVALID. The User-Key opened a
@@ -3011,8 +3852,8 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
   // on, instead of the generic "Något gick fel" that invites a retry.
   ARKIV_NOT_ENABLED: {
     httpStatus: 403,
-    message_sv: 'Arkiv är inte aktiverat för det här företaget ännu.',
-    message_en: 'Arkiv is not enabled for this company yet.',
+    message_sv: 'Företagshjärnan är inte aktiverad för det här företaget ännu. Arkivet fungerar som vanligt.',
+    message_en: 'The company brain is not switched on for this company yet. The archive works as usual.',
     retryable: false,
   },
   // Signed-URL (direct-to-storage) upload: completion found no object under
@@ -3108,6 +3949,135 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Verifikationen kommer inte från en SIE-import och kan inte matchas mot filnamn.',
     message_en: 'The journal entry did not come from a SIE import and cannot be matched by filename.',
   },
+  // Documents, transaction underlag and the invoice inbox as operations
+  // (lib/operations/documents.ts, lib/operations/inbox-items.ts).
+  DOC_DELETE_LINKED: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget är knutet till en verifikation och utgör räkenskapsinformation enligt Bokföringslagen 7 kap 2§. Räkenskapsinformation ska bevaras i minst 7 år och får inte raderas. Använd "Ersätt med ny version" om underlaget behöver korrigeras.',
+    message_en:
+      'The document is linked to a journal entry and is accounting records under BFL 7 kap 2 §: it must be kept for 7 years and cannot be deleted. Upload a new version instead.',
+  },
+  // The other records that hold a document (lib/documents/deletion.ts); the
+  // Swedish texts are DOCUMENT_DELETE_REFUSALS' there, word for word.
+  DOC_DELETE_SUPPLIER_INVOICE_UNDERLAG: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget hör till en registrerad leverantörsfaktura och utgör räkenskapsinformation enligt Bokföringslagen (5 kap 6-7 §§ och 7 kap). Det ska bevaras i minst 7 år och får inte raderas så länge leverantörsfakturan finns kvar.',
+    message_en:
+      'The document is the underlag of a registered supplier invoice and is accounting records under BFL (5 kap 6-7 §§, 7 kap): it must be kept for 7 years and cannot be deleted while the supplier invoice exists.',
+    remediation: {
+      description:
+        'A supplier invoice (supplier_invoices.document_id) holds this document, and it stays as long as the supplier invoice does. A supplier invoice registered by mistake and not yet booked or paid can be deleted first (DELETE /api/v1/companies/{companyId}/supplier-invoices/{id}); a booked one is credited instead, and its underlag is kept.',
+    },
+  },
+  DOC_DELETE_EXPENSE_CLAIM_UNDERLAG: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget hör till ett registrerat utlägg och utgör räkenskapsinformation enligt Bokföringslagen (5 kap 6-7 §§ och 7 kap). Det ska bevaras i minst 7 år och får inte raderas så länge utlägget finns kvar.',
+    message_en:
+      'The document is the underlag of a registered expense claim and is accounting records under BFL (5 kap 6-7 §§, 7 kap): it must be kept for 7 years and cannot be deleted while the expense claim exists.',
+    remediation: {
+      description:
+        'An expense claim (expense_claims.document_id) holds this document, and it stays as long as the expense claim does.',
+    },
+  },
+  DOC_DELETE_BOOKED_INBOX_ITEM: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget hör till en mottagen faktura som redan har bokförts eller blivit en leverantörsfaktura. Det utgör räkenskapsinformation enligt Bokföringslagen 7 kap och ska bevaras i minst 7 år i det skick det togs emot, så det får inte raderas.',
+    message_en:
+      'The document belongs to a received invoice that has already been booked or turned into a supplier invoice. It is accounting records under BFL 7 kap and must be kept for 7 years in the form it was received, so it cannot be deleted.',
+    remediation: {
+      description:
+        'An inbox item that created a journal entry or a supplier invoice (invoice_inbox_items.created_journal_entry_id or created_supplier_invoice_id) holds this document as its file or as the received Peppol XML (channel_context.peppol_xml_document_id). It is kept; the files of an inbox item that was never booked can still be discarded.',
+    },
+  },
+  DOC_ATTACH_REPLACES_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
+    message_en: 'The document currently on the transaction belongs to a posted journal entry and cannot be replaced. Reverse the entry first.',
+  },
+  DOC_ATTACH_OTHER_VERIFIKAT: {
+    httpStatus: 409,
+    message_sv: 'Underlaget är redan kopplat till en annan verifikation.',
+    message_en: 'The document is already the underlag of another journal entry.',
+  },
+  DOC_ATTACH_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Bilagan kopplades till transaktionen men verifikationens period är låst: den kunde inte länkas till verifikationen.',
+    message_en:
+      'The document was attached to the transaction, but its journal entry is in a locked period, so it could not be linked to the entry.',
+  },
+  DOC_ATTACH_PROPAGATION_FAILED: {
+    httpStatus: 500,
+    message_sv:
+      'Bilagan kopplades till transaktionen men kunde inte länkas till verifikationen. Försök igen: operationen är idempotent.',
+    message_en:
+      'The document was attached to the transaction but could not be linked to its journal entry. Retry: the operation is idempotent.',
+    retryable: true,
+  },
+  DOC_DETACH_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Bilagan är kopplad till en bokförd verifikation och kan inte tas bort. Storno verifikationen först.',
+    message_en: 'The document is the underlag of a journal entry and cannot be detached. Reverse the entry first.',
+  },
+  DOC_DETACH_INBOX_UNLINK_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Inkorgsposten kunde inte släppas, så underlaget är fortfarande kopplat. Försök igen.',
+    message_en: 'The inbox item could not be released, so the document is still attached. Retry.',
+    retryable: true,
+  },
+  DOC_DETACH_CONCURRENT: {
+    httpStatus: 409,
+    message_sv: 'Transaktionen ändrades samtidigt. Ladda om sidan och försök igen.',
+    message_en: 'The transaction changed at the same time. Reload and try again.',
+  },
+  INBOX_ITEM_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Inkorgsposten hittades inte.',
+    message_en: 'Inbox item not found.',
+  },
+  INBOX_ITEM_ALREADY_CONVERTED: {
+    httpStatus: 409,
+    message_sv: 'Posten är redan kopplad till en leverantörsfaktura.',
+    message_en: 'The inbox item is already linked to a supplier invoice.',
+  },
+  // Issue #2980: a credit note never becomes a payable of its own.
+  INBOX_ITEM_IS_CREDIT_NOTE: {
+    httpStatus: 409,
+    message_sv:
+      'Posten är en kreditfaktura. Kreditera fakturan den avser i stället för att registrera en ny leverantörsfaktura.',
+    message_en:
+      'The inbox item is a credit note. Credit the invoice it refers to instead of registering a new supplier invoice.',
+    remediation: {
+      description:
+        'details.credit_target says which invoice it credits (status matched, partial, amount_differs, already_credited, ambiguous or none, with candidates). For a matched one, credit it with the inbox item: POST /supplier-invoices/{id}/credit with inbox_item_id. If the reading is wrong (it is a normal invoice), correct documentKind and the totals on the inbox item first.',
+      tool: 'gnubok_credit_supplier_invoice',
+    },
+  },
+  INBOX_ITEM_EDIT_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Posten är redan kopplad till en leverantörsfaktura och kan inte ändras.',
+    message_en: 'The inbox item is linked to a supplier invoice and cannot be changed.',
+  },
+  INBOX_ITEM_EDIT_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Posten ändrades samtidigt av någon annan. Försök igen.',
+    message_en: 'The inbox item was changed by someone else at the same time. Try again.',
+    retryable: true,
+  },
+  INBOX_ITEM_DELETE_CONVERTED: {
+    httpStatus: 409,
+    message_sv: 'Posten är kopplad till en leverantörsfaktura och kan inte tas bort.',
+    message_en: 'The inbox item is linked to a supplier invoice and cannot be deleted.',
+  },
+  INBOX_ITEM_DELETE_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Posten är bokförd och kan inte tas bort.',
+    message_en: 'The inbox item is booked and cannot be deleted.',
+  },
 }
 
 // Invoice-inbox manual upload and attach-document (extension REST routes).
@@ -3181,6 +4151,48 @@ const CUSTOMER: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Kunden har fakturor och kan inte tas bort.',
     message_en: 'Customer cannot be deleted while invoices reference it.',
+  },
+  // A hard delete refused because rows still point at the customer and the
+  // database would silently null them (ON DELETE SET NULL), crm#263.
+  // lib/customers/delete-guard.ts picks the code; details.dependents has
+  // every count.
+  CUSTOMER_HAS_ISSUED_INVOICES: {
+    httpStatus: 409,
+    message_sv:
+      'Kunden kan inte tas bort eftersom den finns på fakturor som ska sparas i sju år, även makulerade. Fakturorna behöver kundens namn och adress.',
+    message_en:
+      "The customer cannot be deleted because it is on invoices that must be kept for seven years, cancelled ones included. The invoices need the customer's name and address.",
+    remediation: {
+      description:
+        'An invoice row stores no copy of the buyer, so a customer on an issued or numbered invoice (cancelled included) is kept for the retention period (ML 17 kap 24 §, BFL 7 kap 2 §). To take it out of the roster, archive it instead: DELETE /api/v1/companies/{companyId}/customers/{id} sets archived_at once no invoice is open.',
+    },
+  },
+  CUSTOMER_HAS_DRAFT_INVOICES: {
+    httpStatus: 409,
+    message_sv: 'Kunden har fakturautkast. Ta bort utkasten först, sedan kan kunden tas bort.',
+    message_en: 'The customer has draft invoices. Delete the drafts first, then delete the customer.',
+    remediation: {
+      description:
+        'Unnumbered drafts point at this customer and would lose it. Delete them first (gnubok_delete_draft_invoice, or DELETE /api/v1/companies/{companyId}/invoices/{id}), then retry. details.dependents.draft_invoices says how many.',
+      tool: 'gnubok_delete_draft_invoice',
+    },
+  },
+  CUSTOMER_HAS_SALES_ORDERS: {
+    httpStatus: 409,
+    message_sv: 'Kunden har kundorder. Ta bort dem först, sedan kan kunden tas bort.',
+    message_en: 'The customer has sales orders. Delete them first, then delete the customer.',
+    remediation: {
+      description:
+        'Sales orders point at this customer and would lose it. Delete them first (a confirmed order is cancelled before it can be deleted), then retry.',
+    },
+  },
+  CUSTOMER_HAS_RECURRING_INVOICES: {
+    httpStatus: 409,
+    message_sv: 'Kunden har en återkommande faktura. Ta bort den först, sedan kan kunden tas bort.',
+    message_en: 'The customer has a recurring invoice. Delete it first, then delete the customer.',
+    remediation: {
+      description: 'A recurring invoice schedule points at this customer. Delete the schedule first, then retry.',
+    },
   },
   CUSTOMER_NO_PERSONAL_NUMBER: {
     httpStatus: 404,
@@ -3408,6 +4420,20 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
         'Inspect details.candidates[].match_reason. For an unlinked row, match it via POST /api/transactions/{id}/match-supplier-invoice. For `already_booked`, the row is already a posted verifikat (booked straight from the bank side): do NOT pay the invoice, correct the double booking instead (reverse one of the two vouchers with a storno entry and attach the underlag to the remaining one). Resend mark-paid with force: true only when the payment really is separate; on the v1 endpoint that retry needs a fresh Idempotency-Key.',
     },
   },
+  // #2955: a foreign-currency invoice's payment clears the SEK its linked
+  // vouchers carry on 244x (lib/bookkeeping/supplier-payment-amounts.ts).
+  // When those links contradict each other the SEK is refused, not guessed.
+  SI_PAID_SEK_UNRESOLVED: {
+    httpStatus: 409,
+    message_sv:
+      'Det gick inte att avgöra hur mycket i kronor fakturan har kvar på leverantörsskulder (2440): kopplingen mellan fakturan och dess verifikationer är inte entydig, eller skulden där stämmer inte med fakturans belopp och kurs. Bokför betalningen som en egen verifikation i kronor och koppla den till fakturan, eller rätta kopplingen först.',
+    message_en:
+      "Could not determine how much SEK the invoice still carries on accounts payable (2440): the links between the invoice and its vouchers are ambiguous, or the liability there does not match the invoice's amount and rate. Book the payment as its own SEK voucher and link it to the invoice, or fix the links first.",
+    remediation: {
+      description:
+        "details.reason names the contradiction: registration_voucher_not_live (reversed with no single correction), registration_voucher_shared, payment_history_mismatch (payment rows do not add up to paid_amount), payment_voucher_not_posted (missing, or reversed with no single correction), payment_voucher_shared (a batch voucher), no_liability_left, or ledger_rate_mismatch (2440 carries more than 10% away from remaining_amount x exchange_rate, details.expected_sek vs details.ledger_sek: the registration was corrected for something other than the rate, so the gap is not a kursdifferens), or ledger_history_too_long (more than 50 payment rows or 20 storno hops to follow: past what one request resolves). Check the SEK against the ledger, then resend mark-paid with explicit SEK `lines` (Debit 2440 / Credit the payment account, plus 3960/7960 for a genuine kursdifferens), or book the voucher yourself and link it to the invoice.",
+    },
+  },
   SI_CREDIT_ALREADY_CREDITED: {
     httpStatus: 409,
     message_sv: 'Leverantörsfakturan har redan krediterats.',
@@ -3422,6 +4448,35 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Kunde inte kreditera leverantörsfakturan.',
     message_en: 'Failed to credit supplier invoice.',
+  },
+  // Issue #2980: a supplier's credit note from the inbox credits the invoice
+  // it references, and only when it is for all of it.
+  SI_CREDIT_PARTIAL: {
+    httpStatus: 400,
+    message_sv:
+      'Kreditfakturan gäller bara en del av fakturan. Kreditera krediterar alltid hela fakturan, så den kan inte användas här. Bokför kreditfakturan som en egen verifikation, eller kreditera hela fakturan och registrera en ny för det som återstår.',
+    message_en:
+      'The credit note covers only part of the invoice. Crediting always reverses the whole invoice, so it cannot be used here. Book the credit note as a verifikat of its own, or credit the whole invoice and register a new one for what remains.',
+    remediation: {
+      description:
+        'details carries credit_total and invoice_total. Do not credit the whole invoice for a partial credit note. Hand over to the user: book the credit note as its own verifikat (reverse the credited part on 2440, the cost account and 2641), or credit the whole invoice and register a corrected invoice for the rest.',
+    },
+  },
+  SI_CREDIT_DOCUMENT_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Kreditfakturan stämmer inte med fakturan: leverantör, valuta eller belopp skiljer sig, eller så saknas beloppet. Kontrollera uppgifterna i inkorgen.',
+    message_en:
+      'The credit note does not fit the invoice: the supplier, the currency or the amount differs, or the amount was not read. Check the reading in the inbox.',
+    remediation: {
+      description:
+        'details.reason is supplier, currency, exceeds or amount_missing. Correct the reading (PATCH /inbox-items/{id}) or pick the invoice the credit note actually references.',
+    },
+  },
+  SI_CREDIT_DOCUMENT_UNAVAILABLE: {
+    httpStatus: 409,
+    message_sv: 'Kreditfakturans dokument hittades inte eller hör redan till en annan verifikation.',
+    message_en: 'The credit note document was not found or already belongs to another verifikat.',
   },
   SI_BATCH_NOT_FOUND: {
     httpStatus: 404,
@@ -3478,12 +4533,78 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte skapa betalfilen.',
     message_en: 'Failed to create the payment batch.',
   },
+  SI_BATCH_PAYEE_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantörens betalningsuppgifter eller belopp har ändrats sedan betalfilen förbereddes. Förbered betalfilen igen och kontrollera mottagaren.',
+    message_en:
+      "The supplier's payment details or amount changed after the payment batch was staged. Stage the batch again and check the payee.",
+    remediation: {
+      description:
+        "Check the supplier's bankgiro, plusgiro or bank account, then stage the batch again (gnubok_preview_supplier_payment_batch, then gnubok_create_supplier_payment_batch). details.invoices names each supplier and what changed.",
+    },
+  },
   SI_DELETE_IN_PAYMENT_BATCH: {
     httpStatus: 409,
     message_sv:
       'Leverantörsfakturan ingår i en betalfil och kan inte tas bort: betalfilens rader är underlag för betalningsinstruktionen, även om filen makulerats.',
     message_en:
       'The supplier invoice is part of a payment batch and cannot be deleted: the batch rows document the payment instruction, even if the batch was cancelled.',
+  },
+  // ── API parity wave 4: supplier-invoice actions, inbox matches, Skatteverket helpers ──
+  SI_DELETE_CREDIT_NOTE: {
+    httpStatus: 400,
+    message_sv:
+      'Kreditfakturor kan inte tas bort direkt. Gå till originalfakturan och välj "Ångra kreditering" för att frigöra numret och återställa bokföringen.',
+    message_en:
+      'A credit note cannot be deleted directly. Undo the credit on the original invoice (uncredit), which cancels its verifikat with a storno and restores the original.',
+  },
+  SI_DELETE_INVALID_STATUS: {
+    httpStatus: 400,
+    message_sv: 'Endast obetalda fakturor utan bokföring kan tas bort.',
+    message_en: 'Only unpaid supplier invoices without bookkeeping can be deleted (status registered, approved or overdue).',
+  },
+  SI_UNCREDIT_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Krediteringen kunde inte ångras.',
+    message_en:
+      'The credit could not be undone. A locked or closed period refuses the storno of the credit note; details.reason names the cause.',
+  },
+  SI_ITEM_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Fakturaraden kunde inte hittas.',
+    message_en: 'Supplier invoice line not found on this invoice.',
+  },
+  SI_ITEM_ACCOUNT_SETTLED: {
+    httpStatus: 409,
+    message_sv: 'Fakturan är avslutad och dess rader kan inte flyttas.',
+    message_en: 'The supplier invoice is settled; its lines can no longer be moved to another account.',
+  },
+  SI_ITEM_ACCOUNT_NO_MATCHING_LINE: {
+    httpStatus: 409,
+    message_sv:
+      'Registreringsverifikatet har ingen rad på det gamla kontot som matchar raden. Rätta verifikatet för hand.',
+    message_en:
+      'The registration verifikat has no line on the old account that matches this invoice line (it was corrected by hand). Correct the verifikat directly.',
+  },
+  SI_ITEM_ACCOUNT_FX_RATE_UNKNOWN: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan är i utländsk valuta och det går inte att avgöra vilken växelkurs registreringsverifikatet bokfördes med, så raden flyttas inte. Rätta verifikatet för hand.',
+    message_en:
+      'The supplier invoice is in a foreign currency and the exchange rate its registration verifikat was booked at cannot be determined, so the line is not moved. Correct the verifikat directly.',
+  },
+  SI_ITEM_ACCOUNT_UPDATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Fakturaraden kunde inte flyttas till det nya kontot. Försök igen.',
+    message_en: 'The supplier invoice line could not be moved to the new account. Try again.',
+    retryable: true,
+  },
+  SKATTEVERKET_CAPABILITY_BLOCKED: {
+    httpStatus: 403,
+    message_sv:
+      'Den här funktionen kräver en betald prenumeration. Uppgradera för att fortsätta använda externa tjänster.',
+    message_en: 'Talking to Skatteverket directly requires a paid subscription for this company.',
   },
 }
 
@@ -3492,6 +4613,12 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 404,
     message_sv: 'Lönekörningen kunde inte hittas.',
     message_en: 'Salary run not found.',
+    retryable: false,
+    remediation: {
+      description:
+        'Check the salary run id and the company: a run of another company reads as not found. To find the run for a month, call gnubok_get_salary_run with period_year and period_month (v1: GET /salary-runs?period_year=YYYY).',
+      tool: 'gnubok_get_salary_run',
+    },
   },
   SALARY_RUN_NO_EMPLOYEES: {
     httpStatus: 400,
@@ -3502,6 +4629,12 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Lönebeskedets rader kan bara redigeras medan lönekörningen är ett utkast.',
     message_en: 'Payslip lines can only be edited while the salary run is a draft.',
+    retryable: false,
+    remediation: {
+      description:
+        'Only the lines of a draft run change. Send a run in review back to draft first (gnubok_revert_salary_run, v1 POST /salary-runs/{id}/revert); an approved run is unapproved before that (gnubok_unapprove_salary_run). A paid or booked run is never edited: it is corrected with a rättelsekörning.',
+      tool: 'gnubok_revert_salary_run',
+    },
   },
   SALARY_RUN_EMPLOYEE_NOT_FOUND: {
     httpStatus: 404,
@@ -3513,6 +4646,22 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Lönebeskedsraden kunde inte hittas.',
     message_en: 'Payslip line not found.',
   },
+  // lib/salary/calculated-line-items.ts: absence, Övertid 50/100 % and OB rows,
+  // förmån and recurring-line rows, the engine's semesterersättning and
+  // öresavrundning rows are deleted and re-derived by every calculation, so a
+  // hand edit would silently vanish before booking (#3185).
+  SALARY_LINE_CALCULATED: {
+    httpStatus: 400,
+    message_sv:
+      'Raden räknas fram av lönekörningen och skrivs om vid varje beräkning. Ändra underlaget i stället: frånvaron, de arbetade timmarna, förmånen eller den återkommande raden. En engångsrad för övertid eller OB läggs som Övertid eller Övrigt.',
+    message_en:
+      'This payslip line is derived by the salary calculation and rewritten on every calculation. Change its source instead: the absence, the worked hours and premium rules, the benefit or the recurring line. Put a one-off overtime or OB amount on item_type overtime or other.',
+    remediation: {
+      description:
+        'Absence: gnubok_register_absence / gnubok_delete_absence. Hours: gnubok_set_worked_days. Förmåner: gnubok_update_employee_benefit. Recurring lines: gnubok_update_employee_recurring_line. A one-off amount: gnubok_add_payslip_line with item_type overtime or other. Then gnubok_calculate_salary_run.',
+    },
+    retryable: false,
+  },
   SALARY_RUN_EMPLOYEE_DUPLICATE: {
     httpStatus: 409,
     message_sv: 'Den anställda finns redan i lönekörningen.',
@@ -3522,6 +4671,21 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Lönekörningen måste vara ett utkast för att ändra anställda eller månadens lön.',
     message_en: 'The salary run must be a draft to change its employees or this month\'s salary.',
+  },
+  SALARY_RUN_SALARY_FIELD_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Månadslön kan bara sättas för månadsavlönade och arbetade timmar bara för timavlönade.',
+    message_en: 'monthly_salary applies to monthly-paid employees and hours_worked to hourly-paid employees only.',
+  },
+  SALARY_RUN_HOURS_FROM_CALENDAR: {
+    httpStatus: 409,
+    message_sv: 'Timmarna för perioden hämtas från kalendern: ändra de arbetade dagarna i stället.',
+    message_en: 'Hours for this period come from the calendar of worked days: change those days instead.',
+  },
+  SALARY_RUN_HOURLY_RATE_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Den anställda saknar timlön: ange timlönen på den anställda innan du sätter arbetade timmar.',
+    message_en: 'The employee has no hourly rate: set it on the employee before setting hours worked.',
   },
   ABSENCE_RANGE_TOO_LARGE: {
     httpStatus: 400,
@@ -3553,15 +4717,39 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Semestersaldon rullades men justeringsverifikationen kunde inte bokföras. Bokför justeringen manuellt från rapporten.',
     message_en: 'Vacation balances rolled but the adjustment entry failed to post. Book the adjustment manually from the report.',
   },
+  // Not a lookup miss: the ledger row is seeded lazily (the first booked run
+  // or the vacation year close), so before that there is no balance to read.
+  // An empty balance would state 0 days, which is false for anyone entitled.
   VACATION_BALANCE_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Inget semestersaldo finns för den anställda ännu.',
     message_en: 'No vacation balance exists for the employee yet.',
+    retryable: false,
+    remediation: {
+      description:
+        'The vacation ledger is seeded when the employee\'s first salary run is booked (gnubok_book_salary_run) or at the vacation year close, not before. Until then read the entitlement from the employee (gnubok_get_employee: vacation_rule, vacation_days_per_year). Retrying returns the same answer.',
+      tool: 'gnubok_get_employee',
+    },
   },
   SALARY_RUN_TAX_TABLE_MISSING: {
     httpStatus: 400,
     message_sv: 'Skattetabellen saknas för perioden. Importera skattetabellen först.',
     message_en: 'Tax table is missing for the period.',
+  },
+  // salary_payroll_config has no row for the year (lib/salary/payroll-config.ts,
+  // PayrollConfigMissingError). The year's figures ship as a migration once they
+  // are official; the calendar tripwire (tests/pg/payroll-rates-calendar.pg.test.ts)
+  // fails CI before the year turns if they have not.
+  SALARY_PAYROLL_CONFIG_MISSING: {
+    httpStatus: 409,
+    message_sv:
+      'Lönesatserna för året (arbetsgivaravgifter, prisbasbelopp, traktamente med mera) är inte inlagda ännu. Beräkningen kan göras när de är på plats.',
+    message_en: 'Payroll rates for this year are not loaded yet. The calculation can run once they are.',
+    remediation: {
+      description:
+        'Accounted adds each year\'s statutory payroll rates in a release once they are officially set. Nothing in the input is wrong: do not move the payment date to get around it. Try again once the year\'s rates are in place.',
+    },
+    retryable: false,
   },
   SALARY_RUN_PERIOD_LOCKED: {
     httpStatus: 400,
@@ -3637,6 +4825,12 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'En lönekörning för perioden finns redan.',
     message_en: 'A salary run for that period already exists.',
   },
+  SALARY_RUN_UNDERLAG_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Bokföringsunderlaget skapas när lönekörningen är bokförd.',
+    message_en: 'The accounting document is available once the salary run is booked.',
+    retryable: false,
+  },
   SALARY_RUN_CORRECT_NOT_BOOKED: {
     httpStatus: 409,
     message_sv: 'Bara bokförda lönekörningar kan korrigeras (rättelsekörning).',
@@ -3655,7 +4849,7 @@ const SALARY: Record<string, StructuredErrorEntry> = {
       'The dates fall inside the deviation period of a salary run that is already calculated, approved or booked. Revert that run to draft, or run a correction, before changing absence or worked hours.',
     remediation: {
       description:
-        'details.salary_run_id names the run and details.locked_dates the dates it reads. Draft runs never lock; a run in review can be reverted from the dashboard.',
+        'details.salary_run_id names the run and details.locked_dates the dates it reads. Draft runs never lock; a run in review can be reverted to draft (POST /salary-runs/{id}/revert, gnubok_revert_salary_run).',
     },
   },
   SALARY_RUN_DEVIATION_PERIOD_INVALID: {
@@ -3729,6 +4923,39 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Lönekörningen är redan bokförd.',
     message_en: 'Salary run is already booked.',
   },
+  // lib/salary/salary-entries.ts: a retried booking resumes by adopting the
+  // run's already-posted vouchers that are exactly what it would post, and
+  // stops here on any other posted voucher of the run (a duplicate, or one
+  // booked from data that has changed since) instead of posting it twice.
+  SALARY_RUN_PARTIALLY_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Lönekörningen har redan bokförda verifikationer från ett tidigare försök som inte stämmer med körningen. Återför dem och bokför sedan lönekörningen igen.',
+    message_en:
+      'The salary run already has posted vouchers from an earlier attempt that do not match the run (details.voucher_numbers). Reverse them, then book the run again.',
+    remediation: {
+      description:
+        'Reverse each voucher in details.entry_ids with storno (gnubok_reverse_journal_entry), then book the run again. Posted vouchers that match the run exactly are reused by the next booking, never posted twice.',
+      tool: 'gnubok_reverse_journal_entry',
+    },
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  // lib/salary/book-run.ts (accounted#3251): another call holds the run's
+  // booking claim (claim_salary_run_booking), so this one posted nothing.
+  // The claim ends when that call finishes, or after 15 minutes if it died.
+  SALARY_RUN_BOOKING_IN_PROGRESS: {
+    httpStatus: 409,
+    message_sv:
+      'Lönekörningen håller redan på att bokföras (i en annan flik eller av en agent), så inget bokfördes nu. Vänta en stund och kontrollera sedan lönekörningens status.',
+    message_en:
+      'The salary run is already being booked by another request. Nothing was posted by this one.',
+    remediation: {
+      description:
+        'Wait a moment, then fetch the run. Status booked means the other booking went through; status paid means it did not finish, so book the run again (vouchers an interrupted booking already posted are reused, never posted twice). A staged book_salary_run operation stays pending and can be approved again.',
+    },
+    retryable: true,
+  },
   SALARY_PAYSLIPS_SEND_INVALID_STATUS: {
     httpStatus: 400,
     message_sv: 'Lönespecifikationer kan bara skickas efter godkännande.',
@@ -3739,10 +4966,70 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Inga anställda i lönekörningen.',
     message_en: 'No employees in the salary run.',
   },
+  // Salary-run lifecycle operations (lib/salary/payslips/send.ts,
+  // lib/salary/run-status-recall.ts), shared by the dashboard, v1 and MCP.
+  SALARY_PAYSLIPS_SEND_SANDBOX: {
+    httpStatus: 403,
+    message_sv: 'Lönebesked kan inte skickas från sandlådan. Skapa ett konto för att skicka e-post.',
+    message_en: 'Payslips cannot be sent from the sandbox. Create an account to send email.',
+  },
+  SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED: {
+    httpStatus: 403,
+    message_sv: 'Att skicka lönebesked med e-post kräver en betald prenumeration.',
+    message_en: 'Emailing payslips requires a paid subscription.',
+  },
+  SALARY_RUN_REVERT_NOT_REVIEW: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen måste vara i granskningsstatus för att återställas till utkast.',
+    message_en: 'The salary run must be in review status to revert it to draft.',
+  },
+  SALARY_RUN_UNAPPROVE_NOT_APPROVED: {
+    httpStatus: 400,
+    message_sv:
+      'Bara en godkänd lönekörning kan låsas upp. En betald eller bokförd körning korrigeras via korrigeringsflödet.',
+    message_en:
+      'Only an approved salary run can be unlocked. A paid or booked run is corrected through the correction flow.',
+  },
+  SALARY_RUN_UNAPPROVE_AGI_FILED: {
+    httpStatus: 409,
+    message_sv:
+      'AGI har redan skickats till Skatteverket för denna period. Ändra genom att lämna in en korrigerad AGI (samma specifikationsnummer) i stället.',
+    message_en:
+      'The AGI for this period has already been sent to Skatteverket. Change it by filing a corrected AGI (same specifikationsnummer) instead.',
+  },
+  SALARY_RUN_UNAPPROVE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte återkalla godkännandet.',
+    message_en: 'Could not recall the approval.',
+  },
+  SALARY_RUN_STATUS_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Lönekörningens status har ändrats: ladda om sidan och försök igen.',
+    message_en: 'The salary run status changed in the meantime: reload and try again.',
+  },
   AGI_GENERATE_NOT_BOOKABLE: {
     httpStatus: 400,
     message_sv: 'AGI kan endast genereras för lönekörningar i status review, approved, paid, booked eller corrected.',
     message_en: 'AGI can only be generated for salary runs in review, approved, paid, booked, or corrected status.',
+    retryable: false,
+    remediation: {
+      description:
+        'The run is still a draft. Calculate and book it first (gnubok_book_salary_run stages the booking of a calculated draft run) so the AGI matches the books, then generate the AGI.',
+      tool: 'gnubok_book_salary_run',
+    },
+  },
+  // gnubok_agi_submit files the stored underlag; it never generates one, so a
+  // run without an agi_declarations row has nothing to send yet.
+  AGI_SUBMIT_NOT_GENERATED: {
+    httpStatus: 409,
+    message_sv: 'AGI-underlaget saknas för lönekörningen. Generera AGI först och lämna sedan in.',
+    message_en: 'No AGI has been generated for this salary run yet. Generate the AGI first, then submit it.',
+    retryable: false,
+    remediation: {
+      description:
+        'Stage gnubok_generate_agi for the run and have it approved, then stage gnubok_agi_submit again.',
+      tool: 'gnubok_generate_agi',
+    },
   },
   AGI_PERIOD_CONFLICT: {
     httpStatus: 409,
@@ -3781,6 +5068,55 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Lönekörningen är kopplad till en verifikation och kan inte raderas (BFL 5 kap räkenskapsinformation).',
     message_en: 'Salary run is linked to a journal entry and cannot be deleted (BFL 5 kap räkenskapsinformation).',
+  },
+  // Deletes the database refuses because other rows still point at the row
+  // (Postgres 23503 on "update or delete"), #2831. lib/errors/foreign-key-
+  // refusal.ts resolves the constraint to one of these codes and supplies the
+  // specific sentence and remediation for each mapped register; the entries
+  // below are the code-level defaults.
+  JOURNAL_ENTRY_DELETE_BLOCKED_BY_REGISTER: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikatet används av ett register (anläggningar, periodiseringar eller lön) och kan inte raderas. Gör en rättelse (storno) i stället.',
+    message_en:
+      'This voucher is used by a register (fixed assets, accruals or payroll) and cannot be deleted. Make a correction (storno) instead.',
+    remediation: {
+      description:
+        'A posted verifikat that a register points at is corrected, never deleted (BFL 5 kap. 5 §). Reverse it with storno (gnubok_reverse_journal_entry); details.register names the register and the remediation on the error names its own way back.',
+      tool: 'gnubok_reverse_journal_entry',
+    },
+  },
+  SALARY_RUN_DELETE_BLOCKED_BY_PAYMENT_FILE: {
+    httpStatus: 409,
+    message_sv:
+      'Lönekörningen kan inte raderas eftersom en betalfil har skapats för den, och betalfilen ska sparas i sju år. Ändra lönekörningen i stället.',
+    message_en:
+      'This payroll run cannot be deleted because a payment file was generated for it, and that file must be kept for seven years. Edit the payroll run instead.',
+    remediation: {
+      description:
+        'A generated payment file is kept for seven years, so the run it belongs to stays. Edit the draft run instead (gnubok_set_run_salary, gnubok_update_salary_run), or leave it unbooked.',
+      tool: 'gnubok_update_salary_run',
+    },
+  },
+  DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget är kopplat till en banktransaktion och kan inte tas bort. Koppla bort det från transaktionen först.',
+    message_en:
+      'The document is attached to a bank transaction and cannot be deleted. Detach it from the transaction first.',
+    remediation: {
+      description:
+        'The document is the underlag of a bank transaction (transactions.document_id). Detach it from the transaction first (POST /api/v1/companies/{companyId}/transactions/{id}/detach-document), then delete it. A document linked to a verifikat is never deleted.',
+    },
+  },
+  RECORD_STILL_REFERENCED: {
+    httpStatus: 409,
+    message_sv: 'Posten kan inte tas bort eftersom annan data fortfarande hänvisar till den.',
+    message_en: 'This record cannot be deleted because other records still refer to it.',
+    remediation: {
+      description:
+        'Other records still point at this one; details.referenced_by names their table. Remove or re-point those records first, or keep this one (archive or deactivate it where the resource supports that). Retrying the same delete will not help.',
+    },
   },
   // Utlägg repaid with the salary (#2331).
   SALARY_RUN_NO_OPEN_EXPENSE_CLAIMS: {
@@ -4183,9 +5519,12 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
     message_en:
       'The transaction already looks booked: one or more posted vouchers with no bank link add up exactly to its amount. Link the transaction to them instead, or pass force=true with expected_journal_entry_ids to book anyway.',
     retryable: false,
+    // Names the scope: a key without reconciliation:write was sent to a tool
+    // it cannot call (feedback seqs 817176, 817189). The MCP door replaces
+    // this hint when it knows the key's scopes.
     remediation: {
       description:
-        'Link the bank row to the vouchers the message names instead of booking it again: gnubok_reconcile_match with account_key "bank:<cash_account_id>" and one pair { external_ids: [transaction_id], journal_entry_ids: [...], allocations }. Only if the row is a genuinely separate affärshändelse, call again with force=true and expected_journal_entry_ids set to exactly the ids the refusal listed.',
+        'Link the bank row to the vouchers the message names instead of booking it again: gnubok_reconcile_match (needs the reconciliation:write scope) with account_key "bank:<cash_account_id>" and one pair { external_ids: [transaction_id], journal_entry_ids: [...], allocations }. One voucher also links with gnubok_link_transaction_to_journal_entry. A key without reconciliation:write: the user links the row on the Avstämning page in Accounted, or reconnects the connector so its new key carries that scope. Only if the row is a genuinely separate affärshändelse, call again with force=true and expected_journal_entry_ids set to exactly the ids the refusal listed.',
       tool: 'gnubok_reconcile_match',
     },
   },
@@ -4282,6 +5621,13 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
       'En transaktion kan inte fördelas på både kund- och leverantörsfakturor i samma verifikat. Skapa två separata fördelningar.',
     message_en:
       'A single transaction cannot allocate to both customer and supplier invoices in one batch.',
+  },
+  BATCH_CASH_METHOD_UNBOOKED_INVOICE: {
+    httpStatus: 400,
+    message_sv:
+      'Företaget använder kontantmetoden och minst en av fakturorna är inte bokförd än: intäkt eller kostnad och moms ska bokföras vid betalningen. En samlingsmatchning kvittar bara mot kundfordringar eller leverantörsskulder och skulle hoppa över det. Matcha fakturan direkt mot transaktionen om den ensam motsvarar beloppet, annars markera varje faktura som betald och koppla sedan transaktionen till verifikaten.',
+    message_en:
+      'The company uses the cash method and at least one of the invoices is not booked yet: revenue or cost and VAT must be booked at payment. A batch match only clears receivables or payables and would skip that. Match the invoice directly to the transaction if it alone covers the amount; otherwise mark each invoice as paid and then link the transaction to those vouchers.',
   },
   BATCH_DIRECTION_MISMATCH: {
     httpStatus: 400,
@@ -4525,6 +5871,42 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
         'A person must connect (or reconnect) to Skatteverket with BankID under Inställningar → Skatteverket. Personal Skatteverket sessions expire after about 1 hour by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
     },
   },
+  // A live connection whose skattekonto has not been fetched yet, so the
+  // reconciliation account "skattekonto" does not exist. It fills by itself
+  // (right after each BankID consent, and on the scheduled sync), which makes
+  // this the one retryable answer; an expired connection is
+  // SKATTEVERKET_NOT_CONNECTED. Both reached agents as UNKNOWN_ERROR before.
+  SKATTEKONTO_NOT_SYNCED: {
+    httpStatus: 409,
+    message_sv:
+      'Skatteverket är kopplat men inga skattekontohändelser har hämtats ännu. Skattekontot går att stämma av när den första hämtningen är klar.',
+    message_en:
+      'Skatteverket is connected but no skattekonto rows have been fetched yet, so account_key "skattekonto" does not exist yet. It appears once the first fetch completes.',
+    retryable: true,
+    remediation: {
+      description:
+        'Skip the skattekonto for now and continue with the other accounts; ask again later. The skattekonto is fetched right after each BankID consent and by the scheduled sync, and the user can fetch it now on the Skattekonto page in Accounted. If it stays empty, check the connection with gnubok_connect_skatteverket and have the user reconnect.',
+      tool: 'gnubok_connect_skatteverket',
+    },
+    thrown_message_sv: true,
+  },
+  // A skattekonto row whose event a live verifikat already carries on 1630
+  // (typically imported by SIE from the previous system): booking it would
+  // record the event twice. The thrown Swedish text names the verifikat.
+  SKATTEKONTO_BOOK_LEDGER_TWIN_EXISTS: {
+    httpStatus: 409,
+    message_sv:
+      'Händelsen finns redan i bokföringen: ett verifikat innehåller den redan på konto 1630. Koppla raden till verifikatet i stället för att bokföra den en gång till.',
+    message_en:
+      'The event is already in the ledger: a live verifikat carries it on account 1630. Link the row to that verifikat instead of booking it a second time.',
+    retryable: false,
+    remediation: {
+      description:
+        'Link the row to the verifikat the message names with gnubok_reconcile_match (account_key "skattekonto", pairs [{ external_ids: [row id, plus any same-day rows the verifikat carries with it], journal_entry_ids: [verifikat id] }]). Book it anyway (allow_duplicate / allow_duplicate_ids) only when the user confirms the event really happened twice.',
+      tool: 'gnubok_reconcile_match',
+    },
+    thrown_message_sv: true,
+  },
   SKATTEVERKET_ACCESS_DENIED: {
     httpStatus: 403,
     message_sv:
@@ -4696,6 +6078,23 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
     message_en:
       'The årsredovisning for this fiscal period has been registered with Bolagsverket; its narrative texts can no longer be edited.',
   },
+  // Årsredovisning workflow operations (lib/operations/arsredovisning.ts).
+  SIGNATURE_INVALID_TRANSITION: {
+    httpStatus: 409,
+    message_sv:
+      'Underskriften kan inte ändras: den är redan signerad eller avböjd, hör till en annan version eller finns inte för räkenskapsåret.',
+    message_en:
+      'The signature cannot transition: it is already signed or declined, bound to another version, or not found for this fiscal period.',
+    retryable: false,
+  },
+  ARSREDOVISNING_CONTENT_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Årsredovisningens innehåll har ändrats sedan förhandsgranskningen. Granska den nya förhandsgranskningen och försök igen.',
+    message_en:
+      'The annual report content has changed since it was previewed (content hash mismatch). Review a new dry run and retry.',
+    retryable: false,
+  },
 }
 
 const ASSETS: Record<string, StructuredErrorEntry> = {
@@ -4744,12 +6143,29 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
     message_en:
       'Acquisition date, cost and category cannot be changed once the asset has been disposed or depreciation has been posted. Reverse (storno) first, or use the disposal flow.',
   },
+  ASSET_OPENING_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Tillgångens ingående avskrivning har ändrats. Beräkna avskrivningsförslaget på nytt innan du bokför.',
+    message_en:
+      'The asset opening depreciation has changed. Recalculate the depreciation proposal before posting.',
+  },
   ASSET_DELETE_BLOCKED: {
     httpStatus: 409,
     message_sv:
       'Tillgången kan inte tas bort eftersom den har nått bokföringen: avskrivningar är bokförda eller tillgången är avyttrad. Registerraden är då räkenskapsinformation (BFL 7 kap.). Använd avyttring, eller återför verifikatet med storno först.',
     message_en:
       'The asset cannot be deleted because it has reached the books: depreciation is posted or the asset is disposed. The register row is then accounting information (BFL ch. 7). Dispose it, or reverse the voucher with storno first.',
+  },
+  INVALID_OPENING_DEPRECIATION: {
+    httpStatus: 400,
+    // The thrower (AssetOpeningDepreciationInvalidError) names the failed rule
+    // in Swedish; message_sv is the fallback that lists every rule.
+    thrown_message_sv: true,
+    message_sv:
+      'Redan avskrivet belopp är ogiltigt: det måste vara mellan 0 och anskaffningsvärdet minus restvärdet, ha ett datum som inte är senare än i dag eller före anskaffningsdatumet, och kan inte kombineras med komponentuppdelning.',
+    message_en:
+      'The opening accumulated depreciation is invalid: it must be between 0 and the acquisition cost less the residual value, carry a date that is not after today or before the acquisition date, and cannot be combined with a component breakdown.',
   },
   K3_REQUIRED_FOR_COMPONENTS: {
     httpStatus: 422,
@@ -4823,6 +6239,26 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Dimensionen kunde inte tas bort.',
     message_en: 'Failed to delete dimension.',
   },
+  ACCOUNTING_METHOD_CHANGE_MID_YEAR: {
+    httpStatus: 409,
+    message_sv: 'Bokföringsmetoden kan inte bytas mitt i ett räkenskapsår som har bokförda verifikationer.',
+    message_en: 'The accounting method cannot change in the middle of a fiscal year that has posted vouchers: it governs the whole year. A person changes it in the settings before the next fiscal year.',
+  },
+  BOOKKEEPING_LOCK_REOPENS_FILED_VAT: {
+    httpStatus: 409,
+    message_sv: 'Låsdatumet skulle öppna momsperioder som redan är deklarerade till Skatteverket.',
+    message_en: 'The lock date would reopen VAT periods already filed with Skatteverket. Send acknowledge_filed_vat_periods: true if a correction must be booked there (then file a corrected return).',
+  },
+  DIMENSION_NUMBER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Dimensionsnumret finns redan i registret.',
+    message_en: 'That dimension number is already in the registry. Omit sie_dim_no to get the next free number from 20.',
+  },
+  DIMENSION_PARENT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Den överordnade dimensionen finns inte i registret.',
+    message_en: 'parent_sie_dim_no must name another existing dimension in the registry.',
+  },
   DIMENSION_VALUE_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Dimensionsvärdet kunde inte hittas.',
@@ -4872,6 +6308,33 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Import av befintliga dimensionskoder misslyckades.',
     message_en: 'Failed to import existing dimension codes from journal lines.',
+  },
+  // Account dimension rules (lib/dimensions/rules-service.ts, operations
+  // dimension-rules.*): one set of codes for the dashboard, v1 and MCP.
+  DIMENSION_RULE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Regeln finns inte.',
+    message_en: 'Account dimension rule not found in this company.',
+  },
+  DIMENSION_RULE_EXISTS: {
+    httpStatus: 409,
+    message_sv: 'Kontot har redan en regel för den dimensionen.',
+    message_en:
+      'The account already has a rule for that dimension (one rule per account and dimension): update the existing rule instead.',
+  },
+  DIMENSION_VALUE_ARCHIVED: {
+    httpStatus: 400,
+    message_sv: 'Värdet är arkiverat: återaktivera det innan det används i en regel.',
+    message_en: 'The dimension value is archived: reactivate it (PATCH the value with is_active true) before a rule uses it.',
+  },
+  // A retag of posted lines (lib/dimensions/retag-service.ts) where the RPC
+  // refused every line. Partial success is not an error: each line is its
+  // own transaction and the refused ones are listed.
+  DIMENSION_RETAG_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Ingen rad kunde taggas om.',
+    message_en:
+      'No line could be retagged: every line was refused. details.failed names each line and why (locked or closed period, lock date, a draft, a code missing from the registry or archived, a line of another company).',
   },
 }
 
@@ -5110,6 +6573,53 @@ const RECONCILIATION_SIGNOFF: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Company settings (lib/company/settings-service.ts): the cross-field rules
+// every settings door applies. message_sv is the exact sentence the
+// dashboard's PUT /api/settings has always answered.
+const COMPANY_SETTINGS: Record<string, StructuredErrorEntry> = {
+  SETTINGS_REMINDER_DAYS_ORDER: {
+    httpStatus: 400,
+    message_sv: 'Påminnelsedagarna måste ligga i stigande ordning.',
+    message_en: 'reminder_days_level_1 < reminder_days_level_2 < reminder_days_level_3 must hold (stored values fill in the ones not sent).',
+  },
+  SETTINGS_EF_CALENDAR_YEAR: {
+    httpStatus: 400,
+    message_sv: 'Enskild firma måste använda kalenderår (BFL 3 kap.)',
+    message_en: 'An enskild firma must use the calendar year: fiscal_year_start_month must be 1 (BFL 3 kap.).',
+  },
+  SETTINGS_SHARE_CAPITAL_PAIR: {
+    httpStatus: 400,
+    message_sv: 'Aktiekapital och antal aktier måste anges tillsammans. Fyll i båda fälten eller lämna båda tomma.',
+    message_en: 'aktiekapital and antal_aktier are set (or cleared) together.',
+  },
+  SETTINGS_VACATION_BASIS_OPEN_BALANCES: {
+    httpStatus: 400,
+    message_sv: 'Semesterårets basis kan inte ändras medan öppna semestersaldon finns. Stäng semesteråret först.',
+    message_en: 'salary_vacation_year_basis cannot change while open vacation balances exist: close the vacation year first.',
+    remediation: { description: 'Close the vacation year first.', tool: 'gnubok_close_vacation_year' },
+  },
+  SETTINGS_VAT_NUMBER_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Momsregistreringsnummer krävs när företaget är momsregistrerat (ML 17 kap. 24 §)',
+    message_en: 'A VAT-registered company needs vat_number (SE + 12 digits; ML 17 kap. 24 §).',
+  },
+  SETTINGS_MOMS_PERIOD_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Momsperiod krävs när företaget är momsregistrerat (SFL 26 kap.)',
+    message_en: 'A VAT-registered company needs moms_period (SFL 26 kap.).',
+  },
+  SETTINGS_VAT_40M_REQUIRES_MONTHLY: {
+    httpStatus: 400,
+    message_sv: 'Företag med beskattningsunderlag över 40 miljoner kronor måste redovisa moms varje månad.',
+    message_en: 'With vat_taxable_base_over_40m the moms_period must be monthly.',
+  },
+  SETTINGS_PS_REQUIRES_VAT_AND_EU_TRADE: {
+    httpStatus: 400,
+    message_sv: 'Periodisk sammanställning kräver momsregistrering och EU-handel.',
+    message_en: 'periodisk_sammanstallning_enabled requires vat_registered and vat_has_eu_trade.',
+  },
+}
+
 const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
   ECONNREFUSED: NETWORK_TRANSIENT_ENTRY,
   ECONNRESET: NETWORK_TRANSIENT_ENTRY,
@@ -5120,11 +6630,72 @@ const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Database refusals raised by name with SQLSTATE PT409
+// ─────────────────────────────────────────────────────────────────
+
+// The bank-booking guards raise `RAISE EXCEPTION '<NAME>' USING ERRCODE =
+// 'PT409'`. The name is the only part that says what went wrong, so a
+// registered name becomes the response code (see conflictCode) instead of
+// the catch-all CONFLICT, whose "reload the page" advice fits only some.
+const DB_CONFLICTS = {
+  BANK_BOOKING_SETTLEMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen bokför inte transaktionens belopp på bankkontot åt rätt håll. Ett uttag ska stå i kredit på bankkontot och en insättning i debet. Har bankkontots inställningar nyss ändrats, ladda om sidan och försök igen.',
+    message_en:
+      'The voucher does not book the transaction amount on the bank ledger in the bank direction: a withdrawal must credit the bank ledger, a deposit must debit it. If the bank account settings just changed, reload and try again.',
+  },
+  BANK_BOOKING_SOURCE_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Transaktionen har ändrats sedan du öppnade den. Ladda om sidan och bokför igen.',
+    message_en: 'The transaction changed after the booking was prepared. Reload it and book again.',
+  },
+  BANK_ANCHOR_SETTLEMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen bokför inte transaktionens belopp på bankkontot åt rätt håll, så transaktionen kan inte kopplas till den. Ett uttag ska stå i kredit på bankkontot och en insättning i debet.',
+    message_en:
+      'The voucher does not book the transaction amount on the bank ledger in the bank direction, so the transaction cannot be linked to it: a withdrawal must credit the bank ledger, a deposit must debit it.',
+  },
+  BANK_ANCHOR_CASH_ACCOUNT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Transaktionens bankkonto har ändrats eller tagits bort. Ladda om sidan och försök igen.',
+    message_en: 'The bank account of the transaction was changed or removed. Reload and try again.',
+  },
+  CASH_ACCOUNT_OPERATION_BUSY: {
+    httpStatus: 409,
+    message_sv: 'En annan ändring av bankkontona pågår just nu. Vänta en stund och försök igen.',
+    message_en: 'Another change to the bank accounts is in progress. Wait a moment and retry.',
+    retryable: true,
+  },
+  // resolve_bank_ingest_route: an enabled account of the connection has no
+  // bound cash account, or its stored ledger differs from the bound one.
+  // Retrying never helps; saving the account picker rewrites both sides. The
+  // sync paths also store message_sv as the connection's error_message.
+  BANK_INGEST_ROUTE_UNRESOLVED: {
+    httpStatus: 409,
+    message_sv: 'Banksynkningen har stannat: kontovalet för bankkopplingen behöver sparas om. Öppna Välj konton och spara igen.',
+    message_en: 'Bank sync has stopped: the account selection for this bank connection needs to be saved again. Open Choose accounts and save again.',
+  },
+} satisfies Record<string, StructuredErrorEntry>
+
+/**
+ * The response code for a PT409 database refusal: its own code when the
+ * raised name is registered above, else the generic CONFLICT.
+ */
+export function conflictCode(dbMessage: unknown): keyof typeof DB_CONFLICTS | 'CONFLICT' {
+  return typeof dbMessage === 'string' && Object.hasOwn(DB_CONFLICTS, dbMessage)
+    ? (dbMessage as keyof typeof DB_CONFLICTS)
+    : 'CONFLICT'
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
 
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
+  ...DB_CONFLICTS,
   ...BOOKKEEPING,
   ...TRANSACTIONS,
   ...MATCH_INVOICE,
@@ -5147,6 +6718,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...TAX_DECL,
   ...SIE_IMPORT,
   ...BANK_FILE,
+  ...BANK_SELECTION,
   ...BANK_SYNC,
   ...SKATTEKONTO_FILE,
   ...OPENING_BALANCE_IMPORT,
@@ -5166,6 +6738,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...BOLAGSVERKET,
   ...ASSETS,
   ...DIMENSION,
+  ...COMPANY_SETTINGS,
   ...WEBSHOP_ORDERS,
   ...RECONCILIATION_SIGNOFF,
   ...NODE_SYSTEM,

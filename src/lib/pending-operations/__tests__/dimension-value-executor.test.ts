@@ -50,7 +50,8 @@ describe('commitPendingOperation: create_dimension_value', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: null, error: null }) // ensure_company_dimensions rpc (dim 6)
-    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false }, error: null })
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt' }, error: null }) // lookup by sie_dim_no
+    enqueue({ data: { id: 'dim-6', resets_annually: false }, error: null }) // createDimensionValue: dimension
     enqueue({ data: { id: 'val-1', code: 'P010', name: 'Etapp 2', is_active: true }, error: null }) // insert
     enqueue({ data: null, error: null }) // finalize update
 
@@ -75,7 +76,8 @@ describe('commitPendingOperation: create_dimension_value', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: null, error: null }) // ensure rpc
-    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false }, error: null })
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt' }, error: null }) // lookup by sie_dim_no
+    enqueue({ data: { id: 'dim-6', resets_annually: false }, error: null }) // createDimensionValue: dimension
     enqueue({ data: null, error: { code: '23505', message: 'duplicate key value' } }) // insert conflict
     enqueue({ data: { id: 'val-existing', code: 'P010', name: 'Etapp 2', is_active: true }, error: null }) // re-read
     enqueue({ data: null, error: null }) // finalize update
@@ -127,10 +129,11 @@ describe('commitPendingOperation: create_dimension_value', () => {
   })
 
   it('rejects value dates on a resets-annually dimension', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: null, error: null }) // ensure rpc (dim 1)
-    enqueue({ data: { id: 'dim-1', sie_dim_no: 1, name: 'Kostnadsställe', resets_annually: true }, error: null })
+    enqueue({ data: { id: 'dim-1', sie_dim_no: 1, name: 'Kostnadsställe' }, error: null }) // lookup by sie_dim_no
+    enqueue({ data: { id: 'dim-1', resets_annually: true }, error: null }) // createDimensionValue: dimension
     enqueue({ data: null, error: null }) // dispatcher reject update
 
     const op = makePendingOp({
@@ -141,5 +144,50 @@ describe('commitPendingOperation: create_dimension_value', () => {
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
     expect(result.error).toMatch(/Start-\/slutdatum är inte tillåtna/)
+    expect(result.code).toBe('DIMENSION_VALUE_DATES_NOT_ALLOWED')
+    expect(findCall('dimension_values', 'insert')).toBeUndefined()
+  })
+
+  it('inserts through the shared service: company-scoped, active by default, dates kept on projekt', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // ensure rpc (dim 6)
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt' }, error: null }) // lookup by sie_dim_no
+    enqueue({ data: { id: 'dim-6', resets_annually: false }, error: null }) // createDimensionValue: dimension
+    enqueue({ data: { id: 'val-2', code: 'P011', name: 'Etapp 3', is_active: true }, error: null }) // insert
+    enqueue({ data: null, error: null }) // finalize update
+
+    const op = makePendingOp({
+      params: { sie_dim_no: 6, code: 'P011', name: 'Etapp 3', start_date: '2026-01-01', end_date: '2026-12-31' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCall('dimension_values', 'insert')?.[0]).toEqual({
+      company_id: 'company-1',
+      dimension_id: 'dim-6',
+      code: 'P011',
+      name: 'Etapp 3',
+      is_active: true,
+      start_date: '2026-01-01',
+      end_date: '2026-12-31',
+    })
+  })
+  it('fails with the database message, never an empty error, when the create cannot read the dimension', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // ensure rpc (dim 6)
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt' }, error: null }) // lookup by sie_dim_no
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+    enqueue({ data: null, error: null }) // dispatcher reject update
+
+    const op = makePendingOp({ params: { sie_dim_no: 6, code: 'P012', name: 'Etapp 4' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(500)
+    expect(result.code).toBe('UNKNOWN_ERROR')
+    expect(result.error).toBe('canceling statement due to statement timeout')
+    expect(findCall('dimension_values', 'insert')).toBeUndefined()
   })
 })

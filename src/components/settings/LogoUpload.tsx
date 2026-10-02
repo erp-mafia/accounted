@@ -128,20 +128,19 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
               variant="ghost"
               size="sm"
               onClick={() => inputRef.current?.click()}
-              disabled={isUploading}
+              loading={isUploading}
               className="text-muted-foreground hover:text-foreground"
             >
-              {isUploading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
               {t('logo_change')}
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={handleDelete}
-              disabled={isDeleting}
+              loading={isDeleting}
               className="text-muted-foreground hover:text-destructive"
             >
-              {isDeleting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-2 h-3.5 w-3.5" />}
+              {!isDeleting && <Trash2 className="mr-2 h-3.5 w-3.5" />}
               {t('logo_remove')}
             </Button>
           </>
@@ -155,7 +154,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
             onDragLeave={handleDragLeave}
             disabled={isUploading}
             className={`inline-flex min-h-10 items-center gap-2 rounded-lg border border-dashed px-4 py-2 text-sm text-muted-foreground transition-colors duration-150 disabled:opacity-50 ${
-              isDragging ? 'border-foreground bg-muted/40' : 'border-border hover:bg-muted/20'
+              isDragging ? 'border-foreground bg-muted/40' : 'border-border hover:bg-secondary/60'
             }`}
           >
             {isUploading ? (

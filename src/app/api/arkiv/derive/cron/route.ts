@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
-import { arkivRollout, isArkivEnabled } from '@/lib/arkiv/flag'
+import { arkivBrainRollout, isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { deriveCompanyFacts } from '@/lib/arkiv/facts/derive-company'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { observeObligations } from '@/lib/arkiv/agreements/observe'
@@ -35,7 +35,7 @@ export const GET = withCronContext('arkiv.derive', async (_request, ctx) => {
   try {
     const { data, error } = await supabase.from('agreements').select('company_id, source_document_id, derived_at').order('derived_at', { ascending: true }).limit(2000)
     if (error) throw new Error(`agreements fetch failed: ${error.message}`)
-    const agreements = ((data ?? []) as AgreementRow[]).filter((a) => isArkivEnabled(a.company_id))
+    const agreements = ((data ?? []) as AgreementRow[]).filter((a) => isArkivBrainEnabled(a.company_id))
     const companies = [...new Set(agreements.map((a) => a.company_id))].slice(0, MAX_COMPANIES)
 
     const totals = { companies: companies.length, checked: 0, matched: 0, missed: 0, rederived: 0 }
@@ -49,7 +49,7 @@ export const GET = withCronContext('arkiv.derive', async (_request, ctx) => {
       if (await enqueueDocumentJob(supabase, agreement.company_id, agreement.source_document_id, 'derive')) totals.rederived++
     }
     // Company facts for every company in the rollout: a listed rollout names them; `*` waits for the brain to open to everyone.
-    const rollout = arkivRollout()
+    const rollout = arkivBrainRollout()
     const factsFor = rollout === 'all' ? [] : rollout.slice(0, MAX_COMPANIES)
     const facts = { companies: factsFor.length, recorded: 0, retired: 0, failed: 0 }
     for (const companyId of factsFor) {

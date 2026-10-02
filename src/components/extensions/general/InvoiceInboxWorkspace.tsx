@@ -57,6 +57,11 @@ import { StartCard } from '@/components/dashboard/StartCard'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
 import InvoiceInboxSkeleton from '@/components/extensions/general/InvoiceInboxSkeleton'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
+import { InboxMailDoor } from '@/components/extensions/general/InboxMailDoor'
+import { summarizeMailboxes } from '@/components/extensions/general/mail-connections'
+import { useMailConnections } from '@/components/extensions/general/use-mail-connections'
+import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
@@ -78,6 +83,7 @@ import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDi
 // InboxCustomDomainDialog (egen domän) is built but gated off: see
 // INBOX_CUSTOM_DOMAINS_ENABLED in extensions/general/invoice-inbox/index.ts.
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
+import { InboxCreditNotePanel } from './InboxCreditNotePanel'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import {
   getErrorMessage as getUserErrorMessage,
@@ -445,6 +451,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // from "the list is empty": with no list at all we know nothing about the
   // inbox and must not render an authoritative "Inkorgen är tom".
   const [routedToArkiv, setRoutedToArkiv] = useState<InboxItem[]>([])
+  // The Dokument section is not open for every company yet; without it the routed line has no link.
+  const [arkivSection, setArkivSection] = useState(false)
   // The questions Arkiv has about documents in this queue (phase 9d): asked in the
   // rail with one tap, so a person never has to go to Granska for them. Empty
   // outside the Arkiv rollout (the route is 404 there).
@@ -547,6 +555,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         return
       }
       const allItems: InboxItem[] = json.data?.items ?? []
+      setArkivSection(json.data?.arkiv_section === true)
       setRoutedToArkiv(allItems.filter((it) => it.routed_to_arkiv_at))
       const serverItems = allItems.filter((it) => !it.routed_to_arkiv_at)
       // Preserve optimistic upload placeholders that haven't resolved to a
@@ -683,9 +692,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [purchases, setPurchases] = useState<PurchaseWithoutUnderlag[]>([])
   const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(null)
 
-  // Where underlag come from. Two routes in, and the page should say so:
-  // WhatsApp for photographed receipts, and the forwarding address that works
-  // with nothing connected at all.
+  // Where underlag come from. Three routes in, and the page should say so:
+  // WhatsApp for photographed receipts, the Gmail mailboxes the hunt
+  // searches when asked, and the forwarding address that works with nothing
+  // connected at all.
   const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phoneMasked?: string; verifiedAt?: string | null } | null>(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
   // Received-mail history (#2181): read when its panel is first opened, so
@@ -746,8 +756,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     })()
   }, [])
 
-  const sourceCount = (whatsapp?.linked ? 1 : 0) + (inboxAddress ? 1 : 0)
-
   const fetchPurchases = useCallback(async () => {
     try {
       const res = await fetch('/api/extensions/ext/invoice-inbox/purchases')
@@ -762,6 +770,30 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   useEffect(() => {
     void fetchPurchases()
   }, [fetchPurchases])
+
+  // The Gmail door. Read only where the mail extension is built in: without
+  // it there is no route to ask, and its 404 is not news. A failed read
+  // leaves the door out rather than guessing at the mailboxes.
+  const mailDoor = useMailConnections(ENABLED_EXTENSION_IDS.has('mail'))
+  const mailboxes = summarizeMailboxes(mailDoor.view)
+  const hasAiCapability = useCapability(CAPABILITY.ai)
+  // A pass files receipts and stages their pairing, which moves rows between
+  // both lists, and it moves each mailbox's lastSearchedAt: all three refresh
+  // as the run goes rather than at the end.
+  const receiptHunt = useReceiptHunt(() => {
+    void fetchItems()
+    void fetchPurchases()
+    void mailDoor.reload()
+  })
+
+  // Counting rows would not answer whether anything is searched: a mailbox
+  // waiting for a new consent is still a row, and the hunt skips it. Only
+  // the ones it reads are sources; the others surface on the chip, but only
+  // when this company may start a consent. Outside the connect allowlist the
+  // reconnect would be refused, so the chip would nag about something nobody
+  // here can fix; the mailbox still shows its state inside the panel.
+  const sourceCount = (whatsapp?.linked ? 1 : 0) + (inboxAddress ? 1 : 0) + mailboxes.active.length
+  const mailboxNeedsReconnect = mailboxes.needsReconnect.length > 0 && mailboxes.canConnect
 
   const selectedPurchase = useMemo(
     () => purchases.find((p) => p.id === selectedPurchaseId) ?? null,
@@ -1268,7 +1300,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         deletable.map((it) =>
           fetch(`/api/extensions/ext/invoice-inbox/items/${it.id}`, { method: 'DELETE' })
             .then(async (res) => {
-              if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'fail')
+              if (!res.ok) throw await resolveFailure(res)
             })
         )
       )
@@ -1362,16 +1394,27 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           <h1 className="text-sm shrink-0">Dokumentinkorg</h1>
           {/* Where the page's contents come from, behind one chip. The detail
               is a thing people look up when something seems wrong, not
-              something they read every visit. */}
-          {sourceCount > 0 ? (
+              something they read every visit. A mailbox that has stopped
+              being read is the exception, so that surfaces on the chip
+              itself: a dead door looking healthy is the failure the Gmail
+              door exists to show. */}
+          {sourceCount > 0 || mailboxNeedsReconnect ? (
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setSourcesOpen((v) => !v)}
-              className="h-7 px-2 text-xs font-normal shrink-0 text-muted-foreground"
+              className={cn(
+                'font-normal shrink-0',
+                mailboxNeedsReconnect ? 'text-attn' : 'text-muted-foreground',
+              )}
               aria-expanded={sourcesOpen}
             >
-              {`${sourceCount} ${sourceCount === 1 ? 'källa' : 'källor'}`}
+              {mailboxNeedsReconnect && <AlertTriangle className="h-3 w-3 mr-1.5" />}
+              {mailboxNeedsReconnect
+                ? t('source_gmail_reconnect_chip')
+                : sourceCount === 1
+                  ? t('sources_one', { count: sourceCount })
+                  : t('sources_many', { count: sourceCount })}
               <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
             </Button>
           ) : addressLoadFailed ? (
@@ -1389,14 +1432,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               variant="outline"
               size="sm"
               onClick={handleRotateAddress}
-              disabled={isRotating}
-              className="ml-2 shrink-0 h-7 text-xs"
+              loading={isRotating}
+              className="ml-2 shrink-0"
             >
-              {isRotating ? (
-                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <Mail className="h-3.5 w-3.5 mr-1.5" />
-              )}
+              {!isRotating && <Mail className="h-3.5 w-3.5 mr-1.5" />}
               Aktivera inkorgsadress
             </Button>
           )}
@@ -1415,19 +1454,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             onChange={handleFileInputChange}
           />
           {agentHandoff && (agentHandoff.count > 0 || purchases.length > 0) && (
-            <KvittojaktenButton clients={agentHandoff.clients} variant="button" />
+            <KvittojaktenButton clients={agentHandoff.clients} />
           )}
           <Button
             variant="outline"
             size="sm"
             onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
+            loading={isUploading}
           >
-            {isUploading ? (
-              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-            ) : (
-              <Plus className="h-3.5 w-3.5 mr-1.5" />
-            )}
+            {!isUploading && <Plus className="h-3.5 w-3.5 mr-1.5" />}
             {uploadQueue
               ? `Laddar ${Math.min(uploadQueue.done + 1, uploadQueue.total)} av ${uploadQueue.total}…`
               : isUploading
@@ -1439,7 +1474,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
       {routedToArkiv.length > 0 && (
         <div className="mx-4 mt-3">
-          <AttnLine action={{ label: tArkiv('underlag_routed_open'), href: '/arkiv' }}>
+          <AttnLine action={arkivSection ? { label: tArkiv('underlag_routed_open'), href: '/arkiv' } : undefined}>
             {tArkiv('underlag_routed_line', {
               count: routedToArkiv.length,
               types: [...new Set(routedToArkiv.map((it) => it.routed_doc_type).filter((x): x is string => !!x))]
@@ -1469,10 +1504,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         )}
       </div>
 
-      {/* Opened from the chip. Two ways in, each with the one fact that
-          matters about it: an address you can forward to, and the number
-          receipts arrive from. Nothing here is configuration; that still
-          lives in Inställningar. */}
+      {/* Opened from the chip. Three ways in, each with the one fact that
+          matters about it: an address you can forward to, the mailboxes we
+          search when asked, and the number receipts arrive from. Nothing
+          here is configuration; that still lives in Inställningar. */}
       {sourcesOpen && (
         <div className="border-b bg-muted/20 text-xs">
           {inboxAddress && (
@@ -1502,7 +1537,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 }
               }}
             >
-              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
+              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/35">
                 <Inbox className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 <span className="flex-1 truncate">{t('inbound_mail_title')}</span>
                 {inboundMails !== null && (
@@ -1545,9 +1580,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             </details>
           )}
 
+          {mailDoor.view && mailboxes.available && (
+            <InboxMailDoor view={mailDoor.view} hunt={receiptHunt} hasAi={hasAiCapability} />
+          )}
+
           {whatsapp?.linked && (
             <details className="group border-b border-border">
-              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
+              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/35">
                 <WhatsAppMark className="h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1 truncate">WhatsApp</span>
                 <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
@@ -1601,7 +1640,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <Button
                 variant="default"
                 size="sm"
-                className="h-8 w-full text-xs"
+                className="w-full"
                 onClick={() => setBulkBookOpen(true)}
                 disabled={isBulkDeleting || bookableSelectedCount === 0}
                 title={
@@ -1619,7 +1658,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 flex-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    className="flex-1 px-2 text-muted-foreground hover:text-foreground"
                     onClick={() =>
                       openAgentSheet({
                         intentId: 'inbox.bulk-book',
@@ -1637,17 +1676,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   variant="outline"
                   size="sm"
                   className={cn(
-                    'h-8 px-2 text-xs text-muted-foreground hover:text-destructive hover:border-destructive/40',
+                    'px-2 text-muted-foreground hover:text-destructive hover:border-destructive/40',
                     identity.isVerified ? 'flex-none' : 'flex-1'
                   )}
                   onClick={handleBulkDelete}
-                  disabled={isBulkDeleting}
+                  loading={isBulkDeleting}
                 >
-                  {isBulkDeleting ? (
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                  )}
+                  {!isBulkDeleting && <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
                   Ta bort
                 </Button>
               </div>
@@ -1662,7 +1697,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-xs"
                 onClick={() => { void fetchItems() }}
               >
                 {t('retry')}
@@ -1895,10 +1929,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   { method: 'POST' },
                 )
                 if (!res.ok) {
-                  const json = await res.json().catch(() => ({}))
+                  const failure = await resolveFailure(res)
                   toast({
                     title: 'Kunde inte avbryta matchningen',
-                    description: json.error ?? `HTTP ${res.status}`,
+                    description: failure.message,
                     variant: 'destructive',
                   })
                   return
@@ -2400,7 +2434,7 @@ export function DocumentPreview({
         <AlertTriangle className="h-5 w-5 text-attn" />
         <span>{t('document_load_failed')}</span>
         {onRetry && (
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onRetry}>
+          <Button variant="outline" size="sm" onClick={onRetry}>
             {t('retry')}
           </Button>
         )}
@@ -2477,12 +2511,8 @@ function EmptyPreview({
       </div>
       <div className="flex gap-2">
         {onActivateInbox && (
-          <Button size="sm" onClick={onActivateInbox} disabled={isActivating}>
-            {isActivating ? (
-              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-            ) : (
-              <Mail className="h-3.5 w-3.5 mr-1.5" />
-            )}
+          <Button size="sm" onClick={onActivateInbox} loading={isActivating}>
+            {!isActivating && <Mail className="h-3.5 w-3.5 mr-1.5" />}
             Aktivera inkorgsadress
           </Button>
         )}
@@ -2550,7 +2580,7 @@ function PurchaseRow({
           {/* A chip only when the row deviates: here, when we can actually
               tell the user where to go. */}
           {purchase.portal && (
-            <Badge data-ph-mask="" variant="outline" className="text-[10px] font-normal">
+            <Badge data-ph-mask="" variant="outline" className="text-[11px] font-normal">
               {purchase.portal.vendor}
             </Badge>
           )}
@@ -2639,7 +2669,13 @@ type SuggestedBooking = {
     | 'no_transaction'
     | 'already_booked'
     | 'currency_unsupported'
-  lines: { account_number: string; debit_amount: number; credit_amount: number; description: string }[]
+  lines: {
+    account_number: string
+    debit_amount: number
+    credit_amount: number
+    description: string
+    dimensions?: Record<string, string>
+  }[]
   confidence: number | null
   requires_review?: boolean
   direction_mismatch?: boolean
@@ -2745,7 +2781,7 @@ function ProposedBooking({
 
       <table className="w-full border-collapse text-xs">
         <thead>
-          <tr className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
             <th className="pb-1 pr-2 text-left font-medium" colSpan={2}>
               Konto
             </th>
@@ -2755,7 +2791,7 @@ function ProposedBooking({
         </thead>
         <tbody>
           {data.lines.map((l, i) => (
-            <tr key={`${l.account_number}-${i}`} className="border-b border-border/40 last:border-0">
+            <tr key={`${l.account_number}-${i}`} className="border-b border-border last:border-0">
               <td className="py-1 pr-2 tabular-nums text-muted-foreground w-10">{l.account_number}</td>
               <td className="py-1 pr-2 truncate" title={l.description}>
                 {l.description}
@@ -3097,15 +3133,11 @@ function FieldsRail({
             <Button
               variant="outline"
               size="sm"
-              className="w-full h-7 text-xs"
+              className="w-full"
               onClick={handleRetry}
-              disabled={isRetrying}
+              loading={isRetrying}
             >
-              {isRetrying ? (
-                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-              ) : (
-                <RotateCcw className="h-3 w-3 mr-1.5" />
-              )}
+              {!isRetrying && <RotateCcw className="h-3 w-3 mr-1.5" />}
               Försök igen
             </Button>
           )}
@@ -3181,15 +3213,11 @@ function FieldsRail({
             <Button
               variant="outline"
               size="sm"
-              className="w-full h-7 text-xs"
+              className="w-full"
               onClick={handleRetry}
-              disabled={isRetrying}
+              loading={isRetrying}
             >
-              {isRetrying ? (
-                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-              ) : (
-                <RotateCcw className="h-3 w-3 mr-1.5" />
-              )}
+              {!isRetrying && <RotateCcw className="h-3 w-3 mr-1.5" />}
               {t('retry_extraction')}
             </Button>
           </div>
@@ -3363,6 +3391,27 @@ function FieldsRail({
               {isUnmatchingTx ? 'Avbryter…' : 'Avbryt matchning'}
             </button>
           </>
+        ) : resolvedKind === 'credit_note' ? (
+          <>
+            {/* A supplier's credit note credits the invoice it references
+                (issue #2980): never a payable of its own. The verifikat
+                editor stays below for a partial credit note. */}
+            <InboxCreditNotePanel
+              itemId={item.id}
+              extracted={(data ?? null) as Record<string, unknown> | null}
+              onCredited={async () => {
+                await onBookedLocally?.()
+              }}
+              onFieldsUpdated={(next) => onFieldsUpdated(next as unknown as InvoiceExtractionResult)}
+            />
+            <button
+              type="button"
+              onClick={onBookDirect}
+              className="w-full text-xs text-muted-foreground hover:text-foreground hover:underline pt-1"
+            >
+              {t('payer_open_editor')}
+            </button>
+          </>
         ) : (
           <>
             {/* Unmatched state: one question decides the booking path. Every
@@ -3397,7 +3446,8 @@ function FieldsRail({
           size="sm"
           className="w-full"
           onClick={onDelete}
-          disabled={isDeleting || isResolved}
+          disabled={isResolved}
+          loading={isDeleting}
           title={
             isProcessed
               ? 'Kopplad till leverantörsfaktura, kan inte tas bort'
@@ -3408,21 +3458,17 @@ function FieldsRail({
                   : undefined
           }
         >
-          {isDeleting ? (
-            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-          ) : (
-            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-          )}
+          {!isDeleting && <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
           Ta bort
         </Button>
         {isProcessed && (
-          <Badge variant="secondary" className="w-full justify-center text-[10px]">
+          <Badge variant="secondary" className="w-full justify-center text-[11px]">
             <Check className="h-2.5 w-2.5 mr-1" />
             Bearbetad
           </Badge>
         )}
         {isBookedDirectly && (
-          <Badge variant="secondary" className="w-full justify-center text-[10px]">
+          <Badge variant="secondary" className="w-full justify-center text-[11px]">
             <Check className="h-2.5 w-2.5 mr-1" />
             Bokförd
           </Badge>
@@ -3435,14 +3481,14 @@ function FieldsRail({
             >
               <Badge
                 variant="secondary"
-                className="w-full justify-center text-[10px] hover:bg-secondary/80"
+                className="w-full justify-center text-[11px] hover:bg-secondary/60"
               >
                 <Link2 className="h-2.5 w-2.5 mr-1" />
                 Kopplad till transaktion
               </Badge>
             </Link>
           ) : (
-            <Badge variant="secondary" className="w-full justify-center text-[10px]">
+            <Badge variant="secondary" className="w-full justify-center text-[11px]">
               <Link2 className="h-2.5 w-2.5 mr-1" />
               Kopplad till transaktion
             </Badge>
@@ -3777,7 +3823,7 @@ export function EditableFieldsList({
               htmlFor={`field-${variant}-${f.key}`}
               className={cn(
                 'uppercase tracking-wide text-muted-foreground/80',
-                variant === 'expanded' ? 'text-xs' : 'text-[10px]'
+                variant === 'expanded' ? 'text-xs' : 'text-[11px]'
               )}
             >
               {f.label}
@@ -3819,7 +3865,7 @@ export function EditableFieldsList({
       )}
       {vatRows.length > 0 && (
         <div className={cn('pt-2 border-t mt-3', variant === 'expanded' && 'sm:col-span-2 mt-1')}>
-          <p className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
             Momsfördelning
           </p>
           <div className="space-y-1">
@@ -3838,7 +3884,7 @@ export function EditableFieldsList({
       {disabled && (
         <p
           className={cn(
-            'text-[10px] text-muted-foreground/70 pt-2',
+            'text-[11px] text-muted-foreground/70 pt-2',
             variant === 'expanded' && 'sm:col-span-2 text-xs'
           )}
         >

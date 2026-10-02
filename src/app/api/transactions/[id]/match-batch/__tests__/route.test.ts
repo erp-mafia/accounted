@@ -37,6 +37,17 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectExplainingVoucherSetForTransaction: mockDetectExplaining,
 }))
 
+// Kontantmetoden guard (lib/invoices/batch-cash-method-guard.ts). Mocked so
+// it consumes no slot in the queued Supabase mock; defaults to "nothing
+// unbooked" (accrual). Its own query shape is pinned by
+// lib/invoices/__tests__/batch-cash-method-guard.test.ts.
+const { mockFindCashUnbooked } = vi.hoisted(() => ({
+  mockFindCashUnbooked: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, unbooked: [] })),
+}))
+vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
+  findCashMethodUnbookedAllocations: mockFindCashUnbooked,
+}))
+
 // An honoured force override is written to behandlingshistorik after the RPC
 // succeeds (issue #2294). Mocked so it never touches a service client here.
 const { mockAppendProcessingHistory } = vi.hoisted(() => ({ mockAppendProcessingHistory: vi.fn() }))
@@ -54,6 +65,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 import { POST } from '../route'
+import { eventBus } from '@/lib/events/bus'
 
 const TX_UUID = '11111111-1111-4111-8111-111111111111'
 const INV_UUID = '22222222-2222-4222-8222-222222222222'
@@ -121,9 +133,11 @@ describe('POST /api/transactions/[id]/match-batch', () => {
       error: null,
     })
     // tx fetch for event payload
-    enqueue({ data: { id: TX_UUID, amount: 1000, currency: 'SEK' }, error: null })
+    enqueue({ data: { id: TX_UUID, amount: 1000, currency: 'SEK', date: '2026-05-20' }, error: null })
     // invoice fetch for event payload
     enqueue({ data: { id: INV_UUID, currency: 'SEK', status: 'paid' }, error: null })
+    // settled in full: the payment row the RPC wrote names the applied amount
+    enqueue({ data: { amount: 1000 }, error: null })
 
     const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
       method: 'POST',
@@ -155,6 +169,20 @@ describe('POST /api/transactions/[id]/match-batch', () => {
       INV_UUID,
       { exceptTransactionId: TX_UUID },
     )
+    // The match is confirmed and, because it settled the invoice in full, the
+    // public invoice.paid transition fires once with the applied amount.
+    const emitted = vi.mocked(eventBus.emit).mock.calls.map(([event]) => event)
+    expect(emitted.map((e) => e.type)).toEqual(['invoice.match_confirmed', 'invoice.paid'])
+    expect(emitted[1]).toEqual({
+      type: 'invoice.paid',
+      payload: {
+        invoice: expect.objectContaining({ id: INV_UUID, status: 'paid' }),
+        paymentAmount: 1000,
+        paymentDate: '2026-05-20',
+        userId: 'user-1',
+        companyId: 'company-1',
+      },
+    })
   })
 
   it('retires suggestions only for the allocations that settled in full', async () => {
@@ -190,8 +218,9 @@ describe('POST /api/transactions/[id]/match-batch', () => {
       },
       error: null,
     })
-    enqueue({ data: { id: TX_UUID, amount: -1400, currency: 'SEK' }, error: null }) // tx fetch
+    enqueue({ data: { id: TX_UUID, amount: -1400, currency: 'SEK', date: '2026-05-20' }, error: null }) // tx fetch
     enqueue({ data: { id: SI_UUID, currency: 'SEK', status: 'paid' }, error: null })
+    enqueue({ data: { amount: 1000 }, error: null }) // settled SI's payment row (applied amount)
     enqueue({ data: { id: SI_PARTIAL_UUID, currency: 'SEK', status: 'partially_paid' }, error: null })
 
     const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
@@ -215,6 +244,22 @@ describe('POST /api/transactions/[id]/match-batch', () => {
       SI_UUID,
       { exceptTransactionId: TX_UUID },
     )
+    // Both matches are confirmed; only the settled one is supplier_invoice.paid.
+    const emitted = vi.mocked(eventBus.emit).mock.calls.map(([event]) => event)
+    expect(emitted.map((e) => e.type)).toEqual([
+      'supplier_invoice.match_confirmed',
+      'supplier_invoice.paid',
+      'supplier_invoice.match_confirmed',
+    ])
+    expect(emitted[1]).toEqual({
+      type: 'supplier_invoice.paid',
+      payload: {
+        supplierInvoice: expect.objectContaining({ id: SI_UUID, status: 'paid' }),
+        paymentAmount: 1000,
+        userId: 'user-1',
+        companyId: 'company-1',
+      },
+    })
   })
 
   it('maps an RPC structured failure to errorResponseFromCode', async () => {
@@ -271,6 +316,50 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(400)
     expect(body.error.code).toBe('MATCH_INVOICE_NOT_INVOICE_TYPE')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('refuses unbooked invoices under kontantmetoden before the RPC can clear 1510', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: true,
+      unbooked: [{ kind: 'customer_invoice', id: INV_UUID, invoice_number: '231' }],
+    })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 }],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { invoices: Array<{ id: string }> } }
+    }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BATCH_CASH_METHOD_UNBOOKED_INVOICE')
+    expect(body.error.details?.invoices[0].id).toBe(INV_UUID)
+    expect(mockFindCashUnbooked).toHaveBeenCalledWith(mockSupabase, 'company-1', [
+      { kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 },
+    ])
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the kontantmetoden check cannot run', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: false,
+      error: { message: 'connection reset', code: '08006' },
+    })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 }],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    expect(response.status).toBeGreaterThanOrEqual(500)
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 })

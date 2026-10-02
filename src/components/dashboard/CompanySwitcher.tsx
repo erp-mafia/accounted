@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { useCompany } from '@/contexts/CompanyContext'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
@@ -109,7 +110,7 @@ export default function CompanySwitcher() {
     return (
       <Link
         href="/select-company?choose=1"
-        className="flex items-center gap-2 w-full text-left rounded-lg border border-dashed border-border/60 hover:border-foreground/30 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-colors duration-150"
+        className="flex items-center gap-2 w-full text-left rounded-lg border border-dashed border-border hover:border-foreground/30 hover:bg-secondary/60 -mx-1 px-2 py-1.5 transition-colors duration-150"
       >
         <Plus className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
         <span className="text-[13px] text-muted-foreground truncate">{t('add_company')}</span>
@@ -122,12 +123,12 @@ export default function CompanySwitcher() {
       <button
         ref={triggerRef}
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 w-full text-left rounded-lg border border-transparent hover:border-border/60 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-colors duration-150"
+        className="flex items-center gap-1.5 w-full text-left rounded-lg border border-transparent hover:border-border hover:bg-secondary/60 -mx-1 px-2 py-1.5 transition-colors duration-150"
         aria-expanded={open}
         aria-haspopup="listbox"
       >
         <div className="flex-1 min-w-0">
-          <p className="text-[10px] text-muted-foreground/60 uppercase tracking-[0.06em] leading-none mb-1">{t('company_label')}</p>
+          <p className="text-[11px] text-muted-foreground/60 uppercase tracking-[0.06em] leading-none mb-1">{t('company_label')}</p>
           <p className="text-[13px] font-semibold text-foreground truncate tracking-[-0.01em]">
             {company?.name || t('default_company_name')}
           </p>
@@ -138,14 +139,14 @@ export default function CompanySwitcher() {
       {open && createPortal(
         <div
           ref={dropdownRef}
-          className="fixed min-w-56 w-max max-w-[calc(100vw-1rem)] bg-card border border-border/60 rounded-lg shadow-lg z-[60] py-1 animate-in fade-in slide-in-from-top-1 duration-150"
+          className={cn('fixed min-w-56 w-max max-w-[calc(100vw-1rem)] z-[60] py-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}
           style={{ top: dropdownPos.top, left: dropdownPos.left }}
         >
           {companies.length > 0 && (
             <>
               {hasMultiple && (
                 <div className="px-2 py-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em] px-1.5">
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.08em] px-1.5">
                     {t('company_label')}
                   </p>
                 </div>
@@ -164,7 +165,7 @@ export default function CompanySwitcher() {
                     >
                       <span className="flex-1 min-w-0">
                         <span className="block truncate">{c.name}</span>
-                        <span className="block truncate text-[10px]">{t('locked_note')}</span>
+                        <span className="block truncate text-[11px]">{t('locked_note')}</span>
                       </span>
                       <Lock className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
                     </div>
@@ -177,7 +178,7 @@ export default function CompanySwitcher() {
                       'flex items-center gap-2 w-full px-2.5 py-2 text-left text-[13px] leading-snug transition-colors rounded-sm md:whitespace-nowrap',
                       c.id === company?.id
                         ? 'text-foreground bg-muted/40'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                        : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
                       isPending && 'opacity-50',
                     )}
                     role="option"
@@ -185,7 +186,7 @@ export default function CompanySwitcher() {
                   >
                     <span className="flex-1 min-w-0">{c.name}</span>
                     {role !== 'owner' && (
-                      <span className="text-[10px] text-muted-foreground/60 flex-shrink-0">
+                      <span className="text-[11px] text-muted-foreground/60 flex-shrink-0">
                         {role}
                       </span>
                     )}
@@ -205,18 +206,18 @@ export default function CompanySwitcher() {
           {/* Companies homed on another domain (home-domain rule, WL-01):
               non-clickable signposts; the company is worked in over there. */}
           {foreignCompanies.length > 0 && (
-            <div className="border-t border-border/40 mt-1 pt-1 px-1">
-              <p className="px-2.5 pt-1 pb-0.5 text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">
+            <div className="border-t border-border mt-1 pt-1 px-1">
+              <p className="px-2.5 pt-1 pb-0.5 text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">
                 {t('managed_elsewhere')}
               </p>
               {foreignCompanies.map((entry) => (
                 <div
                   key={entry.id}
-                  className="px-2.5 py-1.5 text-[12px] leading-snug text-muted-foreground/60"
+                  className="px-2.5 py-1.5 text-[12.5px] leading-snug text-muted-foreground/60"
                   aria-disabled="true"
                 >
                   <span className="block truncate">{entry.name}</span>
-                  <span className="block truncate text-[10px]">
+                  <span className="block truncate text-[11px]">
                     {t('managed_via', { domain: entry.domain })}
                   </span>
                 </div>
@@ -225,11 +226,11 @@ export default function CompanySwitcher() {
           )}
 
           {!isSandbox && (
-            <div className={cn((companies.length > 0 || foreignCompanies.length > 0) && 'border-t border-border/40 mt-1 pt-1', 'px-1')}>
+            <div className={cn((companies.length > 0 || foreignCompanies.length > 0) && 'border-t border-border mt-1 pt-1', 'px-1')}>
               <Link
                 href="/select-company?choose=1"
                 onClick={() => setOpen(false)}
-                className="flex items-center gap-2 px-2.5 py-2 text-[13px] text-muted-foreground hover:text-foreground hover:bg-muted/40 rounded-sm transition-colors md:whitespace-nowrap"
+                className="flex items-center gap-2 px-2.5 py-2 text-[13px] text-muted-foreground hover:text-foreground hover:bg-secondary/60 rounded-sm transition-colors md:whitespace-nowrap"
               >
                 <Plus className="h-3.5 w-3.5" />
                 {t('add_company')}

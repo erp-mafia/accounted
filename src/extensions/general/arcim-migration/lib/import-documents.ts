@@ -17,6 +17,15 @@
  *    dedup across vouchers. This matters because a receipt linked to a posted
  *    verifikat becomes räkenskapsinformation and is undeletable
  *    (BFL 7 kap 2§ / WORM triggers).
+ *  - Never adds to a verifikat that already carries underlag from another
+ *    path (the underlag wizard, an API client, a manual upload): those are
+ *    skipped without a download. Only this import's own earlier files let a
+ *    re-run continue on a verifikat.
+ *  - A Bokio receipt links only when Bokio's entry date equals the
+ *    verifikat's date; a mismatch is reported as unmatched.
+ *  - A receipt whose verifikat sits in a klarmarkerat or locked fiscal year
+ *    is reported as locked, without a download: the period-lock trigger
+ *    would refuse the link, so it is not a failure a retry could fix.
  *  - Best-effort: a per-receipt failure is counted and logged, never thrown,
  *    so one bad download can't abort the sweep.
  *
@@ -65,6 +74,7 @@ import {
   uploadDocument,
   computeSHA256,
   detectFileMagic,
+  isArchivedForOwnJournalEntry,
   ALLOWED_DOCUMENT_TYPES,
 } from '@/lib/core/documents/document-service'
 import {
@@ -74,6 +84,8 @@ import {
   resolveDatedRef,
 } from '@/lib/documents/voucher-ref-resolver'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
+import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('extensions/arcim-migration/import-documents')
@@ -114,12 +126,25 @@ export interface ImportDocumentsResult {
   scanned: number
   /** Receipts newly archived and linked to their verifikat. */
   linked: number
-  /** Receipts already archived for this verifikat (sha256 + journal entry match): re-run skip. */
+  /**
+   * Receipts already archived for this verifikat (sha256 + journal entry
+   * match: re-run skip), or whose verifikat already carries underlag from
+   * another path (left untouched).
+   */
   skipped: number
   /** Attachments whose provider voucher resolved to no gnubok verifikat. */
   unmatched: number
   /** Receipts that failed to download/validate/store (counted, not thrown). */
   failed: number
+  /**
+   * Receipts whose verifikat sits in a closed (klarmarkerat) or locked fiscal
+   * year. enforce_period_lock_documents refuses those links, so they are
+   * neither downloaded nor written, and never counted as failed: retrying
+   * cannot help until the year is reopened.
+   */
+  locked: number
+  /** The fiscal years behind `locked` ("2024", "2022/2023"), oldest first. */
+  lockedPeriods: string[]
   dryRun: boolean
   /** A few unmatched voucher labels, to aid diagnosis without dumping all. */
   unmatchedSamples: { uploadId: string; voucher: string; date: string }[]
@@ -161,6 +186,13 @@ function sanitizeProviderFileName(fileName: string): string {
       .replace(/^[._ ]+|[. _]+$/g, '')
       .slice(0, 180) || 'file'
   )
+}
+
+/** "2024" for a calendar year, "2022/2023" for a broken or extended one. */
+function fiscalYearLabel(period: { period_start: string; period_end: string }): string {
+  const startYear = period.period_start.slice(0, 4)
+  const endYear = period.period_end.slice(0, 4)
+  return startYear === endYear ? startYear : `${startYear}/${endYear}`
 }
 
 function normalizedContentType(contentType: string | null): string | null {
@@ -288,6 +320,8 @@ export async function importProviderDocuments(
     skipped: 0,
     unmatched: 0,
     failed: 0,
+    locked: 0,
+    lockedPeriods: [],
     dryRun,
     unmatchedSamples: [],
     total: 0,
@@ -296,8 +330,9 @@ export async function importProviderDocuments(
   }
 
   // Unsupported providers are a no-op rather than an error
-  // so a mixed-provider caller can invoke this unconditionally.
-  if (provider !== 'bokio' && provider !== 'fortnox') {
+  // so a mixed-provider caller can invoke this unconditionally. The migration
+  // UI offers the import from the same definition.
+  if (!supportsUnderlagImport(provider)) {
     log.info('document import skipped: provider not supported', { provider })
     return result
   }
@@ -317,10 +352,15 @@ export async function importProviderDocuments(
     // A stable `.order('id')` is required: fetchAllRows pages with `.range()`,
     // and PostgREST paging without a deterministic order can skip or repeat
     // rows once a table exceeds one page, which would defeat the hash dedup.
-    fetchAllRows<{ id: string; sha256_hash: string; journal_entry_id: string | null }>(({ from, to }) =>
+    fetchAllRows<{
+      id: string
+      sha256_hash: string
+      journal_entry_id: string | null
+      upload_source: string | null
+    }>(({ from, to }) =>
       supabase
         .from('document_attachments')
-        .select('id, sha256_hash, journal_entry_id')
+        .select('id, sha256_hash, journal_entry_id, upload_source')
         .eq('company_id', companyId)
         .order('id', { ascending: true })
         .range(from, to),
@@ -338,6 +378,25 @@ export async function importProviderDocuments(
 
   // Index gnubok verifikat by (period, series, number) for in-memory resolution.
   const voucherIndex = buildVoucherIndex(vouchers)
+  const entryDateById = new Map(vouchers.map((v) => [v.id, v.entry_date]))
+  const periodIdByEntry = new Map(vouchers.map((v) => [v.id, v.fiscal_period_id]))
+  const periodById = new Map(periods.map((p) => [p.id, p]))
+  const lockedPeriodIds = new Set<string>()
+
+  // Verifikat that already carry underlag from another path: the underlag
+  // wizard, an API client, a manual upload. The import never adds to them. A
+  // linked file is permanent (BFL 7 kap 2§), so the provider's copy of a
+  // receipt the user already attached in other bytes could never be removed
+  // again (crm#200). This import's own earlier files do not count: they are
+  // upload_source 'api' with the verifikat-keyed id, and a re-run must still
+  // reach the rest of a verifikat that has several provider files.
+  const verifikatWithOtherUnderlag = new Set<string>()
+  for (const row of existingAttachments) {
+    if (!row.journal_entry_id || verifikatWithOtherUnderlag.has(row.journal_entry_id)) continue
+    const archivedByThisImport =
+      row.upload_source === 'api' && (await isArchivedForOwnJournalEntry(companyId, row))
+    if (!archivedByThisImport) verifikatWithOtherUnderlag.add(row.journal_entry_id)
+  }
 
   // (content, verifikat) pairs already archived → idempotent skip set. Keyed
   // on hash + journal entry, NOT hash alone: the same content may back
@@ -385,8 +444,33 @@ export async function importProviderDocuments(
 
     const journalEntryId = resolveDatedRef(voucherIndex, periods, ref)
 
-    if (!journalEntryId) {
+    // A source that dates the entry itself (Bokio) must agree with the
+    // verifikat on that date: the number alone is unique only within a
+    // fiscal year, and a wrong link can never be undone.
+    const dateDisagrees =
+      journalEntryId != null &&
+      !ref.dateTo &&
+      entryDateById.get(journalEntryId)?.slice(0, 10) !== ref.date.slice(0, 10)
+
+    if (!journalEntryId || dateDisagrees) {
       recordUnmatched(attachment.id, `${ref.series}${ref.number}`, ref.date)
+      continue
+    }
+
+    if (verifikatWithOtherUnderlag.has(journalEntryId)) {
+      result.skipped++
+      continue
+    }
+
+    // A klarmarkerat or locked year refuses every link (the trigger's own
+    // predicate, shared with the filename underlag plan). Checked before the
+    // download: a migration whose earlier years were closed first used to
+    // spend its whole time budget downloading files the database then refused,
+    // and reported them as retryable failures (crm#251).
+    const periodId = periodIdByEntry.get(journalEntryId)
+    if (periodId && isPeriodLocked(periodById.get(periodId))) {
+      result.locked++
+      lockedPeriodIds.add(periodId)
       continue
     }
 
@@ -478,6 +562,12 @@ export async function importProviderDocuments(
     }
   }
 
+  result.lockedPeriods = [...lockedPeriodIds]
+    .map((id) => periodById.get(id))
+    .filter((period): period is NonNullable<typeof period> => period != null)
+    .sort((a, b) => (a.period_start < b.period_start ? -1 : a.period_start > b.period_start ? 1 : 0))
+    .map(fiscalYearLabel)
+
   log.info('document import complete', {
     companyId,
     dryRun,
@@ -488,6 +578,7 @@ export async function importProviderDocuments(
     skipped: result.skipped,
     unmatched: result.unmatched,
     failed: result.failed,
+    locked: result.locked,
     partial: result.partial,
     nextCursor: result.nextCursor,
     elapsedMs: now() - startedAt,

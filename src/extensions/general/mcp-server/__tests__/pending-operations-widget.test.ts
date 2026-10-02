@@ -140,7 +140,9 @@ describe('Pending operations widget', () => {
         )
       ).json()
       expect(withUi.result.isError).toBeUndefined()
-      expect(withUi.result._meta).toEqual({
+      // _meta also carries the company echo on every company-scoped call;
+      // the UI directive is what this test pins.
+      expect(withUi.result._meta).toMatchObject({
         ui: { resourceUri: 'ui://pending-operations/app.html' },
       })
 
@@ -153,7 +155,7 @@ describe('Pending operations widget', () => {
         )
       ).json()
       expect(withoutUi.result.isError).toBeUndefined()
-      expect(withoutUi.result._meta).toBeUndefined()
+      expect(withoutUi.result._meta?.ui).toBeUndefined()
     })
   })
 

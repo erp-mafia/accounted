@@ -9,6 +9,7 @@ import { createClient } from '@/lib/supabase/client'
 import { guardBrowserWrite } from '@/lib/company/tab-guard'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { AttnLine } from '@/components/ui/attn-line'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import {
@@ -117,6 +118,21 @@ const PEPPOL_STATUS_KEYS = new Set([
   'no_route', 'failed',
 ])
 const PEPPOL_SENDABLE_STATUSES = new Set<InvoiceStatus>(['draft', 'sent', 'overdue'])
+// A delivery that ended without reaching the buyer; sending again stages a
+// new delivery that replaces it.
+const PEPPOL_FAILED_DELIVERY_STATUSES = new Set(['failed', 'no_route'])
+// How long the access point may hold a submission without news of delivery
+// before the page says so.
+const PEPPOL_UNCONFIRMED_AFTER_MS = 60 * 60 * 1000
+
+// The reminder history card's columns. Never '*': action_token is the
+// customer's bearer link, withheld from end-user roles by a column grant, so
+// a '*' select from the browser is refused outright.
+const REMINDER_HISTORY_COLUMNS = 'id, reminder_level, sent_at, email_to, response_type'
+type ReminderHistoryRow = Pick<
+  InvoiceReminder,
+  'id' | 'reminder_level' | 'sent_at' | 'email_to' | 'response_type'
+>
 
 // How long the preview waits for the PDF route to say whether it will render
 // before giving up and closing the placeholder tab. Generous: a cold
@@ -173,7 +189,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const locale = useLocale()
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
-  const [reminders, setReminders] = useState<InvoiceReminder[]>([])
+  const [reminders, setReminders] = useState<ReminderHistoryRow[]>([])
   const [deliveries, setDeliveries] = useState<InvoiceDeliveryView[]>([])
   // An empty deliveries list means "nothing was ever sent through Accounted".
   // A failed read also produces an empty list, and the two must never be
@@ -300,6 +316,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     remaining_sends: number | null
   } | null>(null)
   const [peppolDeliveries, setPeppolDeliveries] = useState<PeppolDeliveryView[]>([])
+  // When the deliveries were read: the clock the "not confirmed yet" line
+  // measures against, set with the rows so rendering stays pure.
+  const [peppolReadAt, setPeppolReadAt] = useState<number | null>(null)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
@@ -440,7 +459,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           .single(),
         supabase
           .from('invoice_reminders')
-          .select('*')
+          .select(REMINDER_HISTORY_COLUMNS)
           .eq('invoice_id', id)
           .order('sent_at', { ascending: false }),
         // Payment history for the Betalningsstatus card. Joins the
@@ -492,7 +511,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setDeliveriesUnreadable(!deliveryData.ok)
 
     if (reminderData) {
-      setReminders(reminderData as InvoiceReminder[])
+      setReminders(reminderData as ReminderHistoryRow[])
     }
 
     if (paymentData) {
@@ -732,7 +751,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  // The invoice has no customer (deleted while the draft existed, crm#263):
+  // nobody to number, send or issue it to. The server refuses as well
+  // (INVOICE_CUSTOMER_MISSING); this says so before a dialog opens.
+  function refuseWithoutCustomer(): boolean {
+    if (invoice?.customer) return false
+    toast({
+      title: t('customer_deleted'),
+      description: t('customer_missing_action'),
+      variant: 'destructive',
+    })
+    return true
+  }
+
   function openSendDialog(mode: 'email' | 'manual') {
+    if (refuseWithoutCustomer()) return
     setSendDialogMode(mode)
     setShowSendDialog(true)
   }
@@ -1171,6 +1204,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const rows = Array.isArray(payload.data) ? [...payload.data] : []
       rows.sort((a, b) => (a.status_at < b.status_at ? 1 : a.status_at > b.status_at ? -1 : 0))
       setPeppolDeliveries(rows)
+      setPeppolReadAt(Date.now())
       setPeppolTransportAvailable(payload.transport?.available === true)
       setPeppolAccess(payload.access ?? null)
     } catch {
@@ -1216,6 +1250,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             }),
         variant: 'destructive',
       })
+      // A failed send can still have issued the draft and recorded a failed
+      // delivery: show where the invoice stands.
+      await fetchInvoice()
+      await loadPeppolDeliveries()
     } finally {
       setIsSendingPeppol(false)
     }
@@ -1377,6 +1415,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // the real number is allocated atomically on confirm and may differ by one if
   // another invoice is created in between.
   async function openFinalizeDialog() {
+    if (refuseWithoutCustomer()) return
     setNextNumberPreview(null)
     setShowFinalizeDialog(true)
     try {
@@ -1490,8 +1529,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     return null
   }
 
+  // Null when the customer was deleted (invoices.customer_id is ON DELETE SET
+  // NULL): the page must still render so the draft can be fixed or deleted.
   const customer = invoice.customer
-  const customerHasEmail = !!customer.email
+  const customerHasEmail = !!customer?.email
   const docType = ((invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice') as InvoiceDocumentType
   const isProforma = docType === 'proforma'
   const isQuote = docType === 'quote'
@@ -1577,16 +1618,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // the rest is claimed from Skatteverket. Same helper as the PDF and the
   // invoice email so all three surfaces state the same "Att betala".
   const amountToPay = getAmountToPay(invoice, { ore_rounding: oreRounding })
-  const deductionItems = invoice.items.filter(
-    (i) => i.deduction_type === 'rot' || i.deduction_type === 'rut',
-  )
+  const deductionItems = invoice.items.filter((i) => Boolean(i.deduction_type))
   const hasRot = deductionItems.some((i) => i.deduction_type === 'rot')
   const hasRut = deductionItems.some((i) => i.deduction_type === 'rut')
+  // Grön teknik never shares an invoice with ROT/RUT (refused at creation).
+  const hasGronTeknik = deductionItems.some((i) => i.deduction_type === 'gron_teknik')
   const deductionKindLabel = hasRot && hasRut ? 'ROT/RUT' : hasRot ? 'ROT' : 'RUT'
+  const deductionRowLabel = hasGronTeknik
+    ? t('deduction_row_gron_teknik')
+    : t('deduction_row', { kind: deductionKindLabel })
   const showDeduction = amountToPay.deductionApplies && !isDeliveryNote
-  // Fastighetsbeteckning / lägenhet live on the ROT lines (one property per
-  // invoice in practice); the first ROT line carries the value.
-  const rotItem = deductionItems.find((i) => i.deduction_type === 'rot')
+  // Fastighetsbeteckning / lägenhet live on the ROT and grön teknik lines
+  // (one property per invoice in practice); the first such line carries it.
+  const rotItem = deductionItems.find((i) => i.deduction_type === 'rot' || i.deduction_type === 'gron_teknik')
   const rotHousing = rotItem?.housing_designation ?? null
   const rotApartment = rotItem?.apartment_number ?? null
   const rotBrf = rotItem?.brf_org_number ?? null
@@ -1594,7 +1638,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // "RUT · Städning · 4 tim" under a claimed line, so the claim is visible on
   // the item itself, not only in the PDF. The amount lives in the totals block.
   const deductionLineInfo = (item: InvoiceItem): string => {
-    const parts = [item.deduction_type === 'rot' ? 'ROT' : 'RUT']
+    const parts = [
+      item.deduction_type === 'gron_teknik'
+        ? tInvoices('rot_rut_type_gron_teknik')
+        : item.deduction_type === 'rot' ? 'ROT' : 'RUT',
+    ]
     const label = workTypeLabel(item.work_type)
     if (label) parts.push(label)
     if (item.labor_hours && item.labor_hours > 0) {
@@ -1670,7 +1718,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 : { label: statusLabel('sent'), exception: false }
 
   const metaParts = [
-    customer.name,
+    customer?.name,
     t('created_at', { date: formatDate(invoice.created_at) }),
     latestCompletedDelivery?.sent_at
       ? t('sent_on', { date: formatDate(latestCompletedDelivery.sent_at) })
@@ -1705,12 +1753,36 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const peppolStatusLabel = (status: string) =>
     PEPPOL_STATUS_KEYS.has(status) ? t(`peppol_status_${status}`) : status
   const latestPeppolDelivery = peppolDeliveries[0] ?? null
+  // The page's one Peppol sentence (convention 6), while the invoice can
+  // still be sent: the latest delivery failed, or the access point has held
+  // it for over an hour without news of delivery.
+  const peppolAttention: 'failed' | 'unconfirmed' | null =
+    !latestPeppolDelivery || !PEPPOL_SENDABLE_STATUSES.has(invoice.status)
+      ? null
+      : PEPPOL_FAILED_DELIVERY_STATUSES.has(latestPeppolDelivery.status)
+        ? 'failed'
+        : latestPeppolDelivery.status === 'submission_accepted'
+            && peppolReadAt !== null
+            && peppolReadAt - Date.parse(latestPeppolDelivery.status_at) > PEPPOL_UNCONFIRMED_AFTER_MS
+          ? 'unconfirmed'
+          : null
+  // The other way to the buyer. A draft (put back after the failure) can be
+  // emailed from here; an issued invoice cannot (the email send issues
+  // drafts only), so it offers the PDF to send by hand.
+  const peppolOtherWay = invoice.status === 'draft'
+    ? (canWrite ? { label: t('peppol_failed_email_action'), onClick: () => openSendDialog('email') } : null)
+    : { label: t('download_pdf'), onClick: () => void downloadPDF() }
   const showDestructive =
     invoice.status !== 'cancelled' &&
     invoice.status !== 'credited' &&
     (!invoice.credited_invoice_id || invoice.status === 'draft') &&
     (isProforma || isQuote || invoice.status === 'draft')
+  // Skapa order is the alternative to the header's next step (Skapa
+  // faktura / Konvertera), so it lives in the menu with the other
+  // alternatives instead of adding a fourth header button.
+  const canCreateOrder = (isProforma && invoice.status !== 'cancelled') || canConvertQuote
   const hasMenu =
+    canCreateOrder ||
     !isSelfBilled ||
     (isCopyable && canWrite) ||
     showManualSendAlternative ||
@@ -1793,7 +1865,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             className="shrink-0"
           />
           {isEditableDraft && canWrite && (
-            <Button variant="outline" asChild>
+            <Button size="sm" variant="outline" asChild>
               <Link href={`/invoices/${invoice.id}/edit`}>
                 <Pencil className="mr-2 h-4 w-4" />
                 {t('edit_draft')}
@@ -1802,20 +1874,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
           {/* Review in the browser (#1190); the download lives in the menu. */}
           {!isSelfBilled && (
-            <Button variant="outline" onClick={() => previewPDF()}>
+            <Button size="sm" variant="outline" onClick={() => previewPDF()}>
               <Eye className="mr-2 h-4 w-4" />
               {t('preview_pdf')}
             </Button>
           )}
           {isProforma && invoice.status !== 'cancelled' && (
-            <Button
+            <Button size="sm"
               onClick={convertToInvoice}
-              disabled={isConverting || !canWrite}
+              disabled={!canWrite}
+              loading={isConverting}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isConverting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : !canWrite ? (
+              {isConverting ? null : !canWrite ? (
                 <Lock className="mr-2 h-4 w-4" />
               ) : (
                 <FileText className="mr-2 h-4 w-4" />
@@ -1824,29 +1895,25 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           )}
           {canDecideQuote && quoteStatus !== 'accepted' && (
-            <Button
+            <Button size="sm"
               variant="outline"
               onClick={acceptQuote}
-              disabled={isDeciding || isConverting || !canWrite}
+              disabled={isConverting || !canWrite}
+              loading={isDeciding}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isDeciding ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle className="mr-2 h-4 w-4" />
-              )}
+              {!isDeciding && <CheckCircle className="mr-2 h-4 w-4" />}
               {t('quote_accept')}
             </Button>
           )}
           {canConvertQuote && (
-            <Button
+            <Button size="sm"
               onClick={startQuoteConvert}
-              disabled={isConverting || isDeciding || !canWrite}
+              disabled={isDeciding || !canWrite}
+              loading={isConverting}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isConverting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : !canWrite ? (
+              {isConverting ? null : !canWrite ? (
                 <Lock className="mr-2 h-4 w-4" />
               ) : (
                 <FileText className="mr-2 h-4 w-4" />
@@ -1854,25 +1921,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('quote_create_invoice')}
             </Button>
           )}
-          {((isProforma && invoice.status !== 'cancelled') || canConvertQuote) && (
-            <Button
-              variant="outline"
-              onClick={isQuote ? startQuoteOrder : convertToOrder}
-              disabled={isCreatingOrder || isConverting || isDeciding || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {isCreatingOrder ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : !canWrite ? (
-                <Lock className="mr-2 h-4 w-4" />
-              ) : (
-                <ClipboardList className="mr-2 h-4 w-4" />
-              )}
-              {t('create_order')}
-            </Button>
-          )}
           {isUnnumberedDraft && (
-            <Button
+            <Button size="sm"
               onClick={openFinalizeDialog}
               disabled={isFinalizing || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1883,7 +1933,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
           {invoice.status === 'draft' && !isDeliveryNote && invoice.invoice_number && (
             preferredSendMode === 'email' ? (
-              <Button
+              <Button size="sm"
                 onClick={() => openSendDialog('email')}
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1892,7 +1942,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 {t(issuesByBooking ? 'send_via_email_and_book' : 'send_via_email')}
               </Button>
             ) : (
-              <Button
+              <Button size="sm"
                 onClick={() => openSendDialog('manual')}
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1903,7 +1953,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             )
           )}
           {creditNoteNeedsRepair && (
-            <Button
+            <Button size="sm"
               onClick={() => openSendDialog('manual')}
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1913,14 +1963,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           )}
           {isDeliveryNote && invoice.status === 'draft' && (
-            <Button
+            <Button size="sm"
               onClick={() => updateStatus('sent')}
-              disabled={isUpdating || !canWrite}
+              disabled={!canWrite}
+              loading={isUpdating}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isUpdating ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : canWrite ? (
+              {isUpdating ? null : canWrite ? (
                 <Send className="mr-2 h-4 w-4" />
               ) : (
                 <Lock className="mr-2 h-4 w-4" />
@@ -1931,7 +1980,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {/* partially_paid included (#1717): completes a stuck partial, e.g.
               a sub-krona öresavrundning remaining, via the same dialog. */}
           {(invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'partially_paid') && isRealInvoice && !isCreditNote && (
-            <Button
+            <Button size="sm"
               onClick={() => setShowPaymentDialog(true)}
               disabled={isUpdating || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1944,15 +1993,30 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {hasMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label={tCommon('more_options')}>
-                  {isDownloading || isDownloadingPeppol || isPreparingPeppol ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={tCommon('more_options')}
+                  loading={isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder}
+                >
+                  {isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder ? null : (
                     <MoreHorizontal className="h-4 w-4" />
                   )}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[240px]">
+                {canCreateOrder && (
+                  <>
+                    <DropdownMenuItem
+                      onSelect={() => void (isQuote ? startQuoteOrder() : convertToOrder())}
+                      disabled={isCreatingOrder || isConverting || isDeciding || !canWrite}
+                    >
+                      <ClipboardList className="h-4 w-4" />
+                      {t('create_order')}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 {!isSelfBilled && (
                   <DropdownMenuItem onSelect={() => void downloadPDF()} disabled={isDownloading}>
                     <Download className="h-4 w-4" />
@@ -2095,7 +2159,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           invoice is what it is. A non-momsregistrerad seller charges nothing
           and has nothing to explain. After a successful check the invoice is
           refetched so the sentence flips to what the lines still carry. */}
-      {isEditableDraft && vatRegistered !== false && (
+      {isEditableDraft && vatRegistered !== false && customer && (
         <VatTreatmentNotice
           customer={customer}
           lineVatRates={invoice.items
@@ -2103,50 +2167,93 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             .map((item) => item.vat_rate ?? 0)}
           onValidated={() => void fetchInvoice()}
           editHref={`/invoices/${invoice.id}/edit`}
+          // One ochre sentence per page: a failed Peppol delivery holds it.
+          tone={peppolAttention ? 'muted' : 'attn'}
         />
       )}
+
+      {/* The latest Peppol delivery, when it needs the user: the operator's
+          own reason (status_detail, never adapter text) and the ways on. */}
+      {peppolAttention === 'failed' && latestPeppolDelivery && (
+        <AttnLine
+          action={canWrite && canSendPeppol
+            ? { label: t('peppol_failed_resend_action'), onClick: () => setShowPeppolSendDialog(true) }
+            : undefined}
+          trailing={peppolOtherWay && (
+            <>
+              {' '}
+              <button
+                type="button"
+                onClick={peppolOtherWay.onClick}
+                className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                {peppolOtherWay.label}
+              </button>
+            </>
+          )}
+        >
+          {latestPeppolDelivery.status_detail
+            ? t.rich('peppol_failed_attn', {
+                reason: latestPeppolDelivery.status_detail,
+                // data-ph-mask: the operator's reason can quote the invoice number
+                mask: (chunks) => <span data-ph-mask="">{chunks}</span>,
+              })
+            : t('peppol_failed_attn_no_reason')}
+        </AttnLine>
+      )}
+      {peppolAttention === 'unconfirmed' && <AttnLine>{t('peppol_unconfirmed_attn')}</AttnLine>}
 
       {/* Kund and Detaljer side by side like an invoice head: who it is for
           on the left, the facts on the right. */}
       <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
         <DetailSection kicker={t('customer_card_title')}>
-          <DefRow label={t('def_customer')}>
-            <Link href={`/customers/${customer.id}`} className="hover:underline">
-              {customer.name}
-            </Link>
-          </DefRow>
-          {customer.customer_type !== 'individual' && customer.org_number && (
-            <DefRow label={t('def_org_number')}>
-              <span className="tabular-nums">{customer.org_number}</span>
+          {customer ? (
+            <>
+              <DefRow label={t('def_customer')}>
+                <Link href={`/customers/${customer.id}`} className="hover:underline">
+                  {customer.name}
+                </Link>
+              </DefRow>
+              {customer.customer_type !== 'individual' && customer.org_number && (
+                <DefRow label={t('def_org_number')}>
+                  <span className="tabular-nums">{customer.org_number}</span>
+                </DefRow>
+              )}
+              {customer.customer_type !== 'individual' && customer.vat_number && (
+                <DefRow label={t('def_vat_number')}>{customer.vat_number}</DefRow>
+              )}
+              <DefRow label={t('def_email')}>
+                {customer.email ? (
+                  <a href={`mailto:${customer.email}`} className="hover:underline">
+                    {customer.email}
+                  </a>
+                ) : (
+                  <DefEmpty />
+                )}
+              </DefRow>
+              {customer.phone && <DefRow label={t('def_phone')}>{customer.phone}</DefRow>}
+              <DefRow label={t('def_address')}>
+                {customer.address_line1 || customer.city ? (
+                  <div>
+                    {customer.address_line1 && <p>{customer.address_line1}</p>}
+                    {customer.address_line2 && <p>{customer.address_line2}</p>}
+                    <p>
+                      {[customer.postal_code, customer.city].filter(Boolean).join(' ')}
+                      {customer.country && customer.country !== 'SE' && `, ${getCountryName(customer.country, locale === 'en' ? 'en' : 'sv')}`}
+                    </p>
+                  </div>
+                ) : (
+                  <DefEmpty />
+                )}
+              </DefRow>
+            </>
+          ) : (
+            // The customer was deleted while the invoice pointed at it
+            // (crm#263): say so instead of failing the whole page.
+            <DefRow label={t('def_customer')}>
+              <span className="text-muted-foreground">{t('customer_deleted')}</span>
             </DefRow>
           )}
-          {customer.customer_type !== 'individual' && customer.vat_number && (
-            <DefRow label={t('def_vat_number')}>{customer.vat_number}</DefRow>
-          )}
-          <DefRow label={t('def_email')}>
-            {customer.email ? (
-              <a href={`mailto:${customer.email}`} className="hover:underline">
-                {customer.email}
-              </a>
-            ) : (
-              <DefEmpty />
-            )}
-          </DefRow>
-          {customer.phone && <DefRow label={t('def_phone')}>{customer.phone}</DefRow>}
-          <DefRow label={t('def_address')}>
-            {customer.address_line1 || customer.city ? (
-              <div>
-                {customer.address_line1 && <p>{customer.address_line1}</p>}
-                {customer.address_line2 && <p>{customer.address_line2}</p>}
-                <p>
-                  {[customer.postal_code, customer.city].filter(Boolean).join(' ')}
-                  {customer.country && customer.country !== 'SE' && `, ${getCountryName(customer.country, locale === 'en' ? 'en' : 'sv')}`}
-                </p>
-              </div>
-            ) : (
-              <DefEmpty />
-            )}
-          </DefRow>
           {invoice.your_reference && (
             <DefRow label={t('your_reference_label')}>
               {invoice.your_reference.split(',').map((ref) => ref.trim()).join(', ')}
@@ -2204,7 +2311,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   <span className="text-muted-foreground">{t('deduction_personnummer_unreadable')}</span>
                 )}
               </DefRow>
-              {hasRot && (
+              {(hasRot || hasGronTeknik) && (
                 <DefRow label={t('deduction_property_label')}>
                   {rotHousing ? (
                     <span>
@@ -2230,7 +2337,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </DefRow>
               )}
               <DefRow label={t('deduction_status_label')}>
-                {payoutRequests.length === 0 ? (
+                {hasGronTeknik && payoutRequests.length === 0 ? (
+                  // No grön teknik file yet: the payout is requested in
+                  // Skatteverkets e-tjänst. The link opens the figures it
+                  // asks for, on this invoice's row.
+                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="text-muted-foreground">{t('deduction_claim_gron_teknik')}</span>
+                    {skvClaimable && (
+                      <Link
+                        href={`/invoices/rot-rut?new=1&type=gron_teknik&invoice=${invoice.id}`}
+                        className={cn(ROW_ACTION_CLASS, 'whitespace-nowrap')}
+                      >
+                        {t('deduction_claim_gron_teknik_cta')}
+                      </Link>
+                    )}
+                  </span>
+                ) : payoutRequests.length === 0 ? (
                   <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span className="text-muted-foreground">{t('deduction_claim_none')}</span>
                     {skvClaimable && (
@@ -2261,8 +2383,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <span className="flex flex-wrap items-center gap-3">
                 <span className="text-muted-foreground">{t('not_booked_yet')}</span>
                 {canWrite && (
-                  <Button size="sm" variant="outline" className="-my-1" onClick={openBookConfirm} disabled={isUpdating}>
-                    {isUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  <Button size="sm" variant="outline" className="-my-1" onClick={openBookConfirm} loading={isUpdating}>
                     {t('book_action')}
                   </Button>
                 )}
@@ -2440,7 +2561,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 <span>{formatCurrency(rounding.displayed, invoice.currency)}</span>
               </div>
               <div className="flex justify-between gap-4">
-                <span className="text-muted-foreground">{t('deduction_row', { kind: deductionKindLabel })}</span>
+                <span className="text-muted-foreground">{deductionRowLabel}</span>
                 <span>{formatCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency)}</span>
               </div>
               {/* Skatteverket refused (part of) the deduction and the reclaim
@@ -2710,8 +2831,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             >
               {t('delete_dialog_cancel')}
             </Button>
-            <Button onClick={() => void sendViaPeppol()} disabled={isSendingPeppol}>
-              {isSendingPeppol && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button onClick={() => void sendViaPeppol()} loading={isSendingPeppol}>
               {isSendingPeppol ? t('peppol_sending') : t('peppol_send_confirm_action')}
             </Button>
           </DialogFooter>
@@ -2752,8 +2872,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <Button variant="outline" onClick={() => setShowDeleteDialog(false)} disabled={isDeleting}>
               {t('delete_dialog_cancel')}
             </Button>
-            <Button variant="destructive" onClick={deleteInvoice} disabled={isDeleting}>
-              {isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button variant="destructive" onClick={deleteInvoice} loading={isDeleting}>
               {isCreditNote
                 ? t('remove_credit_dialog_confirm')
                 : invoice.invoice_number
@@ -2782,8 +2901,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <Button variant="outline" onClick={() => setShowFinalizeDialog(false)} disabled={isFinalizing}>
               {t('finalize_dialog_cancel')}
             </Button>
-            <Button onClick={finalizeInvoice} disabled={isFinalizing}>
-              {isFinalizing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button onClick={finalizeInvoice} loading={isFinalizing}>
               {t('finalize_dialog_confirm')}
             </Button>
           </DialogFooter>
@@ -2886,8 +3004,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 ? t('pdf_archive_issue_rerender_preview')
                 : t('pdf_archive_issue_rerender')}
             </Button>
-            <Button onClick={retryArchivedDownload} disabled={isDownloading}>
-              {isDownloading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button onClick={retryArchivedDownload} loading={isDownloading}>
               {t('pdf_archive_issue_retry')}
             </Button>
           </DialogFooter>

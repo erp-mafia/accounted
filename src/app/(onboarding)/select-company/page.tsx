@@ -7,6 +7,7 @@ import {
 } from '@/lib/company/pending-invites'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import BankIdCompanyPicker from '@/components/onboarding/BankIdCompanyPicker'
+import { orgNumberKey, registrationNumberKey } from '@/lib/invariants/org-number'
 
 export const dynamic = 'force-dynamic'
 
@@ -50,7 +51,6 @@ export default async function SelectCompanyPage({
     // Existing memberships: only to keep already-added companies out of the
     // engagement list and to know where "nothing to choose" leads.
     { data: memberships },
-    { data: teamMembership },
     // Greeting name.
     { data: profile },
     // BankID enrichment (CompanyRoles from Bolagsverket via TIC). Stored
@@ -71,12 +71,6 @@ export default async function SelectCompanyPage({
         )
       `)
       .eq('user_id', user.id),
-    supabase
-      .from('team_members')
-      .select('team_id')
-      .eq('user_id', user.id)
-      .limit(1)
-      .maybeSingle(),
     supabase.from('profiles').select('full_name').eq('id', user.id).single(),
     supabase
       .from('bankid_enrichment')
@@ -100,21 +94,14 @@ export default async function SelectCompanyPage({
     .map((m) => (Array.isArray(m.company) ? m.company[0] ?? null : m.company))
     .filter((c): c is CompanyRow => !!c && !c.archived_at)
 
+  // Both sides keyed the same way: a sole trader's CompanyRoles entry is the
+  // 16-digit TIC registration number, the stored firm the 10-digit
+  // personnummer, and only the shared key sees them as one company.
   const memberOrgNumbers = new Set(
     memberCompanies
-      .map((c) => (c.org_number ? c.org_number.replace(/[\s-]/g, '') : null))
+      .map((c) => orgNumberKey(c.org_number))
       .filter((n): n is string => !!n),
   )
-
-  // Ensure the user has a team (same pattern as /onboarding).
-  let teamId = teamMembership?.team_id
-  if (!teamId) {
-    const { data: ensured } = await supabase.rpc('ensure_user_team')
-    teamId = ensured ?? null
-  }
-  if (!teamId) {
-    redirect('/login')
-  }
 
   const firstName = profile?.full_name?.split(' ')[0] ?? null
 
@@ -142,7 +129,10 @@ export default async function SelectCompanyPage({
 
   // Drop roles for companies the user already belongs to: those are added.
   const rolesNotAlreadyMine = activeRoles.filter(
-    (r) => !memberOrgNumbers.has(r.companyRegistrationNumber.replace(/[\s-]/g, '')),
+    (r) => {
+      const key = registrationNumberKey(r.companyRegistrationNumber)
+      return !key || !memberOrgNumbers.has(key)
+    },
   )
 
   // Other accounts can independently use the same organisation number.
@@ -166,7 +156,6 @@ export default async function SelectCompanyPage({
   return (
     <BankIdCompanyPicker
       firstName={firstName}
-      teamId={teamId}
       roles={candidates}
       enrichmentStale={enrichmentStale}
       hasPendingInvite={hasPendingInvite}

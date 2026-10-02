@@ -1,3 +1,7 @@
+---
+areas: [bokslut]
+---
+
 # Näringsbetingade andelar och skalbolag: utvidgad referens
 
 Ladda denna fil när uppgiften specifikt rör definitionen av näringsbetingade andelar, kapitalvinst/-förlust på dotterandelar, eller skalbolagsbedömning.

@@ -60,23 +60,11 @@ export async function generateResultatrapport(
   const effectiveFromDate = options?.fromDate ?? period.period_start
   const effectiveToDate = options?.toDate ?? period.period_end
 
-  // Exclude year-end closing entries. Without this a closed year reads ZERO on
-  // every line: the resultatavslut posts the mirror image of each P&L account
-  // into 2099 inside the same period, so the period movements this report sums
-  // net out exactly.
-  //
-  // 'exclude-all-year-end', NOT 'exclude-final', so this report keeps showing
-  // the same profit as the formal Resultaträkning. Moving
-  // generateIncomeStatement to 'exclude-final' is Stage 2 of #1051 and
-  // deliberately deferred: see DECISIONS.md archive 2026-07-29. When that lands, this call
-  // site moves with it.
-  const currentTb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
-    closingEntry: 'exclude-all-year-end',
+  const currentRows = await resultatrapportRows(supabase, companyId, fiscalPeriodId, {
     fromDate: options?.fromDate,
     toDate: options?.toDate,
     dimensions: options?.dimensions,
   })
-  const currentRows = filterPnl(currentTb.rows)
 
   // Prior-period comparison. Full period: the previous fiscal period.
   // Narrowed range: the same window shifted one year back (#862), so
@@ -208,6 +196,43 @@ export async function generateResultatrapport(
   }
 }
 
+/**
+ * The report's current-window rows: the trial-balance row of every class 3-8
+ * account for [fromDate, toDate] (default: the whole period), read with
+ * signedAmount below. Exported for the dimension P&L (dimension-pnl.ts),
+ * whose Totalt column must be exactly this report for the same window. The
+ * two used to restate these choices separately and drifted apart when this
+ * report moved from closing to window amounts; now there is one definition.
+ */
+export async function resultatrapportRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  options?: {
+    fromDate?: string
+    toDate?: string
+    dimensions?: Record<string, string>
+  }
+): Promise<TrialBalanceRow[]> {
+  // Exclude year-end closing entries. Without this a closed year reads ZERO on
+  // every line: the resultatavslut posts the mirror image of each P&L account
+  // into 2099 inside the same period, so the period movements this report sums
+  // net out exactly.
+  //
+  // 'exclude-all-year-end', NOT 'exclude-final', so this report keeps showing
+  // the same profit as the formal Resultaträkning. Moving
+  // generateIncomeStatement to 'exclude-final' is Stage 2 of #1051 and
+  // deliberately deferred: see DECISIONS.md archive 2026-07-29. When that lands, this call
+  // site moves with it.
+  const tb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    closingEntry: 'exclude-all-year-end',
+    fromDate: options?.fromDate,
+    toDate: options?.toDate,
+    dimensions: options?.dimensions,
+  })
+  return filterPnl(tb.rows)
+}
+
 function filterPnl(rows: TrialBalanceRow[]): TrialBalanceRow[] {
   return rows.filter((r) => r.account_class >= 3 && r.account_class <= 8)
 }
@@ -224,7 +249,7 @@ function filterPnl(rows: TrialBalanceRow[]): TrialBalanceRow[] {
  * a month/quarter window. In the full-period case P&L accounts carry no
  * opening balance, so period_* equals closing_* and nothing changes there.
  */
-function signedAmount(row: TrialBalanceRow): number {
+export function signedAmount(row: TrialBalanceRow): number {
   return row.period_credit - row.period_debit
 }
 

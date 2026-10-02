@@ -27,6 +27,8 @@
  *   --execute         write; without it nothing is changed
  *   --operation-id <uuid> stable ID required for execution; reuse on a retry
  *   --verify-operation <uuid> read the committed receipt and current plan
+ *   --inspect-history   read-only reports for historical started-only events
+ *   --started-event <uuid> inspect a specific historical event, with --company
  *
  * Never run by a loop: the founder decides per company.
  */
@@ -36,7 +38,7 @@ import { createInterface } from 'node:readline/promises'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { physicalAccountKey } from '@/lib/cash-accounts/service'
-import { getTwinRepairReceipt, healTwinCashAccounts, verifyTwinRepair, type HealTwinsResult, type TwinRepairVerification } from '@/lib/cash-accounts/heal-twins'
+import { getTwinRepairReceipt, healTwinCashAccounts, verifyTwinRepair, reportHistoricalTwinRepairs, type HealTwinsResult, type TwinRepairVerification } from '@/lib/cash-accounts/heal-twins'
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`)
@@ -59,6 +61,8 @@ const ACTOR_USER_ID = arg('actor-user-id') ?? null
 const EXECUTE = process.argv.includes('--execute')
 const OPERATION_ID = arg('operation-id') ?? null
 const VERIFY_OPERATION = arg('verify-operation') ?? null
+const INSPECT_HISTORY = process.argv.includes('--inspect-history')
+const STARTED_EVENT = arg('started-event') ?? (process.argv.includes('--started-event') ? '' : null)
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -85,6 +89,12 @@ if (EXECUTE && (!OPERATION_ID || !UUID_RE.test(OPERATION_ID))) {
 }
 if (VERIFY_OPERATION && (EXECUTE || !COMPANY_ID || !UUID_RE.test(VERIFY_OPERATION))) {
   console.error('--verify-operation needs --company and a valid operation UUID; it is read-only')
+  process.exit(1)
+}
+
+if ((INSPECT_HISTORY && (EXECUTE || VERIFY_OPERATION)) ||
+    (STARTED_EVENT !== null && (!INSPECT_HISTORY || !COMPANY_ID || !UUID_RE.test(STARTED_EVENT)))) {
+  console.error('--inspect-history is read-only; --started-event requires --inspect-history, --company and a valid UUID')
   process.exit(1)
 }
 
@@ -155,6 +165,15 @@ function printVerification(result: TwinRepairVerification): void {
 async function main(): Promise<void> {
   console.log(`Target: ${supabaseUrl} (${ENV_FILE})`)
   console.log(EXECUTE ? 'Mode: EXECUTE' : 'Mode: dry run, nothing is written')
+
+  if (INSPECT_HISTORY) {
+    const reports = await reportHistoricalTwinRepairs(supabase, COMPANY_ID, STARTED_EVENT)
+    console.log(JSON.stringify(reports, null, 2))
+    console.log(`${reports.length} historical event(s) inspected. This reports current consistency, not proof of an original commit.`)
+    console.log('No history was appended. Review any recovery outcome before recording it; partial states need a specific recovery plan.')
+    if (reports.some(report => report.classification !== 'consistent-with-completion')) process.exitCode = 3
+    return
+  }
 
   if (VERIFY_OPERATION && COMPANY_ID) {
     printVerification(await verifyTwinRepair(supabase, COMPANY_ID, VERIFY_OPERATION))

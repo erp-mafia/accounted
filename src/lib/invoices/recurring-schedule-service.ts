@@ -26,7 +26,11 @@ import {
 } from '@/lib/invoices/recurring-placeholders'
 import { isTextLine } from '@/lib/invoices/recurring-schedule-items'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
-import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import {
+  archiveIssuedInvoicePdf,
+  markInvoiceSentAndBook,
+  restoreUnbookedDraft,
+} from '@/lib/invoices/issue-and-book-invoice'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import {
@@ -84,6 +88,20 @@ export interface ExecuteResult {
   invoiceNumber: string | null
   autoSent: boolean
   warning: string | null
+}
+
+/** The schedule warning when auto-send stopped before anything was issued. */
+const MANUAL_SEND_WARNING =
+  'Auto-utskick misslyckades: fakturan finns som utkast och kan skickas manuellt.'
+
+/**
+ * How one auto-send ended. `sent` means the email reached the provider;
+ * `warning` is what the schedule shows (last_run_warning), also on a send
+ * that went out with a follow-up step missing.
+ */
+interface AutoSendOutcome {
+  sent: boolean
+  warning?: string
 }
 
 function assertValidCadence(dayOfMonth: number, intervalMonths: number): void {
@@ -213,7 +231,9 @@ export interface ExecuteScheduleOptions {
 
 /**
  * Spawn one invoice from a schedule. Always creates the invoice; auto_send
- * additionally renders + emails + flips status + creates JE + archives PDF.
+ * additionally renders, issues (status sent + verifikat, fail closed), then
+ * emails and archives the PDF. A verifikat the engine refuses stops the send
+ * and comes back as the warning the schedule shows.
  *
  * Idempotency: caller must check schedule.last_run_at >= today before calling
  * to prevent double-spawn on cron retries within the same UTC day.
@@ -475,8 +495,9 @@ export async function executeRecurringSchedule(
   let warning: string | null = null
 
   // 9. Auto-send path. If anything below fails, we keep the invoice (now a
-  //    numbered draft) and surface a Swedish warning on the schedule: the
-  //    user can manually send from /invoices/[id].
+  //    numbered draft, or issued and booked when only the email failed) and
+  //    surface a Swedish warning on the schedule (last_run_warning): the user
+  //    can act on it from /invoices/[id].
   if (schedule.auto_send && options.suppressAutoSend) {
     // Route-level sandbox suppression: same outcome as the internal sandbox
     // chokepoint below (no email, invoice retained as draft, manual-send
@@ -484,18 +505,17 @@ export async function executeRecurringSchedule(
     opLog.warn('auto-send suppressed by route-level sandbox guard', {
       invoiceId: invoice.id,
     })
-    warning = 'Auto-utskick misslyckades: fakturan finns som utkast och kan skickas manuellt.'
+    warning = MANUAL_SEND_WARNING
   } else if (schedule.auto_send) {
     try {
-      autoSent = await sendInvoiceFromSchedule(
+      const outcome = await sendInvoiceFromSchedule(
         supabase,
         schedule.company_id,
         schedule.user_id,
         completeInvoice as Invoice & { customer: Customer; items: InvoiceItem[] },
       )
-      if (!autoSent) {
-        warning = 'Auto-utskick misslyckades: fakturan finns som utkast och kan skickas manuellt.'
-      }
+      autoSent = outcome.sent
+      warning = outcome.warning ?? (outcome.sent ? null : MANUAL_SEND_WARNING)
     } catch (err) {
       opLog.error('auto-send failed for recurring schedule', err as Error, {
         invoiceId: invoice.id,
@@ -525,22 +545,33 @@ export async function executeRecurringSchedule(
 }
 
 /**
- * Render PDF + send email + flip status + create JE + archive PDF.
- * Mirrors /api/invoices/[id]/send/route.ts but inline so we don't depend on
- * the route's auth chain. Returns true if email was sent successfully.
+ * Render the PDF, issue the invoice (status sent + verifikat, fail closed),
+ * then email it. Mirrors /api/invoices/[id]/send/route.ts but inline so we
+ * don't depend on the route's auth chain.
+ *
+ * The invoice is issued and booked BEFORE the email leaves, through the same
+ * markInvoiceSentAndBook the send route and mark-sent use: a verifikat the
+ * engine refuses (a required dimension on the revenue account, a schedule tag
+ * whose value has since been archived) stops the send with the invoice back
+ * as a draft, and the refusal reaches the schedule's warning so the user can
+ * fix the tag. The customer never holds an invoice the ledger does not have.
+ * An email that fails after a verifikat was posted leaves the invoice issued
+ * and booked (a posted verifikat is never undone), exactly as after
+ * mark-sent: the warning says to deliver it by hand. With nothing booked
+ * (kontantmetoden, deferred booking) the draft is put back instead.
  */
 async function sendInvoiceFromSchedule(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   invoice: Invoice & { customer: Customer; items: InvoiceItem[] },
-): Promise<boolean> {
+): Promise<AutoSendOutcome> {
   const emailService = getEmailService()
   if (!emailService.isConfigured()) {
     log.warn('email service not configured; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
     })
-    return false
+    return { sent: false }
   }
   // The sandbox must never deliver a real email to a real address. The
   // interactive send routes enforce this with guardSandbox, but cron and
@@ -552,7 +583,7 @@ async function sendInvoiceFromSchedule(
       invoiceId: invoice.id,
       companyId,
     })
-    return false
+    return { sent: false }
   }
   // Paywall: email sending is a paid capability. The invoice itself is still
   // created (bookkeeping stays free); it just isn't emailed, and the schedule
@@ -562,14 +593,14 @@ async function sendInvoiceFromSchedule(
       invoiceId: invoice.id,
       companyId,
     })
-    return false
+    return { sent: false }
   }
   if (!invoice.customer.email?.trim()) {
     log.warn('customer has no email; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
       customerId: invoice.customer.id,
     })
-    return false
+    return { sent: false }
   }
 
   const { data: company } = await supabase
@@ -587,7 +618,7 @@ async function sendInvoiceFromSchedule(
       invoiceId: invoice.id,
       ...payeeSnapshot.details,
     })
-    return false
+    return { sent: false }
   }
   invoice.payment_details = payeeSnapshot.payee
   if (!hasRequiredInvoicePaymentAccount(company, invoice)) {
@@ -595,13 +626,13 @@ async function sendInvoiceFromSchedule(
       invoiceId: invoice.id,
       currency: invoice.currency,
     })
-    return false
+    return { sent: false }
   }
   if (!hasRequiredSellerVatNumber(company, invoice)) {
     log.warn('registered company has no VAT number; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
     })
-    return false
+    return { sent: false }
   }
   const recipients = resolveInvoiceEmailRecipients({
     to: invoice.customer.email,
@@ -615,7 +646,7 @@ async function sendInvoiceFromSchedule(
       invoiceId: invoice.id,
       recipientCount: invoiceEmailRecipientCount(recipients),
     })
-    return false
+    return { sent: false }
   }
   let deliveryId: string
   try {
@@ -630,7 +661,7 @@ async function sendInvoiceFromSchedule(
       invoiceId: invoice.id,
       companyId,
     })
-    return false
+    return { sent: false }
   }
 
   const items = (invoice.items || []).slice().sort((a, b) => a.sort_order - b.sort_order)
@@ -677,6 +708,40 @@ async function sendInvoiceFromSchedule(
     }),
   )
 
+  // Issue before the email leaves: status sent + the verifikat, fail closed.
+  // Everything that could stop the send without issuing (settings, payee,
+  // recipients, the delivery reservation, the PDF render) has run above.
+  const issueLog = log.child({ invoiceId: invoice.id })
+  const issued = await markInvoiceSentAndBook({
+    supabase,
+    companyId,
+    userId,
+    invoice,
+    settings: company,
+    log: issueLog,
+  })
+  const label = invoice.invoice_number ?? ''
+  if (!issued.ok) {
+    if (issued.errorCode === 'INVOICE_MARK_SENT_BOOK_FAILED') {
+      log.warn('recurring invoice not sent: its verifikat was refused', {
+        invoiceId: invoice.id,
+        reason: issued.reason,
+      })
+      const reason = issued.reason ? ` ${issued.reason}` : ''
+      return {
+        sent: false,
+        warning: `Auto-utskick stoppades: faktura ${label} kunde inte bokföras och har inte skickats till kunden.${reason} Fakturan ligger kvar som utkast: åtgärda orsaken (i schemat om den kommer därifrån) och skicka fakturan manuellt.`,
+      }
+    }
+    log.warn('recurring invoice not sent: the status could not be set to sent', {
+      invoiceId: invoice.id,
+      errorCode: issued.errorCode,
+    })
+    return { sent: false }
+  }
+  const { journalEntryId } = issued
+  const followUpWarnings = issued.partialFailures.map((failure) => failure.reason)
+
   // Cron send: no user to fall back to for Reply-To.
   const replyTo = resolveInvoiceReplyTo(company)
   const emailData = { invoice: renderableInvoice, customer: invoice.customer, company, replyTo }
@@ -691,7 +756,7 @@ async function sendInvoiceFromSchedule(
   const subject = generateInvoiceEmailSubject(emailData)
   const html = generateInvoiceEmailHtml(emailData)
   const text = generateInvoiceEmailText(emailData)
-  let result
+  let result: Awaited<ReturnType<typeof sendTrackedInvoiceEmail>> | null = null
   try {
     result = await sendTrackedInvoiceEmail({
       supabase,
@@ -716,10 +781,9 @@ async function sendInvoiceFromSchedule(
     log.error('failed to persist recurring invoice delivery before send', err as Error, {
       invoiceId: invoice.id,
     })
-    return false
   }
 
-  if (result.trackingWarning) {
+  if (result?.trackingWarning) {
     log.error(
       'recurring invoice delivery snapshot requires reconciliation',
       new Error(result.trackingWarning),
@@ -727,45 +791,43 @@ async function sendInvoiceFromSchedule(
     )
   }
 
-  if (!result.success) {
-    log.error(
-      'email provider failed in recurring schedule auto-send',
-      new Error(result.error || 'unknown'),
-      { invoiceId: invoice.id },
-    )
-    return false
-  }
-
-  // Email delivered: flip status, create JE, archive PDF. Treat downstream
-  // failures as warnings (don't unsend the email).
-  await supabase
-    .from('invoices')
-    .update({ status: 'sent' })
-    .eq('id', invoice.id)
-    .eq('company_id', companyId)
-
-  const accountingMethod = (company as { accounting_method?: string }).accounting_method
-  let journalEntryId: string | undefined
-  if (!accountingMethod || accountingMethod === 'accrual') {
-    try {
-      const journalEntry = await createInvoiceJournalEntry(
-        supabase,
-        companyId,
-        userId,
-        invoice,
-        company.entity_type,
+  if (!result?.success) {
+    if (result) {
+      log.error(
+        'email provider failed in recurring schedule auto-send',
+        new Error(result.error || 'unknown'),
+        { invoiceId: invoice.id },
       )
-      if (journalEntry) {
-        journalEntryId = journalEntry.id
-        await supabase
-          .from('invoices')
-          .update({ journal_entry_id: journalEntry.id })
-          .eq('id', invoice.id)
-      }
-    } catch (err) {
-      log.error('failed to create journal entry for recurring invoice', err as Error, {
-        invoiceId: invoice.id,
-      })
+    }
+    // Nothing booked (kontantmetoden, deferred booking): nothing irreversible
+    // happened, so the draft is put back and the invoice can be sent by hand
+    // exactly as before.
+    if (!journalEntryId && (await restoreUnbookedDraft(supabase, companyId, invoice.id, issueLog))) {
+      return { sent: false }
+    }
+    // Issued and booked but not delivered: finish it the way mark-sent
+    // does, underlag archived on the verifikat, so the invoice is complete
+    // for whoever delivers it by hand.
+    const archiveFailure = await archiveIssuedInvoicePdf({
+      supabase,
+      companyId,
+      userId,
+      invoice,
+      settings: company,
+      journalEntryId,
+      log: issueLog,
+    })
+    if (archiveFailure) followUpWarnings.push(archiveFailure.reason)
+    await eventBus.emit({
+      type: 'invoice.sent',
+      payload: { invoice: { ...invoice, status: 'sent' }, companyId, userId },
+    })
+    return {
+      sent: false,
+      warning: [
+        `Faktura ${label} är utfärdad${journalEntryId ? ' och bokförd' : ''} men e-postmeddelandet kunde inte skickas. Ladda ned fakturan och skicka den till kunden.`,
+        ...followUpWarnings,
+      ].join(' '),
     }
   }
 
@@ -777,13 +839,16 @@ async function sendInvoiceFromSchedule(
         invoiceId: invoice.id,
         documentId: result.documentId,
       })
+      followUpWarnings.push('Fakturans arkiverade PDF kunde inte kopplas till verifikationen.')
     }
   }
 
   await eventBus.emit({
     type: 'invoice.sent',
-    payload: { invoice, companyId, userId },
+    payload: { invoice: { ...invoice, status: 'sent' }, companyId, userId },
   })
 
-  return true
+  return followUpWarnings.length > 0
+    ? { sent: true, warning: `Fakturan skickades, men: ${followUpWarnings.join(' ')}` }
+    : { sent: true }
 }

@@ -4,6 +4,7 @@ import { validateBody } from '@/lib/api/validate'
 import { ValidateVatNumberSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import { guardSandbox } from '@/lib/sandbox/guard'
+import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
 
 export const POST = withRouteContext('vat.validate', async (request, { supabase, companyId }) => {
   // VIES is a live external call to the EU Commission: block in the sandbox
@@ -28,6 +29,9 @@ export const POST = withRouteContext('vat.validate', async (request, { supabase,
       })
       .eq('id', customer_id)
       .eq('company_id', companyId)
+    // Open drafts to this customer follow the new status (reverse charge
+    // once the number is validated); issued invoices never move.
+    await syncDraftVatHeadersForCustomer(supabase, companyId, customer_id)
   }
 
   return NextResponse.json(validation)

@@ -10,10 +10,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { Loader2, Trash2 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 import {
   DIMENSION_CODE_PATTERN,
-  PROJECT_DIM_NO,
   type DimensionDto,
   type DimensionValueDto,
 } from '@/components/dimensions/types'
@@ -27,7 +26,7 @@ export interface DimensionValueFormInput {
 }
 
 interface DimensionValueFormProps {
-  /** The dimension the value belongs to (drives the Projekt date fields). */
+  /** The dimension the value belongs to (its resets_annually drives the date fields). */
   dimension: DimensionDto
   /** When set, the form edits this value (code becomes immutable). */
   value?: DimensionValueDto | null
@@ -41,8 +40,9 @@ interface DimensionValueFormProps {
 /**
  * Create/edit form for a dimension value (#OBJEKT), hosted in the
  * DimensionsManager dialog. Code is immutable in v1: the field is disabled
- * when editing. Start/end dates appear only for Projekt (dim 6), matching the
- * SIE model where projects span a date range while cost centres do not.
+ * when editing. Start/end dates appear on every accumulating dimension
+ * (resets_annually = false: Projekt and any custom dimension created that
+ * way), the same rule the API applies when it accepts or refuses a date.
  */
 export default function DimensionValueForm({
   dimension,
@@ -53,7 +53,7 @@ export default function DimensionValueForm({
 }: DimensionValueFormProps) {
   const t = useTranslations('dimensions')
   const isEditing = Boolean(value)
-  const isProject = dimension.sie_dim_no === PROJECT_DIM_NO
+  const hasDates = !dimension.resets_annually
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
 
   const schema = useMemo(
@@ -101,8 +101,8 @@ export default function DimensionValueForm({
       code: data.code.trim(),
       name: data.name.trim(),
       is_active: data.is_active,
-      start_date: isProject && data.start_date ? data.start_date : null,
-      end_date: isProject && data.end_date ? data.end_date : null,
+      start_date: hasDates && data.start_date ? data.start_date : null,
+      end_date: hasDates && data.end_date ? data.end_date : null,
     })
   }
 
@@ -140,7 +140,7 @@ export default function DimensionValueForm({
         </div>
       </div>
 
-      {isProject && (
+      {hasDates && (
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="dimension-value-start">{t('form_start_label')}</Label>
@@ -201,8 +201,7 @@ export default function DimensionValueForm({
         ) : (
           <span />
         )}
-        <Button type="submit" disabled={isSaving}>
-          {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button type="submit" loading={isSaving}>
           {isEditing ? t('form_save') : t('form_create')}
         </Button>
       </div>

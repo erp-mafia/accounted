@@ -307,7 +307,7 @@ export function VatChecksCard({
             {checks.map((c, i) => (
               <div
                 key={`${c.code}-${i}`}
-                className="flex items-start gap-2 border-b border-border/60 py-3 text-[13px] leading-5 last:border-b-0"
+                className="flex items-start gap-2 border-b border-border py-3 text-[13px] leading-5 last:border-b-0"
               >
                 {c.status === 'ERROR' ? (
                   <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
@@ -388,12 +388,8 @@ export function VatChecksCard({
                     ariaLabel="Typ av inköp"
                     disabled={busy}
                   />
-                  <Button onClick={handleFixAll} disabled={!canWrite || busy}>
-                    {bulkProgress ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    ) : (
-                      <CheckCircle2 className="h-4 w-4 mr-2" />
-                    )}
+                  <Button size="sm" onClick={handleFixAll} disabled={!canWrite || busy} loading={bulkProgress !== null}>
+                    {bulkProgress === null && <CheckCircle2 className="h-4 w-4 mr-2" />}
                     Korrigera alla ({gaps.length})
                   </Button>
                 </div>

@@ -8,9 +8,7 @@ import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
 import { Textarea } from '@/components/ui/textarea'
 import {
-  Loader2,
   ArrowLeft,
-  AlertTriangle,
   Lock,
   Pencil,
   Copy,
@@ -50,6 +48,7 @@ import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
+import { dimensionDisplayName } from '@/components/dimensions/dimension-label'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -179,8 +178,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
   // Dimension registry, fetched once when any line carries a dimensions map:
-  // used to resolve display names for the per-line dimension text ('KS: Butik');
-  // it falls back to raw codes when the fetch fails or a code is unregistered.
+  // used to resolve display names for the per-line dimension text
+  // ('Kostnadsställe: Butik') and the retag history; it falls back to raw
+  // codes when the fetch fails or a code is unregistered.
   // Dimension names for tagged lines, from the session-cached registry
   // (lib/reference-data); null until it is there, raw codes render meanwhile.
   const { dimensions } = useDimensions()
@@ -485,17 +485,13 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // Include current entry in the chain for the visualization
   const fullChain = [entry, ...chain]
 
-  // SIE dimension prefixes. 'KS' is the market-standard abbreviation for
-  // kostnadsställe; projekt has no standard abbreviation (Fortnox/Visma show
-  // the dimension name, and 'PR' collides with prisnivå in some BAS setups,
-  // flagged in the #859 compliance review), so dim 6 falls through to the
-  // registry name below. Stays Swedish per .claude/rules/i18n.md.
-  const DIM_BADGE_PREFIX: Record<string, string> = { '1': 'KS' }
-
-  // Display-only dimension text for a line (e.g. 'KS: Butik · Projekt: P001').
-  // Names resolve through the registry when loaded; raw codes otherwise.
-  // Muted text, not chips: dimensions are normal data on a line, and chips
-  // mark exceptions only.
+  // Display-only dimension text for a line (e.g. 'Kostnadsställe: Butik ·
+  // Projekt: P001'). Every dimension is prefixed by its registry name
+  // (dimensionDisplayName), the system pair included, so a custom dimension
+  // reads like the built-in ones. Value names resolve through the registry
+  // when loaded; raw codes otherwise. Muted text, not chips: dimensions are
+  // normal data on a line, and chips mark exceptions only. Stays Swedish per
+  // .claude/rules/i18n.md.
   const renderDimensions = (line: JournalEntryLine) => {
     const entries = Object.entries(line.dimensions ?? {})
       .filter(([, code]) => code)
@@ -505,9 +501,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       .map(([dimNo, code]) => {
         const dim = registryDims?.find((d) => String(d.sie_dim_no) === dimNo)
         const value = dim?.values.find((v) => v.code === code)
-        const prefix = DIM_BADGE_PREFIX[dimNo] ?? dim?.name ?? `Dim ${dimNo}`
         const hasName = !!value && value.name !== '' && value.name !== value.code
-        return `${prefix}: ${hasName ? value.name : code}`
+        return `${dimensionDisplayName(registryDims, dimNo)}: ${hasName ? value.name : code}`
       })
       .join(' · ')
     return (
@@ -537,11 +532,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // "Utkast till verifikat" while the number is still unassigned.
   const title = entry.status === 'draft' ? t('title_draft') : t('title', { label: formatVoucher(entry) })
 
-  const metaParts = [
-    formatDate(entry.entry_date),
-    entry.description,
-    entry.committed_at ? t('posted_on', { date: formatDate(entry.committed_at) }) : null,
-  ].filter(Boolean)
+  // The posting date lives once, in Detaljer ("Bokförd"), not also here.
+  const metaParts = [formatDate(entry.entry_date), entry.description].filter(Boolean)
 
   // Header actions (convention 9): the one next step as a filled button, at
   // most a couple of quiet secondaries, everything else in the ⋯ menu. The
@@ -569,33 +561,16 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
   return (
     <div className="space-y-8 stagger-enter">
-      {/* Back link + prev/next record pager */}
-      <div className="flex items-center justify-between gap-4">
-        <Link
-          href="/bookkeeping"
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t('back')}
-        </Link>
-        <DetailPager
-          contextKey={listContextKey('bookkeeping', company?.id)}
-          basePath="/bookkeeping"
-          currentId={id}
-          // Arrow paging unmounts the page and would destroy an unsaved notes
-          // draft; the textarea only guards arrows while it has focus, so gate
-          // the keyboard bindings on the editing state itself.
-          keyboard={!editingNotes}
-        />
-      </div>
-
-      {/* Header: serif title, status chips only for deviations (a plain posted
-          verifikat carries none), a quiet meta line, the next step right. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
+      {/* Header: title, status chips only for deviations (a plain posted
+          verifikat carries none), a quiet meta line, the next step right.
+          The page-header hooks turn it into the top bar, like the invoice
+          detail page: the sidebar says where we are, so there is no back
+          link, and the prev/next pager sits in the bar. */}
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             {/* data-ph-mask: the title carries the voucher number */}
-            <h1 data-ph-mask="" className="font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
             {/* Convention 7: which correction track applies when, behind the "?" */}
             <HelpPopover>
               <p>{t('help_rattelse_tracks_open')}</p>
@@ -609,117 +584,130 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             )}
           </div>
           {/* data-ph-mask: the meta line carries the entry description */}
-          <p data-ph-mask="" className="mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
+          <p data-ph-mask="" className="page-header-meta mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
         </div>
 
-        {showActions && (
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            {entry.status === 'draft' && (
-              <Button
-                variant="outline"
-                onClick={() => setShowEdit(true)}
-                disabled={!canWrite}
-                title={!canWrite ? t('read_only_tooltip') : undefined}
-              >
-                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
-                {t('edit_draft')}
-              </Button>
-            )}
-            {entry.status === 'draft' && (
-              <Button
-                onClick={openCommitConfirm}
-                disabled={!canWrite || isCommitting}
-                title={!canWrite ? t('read_only_tooltip') : undefined}
-              >
-                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isCommitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {t('post')}
-              </Button>
-            )}
-            {canCorrect && isOpeningBalance && (
-              <Button
-                variant="outline"
-                onClick={() => setShowCorrectIB(true)}
-                disabled={!canWrite}
-                title={!canWrite ? t('read_only_tooltip') : undefined}
-              >
-                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
-                {t('correct_opening_balances')}
-              </Button>
-            )}
-            {showStrikeButton && (
-              <Button
-                variant="outline"
-                onClick={() => setShowStrikeLines(true)}
-                disabled={!canWrite}
-                title={!canWrite ? t('read_only_tooltip') : undefined}
-              >
-                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Scissors className="mr-2 h-4 w-4" />}
-                {t('strike_lines')}
-              </Button>
-            )}
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label={tCommon('more_options')}>
-                  <MoreHorizontal className="h-4 w-4" />
+        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
+          <DetailPager
+            contextKey={listContextKey('bookkeeping', company?.id)}
+            basePath="/bookkeeping"
+            currentId={id}
+            className="shrink-0"
+            // Arrow paging unmounts the page and would destroy an unsaved notes
+            // draft; the textarea only guards arrows while it has focus, so gate
+            // the keyboard bindings on the editing state itself.
+            keyboard={!editingNotes}
+          />
+          {showActions && (
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {entry.status === 'draft' && (
+                <Button size="sm"
+                  variant="outline"
+                  onClick={() => setShowEdit(true)}
+                  disabled={!canWrite}
+                  title={!canWrite ? t('read_only_tooltip') : undefined}
+                >
+                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
+                  {t('edit_draft')}
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[240px]">
-                {/* Copy is not status-gated: it only prefills a fresh manual
-                    draft (no voucher number, date or attachments carried over),
-                    so it is offered on drafts too, matching the list surfaces. */}
-                <DropdownMenuItem asChild disabled={!canWrite}>
-                  <Link href={`/bookkeeping?copy_from=${entry.id}`}>
-                    <Copy className="h-4 w-4" />
-                    {t('copy_entry')}
-                  </Link>
-                </DropdownMenuItem>
-                {showRattelseGroup && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel>{t('correct_menu')}</DropdownMenuLabel>
-                    {canInlineRattelse && (
-                      <DropdownMenuItem onSelect={() => setShowStrikeLines(true)} disabled={!canWrite}>
-                        <Scissors className="h-4 w-4" />
-                        {t('strike_lines')}
+              )}
+              {entry.status === 'draft' && (
+                <Button size="sm"
+                  onClick={openCommitConfirm}
+                  disabled={!canWrite}
+                  loading={isCommitting}
+                  title={!canWrite ? t('read_only_tooltip') : undefined}
+                >
+                  {!canWrite && !isCommitting && <Lock className="mr-2 h-4 w-4" />}
+                  {t('post')}
+                </Button>
+              )}
+              {canCorrect && isOpeningBalance && (
+                <Button size="sm"
+                  variant="outline"
+                  onClick={() => setShowCorrectIB(true)}
+                  disabled={!canWrite}
+                  title={!canWrite ? t('read_only_tooltip') : undefined}
+                >
+                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
+                  {t('correct_opening_balances')}
+                </Button>
+              )}
+              {showStrikeButton && (
+                <Button size="sm"
+                  variant="outline"
+                  onClick={() => setShowStrikeLines(true)}
+                  disabled={!canWrite}
+                  title={!canWrite ? t('read_only_tooltip') : undefined}
+                >
+                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Scissors className="mr-2 h-4 w-4" />}
+                  {t('strike_lines')}
+                </Button>
+              )}
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[240px]">
+                  {/* Copy is not status-gated: it only prefills a fresh manual
+                      draft (no voucher number, date or attachments carried over),
+                      so it is offered on drafts too, matching the list surfaces. */}
+                  <DropdownMenuItem asChild disabled={!canWrite}>
+                    <Link href={`/bookkeeping?copy_from=${entry.id}`}>
+                      <Copy className="h-4 w-4" />
+                      {t('copy_entry')}
+                    </Link>
+                  </DropdownMenuItem>
+                  {showRattelseGroup && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>{t('correct_menu')}</DropdownMenuLabel>
+                      {canInlineRattelse && (
+                        <DropdownMenuItem onSelect={() => setShowStrikeLines(true)} disabled={!canWrite}>
+                          <Scissors className="h-4 w-4" />
+                          {t('strike_lines')}
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem onSelect={() => setShowCorrectMetadata(true)} disabled={!canWrite}>
+                        <PenLine className="h-4 w-4" />
+                        {t('correct_metadata')}
                       </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem onSelect={() => setShowCorrectMetadata(true)} disabled={!canWrite}>
-                      <PenLine className="h-4 w-4" />
-                      {t('correct_metadata')}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => setShowCorrection(true)} disabled={!canWrite}>
-                      <Pencil className="h-4 w-4" />
-                      {t('correct_lines')}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => setShowRecordate(true)} disabled={!canWrite}>
-                      <CalendarClock className="h-4 w-4" />
-                      {t('correct_date')}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={() => setShowReverseConfirm(true)} disabled={!canWrite}>
-                      <RotateCcw className="h-4 w-4" />
-                      {t('reverse_action')}
-                    </DropdownMenuItem>
-                  </>
-                )}
-                {showDelete && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onSelect={() => setShowDeleteConfirm(true)}
-                      disabled={!canWrite}
-                      className="text-destructive focus:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      {entry.status === 'draft' ? t('delete_draft') : t('delete_entry')}
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        )}
+                      <DropdownMenuItem onSelect={() => setShowCorrection(true)} disabled={!canWrite}>
+                        <Pencil className="h-4 w-4" />
+                        {t('correct_lines')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => setShowRecordate(true)} disabled={!canWrite}>
+                        <CalendarClock className="h-4 w-4" />
+                        {t('correct_date')}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => setShowReverseConfirm(true)} disabled={!canWrite}>
+                        <RotateCcw className="h-4 w-4" />
+                        {t('reverse_action')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {showDelete && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onSelect={() => setShowDeleteConfirm(true)}
+                        disabled={!canWrite}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        {entry.status === 'draft' ? t('delete_draft') : t('delete_entry')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Facts on the left, the internal note on the right. */}
@@ -812,9 +800,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 <Button
                   size="sm"
                   onClick={() => saveNotes(notesValue)}
-                  disabled={savingNotes}
+                  loading={savingNotes}
                 >
-                  {savingNotes && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   {tCommon('save')}
                 </Button>
               </div>
@@ -1122,7 +1109,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       )}
 
       {/* Dimension retag history (dimensions plan PR6): the immutable
-          before/after trail. Stays Swedish (voucher detail surface). */}
+          before/after trail. Stays Swedish (voucher detail surface). Each
+          side shows the dimension's registry name and the code as logged:
+          codes are what the trail recorded, names can change later. */}
       {dimensionsEnabled && retagLog.length > 0 && (
         <DetailSection kicker="Ändringshistorik för dimensioner">
           <ul className="divide-y divide-border text-sm">
@@ -1130,7 +1119,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               const lineForRow = lines.find((l) => l.id === row.line_id)
               const fmt = (dims: Record<string, string>) => {
                 const entries = Object.entries(dims ?? {}).sort(([a], [b]) => Number(a) - Number(b))
-                return entries.length > 0 ? entries.map(([no, code]) => `${no}: ${code}`).join(', ') : '-'
+                return entries.length > 0
+                  ? entries.map(([no, code]) => `${dimensionDisplayName(registryDims, no)}: ${code}`).join(', ')
+                  : '-'
               }
               return (
                 <li key={row.id} className="py-2">
@@ -1138,7 +1129,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                     <span className="tabular-nums text-muted-foreground">{formatDate(row.created_at)}</span>
                     {lineForRow && <AccountNumber number={lineForRow.account_number} />}
                   </div>
-                  <p className="tabular-nums">
+                  {/* data-ph-mask: dimension names and codes are user data */}
+                  <p data-ph-mask="" className="tabular-nums">
                     <span className="text-muted-foreground line-through">{fmt(row.old_dimensions)}</span>
                     {' → '}
                     <span>{fmt(row.new_dimensions)}</span>
@@ -1271,15 +1263,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         }
         confirmLabel={t('delete_confirm_label')}
       >
-        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-4">
-          <AlertTriangle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
-          <div className="text-sm">
-            <p className="font-medium mb-1">{t('delete_dialog_heading')}</p>
-            <p className="text-muted-foreground">
-              {entry?.status === 'draft' ? t('delete_dialog_draft_body') : t('delete_dialog_entry_body')}
-            </p>
-          </div>
-        </div>
+        {/* Plain consequence text: the title names the action and the attn
+            line carries the warning, so no second boxed banner. */}
+        <p className="text-sm text-muted-foreground">
+          {entry?.status === 'draft' ? t('delete_dialog_draft_body') : t('delete_dialog_entry_body')}
+        </p>
       </ConfirmationDialog>
 
       {/* Reverse (storno) confirmation dialog */}
@@ -1292,12 +1280,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         warningText={t('reverse_warning')}
         confirmLabel={t('reverse_confirm_label')}
       >
-        <div className="flex items-start gap-3 rounded-lg border bg-muted/50 p-4">
-          <RotateCcw className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
-          <div className="text-sm">
-            <p className="font-medium mb-1">{t('reverse_dialog_heading', { voucher: formatVoucher(entry) })}</p>
-            <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
-          </div>
+        <div className="space-y-1 text-sm">
+          <p className="font-medium">{t('reverse_dialog_heading', { voucher: formatVoucher(entry) })}</p>
+          <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
         </div>
       </ConfirmationDialog>
 
@@ -1312,12 +1297,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         warningText={t('deep_chain_body', { depth: reverseDeepChainDepth ?? 3 })}
         confirmLabel={t('deep_chain_reverse_anyway')}
       >
-        <div className="flex items-start gap-3 rounded-lg border bg-muted/50 p-4">
-          <RotateCcw className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
-          <div className="text-sm">
-            <p className="font-medium mb-1">{t('deep_chain_reverse_heading', { voucher: formatVoucher(entry) })}</p>
-            <p className="text-muted-foreground">{t('deep_chain_reverse_body')}</p>
-          </div>
+        <div className="space-y-1 text-sm">
+          <p className="font-medium">{t('deep_chain_reverse_heading', { voucher: formatVoucher(entry) })}</p>
+          <p className="text-muted-foreground">{t('deep_chain_reverse_body')}</p>
         </div>
       </ConfirmationDialog>
     </div>

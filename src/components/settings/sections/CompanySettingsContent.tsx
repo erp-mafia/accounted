@@ -1,13 +1,11 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { CompanyDangerZone } from '@/components/settings/CompanyDangerZone'
 import { CompanyInfoForm } from '@/components/settings/CompanyInfoForm'
-import { CompanyMembersSection } from '@/components/settings/CompanyMembersSection'
 import { CompanyProfileSection } from '@/components/settings/CompanyProfileSection'
-import { FiscalPeriodEditor } from '@/components/settings/FiscalPeriodEditor'
 import { LogoUpload } from '@/components/settings/LogoUpload'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
@@ -23,16 +21,16 @@ export function CompanySettingsContent() {
   const tIntro = useTranslations('settings_intro')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
 
-  // Deep-link target for "Medlemmar och roller" (/settings/company#members):
+  // Members moved to their own section (2026-09-24): old links to
+  // /settings/company#members land there instead.
+  useEffect(() => {
+    if (window.location.hash === '#members') router.replace('/settings/members')
+  }, [router])
+
+  // Deep-link target for "Arkivera / börja om" (/settings/company#archive-start-fresh):
   // a ref callback rather than an effect because this content mounts late
-  // (settings fetch + dynamic import); the callback fires exactly when the
-  // section exists. The hash is cleared after scrolling so switching tabs
-  // and returning to Företag doesn't scroll again.
-  const scrollToMembers = useCallback((node: HTMLDivElement | null) => {
-    if (!node || window.location.hash !== '#members') return
-    node.scrollIntoView({ block: 'start' })
-    history.replaceState(null, '', window.location.pathname + window.location.search)
-  }, [])
+  // (settings fetch); the callback fires exactly when the section exists. The
+  // hash is cleared after scrolling so returning to Företag doesn't scroll again.
   const scrollToArchive = useCallback((node: HTMLDivElement | null) => {
     if (!node || window.location.hash !== '#archive-start-fresh') return
     node.scrollIntoView({ block: 'start' })
@@ -93,12 +91,6 @@ export function CompanySettingsContent() {
         logoUrl={settings.logo_url}
         onUpdate={(url) => updateSettings({ logo_url: url })}
       />
-
-      <div id="members" ref={scrollToMembers} className="scroll-mt-6">
-        <CompanyMembersSection />
-      </div>
-
-      <FiscalPeriodEditor />
 
       <CompanyProfileSection />
 

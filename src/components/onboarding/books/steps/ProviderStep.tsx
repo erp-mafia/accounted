@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { SIEJobFailedError } from '@/lib/import/sie-job-client'
+import { formatImportFailure } from '@/lib/import/import-failure'
+import { countSieVouchers, importProviderYears, planProviderYears, providerYearsComplete, type ProviderYearsOutcome } from '@/lib/onboarding-books/provider-years'
+import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
+import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -20,11 +25,13 @@ import {
   providerSubmitToken, takeReturnedConsentId, useProviderMessage, type ProviderPreview, type ProviderSieData,
 } from '../lib/provider'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
 
 type Phase = 'connect' | 'connecting' | 'token' | 'loading' | 'preview' | 'importing' | 'imported'
 type OptKey = 'kunder' | 'lev' | 'kf' | 'lf' | 'anl'
 
-/** The provider's own colour on the one button that leaves for it. */
+/** The provider's own colour on the one button that leaves for it: a
+ *  depiction of a third party's brand, so these stay literal (not theme tokens). */
 const BRAND: Record<string, { color: string; dark?: boolean }> = {
   fortnox: { color: '#0b8a46' },
   visma: { color: '#d3202b' },
@@ -32,6 +39,17 @@ const BRAND: Record<string, { color: string; dark?: boolean }> = {
   bjornlunden: { color: '#f5b400', dark: true },
   briox: { color: '#e05a2b' },
   wint: { color: '#1b1b1b' },
+}
+const BRAND_TEXT = { light: '#fff', dark: '#171717' }
+
+/** A run that left a selected year out of the books. `text` names the
+ *  years and is written here from our own strings, so it is shown as is,
+ *  never re-mapped; `message` stays technical like any other Error. */
+class YearsMissingError extends Error {
+  constructor(readonly text: string) {
+    super('selected years missing from the books')
+    this.name = 'YearsMissingError'
+  }
 }
 
 /**
@@ -49,6 +67,15 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   const providerId = state.provider
   const provName = useMemo(() => BRANCH_PROVIDERS.find((p) => p.id === providerId)?.name ?? t('provider_generic'), [providerId, t])
   const provLogo = useMemo(() => BRANCH_PROVIDERS.find((p) => p.id === providerId)?.logo ?? null, [providerId])
+  // What the provider charges or requires before its login can succeed,
+  // said before the click in the migration workspace's own words, so the
+  // paid add-on is not first met on the provider's page.
+  const tx = useTranslations('extensions')
+  const requirement = providerId === 'fortnox'
+    ? tx('ext_arcim_requirement_fortnox')
+    : providerId === 'visma'
+      ? tx('ext_arcim_requirement_visma')
+      : null
   const [phase, setPhase] = useState<Phase>('connect')
   const [error, setError] = useState<string | null>(null)
   const [consentId, setConsentId] = useState<string | null>(null)
@@ -64,9 +91,12 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   const [prepared, setPrepared] = useState(0)
   const [total, setTotal] = useState(0)
   const [created, setCreated] = useState(0)
+  const [obs, setObs] = useState<string[]>([])
   const [accountsN, setAccountsN] = useState(0)
   const [regText, setRegText] = useState('')
   const [importError, setImportError] = useState<string | null>(null)
+  const [keptYears, setKeptYears] = useState<number[]>([])
+  const [unfetched, setUnfetched] = useState<number[]>([])
   const [jobPhase, setJobPhase] = useState<JobPhase | null>(null)
   const apiRef = useRef<TheaterApi | null>(null)
   const timers = useRef<number[]>([])
@@ -105,13 +135,27 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     (reason) => { setError(getErrorMessage(reason, { locale })); setPhase('connect') },
   )
 
+  // The login popup belongs to this step. Leaving it (SIE instead, Tillbaka)
+  // closes the popup and drops a connect still in flight: a login finished
+  // there would otherwise post its success to the next step's own listener
+  // (SieStep runs the registers on it), and pointWindow with a closed popup
+  // sends the main window to the provider.
+  const login = useRef<{ popup: Window | null; left: boolean }>({ popup: null, left: false })
+  useEffect(() => {
+    const l = login.current
+    l.left = false
+    return () => { l.left = true; l.popup?.close() }
+  }, [])
+
   async function connect() {
     if (!providerId) return
     setError(null)
     setPhase('connecting')
     const popup = openProviderWindow()
+    login.current.popup = popup
     try {
       const r = await providerConnect(providerId)
+      if (login.current.left) return
       setConsentId(r.consentId)
       if (r.alreadyConnected) { popup?.close(); void loadPreview(r.consentId); return }
       if (r.authType === 'oauth' && r.authUrl) { pointWindow(popup, r.authUrl); return }
@@ -162,18 +206,43 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   ]
 
   /* ── import ──────────────────────────────────────────────────────── */
+  // Years as a list: "2024 och 2025". Strings, so ICU never groups them as numbers.
+  const listYears = (ys: number[]) => new Intl.ListFormat(locale, { type: 'conjunction' }).format(ys.map(String))
+  const yearsSub = t('fact_years', { count: years.length })
   const lines: TheaterLine[] = [
-    { title: t('th_read_from', { company: companyName, provider: provName }), sub: t('fact_years', { count: years.length }), tone: 'ok' },
-    { title: t('th_map'), sub: created ? t('th_map_sub_new', { count: accountsN, created }) : t('th_map_sub_known', { count: accountsN }) },
+    { title: t('th_read_from', { company: companyName, provider: provName }), sub: keptYears.length > 0 ? `${yearsSub} · ${t('fact_years_kept', { count: keptYears.length, years: listYears(keptYears) })}` : yearsSub, tone: 'ok' },
+    // This flow has no mapping page: name the class 9 accounts that land on 2999, as the SIE step does.
+    { title: t('th_map'), sub: [created ? t('th_map_sub_new', { count: accountsN, created }) : t('th_map_sub_known', { count: accountsN }), ...(obs.length > 0 ? [t('fact_obs_to_2999', { accounts: obs.join(', ') })] : [])].join(' · ') },
     { title: t('th_write'), sub: jobPhase === 'preparing' ? t('th_write_preparing', { total: total.toLocaleString('sv-SE') }) : jobPhase === 'checking' ? t('th_write_checking') : t('progress_written', { count: tick.toLocaleString('sv-SE') }) },
     { title: t('th_registers'), sub: regText },
     { title: t('th_balance'), sub: importError ?? t('th_balance_sub'), tone: importError ? 'err' : 'ok' },
   ]
 
+  /** The result of a run that left selected years out of the books: which,
+   *  and why. A failed job's reason spans lines (bullets, then its
+   *  reference), so what follows it starts on a line of its own. */
+  function missingYearsText(o: ProviderYearsOutcome): string {
+    const lines: string[] = []
+    if (o.failed) {
+      if (o.failed.fiscalYear !== null) lines.push(t('provider_year_failed', { year: String(o.failed.fiscalYear) }))
+      if (o.failed.reason) lines.push(o.failed.reason)
+      else if (o.failed.fiscalYear === null) lines.push(t('sie_failed'))
+    }
+    const rest: string[] = []
+    if (o.notReached.length > 0) rest.push(t('provider_years_not_reached', { count: o.notReached.length, years: listYears(o.notReached) }))
+    if (o.notFetched.length > 0) rest.push(t('provider_years_not_fetched', { count: o.notFetched.length, years: listYears(o.notFetched), provider: provName }))
+    if (o.imported.length + o.alreadyImported.length > 0) rest.push(t('provider_retry_missing'))
+    if (rest.length > 0) lines.push(rest.join(' '))
+    return lines.join('\n')
+  }
+
   async function runImport() {
     if (!consentId || (preview?.sieAvailable !== false && years.length === 0)) return
     setPhase('importing')
     setImportError(null)
+    setObs([])
+    setKeptYears([])
+    setUnfetched([])
     setTick(0)
     setPrepared(0)
     setJobPhase('preparing')
@@ -202,16 +271,33 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
         setAccountsN(data.mappingStats.total)
         setShown(2)
         at(200, () => apiRef.current?.spawnAccounts())
-        const unmapped = data.mappings.filter((m) => !m.targetAccount).map((m) => ({ number: m.sourceAccount, name: data!.parsed.accounts.find((a) => a.number === m.sourceAccount)?.name ?? m.sourceName }))
-        if (unmapped.length > 0) {
-          const res = await fetch('/api/import/sie/create-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accounts: unmapped }) })
+        // The server decided every target it can (class 9 amounts to 2999).
+        // A blank left over that no chart can hold stops here, before any
+        // write: mapped onto itself it was refused one call later (#3312).
+        const resolved = resolveOnboardingMappings(data.mappings, data.parsed.accounts)
+        if (resolved.unresolved.length > 0) {
+          throw new Error(t('accounts_outside_bas', { count: resolved.unresolved.length, accounts: resolved.unresolved.join(', ') }))
+        }
+        setObs(obsAccountsOf(resolved.mappings))
+        if (resolved.create.length > 0) {
+          const res = await fetch('/api/import/sie/create-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accounts: resolved.create }) })
           if (!res.ok) throw new Error(getErrorMessage(await res.json().catch(() => ({}))))
-          setCreated(unmapped.length)
+          setCreated(resolved.create.length)
           void invalidateReferenceData('ref:accounts')
         }
-        const mappings = data.mappings.map((m) => (m.targetAccount ? m : { ...m, targetAccount: m.sourceAccount, targetName: m.sourceName, matchType: 'exact', confidence: 1, isOverride: true }))
+        const mappings = resolved.mappings
         await new Promise((r) => at(1600, () => r(null)))
         setShown(3)
+        // A year a completed import already holds is not sent again (a retry
+        // after a failed year died on it before reaching the missing one),
+        // and the count to write is then only the years still to come.
+        const plan = planProviderYears(data)
+        setKeptYears(plan.alreadyImported)
+        if (plan.alreadyImported.length > 0) {
+          const files = data.rawContent
+          voucherTotal = plan.pending.reduce((n, f) => n + countSieVouchers(files[f.index]), 0)
+          setTotal(voucherTotal)
+        }
         // The feed runs for as long as the job does; the count is held at
         // what the worker has actually written (setFeedCap) so the line
         // moves with the import instead of finishing a minute early.
@@ -220,21 +306,28 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
         setJobPhase('preparing')
         const importedAccounts: string[] = data.parsed.accounts.map((a) => a.number)
         let writtenBefore = 0
-        for (let i = 0; i < data.rawContent.length; i++) {
+        const outcome = await importProviderYears(data, async (rawContent) => {
           setJobPhase('preparing')
           setPrepared(0)
-          const yearLabel = data.fileStatuses?.[i]?.fiscalYear
-          const result = await providerImportSie(data.rawContent[i], mappings, voucherSeries, (job) => {
+          const result = await providerImportSie(rawContent, mappings, voucherSeries, (job) => {
             const { written, phase } = jobProgress(job)
             setJobPhase(phase)
             setPrepared(job.prepared_through ?? 0)
             setTick(writtenBefore + written)
             apiRef.current?.setFeedCap(Math.min(voucherTotal, writtenBefore + written))
           })
-          if (!result.success) throw new Error(`${yearLabel ? `${t('year')} ${yearLabel}: ` : ''}${result.errors.join(' ') || t('provider_failed')}`)
-          writtenBefore += result.journalEntriesCreated ?? 0
-          setTick(writtenBefore)
-          void invalidateReferenceData(['ref:accounts', 'ref:fiscal-periods'])
+          if (result.success) {
+            writtenBefore += result.journalEntriesCreated ?? 0
+            setTick(writtenBefore)
+            void invalidateReferenceData(['ref:accounts', 'ref:fiscal-periods'])
+          }
+          return result
+        }, (err) => (err instanceof SIEJobFailedError ? formatImportFailure(err.failure) : getErrorMessage(err, { locale })))
+        // Registers, the insight and the door onward wait until every
+        // selected year is in the books.
+        if (!providerYearsComplete(outcome)) {
+          setUnfetched(outcome.notFetched)
+          throw new YearsMissingError(missingYearsText(outcome))
         }
         setJobPhase(null)
         apiRef.current?.pulse()
@@ -272,7 +365,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       await new Promise((r) => at(900, () => r(null)))
       setPhase('imported')
     } catch (err) {
-      setImportError(getErrorMessage(err, { locale }))
+      setImportError(err instanceof YearsMissingError ? err.text : getErrorMessage(err, { locale }))
       setJobPhase(null)
       setShown(5)
       apiRef.current?.settle()
@@ -293,10 +386,11 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
 
       {phase === 'connect' ? (
         <div className="bks-center-col">
-          <button
-            type="button"
-            className={`brandbtn${BRAND[providerId ?? '']?.dark ? ' is-dark-text' : ''}`}
-            style={{ ['--brand' as string]: BRAND[providerId ?? '']?.color }}
+          {requirement ? <p className="brandreq">{requirement}</p> : null}
+          <Button
+            size="lg"
+            className="brandbtn animate-fade-in gap-2 pl-2"
+            style={BRAND[providerId ?? ''] ? { backgroundColor: BRAND[providerId ?? ''].color, color: BRAND[providerId ?? ''].dark ? BRAND_TEXT.dark : BRAND_TEXT.light } : undefined}
             onClick={() => void connect()}
           >
             {provLogo ? (
@@ -306,18 +400,33 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
               </span>
             ) : null}
             {t('provider_login', { provider: provName })}
-          </button>
+          </Button>
         </div>
       ) : null}
       {phase === 'connecting' ? <Wait text={t('provider_connecting', { provider: provName })} /> : null}
+      {/* The SIE way round the login, on the same screen. Also while
+          connecting: a popup closed on the provider's licence page sends
+          no message back, so the step would otherwise wait there. */}
+      {phase === 'connect' || phase === 'connecting' ? (
+        <div className="bks-center-col" style={{ marginTop: 18 }}>
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'PICK_SIE' })}>
+            {t('provider_sie_instead')}
+          </Button>
+          <p className="brandhint">
+            {BRANCH_PROVIDERS.some((p) => p.id === providerId)
+              ? t('provider_sie_instead_note', { provider: provName })
+              : t('provider_sie_instead_note_generic')}
+          </p>
+        </div>
+      ) : null}
       {phase === 'loading' ? <Wait text={t('provider_reading', { provider: provName })} /> : null}
       {phase === 'token' ? (
         <div className="tokfields">
           <input type="text" value={tokenB} onChange={(e) => setTokenB(e.target.value)} placeholder={t('tok_company', { provider: provName })} />
           <input type="password" value={tokenA} onChange={(e) => setTokenA(e.target.value)} placeholder={t('tok_token', { provider: provName })} autoComplete="off" />
           <div className="jny-qactions" style={{ marginTop: 12 }}>
-            <button type="button" className="jny-btn-quiet" onClick={() => setPhase('connect')}>‹ {t('back')}</button>
-            <button type="button" className="jny-btn" disabled={!tokenA} onClick={() => void submitToken()}>{t('tok_connect')}</button>
+            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setPhase('connect')}>‹ {t('back')}</Button>
+            <Button size="lg" disabled={!tokenA} onClick={() => void submitToken()}>{t('tok_connect')}</Button>
           </div>
         </div>
       ) : null}
@@ -385,9 +494,9 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
             </OptRows>
           ) : null}
           <div className="jny-qactions">
-            <button type="button" className="jny-btn" disabled={years.length === 0 && preview.sieAvailable !== false} onClick={() => void runImport()}>
+            <Button size="lg" disabled={years.length === 0 && preview.sieAvailable !== false} onClick={() => void runImport()}>
               {years.length === 0 && preview.sieAvailable !== false ? t('years_pick_one') : t('sie_import', { count: years.length })}
-            </button>
+            </Button>
           </div>
         </>
       ) : null}
@@ -417,26 +526,35 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
         </div>
       ) : null}
 
-      {/* The door onward opens only on a successful import: a failed one
-          (0 of N vouchers written) must never reach the bank step or Klart.
+      {/* The door onward opens only when every selected year is in: a failed
+          or missing year must never reach the bank step or Klart.
           A failed attempt never blocks the retry (sie_imports 'failed' rows
           are ignored by the overlap check) and the opening balance it may
-          have written is skipped, not duplicated, on the next run. */}
+          have written is skipped, not duplicated, on the next run. Years
+          that did complete are skipped by the retry, not sent again. */}
       {phase === 'imported' && !importError ? (
         <div className="jny-qactions">
-          <button type="button" className="jny-btn" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
+          <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
             {flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')}
-          </button>
+          </Button>
         </div>
       ) : null}
       {phase === 'imported' && importError ? (
         <div className="jny-qactions">
-          <button type="button" className="jny-btn" onClick={() => { setShown(0); setTick(0); void runImport() }}>
+          <Button size="lg" onClick={() => { setShown(0); setTick(0); void runImport() }}>
             {t('provider_retry')}
-          </button>
-          <button type="button" className="jny-btn-quiet" onClick={() => dispatch({ type: 'GO_BACK', flags })}>
+          </Button>
+          {/* A year the provider will not hand over is fetched again by a
+              retry. Back to the years instead, where it can be left out as
+              on a first run; the preview is still in memory. */}
+          {unfetched.length > 0 && sourceYears.length > 1 ? (
+            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => { setShown(0); setTick(0); setImportError(null); setPhase('preview') }}>
+              {t('provider_pick_years')}
+            </Button>
+          ) : null}
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags })}>
             {t('provider_change_source')}
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>

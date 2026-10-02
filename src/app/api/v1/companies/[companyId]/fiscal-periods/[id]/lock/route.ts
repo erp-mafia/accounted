@@ -34,7 +34,7 @@ registerEndpoint({
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'A period with uncategorised business transactions cannot be locked; the response surfaces the count.',
-    'Locking is reversible until /close. The unlock endpoint is not in v1; use the dashboard.',
+    'Locking is reversible until /close: POST /fiscal-periods/{id}/unlock lifts it.',
   ],
   example: {
     response: {

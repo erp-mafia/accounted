@@ -22,7 +22,14 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { updateBalancesFromSync } from '@/lib/cash-accounts/service'
+import {
+  persistBankSyncResult,
+  persistBankSyncFailure,
+  persistBankRouteNeedsConfiguration,
+  BankSyncResultObsoleteError,
+  type BankSyncInitialResult,
+} from '@/lib/bank-sync/persist-sync-result'
+import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import {
   INCREMENTAL_LOOKBACK_DAYS,
@@ -154,6 +161,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   let leaseLost = 0
 
   const syncConnection = async (connection: (typeof connections)[number]) => {
+    const syncStartedAt = new Date().toISOString()
     try {
       if (!(await claimSyncLease(supabase, connection.id, Date.now()))) {
         leaseLost++
@@ -164,10 +172,14 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       const isExpired = daysLeft !== null && daysLeft <= 0
 
       if (isExpired) {
-        await supabase
-          .from('bank_connections')
-          .update({ status: 'expired' })
-          .eq('id', connection.id)
+        await persistBankSyncFailure(supabase, {
+          companyId: connection.company_id,
+          connectionId: connection.id,
+          sessionId: connection.session_id,
+          startedAt: syncStartedAt,
+          status: 'expired',
+          message: REAUTH_REQUIRED_MESSAGE,
+        })
 
         // Send expiry notification, once per shared consent
         if (!notifiedSessions.has(notifyKey(connection))) {
@@ -314,45 +326,30 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         }
       }
 
-      // Successful sync: update connection and clear any previous error state.
-      // Write allAccounts (not accounts) so disabled accounts stay in the row.
+      // Persist observations against current configuration and session.
       const completedAt = new Date().toISOString()
-      let initialSyncFields: Record<string, unknown> = {}
+      let initialSync: BankSyncInitialResult | undefined
       if (isFirstSync) {
         // Aggregate returned booking dates across enabled accounts so the UI
         // can show "we requested X but the bank returned Y to Z".
         const minDates = syncResults.map(r => r.returnedMinBookingDate).filter((d): d is string => !!d)
         const maxDates = syncResults.map(r => r.returnedMaxBookingDate).filter((d): d is string => !!d)
-        initialSyncFields = {
-          initial_sync_completed_at: completedAt,
-          initial_sync_requested_from: fromDate,
-          initial_sync_returned_min_date: minDates.length > 0 ? minDates.reduce((a, b) => (a < b ? a : b)) : null,
-          initial_sync_returned_max_date: maxDates.length > 0 ? maxDates.reduce((a, b) => (a > b ? a : b)) : null,
-          initial_sync_lookback_days: lookbackDays,
+        initialSync = {
+          requestedFrom: fromDate,
+          returnedMin: minDates.length > 0 ? minDates.reduce((a, b) => (a < b ? a : b)) : null,
+          returnedMax: maxDates.length > 0 ? maxDates.reduce((a, b) => (a > b ? a : b)) : null,
+          lookbackDays,
         }
       }
-      // Mirror refreshed balances into cash_accounts (what the Bank-page
-      // picker and reconciliation read); logs failures instead of throwing.
-      await updateBalancesFromSync(
-        supabase,
-        connection.company_id,
-        connection.id,
-        allAccounts.map(a => ({
-          external_uid: a.uid,
-          balance: a.balance,
-          available_balance: a.available_balance,
-          balance_updated_at: a.balance_updated_at,
-        })),
-      )
-      await supabase
-        .from('bank_connections')
-        .update({
-          accounts_data: allAccounts,
-          last_synced_at: completedAt,
-          ...initialSyncFields,
-          ...(connection.error_message ? { error_message: null } : {}),
-        })
-        .eq('id', connection.id)
+      await persistBankSyncResult(supabase, {
+        companyId: connection.company_id,
+        connectionId: connection.id,
+        sessionId: connection.session_id,
+        startedAt: syncStartedAt,
+        completedAt,
+        accounts,
+        initialSync,
+      })
 
       results.push({
         connectionId: connection.id,
@@ -381,6 +378,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       // (four canary companies on 2026-09-04). The probe below still checks
       // the session, so a dead one is caught anyway.
       const isTransient = error instanceof AspspUnavailableError || error instanceof ConnectorSyncError
+        || error instanceof BankSyncResultObsoleteError || isBankRoutingConflict(error)
       const failureStatus = isSessionDead ? 'expired' : 'error'
       // A 429 holds the lease of every connection on the session for hours:
       // retrying next run would only spend another refused call.
@@ -429,11 +427,32 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         ctx.log.error('sync failed for connection', error as Error, failureContext)
       }
 
+      // The one transient-classified failure a retry never fixes: the account
+      // selection no longer matches the bound cash account. Leaving it silent
+      // stopped syncs for days with nothing but a stale "Synkad" date, so the
+      // row gets the picker advice while status stays 'active' (the cron only
+      // takes active rows, and the picker only saves on them). The next
+      // successful sync clears it. Best effort: the run goes on regardless.
+      if (isBankRouteUnresolved(error)) {
+        try {
+          await persistBankRouteNeedsConfiguration(supabase, {
+            companyId: connection.company_id,
+            connectionId: connection.id,
+          })
+        } catch (persistError) {
+          ctx.log.error('could not store the account selection advice', persistError as Error, failureContext)
+        }
+      }
+
       if (!isTransient) {
-        await supabase
-          .from('bank_connections')
-          .update({ status: failureStatus, error_message: failureMessage })
-          .eq('id', connection.id)
+        await persistBankSyncFailure(supabase, {
+          companyId: connection.company_id,
+          connectionId: connection.id,
+          sessionId: connection.session_id,
+          startedAt: syncStartedAt,
+          status: failureStatus,
+          message: failureMessage,
+        })
       }
 
       results.push({

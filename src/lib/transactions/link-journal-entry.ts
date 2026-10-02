@@ -17,11 +17,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
+import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
+import { roundOre } from '@/lib/money'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { createLogger } from '@/lib/logger'
+import { conflictCode } from '@/lib/errors/structured-errors'
 import type { Invoice, Transaction } from '@/types'
 
 const log = createLogger('transactions/link-journal-entry')
@@ -33,7 +36,7 @@ const log = createLogger('transactions/link-journal-entry')
 // rather than a link-specific one: it predates this route and is the
 // canonical "bank tx not found in this company" envelope.
 export type LinkTransactionJournalEntryErrorCode =
-  | 'CONFLICT'
+  | ReturnType<typeof conflictCode>
   | 'TX_CATEGORIZE_TX_NOT_FOUND'
   | 'LINK_TX_TX_ALREADY_LINKED'
   | 'LINK_TX_JE_NOT_FOUND'
@@ -63,7 +66,8 @@ export interface LinkTransactionJournalEntryResult {
 }
 
 export type LinkTransactionJournalEntryOutcome =
-  | { ok: true; result: LinkTransactionJournalEntryResult }
+  // dryRun: the result the link WOULD produce; nothing was written.
+  | { ok: true; result: LinkTransactionJournalEntryResult; dryRun?: boolean }
   | { ok: false; code: LinkTransactionJournalEntryErrorCode; details?: Record<string, unknown> }
 
 /**
@@ -127,7 +131,8 @@ export async function linkTransactionToJournalEntry(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
-  params: LinkTransactionJournalEntryParams
+  params: LinkTransactionJournalEntryParams,
+  options: { dryRun?: boolean } = {},
 ): Promise<LinkTransactionJournalEntryOutcome> {
   const { transactionId, journalEntryId, invoiceId } = params
 
@@ -280,6 +285,27 @@ export async function linkTransactionToJournalEntry(
     newStatus = isFullyPaid ? 'paid' : 'partially_paid'
   }
 
+  // Dry run (the v1 ?dry_run=true door): every check above ran on the same
+  // reads the commit uses; answer the projected result and write nothing.
+  if (options.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      result: {
+        transactionId,
+        journalEntryId,
+        voucherLabel: formatVoucherLabel(
+          journalEntry.voucher_series as string | null,
+          journalEntry.voucher_number as number | null,
+        ),
+        invoiceId: invoiceId ?? null,
+        invoiceStatus: invoice ? newStatus : null,
+        paidAmount: invoice ? newPaidAmount : null,
+        remainingAmount: invoice ? newRemaining : null,
+      },
+    }
+  }
+
   // Snapshot tx state so the compensating-rollback path can restore the row
   // if a subsequent step fails: otherwise a partial state would persist
   // (tx linked, invoice unchanged, no payment row).
@@ -316,7 +342,7 @@ export async function linkTransactionToJournalEntry(
   ).select('id')
 
   if (updateTxError) {
-    return { ok: false, code: updateTxError.code === 'PT409' ? 'CONFLICT' : 'LINK_TX_DB_ERROR', details: { reason: updateTxError.message } }
+    return { ok: false, code: updateTxError.code === 'PT409' ? conflictCode(updateTxError.message) : 'LINK_TX_DB_ERROR', details: { reason: updateTxError.message } }
   }
   // CAS lost: a concurrent linker changed the pointer between the liveness
   // check and this write, so 0 rows matched. Fail BEFORE any invoice side
@@ -460,17 +486,18 @@ export async function linkTransactionToJournalEntry(
   })
 
   if (invoice && invoiceId) {
+    const settledInvoice = {
+      ...invoice,
+      status: newStatus,
+      paid_at: paidAt,
+      paid_amount: newPaidAmount,
+      remaining_amount: newRemaining,
+    } as Invoice
     try {
       eventBus.emit({
         type: 'invoice.match_confirmed',
         payload: {
-          invoice: {
-            ...invoice,
-            status: newStatus,
-            paid_at: paidAt,
-            paid_amount: newPaidAmount,
-            remaining_amount: newRemaining,
-          } as Invoice,
+          invoice: settledInvoice,
           transaction: {
             ...transaction,
             journal_entry_id: journalEntryId,
@@ -486,6 +513,29 @@ export async function linkTransactionToJournalEntry(
       })
     } catch {
       /* non-critical */
+    }
+    // Linking the payment that settles the invoice in full is its
+    // invoice.paid transition; a partial link is not. The CAS update above
+    // admits one winner, so this fires once. Subscribers get the full
+    // committed row like every other settlement door (the narrow read above
+    // lacks e.g. stripe_payment_link_id, which the Stripe handler needs), so
+    // it is re-read on this transition only. Same-currency only (guarded
+    // above), so the applied amount is in the invoice currency.
+    if (newStatus === 'paid') {
+      const { data: committedInvoice } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('id', invoiceId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      await emitInvoicePaidIfSettled({
+        newStatus,
+        invoice: (committedInvoice as Invoice | null) ?? settledInvoice,
+        paymentAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
+        paymentDate: transaction.date as string,
+        userId,
+        companyId,
+      })
     }
   }
 

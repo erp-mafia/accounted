@@ -8,12 +8,14 @@ import { sha256Hex } from '@/lib/invoices/peppol-delivery'
 import {
   PEPPOL_INBOUND_AWAITING_OWNER,
   PEPPOL_INBOUND_AWAITING_XML,
+  PEPPOL_INBOUND_MAX_PAGES,
   PEPPOL_INBOUND_RECIPIENT_MISSING,
   PEPPOL_INBOUND_UNARCHIVABLE_PREFIX,
   PEPPOL_INBOUND_UNREADABLE,
   PEPPOL_INBOUND_XML_UNAVAILABLE,
   PeppolInboundArchiveError,
   archiveInboundPeppolMessage,
+  isPeppolInboundSweepRun,
   orderInboundMessagesOldestFirst,
   processInboundPeppolRow,
   reprocessInboundPeppolDocuments,
@@ -48,6 +50,7 @@ const message: PeppolInboundMessage = {
 function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTransport {
   return {
     provider: 'qvalia',
+    tenantId: 'SE5595386219',
     lookupRecipient: vi.fn(),
     submit: vi.fn(),
     verifyWebhook: vi.fn(),
@@ -376,6 +379,8 @@ describe('processInboundPeppolRow', () => {
 })
 
 describe('syncInboundPeppolDocuments', () => {
+  /** Minute 30: not the hourly sweep run. */
+  const LISTING_NOW = new Date('2026-09-10T12:30:00.000Z')
   const older: PeppolInboundMessage = { ...message, providerDocumentId: 'older', receivedAt: '2026-09-10T10:00:00.000Z' }
   const newer: PeppolInboundMessage = { ...message, providerDocumentId: 'newer', receivedAt: '2026-09-10T10:05:00.000Z' }
   const listing = (messages: PeppolInboundMessage[]) =>
@@ -397,10 +402,11 @@ describe('syncInboundPeppolDocuments', () => {
     enqueue({ data: row({ company_id: 'company-1', status: 'converted' }), error: null })
     enqueue({ data: null, error: null })                                          // credit note cursor: nothing archived
 
-    const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log })
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log, now: LISTING_NOW })
 
     expect(transport.listInboundDocuments).toHaveBeenCalledTimes(2)
     expect(summary).toEqual({
+      pages: 2, sweep: false,
       listed: 1, archived: 1, duplicates: 0, routed: 0, unrouted: 0, delivered: 1, failed: 0,
       terminal: 0, terminalDocuments: [], errors: [],
     })
@@ -518,6 +524,167 @@ describe('syncInboundPeppolDocuments', () => {
     const transport = makeTransport({ listInboundDocuments: undefined })
     const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log })
     expect(summary.listed).toBe(0)
+  })
+})
+
+describe('syncInboundPeppolDocuments: paging and the hourly sweep', () => {
+  /** Minute 30: an ordinary run. */
+  const LISTING_NOW = new Date('2026-09-10T12:30:00.000Z')
+  /** Minute 5: the first run of the hour, which sweeps. */
+  const SWEEP_NOW = new Date('2026-09-10T12:05:00.000Z')
+  const at = (id: string, receivedAt: string): PeppolInboundMessage => ({ ...message, providerDocumentId: id, receivedAt })
+  /** A document the archive already holds, converted: one read, nothing else. */
+  const held = (id: string) => enqueue({ data: row({ id, provider_document_id: id, status: 'converted', company_id: 'company-1' }), error: null })
+  /** Invoice listing answered page by page; credit notes list nothing. */
+  const pagedListing = (pages: PeppolInboundMessage[][]) => {
+    let call = 0
+    return vi.fn().mockImplementation(async ({ documentType }: { documentType: string }) => {
+      if (documentType !== 'Invoice') return []
+      const page = pages[Math.min(call, pages.length - 1)]
+      call += 1
+      return page
+    })
+  }
+  const invoiceListCalls = (transport: PeppolTransport) =>
+    (transport.listInboundDocuments as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0] as { documentType: string; limit: number; receivedAfter?: string })
+      .filter((options) => options.documentType === 'Invoice')
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  it('follows a full page with the next one, from one second before the newest document it listed', async () => {
+    const transport = makeTransport({
+      listInboundDocuments: pagedListing([
+        [at('b', '2026-09-10T10:02:00.000Z'), at('a', '2026-09-10T10:01:00.000Z')],
+        [at('c', '2026-09-10T10:03:00.000Z')],
+      ]),
+    })
+    enqueue({ data: { received_at: '2026-09-10T09:00:00.000Z' }, error: null }) // invoice cursor
+    held('a')
+    held('b')
+    held('c')
+    enqueue({ data: null, error: null }) // credit note cursor
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, limit: 2, now: LISTING_NOW })
+
+    expect(invoiceListCalls(transport)).toEqual([
+      { documentType: 'Invoice', limit: 2, receivedAfter: '2026-09-10T08:59:59.000Z' },
+      { documentType: 'Invoice', limit: 2, receivedAfter: '2026-09-10T10:01:59.000Z' },
+    ])
+    expect(summary).toMatchObject({ pages: 3, sweep: false, listed: 3, duplicates: 3, failed: 0, errors: [] })
+  })
+
+  it('stops at the page cap and leaves the rest to the next run', async () => {
+    const pages = Array.from({ length: 12 }, (_, i) => [at(`doc-${i}`, new Date(Date.UTC(2026, 8, 10, 10, i)).toISOString())])
+    const transport = makeTransport({ listInboundDocuments: pagedListing(pages) })
+    enqueue({ data: null, error: null }) // invoice cursor: nothing archived yet
+    for (let i = 0; i < PEPPOL_INBOUND_MAX_PAGES; i += 1) held(`doc-${i}`)
+    enqueue({ data: null, error: null }) // credit note cursor
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, limit: 1, now: LISTING_NOW })
+
+    expect(invoiceListCalls(transport)).toHaveLength(PEPPOL_INBOUND_MAX_PAGES)
+    expect(summary).toMatchObject({ pages: PEPPOL_INBOUND_MAX_PAGES + 1, listed: PEPPOL_INBOUND_MAX_PAGES, errors: [] })
+  })
+
+  it('stops when a full page does not move the cursor, as from a service that answers newest first and ignores it', async () => {
+    const warn = vi.spyOn(log, 'warn')
+    const samePage = [at('newest', '2026-09-10T10:05:00.000Z'), at('older', '2026-09-10T10:04:00.000Z')]
+    const transport = makeTransport({ listInboundDocuments: pagedListing([samePage]) })
+    enqueue({ data: { received_at: '2026-09-10T09:00:00.000Z' }, error: null }) // invoice cursor
+    held('older')
+    held('newest')
+    held('older')
+    held('newest')
+    enqueue({ data: null, error: null }) // credit note cursor
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, limit: 2, now: LISTING_NOW })
+
+    expect(invoiceListCalls(transport).map((options) => options.receivedAfter)).toEqual([
+      '2026-09-10T08:59:59.000Z',
+      '2026-09-10T10:04:59.000Z',
+    ])
+    expect(summary).toMatchObject({ pages: 3, listed: 4, duplicates: 4, errors: [] })
+    expect(warn).toHaveBeenCalledWith(
+      'inbound Peppol listing returned a full page that does not move the cursor; the rest is listed next run',
+      expect.objectContaining({ documentType: 'Invoice', page: 2 }),
+    )
+    warn.mockRestore()
+  })
+
+  it('does not ask for the next page after an archive failure, so the cursor never passes an unarchived document', async () => {
+    const transport = makeTransport({
+      listInboundDocuments: pagedListing([[at('a', '2026-09-10T10:01:00.000Z'), at('b', '2026-09-10T10:02:00.000Z')]]),
+    })
+    enqueue({ data: null, error: null }) // invoice cursor
+    enqueue({ data: null, error: null }) // a: not archived yet
+    enqueue({ data: null, error: { code: '08006', message: 'connection failure' } }) // a: insert fails transiently
+    enqueue({ data: null, error: null }) // credit note cursor
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, limit: 2, now: LISTING_NOW })
+
+    expect(invoiceListCalls(transport)).toHaveLength(1)
+    expect(summary).toMatchObject({ pages: 2, listed: 2, failed: 1 })
+    expect(summary.errors).toEqual([{ providerDocumentId: 'a', reason: expect.stringContaining('connection failure') }])
+  })
+
+  it('sweeps the last seven days in the first run of each hour, never starting later than the archive cursor', async () => {
+    const transport = makeTransport({ listInboundDocuments: vi.fn().mockResolvedValue([]) })
+    enqueue({ data: { received_at: '2026-09-10T11:00:00.000Z' }, error: null }) // invoice cursor: inside the week
+    enqueue({ data: { received_at: '2026-08-01T10:00:00.000Z' }, error: null }) // credit note cursor: older than the week
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, now: SWEEP_NOW })
+
+    expect((transport.listInboundDocuments as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toEqual([
+      { documentType: 'Invoice', limit: 50, receivedAfter: '2026-09-03T12:05:00.000Z' },
+      { documentType: 'CreditNote', limit: 50, receivedAfter: '2026-08-01T09:59:59.000Z' },
+    ])
+    expect(summary).toMatchObject({ sweep: true, pages: 2 })
+  })
+
+  it('lists everything in a sweep over an empty archive, and from the archive cursor in the other runs', async () => {
+    const sweeping = makeTransport({ listInboundDocuments: vi.fn().mockResolvedValue([]) })
+    enqueue({ data: null, error: null }) // invoice cursor: empty archive
+    enqueue({ data: null, error: null }) // credit note cursor
+    await syncInboundPeppolDocuments({ service, transport: sweeping, deliver: null, log, now: SWEEP_NOW })
+    expect((sweeping.listInboundDocuments as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual({ documentType: 'Invoice', limit: 50 })
+
+    const ordinary = makeTransport({ listInboundDocuments: vi.fn().mockResolvedValue([]) })
+    enqueue({ data: { received_at: '2026-09-10T11:00:00.000Z' }, error: null }) // invoice cursor
+    enqueue({ data: null, error: null }) // credit note cursor
+    const summary = await syncInboundPeppolDocuments({ service, transport: ordinary, deliver: null, log, now: LISTING_NOW })
+    expect((ordinary.listInboundDocuments as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual({
+      documentType: 'Invoice',
+      limit: 50,
+      receivedAfter: '2026-09-10T10:59:59.000Z',
+    })
+    expect(summary.sweep).toBe(false)
+  })
+
+  it('pages through the sweep window the same way', async () => {
+    const transport = makeTransport({
+      listInboundDocuments: pagedListing([[at('x', '2026-09-05T10:00:00.000Z')], []]),
+    })
+    enqueue({ data: { received_at: '2026-09-10T11:00:00.000Z' }, error: null }) // invoice cursor
+    held('x')
+    enqueue({ data: null, error: null }) // credit note cursor
+
+    await syncInboundPeppolDocuments({ service, transport, deliver: null, log, limit: 1, now: SWEEP_NOW })
+
+    expect(invoiceListCalls(transport).map((options) => options.receivedAfter)).toEqual([
+      '2026-09-03T12:05:00.000Z',
+      '2026-09-05T09:59:59.000Z',
+    ])
+  })
+
+  it('makes the first run of each hour the sweep run', () => {
+    expect(isPeppolInboundSweepRun(new Date('2026-09-10T12:00:00.000Z'))).toBe(true)
+    expect(isPeppolInboundSweepRun(new Date('2026-09-10T12:09:59.999Z'))).toBe(true)
+    expect(isPeppolInboundSweepRun(new Date('2026-09-10T12:10:00.000Z'))).toBe(false)
+    expect(isPeppolInboundSweepRun(new Date('2026-09-10T12:50:00.000Z'))).toBe(false)
   })
 })
 

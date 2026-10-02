@@ -78,40 +78,44 @@ describe('gnubok_get_dimension_pnl: registration', () => {
 // ── Execute ──────────────────────────────────────────────────────────────────
 
 describe('gnubok_get_dimension_pnl: execute', () => {
-  it('passes an explicit period + date window straight to the generator (no period lookup)', async () => {
-    const { supabase } = createQueuedMockSupabase()
+  const PERIOD_2026 = { id: 'fp-1', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' }
+
+  it('passes an explicit period and its from_date/to_date window to the generator', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD_2026, error: null }) // the period's bounds, for the window check
     const report = makeReport()
     mockGenerate.mockResolvedValueOnce(report as never)
 
     const result = await tool.execute(
-      { sie_dim_no: '6', period_id: 'fp-1', to_date: '2026-03-31' },
+      { sie_dim_no: '6', period_id: 'fp-1', from_date: '2026-07-01', to_date: '2026-09-30' },
       'company-1',
       'user-1',
       supabase as never,
     )
 
     expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', 'fp-1', '6', {
-      toDate: '2026-03-31',
+      fromDate: '2026-07-01',
+      toDate: '2026-09-30',
     })
     expect(result).toEqual(report)
-    // Explicit period_id → no fiscal_periods default lookup.
-    expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('defaults to the most recent fiscal period when period_id is omitted', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'fp-latest', name: '2026' }, error: null }) // fiscal_periods lookup
+    enqueue({ data: { id: 'fp-latest' }, error: null }) // most recent period
+    enqueue({ data: { ...PERIOD_2026, id: 'fp-latest' }, error: null }) // its row
     mockGenerate.mockResolvedValueOnce(makeReport() as never)
 
     await tool.execute({ sie_dim_no: '1' }, 'company-1', 'user-1', supabase as never)
 
     expect(supabase.from).toHaveBeenCalledWith('fiscal_periods')
     expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', 'fp-latest', '1', {
+      fromDate: undefined,
       toDate: undefined,
     })
   })
 
-  it('resolves the period that contains to_date when period_id is omitted (#2185)', async () => {
+  it('resolves the period that contains the window when period_id is omitted (#2185)', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({
       data: { id: 'fp-2023', name: '2023', period_start: '2023-01-01', period_end: '2023-12-31' },
@@ -119,12 +123,44 @@ describe('gnubok_get_dimension_pnl: execute', () => {
     })
     mockGenerate.mockResolvedValueOnce(makeReport() as never)
 
-    await tool.execute({ sie_dim_no: '6', to_date: '2023-06-30' }, 'company-1', 'user-1', supabase as never)
+    await tool.execute(
+      { sie_dim_no: '6', from_date: '2023-04-01', to_date: '2023-06-30' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
 
-    expect(findCalls('fiscal_periods', 'lte')).toContainEqual(['period_start', '2023-06-30'])
+    expect(findCalls('fiscal_periods', 'lte')).toContainEqual(['period_start', '2023-04-01'])
     expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', 'fp-2023', '6', {
+      fromDate: '2023-04-01',
       toDate: '2023-06-30',
     })
+  })
+
+  it('refuses a window outside the period or running backwards, instead of an empty matrix', async () => {
+    for (const [window, message] of [
+      [{ from_date: '2025-12-01' }, /from_date must be within the fiscal period/],
+      [{ to_date: '2027-01-31' }, /to_date must be within the fiscal period/],
+      [{ from_date: '2026-09-30', to_date: '2026-07-01' }, /from_date must not be after to_date/],
+      [{ from_date: '2026-7-1' }, /from_date must be an ISO date/],
+    ] as const) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: PERIOD_2026, error: null })
+      await expect(
+        tool.execute({ sie_dim_no: '6', period_id: 'fp-1', ...window }, 'company-1', 'user-1', supabase as never),
+      ).rejects.toThrow(message)
+    }
+    expect(mockGenerate).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unknown argument rather than reporting the whole period', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool.execute({ sie_dim_no: '6', fromdate: '2026-07-01' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/Unknown parameter\(s\): fromdate/)
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(mockGenerate).not.toHaveBeenCalled()
   })
 
   it('errors when no fiscal period exists', async () => {
@@ -150,12 +186,14 @@ describe('gnubok_get_dimension_pnl: execute', () => {
   })
 
   it('accepts a numeric sie_dim_no by coercing it to string (lenient hosts)', async () => {
-    const { supabase } = createQueuedMockSupabase()
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD_2026, error: null })
     mockGenerate.mockResolvedValueOnce(makeReport() as never)
 
     await tool.execute({ sie_dim_no: 6, period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never)
 
     expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', 'fp-1', '6', {
+      fromDate: undefined,
       toDate: undefined,
     })
   })

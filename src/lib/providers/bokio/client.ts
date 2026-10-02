@@ -4,6 +4,7 @@ import { withRetry } from '../retry';
 import { BOKIO_BASE_URL, BOKIO_RATE_LIMIT } from './config';
 import { createLogger } from '@/lib/logger';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
+import { cleanProviderPayload } from '../provider-text';
 
 const log = createLogger('bokio-client');
 
@@ -74,6 +75,49 @@ export function unwrapBokioCompanyInformation(
   return looksLikeBokioCompany(body) ? body : null;
 }
 
+/**
+ * True when Bokio answered 403 because the company's price plan does not
+ * include API access (docs.bokio.se/docs/price-plan-requirements): private
+ * integrations are included in Plus, Premium and Business but not in Basic,
+ * and an expired plan answers the same way. The token itself can be fine, so
+ * this must never be reported as "check what you pasted".
+ *
+ * The documented body is `{"error":"price_plan_feature_required", ...}`, but
+ * Bokio's generic apiError schema names that field `code`. Matching the string
+ * in the raw body covers both shapes; other 403s (missing scope, membership)
+ * carry a different body and stay ordinary authentication refusals.
+ */
+export function isBokioPricePlanError(error: unknown): boolean {
+  return (
+    error instanceof BokioApiError &&
+    error.statusCode === 403 &&
+    /price_plan_feature_required/i.test(error.body ?? '')
+  );
+}
+
+const BOKIO_ERROR_CODE_SHAPE = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/**
+ * The machine-readable code from a Bokio error body (`error` or `code`), or
+ * null. Only an identifier-shaped value is returned, never the message,
+ * details or anything else from the body, so the result is safe to log.
+ */
+export function bokioErrorCode(body: string | undefined): string | null {
+  if (!body) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  for (const key of ['error', 'code']) {
+    const value = parsed[key];
+    if (typeof value === 'string' && BOKIO_ERROR_CODE_SHAPE.test(value)) return value;
+  }
+  return null;
+}
+
 function isRetryableError(error: unknown): boolean {
   if (isTimeoutError(error)) return true;
   if (error instanceof BokioApiError) {
@@ -124,7 +168,7 @@ export class BokioClient {
           );
         }
 
-        return await response.json() as T;
+        return cleanProviderPayload(await response.json()) as T;
       },
       {
         maxAttempts: 3,

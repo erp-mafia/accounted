@@ -1,6 +1,6 @@
 'use client'
 
-import { Loader2, ShieldAlert } from 'lucide-react'
+import { ShieldAlert } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,8 +46,7 @@ export function SessionTimeoutModal({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button onClick={onContinue} disabled={isExtending} autoFocus>
-            {isExtending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          <Button onClick={onContinue} loading={isExtending} autoFocus>
             {reason === 'idle' ? t('continue') : t('sign_in_again')}
           </Button>
         </DialogFooter>

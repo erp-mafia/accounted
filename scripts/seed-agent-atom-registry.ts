@@ -39,17 +39,19 @@ const dryRun = process.argv.includes('--dry')
 
 async function main() {
   console.log(`Scanning ${relative(process.cwd(), join(ROOT, '.claude', 'skills'))}`)
-  const atoms = await discoverAtoms(ROOT)
+  // Developer-audience references stay out of the registry, like the generator.
+  const atoms = (await discoverAtoms(ROOT)).filter((a) => a.audience === 'agent')
 
   if (atoms.length === 0) {
     console.log('No atoms discovered.')
     return
   }
 
-  // Map discovery → registry rows. We intentionally OMIT mcp_exposed so that a
+  // Map discovery → registry rows. We intentionally OMIT is_active so that a
   // manual kill-switch flip survives a re-seed (the column default applies on
   // first insert; ON CONFLICT leaves it untouched). `body` is inlined so runtime
-  // reads from the DB rather than disk.
+  // reads from the DB rather than disk. First-party exposure is also preserved;
+  // community exposure and publication dates are owned by reviewed frontmatter.
   const rows = atoms.map((a) => ({
     id: a.id,
     tier: a.tier,
@@ -62,8 +64,8 @@ async function main() {
     body: a.body,
     parent_atom_id: a.parent_atom_id,
     version: a.frontmatter_version,
-    is_active: true,
     schema_version: a.schema_version,
+    ...(a.tier === 'community' ? { mcp_exposed: a.mcp_exposed === true, reviewed_at: a.reviewed_at } : {}),
   }))
 
   console.log(`\nFound ${rows.length} atoms:\n`)
@@ -77,10 +79,15 @@ async function main() {
   }
 
   console.log('\nUpserting...')
-  const { error } = await supabase.from('agent_atom_registry').upsert(rows, { onConflict: 'id' })
-  if (error) {
-    console.error('Upsert failed:', error)
-    process.exit(1)
+  // PostgREST fills missing properties in a mixed batch with defaults/nulls.
+  // Keep equal column sets together so first-party exposure is not overwritten.
+  for (const batch of [rows.filter((row) => row.tier !== 'community'), rows.filter((row) => row.tier === 'community')]) {
+    if (!batch.length) continue
+    const { error } = await supabase.from('agent_atom_registry').upsert(batch, { onConflict: 'id' })
+    if (error) {
+      console.error('Upsert failed:', error)
+      process.exit(1)
+    }
   }
 
   console.log(`Upserted ${rows.length} rows into agent_atom_registry.`)

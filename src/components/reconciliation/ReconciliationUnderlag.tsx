@@ -157,7 +157,7 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
               >
                 {a.file_name}
               </a>
-              <span className="shrink-0 text-[11.5px] tabular-nums text-muted-foreground">
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                 {formatSize(a.size_bytes)} · {formatDate(a.uploaded_at)}
               </span>
               {canWrite && (

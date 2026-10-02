@@ -6,6 +6,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Upload, FileText, ImageIcon, X, Loader2 } from 'lucide-react'
+import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
 
 export interface UploadedFile {
   id?: string
@@ -128,8 +129,12 @@ export default function DocumentUploadZone({
   const [surfaceRect, setSurfaceRect] = useState<DOMRect | null>(null)
 
   const uploadFile = useCallback(async (file: UploadedFile): Promise<UploadedFile> => {
+    const prepared = await prepareForMultipartUpload(file.file)
+    if (!prepared.ok) {
+      return { ...file, status: 'error', error: prepared.message }
+    }
     const formData = new FormData()
-    formData.append('file', file.file)
+    formData.append('file', prepared.file)
     formData.append('upload_source', 'file_upload')
     if (journalEntryId) {
       formData.append('journal_entry_id', journalEntryId)
@@ -403,9 +408,9 @@ export default function DocumentUploadZone({
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
               )}
               {file.status === 'uploaded' && (
-                <Badge variant="success" className="text-xs px-1.5 py-0">
+                <span className="text-xs text-muted-foreground shrink-0">
                   {t('uploaded')}
-                </Badge>
+                </span>
               )}
               {file.status === 'error' && (
                 <>
@@ -420,9 +425,9 @@ export default function DocumentUploadZone({
 
               <Button
                 variant="ghost"
-                size="sm"
+                size="icon-sm"
                 aria-label={t('remove_file')}
-                className="h-6 w-6 p-0 shrink-0"
+                className="shrink-0"
                 onClick={(e) => {
                   e.stopPropagation()
                   removeFile(index)

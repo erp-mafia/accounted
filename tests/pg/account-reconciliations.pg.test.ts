@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, it, expect } from 'vitest'
 import { getPool, withUserContext } from './setup'
-import { seedCompany, insertAuthUser, insertCompanyMember } from './fixtures'
+import { seedCompany, insertAuthUser, insertCompanyMember, insertCashAccount } from './fixtures'
 
 // pg-real coverage for 20260823140000_account_reconciliations: RLS (member
 // SELECT, owner/admin/member writes with signed_by = auth.uid(), viewers
@@ -117,7 +117,8 @@ describe('account_reconciliations constraints', () => {
     const { userId, companyId } = await seedCompany()
     await expect(insertSignoff(companyId, userId, { accountKey: '1930' })).rejects.toThrow(/account_key/i)
     await expect(insertSignoff(companyId, userId, { accountKey: 'bank:not-a-uuid' })).rejects.toThrow(/account_key/i)
-    await expect(insertSignoff(companyId, userId, { accountKey: `bank:${randomUUID()}` })).resolves.toBeTruthy()
+    const cashId = await insertCashAccount({ companyId, ledgerAccount: '1930' })
+    await expect(insertSignoff(companyId, userId, { accountKey: `bank:${cashId}` })).resolves.toBeTruthy()
     await expect(insertSignoff(companyId, userId, { accountKey: 'manual:1910' })).resolves.toBeTruthy()
   })
 
@@ -127,9 +128,10 @@ describe('account_reconciliations constraints', () => {
     await expect(insertSignoff(companyId, userId, { throughDate: '2026-07-31' })).rejects.toThrow(
       /ux_account_reconciliations_active|duplicate key/i,
     )
-    // A different account on the same date is fine.
+    // A different existing account on the same date is fine.
+    const cashId = await insertCashAccount({ companyId, ledgerAccount: '1930' })
     await expect(
-      insertSignoff(companyId, userId, { accountKey: `bank:${randomUUID()}`, throughDate: '2026-07-31' }),
+      insertSignoff(companyId, userId, { accountKey: `bank:${cashId}`, throughDate: '2026-07-31' }),
     ).resolves.toBeTruthy()
 
     await getPool().query(

@@ -150,7 +150,7 @@ export default function ArcimMigrationTheater({
                 return (
                   <li
                     key={line.id}
-                    className="border-b border-border/60 py-2.5 last:border-b-0"
+                    className="border-b border-border py-2.5 last:border-b-0"
                   >
                     <p className={`text-sm ${active ? '' : 'text-muted-foreground'}`}>
                       {line.text}

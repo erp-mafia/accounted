@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
-import { projectToolInputSchema } from '../company-routing'
+import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
+
+// Ceiling for the catalog a single-company key is served (see the second case).
+const SIMPLE_CATALOG_CEILING = 60_100
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -8,14 +11,21 @@ import { projectToolReferences } from '../tool-namespace'
 // _meta: otherwise the guard under-measures the wire payload.
 const canonicalToolNames = new Set(tools.map((t) => t.name))
 
-function serializeCatalog(namespace: 'gnubok' | 'accounted'): string {
-  const projection = tools.filter(isDefaultCatalogTool).map((t) => {
+function serializeCatalog(
+  namespace: 'gnubok' | 'accounted',
+  options: { simpleCompanyMode?: boolean } = {}
+): string {
+  const simple = options.simpleCompanyMode === true
+  const listed = tools
+    .filter(isDefaultCatalogTool)
+    .filter((t) => !(simple && isMultiCompanyOnlyTool(t.name)))
+  const projection = listed.map((t) => {
     const meta = { ...(deriveToolMeta(t) ?? {}), ...(t._meta ?? {}) }
     const projected = {
       name: t.name,
       ...(t.title ? { title: t.title } : {}),
       description: t.description,
-      inputSchema: projectToolInputSchema(t),
+      inputSchema: projectToolInputSchema(t, { omitCompanyId: simple }),
       ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
       annotations: t.annotations,
       ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
@@ -27,8 +37,8 @@ function serializeCatalog(namespace: 'gnubok' | 'accounted'): string {
   return JSON.stringify({ tools: projection })
 }
 
-const tokensFor = (namespace: 'gnubok' | 'accounted') =>
-  Math.round(serializeCatalog(namespace).length / 4)
+const tokensFor = (namespace: 'gnubok' | 'accounted', options: { simpleCompanyMode?: boolean } = {}) =>
+  Math.round(serializeCatalog(namespace, options).length / 4)
 
 describe('tools/list payload size guard', () => {
   it('keeps the projected tools/list payload under the context-budget ceiling', () => {
@@ -544,7 +554,115 @@ describe('tools/list payload size guard', () => {
     //     reachable through gnubok_call_tool and named by the briefing, so the
     //     graph walk costs the default catalog nothing. Measured 63 381 on
     //     the rebased branch. Ceiling unchanged.
-    expect(approxTokens).toBeLessThan(63_500)
+    //   * Contextual handoffs and own skills (feat/contextual-ai-accounting):
+    //     gnubok_get_task (the first call of every in-app AI handoff) and
+    //     gnubok_create_skill (a direct write, so neither bridge reaches it)
+    //     join the default catalog. Paid for by trims: the list_skills,
+    //     load_skill and briefing texts, both new tools' notes, and get_task's
+    //     scope, which the handoff passes verbatim and Zod validates, so the
+    //     wire schema no longer lists its fields. Measured 63 477. Ceiling
+    //     unchanged.
+    //   * Own items of every kind (Agentinstruktioner): gnubok_create_skill
+    //     takes kind and text so an AI can save knowledge and analyses, not
+    //     only flows. Paid for by a shorter title and description. Measured
+    //     63 498: two tokens of headroom, so the next default-catalog addition
+    //     has to trim first. Ceiling unchanged.
+    //   * Routines and own item kinds (Instruktioner audit): gnubok_get_task
+    //     takes `unattended` and gnubok_list_skills declares `item_kind`.
+    //     Paid for by dropping the list_skills sentence that repeated
+    //     include_all's own description, two output descriptions that
+    //     restated their property names, and get_task no longer saying "the
+    //     skills to load" (agent runs and analyses arrive whole). Measured
+    //     63 486. Ceiling unchanged.
+    //   * Reverse-charge basis on the MCP surface (#2919):
+    //     gnubok_categorize_transaction takes reverse_charge_eu_services /
+    //     _non_eu_services / _eu_goods, and the VAT report schema (counted
+    //     twice: get_vat_report and vat_review_widget) declares rutor 20-24.
+    //     Paid for by one shared RC note instead of per-box prose, account
+    //     numbers without the word "account", and a shorter vat_treatment
+    //     text. Measured 63 496. Ceiling unchanged.
+    //   * Clearable employee fields (#3008): gnubok_update_employee's eleven
+    //     nullable columns declare type [.., 'null'] and its description says
+    //     null clears a field. Paid for inside the same tool: employee_id's
+    //     note restated its name, jamkning_percentage's "null clears" is now
+    //     that one sentence, and default_dimensions' "omit to keep" is true of
+    //     every field of a sparse update, and the tool description drops
+    //     "payroll" and "a field" (the parenthesis names the payroll parts),
+    //     so it fits beside #2919 and #2980 (-6) without a bump. Measured
+    //     63 497 on top of both. Ceiling unchanged.
+    //   * 62.2K to 63.5K with "one connection, every company" (2026-09-19,
+    //     re-measured 2026-09-21 on top of #2748 and #2800): three tools ride
+    //     the default catalog, gnubok_client_overview (the byrå cockpit as a
+    //     tool), gnubok_run_across_companies (any read tool once per company
+    //     in one answer) and gnubok_stage_across_companies (a search-only
+    //     WRITE is out of reach on chat hosts, #2800, and its batch listing
+    //     is not the staged-operation contract gnubok_stage_tool carries);
+    //     the readiness fan-out is a search-only READ, bridged. This is the
+    //     FULL catalog, which only a key that reaches several companies is
+    //     served: simple company mode (next case) hides all of it from the
+    //     nine keys in ten that reach one company, so the payload most
+    //     sessions pay went DOWN, not up.
+    //     Existing tools grew too: gnubok_list_companies (query, team,
+    //     recency), gnubok_list_pending_operations (batch_id,
+    //     all_companies) and gnubok_approve_pending_operation (batch_id).
+    //     Paid first inside the cluster: the shared scope output schema is
+    //     declared as a bare object (its six fields are documented in a
+    //     comment), the per-row result schema of run_across is a bare
+    //     object, the team block lost its property list, and every new
+    //     description was cut to one clause (measured 63 376, ~120
+    //     headroom; main alone measures 61 844).
+    //   * 63.5K to 65K, 2026-09-23, merging main into this branch: Arkiv
+    //     phases 5 to 9 (above) and this branch each spent the same
+    //     62.2K to 63.5K headroom independently, so the union measures
+    //     64 733. No read was demoted: the low-count default reads left
+    //     (list_sales_orders, list_articles, list_dimensions) sum to ~1 085,
+    //     short of the ~1 233 overshoot, and the rest are seasonal, widgets,
+    //     onboarding entries or Arkiv tools main put there on purpose.
+    //     FOUNDER CALL: keep this bump, or demote those three reads plus
+    //     gnubok_client_overview to search-only and ratchet back to 63.5K.
+    //   * 65K to 65.5K, 2026-09-28, folding #2752 and #2753 into #3169 on
+    //     top of current main: main alone measures 63 497 (its own ceiling
+    //     was 63.5K), the union 65 030. The simple company mode catalog
+    //     measures 60 028 (next case), so a single-company session still
+    //     starts ~3 470 tokens lighter than on main. The founder call above
+    //     stands.
+    //   * KPI report correctness (fix/mcp-kpi-report-correctness):
+    //     gnubok_get_kpi_report gains from_date/to_date, a metrics filter and
+    //     a real outputSchema (bare types, metric keys only; the keys double
+    //     as the valid metrics values, so no input enum). Paid for by trims
+    //     on shared text every default-catalog write repeats: the staged
+    //     envelope's operation_id note and the generated tools' dry_run and
+    //     idempotency_key notes. Measured 63 302 on the old base; rebased onto
+    //     #3169 it measures 64 860, 170 under main alone. Ceiling unchanged.
+    //   * Report trust envelope (#3103, #3105): gnubok_get_income_statement
+    //     names nettoomsattning (3000-3799) as the revenue figure and
+    //     declares it in its outputSchema (#3103). The per-figure account
+    //     definitions and the report data_status (#3105) travel in the
+    //     response and are declared in no outputSchema, so they cost the
+    //     catalog nothing. Measured 64 937 on 2026-10-01 on top of main;
+    //     #3105 changes no tool schema or description. Ceiling unchanged.
+    expect(approxTokens).toBeLessThan(65_500)
+  })
+
+  it('serves a single-company key a smaller catalog than the multi-company one', () => {
+    // Simple company mode (the key reaches at most one company): no
+    // company_id property on any tool and no company switch or cross-company
+    // tools. Nine users in ten are here, so this is the payload most sessions
+    // actually pay. Pinned as a saving against the full catalog (so it cannot
+    // silently erode) and as its own ceiling.
+    const full = Math.max(tokensFor('gnubok'), tokensFor('accounted'))
+    const simple = Math.max(
+      tokensFor('gnubok', { simpleCompanyMode: true }),
+      tokensFor('accounted', { simpleCompanyMode: true })
+    )
+    expect(full - simple).toBeGreaterThan(3_500)
+    // Measured 58 521 on 2026-09-21 against 63 376 for the full catalog and
+    // 61 844 on main without any of this: a single-company session starts
+    // ~3 300 tokens lighter than it did before. ~280 headroom.
+    // Re-measured 59 785 on 2026-09-23 after merging main (Arkiv phases 5
+    // to 9 added ~1 540 to both catalogs); ceiling 58 800 to 60 100, ~315
+    // headroom. The saving against the full catalog is unchanged.
+    expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 
   /**

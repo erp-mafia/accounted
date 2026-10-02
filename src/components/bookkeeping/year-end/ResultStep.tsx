@@ -240,10 +240,10 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
             Avvikelser
           </Badge>
         ) : (
-          <Badge variant="success" className="gap-1">
-            <CheckCircle2 className="h-3 w-3" />
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <CheckCircle2 className="h-3.5 w-3.5" />
             Stämmer
-          </Badge>
+          </span>
         )}
       </div>
       <div className="space-y-4 px-1">
@@ -301,7 +301,7 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
                               {overTol ? (
                                 <Badge variant="destructive">Avviker</Badge>
                               ) : (
-                                <Badge variant="success">OK</Badge>
+                                <span className="text-xs text-muted-foreground">OK</span>
                               )}
                             </TableCell>
                           </TableRow>

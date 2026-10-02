@@ -312,4 +312,43 @@ describe('POST /api/billing/checkout', () => {
       )
     })
   })
+
+  // Stripe Checkout speaks the app's language, not the browser's.
+  describe('locale', () => {
+    function checkoutWithCookie(cookie?: string) {
+      enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+      enqueue({ data: null }) // no trial grant
+      sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+      return POST(
+        createMockRequest('/api/billing/checkout', {
+          method: 'POST',
+          body: { plan: 'monthly' },
+          ...(cookie ? { headers: { cookie } } : {}),
+        }),
+        routeParams,
+      )
+    }
+
+    it('opens in English when the app is in English', async () => {
+      const { status } = await parseJsonResponse(
+        await checkoutWithCookie('gnubok-company-id=company-1; gnubok-locale=en'),
+      )
+
+      expect(status).toBe(200)
+      expect(sessionsCreate).toHaveBeenCalledWith(expect.objectContaining({ locale: 'en' }))
+    })
+
+    it('opens in Swedish when the app is in Swedish', async () => {
+      await checkoutWithCookie('gnubok-locale=sv')
+      expect(sessionsCreate).toHaveBeenCalledWith(expect.objectContaining({ locale: 'sv' }))
+    })
+
+    it('falls back to Swedish without a locale cookie or with an unsupported one', async () => {
+      await checkoutWithCookie()
+      await checkoutWithCookie('gnubok-locale=de')
+
+      expect(sessionsCreate).toHaveBeenNthCalledWith(1, expect.objectContaining({ locale: 'sv' }))
+      expect(sessionsCreate).toHaveBeenNthCalledWith(2, expect.objectContaining({ locale: 'sv' }))
+    })
+  })
 })

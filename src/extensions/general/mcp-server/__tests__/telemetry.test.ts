@@ -36,6 +36,12 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     // filter has data to work against.
     createServiceClientNoCookies: vi.fn(() => ({
       from: vi.fn((table: string) => {
+        if (table === 'company_skills') {
+          const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+          for (const method of ['select', 'eq', 'order']) chain[method] = vi.fn(() => chain)
+          chain.range = vi.fn().mockResolvedValue({ data: [], error: null })
+          return chain
+        }
         if (table === 'company_members') {
           return {
             select: vi.fn(() => {
@@ -59,7 +65,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
                 maybeSingle: vi.fn().mockResolvedValue({
-                  data: { entity_type: 'AB', vat_registered: true },
+                  data: { entity_type: 'aktiebolag', vat_registered: true },
                   error: null,
                 }),
               })),

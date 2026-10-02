@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 import { createLogger } from '@/lib/logger'
 
@@ -20,14 +21,19 @@ import {
   createNextPeriod,
   findNextPeriod,
 } from './period-service'
-import { generateResultAppropriation } from './result-appropriation-service'
+import { generateResultAppropriation, previewResultAppropriation } from './result-appropriation-service'
 import {
   previewCurrencyRevaluation,
   executeCurrencyRevaluation,
 } from '@/lib/bookkeeping/currency-revaluation'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
-import { assessKontantmetodCutoff } from './kontantmetod-cutoff'
-import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
+import { assessKontantmetodCutoff, undatedSettlementsNote } from './kontantmetod-cutoff'
+import { ENTITY_TYPES, resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
+import { formatCurrency } from '@/lib/utils'
+import { overDisposedAmount, resultAccountLeftover, resultAccountResidual } from './prior-result-guard'
+import { priorResultCarry } from './prior-result-carry'
+import { buildOpeningBalanceLines, fetchObjectClosingBalances } from './opening-balance-split'
+import type { ObjectBalanceSplit } from '@/lib/bookkeeping/dimension-carry'
 import type {
   YearEndValidation,
   YearEndBlocker,
@@ -258,6 +264,88 @@ export async function validateYearEndReadiness(
     })
   }
 
+  // Check: the "årets resultat" account holds only this year's result. A prior
+  // year's result still sitting there (typically carried in by imported opening
+  // balances that no Accounted year-end ever moved) would be added to this
+  // year's by the closing entry, and the balance sheet's Årets resultat would
+  // no longer match the income statement (PostHog PH 120). Only before the
+  // close: once a closing entry exists, CLOSING_ENTRY_EXISTS already blocks.
+  // Fails open (logged): a lookup error must not block every close. The free
+  // pre-check on the trial balance keeps the form lookup off the common path:
+  // only a leftover on one of the forms' result accounts, or one that shows
+  // once this year's hand-closed result is taken off, is worth resolving.
+  const resultAccountCandidates = [
+    ...new Set(
+      ENTITY_TYPES.map((t) => resultClosingAccounts(t))
+        .filter((a) => a.priorYearCarry)
+        .map((a) => a.closing),
+    ),
+  ]
+  if (
+    !period.closing_entry_id &&
+    resultAccountCandidates.some(
+      (account) =>
+        resultAccountLeftover(trialBalance.rows, account) !== 0 ||
+        resultAccountResidual(trialBalance.rows, account) !== 0,
+    )
+  ) {
+    try {
+      const { data: formSettings } = await supabase
+        .from('company_settings')
+        .select('entity_type')
+        .eq('company_id', companyId)
+        .maybeSingle()
+      const entityType = await resolveCompanyEntityType(supabase, companyId, formSettings?.entity_type)
+      // Null for forms that close straight into equity (enskild firma, 2010).
+      // A balance that is this year's result, already booked by hand, is not
+      // a carry and does not block (PostHog PH 108's re-run): only what is
+      // left of the ingående balans after the omföring and hand-booked
+      // dispositions counts.
+      const carry = await priorResultCarry(supabase, companyId, period, entityType)
+      if (carry && carry.remaining !== 0) {
+        blockers.push({
+          code: 'PRIOR_RESULT_NOT_DISPOSED',
+          message:
+            `Konto ${carry.resultAccount} ${carry.resultAccountName} bär fortfarande ${formatCurrency(Math.abs(carry.remaining))} från föregående års resultat. ` +
+            `Flytta det till ${carry.priorResultAccount} eller ${carry.retainedAccount} (resultatdisposition) innan bokslutet, annars räknas det in i årets resultat.`,
+        })
+      }
+      // The other way round (an SIE-migrated aktiebolag, 2026-09-29): the
+      // prior result moved off more than it was, typically the automatic
+      // omföring plus the previous system's own disposition imported into the
+      // same year. The account then carries the excess with the opposite sign
+      // and the close adds this year's result on top. Measured net of this
+      // year's result already closed onto the account by hand (899x), so the
+      // amount is what a correction must move back and the block clears once
+      // one is booked.
+      const excess = carry
+        ? overDisposedAmount(carry.overMoved, resultAccountResidual(trialBalance.rows, carry.resultAccount))
+        : 0
+      if (carry && excess !== 0) {
+        const amount = formatCurrency(Math.abs(excess))
+        const dispositionAccounts = `${carry.priorResultAccount} eller ${carry.retainedAccount}`
+        // A profit moved off too often leaves a debit, credited back; a loss the other way.
+        const [debit, credit] =
+          excess < 0 ? [dispositionAccounts, carry.resultAccount] : [carry.resultAccount, dispositionAccounts]
+        blockers.push({
+          code: 'PRIOR_RESULT_OVER_DISPOSED',
+          message:
+            `Från konto ${carry.resultAccount} ${carry.resultAccountName} har ${amount} mer än föregående års resultat förts bort (verifikat ${carry.movedBy.join(', ')}). ` +
+            `Boka en rättelse daterad i räkenskapsåret, senast ${period.period_end}, som för tillbaka ${amount} till ${carry.resultAccount} från ${dispositionAccounts}, där beloppet bokades för mycket (debet ${debit}, kredit ${credit}). ` +
+            'Annars stämmer årets resultat i balansräkningen inte med resultaträkningen.',
+        })
+      }
+    } catch (err) {
+      log.warn('year-end: prior-result check skipped', {
+        operation: 'year_end.prior_result_check',
+        companyId,
+        entityType: 'fiscal_period',
+        entityId: fiscalPeriodId,
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   // Check: at least some entries exist
   const { count: entryCount } = await supabase
     .from('journal_entries')
@@ -362,60 +450,78 @@ export async function validateYearEndReadiness(
   // requires every unpaid receivable and liability to be booked at the fiscal
   // year end. Gate before executeYearEndClosing posts its closing entry. A
   // later lock-time check would leave a partial close behind on failure.
-  try {
-    const { data: settings, error: settingsError } = await supabase
-      .from('company_settings')
-      .select('accounting_method, entity_type')
-      .eq('company_id', companyId)
-      .maybeSingle()
+  //
+  // Not for a closed period: nothing can be posted into it any more (the
+  // cut-off tool and its executor refuse a closed period, as does the
+  // period-lock trigger), and PERIOD_ALREADY_CLOSED already says why this
+  // close cannot run. A year marked closed outside the year-end
+  // (close_fiscal_period_external) otherwise kept a blocker nobody could
+  // clear (feedback seq 798354).
+  if (!period.is_closed) {
+    try {
+      const { data: settings, error: settingsError } = await supabase
+        .from('company_settings')
+        .select('accounting_method, entity_type')
+        .eq('company_id', companyId)
+        .maybeSingle()
 
-    if (settingsError) throw settingsError
+      if (settingsError) throw settingsError
 
-    if (settings?.accounting_method === 'cash') {
-      if (!nextPeriod) {
-        blockers.push({
-          code: 'KONTANTMETOD_CUTOFF_REQUIRED',
-          message:
-            'Kontantmetodens bokslutsavgränsning kan inte bokföras förrän nästa räkenskapsår är upplagt. Skapa nästa period, förhandsgranska och bokför avgränsningen innan bokslut.',
-        })
-      } else {
-        const assessment = await assessKontantmetodCutoff(
-          supabase,
-          companyId,
-          period,
-          nextPeriod.id,
-          await resolveCompanyEntityType(supabase, companyId, settings.entity_type),
-        )
-        const invalidCount =
-          assessment.collection.unknownVatTreatment.length +
-          assessment.collection.strayVatOnZeroRate.length
-        const outstandingCount =
-          assessment.collection.receivables.length + assessment.collection.payables.length
-
-        if (invalidCount > 0) {
+      if (settings?.accounting_method === 'cash') {
+        if (!nextPeriod) {
           blockers.push({
             code: 'KONTANTMETOD_CUTOFF_REQUIRED',
             message:
-              `${invalidCount} fakturor kan inte tas med i kontantmetodens bokslutsavgränsning på grund av saknad eller oförenlig momsinställning. Rätta fakturorna och bokför avgränsningen innan bokslut.`,
+              'Kontantmetodens bokslutsavgränsning kan inte bokföras förrän nästa räkenskapsår är upplagt. Skapa nästa period, förhandsgranska och bokför avgränsningen innan bokslut.',
           })
-        } else if (!assessment.postings.complete) {
-          blockers.push({
-            code: 'KONTANTMETOD_CUTOFF_REQUIRED',
-            message:
-              outstandingCount > 0
-                ? `${outstandingCount} obetalda fakturor var utestående vid periodens slut. Förhandsgranska och bokför kontantmetodens bokslutsavgränsning med vändningar innan bokslut (BFL 5 kap 2 §).`
-                : 'En tidigare kontantmetodavgränsning stämmer inte längre med reskontran. Kontrollera och rätta verifikaten innan bokslut.',
-          })
+        } else {
+          const assessment = await assessKontantmetodCutoff(
+            supabase,
+            companyId,
+            period,
+            nextPeriod.id,
+            await resolveCompanyEntityType(supabase, companyId, settings.entity_type),
+          )
+          const invalidCount =
+            assessment.collection.unknownVatTreatment.length +
+            assessment.collection.strayVatOnZeroRate.length
+          const outstandingCount =
+            assessment.collection.receivables.length + assessment.collection.payables.length
+
+          // A warning, never a blocker: the assumption is the reskontra's own
+          // as-of rule, and nothing in the books can date what the previous
+          // system never recorded. The user can, against the bank.
+          const undatedNote = undatedSettlementsNote(
+            assessment.collection.undatedSettlements.length,
+            period.period_end,
+          )
+          if (undatedNote) warnings.push(undatedNote)
+
+          if (invalidCount > 0) {
+            blockers.push({
+              code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+              message:
+                `${invalidCount} fakturor kan inte tas med i kontantmetodens bokslutsavgränsning på grund av saknad eller oförenlig momsinställning. Rätta fakturorna och bokför avgränsningen innan bokslut.`,
+            })
+          } else if (!assessment.postings.complete) {
+            blockers.push({
+              code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+              message:
+                outstandingCount > 0
+                  ? `${outstandingCount} obetalda fakturor var utestående vid periodens slut. Förhandsgranska och bokför kontantmetodens bokslutsavgränsning med vändningar innan bokslut (BFL 5 kap 2 §).`
+                  : 'En tidigare kontantmetodavgränsning stämmer inte längre med reskontran. Kontrollera och rätta verifikaten innan bokslut.',
+            })
+          }
         }
       }
+    } catch (err) {
+      log.warn('kontantmetoden cut-off readiness check failed', err as Error)
+      blockers.push({
+        code: 'KONTANTMETOD_CUTOFF_CHECK_FAILED',
+        message:
+          'Kontrollen av kontantmetodens bokslutsavgränsning kunde inte genomföras: försök igen innan bokslut',
+      })
     }
-  } catch (err) {
-    log.warn('kontantmetoden cut-off readiness check failed', err as Error)
-    blockers.push({
-      code: 'KONTANTMETOD_CUTOFF_CHECK_FAILED',
-      message:
-        'Kontrollen av kontantmetodens bokslutsavgränsning kunde inte genomföras: försök igen innan bokslut',
-    })
   }
 
   // Check: unbooked bank transactions in the period. lockPeriod enforces this
@@ -465,13 +571,16 @@ export async function validateYearEndReadiness(
 
 /**
  * Preview year-end closing without persisting anything.
- * Shows the net result, closing account, and the journal entry lines that would be created.
+ * Shows the net result, closing account, and the journal entry lines that would be created,
+ * plus the omföring the close books in the next period (`resultAppropriation`) unless the
+ * caller opts out.
  */
 export async function previewYearEndClosing(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
+  options: { resultAppropriation?: boolean } = {},
 ): Promise<YearEndPreview> {
 
   // Get entity type to determine closing account
@@ -599,6 +708,22 @@ export async function previewYearEndClosing(
   const bolagsskattMissing =
     closingAccount === '2099' && netResult > ORE_TOLERANCE && !hasTaxAccount
 
+  // The close books a second verifikat: step 11's omföring of the result off
+  // the result account in the next period. Disclose it with the same rule
+  // (feedback seq 707985). The next period's ingående balans on the result
+  // account will be what the account holds now plus this year's result,
+  // including the balansdagen revaluation step 2 books first.
+  const resultAppropriation = periodData && options.resultAppropriation !== false
+    ? await previewResultAppropriation(supabase, companyId, {
+        periodId: fiscalPeriodId,
+        periodEnd: periodData.period_end,
+        entityType,
+        projectedIbNet: roundOre(
+          resultAccountLeftover(rows, closingAccount) + netResult + (currencyRevaluation?.netEffect ?? 0),
+        ),
+      })
+    : null
+
   return {
     netResult,
     closingAccount,
@@ -607,6 +732,7 @@ export async function previewYearEndClosing(
     resultAccountSummary,
     currencyRevaluation,
     bolagsskattMissing,
+    resultAppropriation,
   }
 }
 
@@ -660,8 +786,12 @@ export async function executeYearEndClosing(
     userId
   )
 
-  // 3. Get closing preview (now includes revaluation effects in trial balance)
-  const preview = await previewYearEndClosing(supabase, companyId, userId, fiscalPeriodId)
+  // 3. Get closing preview (now includes revaluation effects in trial balance).
+  //    Without the omföring disclosure: step 11 books it from the real IB, and
+  //    here the estimate would only add queries that could fail the close.
+  const preview = await previewYearEndClosing(supabase, companyId, userId, fiscalPeriodId, {
+    resultAppropriation: false,
+  })
 
   if (preview.closingLines.length === 0) {
     throw new Error('No result accounts to close: period has no activity')
@@ -872,7 +1002,12 @@ export async function executeYearEndClosing(
  * Generate opening balance entries in the next period from the closed period's
  * balance sheet accounts (class 1-2).
  *
- * Each account's closing balance becomes its opening balance.
+ * Each account's closing balance becomes its opening balance, split per
+ * project (issue #3313, lib/core/bookkeeping/opening-balance-split.ts): one
+ * line per object of an accumulating dimension carrying that object's
+ * closing balance, plus an untagged remainder. The VAT accounts (26xx) are
+ * never split: their IB stays one untagged line. Per-account totals are the
+ * trial balance's, exactly as before the split.
  * The entry must be balanced (total debit openings = total credit openings).
  */
 export async function generateOpeningBalances(
@@ -903,31 +1038,29 @@ export async function generateOpeningBalances(
     (r) => r.account_class >= 1 && r.account_class <= 2
   )
 
-  const openingLines: CreateJournalEntryLineInput[] = []
-
-  for (const account of balanceSheetAccounts) {
-    const netBalance = account.closing_debit - account.closing_credit
-
-    if (Math.abs(netBalance) < ORE_TOLERANCE) continue
-
-    if (netBalance > 0) {
-      // Debit balance → opening debit
-      openingLines.push({
-        account_number: account.account_number,
-        debit_amount: roundOre(netBalance),
-        credit_amount: 0,
-        line_description: `Ingående balans: ${account.account_name}`,
-      })
-    } else {
-      // Credit balance → opening credit
-      openingLines.push({
-        account_number: account.account_number,
-        debit_amount: 0,
-        credit_amount: roundOre(Math.abs(netBalance)),
-        line_description: `Ingående balans: ${account.account_name}`,
-      })
-    }
+  // Project split. This runs after the period was closed (irreversible), so
+  // a failure must not leave the year without an IB: fall back to one line
+  // per account, alert, and leave the split to be redone later. Totals are
+  // identical either way.
+  let objectBalances = new Map<string, ObjectBalanceSplit[]>()
+  try {
+    objectBalances = await fetchObjectClosingBalances(supabase, companyId, closedPeriodId)
+  } catch (err) {
+    log.error('year-end: opening balance project split failed, IB booked per account (non-fatal)', err as Error, {
+      operation: 'year_end.opening_balance_split',
+      alert: true,
+      companyId,
+      entityType: 'fiscal_period',
+      entityId: nextPeriodId,
+    })
   }
+
+  const accountTotals = balanceSheetAccounts.map((account) => ({
+    account_number: account.account_number,
+    account_name: account.account_name,
+    net: account.closing_debit - account.closing_credit,
+  }))
+  const openingLines: CreateJournalEntryLineInput[] = buildOpeningBalanceLines(accountTotals, objectBalances)
 
   if (openingLines.length === 0) {
     throw new Error('No balance sheet accounts with non-zero closing balance')
@@ -943,15 +1076,53 @@ export async function generateOpeningBalances(
     )
   }
 
-  // Create opening balance entry in next period
-  const openingEntry = await createJournalEntry(supabase, companyId, userId, {
+  // Create opening balance entry in next period. The project bags are copied
+  // from posted history, so the registry must not refuse them: a project
+  // archived during the year can still hold a 1470 balance (replayDimensions,
+  // scoped to this generator; see CreateEntryOptions).
+  const openingEntryInput = (lines: CreateJournalEntryLineInput[]) => ({
     fiscal_period_id: nextPeriodId,
     entry_date: nextPeriod.period_start,
     description: `Ingående balans ${nextPeriod.name}`,
-    source_type: 'opening_balance',
+    source_type: 'opening_balance' as const,
     voucher_series: 'A',
-    lines: openingLines,
+    lines,
   })
+  let openingEntry: JournalEntry
+  try {
+    openingEntry = await createJournalEntry(
+      supabase, companyId, userId, openingEntryInput(openingLines), undefined, undefined, { replayDimensions: true }
+    )
+  } catch (err) {
+    // The period is already closed, so a split that the database refuses
+    // (a line insert constraint, e.g. a legacy bag the NOT VALID
+    // jel_dimensions_well_formed CHECK never saw, or a commit trigger) must
+    // not leave the year without an IB. Retrying per account must never
+    // double the IB, so it runs only when nothing can have been posted:
+    // - create_entry_lines: the draft never reached commit_journal_entry;
+    // - commit_entry with a Postgres error code: the database answered with
+    //   a rejection, so the commit transaction rolled back. A commit error
+    //   without one (a transport failure, a lost response) may hide a
+    //   commit that succeeded, so it fails as before;
+    // and only after re-reading that the next period holds no posted IB.
+    // Anything else, or an IB that had no split, fails as before.
+    const refusedBeforePosting =
+      err instanceof BookkeepingDatabaseError &&
+      (err.operation === 'create_entry_lines' || (err.operation === 'commit_entry' && Boolean(err.pgCode)))
+    const hadSplit = openingLines.some((line) => line.dimensions !== undefined)
+    if (!hadSplit || !refusedBeforePosting) throw err
+    if (await mayHavePostedOpeningBalance(supabase, companyId, nextPeriodId)) throw err
+    log.error('year-end: opening balance with project split refused, IB booked per account (non-fatal)', err as Error, {
+      operation: 'year_end.opening_balance_split',
+      alert: true,
+      companyId,
+      entityType: 'fiscal_period',
+      entityId: nextPeriodId,
+    })
+    openingEntry = await createJournalEntry(
+      supabase, companyId, userId, openingEntryInput(buildOpeningBalanceLines(accountTotals, new Map()))
+    )
+  }
 
   // Mark next period with opening balance entry
   const { error: updateError } = await supabase
@@ -968,6 +1139,29 @@ export async function generateOpeningBalances(
   }
 
   return openingEntry
+}
+
+/**
+ * True unless a read confirms the period holds no posted opening balance
+ * entry. Guards the per-account IB retry: a second posted IB would double
+ * every balance and count as period activity. A failed read is treated as
+ * "may have posted", so the retry is skipped and the original error stands.
+ */
+async function mayHavePostedOpeningBalance(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
+    .eq('source_type', 'opening_balance')
+    .eq('status', 'posted')
+    .limit(1)
+  if (error) return true
+  return Array.isArray(data) && data.length > 0
 }
 
 /**

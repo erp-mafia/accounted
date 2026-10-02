@@ -161,6 +161,80 @@ describe('commitPendingOperation: retag_line_dimensions, execution', () => {
     expect(rpc.mock.calls[1][1]).toMatchObject({ p_line_id: uuidAt(2) })
   })
 
+  it('a row staged before the mode existed commits as the replace its approver was shown', async () => {
+    // The staged preview of such a row said "replace the dimensions bag on
+    // every matched line": the executor must not start merging it.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { changed: true, log_id: 'log-1' }, error: null }) // line 1 rpc
+    enqueue({ data: null, error: null }) // finalize update
+
+    const op = makePendingOp({
+      params: { line_ids: [uuidAt(1)], dimensions: { '6': 'P01' }, reason: 'Retro-taggning' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ retagged: 1, mode: 'replace' })
+    // No line read: a replace sends exactly the staged bag.
+    const tables = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(tables).not.toContain('journal_entry_lines')
+    expect((supabase.rpc as ReturnType<typeof vi.fn>).mock.calls[0][1]).toMatchObject({ p_dimensions: { '6': 'P01' } })
+  })
+
+  it('merge reads the lines at approval, keeps their other dimensions and never replaces a line it cannot read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: [
+        { id: uuidAt(1), journal_entry_id: 'entry-1', dimensions: { '1': 'KS01', '6': 'P00' } },
+        { id: uuidAt(2), journal_entry_id: 'entry-1', dimensions: {} },
+        // A line of another company: its entry is not the company's.
+        { id: uuidAt(3), journal_entry_id: 'entry-foreign', dimensions: { '1': 'X' } },
+      ],
+      error: null,
+    }) // journal_entry_lines by id
+    enqueue({ data: [{ id: 'entry-1' }], error: null }) // the company's entries among them
+    enqueue({ data: { changed: true, log_id: 'log-1' }, error: null }) // line 1 rpc
+    enqueue({ data: { changed: true, log_id: 'log-2' }, error: null }) // line 2 rpc
+    enqueue({ data: null, error: null }) // finalize update
+
+    const op = makePendingOp({
+      params: {
+        line_ids: [uuidAt(1), uuidAt(2), uuidAt(3)],
+        dimensions: { '6': 'P01' },
+        mode: 'merge',
+        reason: 'Projektet rättas',
+      },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ retagged: 2, unchanged: 0, failed_count: 1, mode: 'merge' })
+    expect(result.data?.failed).toEqual([{ line_id: uuidAt(3), error: 'Verifikationsraden hittades inte.' }])
+
+    const rpc = supabase.rpc as ReturnType<typeof vi.fn>
+    expect(rpc).toHaveBeenCalledTimes(2)
+    // Line 1 keeps its kostnadsställe; only projekt changes.
+    expect(rpc.mock.calls[0][1]).toMatchObject({ p_line_id: uuidAt(1), p_dimensions: { '1': 'KS01', '6': 'P01' } })
+    expect(rpc.mock.calls[1][1]).toMatchObject({ p_line_id: uuidAt(2), p_dimensions: { '6': 'P01' } })
+  })
+
+  it('rejects a mode that is neither merge nor replace at the commit boundary', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher reject update
+
+    const op = makePendingOp({
+      params: { line_ids: [uuidAt(1)], dimensions: { '6': 'P01' }, mode: 'append', reason: 'Retro-taggning' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toMatch(/Invalid mode/)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('partial failure: continues past a failing line and reports it', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
@@ -227,6 +301,7 @@ describe('commitPendingOperation: retag_line_dimensions, execution', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
+    expect(result.code).toBe('DIMENSION_RETAG_FAILED')
     expect(result.error).toMatch(/Ingen rad kunde taggas om \(2 rader misslyckades\)/)
     expect(result.error).toMatch(/Verifikationsraden hittades inte/)
   })

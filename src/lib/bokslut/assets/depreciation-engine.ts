@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createAssetDepreciationEntry } from '@/lib/bookkeeping/engine'
 import { AssetDepreciationRefusedError } from '@/lib/bookkeeping/errors'
+import { roundOre } from '@/lib/money'
 import type {
   Asset,
   FiscalPeriod,
@@ -37,13 +38,18 @@ export interface DepreciationProposal {
  * Compute avskrivning för en enskild tillgång under en given fiscal period.
  *
  * Ordinary depreciation is always linear at asset level and pro-rates by the
- * active-life overlap. The pooled 30, 20 and 25 percent tax rules live in
+ * active-life overlap, scaled by the fiscal year's length (see
+ * fiscalYearLengthFactor). The pooled 30, 20 and 25 percent tax rules live in
  * tax-depreciation.ts and never create ordinary per-asset postings.
  */
 export function computeAnnualDepreciation(
   asset: Asset,
   fiscalPeriod: Pick<FiscalPeriod, 'period_start' | 'period_end'>,
-  _priorAccumulated: number = 0,
+  /** Depreciation booked IN ACCOUNTED for this asset before this period
+   *  (posted schedules). Excludes the opening balance: that is read from the
+   *  asset itself. Only the opening-balance path uses it, to cap the charge
+   *  at the remaining value. */
+  priorAccumulated: number = 0,
 ): { amount: number; proRated: boolean } {
   if (asset.disposed_at && asset.disposed_at < fiscalPeriod.period_start) {
     return { amount: 0, proRated: false }
@@ -60,7 +66,109 @@ export function computeAnnualDepreciation(
     return { amount: result.amount, proRated: result.proRated }
   }
 
+  const opening = openingDepreciationOf(asset)
+  if (opening) {
+    return computeLinearFromOpening(asset, fiscalPeriod, opening, priorAccumulated)
+  }
+
   return computeLinearAnnual(asset, fiscalPeriod)
+}
+
+export interface OpeningDepreciation {
+  /** Ackumulerad avskrivning already on the books, in SEK (öre-rounded). */
+  amount: number
+  /** ISO date the amount is stated per (inclusive). */
+  date: string
+}
+
+/**
+ * The asset's opening accumulated depreciation (depreciation booked in a
+ * previous system before the asset entered Accounted), or null when there is
+ * none. It is part of the accumulated depreciation on the books but was never
+ * posted by Accounted, so every place that sums posted schedules must add it.
+ */
+export function openingDepreciationOf(asset: Asset): OpeningDepreciation | null {
+  const amount = roundOre(Number(asset.opening_accumulated_depreciation ?? 0) || 0)
+  const date = asset.opening_depreciation_date ?? null
+  if (amount <= 0 || !date) return null
+  return { amount, date }
+}
+
+/**
+ * Opening accumulated depreciation that is already on the books at the START
+ * of a period beginning `periodStart`: the whole opening amount when it is
+ * stated per a date before that, else 0.
+ */
+export function openingAccumulatedBefore(asset: Asset, periodStart: string): number {
+  const opening = openingDepreciationOf(asset)
+  return opening && opening.date < periodStart ? opening.amount : 0
+}
+
+/**
+ * Linear planenlig avskrivning for an asset that arrived partly depreciated.
+ *
+ * The remaining depreciable amount (cost - salvage - opening accumulated
+ * depreciation) is spread linearly over the remaining useful life, which
+ * runs from the day after the opening date to the end of the original life
+ * (acquisition_date + useful_life_months). Depreciation for periods on or
+ * before the opening date is 0: it is already in the opening amount.
+ *
+ * When the previous system followed the same linear plan this reproduces
+ * the original schedule exactly (the remaining amount over the remaining
+ * months is the original annual rate). When it did not, the plan continues
+ * from the actual book value, so the asset is fully depreciated exactly when
+ * the life ends and never below its salvage value.
+ *
+ * The charge is capped at what is left after the opening amount and the
+ * depreciation already booked in Accounted, so the final period absorbs the
+ * whole-krona rounding and the total lands öre-exactly on the remaining
+ * value.
+ */
+function computeLinearFromOpening(
+  asset: Asset,
+  fiscalPeriod: Pick<FiscalPeriod, 'period_start' | 'period_end'>,
+  opening: OpeningDepreciation,
+  priorAccumulated: number,
+): { amount: number; proRated: boolean } {
+  const acquisitionCost = Number(asset.acquisition_cost)
+  const salvageValue = Number(asset.salvage_value)
+  const remainingBase = roundOre(acquisitionCost - salvageValue - opening.amount)
+  if (remainingBase <= 0) return { amount: 0, proRated: false }
+
+  const acquisition = isoToDate(asset.acquisition_date)
+  const lifeEndExclusive = addMonths(acquisition, asset.useful_life_months)
+  const remainingStart = maxDate(addDays(isoToDate(opening.date), 1), acquisition)
+  if (remainingStart >= lifeEndExclusive) return { amount: 0, proRated: false }
+
+  const remainingMonths = fractionalMonthsBetween(remainingStart, lifeEndExclusive)
+  if (remainingMonths <= 0) return { amount: 0, proRated: false }
+
+  const periodStart = isoToDate(fiscalPeriod.period_start)
+  const periodEndInclusive = isoToDate(fiscalPeriod.period_end)
+  const disposalEnd = asset.disposed_at ? isoToDate(asset.disposed_at) : null
+
+  const windowStart = maxDate(remainingStart, periodStart)
+  let windowEnd = minDate(periodEndInclusive, addDays(lifeEndExclusive, -1))
+  if (disposalEnd) windowEnd = minDate(windowEnd, disposalEnd)
+  if (windowEnd < windowStart) return { amount: 0, proRated: false }
+
+  const fullPeriodDays = daysBetween(periodStart, periodEndInclusive) + 1
+  const windowDays = daysBetween(windowStart, windowEnd) + 1
+  const fraction = windowDays / fullPeriodDays
+  const proRated = fraction < 0.999
+
+  const annualAmount = (remainingBase * 12) / remainingMonths
+  const planned = Math.round(
+    annualAmount * fraction * fiscalYearLengthFactor(periodStart, periodEndInclusive),
+  )
+  const left = roundOre(remainingBase - (Number(priorAccumulated) || 0))
+  if (left <= 0) return { amount: 0, proRated }
+
+  // The period that reaches the end of the life takes exactly what is left,
+  // so whole-krona rounding never strands öre on the asset.
+  const reachesLifeEnd = windowEnd >= addDays(lifeEndExclusive, -1)
+  const amount = reachesLifeEnd ? left : Math.min(planned, left)
+  return { amount: roundOre(amount), proRated }
 }
 
 function computeLinearAnnual(
@@ -94,9 +202,10 @@ function computeLinearAnnual(
   const fraction = windowDays / fullPeriodDays
   const proRated = fraction < 0.999
 
-  // Full-year amount = annualRate × depreciableBase (linear).
+  // Full-year amount = annualRate × depreciableBase (linear), for 12 months.
   const annualAmount = depreciableBase * annualRate
-  const proRatedAmount = annualAmount * fraction
+  const proRatedAmount =
+    annualAmount * fraction * fiscalYearLengthFactor(periodStart, periodEndInclusive)
 
   return {
     amount: Math.round(proRatedAmount),
@@ -121,10 +230,11 @@ export interface ComponentDepreciationResult {
  *
  * Mirrors `computeLinearAnnual` per component: the depreciable base is
  * `cost − salvage_value` (salvage defaults to 0 when omitted), and the
- * annual amount is `depreciableBase × 12 / useful_life_months`. The
- * pro-ration window is the overlap between the period and the asset's
- * active life: components share the same acquisition_date and disposal
- * date as the parent asset, because BFNAR 2012:1 treats them as a single
+ * annual amount is `depreciableBase × 12 / useful_life_months`, scaled by
+ * the fiscal year's length like every other path. The pro-ration window is
+ * the overlap between the period and the asset's active life: components
+ * share the same acquisition_date and disposal date as the parent asset,
+ * because BFNAR 2012:1 treats them as a single
  * accounting unit for acquisition / disposal purposes; only the depreciation
  * schedule is split.
  *
@@ -149,6 +259,7 @@ export function computeComponentDepreciation(
   const periodEndInclusive = isoToDate(fiscalPeriod.period_end)
   const disposalEnd = asset.disposed_at ? isoToDate(asset.disposed_at) : null
   const fullPeriodDays = daysBetween(periodStart, periodEndInclusive) + 1
+  const yearLength = fiscalYearLengthFactor(periodStart, periodEndInclusive)
 
   const perComponent: { name: string; amount: number }[] = []
   let total = 0
@@ -181,7 +292,7 @@ export function computeComponentDepreciation(
     if (fraction < 0.999) anyProRated = true
 
     const annualAmount = depreciableBase * annualRate
-    const proRatedAmount = annualAmount * fraction
+    const proRatedAmount = annualAmount * fraction * yearLength
     const rounded = Math.round(proRatedAmount)
     perComponent.push({ name: label, amount: rounded })
     total += rounded
@@ -272,8 +383,13 @@ export async function proposeAnnualPostings(
     if (amount <= 0) continue
 
     const existingSchedule = existing.get(asset.id)
-    const netBookValueAfter =
-      Math.round((Number(asset.acquisition_cost) - accumulatedBefore - amount) * 100) / 100
+    // Restvärde after this period: cost less the opening accumulated
+    // depreciation from a previous system, less what Accounted has booked,
+    // less this period's charge.
+    const openingAmount = openingDepreciationOf(asset)?.amount ?? 0
+    const netBookValueAfter = roundOre(
+      Number(asset.acquisition_cost) - openingAmount - accumulatedBefore - amount,
+    )
 
     items.push({
       asset,
@@ -359,7 +475,12 @@ export async function commitAnnualPostings(
           source_type: 'year_end',
           lines,
         },
-        { asset_id: item.asset.id, planned_depreciation: item.amount },
+        {
+          asset_id: item.asset.id,
+          planned_depreciation: item.amount,
+          opening_accumulated_depreciation: Number(item.asset.opening_accumulated_depreciation ?? 0),
+          opening_depreciation_date: item.asset.opening_depreciation_date ?? null,
+        },
       )
       posted.push({ assetId: item.asset.id, entry, scheduleId })
     } catch (error) {
@@ -413,6 +534,37 @@ function maxDate(a: Date, b: Date): Date {
 
 function minDate(a: Date, b: Date): Date {
   return a < b ? a : b
+}
+
+/**
+ * The fiscal year's length in months over 12: exactly 1 for every 12-month
+ * year, 1.25 for a förlängt 15-month first year, 0.5 for a förkortat 6-month
+ * year. Every path multiplies its 12-month amount by this, after the day
+ * share of the year the asset was in use.
+ *
+ * K2 (BFNAR 2016:10) punkt 10.23, BFN's kommentar: "Omfattar räkenskapsåret
+ * annan tid än 12 månader behöver avskrivningen justeras utifrån
+ * räkenskapsårets längd." Without it a 15-month year never carried more
+ * than 12 months of depreciation and a 6-month year carried a full 12.
+ */
+function fiscalYearLengthFactor(periodStart: Date, periodEndInclusive: Date): number {
+  return fractionalMonthsBetween(periodStart, addDays(periodEndInclusive, 1)) / 12
+}
+
+/**
+ * Months from `start` (inclusive) to `endExclusive`, fractional: whole
+ * calendar months stepped with the same end-of-month clamping as addMonths,
+ * plus the leftover days as a share of the next month's length.
+ */
+function fractionalMonthsBetween(start: Date, endExclusive: Date): number {
+  if (endExclusive <= start) return 0
+  let whole = 0
+  while (addMonths(start, whole + 1) <= endExclusive) whole += 1
+  const stepStart = addMonths(start, whole)
+  const stepEnd = addMonths(start, whole + 1)
+  const leftover = daysBetween(stepStart, endExclusive)
+  const stepDays = daysBetween(stepStart, stepEnd)
+  return whole + (stepDays > 0 ? leftover / stepDays : 0)
 }
 
 function daysBetween(a: Date, b: Date): number {

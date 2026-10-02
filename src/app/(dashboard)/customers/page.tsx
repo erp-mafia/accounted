@@ -7,7 +7,6 @@ import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -389,23 +388,17 @@ function CustomersPageInner() {
                           {customer.customer_number || ''}
                         </td>
                       )}
-                      {/* overflow-hidden: see #2003, the shrink-0 verified
-                          badge cannot truncate. */}
-                      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
-                        <span className="flex min-w-0 items-center gap-2">
-                          <Link
-                            href={`/customers/${customer.id}`}
-                            className="truncate hover:underline"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {customer.name}
-                          </Link>
-                          {customer.org_number && customer.vat_number_validated && (
-                            <Badge variant="success" className="shrink-0 font-normal">
-                              {t('verified')}
-                            </Badge>
-                          )}
-                        </span>
+                      {/* The VIES "Verifierad" mark lives on the customer
+                          page: a success chip on most rows marks the normal
+                          state, not an exception (convention 5). */}
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                        <Link
+                          href={`/customers/${customer.id}`}
+                          className="block truncate hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {customer.name}
+                        </Link>
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
                         {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}

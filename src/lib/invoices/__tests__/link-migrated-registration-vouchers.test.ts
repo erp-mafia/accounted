@@ -333,13 +333,80 @@ describe('linkMigratedRegistrationVouchers', () => {
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
   })
 
-  it('reports ambiguous for a series-less ref that hits several series', async () => {
-    queue({ vouchers: [voucher({ id: 'je-1', series: 'A' }), voucher({ id: 'je-1b', series: 'B' })] })
+  it('reports ambiguous for a series-less ref when several dated series carry the total, or none does', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-1', series: 'A' }), voucher({ id: 'je-1b', series: 'B' })],
+      entries: [{ id: 'je-1', status: 'posted' }, { id: 'je-1b', status: 'posted' }],
+      lines: [...supplierLines('je-1'), ...supplierLines('je-1b')],
+      supplierRefs: [],
+      customerRefs: [],
+    })
+    const both = await run([input({ invoiceId: 'si-1', sourceVoucher: { series: null, number: 329 } })])
+    expect(both.ambiguous).toBe(1)
+    expect(both.reports[0].reason).toContain('2 series dated with the invoice; 2 of them carry the invoice total')
+    expect(updateCalls('supplier_invoices')).toHaveLength(0)
 
-    const result = await run([input({ invoiceId: 'si-1', sourceVoucher: { series: null, number: 329 } })])
+    mock = createQueuedMockSupabase()
+    queue({
+      vouchers: [voucher({ id: 'je-1', series: 'A' }), voucher({ id: 'je-1b', series: 'B' })],
+      entries: [{ id: 'je-1', status: 'posted' }, { id: 'je-1b', status: 'posted' }],
+      lines: [...supplierLines('je-1', 500), ...supplierLines('je-1b', 700)],
+      supplierRefs: [],
+      customerRefs: [],
+    })
+    const none = await run([input({ invoiceId: 'si-1', sourceVoucher: { series: null, number: 329 } })])
+    expect(none.ambiguous).toBe(1)
+    expect(none.reports[0].reason).toContain('0 of them carry the invoice total')
+    expect(updateCalls('supplier_invoices')).toHaveLength(0)
+  })
 
-    expect(result.ambiguous).toBe(1)
-    expect(result.reports[0].reason).toContain('2 series')
+  /**
+   * A Visma customer's ledger keeps kundfakturor in series K and their
+   * payments in series I, numbered independently, while Visma names only the
+   * number: 2933 imported invoices sat in review with one date-and-amount
+   * match each.
+   */
+  it('picks the series dated with the invoice when a series-less number is carried by several', async () => {
+    queue({
+      vouchers: [
+        voucher({ id: 'je-k', series: 'K', number: 1884, date: '2025-06-01' }),
+        voucher({ id: 'je-i', series: 'I', number: 1884, date: '2025-04-01' }),
+      ],
+      entries: [{ id: 'je-k', status: 'posted' }],
+      lines: customerLines('je-k', 4156),
+      supplierRefs: [],
+      customerRefs: [],
+      updates: [{ data: [{ id: 'inv-1' }] }],
+    })
+
+    const result = await run([input({ invoiceId: 'inv-1', kind: 'customer', sourceVoucher: { series: null, number: 1884 },
+      invoiceDate: '2025-06-01', totalSek: 4156 })])
+
+    expect(result.linked).toBe(1)
+    expect(result.reports[0].journalEntryId).toBe('je-k')
+    expect(updateCalls('invoices')[0].args[0]).toEqual({ journal_entry_id: 'je-k' })
+  })
+
+  it('picks, among several series dated with the invoice, the one that books its total on 1510', async () => {
+    queue({
+      vouchers: [
+        voucher({ id: 'je-k', series: 'K', number: 1884, date: '2025-06-01' }),
+        voucher({ id: 'je-i', series: 'I', number: 1884, date: '2025-06-19' }),
+      ],
+      entries: [{ id: 'je-k', status: 'posted' }, { id: 'je-i', status: 'posted' }],
+      // The payment voucher nets the receivable the other way: Dr 1930, Cr 1510.
+      lines: [...customerLines('je-k', 4156), line('je-i', '1930', 4156, 0), line('je-i', '1510', 0, 4156)],
+      supplierRefs: [],
+      customerRefs: [],
+      updates: [{ data: [{ id: 'inv-1' }] }],
+    })
+
+    const result = await run([input({ invoiceId: 'inv-1', kind: 'customer', sourceVoucher: { series: null, number: 1884 },
+      invoiceDate: '2025-06-01', totalSek: 4156 })])
+
+    expect(result.linked).toBe(1)
+    expect(result.reports[0].journalEntryId).toBe('je-k')
+    expect(updateCalls('invoices')).toHaveLength(1)
   })
 
   it('reports ambiguous for both invoices when they resolve to the same verifikat', async () => {

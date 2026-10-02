@@ -10,7 +10,7 @@ import {
   resolveCashFlowOmission,
 } from '../cash-flow-omission'
 import { applyCashFlowOmission } from '../model'
-import { K3_CASH_FLOW_FAILED_WARNING, k3ContentsNotice } from '../build-data'
+import { K3_CASH_FLOW_FAILED_WARNING, K3_CASH_FLOW_TAX_ALLOCATION_WARNING, k3ContentsNotice } from '../build-data'
 import {
   emptyAnnualReportProfile,
   type AnnualReportEligibilityResult,
@@ -151,6 +151,7 @@ const unlistedProfile = {
 describe('applyCashFlowOmission', () => {
   it('drops the statement and its warnings when the omission is honoured', () => {
     const report = makeReport('k3', true)
+    report.warnings.push(K3_CASH_FLOW_TAX_ALLOCATION_WARNING)
     applyCashFlowOmission(report, eligibility('smaller'), twoYears, unlistedProfile)
     expect(report.kassaflodesanalys).toBeUndefined()
     expect(report.kassaflodesanalys_omission).toMatchObject({ rule: 'allowed', omitted: true })

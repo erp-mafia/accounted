@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
+import { isDeductionType } from '@/lib/invoices/rot-rut-rules'
 
 /**
  * GET /api/rot-rut/payout-requests
@@ -28,7 +29,9 @@ export const GET = withRouteContext('rot_rut.requests.list', async (request, ctx
     .order('created_at', { ascending: false })
     .limit(100)
 
-  if (typeFilter === 'rot' || typeFilter === 'rut') {
+  // gron_teknik is a valid filter (the column allows it); it lists nothing
+  // until the grön teknik file records begäran rows.
+  if (isDeductionType(typeFilter)) {
     query = query.eq('deduction_type', typeFilter)
   }
 

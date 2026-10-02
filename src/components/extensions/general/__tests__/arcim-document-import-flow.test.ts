@@ -28,6 +28,8 @@ function result(
     skipped: 0,
     unmatched: 2,
     failed: 0,
+    locked: 0,
+    lockedPeriods: [],
     dryRun: true,
     unmatchedSamples: [],
     total: 7,
@@ -44,7 +46,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
-describe('Fortnox document follow-up state', () => {
+describe('document follow-up state', () => {
   it('offers the prompt after a successful Fortnox migration using the honest found count', () => {
     const discovering = arcimDocumentImportReducer(
       INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
@@ -59,11 +61,26 @@ describe('Fortnox document follow-up state', () => {
     expect(offered.found).toBe(7)
   })
 
-  it('does not start discovery for a non-Fortnox migration', () => {
+  it('offers the prompt after a successful Bokio migration too (crm#190)', () => {
+    const discovering = arcimDocumentImportReducer(
+      INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
+      { type: 'discovery-started', provider: 'bokio', migrationSucceeded: true },
+    )
+    expect(discovering).toMatchObject({ phase: 'discovering', provider: 'bokio' })
+
+    const offered = arcimDocumentImportReducer(discovering, {
+      type: 'discovery-succeeded',
+      result: result({ provider: 'bokio', scanned: 12, linked: 10, unmatched: 2 }),
+    })
+
+    expect(offered).toMatchObject({ phase: 'offered', provider: 'bokio', found: 12 })
+  })
+
+  it('does not start discovery for a provider without an underlag import', () => {
     expect(
       arcimDocumentImportReducer(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE, {
         type: 'discovery-started',
-        provider: 'bokio',
+        provider: 'visma',
         migrationSucceeded: true,
       }),
     ).toEqual(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE)
@@ -87,18 +104,20 @@ describe('Fortnox document follow-up state', () => {
     expect(resolveArcimDocumentFollowUpProvider('fortnox', null)).toBe('fortnox')
     expect(resolveArcimDocumentFollowUpProvider('fortnox', 'bokio')).toBe('fortnox')
     expect(resolveArcimDocumentFollowUpProvider(undefined, 'fortnox')).toBe('fortnox')
-    expect(resolveArcimDocumentFollowUpProvider('bokio', 'fortnox')).toBeNull()
+    expect(resolveArcimDocumentFollowUpProvider('bokio', 'fortnox')).toBe('bokio')
+    expect(resolveArcimDocumentFollowUpProvider('visma', 'fortnox')).toBeNull()
   })
 
   it('keeps a dry-run failure in a retryable document state, separate from migration success', () => {
     const problem = { code: 'TRANSIENT_ERROR', requestId: 'req_test', reconnectRequired: false }
     const state = arcimDocumentImportReducer(
-      { phase: 'discovering', found: 0, result: null, problem: null },
+      { phase: 'discovering', provider: 'fortnox', found: 0, result: null, problem: null },
       { type: 'discovery-failed', problem },
     )
 
     expect(state).toEqual({
       phase: 'discovery-error',
+      provider: 'fortnox',
       found: 0,
       result: null,
       problem,
@@ -115,7 +134,7 @@ describe('Fortnox document follow-up state', () => {
       failed: 1,
     })
     const state = arcimDocumentImportReducer(
-      { phase: 'importing', found: 7, result: null, problem: null },
+      { phase: 'importing', provider: 'fortnox', found: 7, result: null, problem: null },
       { type: 'import-succeeded', result: imported },
     )
 
@@ -130,7 +149,7 @@ describe('Fortnox document follow-up state', () => {
 
   it('keeps the dry-run result offered until the user explicitly starts import', () => {
     const offered = arcimDocumentImportReducer(
-      { phase: 'discovering', found: 0, result: null, problem: null },
+      { phase: 'discovering', provider: 'fortnox', found: 0, result: null, problem: null },
       { type: 'discovery-succeeded', result: result({ dryRun: true }) },
     )
 
@@ -143,7 +162,7 @@ describe('Fortnox document follow-up state', () => {
   it('allows OAuth success to replace an earlier popup-close failure', () => {
     const problem = { code: null, requestId: null, reconnectRequired: true }
     const failed = arcimDocumentImportReducer(
-      { phase: 'reconnecting', found: 7, result: result(), problem },
+      { phase: 'reconnecting', provider: 'fortnox', found: 7, result: result(), problem },
       { type: 'import-failed', problem },
     )
     const importing = arcimDocumentImportReducer(failed, { type: 'import-started' })
@@ -341,6 +360,25 @@ describe('resumable import (one server slice per call)', () => {
     })
   })
 
+  it('reads an older server answer without the locked-year fields as nothing locked', async () => {
+    const { locked: _l, lockedPeriods: _lp, ...legacy } = result({ scanned: 4 })
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ success: true, result: legacy }))
+
+    const normalized = await requestArcimDocumentImport('consent-1', true, fetcher)
+
+    expect(normalized).toMatchObject({ scanned: 4, locked: 0, lockedPeriods: [] })
+  })
+
+  it('keeps the locked count and years a server reports (crm#251)', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      jsonResponse({ success: true, result: result({ locked: 491, lockedPeriods: ['2022/2023', '2024', '2025'] }) }),
+    )
+
+    const normalized = await requestArcimDocumentImport('consent-1', true, fetcher)
+
+    expect(normalized).toMatchObject({ locked: 491, lockedPeriods: ['2022/2023', '2024', '2025'] })
+  })
+
   it('sends the cursor only when resuming', async () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({ success: true, result: result() }))
 
@@ -370,6 +408,15 @@ describe('resumable import (one server slice per call)', () => {
       nextCursor: 'file-37',
     })
     expect(merged.unmatchedSamples).toHaveLength(2)
+  })
+
+  it('sums locked receipts across slices and keeps each locked year once, oldest first', () => {
+    const merged = mergeArcimDocumentImportResults(
+      result({ locked: 3, lockedPeriods: ['2024', '2025'] }),
+      result({ locked: 2, lockedPeriods: ['2022/2023', '2024'] }),
+    )
+
+    expect(merged).toMatchObject({ locked: 5, lockedPeriods: ['2022/2023', '2024', '2025'] })
   })
 
   it('loops until the server reports the end, passing the cursor back and reporting running totals', async () => {
@@ -430,7 +477,7 @@ describe('resumable import (one server slice per call)', () => {
 
   it('keeps the import phase while recording running totals, then completes with the honest total', () => {
     const importing = arcimDocumentImportReducer(
-      { phase: 'offered', found: 40, result: result({ dryRun: true, total: 40 }), problem: null },
+      { phase: 'offered', provider: 'fortnox', found: 40, result: result({ dryRun: true, total: 40 }), problem: null },
       { type: 'import-started' },
     )
     const progressed = arcimDocumentImportReducer(importing, {

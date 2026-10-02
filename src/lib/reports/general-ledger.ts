@@ -57,8 +57,10 @@ export async function generateGeneralLedger(
   accountFrom?: string,
   accountTo?: string,
   options?: {
-    /** SIE dim → code filter ({"6":"P001"}). Opening balances are dropped
-     *  when set: they are company-wide and cannot be dimension-scoped. */
+    /** SIE dim → code filter ({"6":"P001"}). Opening balances are scoped
+     *  to it too: the IB lines tagged with the object (issue #3313), so a
+     *  project's ledger opens at the project's IB. A dimension that resets
+     *  annually (registry flag) opens at zero. */
     dimensions?: Record<string, string>
     /** Inclusive date sub-range within the fiscal period (kontoanalys).
      *  Lines before fromDate roll into each account's opening balance so
@@ -88,15 +90,13 @@ export async function generateGeneralLedger(
 
   // ── Opening balances (IB) ──────────────────────────────────────
   const { balances: openingByAccount, obEntryId } = await getOpeningBalances(
-    supabase, companyId, period
+    supabase, companyId, period, { dimensions: dimensionFilter }
   )
 
   // Convert to net balance (debit - credit) for GL running balance
   const openingBalances = new Map<string, number>()
-  if (!dimensionFilter) {
-    for (const [accNum, { debit, credit }] of openingByAccount) {
-      openingBalances.set(accNum, debit - credit)
-    }
+  for (const [accNum, { debit, credit }] of openingByAccount) {
+    openingBalances.set(accNum, debit - credit)
   }
 
   // ── Period lines via the two-step entry-lines fetch (excluding OB entry) ──
@@ -207,9 +207,8 @@ export async function generateGeneralLedger(
   }
 
   // Opening balance at the range start: period IB plus movements before
-  // fromDate. Under a dimension filter the IB map is empty (company-wide IB
-  // cannot be dimension-scoped) but pre-range movements are dimension-scoped
-  // by the query, so they still roll in.
+  // fromDate. Under a dimension filter both are scoped to it: the IB to the
+  // object's tagged IB lines, the pre-range movements by the query.
   const effectiveOpening = new Map<string, number>(openingBalances)
   for (const [accNum, movement] of preRangeMovements) {
     effectiveOpening.set(accNum, roundOre((effectiveOpening.get(accNum) || 0) + movement))

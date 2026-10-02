@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef, useState, type ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
 
 /**
  * Three-part address entry (street / postal code / city) with Enter
@@ -75,9 +76,9 @@ export default function AddressFields({ initial, onChange, placeholders, enterHi
       </div>
       <p className="jny-enterhint">{enterHint}</p>
       <div className="jny-qactions">
-        <button type="button" className="jny-btn-quiet" onClick={() => onSubmit({})}>
+        <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => onSubmit({})}>
           {skipLabel}
-        </button>
+        </Button>
       </div>
     </>
   )

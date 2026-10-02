@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Pencil, X, Loader2, ArrowLeft, ArrowRight } from 'lucide-react'
+import { Pencil, X, ArrowLeft, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -258,7 +258,7 @@ export default function ReviewCard({
                       onClick={() => setAvatarId(opt.id)}
                       aria-label={`Välj avatar ${opt.label}`}
                       className={cn(
-                        'aspect-square rounded-full overflow-hidden transition-all',
+                        'aspect-square rounded-full overflow-hidden transition-[opacity,box-shadow] duration-150',
                         avatarId === opt.id
                           ? 'ring-2 ring-foreground ring-offset-2 ring-offset-background'
                           : 'opacity-70 hover:opacity-100 hover:ring-1 hover:ring-border',
@@ -299,7 +299,7 @@ export default function ReviewCard({
                     onBlur={() => setEditingSummary(false)}
                     autoFocus
                     rows={5}
-                    className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   />
                 ) : (
                   <p className="text-sm leading-6 italic text-muted-foreground">
@@ -428,7 +428,7 @@ export default function ReviewCard({
                   onChange={(e) => setSeedMemory(e.target.value)}
                   rows={3}
                   placeholder="Skriv något, eller lämna tomt"
-                  className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                  className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </section>
             </>
@@ -457,10 +457,9 @@ export default function ReviewCard({
               </Button>
             )}
             {step === 2 && (
-              <Button size="lg" onClick={handleVerify} disabled={verifying}>
+              <Button size="lg" onClick={handleVerify} loading={verifying}>
                 {verifying ? (
                   <>
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
                     Sparar…
                   </>
                 ) : (
@@ -634,7 +633,7 @@ function Chip({
       {label}
       <button
         onClick={onRemove}
-        className="ml-1 rounded-full hover:bg-foreground/10 p-0.5 transition-colors"
+        className="ml-1 rounded-full hover:bg-secondary/60 p-0.5 transition-colors"
         aria-label={`Ta bort ${label}`}
       >
         <X className="h-3 w-3" />

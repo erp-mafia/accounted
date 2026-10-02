@@ -3,11 +3,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   countDeadlinesNeedingAction,
+  countFailedPeppolDeliveries,
   countInboxDocuments,
   countOverdueInvoices,
   countPendingOperations,
   countReconciliationDue,
   countSuggestedMatches,
+  countUnclassifiedDocuments,
+  REVIEW_RECENT_DAYS,
   countSupplierInvoicesAwaitingApproval,
   countUnbookedSkattekontoRows,
   countUnbookedTransactions,
@@ -812,5 +815,37 @@ describe('listSkattekontoPaymentDue', () => {
     enqueue({ data: [] })
     enqueue({ data: null })
     await expect(countSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBe(0)
+  })
+})
+
+describe('countUnclassifiedDocuments', () => {
+  beforeEach(() => reset())
+
+  it('asks only about documents uploaded in the last REVIEW_RECENT_DAYS days: typed history is not a to-do', async () => {
+    enqueue({ count: 2 })
+    expect(await countUnclassifiedDocuments(supabase, COMPANY)).toBe(2)
+    const since = findCall('document_classifications', 'gte') as [string, string] | undefined
+    expect(since?.[0]).toBe('document_attachments.created_at')
+    const days = (Date.now() - new Date(since![1]).getTime()) / 86_400_000
+    expect(Math.round(days)).toBe(REVIEW_RECENT_DAYS)
+    expect(findCalls('document_classifications', 'is')).toEqual(expect.arrayContaining([['document_attachments.journal_entry_id', null]]))
+  })
+})
+
+
+describe('countFailedPeppolDeliveries', () => {
+  beforeEach(() => reset())
+
+  it('counts the ids the membership-checked SQL function returns on the session client', async () => {
+    enqueue({ data: ['inv-1', 'inv-2'] })
+    await expect(countFailedPeppolDeliveries(supabase, COMPANY)).resolves.toBe(2)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('peppol_failed_invoice_ids', expect.objectContaining({ p_company_id: COMPANY }))
+    // No table read: peppol_deliveries is not granted to authenticated.
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
+  it('soft-fails to 0 on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(countFailedPeppolDeliveries(supabase, COMPANY)).resolves.toBe(0)
   })
 })

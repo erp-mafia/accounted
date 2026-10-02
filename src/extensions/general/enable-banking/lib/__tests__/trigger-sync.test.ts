@@ -2,15 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   syncAccountTransactions: vi.fn(),
-  updateBalancesFromSync: vi.fn(),
+  rpc: vi.fn(),
   emit: vi.fn(),
 }))
 
 vi.mock('../sync', () => ({
   syncAccountTransactions: (...args: unknown[]) => mocks.syncAccountTransactions(...args),
-}))
-vi.mock('@/lib/cash-accounts/service', () => ({
-  updateBalancesFromSync: (...args: unknown[]) => mocks.updateBalancesFromSync(...args),
 }))
 vi.mock('@/lib/events/bus', () => ({
   eventBus: { emit: (...args: unknown[]) => mocks.emit(...args) },
@@ -25,6 +22,7 @@ import {
 } from '../api-client'
 import { DAILY_QUOTA_COOLDOWN_MS } from '../sync-lease'
 import { SYNC_COOLDOWN_MS, triggerConnectionSync } from '../trigger-sync'
+import { BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE } from '@/lib/bank-sync/ingest-route'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CONNECTION_ID = '11111111-1111-4111-8111-111111111111'
@@ -48,11 +46,12 @@ const EPOCH = '1970-01-01T00:00:00.000Z'
 
 function makeClient(state: State) {
   return {
+    rpc: mocks.rpc,
     from: (table: string) => {
       let updatePayload: Record<string, unknown> | null = null
       let lteFilter: { column: string; value: string } | null = null
       const chain: Record<string, unknown> = {}
-      const passthrough = ['select', 'eq', 'gte', 'order', 'limit', 'in']
+      const passthrough = ['select', 'eq', 'gte', 'order', 'limit', 'in', 'is']
       for (const m of passthrough) chain[m] = vi.fn(() => chain)
       chain.lte = vi.fn((column: string, value: string) => {
         lteFilter = { column, value }
@@ -142,8 +141,24 @@ describe('triggerConnectionSync', () => {
       leaseUntil: EPOCH,
     }
     mocks.syncAccountTransactions.mockResolvedValue({ imported: 2, duplicates: 5, errors: 0 })
-    mocks.updateBalancesFromSync.mockResolvedValue(undefined)
+    mocks.rpc.mockImplementation(async (name: string) => ({ data: name === 'persist_bank_sync_result' ? { applied: true } : true, error: null }))
     mocks.emit.mockResolvedValue(undefined)
+  })
+
+  it.each(['active', 'error'])('leaves %s connection state and cursor intact on a routing conflict', async status => {
+    state.connection = connection({ status, error_message: 'existing message' })
+    mocks.syncAccountTransactions.mockRejectedValue(Object.assign(new Error('BANK_CONFIGURATION_CHANGED'), { code: 'PT409' }))
+    expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status })
+    expect(mocks.rpc).not.toHaveBeenCalled()
+    expect(state.updates.every(update => Object.keys(update).join() === 'sync_lease_until')).toBe(true)
+  })
+
+  it('stores the account selection advice on an unresolved route, keeping status and cursor', async () => {
+    mocks.syncAccountTransactions.mockRejectedValue(Object.assign(new Error('BANK_INGEST_ROUTE_UNRESOLVED'), { code: 'PT409' }))
+    expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status: 'active' })
+    expect(mocks.rpc).not.toHaveBeenCalled()
+    expect(state.updates.filter(update => !('sync_lease_until' in update)))
+      .toEqual([{ error_message: BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE }])
   })
 
   it('syncs only the enabled accounts over the gap-aware window and stamps last_synced_at', async () => {
@@ -156,10 +171,12 @@ describe('triggerConnectionSync', () => {
     expect(result.to_date).toBe('2026-09-02')
     expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
     expect(mocks.syncAccountTransactions.mock.calls[0][4]).toMatchObject({ uid: 'acc-1' })
-    expect(state.updates.at(-1)).toMatchObject({ last_synced_at: result.last_synced_at })
-    // Write-back keeps the disabled account so the user's selection survives.
-    expect((state.updates.at(-1)!.accounts_data as unknown[]).length).toBe(2)
-    expect(mocks.updateBalancesFromSync).toHaveBeenCalledTimes(1)
+    expect(mocks.rpc).toHaveBeenCalledWith('persist_bank_sync_result', expect.objectContaining({
+      p_company_id: COMPANY_ID,
+      p_completed_at: result.last_synced_at,
+      p_accounts: [{ uid: 'acc-1', balance: 100 }],
+    }))
+    expect(state.updates.some(update => 'accounts_data' in update)).toBe(false)
     expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))
   })
 
@@ -170,6 +187,19 @@ describe('triggerConnectionSync', () => {
     if (!result.ok) return
     expect(result.from_date).toBe(new Date(NOW - 41 * DAY_MS).toISOString().split('T')[0])
     expect(mocks.syncAccountTransactions.mock.calls[0][8]).toMatchObject({ strategy: 'longest' })
+  })
+
+  it('does not report success or write a cursor when persistence rejects the fetched snapshot', async () => {
+    mocks.rpc.mockResolvedValue({ data: { applied: false, reason: 'session_changed' }, error: null })
+    expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED' })
+    expect(state.updates.some(update => 'last_synced_at' in update || 'accounts_data' in update)).toBe(false)
+    expect(mocks.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))
+  })
+
+  it('surfaces a database persistence error after bank rows have been fetched', async () => {
+    mocks.rpc.mockResolvedValue({ data: null, error: { code: '57014', message: 'timeout' } })
+    expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED' })
+    expect(state.updates.some(update => 'last_synced_at' in update)).toBe(false)
   })
 
   it('refuses with a cooldown when the connection synced within 15 minutes', async () => {
@@ -216,7 +246,7 @@ describe('triggerConnectionSync', () => {
     const result = await run()
     expect(result).toMatchObject({ ok: false, code: 'BANK_SYNC_COOLDOWN' })
     expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
-    expect(mocks.updateBalancesFromSync).not.toHaveBeenCalled()
+    expect(mocks.rpc).not.toHaveBeenCalled()
   })
 
   it('accepts a sync once a previous lease has expired', async () => {
@@ -259,7 +289,7 @@ describe('triggerConnectionSync', () => {
     state.connection = connection({ status: 'error', error_message: 'Banksynkningen misslyckades.' })
     const result = await run()
     expect(result.ok).toBe(true)
-    expect(state.updates.at(-1)).toMatchObject({ status: 'active', error_message: null })
+    expect(mocks.rpc).toHaveBeenCalledWith('persist_bank_sync_result', expect.anything())
   })
 
   it('refuses when every account is deselected', async () => {
@@ -283,7 +313,7 @@ describe('triggerConnectionSync', () => {
     mocks.syncAccountTransactions.mockRejectedValue(new SessionExpiredError(401, 'consent closed'))
     const result = await run()
     expect(result).toMatchObject({ ok: false, code: 'BANK_SESSION_EXPIRED', status: 'expired' })
-    expect(state.updates.at(-1)).toMatchObject({ status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE })
+    expect(mocks.rpc).toHaveBeenCalledWith('persist_bank_sync_failure', expect.objectContaining({ p_status: 'expired', p_message: REAUTH_REQUIRED_MESSAGE }))
   })
 
   it('suppresses auto-categorisation over a completed SIE import and for viewers', async () => {
@@ -307,7 +337,7 @@ describe('triggerConnectionSync: bank_connection.sync_failed (feedback seq 34010
       updates: [],
       leaseUntil: EPOCH,
     }
-    mocks.updateBalancesFromSync.mockResolvedValue(undefined)
+    mocks.rpc.mockImplementation(async (name: string) => ({ data: name === 'persist_bank_sync_result' ? { applied: true } : true, error: null }))
     mocks.emit.mockResolvedValue(undefined)
   })
 

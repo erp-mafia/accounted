@@ -535,6 +535,131 @@ describe('generateAgiDeclaration: utlägg repaid with the salary (#2331)', () =>
   })
 })
 
+describe('generateAgiDeclaration: sjuklön never reaches the HU', () => {
+  // FK499 TotalSjuklonekostnad fed högkostnadsskyddet för sjuklönekostnader,
+  // abolished 2024-07-01. Skatteverket's schema only allows the field up to
+  // period 202406 and rejects the whole file for any later period, so a run
+  // with sick pay must declare exactly like one without it.
+  it('omits FK499 for a run with sjuklön days and a karensavdrag', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    const withSjuklon = {
+      ...REGULAR_ROW,
+      line_items: [
+        { item_type: 'monthly_salary', amount: 40000, is_taxable: true, is_avgift_basis: true },
+        { item_type: 'sick_karens', amount: -1523, quantity: 1, is_taxable: true, is_avgift_basis: true },
+        { item_type: 'sick_day2_14', amount: -1904.76, quantity: 5, is_taxable: true, is_avgift_basis: true },
+      ],
+    }
+    enqueueHappyPath(enqueueMany, [withSjuklon])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    expect(result.xml).not.toContain('faltkod="499"')
+    expect(result.xml).not.toContain('TotalSjuklonekostnad')
+    expect(result.totals).not.toHaveProperty('totalSjuklonekostnad')
+    // The other HU totals are untouched by the sick rows.
+    expect(result.xml).toContain('faltkod="497">12000<')
+    expect(result.xml).toContain('faltkod="487">12568<')
+  })
+})
+
+describe('generateAgiDeclaration: växa-stöd never reaches the IU (Lag 2025:1334)', () => {
+  // FK062 ForstaAnstalld and FK063 VaxaStod have no valid period after 202512
+  // (Teknisk beskrivning 1.1.18.2): from 202601 the IU carries the full
+  // avgifter and the employer applies for the refund separately. The flag used
+  // to fire from the employee boolean alone, whatever the run's category.
+  const VAXA_EMPLOYEE = {
+    ...REGULAR_ROW.employee,
+    vaxa_stod_eligible: true,
+    employment_start: '2025-06-01',
+  }
+
+  function enqueueSeptemberPayout(
+    enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
+    roster: unknown[],
+  ) {
+    enqueueMany([
+      { data: { ...RUN, period_month: 8, payment_date: '2026-09-25' } }, // redovisningsperiod 202609
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: roster },
+      { data: [] }, // salary_absence_days
+      { data: null }, // agi_declarations maybeSingle (first generation)
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs update
+    ])
+  }
+
+  it('declares an eligible employee in 202609 with full avgifter and no FK062/FK063', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueSeptemberPayout(enqueueMany, [{ ...REGULAR_ROW, employee: VAXA_EMPLOYEE }])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<gem:RedovisningsPeriod faltkod="006">202609</gem:RedovisningsPeriod>')
+    expect(result.xml).not.toContain('faltkod="062"')
+    expect(result.xml).not.toContain('faltkod="063"')
+    expect(result.xml).not.toContain('ForstaAnstalld')
+    expect(result.xml).not.toContain('VaxaStod')
+    // 40 000 × 31,42 % = 12 568: the full avgift, no växa-stöd reduction.
+    expect(result.xml).toContain('faltkod="487">12568<')
+  })
+
+  it('no longer refuses an eligible employee on the youth rate: there is no växa flag left to conflict with', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueSeptemberPayout(enqueueMany, [
+      {
+        ...REGULAR_ROW,
+        monthly_salary: 20000,
+        gross_salary: 20000,
+        tax_withheld: 4000,
+        avgifter_basis: 20000,
+        avgifter_amount: 4162,
+        avgifter_rate: 0.2081,
+        avgifter_category: 'youth',
+        employee: VAXA_EMPLOYEE,
+      },
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).not.toContain('faltkod="063"')
+    expect(result.totals.avgifterByCategory.youth).toEqual({ basis: 20000, amount: 4162 })
+  })
+
+  it('refuses a stored row calculated at the old reduced växa-stöd sats instead of declaring 10,21 %', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueSeptemberPayout(enqueueMany, [
+      {
+        ...REGULAR_ROW,
+        // 35 000 × 10,21 % + 5 000 × 31,42 %: the pre-2026 capped växa sats.
+        avgifter_amount: 5144.5,
+        avgifter_rate: 0.1021,
+        avgifter_category: 'vaxa_stod',
+        employee: VAXA_EMPLOYEE,
+      },
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('AGI_INCOMPLETE_DATA')
+    const details = result.details as { missing_fields: string[]; message: string }
+    expect(details.missing_fields).toEqual(['avgifter_category'])
+    expect(details.message).toContain('Räkna om lönekörningen')
+    expect(details.message).toContain('Lag 2025:1334')
+  })
+})
+
 describe('generateAgiDeclaration: an employee payment for a benefit reduces the declared förmånsvärde', () => {
   // swedish-payroll skill, deductions-lonevaxling.md: a nettolöneavdrag "DOES
   // reduce the taxable förmånsvärde if the deduction constitutes payment for a

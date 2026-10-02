@@ -1,6 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
+import type { ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
 import { Upload, Plus, RefreshCw } from 'lucide-react'
 import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
@@ -11,6 +12,7 @@ import { useBankSync } from '@/components/transactions/BankSyncNowButton'
 import { useAgeFormatter } from '@/components/transactions/BankSyncStatusChip'
 
 interface TransactionStatusBarProps {
+  children?: ReactNode
   onOpenCreateDialog: () => void
 }
 
@@ -21,6 +23,7 @@ interface TransactionStatusBarProps {
  */
 export default function TransactionStatusBar({
   onOpenCreateDialog,
+  children,
 }: TransactionStatusBarProps) {
   const { canWrite } = useCanWrite()
   const t = useTranslations('transactions')
@@ -76,6 +79,8 @@ export default function TransactionStatusBar({
   return (
     <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
       <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
+      <div className="flex flex-wrap items-center gap-2">
+      {children}
       <SplitButton
         key={`${loaded ? 'loaded' : 'initial'}-${showSync ? 'sync' : 'nosync'}`}
         persistKey="transactions"
@@ -87,6 +92,7 @@ export default function TransactionStatusBar({
         )}
         options={options}
       />
+      </div>
     </div>
   )
 }

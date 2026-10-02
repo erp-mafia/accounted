@@ -16,7 +16,12 @@ import {
   type FortnoxFileConnection,
   type FortnoxFinancialYear,
 } from '@/lib/providers/fortnox/attachments'
-import { uploadDocument, computeSHA256, detectFileMagic } from '@/lib/core/documents/document-service'
+import {
+  uploadDocument,
+  computeSHA256,
+  detectFileMagic,
+  isArchivedForOwnJournalEntry,
+} from '@/lib/core/documents/document-service'
 import { importProviderDocuments } from '../lib/import-documents'
 
 // The Bokio client is constructed but never called directly (the attachments
@@ -41,6 +46,7 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn(),
   computeSHA256: vi.fn(),
   detectFileMagic: vi.fn(),
+  isArchivedForOwnJournalEntry: vi.fn(),
   ALLOWED_DOCUMENT_TYPES: ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'],
 }))
 
@@ -54,6 +60,7 @@ const mockDownloadFortnoxArchiveFile = vi.mocked(downloadFortnoxArchiveFile)
 const mockUpload = vi.mocked(uploadDocument)
 const mockSha256 = vi.mocked(computeSHA256)
 const mockDetectMagic = vi.mocked(detectFileMagic)
+const mockArchivedForOwnEntry = vi.mocked(isArchivedForOwnJournalEntry)
 
 const COMPANY = 'company-1'
 const USER = 'user-1'
@@ -91,11 +98,18 @@ beforeEach(() => {
   // Default: no recognisable signature, so the declared contentType is used.
   mockDetectMagic.mockReturnValue(null)
   mockUpload.mockResolvedValue({ id: 'doc-1' } as never)
+  // Default: no existing document was archived by this import.
+  mockArchivedForOwnEntry.mockResolvedValue(false)
 })
 
 // A receipt linked to Bokio entry "V33", dated inside FY2021.
 const VOUCHER_REF: BokioVoucherRef = { series: 'V', number: 33, date: '2021-03-01' }
-const PERIODS = [{ id: 'fp-2021', period_start: '2021-02-04', period_end: '2021-12-31' }]
+// Every row carries the lock columns, as fetchFiscalPeriods selects them:
+// a row without them would read as locked under the trigger's predicate.
+type PeriodFixture = { id: string; period_start: string; period_end: string; is_closed: boolean; locked_at: string | null }
+const PERIODS: PeriodFixture[] = [
+  { id: 'fp-2021', period_start: '2021-02-04', period_end: '2021-12-31', is_closed: false, locked_at: null },
+]
 const GNUBOK_VOUCHERS = [
   { id: 'je-1', fiscal_period_id: 'fp-2021', entry_date: '2021-03-01', source_voucher_series: 'V', source_voucher_number: 33 },
 ]
@@ -113,11 +127,18 @@ const FORTNOX_CONNECTION: FortnoxFileConnection = {
   financialYearId: 3,
 }
 
+interface ExistingAttachment {
+  id: string
+  sha256_hash: string
+  journal_entry_id: string | null
+  upload_source?: string | null
+}
+
 function wireBokio(
-  opts: { existingAttachments?: { id: string; sha256_hash: string; journal_entry_id: string | null }[] } = {},
+  opts: { existingAttachments?: ExistingAttachment[]; voucherRef?: BokioVoucherRef } = {},
 ) {
   mockFetchUploads.mockResolvedValue([UPLOAD] as never)
-  mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1', VOUCHER_REF]]))
+  mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1', opts.voucherRef ?? VOUCHER_REF]]))
   mockDownload.mockResolvedValue({ bytes: bytesOf('PDFBYTES'), contentType: 'application/octet-stream' })
   return rangeMockSupabase({
     fiscal_periods: PERIODS,
@@ -133,6 +154,7 @@ function wireFortnox(
     periods?: typeof PERIODS
     vouchers?: typeof GNUBOK_VOUCHERS
     providerCompanyId?: string
+    existingAttachments?: ExistingAttachment[]
   } = {},
 ) {
   mockResolveConsent.mockResolvedValue({
@@ -161,7 +183,7 @@ function wireFortnox(
           source_voucher_number: 12,
         },
       ],
-    document_attachments: [],
+    document_attachments: opts.existingAttachments ?? [],
   })
 }
 
@@ -191,8 +213,11 @@ describe('importProviderDocuments', () => {
 
   it('skips a receipt already archived on the same verifikat (sha256 + journal entry idempotency)', async () => {
     const supabase = wireBokio({
-      existingAttachments: [{ id: 'existing-doc', sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-1' }],
+      existingAttachments: [
+        { id: 'existing-doc', sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-1', upload_source: 'api' },
+      ],
     })
+    mockArchivedForOwnEntry.mockResolvedValue(true)
 
     const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
 
@@ -213,6 +238,125 @@ describe('importProviderDocuments', () => {
 
     expect(result).toMatchObject({ scanned: 1, linked: 1, skipped: 0 })
     expect(mockUpload).toHaveBeenCalledTimes(1)
+  })
+
+  describe('a verifikat that already carries underlag from another path (crm#200)', () => {
+    it('is left untouched, without a download, when the underlag wizard attached a file', async () => {
+      const supabase = wireBokio({
+        existingAttachments: [
+          { id: 'wizard-doc', sha256_hash: 'sha-MERGED', journal_entry_id: 'je-1', upload_source: 'file_upload' },
+        ],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ scanned: 1, linked: 0, skipped: 1, unmatched: 0, failed: 0 })
+      expect(mockDownload).not.toHaveBeenCalled()
+      expect(mockUpload).not.toHaveBeenCalled()
+      expect(supabase.rpc).not.toHaveBeenCalled()
+    })
+
+    it('is left untouched when an API client uploaded the file (upload_source api, not keyed to the verifikat)', async () => {
+      const supabase = wireBokio({
+        existingAttachments: [
+          { id: 'script-doc', sha256_hash: 'sha-MERGED', journal_entry_id: 'je-1', upload_source: 'api' },
+        ],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 0, skipped: 1 })
+      expect(mockArchivedForOwnEntry).toHaveBeenCalledWith(COMPANY, expect.objectContaining({ id: 'script-doc' }))
+      expect(mockDownload).not.toHaveBeenCalled()
+    })
+
+    it('does not count a wizard file as this import even though it is keyed to the verifikat', async () => {
+      const supabase = wireBokio({
+        existingAttachments: [
+          { id: 'wizard-doc', sha256_hash: 'sha-MERGED', journal_entry_id: 'je-1', upload_source: 'file_upload' },
+        ],
+      })
+      mockArchivedForOwnEntry.mockResolvedValue(true)
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 0, skipped: 1 })
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('still lets a re-run add the rest of a verifikat whose only files came from this import', async () => {
+      const supabase = wireBokio({
+        existingAttachments: [
+          { id: 'first-upload', sha256_hash: 'sha-FIRST', journal_entry_id: 'je-1', upload_source: 'api' },
+        ],
+      })
+      mockArchivedForOwnEntry.mockResolvedValue(true)
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 1, skipped: 0 })
+      expect(mockUpload).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports the untouched verifikat as skipped in the dry run, not as a would-link', async () => {
+      const supabase = wireBokio({
+        existingAttachments: [
+          { id: 'wizard-doc', sha256_hash: 'sha-MERGED', journal_entry_id: 'je-1', upload_source: 'file_upload' },
+        ],
+      })
+
+      const result = await importProviderDocuments({
+        supabase, companyId: COMPANY, userId: USER, consentId: 'c1', dryRun: true,
+      })
+
+      expect(result).toMatchObject({ dryRun: true, scanned: 1, linked: 0, skipped: 1 })
+    })
+
+    it('applies to Fortnox too: the adapter is shared', async () => {
+      const supabase = wireFortnox({
+        existingAttachments: [
+          { id: 'manual-doc', sha256_hash: 'sha-OTHER', journal_entry_id: 'je-1', upload_source: 'file_upload' },
+        ],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ provider: 'fortnox', linked: 0, skipped: 1 })
+      expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalled()
+    })
+
+    it('ignores unlinked archive documents', async () => {
+      const supabase = wireBokio({
+        existingAttachments: [
+          { id: 'inbox-doc', sha256_hash: 'sha-OTHER', journal_entry_id: null, upload_source: 'file_upload' },
+        ],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 1, skipped: 0 })
+    })
+  })
+
+  it('does not link a Bokio receipt whose Bokio entry date differs from the verifikat date', async () => {
+    // Same fiscal year, series and number, but Bokio dates the entry a day
+    // later than the migrated verifikat: not provably the same voucher.
+    const supabase = wireBokio({ voucherRef: { series: 'V', number: 33, date: '2021-03-02' } })
+
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+    expect(result).toMatchObject({ scanned: 1, linked: 0, unmatched: 1, failed: 0 })
+    expect(result.unmatchedSamples[0]).toMatchObject({ voucher: 'V33', date: '2021-03-02' })
+    expect(mockDownload).not.toHaveBeenCalled()
+    expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it('accepts a Bokio entry date that carries a time part', async () => {
+    const supabase = wireBokio({ voucherRef: { series: 'V', number: 33, date: '2021-03-01T00:00:00' } })
+
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+    expect(result).toMatchObject({ linked: 1, unmatched: 0 })
   })
 
   it('counts a receipt as unmatched when no gnubok verifikat resolves', async () => {
@@ -352,8 +496,8 @@ describe('importProviderDocuments', () => {
   it('matches a Fortnox voucher by its booking date across split local periods', async () => {
     const supabase = wireFortnox({
       periods: [
-        { id: 'fp-2021-h1', period_start: '2021-02-04', period_end: '2021-06-30' },
-        { id: 'fp-2021-h2', period_start: '2021-07-01', period_end: '2021-12-31' },
+        { id: 'fp-2021-h1', period_start: '2021-02-04', period_end: '2021-06-30', is_closed: false, locked_at: null },
+        { id: 'fp-2021-h2', period_start: '2021-07-01', period_end: '2021-12-31', is_closed: false, locked_at: null },
       ],
       vouchers: [
         {
@@ -375,6 +519,96 @@ describe('importProviderDocuments', () => {
     })
 
     expect(result).toMatchObject({ scanned: 1, linked: 1, unmatched: 0 })
+  })
+
+  describe('verifikat in a klarmarkerat or locked year (crm#251)', () => {
+    // A broken first year and a calendar year after it, as a migrated
+    // company's books look. The second Fortnox file belongs to 2024.
+    const BROKEN_YEAR: PeriodFixture = {
+      id: 'fp-2023', period_start: '2022-12-29', period_end: '2023-12-31', is_closed: false, locked_at: null,
+    }
+    const OPEN_YEAR: PeriodFixture = {
+      id: 'fp-2024', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false, locked_at: null,
+    }
+    const TWO_YEARS = {
+      years: [
+        { id: 7, fromDate: '2022-12-29', toDate: '2023-12-31' },
+        { id: 8, fromDate: '2024-01-01', toDate: '2024-12-31' },
+      ],
+      connections: [
+        { ...FORTNOX_CONNECTION, fileId: 'file-a', number: 12, financialYearId: 7 },
+        { ...FORTNOX_CONNECTION, fileId: 'file-b', number: 3, financialYearId: 8 },
+      ],
+      vouchers: [
+        { id: 'je-2023', fiscal_period_id: 'fp-2023', entry_date: '2023-05-02', source_voucher_series: 'A', source_voucher_number: 12 },
+        { id: 'je-2024', fiscal_period_id: 'fp-2024', entry_date: '2024-02-01', source_voucher_series: 'A', source_voucher_number: 3 },
+      ],
+    }
+
+    it('reports a receipt in a klarmarkerat year as locked, without a download, and links the rest', async () => {
+      const supabase = wireFortnox({
+        ...TWO_YEARS,
+        periods: [
+          { ...BROKEN_YEAR, is_closed: true, locked_at: '2026-09-30T11:52:22Z' },
+          OPEN_YEAR,
+        ],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      // Not a failure: the period-lock trigger would refuse the link, so a
+      // retry cannot help until the year is reopened.
+      expect(result).toMatchObject({ scanned: 2, linked: 1, locked: 1, failed: 0, lockedPeriods: ['2022/2023'] })
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(1)
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledWith(expect.anything(), 'fortnox-token', 'file-b')
+      expect(mockUpload).toHaveBeenCalledTimes(1)
+      expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'je-2024' })
+    })
+
+    it('treats a locked year that is not closed (locked_at only) as locked too', async () => {
+      const supabase = wireFortnox({
+        ...TWO_YEARS,
+        periods: [BROKEN_YEAR, { ...OPEN_YEAR, locked_at: '2026-09-30T12:00:00Z' }],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 1, locked: 1, failed: 0, lockedPeriods: ['2024'] })
+      expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'je-2023' })
+    })
+
+    it('counts locked receipts apart from would-link ones in the dry run, oldest year first', async () => {
+      const supabase = wireFortnox({
+        ...TWO_YEARS,
+        periods: [
+          { ...OPEN_YEAR, is_closed: true, locked_at: '2026-09-30T11:52:23Z' },
+          { ...BROKEN_YEAR, is_closed: true, locked_at: '2026-09-30T11:52:22Z' },
+        ],
+      })
+
+      const result = await importProviderDocuments({
+        supabase, companyId: COMPANY, userId: USER, consentId: 'c1', dryRun: true,
+      })
+
+      expect(result).toMatchObject({
+        dryRun: true, scanned: 2, linked: 0, locked: 2, failed: 0, lockedPeriods: ['2022/2023', '2024'],
+      })
+      expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalled()
+    })
+
+    it('leaves a locked verifikat that already carries other underlag as skipped, not locked', async () => {
+      const supabase = wireFortnox({
+        ...TWO_YEARS,
+        periods: [{ ...BROKEN_YEAR, is_closed: true, locked_at: '2026-09-30T11:52:22Z' }, OPEN_YEAR],
+        existingAttachments: [
+          { id: 'doc-manual', sha256_hash: 'sha-other', journal_entry_id: 'je-2023', upload_source: 'upload' },
+        ],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 1, skipped: 1, locked: 0, lockedPeriods: [] })
+    })
   })
 
   it('keeps a dotted Bokio description as a basename and appends the effective extension', async () => {
@@ -595,8 +829,8 @@ describe('importProviderDocuments', () => {
     const supabase = rangeMockSupabase({
       fiscal_periods: PERIODS,
       journal_entries: [
-        { id: 'je-1', fiscal_period_id: 'fp-2021', source_voucher_series: 'V', source_voucher_number: 33 },
-        { id: 'je-2', fiscal_period_id: 'fp-2021', source_voucher_series: 'V', source_voucher_number: 34 },
+        { id: 'je-1', fiscal_period_id: 'fp-2021', entry_date: '2021-03-01', source_voucher_series: 'V', source_voucher_number: 33 },
+        { id: 'je-2', fiscal_period_id: 'fp-2021', entry_date: '2021-04-01', source_voucher_series: 'V', source_voucher_number: 34 },
       ],
       document_attachments: [],
     })
@@ -623,8 +857,8 @@ describe('importProviderDocuments', () => {
     const supabase = rangeMockSupabase({
       fiscal_periods: PERIODS,
       journal_entries: [
-        { id: 'je-1', fiscal_period_id: 'fp-2021', source_voucher_series: 'V', source_voucher_number: 33 },
-        { id: 'je-2', fiscal_period_id: 'fp-2021', source_voucher_series: 'V', source_voucher_number: 34 },
+        { id: 'je-1', fiscal_period_id: 'fp-2021', entry_date: '2021-03-01', source_voucher_series: 'V', source_voucher_number: 33 },
+        { id: 'je-2', fiscal_period_id: 'fp-2021', entry_date: '2021-04-01', source_voucher_series: 'V', source_voucher_number: 34 },
       ],
       document_attachments: [],
     })

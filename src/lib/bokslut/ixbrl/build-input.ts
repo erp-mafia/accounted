@@ -170,11 +170,12 @@ export async function buildIxbrlInput(
   // Duplicate-fact consistency (TA §2.7.3): the flerårsöversikt repeats
   // Nettoomsattning / ResultatEfterFinansiellaPoster in the same contexts
   // (period0/period1) as the RR, and repeated facts must be value-identical
-  // or Bolagsverket rejects the filing. The PDF rows are computed from the
-  // income statement (ALL class-3 revenue), while nettoomsättning per ÅRL is
-  // strictly 3000-3799: so the current and previous year columns are
-  // overridden with the mapper outputs. Older years have no RR facts and
-  // keep the PDF values.
+  // or Bolagsverket rejects the filing. The PDF rows already come from
+  // mapTrialBalancesToK2 per year (buildFlerarsoversikt, since #1116), but
+  // from the årsredovisning build's own mapping, not this document's: so the
+  // current and previous year columns are overridden with this mapping's
+  // outputs, which makes the repeated facts identical by construction. Older
+  // years have no RR facts and keep the PDF values.
   if (flerarsoversikt.length > 0) {
     flerarsoversikt[0] = {
       ...flerarsoversikt[0],

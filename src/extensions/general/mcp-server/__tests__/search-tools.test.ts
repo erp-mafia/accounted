@@ -260,6 +260,22 @@ describe('gnubok_search_tools', () => {
       expect(result.tools.map((t) => t.name)).toContain('gnubok_list_invoices')
     })
 
+    // English guesses (get_customer, waive_..., list_skattekonto_rows) found no
+    // Swedish keyword; these are matcher-side too, so tools/list is unchanged.
+    it.each([
+      ['customer', 'gnubok_get_party'],
+      ['counterparty', 'gnubok_get_party'],
+      ['waiver', 'gnubok_mark_no_document_required'],
+      ['no document needed', 'gnubok_mark_no_document_required'],
+      ['skattekonto rows', 'gnubok_list_reconciliation_items'],
+      ['tax account transactions', 'gnubok_list_reconciliation_items'],
+      ['rejected operations', 'gnubok_list_pending_operations'],
+      ['get pending operation', 'gnubok_list_pending_operations'],
+    ])('English keyword %j finds %s', async (query, expected) => {
+      const result = await call({ query, detail: 'name', limit: 10 })
+      expect(result.tools.map((t) => t.name)).toContain(expected)
+    })
+
     it('keywords are matcher-side only: never serialized into search results', async () => {
       // A keyword-only match proves the keywords were consulted; the payload
       // must still not carry them at any detail level.

@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { POPOVER_ENTER_UP_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
+import { cn } from '@/lib/utils'
 
 // Inlined at build time from next.config's `env` (the deploy's commit SHA on
 // Vercel; empty in dev / self-hosted, which turns the check off).
@@ -59,7 +61,13 @@ export function DeployReloadPrompt() {
     // composer sits exactly there, and "a new version is available" turned
     // into "I can't type any more". Only the card itself takes input.
     <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[60] flex justify-center px-4">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-border bg-popover px-4 py-3 text-sm shadow-md">
+      <div
+        className={cn(
+          'pointer-events-auto flex items-center gap-3 px-4 py-3 text-sm',
+          POPOVER_SURFACE_CLASS,
+          POPOVER_ENTER_UP_CLASS,
+        )}
+      >
         <span className="text-foreground">{t('update_available')}</span>
         <Button size="sm" onClick={() => window.location.reload()}>
           {t('reload')}

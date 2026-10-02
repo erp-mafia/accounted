@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('../lib/route-from-arkiv', () => ({
+  routeStaleQueueItems: vi.fn(),
+  requeueHiddenRoutedItems: vi.fn(),
+}))
+
 import { runInboxSweep, PROCESSING_STUCK_MS } from '../lib/sweep'
 import { emptyResult } from '../lib/extract-invoice-fields'
+import { requeueHiddenRoutedItems, routeStaleQueueItems } from '../lib/route-from-arkiv'
 
 /**
  * The staged-upload crash recovery: only rows that are (a) still
@@ -74,6 +81,8 @@ function makeSupabase(opts: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(routeStaleQueueItems).mockResolvedValue(0)
+  vi.mocked(requeueHiddenRoutedItems).mockResolvedValue(0)
 })
 
 describe('runInboxSweep', () => {
@@ -82,7 +91,7 @@ describe('runInboxSweep', () => {
 
     const summary = await runInboxSweep(supabase)
 
-    expect(summary).toEqual({ flipped: 2, routed: 0 })
+    expect(summary).toEqual({ flipped: 2, routed: 0, requeued: 0 })
     // The stale scan targets processing rows older than the threshold.
     expect(captured.selectFilters).toEqual([
       { method: 'eq', args: ['status', 'processing'] },
@@ -109,7 +118,7 @@ describe('runInboxSweep', () => {
 
     const summary = await runInboxSweep(supabase)
 
-    expect(summary).toEqual({ flipped: 1, routed: 0 })
+    expect(summary).toEqual({ flipped: 1, routed: 0, requeued: 0 })
   })
 
   it('does nothing when no processing row is stale', async () => {
@@ -117,19 +126,37 @@ describe('runInboxSweep', () => {
 
     const summary = await runInboxSweep(supabase)
 
-    expect(summary).toEqual({ flipped: 0, routed: 0 })
+    expect(summary).toEqual({ flipped: 0, routed: 0, requeued: 0 })
     expect(captured.updatePayload).toBeUndefined()
   })
 
   it('never throws: a failed select reports zero flips', async () => {
     const { supabase } = makeSupabase({ staleIds: [], selectError: { message: 'boom' } })
 
-    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0 })
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0, requeued: 0 })
   })
 
   it('never throws: a failed update reports zero flips', async () => {
     const { supabase } = makeSupabase({ staleIds: ['i1'], updateError: { message: 'boom' } })
 
-    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0 })
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0, requeued: 0 })
+  })
+
+  it('brings routed rows back to Underlag and routes stale ones on every pass', async () => {
+    const { supabase } = makeSupabase({ staleIds: [] })
+    vi.mocked(requeueHiddenRoutedItems).mockResolvedValue(3)
+    vi.mocked(routeStaleQueueItems).mockResolvedValue(1)
+
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 1, requeued: 3 })
+    expect(requeueHiddenRoutedItems).toHaveBeenCalledWith(supabase)
+    expect(routeStaleQueueItems).toHaveBeenCalledWith(supabase)
+  })
+
+  it('never throws: a failed requeue still lets the routing run', async () => {
+    const { supabase } = makeSupabase({ staleIds: [] })
+    vi.mocked(requeueHiddenRoutedItems).mockRejectedValue(new Error('boom'))
+    vi.mocked(routeStaleQueueItems).mockResolvedValue(2)
+
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 2, requeued: 0 })
   })
 })

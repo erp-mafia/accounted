@@ -389,7 +389,7 @@ export default function MileagePage() {
         title={t('title')}
         action={
           canWrite ? (
-            <Button onClick={openCreate}>
+            <Button size="sm" onClick={openCreate}>
               <Plus className="mr-2 h-4 w-4" />
               {t('new_trip')}
             </Button>
@@ -405,12 +405,12 @@ export default function MileagePage() {
         )}
         <div className="ml-auto flex items-center gap-2">
           {canWrite && draftTrips.length > 0 && (
-            <Button variant="secondary" onClick={openBook}>
+            <Button size="sm" variant="secondary" onClick={openBook}>
               {t('book_period')}
             </Button>
           )}
           {trips.length > 0 && (
-            <Button variant="ghost" asChild>
+            <Button size="sm" variant="ghost" asChild>
               <a href={exportHref} download>
                 <Download className="mr-2 h-4 w-4" />
                 {t('export_csv')}
@@ -445,12 +445,16 @@ export default function MileagePage() {
           onAction={canWrite ? openCreate : undefined}
         />
       ) : (
+        // One-line rows (convention 4): purpose truncates with the full text
+        // in the tooltip and steps aside on a phone; the wrapper scrolls
+        // instead of the page.
+        <div className="overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
               <th className={TH_CLASS}>{t('col_date')}</th>
               <th className={TH_CLASS}>{t('col_route')}</th>
-              <th className={TH_CLASS}>{t('col_purpose')}</th>
+              <th className={`${TH_CLASS} hidden w-full sm:table-cell`}>{t('col_purpose')}</th>
               <th className={`${TH_CLASS} text-right`}>{t('col_km')}</th>
               <th className={TH_CLASS}>{t('col_status')}</th>
               <th className={TH_CLASS} />
@@ -462,11 +466,16 @@ export default function MileagePage() {
                 <td className={`${TD_CLASS} tabular-nums whitespace-nowrap`}>
                   {formatDate(trip.trip_date)}
                 </td>
-                <td className={TD_CLASS}>
+                <td className={`${TD_CLASS} whitespace-nowrap`}>
                   {trip.from_location} – {trip.to_location}
                   {trip.is_round_trip ? ` ${t('round_trip_suffix')}` : ''}
                 </td>
-                <td className={`${TD_CLASS} text-muted-foreground`}>{trip.purpose}</td>
+                <td
+                  className={`${TD_CLASS} hidden max-w-0 truncate text-muted-foreground sm:table-cell`}
+                  title={trip.purpose}
+                >
+                  {trip.purpose}
+                </td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>
                   {Number(trip.distance_km).toLocaleString('sv-SE')}
                 </td>
@@ -515,6 +524,7 @@ export default function MileagePage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       <Dialog

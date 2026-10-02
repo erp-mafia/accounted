@@ -364,7 +364,13 @@ export function buildBrRows(mapping: StatementMapping): {
     e.post('Uppskrivningsfond', br['Uppskrivningsfond'], { indent: 2 })
     e.post('Reservfond', br['Reservfond'], { indent: 2 })
   } else {
-    e.post('Aktiekapital', br['Aktiekapital'], { indent: 2, alwaysShow: true })
+    // Registered aktiekapital (2080-2081); 2082 is the post below. Keyed for the
+    // kontrollbalansräkning check (completeness.ts).
+    e.post('Aktiekapital', br['Aktiekapital'], {
+      indent: 2,
+      alwaysShow: true,
+      semantic_key: 'balance_sheet_share_capital',
+    })
     e.post('Ej registrerat aktiekapital', br['EjRegistreratAktiekapital'], { indent: 2 })
     e.post('Bunden överkursfond', br['OverkursfondBunden'], { indent: 2 })
     e.post('Uppskrivningsfond', br['Uppskrivningsfond'], { indent: 2 })
@@ -382,7 +388,7 @@ export function buildBrRows(mapping: StatementMapping): {
     semantic_key: 'balance_sheet_current_year_result',
   })
   e.total('Summa fritt eget kapital', totals.frittEgetKapital, { indent: 1 })
-  e.total('Summa eget kapital', totals.egetKapital)
+  e.total('Summa eget kapital', totals.egetKapital, { semantic_key: 'balance_sheet_equity_total' })
   if (hasValue(totals.obeskattadeReserver)) {
     e.heading('Obeskattade reserver')
     e.post('Periodiseringsfonder', br['Periodiseringsfonder'], { indent: 1 })

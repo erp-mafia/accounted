@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Loader2, KeyRound } from 'lucide-react'
+import { KeyRound } from 'lucide-react'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { GitHubMark, GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import type { ResolvedProvider } from '@/lib/auth/gotrue-providers'
@@ -80,15 +80,14 @@ export function OAuthButton({
     <Button
       type="button"
       variant="outline"
-      className={compact ? 'h-10 w-full gap-2' : 'w-full h-11'}
+      size={compact ? 'default' : 'lg'}
+      className="w-full"
       onClick={handleClick}
-      disabled={isRedirecting}
+      loading={isRedirecting}
       aria-label={label}
     >
-      {isRedirecting ? (
-        <Loader2 className={compact ? 'h-4 w-4 animate-spin' : 'mr-2 h-4 w-4 animate-spin'} />
-      ) : (
-        <span className={compact ? 'flex items-center' : 'mr-2 flex items-center'}>
+      {!isRedirecting && (
+        <span className="mr-2 flex items-center">
           <ProviderMark provider={provider} />
         </span>
       )}

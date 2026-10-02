@@ -40,9 +40,9 @@ export const GET = withRouteContext(
     }
 
     try {
-      // Only toDate: the matrix is cumulative from period_start by design
-      // (closing-balance semantics; see lib/reports/dimension-pnl.ts).
+      // The resultatrapport's window: activity inside from_date..to_date.
       const data = await generateDimensionPnl(supabase, companyId!, periodId, dimNo, {
+        fromDate: parsed.range.fromDate,
         toDate: parsed.range.toDate,
       })
       return NextResponse.json({ data })

@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { tools } from '../server'
 import { findSkill } from '../skills'
-import { buildKvittojaktenSkill, kvittojaktenSkills, kvittojaktenSlug } from '../skills/kvittojakten'
+import { buildKvittojaktenSkill, kvittojaktenSkills, kvittojaktenSlug } from '@/lib/agent-skills/workflows/kvittojakten'
 import { AI_CLIENTS, kvittojaktenSkillSlug } from '@/lib/onboarding/ai-clients'
 
 describe('kvittojakten skills', () => {

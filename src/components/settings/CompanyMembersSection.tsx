@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -14,9 +15,10 @@ import {
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { parseCompanyMembersPayload } from '@/components/settings/members-payload'
+import { isInviteExpired } from '@/components/settings/invite-expiry'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatDateLong } from '@/lib/utils'
-import { Loader2, Plus, Trash2, Mail } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, Mail } from 'lucide-react'
 
 interface CompanyMemberItem {
   id: string
@@ -38,11 +40,11 @@ interface CompanyInvitation {
 }
 
 /**
- * The shareable accept link from the latest invite response. Raw tokens are
- * never stored server-side (only their hash), so the link exists exactly
- * once: here, until the next navigation. Kept visible so a failed or absent
- * mail send (self-hosted without a mail provider, #1710) never dead-ends the
- * inviter. There is no re-send for company invites: revoke and re-invite.
+ * The shareable accept link from the latest invite or re-send response. Raw
+ * tokens are never stored server-side (only their hash), so the link exists
+ * exactly once: here, until the next navigation. Kept visible so a failed or
+ * absent mail send (self-hosted without a mail provider, #1710) never
+ * dead-ends the inviter. A lost link is renewed with the row's re-send action.
  * provisioned = GoTrue created the account and sent its own invite mail
  * (AUTH_SIGNUPS_DISABLED path), so email_sent=false is not a failure there.
  */
@@ -81,6 +83,7 @@ export function CompanyMembersSection() {
   const [isSending, setIsSending] = useState(false)
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
+  const [resendingId, setResendingId] = useState<string | null>(null)
   const [canInvite, setCanInvite] = useState(false)
   // Multi-user seat gate: true when inviting requires the paid plan
   // (multi_user frozen). The form is swapped for the upsell line; the POST's
@@ -238,6 +241,48 @@ export function CompanyMembersSection() {
     }
   }
 
+  // Re-send issues a fresh token and expiry (reviving an expired invitation)
+  // and mails it again; the previous link stops working.
+  const handleResendInvite = async (invite: CompanyInvitation) => {
+    setResendingId(invite.id)
+    try {
+      const res = await fetch(`/api/company/members/invite/${invite.id}`, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+
+      if (!res.ok) {
+        const message = (data as { error?: unknown } | null)?.error
+        toast({
+          title:
+            typeof message === 'string' && message.length > 0
+              ? message
+              : t('members_invite_resend_failed'),
+          variant: 'destructive',
+        })
+        return
+      }
+
+      const payload = (
+        data as { data?: { email_sent?: boolean; inviteUrl?: string } } | null
+      )?.data
+      const sent = payload?.email_sent !== false
+      if (payload?.inviteUrl) {
+        setShareInvite({ email: invite.email, url: payload.inviteUrl, sent, provisioned: false })
+      }
+      // Same rule as the first send: never claim a mail that did not go out.
+      toast({
+        title: sent ? t('members_invite_resent_title') : t('members_invite_renewed_title'),
+        description: sent
+          ? t('members_invite_sent_description', { email: invite.email })
+          : t('members_invite_mail_not_sent'),
+      })
+      fetchMembers()
+    } catch {
+      toast({ title: t('members_invite_resend_failed'), variant: 'destructive' })
+    } finally {
+      setResendingId(null)
+    }
+  }
+
   if (members === null || invitations === null) {
     return (
       <div>
@@ -259,8 +304,10 @@ export function CompanyMembersSection() {
           )}
         </div>
         {!loadError && (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div aria-busy className="space-y-3 py-3">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-4 w-full" />
+            ))}
           </div>
         )}
       </div>
@@ -293,23 +340,22 @@ export function CompanyMembersSection() {
           {canInvite && !member.is_current_user && member.role !== 'owner' && member.source !== 'team' && (
             <Button
               variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+              size="icon-sm"
+              className="shrink-0 text-muted-foreground hover:text-destructive"
               aria-label={t('members_remove_aria')}
               onClick={() => handleRemoveMember(member.id)}
-              disabled={removingId === member.id}
+              loading={removingId === member.id}
             >
-              {removingId === member.id ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
+              {removingId !== member.id && <Trash2 className="h-3.5 w-3.5" />}
             </Button>
           )}
         </div>
       ))}
 
-      {/* Pending invitations continue the same list, visually quieter. */}
+      {/* Pending invitations continue the same list, visually quieter. A
+          pending row past its expiry is an expired invitation (the status
+          only flips when someone tries the dead link), so the date is never
+          shown as a future one. */}
       {invitations.map((inv) => (
         <div
           key={inv.id}
@@ -321,26 +367,41 @@ export function CompanyMembersSection() {
           <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
             {inv.email}
             <span className="ml-1 text-xs">
-              · {t('invitations_expires', { date: formatDateLong(inv.expires_at) })}
+              ·{' '}
+              {isInviteExpired(inv.expires_at)
+                ? t('invitations_expired')
+                : t('invitations_expires', { date: formatDateLong(inv.expires_at) })}
             </span>
           </p>
           <span className="shrink-0 text-xs text-muted-foreground">
             {roleLabels[inv.role] || inv.role}
           </span>
+          {/* Re-send is inviting again, so it follows the invite form's
+              seat gate: hidden while the paid-plan upsell replaces the form. */}
+          {canInvite && !inviteRequiresUpgrade && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label={t('members_resend_aria', { email: inv.email })}
+              onClick={() => void handleResendInvite(inv)}
+              disabled={revokingId === inv.id}
+              loading={resendingId === inv.id}
+            >
+              {resendingId !== inv.id && <RefreshCw className="h-3.5 w-3.5" />}
+            </Button>
+          )}
           {canInvite && (
             <Button
               variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+              size="icon-sm"
+              className="shrink-0 text-muted-foreground hover:text-destructive"
               aria-label={t('members_revoke_aria')}
               onClick={() => handleRevokeInvite(inv)}
-              disabled={revokingId === inv.id}
+              disabled={resendingId === inv.id}
+              loading={revokingId === inv.id}
             >
-              {revokingId === inv.id ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
+              {revokingId !== inv.id && <Trash2 className="h-3.5 w-3.5" />}
             </Button>
           )}
         </div>
@@ -419,15 +480,9 @@ export function CompanyMembersSection() {
             <option value="member">{t('members_role_member')}</option>
             <option value="admin">{t('members_role_admin')}</option>
           </SettingsSelect>
-          <Button type="submit" size="sm" disabled={isSending || !inviteEmail.trim()}>
-            {isSending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('members_invite_button')}
-              </>
-            )}
+          <Button type="submit" size="sm" disabled={!inviteEmail.trim()} loading={isSending}>
+            {!isSending && <Plus className="mr-2 h-4 w-4" />}
+            {t('members_invite_button')}
           </Button>
         </form>
       )}

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { MoreHorizontal, Loader2 } from 'lucide-react'
+import { MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -78,14 +78,13 @@ export function SuggestionReviewList({
           <Button
             size="sm"
             variant="outline"
-            disabled={rerunning || bulkBusy}
+            disabled={bulkBusy}
+            loading={rerunning}
             onClick={() => void onRerunMatching()}
           >
-            {rerunning && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
             {t('rerun')}
           </Button>
-          <Button size="sm" disabled={bulkBusy || items.length === 0} onClick={() => void confirmAll()}>
-            {bulkBusy && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+          <Button size="sm" disabled={items.length === 0} loading={bulkBusy} onClick={() => void confirmAll()}>
             {t('confirm_all', { count: items.length })}
           </Button>
         </div>
@@ -141,18 +140,17 @@ export function SuggestionReviewList({
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-7 px-3.5 text-xs"
-                          disabled={busy || bulkBusy || !voucher}
+                          disabled={bulkBusy || !voucher}
+                          loading={busy}
                           onClick={() => void runRows([tx.id], onConfirm)}
                         >
-                          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t('confirm')}
+                          {busy ? null : t('confirm')}
                         </Button>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
-                              size="icon"
+                              size="icon-sm"
                               variant="ghost"
-                              className="h-7 w-7"
                               disabled={busy || bulkBusy}
                               aria-label={t('row_menu')}
                             >

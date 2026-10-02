@@ -46,6 +46,9 @@ const log = {
 
 const ARGS = { companyId: 'company-1', userId: 'user-1', salaryRunId: 'run-1', log }
 
+// The token claim_salary_run_booking hands the call that may book the run.
+const BOOKING_CLAIM = 'booking-claim-1'
+
 const makeRun = (overrides: Record<string, unknown> = {}) => ({
   id: 'run-1',
   company_id: 'company-1',
@@ -135,6 +138,7 @@ describe('advanceAndBookSalaryRun', () => {
       { data: [makeSre({ employee: { ...makeSre().employee, clearing_number: null } })] },
       { data: { id: 'run-1' } }, // review → approved
       { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: { id: 'run-1', status: 'booked' } }, // paid → booked
     ])
 
@@ -169,6 +173,7 @@ describe('advanceAndBookSalaryRun', () => {
       },
       { data: { id: 'run-1' } },
       { data: { id: 'run-1' } },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -195,6 +200,7 @@ describe('advanceAndBookSalaryRun', () => {
         }),
       },
       { data: [] }, // empty roster
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: { id: 'run-1', status: 'booked' } }, // → booked
     ])
 
@@ -232,6 +238,7 @@ describe('bookPaidSalaryRun', () => {
     enqueueMany([
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -277,6 +284,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
     enqueueMany([
       { data: makeRun({ status: 'paid', total_net: 23500 }) },
       { data: [makeSre({ net_salary: 23500, line_items: [claimLine('claim-1', 500)] })] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: [{ id: 'claim-1', status: 'paid', employee_id: 'e1', amount_sek: 500 }] }, // paid by bank meanwhile
     ])
 
@@ -296,6 +304,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
     enqueueMany([
       { data: makeRun({ status: 'paid', total_net: 23500 }) },
       { data: [makeSre({ net_salary: 23500, line_items: [claimLine('claim-1', 500)] })] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: '500.00' }] },
       { data: { id: 'run-1', status: 'booked' } },
     ])
@@ -317,6 +326,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
     enqueueMany([
       { data: makeRun({ status: 'paid', total_net: 23500 }) },
       { data: [makeSre({ net_salary: 23500, line_items: [claimLine('claim-1', 500)] })] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: 500 }] },
       { data: { id: 'run-1', status: 'booked' } },
     ])
@@ -338,6 +348,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
     enqueueMany([
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -348,7 +359,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
   })
 
   it('posts a run that only repays utlägg (gross 0, net > 0) instead of treating it as a nollkörning', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
     enqueueMany([
       { data: makeRun({ status: 'paid', total_gross: 0, total_tax: 0, total_net: 800, total_avgifter: 0 }) },
       {
@@ -362,15 +373,280 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
           }),
         ],
       },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: 800 }] },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    // No avgifter in an utlägg-only run: createSalaryRunEntries posts no
+    // avgifter voucher, and the run records none.
+    vi.mocked(createSalaryRunEntries).mockResolvedValue({
+      salaryEntry: { id: 'je-1' },
+      avgifterEntry: null,
+      vacationEntry: null,
+      pensionEntry: null,
+    } as never)
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.nollkorning).toBe(false)
+      expect(result.data.entryIds).toEqual(['je-1'])
+    }
+    expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
+    expect(settleExpenseClaimsForBookedRun).toHaveBeenCalledTimes(1)
+    const runUpdate = findCalls('salary_runs', 'update').at(-1)?.[0] as Record<string, unknown>
+    expect(runUpdate).toMatchObject({ status: 'booked', salary_entry_id: 'je-1' })
+    expect(runUpdate).not.toHaveProperty('avgifter_entry_id')
+  })
+})
+
+// accounted#3251: two concurrent book calls on the same run could both read
+// it as 'paid' and both post its vouchers. The run is now claimed in the
+// database (claim_salary_run_booking) before anything is posted, and only the
+// claim holder can flip it to 'booked'.
+describe('salary run booking claim (#3251)', () => {
+  type Call = { table: string; method: string; args: unknown[] }
+
+  /** The .eq filters of the paid -> booked UPDATE chain. */
+  const flipFilters = (calls: Call[]) => {
+    const start = calls.findIndex(
+      (c) => c.table === 'salary_runs' && c.method === 'update' && (c.args[0] as { status?: string }).status === 'booked',
+    )
+    if (start === -1) return null
+    const end = calls.findIndex((c, i) => i > start && c.method === 'maybeSingle')
+    return calls.slice(start + 1, end).filter((c) => c.method === 'eq').map((c) => c.args)
+  }
+
+  /** The .eq filters of the claim release UPDATE, or null when there was none. */
+  const releaseFilters = (calls: Call[]) => {
+    const start = calls.findIndex(
+      (c) =>
+        c.table === 'salary_runs' &&
+        c.method === 'update' &&
+        (c.args[0] as Record<string, unknown>).status === undefined &&
+        'booking_claim_id' in (c.args[0] as Record<string, unknown>),
+    )
+    if (start === -1) return null
+    return calls.slice(start + 1, start + 4).map((c) => c.args)
+  }
+
+  it('claims the run with company and run id before posting', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: BOOKING_CLAIM },
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
     const result = await bookPaidSalaryRun(supabase as never, ARGS)
 
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.data.nollkorning).toBe(false)
-    expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
-    expect(settleExpenseClaimsForBookedRun).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).toHaveBeenCalledWith('claim_salary_run_booking', {
+      p_company_id: 'company-1',
+      p_salary_run_id: 'run-1',
+    })
+  })
+
+  it('answers 409 SALARY_RUN_BOOKING_IN_PROGRESS and posts nothing when another call holds the run', async () => {
+    const { supabase, enqueueMany, calls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: null }, // claim refused
+      { data: { status: 'paid' } }, // still paid: a live booking holds it
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result).toEqual({ ok: false, code: 'SALARY_RUN_BOOKING_IN_PROGRESS' })
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+    expect(refreshRunYtd).not.toHaveBeenCalled()
+    expect(eventBus.emit).not.toHaveBeenCalled()
+    // It never held the claim, so it neither flips nor releases the run.
+    expect(calls.some((c) => c.table === 'salary_runs' && c.method === 'update')).toBe(false)
+  })
+
+  it('answers SALARY_RUN_ALREADY_BOOKED when the concurrent call already booked the run', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: null },
+      { data: { status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result).toEqual({ ok: false, code: 'SALARY_RUN_ALREADY_BOOKED' })
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a failed claim call as a database error without posting', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    const dbError = { code: '42501', message: 'row-level security: no write access' }
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: null, error: dbError },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result).toEqual({ ok: false, code: 'SALARY_RUN_BOOK_FAILED', dbError })
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('flips to booked only for the claim holder and clears the claim in the same update', async () => {
+    const { supabase, enqueueMany, calls, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: BOOKING_CLAIM },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    const updates = findCalls('salary_runs', 'update')
+    // One update: the flip. A booked run has no claim left to release.
+    expect(updates).toHaveLength(1)
+    expect(updates[0][0]).toMatchObject({
+      status: 'booked',
+      salary_entry_id: 'je-1',
+      avgifter_entry_id: 'je-2',
+      booked_by: 'user-1',
+      booking_claim_id: null,
+      booking_claimed_at: null,
+    })
+    expect(flipFilters(calls as Call[])).toEqual(
+      expect.arrayContaining([
+        ['id', 'run-1'],
+        ['company_id', 'company-1'],
+        ['status', 'paid'],
+        ['booking_claim_id', BOOKING_CLAIM],
+      ]),
+    )
+  })
+
+  it('claims a nollkörning too, and flips it with the same filters', async () => {
+    const { supabase, enqueueMany, calls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid', total_gross: 0, total_tax: 0, total_net: 0, total_avgifter: 0 }) },
+      { data: [] },
+      { data: BOOKING_CLAIM },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.nollkorning).toBe(true)
+    expect(supabase.rpc).toHaveBeenCalledWith('claim_salary_run_booking', expect.anything())
+    expect(flipFilters(calls as Call[])).toEqual(
+      expect.arrayContaining([
+        ['status', 'paid'],
+        ['booking_claim_id', BOOKING_CLAIM],
+      ]),
+    )
+  })
+
+  it('reports a lost claim at the flip as a failure, never as a booking', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: BOOKING_CLAIM },
+      { data: null }, // the flip matched no row: the claim is no longer ours
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SALARY_RUN_BOOK_FAILED',
+      details: { reason: 'booking_claim_lost', entry_ids: ['je-1', 'je-2'] },
+    })
+    expect(eventBus.emit).not.toHaveBeenCalled()
+    const logError = (log as unknown as { error: ReturnType<typeof vi.fn> }).error
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining('claim lost'),
+      expect.any(Error),
+      expect.objectContaining({ salaryRunId: 'run-1', entryIds: ['je-1', 'je-2'] }),
+    )
+  })
+
+  it('releases the claim when the engine throws, and rethrows', async () => {
+    const { supabase, enqueueMany, calls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: BOOKING_CLAIM },
+    ])
+    vi.mocked(createSalaryRunEntries).mockRejectedValue(new Error('period locked'))
+
+    await expect(bookPaidSalaryRun(supabase as never, ARGS)).rejects.toThrow('period locked')
+
+    expect(releaseFilters(calls as Call[])).toEqual([
+      ['id', 'run-1'],
+      ['company_id', 'company-1'],
+      ['booking_claim_id', BOOKING_CLAIM],
+    ])
+    expect(flipFilters(calls as Call[])).toBeNull()
+  })
+
+  it('releases the claim when a pre-posting check refuses the booking', async () => {
+    const { supabase, enqueueMany, calls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid', total_net: 23500 }) },
+      {
+        data: [
+          makeSre({
+            net_salary: 23500,
+            line_items: [
+              {
+                item_type: 'expense_reimbursement',
+                amount: 500,
+                account_number: '2820',
+                is_net_deduction: false,
+                is_gross_deduction: false,
+                source_expense_claim_id: 'expense-1',
+              },
+            ],
+          }),
+        ],
+      },
+      { data: BOOKING_CLAIM },
+      { data: [{ id: 'expense-1', status: 'paid', employee_id: 'e1', amount_sek: 500 }] },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_EXPENSE_CLAIM_NOT_OPEN')
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+    expect(releaseFilters(calls as Call[])).toEqual([
+      ['id', 'run-1'],
+      ['company_id', 'company-1'],
+      ['booking_claim_id', BOOKING_CLAIM],
+    ])
+  })
+
+  it('makes the MCP advance-walk wait for the claim like every other door', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: null },
+      { data: { status: 'paid' } },
+    ])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result).toEqual({ ok: false, code: 'SALARY_RUN_BOOKING_IN_PROGRESS' })
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
   })
 })

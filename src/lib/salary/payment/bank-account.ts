@@ -26,11 +26,10 @@
  *     the first salary run), but a clearing without an account (or vice versa)
  *     cannot be paid out and is rejected.
  *
- * One resolved shape does not fit every file: a 5-digit clearing with a
- * 10-digit account yields 11 account-field digits, and the Bankgirot LB
- * account field (TK 54, pos 7-16) is 10 wide. `fitsBgLb` says so; the LB
- * generator refuses that payee by name and points at pain.001, which has no
- * fixed width. It is never truncated or re-encoded.
+ * Every resolved shape fits every file: the longest account-field form (a
+ * 5-digit clearing with a 10-digit account, 11 digits) fits the 12-wide
+ * Bankgirot LB account field (TK40, pos 17-28), and pain.001 has no fixed
+ * width. Nothing is truncated or re-encoded.
  *
  * Per-bank mod10/mod11 check digits are advisory only (non-blocking), see
  * `checkEmployeeAccountChecksum`.
@@ -43,6 +42,16 @@ export type { AccountChecksumResult }
 /** Strip spaces and hyphens so "8327-9" / "1234 5678" become plain digits. */
 export function normalizeBankNumber(input: string | null | undefined): string {
   return (input ?? '').replace(/[\s-]/g, '')
+}
+
+/**
+ * An employee's account as salary documents print it: the clearing number and
+ * the last four digits of the account, the rest starred ("8327-****1234", the
+ * payslip form). A personkonto number is the holder's personnummer, so a list
+ * that leaves the payment file never carries it in full.
+ */
+export function maskPayeeAccount(clearing: string | null | undefined, account: string | null | undefined): string {
+  return `${normalizeBankNumber(clearing)}-****${normalizeBankNumber(account).slice(-4)}`
 }
 
 /**
@@ -131,9 +140,6 @@ export function validateEmployeeBankAccount(
   return issues
 }
 
-/** Width of the Bankgirot LB account field (TK 54, pos 7-16). */
-export const BG_LB_ACCOUNT_FIELD_WIDTH = 10
-
 /** Why a clearing/account pair names no payable account. */
 export type DomesticAccountProblem = 'clearing_format' | 'account_format'
 
@@ -142,12 +148,6 @@ export interface DomesticBankAccountParts {
   clearing4: string
   /** Account digits without the clearing prefix (see the special cases below). */
   accountDigits: string
-  /**
-   * Whether `accountDigits` fits the 10-wide Bankgirot LB account field. False
-   * only for a 5-digit clearing with a 10-digit account. pain.001 has no fixed
-   * width and carries every resolved account.
-   */
-  fitsBgLb: boolean
 }
 
 export type DomesticBankAccountResolution =
@@ -167,7 +167,7 @@ function isPayableAccountFor(clearing: string, account: string): boolean {
  * Resolve a clearing/account pair into the 4-digit clearing and the account
  * digits used by EVERY payout format, or say why it names no payable account.
  * This is the single source of truth: the Bankgirot LB file (fixed 4-digit
- * clearing field, TK 54) and the pain.001 files (CdtrAgt ClrSysMmbId SESBA +
+ * clearing field, TK40) and the pain.001 files (CdtrAgt ClrSysMmbId SESBA +
  * CdtrAcct BBAN without clearing) must present identical routing for the same
  * payee, or one format pays a different account than the other.
  *
@@ -197,19 +197,14 @@ export function resolveDomesticBankAccount(
   if (clearing.length === 5) accountDigits = clearing.slice(4) + account
   else if (account.length === 11) accountDigits = account.slice(4)
 
-  return {
-    ok: true,
-    clearing4,
-    accountDigits,
-    fitsBgLb: accountDigits.length <= BG_LB_ACCOUNT_FIELD_WIDTH,
-  }
+  return { ok: true, clearing4, accountDigits }
 }
 
-/** A payment-file format a payee account has to be carried in. */
-export type PayeeAccountFormat = 'pain001' | 'bg_lb'
-
-/** Why a payee cannot be written into a payment file of a given format. */
-export type PayeeAccountProblem = DomesticAccountProblem | 'bg_lb_account_too_long'
+/**
+ * Why a payee cannot be written into a payment file. The same verdict for
+ * every format: a pair that names a payable account is carried by all of them.
+ */
+export type PayeeAccountProblem = DomesticAccountProblem
 
 /**
  * What is wrong and what to do about it, in Swedish, as the tail of a
@@ -222,32 +217,21 @@ export const PAYEE_ACCOUNT_PROBLEM_SV: Record<PayeeAccountProblem, string> = {
     'clearingnumret är ogiltigt (4 siffror, eller 5 siffror som börjar med 8 för Swedbank). Rätta bankuppgifterna.',
   account_format:
     'kontonumret är ogiltigt (5-10 siffror, utan clearingnummer). Rätta bankuppgifterna.',
-  bg_lb_account_too_long:
-    'kontonumret ryms inte i Bankgirot LB-filen (femsiffrigt clearingnummer med tiosiffrigt kontonummer). Skapa betalfilen som ISO 20022 (pain.001) i stället.',
-}
-
-function formatProblem(
-  resolved: DomesticBankAccountResolution,
-  format: PayeeAccountFormat,
-): PayeeAccountProblem | null {
-  if (!resolved.ok) return resolved.problem
-  if (format === 'bg_lb' && !resolved.fitsBgLb) return 'bg_lb_account_too_long'
-  return null
 }
 
 /**
  * The problem, if any, that keeps a clearing/account pair out of a payment
- * file of the given format. null means the generator for that format carries
- * it. Callers use this to name every affected payee BEFORE generating; the
- * generators go through `payeeAccountParts`, which applies the same verdict,
- * so a precheck that passes means the generator passes.
+ * file. null means every generator carries it. Callers use this to name every
+ * affected payee BEFORE generating; the generators go through
+ * `payeeAccountParts`, which applies the same verdict, so a precheck that
+ * passes means the generator passes.
  */
 export function payeeAccountProblem(
   clearingInput: string | null | undefined,
   accountInput: string | null | undefined,
-  format: PayeeAccountFormat,
 ): PayeeAccountProblem | null {
-  return formatProblem(resolveDomesticBankAccount(clearingInput, accountInput), format)
+  const resolved = resolveDomesticBankAccount(clearingInput, accountInput)
+  return resolved.ok ? null : resolved.problem
 }
 
 /**
@@ -269,7 +253,7 @@ export class PayeeAccountError extends Error {
 /**
  * One Swedish message for a list of payees a file cannot carry, grouped by
  * problem so ten employees with the same problem read as one sentence:
- * "Anna Ek, Bo Ek: kontonumret ryms inte ...". Names only, never numbers.
+ * "Anna Ek, Bo Ek: kontonumret är ogiltigt ...". Names only, never numbers.
  */
 export function describePayeeAccountProblems(
   payees: ReadonlyArray<{ name: string; problem: PayeeAccountProblem }>,
@@ -305,21 +289,18 @@ export function employeeBankDetailsRemark(
 }
 
 /**
- * Generator entry point: the routing parts for one payee in one format, or a
+ * Generator entry point: the routing parts for one payee, or a
  * `PayeeAccountError` naming the payee.
  */
 export function payeeAccountParts(
   payeeName: string,
   clearingInput: string | null | undefined,
   accountInput: string | null | undefined,
-  format: PayeeAccountFormat,
 ): DomesticBankAccountParts {
   const resolved = resolveDomesticBankAccount(clearingInput, accountInput)
   if (!resolved.ok) throw new PayeeAccountError(payeeName, resolved.problem)
-  const problem = formatProblem(resolved, format)
-  if (problem) throw new PayeeAccountError(payeeName, problem)
-  const { clearing4, accountDigits, fitsBgLb } = resolved
-  return { clearing4, accountDigits, fitsBgLb }
+  const { clearing4, accountDigits } = resolved
+  return { clearing4, accountDigits }
 }
 
 /**

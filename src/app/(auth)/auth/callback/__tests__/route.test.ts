@@ -354,3 +354,35 @@ describe('GET /auth/callback: byrå-team invite acceptance', () => {
     expect(response.headers.get('set-cookie') ?? '').not.toContain('gnubok-invite-token=;')
   })
 })
+
+describe('GET /auth/callback: off-origin next after a successful exchange', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('never redirects off-origin when getUser comes back empty after the exchange', async () => {
+    exchangeCodeForSession.mockResolvedValue({ error: null })
+    vi.mocked(createServerClient).mockReturnValueOnce({
+      auth: {
+        verifyOtp,
+        exchangeCodeForSession,
+        getUser: vi.fn().mockResolvedValue({ data: { user: null } }),
+        mfa: {
+          getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: null }),
+          listFactors: vi.fn().mockResolvedValue({ data: null }),
+        },
+      },
+      from: vi.fn(),
+      rpc: vi.fn(),
+    } as never)
+
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?code=xyz&next=//evil.example.com/steal'
+    )
+    const response = await GET(request)
+
+    const location = response.headers.get('location')
+    expect(location).not.toBeNull()
+    expect(new URL(location!).origin).toBe('http://localhost:3000')
+  })
+})

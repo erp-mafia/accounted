@@ -167,6 +167,19 @@ export const WORKLIST_CATEGORIES = [
    * the person applies or dismisses it, or the next lint no longer sees it.
    */
   'arkiv_finding',
+  /**
+   * Issued invoices the Peppol network did not take ("Peppol-leveranser som
+   * misslyckades"), one item per invoice.
+   * Pending:  the invoice's newest peppol_deliveries row has status 'failed'
+   *           or 'no_route' and the invoice is sent or overdue: the SQL
+   *           function peppol_failed_invoice_ids, read on the session client
+   *           (lib/invoices/peppol-failed-invoices.ts) and shared with the
+   *           invoice list's "Peppol misslyckades" chip. Capped at 200.
+   * Done:     a newer delivery that did not fail (a resend of changed
+   *           content stages a new delivery row), or the invoice leaves sent
+   *           and overdue (paid, partly paid, credited, cancelled).
+   */
+  'peppol_delivery_failed',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]

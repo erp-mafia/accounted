@@ -27,7 +27,13 @@ CREATE TABLE public.tablename (
 -- 2. RLS
 ALTER TABLE public.tablename ENABLE ROW LEVEL SECURITY;
 
--- 3. All four CRUD policies: scope to the user's companies
+-- 3. Grants: a new public table is reachable by NO Data API role until
+--    granted (see Grants below). service_role gets the DML the server needs;
+--    authenticated gets what the policies in step 4 allow; anon nothing.
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.tablename TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.tablename TO authenticated;
+
+-- 4. All four CRUD policies: scope to the user's companies
 CREATE POLICY "view own-company tablename"
   ON public.tablename FOR SELECT USING (company_id IN (SELECT user_company_ids()));
 CREATE POLICY "insert own-company tablename"
@@ -37,22 +43,34 @@ CREATE POLICY "update own-company tablename"
 CREATE POLICY "delete own-company tablename"
   ON public.tablename FOR DELETE USING (company_id IN (SELECT user_company_ids()));
 
--- 4. Indexes (minimum: company_id + any FK/filter columns)
+-- 5. Indexes (minimum: company_id + any FK/filter columns)
 CREATE INDEX idx_tablename_company_id ON public.tablename (company_id);
 
--- 5. updated_at trigger
+-- 6. updated_at trigger
 CREATE TRIGGER set_updated_at_tablename
   BEFORE UPDATE ON public.tablename
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
--- 6. Audit trigger
+-- 7. Audit trigger
 CREATE TRIGGER audit_tablename
   AFTER INSERT OR UPDATE OR DELETE ON public.tablename
   FOR EACH ROW EXECUTE FUNCTION public.write_audit_log();
 
--- 7. Reload PostgREST schema cache (required after structural DDL)
+-- 8. Reload PostgREST schema cache (required after structural DDL)
 NOTIFY pgrst, 'reload schema';
 ```
+
+## Grants
+
+Since migration `20260929220000_own_default_privileges` (and on every Supabase project from 2026-10-30) a new table, view or sequence in `public` gets no privileges for `anon`, `authenticated` or `service_role`. Without a GRANT it answers 42501 to every supabase-js client, the service-role one included, while unit tests (mocked client) stay green. The tables created before that keep the grants the old platform default gave them, so do not copy an old migration's missing GRANT.
+
+- Grant in the same migration that creates the relation. `service_role`: `SELECT, INSERT, UPDATE, DELETE` (crons, API-key/MCP paths, account erasure and the archive export all run as the service role). `authenticated`: the privileges its RLS policies allow, nothing more (a SELECT-only policy set gets `GRANT SELECT`). `anon`: only when the table is meant to be public.
+- A view needs `GRANT SELECT` like a table, and `WITH (security_invoker = true)` so the base tables' RLS applies to the caller rather than to the view owner.
+- A role that must not reach the table gets a reasoned waiver instead of a GRANT: `-- no-grant: authenticated on public.tablename (service-role only: written by the cron)`.
+- Keys: `uuid DEFAULT gen_random_uuid()` or `GENERATED ALWAYS AS IDENTITY` need no sequence grant. `serial`/`bigserial` does: `GRANT USAGE, SELECT ON SEQUENCE public.tablename_col_seq TO service_role, authenticated;`.
+- Never `GRANT ... ON ALL TABLES IN SCHEMA public` or `ALTER DEFAULT PRIVILEGES ... GRANT` to the API roles: the first re-opens tables earlier migrations locked down on purpose, the second undoes `20260929220000` for every table after it.
+- `npm run check:guards` (table-without-grant) fails a migration that misses any of this and prints the exact lines to add.
+- A fresh database that replays the whole history runs `supabase/bootstrap.sql` first (docs/SELF-HOSTING.md, section 3).
 
 ## Child Tables (No Direct user_id)
 
@@ -109,3 +127,4 @@ Use `mcp__plugin_supabase_supabase__apply_migration` with snake_case `name`. Nev
 4. Missing audit trigger: no audit trail
 5. Hardcoded UUIDs in data migrations: use subqueries
 6. Forgetting `source_type` CHECK expansion for new entry generators
+7. Missing GRANT: the table answers 42501 to every supabase-js client, service role included

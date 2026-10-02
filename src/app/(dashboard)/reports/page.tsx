@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
@@ -12,6 +12,7 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { ReportLibrary } from '@/components/reports/ReportLibrary'
 import { useRecentReports } from '@/components/reports/useRecentReports'
 import { getReport } from '@/lib/reports/catalog'
+import { createClient } from '@/lib/supabase/client'
 
 /**
  * Reports catalog landing (concept "Tabellen"): one dry table grouped by
@@ -32,6 +33,23 @@ export default function ReportsPage() {
   const { settings } = useCompanySettings()
   const t = useTranslations('reports')
   const { openedAt, pushRecent } = useRecentReports(company?.id)
+  // Payroll reports (catalog needsEmployees) show only for a company that
+  // has employees. Best effort: a failed read keeps them hidden.
+  const [hasEmployees, setHasEmployees] = useState(false)
+  useEffect(() => {
+    if (!company?.id) return
+    let cancelled = false
+    createClient()
+      .from('employees')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', company.id)
+      .then(({ count }) => {
+        if (!cancelled) setHasEmployees((count ?? 0) > 0)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [company?.id])
 
   // Open a report. Route-owning reports (cash flow, annual report, KPI, SIE)
   // navigate to their own page; the rest open the focused /reports/[slug] route.
@@ -56,6 +74,9 @@ export default function ReportsPage() {
         help={
           <HelpPopover>
             <p>{t('help_text')}</p>
+            {/* Was a footnote under the catalog: help belongs behind the "?"
+                (convention 7), not in the page flow. */}
+            <p className="mt-2">{t('catalog_footnote')}</p>
           </HelpPopover>
         }
         action={
@@ -71,23 +92,19 @@ export default function ReportsPage() {
 
       {fyReady && !selectedPeriod ? (
         <EmptyState
-          title="Inget räkenskapsår valt"
-          description="Skapa ett räkenskapsår för att kunna se rapporter."
-          actionLabel="Gå till inställningar"
+          title={t('no_fiscal_year_title')}
+          description={t('no_fiscal_year_description')}
+          actionLabel={t('no_fiscal_year_action')}
           actionHref="/settings"
         />
       ) : (
-        <>
-          <ReportLibrary
-            entityType={company?.entity_type}
-            dimensionsEnabled={settings?.dimensions_enabled === true}
-            openedAt={openedAt}
-            onOpen={openReport}
-          />
-          <p className="px-1 text-xs leading-5 text-muted-foreground">
-            {t('catalog_footnote')}
-          </p>
-        </>
+        <ReportLibrary
+          entityType={company?.entity_type}
+          hasEmployees={hasEmployees}
+          dimensionsEnabled={settings?.dimensions_enabled === true}
+          openedAt={openedAt}
+          onOpen={openReport}
+        />
       )}
     </div>
   )

@@ -17,6 +17,25 @@ const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 describe('readDocumentBytes', () => {
   beforeEach(() => vi.clearAllMocks())
 
+  it('reads a scanned bundle a few pages at a time and returns them in page order', async () => {
+    mock(readPdfTextLayer).mockResolvedValue({ pages: [], pagesNeedingVision: [1, 2, 3, 4], pageCount: 4, pdfType: 'Scanned' })
+    mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('p'))
+    let inFlight = 0
+    let peak = 0
+    mock(transcribeWithModel).mockImplementation(async (doc: { fileName?: string }) => {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 5))
+      inFlight--
+      return { ok: true, text: `sida ${doc.fileName}` }
+    })
+    const out = await readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf', { allowModel: true })
+    expect(transcribeWithModel).toHaveBeenCalledTimes(4)
+    expect(peak).toBeGreaterThan(1)
+    expect(out).toMatchObject({ ok: true, pageCount: 4 })
+    expect((out as { pages: Array<{ pageNo: number }> }).pages.map((p) => p.pageNo)).toEqual([1, 2, 3, 4])
+  })
+
   it('skips structured archives and unknown types without reading', async () => {
     expect(await readDocumentBytes(Buffer.from('<x/>'), 'application/xml')).toEqual({ ok: false, skipped: 'structured' })
     expect(await readDocumentBytes(Buffer.from('zzz'), 'application/zip')).toEqual({ ok: false, skipped: 'unsupported_mime' })
@@ -56,6 +75,35 @@ describe('readDocumentBytes', () => {
       [2, 'claude_vision'],
       [3, 'pdf_text'],
     ])
+  })
+
+  it('reads a picture page whole with the model and keeps its text layer when the model may not', async () => {
+    const local = {
+      pages: [
+        { pageNo: 1, text: 'Shareholders Agreement', reader: 'pdf_text', hasTextLayer: true },
+        { pageNo: 2, text: 'Schedule 1.2 - Cap Table', reader: 'pdf_text', hasTextLayer: true },
+      ],
+      pagesNeedingVision: [],
+      pagesWithImages: [2],
+      pageCount: 2,
+    }
+    mock(readPdfTextLayer).mockResolvedValue(local)
+    mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('%PDF-page2'))
+    mock(transcribeWithModel).mockResolvedValue({ ok: true, text: 'Schedule 1.2 - Cap Table\nJakob Wennberg 60 000' })
+    const read = await readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf')
+    expect(extractSinglePagePdf).toHaveBeenCalledWith(expect.any(Buffer), 2)
+    expect(read.ok && read.pages.map((p) => [p.pageNo, p.reader, p.text])).toEqual([
+      [1, 'pdf_text', 'Shareholders Agreement'],
+      [2, 'claude_vision', 'Schedule 1.2 - Cap Table\nJakob Wennberg 60 000'],
+    ])
+
+    vi.clearAllMocks()
+    mock(readPdfTextLayer).mockResolvedValue(local)
+    const gated = await readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf', { allowModel: false })
+    expect(transcribeWithModel).not.toHaveBeenCalled()
+    // Nothing is lost: the text layer stays, and the partial read is retried when the model may.
+    expect(gated).toMatchObject({ ok: true, reader: 'pdf_text', partial: 'ai_gated' })
+    expect(gated.ok && gated.pages.map((p) => p.text)).toEqual(['Shareholders Agreement', 'Schedule 1.2 - Cap Table'])
   })
 
   it('stops at the page cap and says so, keeping what it read', async () => {

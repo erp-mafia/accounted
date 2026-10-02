@@ -548,6 +548,40 @@ describe('extractInvoiceFields', () => {
     expect(data.totals.roundingAmount).toBe(-0.25)
   })
 
+  it('reads a credit note as one, with the invoice number it credits (issue #2980)', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'credit_note',
+        invoice: { ...VALID_RESULT.invoice, invoiceNumber: 'K-778', creditedInvoiceNumber: '10234' },
+        lineItems: [{ ...VALID_RESULT.lineItems[0], lineTotal: -5 }],
+        totals: { subtotal: -5, vatAmount: -1.25, total: -6.25 },
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kreditfaktura.pdf',
+    })
+    expect(data.documentKind).toBe('credit_note')
+    expect(data.invoice.creditedInvoiceNumber).toBe('10234')
+    expect(data.invoice.invoiceNumber).toBe('K-778')
+    expect(data.totals.total).toBe(-6.25)
+  })
+
+  it('degrades a malformed credited invoice number to null instead of failing the parse', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse({ ...VALID_RESULT, invoice: { ...VALID_RESULT.invoice, creditedInvoiceNumber: 10234 } })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kreditfaktura.pdf',
+    })
+    expect(data.supplier.name).toBe('Anthropic, PBC')
+    expect(data.invoice.creditedInvoiceNumber).toBeNull()
+  })
+
   it('still parses cached outputs from before the classification fields existed', async () => {
     // VALID_RESULT has none of the new fields: the whole document must
     // validate, not fall back to the empty result.
@@ -839,7 +873,7 @@ describe('stripOwnCompanyAsSupplier', () => {
     }
     await expect(
       fetchOwnCompanyIdentity(supabase as never, 'company-1')
-    ).resolves.toEqual({ orgNumber: null, name: null })
+    ).resolves.toEqual({ orgNumber: null, name: null, companyId: 'company-1' })
   })
 
   it('is a no-op without ownCompany', () => {

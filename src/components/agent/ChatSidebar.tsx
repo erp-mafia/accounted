@@ -141,14 +141,14 @@ export default function ChatSidebar({ initialConversations }: Props) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Sök…"
-            className="w-full rounded-lg border border-border bg-background pl-8 pr-7 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full rounded-lg border border-border bg-background pl-8 pr-7 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           {query.length > 0 && (
             <button
               type="button"
               onClick={() => setQuery('')}
               aria-label="Rensa sökning"
-              className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+              className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
             >
               <X className="h-3 w-3" />
             </button>
@@ -166,7 +166,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
         ) : (
           grouped.map(({ bucket, rows }) => (
             <section key={bucket} className="py-2">
-              <p className="px-4 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+              <p className="px-4 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
                 {BUCKET_LABELS[bucket]}
               </p>
               <ul className="space-y-1">
@@ -191,7 +191,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                           placeholder="Namnge konversationen…"
                           maxLength={200}
                           aria-label="Nytt namn på konversationen"
-                          className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                          className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         />
                       </div>
                     ) : (
@@ -230,7 +230,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                             }}
                             title="Byt namn"
                             aria-label="Byt namn på konversation"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
                           >
                             <Pencil className="h-3 w-3" />
                           </button>
@@ -246,7 +246,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                               'inline-flex h-8 w-8 items-center justify-center rounded-sm transition-colors',
                               c.pinned
                                 ? 'text-foreground'
-                                : 'text-muted-foreground/50 hover:text-foreground hover:bg-secondary',
+                                : 'text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60',
                             )}
                           >
                             {c.pinned ? (
@@ -263,7 +263,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                             }}
                             title="Arkivera"
                             aria-label="Arkivera konversation"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
                           >
                             <Archive className="h-3 w-3" />
                           </button>

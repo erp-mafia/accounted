@@ -140,4 +140,40 @@ describe('POST /api/reports/vat-declaration/rc-basis-gaps/fix', () => {
       expect.any(Array),
     )
   })
+
+  it('keeps every dimension of the original lines on the corrected entry, not only the 1/6 mirrors', async () => {
+    const bag = { '1': 'KS01', '2': 'AVD3', '6': 'P001', '7': 'ANST9', '20': 'KUND42' }
+    enqueue({
+      data: {
+        id: ENTRY_ID,
+        status: 'posted',
+        lines: [
+          {
+            account_number: '6540',
+            debit_amount: 10000,
+            credit_amount: 0,
+            line_description: 'IT-tjänst EU',
+            dimensions: bag,
+            // The generated mirrors of keys 1 and 6 ride along on a posted row.
+            cost_center: 'KS01',
+            project: 'P001',
+          },
+          { account_number: '2645', debit_amount: 2500, credit_amount: 0, dimensions: {} },
+          { account_number: '2614', debit_amount: 0, credit_amount: 2500, dimensions: {} },
+          { account_number: '1930', debit_amount: 0, credit_amount: 10000, dimensions: {} },
+        ],
+      },
+    })
+    correctEntryMock.mockResolvedValue({ reversal: { id: 'rev-1' }, corrected: { id: 'cor-1' } })
+
+    const response = await POST(fixRequest(validBody), { params: Promise.resolve({}) })
+    expect(response.status).toBe(200)
+
+    const lines = correctEntryMock.mock.calls[0][4] as Array<{ account_number: string; dimensions?: Record<string, string> }>
+    expect(lines.find((l) => l.account_number === '6540')?.dimensions).toEqual(bag)
+    // Untagged lines stay untagged, and so does the added basis pair.
+    for (const account of ['2645', '2614', '1930', '4535', '4598']) {
+      expect(lines.find((l) => l.account_number === account)?.dimensions, account).toBeUndefined()
+    }
+  })
 })

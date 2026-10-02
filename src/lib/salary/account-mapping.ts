@@ -123,8 +123,9 @@ export const SALARY_ACCOUNTS = {
   // Tax withholding (credit)
   TAX_WITHHELD: '2710',       // Personalskatt
 
-  // Bank / payment (credit)
-  BANK: '1930',               // Företagskonto
+  // No bank entry: the net pay is credited on the company's own bank account,
+  // which is per company (resolvePrimaryBankAccount), not a payroll constant
+  // (issue #3097).
 
   // Employer contributions
   AVGIFTER_EXPENSE: '7510',   // Lagstadgade sociala avgifter (debit)

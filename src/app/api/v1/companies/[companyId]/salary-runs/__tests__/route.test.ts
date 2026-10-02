@@ -635,6 +635,44 @@ describe('DELETE /api/v1/companies/:companyId/salary-runs/:id', () => {
     expect(res.status).toBe(404)
   })
 
+  it('tells an API client why a draft with a payment file cannot be deleted, and what to do instead (#2831)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          { data: { id: RUN_ID, status: 'draft' }, error: null },
+          // The payment file (kept seven years) still points at the run.
+          {
+            error: {
+              code: '23503',
+              message:
+                'update or delete on table "salary_runs" violates foreign key constraint "salary_payment_files_salary_run_id_fkey" on table "salary_payment_files"',
+              details: `Key (id)=(${RUN_ID}) is still referenced from table "salary_payment_files".`,
+              hint: null,
+            },
+            count: null,
+          },
+        ],
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await deleteSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}`, {
+        method: 'DELETE',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_DELETE_BLOCKED_BY_PAYMENT_FILE')
+    expect(body.error.message_en).toMatch(/payment file was generated/)
+    expect(body.error.message_en).not.toMatch(/violates foreign key/)
+    expect(body.error.recovery_hint).toMatch(/Edit the draft run instead/)
+    expect(body.error.details).toMatchObject({ referenced_by: 'salary_payment_files', register: 'payment_file' })
+  })
+
   it('refuses to delete a draft that already has journal-entry foreign keys set (BFL 5 kap)', async () => {
     // Defense in depth: if a hypothetical partial failure ever left a row
     // in status=draft with non-null salary_entry_id, the DELETE must NOT

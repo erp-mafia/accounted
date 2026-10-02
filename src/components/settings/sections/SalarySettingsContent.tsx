@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
@@ -9,11 +8,13 @@ import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSk
 import {
   SettingsGroup,
   SettingsInput,
+  SettingsReveal,
   SettingsRow,
   SettingsSectionHeader,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { TaxTableStatus } from '@/components/salary/TaxTableStatus'
+import { VacationYearSettings } from '@/components/settings/sections/VacationYearSettings'
 import { Switch } from '@/components/ui/switch'
 import { useSettings } from '@/components/settings/useSettings'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -57,18 +58,36 @@ export function SalarySettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const tSalary = useTranslations('salary')
+  const tTax = useTranslations('settings_tax_form')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
   // Controlled so the LB sunset note reacts to the selection before save.
   const [format, setFormat] = useState<'bg_lb' | 'pain001' | null>(null)
   // Controlled: the Radix Switch is not a form element, so its value rides
   // along in handleSave instead of FormData.
   const [netRounding, setNetRounding] = useState<boolean | null>(null)
+  // Payslip sections on the employee's copy (crm#202). Controlled Switches,
+  // same null = not touched rule.
+  const [showEmployerCost, setShowEmployerCost] = useState<boolean | null>(null)
+  const [showBreakdown, setShowBreakdown] = useState<boolean | null>(null)
+  // Employer flags moved here from Skatt (2026-09-24). Controlled for the
+  // same reason; null = not touched, read the saved value.
+  const [paysSalaries, setPaysSalaries] = useState<boolean | null>(null)
+  const [employerRegistered, setEmployerRegistered] = useState<boolean | null>(null)
+  const [employerSeasonal, setEmployerSeasonal] = useState<boolean | null>(null)
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
 
   const effectiveFormat = format ?? settings.preferred_payment_format ?? 'pain001'
   const effectiveNetRounding = netRounding ?? settings.salary_net_rounding ?? false
+  const effectiveShowEmployerCost = showEmployerCost ?? settings.salary_payslip_show_employer_cost ?? true
+  const effectiveShowBreakdown = showBreakdown ?? settings.salary_payslip_show_breakdown ?? true
+  const effectivePays = paysSalaries ?? settings.pays_salaries ?? false
+  // Fall back to pays_salaries for rows saved before the registration flag
+  // existed; saving attests the shown value.
+  const effectiveRegistered =
+    employerRegistered ?? settings.employer_registered ?? settings.pays_salaries ?? false
+  const effectiveSeasonal = employerSeasonal ?? settings.employer_seasonal ?? false
   const currentSeries = resolveDefaultSeriesForSource(settings, 'salary_payment')
   // {} on a company that never touched the conventions = every default.
   const currentPolicy: SalaryCalculationPolicy = {
@@ -90,7 +109,12 @@ export function SalarySettingsContent() {
       preferred_payment_format: paymentFormat,
       salary_default_bank: bank === 'none' ? null : bank,
       salary_net_rounding: effectiveNetRounding,
+      salary_payslip_show_employer_cost: effectiveShowEmployerCost,
+      salary_payslip_show_breakdown: effectiveShowBreakdown,
       salary_deviation_period: deviationPeriod,
+      pays_salaries: effectivePays,
+      employer_registered: effectiveRegistered,
+      employer_seasonal: effectiveRegistered && effectiveSeasonal,
       // All six conventions travel together: the internal settings route
       // stores the object as a whole.
       salary_calculation_policy: readPolicyFromForm(formData),
@@ -120,6 +144,56 @@ export function SalarySettingsContent() {
       <SettingsSectionHeader title={tNav('salary')} intro={tIntro('salary')} />
 
       <SettingsFormWrapper onSave={handleSave}>
+        {/* Whether the company pays salaries at all: drives the AGI
+            obligation and whether Löner shows in the menu. Everything below
+            folds away while it is off, but stays mounted so saving the
+            switch never resets the payroll defaults. */}
+        <SettingsGroup>
+          <SettingsRow label={tTax('pays_salaries_label')} htmlFor="pays_salaries" help={tTax('pays_salaries_help')}>
+            <Switch
+              id="pays_salaries"
+              checked={effectivePays}
+              onCheckedChange={(v) => {
+                const checked = v === true
+                setPaysSalaries(checked)
+                // Paying out salary obliges employer registration (SFL 7 kap. 1 §).
+                if (checked) setEmployerRegistered(true)
+              }}
+            />
+            <input type="hidden" name="pays_salaries" value={effectivePays ? 'true' : 'false'} />
+          </SettingsRow>
+          <SettingsRow
+            label={tTax('employer_registered_label')}
+            htmlFor="employer_registered"
+            help={tTax('employer_registered_help')}
+            borderless={effectiveRegistered}
+          >
+            <Switch
+              id="employer_registered"
+              checked={effectiveRegistered}
+              onCheckedChange={(v) => {
+                const checked = v === true
+                setEmployerRegistered(checked)
+                if (!checked) setEmployerSeasonal(false)
+              }}
+            />
+          </SettingsRow>
+          <SettingsReveal open={effectiveRegistered}>
+            <SettingsRow
+              label={tTax('employer_seasonal_label')}
+              htmlFor="employer_seasonal"
+              help={tTax('employer_seasonal_help')}
+            >
+              <Switch
+                id="employer_seasonal"
+                checked={effectiveSeasonal}
+                onCheckedChange={(v) => setEmployerSeasonal(v === true)}
+              />
+            </SettingsRow>
+          </SettingsReveal>
+        </SettingsGroup>
+
+        <SettingsReveal open={effectivePays} indent={false}>
         <SettingsGroup label={t('payments_heading')} help={t('info_payroll_scope')}>
           <SettingsRow
             label={t('pay_day_label')}
@@ -189,12 +263,10 @@ export function SalarySettingsContent() {
           <SettingsRow label={t('net_rounding_label')} help={t('net_rounding_help')}>
             <Switch
               id="salary_net_rounding"
+              aria-label={t('net_rounding_toggle')}
               checked={effectiveNetRounding}
               onCheckedChange={(next) => setNetRounding(next)}
             />
-            <label htmlFor="salary_net_rounding" className="cursor-pointer text-sm">
-              {t('net_rounding_toggle')}
-            </label>
           </SettingsRow>
         </SettingsGroup>
 
@@ -221,6 +293,35 @@ export function SalarySettingsContent() {
           ))}
         </SettingsGroup>
 
+        {/* What the employee's copy of the payslip prints (crm#202). The
+            employer's own view always prints both sections
+            (lib/salary/payslips/build-payslip-data). */}
+        <SettingsGroup label={t('payslip_heading')} help={t('payslip_help')}>
+          <SettingsRow label={t('payslip_employer_cost_label')} help={t('payslip_employer_cost_help')}>
+            <Switch
+              id="salary_payslip_show_employer_cost"
+              aria-label={t('payslip_employer_cost_toggle')}
+              checked={effectiveShowEmployerCost}
+              onCheckedChange={(next) => setShowEmployerCost(next)}
+            />
+          </SettingsRow>
+          {/* The breakdown's steps carry the employer cost figures, so the
+              employee copy prints it only while the employer cost is shown
+              (payslipSectionsFor). The stored value is kept as is. */}
+          <SettingsRow
+            label={t('payslip_breakdown_label')}
+            help={effectiveShowEmployerCost ? t('payslip_breakdown_help') : t('payslip_breakdown_requires_employer_cost')}
+          >
+            <Switch
+              id="salary_payslip_show_breakdown"
+              aria-label={t('payslip_breakdown_toggle')}
+              checked={effectiveShowEmployerCost && effectiveShowBreakdown}
+              disabled={!effectiveShowEmployerCost}
+              onCheckedChange={(next) => setShowBreakdown(next)}
+            />
+          </SettingsRow>
+        </SettingsGroup>
+
         <SettingsGroup label={t('accounting_heading')}>
           <SettingsRow
             label={t('voucher_series_label')}
@@ -239,8 +340,11 @@ export function SalarySettingsContent() {
             </SettingsSelect>
           </SettingsRow>
         </SettingsGroup>
+        </SettingsReveal>
       </SettingsFormWrapper>
 
+      {effectivePays ? (
+      <>
       {/* Tax tables: automatic, read-only status. Lives outside the form so
           the recheck action never interacts with the save flow. */}
       <SettingsGroup
@@ -254,17 +358,13 @@ export function SalarySettingsContent() {
         </SettingsRow>
       </SettingsGroup>
 
-      {/* Vacation is configured per employee; this row only points there. */}
-      <SettingsGroup label={t('vacation_heading')}>
-        <SettingsRow label={t('vacation_rule_label')} help={t('vacation_info')}>
-          <Link
-            href="/salary/employees"
-            className="text-sm text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
-          >
-            {t('vacation_info_link')}
-          </Link>
-        </SettingsRow>
-      </SettingsGroup>
+      {/* Semesterår: a choice while the settings service accepts a basis
+          change, locked with its reason once open vacation-ledger rows
+          exist. Vacation itself is configured per employee; the rule row
+          only points there. */}
+      <VacationYearSettings settings={settings} onSaved={updateSettings} />
+      </>
+      ) : null}
     </div>
   )
 }

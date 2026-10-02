@@ -131,6 +131,33 @@ const NAME_TO_CODE: Map<string, string> = (() => {
 const ALPHA2_RE = /^[A-Z]{2}$/
 
 /**
+ * The officially assigned ISO 3166-1 alpha-2 codes, plus XI (Northern
+ * Ireland: EU VAT area for goods, see eu-countries) and XK (Kosovo, the
+ * customary user-assigned code) because goods are really shipped there.
+ *
+ * Customer and supplier country deliberately accept any well-formed code
+ * (normalizeCountryCode). An invoice's delivery_country cannot: it decides a
+ * 0 % treatment, and every code outside the EU table reads as "outside the
+ * EU", so a typo or an unassigned code would unlock export (#2906).
+ */
+const ASSIGNED_COUNTRY_CODES: ReadonlySet<string> = new Set(
+  (
+    'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ ' +
+    'CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR ' +
+    'GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP ' +
+    'KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT ' +
+    'MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW ' +
+    'SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ ' +
+    'UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW XI XK'
+  ).split(' '),
+)
+
+/** True for an assigned ISO 3166-1 alpha-2 code (plus XI and XK), after normalizeCountryCode. */
+export function isAssignedCountryCode(code: string | null | undefined): boolean {
+  return typeof code === 'string' && ASSIGNED_COUNTRY_CODES.has(code)
+}
+
+/**
  * Every folded name the TypeScript table knows, with its code. Exists so a
  * test can hold the SQL twin in migration 20260903173000 to the same table.
  */
@@ -267,6 +294,17 @@ export function isEuTradeVatPrefix(prefix: string | null | undefined): boolean {
 /** True when the country is in the EU VAT area: a member, or a territory of one. */
 export function isEuVatAreaCountry(code: string): boolean {
   return isEuMemberCountry(code) || code in VAT_TERRITORY_OF
+}
+
+/**
+ * True when goods delivered to this country stay inside the EU goods VAT
+ * area: the EU VAT area above, plus Northern Ireland (XI), which stays in it
+ * for goods under the Protocol. Goods transported anywhere else leave the EU
+ * (an export). Sweden is included: callers that need "another member state"
+ * test SE first.
+ */
+export function isEuGoodsDestination(code: string): boolean {
+  return isEuVatAreaCountry(code) || code === 'XI'
 }
 
 /**

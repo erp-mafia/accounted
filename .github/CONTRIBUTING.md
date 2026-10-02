@@ -16,7 +16,7 @@ Everyone interacting in the project is expected to follow the [Code of Conduct](
 You need a Supabase project for local development:
 
 1. Create a free project at [supabase.com](https://supabase.com)
-2. Run all migrations from `supabase/migrations/` against your project
+2. Run `supabase/bootstrap.sql` once, then all migrations from `supabase/migrations/` in filename order (see [docs/SELF-HOSTING.md](../docs/SELF-HOSTING.md#3-apply-database-migrations); a project created since 2026-05-30 answers every request with 42501 if the bootstrap is skipped)
 3. Copy `.env.example` to `.env` and fill in your Supabase credentials:
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`

@@ -1,3 +1,7 @@
+---
+audience: developer
+---
+
 # Implementation Guide, Building Peppol into a Swedish Accounting Product
 
 This reference is the practical builder's guide. Open-source library landscape, common rejection patterns, build-vs-buy economics, validation in CI, and a concrete phased plan for a new Swedish accounting platform.

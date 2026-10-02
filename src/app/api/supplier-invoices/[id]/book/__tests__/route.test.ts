@@ -130,9 +130,24 @@ describe('POST /api/supplier-invoices/[id]/book', () => {
     expect(mockCreateRegistrationEntry).not.toHaveBeenCalled()
   })
 
+  it('refuses a locked period with PERIOD_LOCKED before generating the entry', async () => {
+    enqueue({ data: makeUnbookedInvoice(), error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: '2026-02-01T00:00:00Z' }, error: null })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await bookRequest())
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PERIOD_LOCKED')
+    expect(mockCreateRegistrationEntry).not.toHaveBeenCalled()
+  })
+
   it('returns 400 when no fiscal period covers the invoice date', async () => {
     enqueue({ data: makeUnbookedInvoice(), error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    // Period-lock pre-check (company lock date, covering period): nothing locked.
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
     mockCreateRegistrationEntry.mockResolvedValue(null)
 
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await bookRequest())
@@ -143,6 +158,9 @@ describe('POST /api/supplier-invoices/[id]/book', () => {
   it('cancels the entry and returns 409 when another request booked first', async () => {
     enqueue({ data: makeUnbookedInvoice(), error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    // Period-lock pre-check (company lock date, covering period): nothing locked.
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
     mockCreateRegistrationEntry.mockResolvedValue({ id: 'je-1' })
     // CAS-guarded link matches no row: someone else already claimed it.
     enqueue({ data: null, error: { message: 'no rows' } })
@@ -164,6 +182,9 @@ describe('POST /api/supplier-invoices/[id]/book', () => {
     const invoice = makeUnbookedInvoice()
     enqueue({ data: invoice, error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    // Period-lock pre-check (company lock date, covering period): nothing locked.
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
     mockCreateRegistrationEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: { ...invoice, registration_journal_entry_id: 'je-1' }, error: null })
 
@@ -196,6 +217,9 @@ describe('POST /api/supplier-invoices/[id]/book', () => {
     })
     enqueue({ data: invoice, error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    // Period-lock pre-check (company lock date, covering period): nothing locked.
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
     mockCreateRegistrationEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: { ...invoice, registration_journal_entry_id: 'je-1' }, error: null })
     mockCreateSchedules.mockResolvedValue({ created: 0, failed: 1 })

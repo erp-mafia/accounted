@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -173,12 +173,8 @@ export function ConnectorSettingsSection() {
             )}
             {status.configured ? (
               <SettingsRowEnd>
-                <Button variant="outline" size="sm" disabled={syncing} onClick={runSync}>
-                  {syncing ? (
-                    <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
-                  )}
+                <Button variant="outline" size="sm" loading={syncing} onClick={runSync}>
+                  {!syncing && <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />}
                   <span>{syncing ? t('connector_sync_button_busy') : t('connector_sync_button')}</span>
                 </Button>
               </SettingsRowEnd>

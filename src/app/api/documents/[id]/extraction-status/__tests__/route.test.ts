@@ -97,4 +97,31 @@ describe('GET /api/documents/:id/extraction-status', () => {
     const { body } = await parseJsonResponse<{ data: { status: string } }>(res)
     expect(body.data.status).toBe('disabled')
   })
+
+  type FactsBody = { data: { status: string; facts: { vat_amount: number | null; vat_rate: number | null } | null } }
+
+  it("returns the document's facts once it is read, so a review can book its moms", async () => {
+    enqueue({
+      data: {
+        id: 'doc-1',
+        extracted_at: '2026-09-26T19:00:00Z',
+        extracted_data: { totals: { vatAmount: 200, total: 1000 }, vatBreakdown: [{ rate: 25, base: 800, amount: 200 }] },
+        extraction_model: 'claude',
+      },
+    })
+    const res = await GET(createMockRequest('/api/documents/doc-1/extraction-status'), params)
+    const { status, body } = await parseJsonResponse<FactsBody>(res)
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('succeeded')
+    expect(body.data.facts?.vat_amount).toBe(200)
+    expect(body.data.facts?.vat_rate).toBe(25)
+  })
+
+  it('returns no facts while the extraction is still running', async () => {
+    enqueue({ data: { id: 'doc-1', extracted_at: null, extracted_data: null, extraction_model: null } })
+    const res = await GET(createMockRequest('/api/documents/doc-1/extraction-status'), params)
+    const { body } = await parseJsonResponse<FactsBody>(res)
+    expect(body.data.status).toBe('running')
+    expect(body.data.facts).toBeNull()
+  })
 })

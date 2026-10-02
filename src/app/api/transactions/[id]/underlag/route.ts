@@ -11,7 +11,9 @@ import { readUnderlagFacts, type TransactionUnderlag } from '@/lib/transactions/
  * with it (invoice_inbox_items.matched_transaction_id). Returns the document
  * to show, where it came from, and the facts read off it (supplier, date,
  * totals, moms), so the review and the drawer can put the receipt next to
- * the booking and use its moms.
+ * the booking and use its moms. The facts are the inbox item's reading, or,
+ * for a document that never went through the inbox (attached from the
+ * drawer), the document's own extraction.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.underlag.get',
@@ -41,18 +43,23 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const source: TransactionUnderlag['source'] = tx.document_id ? 'pinned' : item?.document_id ? 'matched' : null
 
     let document: TransactionUnderlag['document'] = null
+    let documentExtraction: unknown = null
     if (documentId) {
       const { data: doc, error: docError } = await supabase
         .from('document_attachments')
-        .select('id, file_name, mime_type')
+        .select('id, file_name, mime_type, extracted_data')
         .eq('company_id', companyId)
         .eq('id', documentId)
         .maybeSingle()
       if (docError) throw docError
-      document = doc ?? null
+      if (doc) {
+        const { extracted_data: extracted, ...shown } = doc
+        document = shown
+        documentExtraction = extracted
+      }
     }
 
-    const facts = readUnderlagFacts(item?.extracted_data)
+    const facts = readUnderlagFacts(item?.extracted_data ?? documentExtraction)
     if (facts && !facts.kind && item?.kind_hint) facts.kind = item.kind_hint
 
     const data: TransactionUnderlag = { source, document, inbox_item_id: item?.id ?? null, facts }

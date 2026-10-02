@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Plus, Trash2, AlertTriangle, Loader2, Lock, CalendarPlus, Eraser, Tags, BookmarkPlus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -43,10 +44,12 @@ import {
   formatFailedDocumentNames,
   type DocumentLinkFailure,
 } from '@/lib/documents/link-documents'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { roundOre } from '@/lib/money'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
+import { resolveVoucherEnter, type VoucherEnterAction } from '@/lib/bookkeeping/voucher-enter-key'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
@@ -911,65 +914,79 @@ export default function JournalEntryForm({
     !isSubmitting &&
     !isSavingDraft
 
-  // Whether the entry is actually submittable. The Enter-to-advance handlers
-  // below key off this: navigation fires while the entry is incomplete, and
-  // once it balances Enter falls through to the review instead.
-  const canSubmitReview = () =>
-    isBalanced &&
-    !!description &&
-    !!selectedPeriod &&
-    !periodMismatch &&
-    processReady()
+  // Carry out what resolveVoucherEnter decided for an Enter keypress. The
+  // decision (which field, which row, review or not) lives in
+  // lib/bookkeeping/voucher-enter-key.ts; this only touches focus and state.
+  const applyEnterAction = (action: VoucherEnterAction) => {
+    if (action.kind === 'review') {
+      if (processReady()) handleReview()
+      return
+    }
+    if (action.kind !== 'focus') return
+    if (action.appendRow) addLine()
+    if (action.field === 'account') focusAccount(action.row)
+    else if (action.field === 'debit') focusDebit(action.row)
+    else focusCredit(action.row)
+  }
 
-  // Enter anywhere in the form = "Granska & skapa": opens the review exactly as
-  // the button does, from any field. Navigation is Tab's job. Two Enter
-  // exceptions stay intact: the account combobox (it calls preventDefault to
-  // select the highlighted account (we skip when defaultPrevented) and the
-  // internal-note textarea (newlines). The inline review owns its own Enter.
+  // Which konteringsrad's account input (desktop or mobile) an element is,
+  // or -1. The account combobox takes no onKeyDown, so the form-level handler
+  // recognises it by its ref.
+  const accountRowOf = (el: EventTarget) => {
+    const d = desktopAccountRefs.current.indexOf(el as HTMLInputElement)
+    return d !== -1 ? d : mobileAccountRefs.current.indexOf(el as HTMLInputElement)
+  }
+
+  // Form-level Enter. Inside the konteringsrader Enter moves forward and only
+  // an empty row's empty account field opens the review; any other control
+  // (date, series, currency) opens the review exactly as the Granska & skapa
+  // button does. Whether the voucher balances plays no part: it balances
+  // several times while a payroll voucher is keyed (crm#229). Exceptions that
+  // stay intact: the account combobox consumes Enter when it selects a
+  // suggestion or re-commits a full number (we skip when defaultPrevented),
+  // the per-field handlers below consume their own Enter, the internal-note
+  // textarea keeps newlines, and the inline review owns its own Enter.
   const handleFormKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Enter') return
     if (e.defaultPrevented || showReview) return
-    if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
+    const target = e.target as HTMLElement
+    if (target.tagName === 'TEXTAREA') return
     e.preventDefault()
-    if (processReady()) handleReview()
+    const row = accountRowOf(target)
+    applyEnterAction(
+      resolveVoucherEnter(
+        row !== -1
+          ? { kind: 'account', row, text: (target as HTMLInputElement).value }
+          : { kind: 'other' },
+        lines
+      )
+    )
   }
 
-  // Enter-to-advance inside the konteringsrader: konto → debet → kredit →
-  // nästa rads konto. Navigation only fires while the entry is NOT
-  // submittable: once the voucher balances, Enter falls through to the
-  // form-level handler above and opens the review instead, so a single Enter
-  // never both moves focus and submits.
+  // Enter in a debet/kredit field: debet → kredit → nästa rads konto, landing
+  // on an empty row past the last one. Never opens the review.
   const handleAmountKeyDown =
     (index: number, side: 'debit' | 'credit') =>
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key !== 'Enter' || canSubmitReview()) return
+      if (e.key !== 'Enter') return
       e.preventDefault()
-      // An amount on this side finishes the row (debit clears credit and vice
-      // versa) → jump to the next row's account. An empty debit means the row
-      // books on the credit side → hop across first.
-      if (side === 'debit' && !(parseFloat(lines[index].debit_amount) > 0)) {
-        focusCredit(index)
-      } else {
-        focusAccount(index + 1)
-      }
+      applyEnterAction(resolveVoucherEnter({ kind: side, row: index }, lines))
     }
 
   // Enter in a radbeskrivning continues to that row's amount.
   const handleLineDescKeyDown =
     (index: number) => (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key !== 'Enter' || canSubmitReview()) return
+      if (e.key !== 'Enter') return
       e.preventDefault()
-      focusDebit(index)
+      applyEnterAction(resolveVoucherEnter({ kind: 'line_description', row: index }, lines))
     }
 
   // Enter in the verifikationstext drops into the first row still missing an
   // account, so the top-to-bottom keyboard flow never needs the mouse.
   const handleHeaderDescKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== 'Enter' || canSubmitReview()) return
-    const idx = lines.findIndex((l) => !l.account_number)
-    if (idx === -1) return
+    if (e.key !== 'Enter') return
     e.preventDefault()
-    focusAccount(idx)
+    applyEnterAction(resolveVoucherEnter({ kind: 'header_description' }, lines))
   }
 
   // Inner submit: builds payload, POSTs, throws a structured error on failure
@@ -1354,25 +1371,15 @@ export default function JournalEntryForm({
         </span>
       </div>
 
-      {(monthChanged || selectedPeriodLocked) && (
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
-          <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
-          <div className="flex-1 text-sm text-attn space-y-0.5">
-            {monthChanged && (
-              <p className="font-medium">
-                {t('review_month_changed', { prev: monthLabel(lastPostedMonth as string), current: monthLabel(entryMonth) })}
-              </p>
-            )}
-            {selectedPeriodLocked && <p>{t('review_period_locked')}</p>}
-          </div>
-        </div>
+      {/* Attention as ochre sentences (convention 6), not boxed banners. */}
+      {monthChanged && (
+        <AttnLine>
+          {t('review_month_changed', { prev: monthLabel(lastPostedMonth as string), current: monthLabel(entryMonth) })}
+        </AttnLine>
       )}
-
+      {selectedPeriodLocked && <AttnLine>{t('review_period_locked')}</AttnLine>}
       {uploadedFiles.filter((f) => f.status === 'uploaded').length === 0 && (
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm text-attn">
-          <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
-          <p>{t('no_doc_body')}</p>
-        </div>
+        <AttnLine>{t('no_doc_body')}</AttnLine>
       )}
 
       <JournalEntryReviewContent
@@ -1393,8 +1400,7 @@ export default function JournalEntryForm({
         <Button variant="outline" onClick={() => setShowReview(false)} disabled={isSubmitting}>
           {t('review_back')}
         </Button>
-        <Button ref={bareConfirmRef} onClick={handleConfirm} disabled={isSubmitting}>
-          {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button ref={bareConfirmRef} onClick={handleConfirm} loading={isSubmitting}>
           {/* No underlag attached → explicit acknowledgement, equivalent to the
               blocking "Bokför utan underlag" dialog in the non-bare flow (BFL
               5 kap 6-7 §§). With a document it's the normal create label. */}
@@ -1654,10 +1660,10 @@ export default function JournalEntryForm({
               </div>
               <Button
                 variant="ghost"
-                size="sm"
+                size="icon-sm"
                 onClick={() => removeLine(index)}
                 disabled={lines.length <= 2}
-                className="h-8 w-8 p-0 min-h-[44px] min-w-[44px] shrink-0 -mr-1 -mt-1"
+                className="shrink-0 -mr-1 -mt-1"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
@@ -1887,13 +1893,13 @@ export default function JournalEntryForm({
                       >
                         <Button
                           variant="ghost"
-                          size="sm"
+                          size="icon-sm"
                           onClick={() => setDimPopoverRow(dimPopoverRow === index ? null : index)}
-                          className={`h-8 w-8 p-0 min-h-[44px] min-w-[44px] ${
+                          className={
                             line.dimensions && Object.keys(line.dimensions).length > 0
                               ? 'text-foreground'
                               : 'text-muted-foreground'
-                          }`}
+                          }
                           aria-label={t('row_dimensions_aria')}
                           aria-expanded={dimPopoverRow === index}
                           title={t('row_dimensions_aria')}
@@ -1902,7 +1908,11 @@ export default function JournalEntryForm({
                         </Button>
                         {dimPopoverRow === index && (
                           <div
-                            className="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border bg-card p-3 shadow-md"
+                            className={cn(
+                              'absolute right-0 top-full z-50 mt-1 w-64 p-3',
+                              POPOVER_SURFACE_CLASS,
+                              POPOVER_ENTER_CLASS,
+                            )}
                             onKeyDown={(e) => {
                               // The comboboxes preventDefault their own Escape
                               // (closing their dropdown): only an unhandled
@@ -1926,10 +1936,9 @@ export default function JournalEntryForm({
                     )}
                     <Button
                       variant="ghost"
-                      size="sm"
+                      size="icon-sm"
                       onClick={() => removeLine(index)}
                       disabled={lines.length <= 2}
-                      className="h-8 w-8 p-0 min-h-[44px] min-w-[44px]"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -2012,10 +2021,11 @@ export default function JournalEntryForm({
           {editEntryId ? (
             <Button
               onClick={handleSaveEdit}
-              disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
+              disabled={isSubmitting || isUploading || !canWrite}
+              loading={canWrite && isSavingDraft}
               title={!canWrite ? t('read_only_tooltip') : undefined}
             >
-              {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {!canWrite && <Lock className="mr-2 h-4 w-4" />}
               {t('save_edit')}
             </Button>
           ) : (
@@ -2039,10 +2049,11 @@ export default function JournalEntryForm({
                 <Button
                   variant="outline"
                   onClick={handleSaveDraft}
-                  disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
+                  disabled={isSubmitting || isUploading || !canWrite}
+                  loading={canWrite && isSavingDraft}
                   title={!canWrite ? t('read_only_tooltip') : t('save_draft_tooltip')}
                 >
-                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {!canWrite && <Lock className="mr-2 h-4 w-4" />}
                   {t('save_draft')}
                 </Button>
               )}
@@ -2155,19 +2166,16 @@ export default function JournalEntryForm({
         warningText={embedded ? '' : t('review_warning')}
       >
         {(monthChanged || selectedPeriodLocked) && (
-          <div className="mb-4 flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
-            <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
-            <div className="flex-1 text-sm text-attn space-y-0.5">
-              {monthChanged && (
-                <p className="font-medium">
-                  {t('review_month_changed', {
-                    prev: monthLabel(lastPostedMonth as string),
-                    current: monthLabel(entryMonth),
-                  })}
-                </p>
-              )}
-              {selectedPeriodLocked && <p>{t('review_period_locked')}</p>}
-            </div>
+          <div className="mb-4 space-y-1">
+            {monthChanged && (
+              <AttnLine>
+                {t('review_month_changed', {
+                  prev: monthLabel(lastPostedMonth as string),
+                  current: monthLabel(entryMonth),
+                })}
+              </AttnLine>
+            )}
+            {selectedPeriodLocked && <AttnLine>{t('review_period_locked')}</AttnLine>}
           </div>
         )}
         <JournalEntryReviewContent

@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import { CompanyProfileView } from '@/components/settings/CompanyProfileView'
@@ -102,15 +101,8 @@ export function CompanyProfileSection() {
             autoComplete="off"
             className="max-w-xs tabular-nums"
           />
-          <Button type="submit" size="sm" disabled={submitting || !orgInput.trim()}>
-            {submitting ? (
-              <>
-                <Loader2 className="animate-spin" />
-                Hämtar…
-              </>
-            ) : (
-              'Hämta'
-            )}
+          <Button type="submit" size="sm" disabled={!orgInput.trim()} loading={submitting}>
+            {submitting ? 'Hämtar…' : 'Hämta'}
           </Button>
           {fetchedAt && (
             <SettingsRowNote>Uppdaterad {formatDateLong(fetchedAt)}</SettingsRowNote>

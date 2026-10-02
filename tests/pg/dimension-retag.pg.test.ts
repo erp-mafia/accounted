@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { getPool } from '@/tests/pg/setup'
+import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
 import {
   seedCompany,
   insertAuthUser,
@@ -20,6 +20,10 @@ import {
 //      unaffected
 // plus registry validation, role gates, log immutability, mirror sync and
 // the untag path.
+//
+// 20260928200000 pins the logged actor for JWT callers and closes the
+// carve-out flag after the UPDATE; 20260928200200 adds the line bag CHECK
+// that stands behind the registry lookup.
 
 async function insertPostedTaggedEntry(params: {
   companyId: string
@@ -366,5 +370,182 @@ describe('dimension retag carve-out (PR6)', () => {
     } finally {
       client.release()
     }
+  })
+})
+
+// The error a rejected query carries, for assertions on SQLSTATE and text.
+async function rejectionOf(query: Promise<unknown>): Promise<{ code?: string; message: string }> {
+  try {
+    await query
+  } catch (err) {
+    return err as { code?: string; message: string }
+  }
+  throw new Error('expected the query to be rejected')
+}
+
+describe('retag actor attribution and carve-out scope (20260928200000)', () => {
+  // Owner plus a second writer (role 'member'), two active values, one
+  // posted untagged line.
+  async function seedTwoWriters() {
+    const seeded = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId: seeded.companyId, userId: memberId, role: 'member' })
+    await insertRegistryValue({ companyId: seeded.companyId, sieDimNo: 6, code: 'P001' })
+    await insertRegistryValue({ companyId: seeded.companyId, sieDimNo: 6, code: 'P002' })
+    const { lineId } = await insertPostedTaggedEntry({
+      companyId: seeded.companyId,
+      userId: seeded.userId,
+      fiscalPeriodId: seeded.fiscalPeriodId,
+    })
+    return { ...seeded, memberId, lineId }
+  }
+
+  it('refuses a signed-in writer who names another member as the actor', async () => {
+    const { companyId, userId: ownerId, memberId, lineId } = await seedTwoWriters()
+
+    const err = await withUserContext(memberId, (client) =>
+      rejectionOf(
+        client.query(
+          `SELECT public.retag_line_dimensions($1::uuid, $2::uuid, $3::jsonb, $4, $5::uuid)`,
+          [companyId, lineId, '{"6":"P001"}', 'Förfalskad utförare', ownerId],
+        ),
+      ),
+    )
+    expect(err.code).toBe('42501')
+    expect(err.message).toMatch(/annan användare/)
+
+    // Nothing was logged or written under anyone's name.
+    const { rows: log } = await getPool().query(
+      `SELECT 1 FROM public.dimension_retag_log WHERE line_id = $1`,
+      [lineId],
+    )
+    expect(log).toHaveLength(0)
+    expect((await lineState(lineId)).dimensions).toEqual({})
+  })
+
+  it('refuses a viewer who borrows a writer id at the actor check, before any write', async () => {
+    const { companyId, userId: ownerId, lineId } = await seedTwoWriters()
+    const viewerId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: viewerId, role: 'viewer' })
+
+    // Before the pin the borrowed id passed the RPC's own writer gate and
+    // only the line's writer-role trigger (20260902093000) stopped the
+    // UPDATE; now the RPC refuses the borrowed identity itself.
+    const err = await withUserContext(viewerId, (client) =>
+      rejectionOf(
+        client.query(
+          `SELECT public.retag_line_dimensions($1::uuid, $2::uuid, $3::jsonb, $4, $5::uuid)`,
+          [companyId, lineId, '{"6":"P001"}', 'Lånad behörighet', ownerId],
+        ),
+      ),
+    )
+    expect(err.code).toBe('42501')
+    expect(err.message).toMatch(/annan användare/)
+    expect((await lineState(lineId)).dimensions).toEqual({})
+  })
+
+  it('logs the signed-in caller as the actor for its own id and for NULL', async () => {
+    const { companyId, memberId, lineId } = await seedTwoWriters()
+
+    await withUserContext(memberId, async (client) => {
+      const own = await client.query<{ result: { changed: boolean } }>(
+        `SELECT public.retag_line_dimensions($1::uuid, $2::uuid, $3::jsonb, $4, $5::uuid) AS result`,
+        [companyId, lineId, '{"6":"P001"}', 'Eget användar-id', memberId],
+      )
+      expect(own.rows[0].result.changed).toBe(true)
+
+      const withoutId = await client.query<{ result: { changed: boolean } }>(
+        `SELECT public.retag_line_dimensions($1::uuid, $2::uuid, $3::jsonb, $4) AS result`,
+        [companyId, lineId, '{"6":"P002"}', 'Utan användar-id'],
+      )
+      expect(withoutId.rows[0].result.changed).toBe(true)
+
+      const { rows } = await client.query<{ reason: string; actor: string }>(
+        `SELECT reason, actor FROM public.dimension_retag_log WHERE line_id = $1 ORDER BY reason`,
+        [lineId],
+      )
+      expect(rows).toEqual([
+        { reason: 'Eget användar-id', actor: memberId },
+        { reason: 'Utan användar-id', actor: memberId },
+      ])
+    })
+  })
+
+  it('keeps p_user_id for a service-role caller (the MCP approval path)', async () => {
+    const { companyId, memberId, lineId } = await seedTwoWriters()
+
+    await runAsServiceRole((client) =>
+      client.query(
+        `SELECT public.retag_line_dimensions($1::uuid, $2::uuid, $3::jsonb, $4, $5::uuid)`,
+        [companyId, lineId, '{"6":"P001"}', 'Godkänd via MCP', memberId],
+      ),
+    )
+
+    const { rows } = await getPool().query(
+      `SELECT actor FROM public.dimension_retag_log WHERE line_id = $1`,
+      [lineId],
+    )
+    expect(rows).toEqual([{ actor: memberId }])
+  })
+
+  it('closes the carve-out flag right after its own UPDATE', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    await insertRegistryValue({ companyId, sieDimNo: 6, code: 'P001' })
+    const { lineId } = await insertPostedTaggedEntry({ companyId, userId, fiscalPeriodId })
+    const { lineId: otherLineId } = await insertPostedTaggedEntry({
+      companyId, userId, fiscalPeriodId, voucherNumber: 2,
+    })
+
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        `SELECT public.retag_line_dimensions($1::uuid, $2::uuid, $3::jsonb, $4, $5::uuid)`,
+        [companyId, lineId, '{"6":"P001"}', 'Loggad ändring', userId],
+      )
+      const { rows } = await client.query<{ flag: string | null }>(
+        `SELECT current_setting('gnubok.allow_dimension_retag', true) AS flag`,
+      )
+      expect(rows[0].flag).toBe('false')
+
+      // A direct, unlogged UPDATE later in the same transaction is blocked
+      // again instead of riding the retag's carve-out.
+      await expect(
+        client.query(
+          `UPDATE public.journal_entry_lines SET dimensions = '{"6":"P001"}'::jsonb WHERE id = $1`,
+          [otherLineId],
+        ),
+      ).rejects.toThrow(/Cannot UPDATE lines of a posted journal entry/)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  })
+})
+
+describe('line bag CHECK behind the registry lookup (20260928200200)', () => {
+  it('refuses a non-string value at the UPDATE even when the registry lookup passes', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    await insertRegistryValue({ companyId, sieDimNo: 1, code: '5' })
+    const { lineId } = await insertPostedTaggedEntry({
+      companyId, userId, fiscalPeriodId,
+      dimensions: { '6': 'GAMMAL' },
+    })
+
+    // jsonb_each_text turns the JSON number 5 into the registered code '5',
+    // so only the line CHECK stands between this bag and the ledger.
+    await expect(
+      getPool().query(
+        `SELECT public.retag_line_dimensions($1::uuid, $2::uuid, '{"1":5}'::jsonb, 'Numeriskt värde', $3::uuid)`,
+        [companyId, lineId, userId],
+      ),
+    ).rejects.toThrow(/jel_dimensions_well_formed/)
+
+    expect((await lineState(lineId)).dimensions).toEqual({ '6': 'GAMMAL' })
+    const { rows } = await getPool().query(
+      `SELECT 1 FROM public.dimension_retag_log WHERE line_id = $1`,
+      [lineId],
+    )
+    expect(rows).toHaveLength(0)
   })
 })

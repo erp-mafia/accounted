@@ -148,7 +148,7 @@ describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
     ).rejects.toThrow(/Cannot modify a posted journal entry/i)
   })
 
-  it('allows a status-only cancel of a posted entry (today\'s intended behaviour)', async () => {
+  it('rejects a status-only cancel of a posted entry outside cancel_orphaned_entry', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
 
     const entryId = await insertDraftJournalEntry({
@@ -159,14 +159,18 @@ describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
       voucherNumber: 1,
     })
 
-    await getPool().query(`UPDATE public.journal_entries SET status = 'cancelled' WHERE id = $1`, [
-      entryId,
-    ])
+    // Migration 20260929220100: posted -> cancelled needs the GUC that only
+    // the cancel_orphaned_entry RPC sets (tests/pg/journal-posted-cancel-gate).
+    await expect(
+      getPool().query(`UPDATE public.journal_entries SET status = 'cancelled' WHERE id = $1`, [
+        entryId,
+      ]),
+    ).rejects.toThrow(/Cannot cancel a posted journal entry/)
     const persisted = await getPool().query<{ status: string }>(
       `SELECT status FROM public.journal_entries WHERE id = $1`,
       [entryId],
     )
-    expect(persisted.rows[0]!.status).toBe('cancelled')
+    expect(persisted.rows[0]!.status).toBe('posted')
   })
 
   it('rejects changing another field while cancelling a posted entry (field-lock bypass)', async () => {

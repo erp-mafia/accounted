@@ -64,7 +64,7 @@ function createRecordingSupabase(pages: Record<string, Array<{ data?: unknown; e
   const supabase = {
     from: vi.fn(from),
     rpc: vi.fn(() => from('__rpc')),
-    auth: { getUser: vi.fn() },
+    auth: { getUser: vi.fn(), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   }
 
   return { supabase, queries }
@@ -270,8 +270,6 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
             items: [],
           }),
         },
-        // The status flip after the guard lets the payment through.
-        { data: [{ id: 'si-1' }] },
       ],
       // The single EUR sweep returns a kronor row anyway (PostgREST `.or()`
       // composes with the other filters and this stub ignores them): the
@@ -282,10 +280,14 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
 
     const response = await markPaid()
-    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
+    // The guard lets it through; the 2440 clearing then refuses, since with no
+    // rate and no registration verifikat there is no SEK to clear (#2955: it
+    // used to book 1 000 EUR as 1 000 kr).
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_FX_RATE_MISSING')
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
     expect(txQueries()).toHaveLength(1)
     expect(txQueries()[0].calls.or).toEqual([[
       'and(or(currency.eq.EUR),or(merchant_name.ilike.*leverantör*,description.ilike.*leverantör*))',

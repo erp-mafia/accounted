@@ -8,6 +8,7 @@ import type { SalaryCalculationPolicy } from './calculation-policy'
 import { groupOneOffBasesByRate, oneOffTaxForGroup, validateOneOffTaxLine } from './one-off-tax'
 import { isBenefitItemType, resolveTaxableBenefits } from './benefit-payments'
 import { degreeAdjustedMonthlySalary } from './work-schedule'
+import { isVaxaStodRefundMonth, VAXA_STOD_CONFIGURED_CAP_FROM, VAXA_STOD_REFUND_STEP_LABEL } from './vaxa-stod'
 import type { SalaryLineItemType } from '@/types'
 
 // ============================================================
@@ -52,7 +53,7 @@ export interface SalaryCalculationInput {
    *  day and does not vary with workdays per week. */
   dailyDivisor?: number
 
-  /** Växa-stöd */
+  /** Växa-stöd window: never lowers the avgifter, only notes the refund (lib/salary/vaxa-stod.ts). */
   vaxaStodEligible: boolean
   vaxaStodStart: string | null
   vaxaStodEnd: string | null
@@ -149,14 +150,27 @@ export interface SalaryCalculationResult {
   /** Semesterersättning paid out directly (vacation_rule = 'semesterersattning'). 0 otherwise. */
   vacationCompensation: number
   totalEmployerCost: number
+  /** Växa-stöd refund to apply for on this payment, null outside a växa-stöd month. */
+  vaxaStodRefund: VaxaStodRefund | null
   steps: CalculationStep[]
+}
+
+/**
+ * Information only (lib/salary/vaxa-stod.ts): nothing in the calculation, the
+ * booking or the AGI depends on it. amount is null when the refund cannot be
+ * stated reliably from the payslip.
+ */
+export interface VaxaStodRefund {
+  amount: number | null
 }
 
 export interface AvgifterCalculation {
   rate: number
   amount: number
   basis: number
-  category: 'standard' | 'reduced_65plus' | 'youth' | 'vaxa_stod' | 'exempt'
+  // Never 'vaxa_stod': växa-stöd is a refund, not a sats (lib/salary/vaxa-stod.ts).
+  // Rows stored before that keep the value in salary_run_employees.avgifter_category.
+  category: 'standard' | 'reduced_65plus' | 'youth' | 'exempt'
   steps: CalculationStep[]
 }
 
@@ -704,8 +718,8 @@ export function calculateSalary(
   const avgifterCalc = calculateAvgifterRate(input, config, paymentYear)
   const avgifterBasis = input.fSkattStatus === 'f_skatt' ? 0 : r(grossSalary + totalBenefits)
 
-  // Handle salary caps for youth and växa-stöd:
-  // Reduced rate applies only up to the cap, standard rate on the rest
+  // Salary cap for the youth rate: the reduced rate applies only up to the
+  // cap, the standard rate on the rest.
   let avgifterAmount: number
   if (avgifterCalc.category === 'youth' && config.avgifterYouthSalaryCap && avgifterBasis > config.avgifterYouthSalaryCap) {
     const reducedPart = r(config.avgifterYouthSalaryCap * avgifterCalc.rate)
@@ -718,17 +732,6 @@ export function calculateSalary(
       input: { cap: config.avgifterYouthSalaryCap, reduced: reducedPart, standard: standardPart },
       output: avgifterAmount,
     })
-  } else if (avgifterCalc.category === 'vaxa_stod' && config.avgifterVaxaStodCap && avgifterBasis > config.avgifterVaxaStodCap) {
-    const reducedPart = r(config.avgifterVaxaStodCap * avgifterCalc.rate)
-    const standardPart = r((avgifterBasis - config.avgifterVaxaStodCap) * config.avgifterTotal)
-    avgifterAmount = r(reducedPart + standardPart)
-    steps.push(...avgifterCalc.steps)
-    steps.push({
-      label: 'Arbetsgivaravgifter (växa-stöd med tak)',
-      formula: `${fmtKr(config.avgifterVaxaStodCap)} × ${fmtPct(avgifterCalc.rate)} + ${fmtKr(avgifterBasis - config.avgifterVaxaStodCap)} × ${fmtPct(config.avgifterTotal)}`,
-      input: { cap: config.avgifterVaxaStodCap, reduced: reducedPart, standard: standardPart },
-      output: avgifterAmount,
-    })
   } else {
     avgifterAmount = r(avgifterBasis * avgifterCalc.rate)
     steps.push(...avgifterCalc.steps)
@@ -739,6 +742,10 @@ export function calculateSalary(
       output: avgifterAmount,
     })
   }
+
+  // ─── Step 8b: Växa-stöd refund (information only) ───
+  const vaxaStod = vaxaStodRefundNotice(input, config, avgifterCalc.category, avgifterBasis)
+  if (vaxaStod) steps.push(vaxaStod.step)
 
   // ─── Step 9: Vacation accrual ───
   // Vacation basis = baseSalary (computed at the top) + any *additional*
@@ -849,7 +856,66 @@ export function calculateSalary(
     vacationAccrualAvgifter,
     vacationCompensation,
     totalEmployerCost,
+    vaxaStodRefund: vaxaStod?.refund ?? null,
     steps,
+  }
+}
+
+/**
+ * Växa-stöd no longer lowers the avgifter (Lag 2025:1334,
+ * lib/salary/vaxa-stod.ts): the sats stays whatever age decides, and the
+ * company applies for the refund after filing. This notes the expected
+ * refund: the avgifter except ålderspensionsavgiften on the underlag up to
+ * the monthly cap, which leaves the employer the 10,21 % the reduced sats
+ * used to charge (swedish-payroll social-charges.md).
+ *
+ * The amount is stated only where that is unambiguous: an employee on the
+ * full sats whose employment started on or after 2024-05-01 (the configured
+ * cap). With ungdomsrabatt the paid avgift is already reduced and how the two
+ * combine is not defined here, and an earlier employment has a lower cap the
+ * payroll config does not carry: both get the notice without an amount.
+ * Reduced 67+ and exempt rows pay nothing beyond ålderspensionsavgiften, so
+ * there is nothing to refund and no notice.
+ */
+function vaxaStodRefundNotice(
+  input: SalaryCalculationInput,
+  config: PayrollConfig,
+  category: AvgifterCalculation['category'],
+  avgifterBasis: number,
+): { refund: VaxaStodRefund; step: CalculationStep } | null {
+  const vaxaWindow = { eligible: input.vaxaStodEligible, start: input.vaxaStodStart, end: input.vaxaStodEnd }
+  if (!isVaxaStodRefundMonth(vaxaWindow, input.paymentDate)) return null
+  if (avgifterBasis <= 0 || (category !== 'standard' && category !== 'youth')) return null
+
+  const label = VAXA_STOD_REFUND_STEP_LABEL
+  const windowInput = { vaxa_start: input.vaxaStodStart ?? '', vaxa_end: input.vaxaStodEnd ?? '' }
+  const withoutAmount = (reason: string) => ({
+    refund: { amount: null },
+    step: { label, formula: `växa-stöd sänker inte avgiften; ${reason}`, input: windowInput, output: null },
+  })
+
+  if (category === 'youth') {
+    return withoutAmount('beloppet beräknas inte här när ungdomsrabatt tillämpas')
+  }
+  const cap = config.avgifterVaxaStodCap
+  if (cap === null || cap <= 0 || !input.employmentStart) {
+    return withoutAmount('beloppet beräknas inte här')
+  }
+  if (input.employmentStart < VAXA_STOD_CONFIGURED_CAP_FROM) {
+    return withoutAmount(`beloppet beräknas inte här för anställningar före ${VAXA_STOD_CONFIGURED_CAP_FROM}`)
+  }
+
+  const refundRate = Math.round((config.avgifterTotal - config.avgifterAlderspension) * 10000) / 10000
+  const refundBasis = Math.min(avgifterBasis, cap)
+  const amount = r(refundBasis * refundRate)
+  return {
+    refund: { amount },
+    step: {
+      label,
+      formula: `växa-stöd sänker inte avgiften; förväntad återbetalning ${fmtKr(refundBasis)} × ${fmtPct(refundRate)} (avgifter utom ålderspensionsavgift, tak ${fmtKr(cap)}/mån)`,
+      input: { ...windowInput, refund_basis: refundBasis, refund_rate: refundRate, cap },
+      output: amount,
+    },
   }
 }
 
@@ -858,7 +924,9 @@ export function calculateSalary(
 // ============================================================
 
 /**
- * Determine arbetsgivaravgifter rate based on employee age, växa-stöd, etc.
+ * Determine the arbetsgivaravgifter rate from F-skatt status and age.
+ * Växa-stöd plays no part: since Lag (2025:1334) it is a refund applied for
+ * after filing, never a reduced sats (vaxaStodRefundNotice).
  */
 export function calculateAvgifterRate(
   input: SalaryCalculationInput,
@@ -920,20 +988,6 @@ export function calculateAvgifterRate(
       output: null,
     })
     return { rate: config.avgifterReduced65plus, amount: 0, basis: 0, category: 'reduced_65plus', steps }
-  }
-
-  // Växa-stöd eligible
-  if (input.vaxaStodEligible && input.vaxaStodStart && input.vaxaStodEnd) {
-    const payDate = input.paymentDate
-    if (payDate >= input.vaxaStodStart && payDate <= input.vaxaStodEnd && config.avgifterVaxaStodRate !== null) {
-      steps.push({
-        label: 'Avgiftskategori',
-        formula: `Växa-stöd ${fmtPct(config.avgifterVaxaStodRate ?? 0)} på första ${fmtKr(config.avgifterVaxaStodCap ?? 0)}`,
-        input: { vaxa_cap: config.avgifterVaxaStodCap ?? 0 },
-        output: null,
-      })
-      return { rate: config.avgifterVaxaStodRate ?? config.avgifterTotal, amount: 0, basis: 0, category: 'vaxa_stod', steps }
-    }
   }
 
   // Youth rate (ungdomsrabatt 2026-2027, Prop. 2025/26:66):

@@ -1,3 +1,7 @@
+---
+areas: [fakturering]
+---
+
 # ROT-fakturering enligt fakturamodellen: flöde och kontering
 
 ## Regelverk
@@ -14,11 +18,11 @@
 - Tillfällig höjning **50 %** under perioden **2025-05-12 till 2025-12-31** enligt prop. 2024/25:156 / FiU32. Avgörande är **betalningsdatum**, inte fakturadatum.
 - Återgång till 30 % från 2026-01-01.
 
-## Dokumentationskrav vid utbetalningsbegäran (9 § HUSFL)
+## Dokumentationskrav vid utbetalningsbegäran (9 och 9 a §§ HUSFL)
 
 - Utförarens organisationsnummer + F-skatt
-- Köparens personnummer/samordningsnummer
-- Fastighetsbeteckning (småhus) eller lägenhetsnummer + brf-organisationsnummer (bostadsrätt)
+- Köparens personnummer/samordningsnummer (9 § p. 2 HUSFL)
+- Fastighetsbeteckning (småhus) eller lägenhetsnummer + brf-organisationsnummer (bostadsrätt) (9 a § HUSFL)
 - Antal arbetade timmar
 - Art av arbete
 - Arbetskostnad och debiterad skattereduktion

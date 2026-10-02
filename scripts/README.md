@@ -16,7 +16,7 @@ Run scripts from the repository root. Prefer the named commands in [package.json
 
 | Directory | Purpose |
 | --- | --- |
-| `self-host/` | Backup, restore, and access-control helpers |
+| `self-host/` | Backup, restore, and access-control helpers; `smoke-boot.sh` boots an image under `docker-compose.yml` (run by `docker-publish.yml` before `latest` moves) |
 | `sie-import/` | Import acceptance, staging benchmarks, and reviewed repairs |
 | `provider-migration/` | Synthetic load and recovery harnesses; [measured results](provider-migration/README.md) |
 | `migration/` | Targeted migration follow-up tools |
@@ -31,4 +31,4 @@ Standalone `backfill-*`, `migrate-*`, `repair-*`, and parity scripts are manual 
 
 Read a script's header before running it. Follow the repository's environment and database-write rules; `.env.local` must be treated as production. Generated reports and customer data belong outside version control. Retained synthetic benchmark results are identified in their accompanying README.
 
-The public installation entry point remains [`setup.sh`](../setup.sh). See the [self-hosting guide](../docs/SELF-HOSTING.md) for its complete workflow.
+The public installation entry point remains [`docker/setup.sh`](../docker/setup.sh). See the [self-hosting guide](../docs/SELF-HOSTING.md) for its complete workflow.

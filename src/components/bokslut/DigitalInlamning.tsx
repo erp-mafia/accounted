@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Select,
   SelectContent,
@@ -134,7 +135,7 @@ function normalizePnr(raw: string): string | null {
   return `${century}${digits}`
 }
 
-const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline' }> = {
+const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secondary' | 'warning' | 'destructive' | 'outline' | null }> = {
   draft: { label: 'Utkast', variant: 'outline' },
   kontrollerad: { label: 'Kontrollerad', variant: 'secondary' },
   sending: { label: 'Skickar: avvakta', variant: 'warning' },
@@ -143,7 +144,8 @@ const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secon
   inkommen: { label: 'Inkommen till Bolagsverket', variant: 'secondary' },
   forelagd: { label: 'Föreläggande: åtgärd krävs', variant: 'destructive' },
   komplettering: { label: 'Komplettering inlämnad', variant: 'secondary' },
-  registrerad: { label: 'Registrerad', variant: 'success' },
+  // null: a finished state is not an exception, so it renders as muted text.
+  registrerad: { label: 'Registrerad', variant: null },
   avslutad: { label: 'Avslutad utan registrering', variant: 'destructive' },
   error: { label: 'Fel', variant: 'destructive' },
 }
@@ -446,12 +448,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 <FileDown className="mr-2 h-4 w-4" /> Ladda ner tekniskt iXBRL-underlag
               </a>
             </Button>
-            <Button onClick={() => void handleValidate()} disabled={validating}>
-              {validating ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <SearchCheck className="mr-2 h-4 w-4" />
-              )}
+            <Button onClick={() => void handleValidate()} loading={validating}>
+              {!validating && <SearchCheck className="mr-2 h-4 w-4" />}
               Validera
             </Button>
           </div>
@@ -468,7 +466,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 {validation.ok ? (
-                  <Badge variant="success">Klar för inlämning</Badge>
+                  <span className="text-xs text-muted-foreground">Klar för inlämning</span>
                 ) : (
                   <Badge variant="destructive">{validation.error_count} fel</Badge>
                 )}
@@ -675,7 +673,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               </p>
 
               {registryInformation && (
-                <div className="border-t border-border/60 pt-3 text-xs">
+                <div className="border-t border-border pt-3 text-xs">
                   <p className="font-medium">Grunduppgifter från Bolagsverket</p>
                   <p className="mt-1 text-muted-foreground">
                     {registryInformation.namn}
@@ -701,7 +699,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               )}
 
               {avtal && (
-                <div className="space-y-3 border-y border-border/60 py-4">
+                <div className="space-y-3 border-y border-border py-4">
                   <p className="font-medium">Villkor för eget utrymme hos Bolagsverket</p>
                   <p className="text-muted-foreground whitespace-pre-wrap text-xs max-h-48 overflow-y-auto">
                     {avtal.text}
@@ -752,17 +750,13 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                  
                   onClick={() => void handleSubmit()}
                   disabled={
-                    submitting ||
                     blockingErrors ||
                     !selectedVersionId ||
                     (avtal !== null && !avtal.accepted)
                   }
+                  loading={submitting}
                 >
-                  {submitting ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="mr-2 h-4 w-4" />
-                  )}
+                  {!submitting && <Send className="mr-2 h-4 w-4" />}
                   {avtal ? 'Godkänn villkoren och skicka in' : 'Kontrollera och skicka in'}
                 </Button>
                 {utfall && utfall.length > 0 && !utfallHasErrors && (
@@ -778,7 +772,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               </div>
 
               {kvittens && (
-                <div className="space-y-2 border-t border-border/60 pt-4">
+                <div className="space-y-2 border-t border-border pt-4">
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="h-4 w-4 text-success" />
                     <p className="font-medium">Uppladdad till eget utrymme</p>
@@ -814,22 +808,20 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={pollingEvents}
+                loading={pollingEvents}
                 onClick={() => void handlePollEvents()}
               >
-                {pollingEvents ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCcw className="mr-2 h-4 w-4" />
-                )}
+                {!pollingEvents && <RefreshCcw className="mr-2 h-4 w-4" />}
                 {pollingEvents ? 'Uppdaterar …' : 'Uppdatera status'}
               </Button>
             </div>
             {submissionsError && <p className="text-xs text-destructive">{submissionsError}</p>}
             {loadingSubmissions && submissions.length === 0 && (
-              <p className="text-muted-foreground">
-                <Loader2 className="inline h-4 w-4 animate-spin mr-2" /> Hämtar …
-              </p>
+              <div className="space-y-2" aria-busy="true" aria-label="Hämtar">
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-4 w-1/2" />
+              </div>
             )}
             {!loadingSubmissions && submissions.length === 0 && !submissionsError && (
               <p className="text-muted-foreground italic">Inga inlämningar ännu.</p>
@@ -854,7 +846,11 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   className="flex flex-col gap-3 border-b border-border pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"
                 >
                   <div className="space-y-1">
-                    <Badge variant={badge.variant}>{badge.label}</Badge>
+                    {badge.variant ? (
+                      <Badge variant={badge.variant}>{badge.label}</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">{badge.label}</span>
+                    )}
                     <p className="text-xs text-muted-foreground tabular-nums">
                       {envLabel ? `${envLabel} · ` : ''}
                       {formatDate(submission.created_at)}

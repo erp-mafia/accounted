@@ -101,11 +101,12 @@ The boundary is strict and CI-enforced:
 - Provider integrations (banks, Skatteverket, Peppol, migration sources) are
   moving behind the connector: a self-hosted instance with a connector key
   and no credentials of its own for an upstream reaches that upstream through
-  the hosted `src/app/api/connect/*` side (an instance running on its own
-  registered credentials talks to the provider directly, see
-  `docs/SELF-HOSTING.md`), and the open ledger keeps the contract plus the
-  manual file paths. `npm run check:guards` ratchets the set of files that
-  name a provider API host directly; that set may only shrink.
+  the Accounted Connect service (`connect.accounted.se`, a separate private
+  deployment; an instance running on its own registered credentials talks to
+  the provider directly, see `docs/SELF-HOSTING.md`), and the open ledger
+  keeps the contract plus the manual file paths. `npm run check:guards`
+  ratchets the set of files that name a provider API host directly; that set
+  may only shrink.
 
 Licensing follows the same boundary: the project is AGPL-3.0, with an
 extension exception that allows third-party extensions using only the
@@ -120,7 +121,7 @@ transactions, draft vouchers, reconcile periods, generate reports and
 declarations.
 
 - Authentication uses scoped API keys (stored as SHA-256 hashes, rate limited
-  per key). Claude, ChatGPT and Grok connectors instead authenticate with OAuth 2.1
+  per key). Claude, ChatGPT, Grok and Gemini connectors instead authenticate with OAuth 2.1
   (PKCE; `src/app/api/mcp-oauth/{authorize,register,token}` plus the
   `.well-known` discovery documents), which mints a scoped API key behind the
   scenes. Authentication is lazy: a client can connect, list tools, and call a

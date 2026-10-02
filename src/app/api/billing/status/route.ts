@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 import { requireCompanyId } from '@/lib/company/context'
-import { isStripeConfigured } from '@/lib/stripe/client'
+import { getStripe, isStripeConfigured } from '@/lib/stripe/client'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { getTeamAgreement, type TeamAgreement } from '@/lib/entitlements/team-agreement'
 import {
@@ -10,10 +10,32 @@ import {
   type EntitlementCoverage,
   type EntitlementState,
 } from '@/lib/entitlements/has-capability'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('api/billing/status')
 
 /**
- * Billing status for the client-rendered billing section (which lives inside the
- * settings modal Dialog and can't read the DB server-side). Returns whether the
+ * Whether a trialing subscription will still be charged when its trial ends.
+ * company_subscriptions does not record a pending cancellation, and a portal
+ * cancellation takes effect at period end by default, so a trial cancelled in
+ * the portal stays 'trialing' in the row until it lapses without a charge.
+ * Stripe is asked live, and only for a trialing row. Any doubt (a Stripe
+ * error, a pending cancellation, a status other than trialing) counts as no:
+ * the card then makes no date claim.
+ */
+async function firstChargeStillDue(subscriptionId: string, companyId: string): Promise<boolean> {
+  try {
+    const sub = await getStripe().subscriptions.retrieve(subscriptionId)
+    return sub.status === 'trialing' && !sub.cancel_at_period_end && !sub.cancel_at
+  } catch (err) {
+    log.warn('first charge check failed', err as Error, { companyId })
+    return false
+  }
+}
+
+/**
+ * Billing status for the client-rendered billing section (Settings →
+ * Abonnemang, a client component). Returns whether the
  * company is paying, whether Stripe checkout is configured, and the trial expiry
  * (for the days-left urgency banner). Read-only.
  *
@@ -51,6 +73,17 @@ export async function GET() {
   let entitlementState: EntitlementState = 'none'
   let coverage: EntitlementCoverage | null = null
   let teamAgreement: TeamAgreement | null = null
+  // The paying company's interval, so the plan card shows the price it pays.
+  let subscriptionPlan: 'monthly' | 'yearly' | null = null
+  // A subscription started during the product trial stays Stripe 'trialing'
+  // until the deferred first charge (billing/checkout sets trial_end), and its
+  // current_period_end is that charge date. The entitlement read nulls
+  // trialEndsAt once the stripe grant lands, so this is the only date the
+  // paying card can show. Additive field: absent for everyone else.
+  // That deferral is the only trial we create. A trial added by hand in the
+  // Stripe dashboard to a subscription that was already charged would also
+  // read as a first charge here; the date is still the next charge.
+  let firstChargeAt: string | null = null
   if (companyId) {
     const entitlements = await getCompanyEntitlements(supabase, companyId)
     entitlementState = entitlements.entitlementState
@@ -69,6 +102,28 @@ export async function GET() {
     // from the user's session.
     if (!isPaying) {
       teamAgreement = await getTeamAgreement(createServiceClient(), companyId)
+    } else {
+      // The user's own client: company members read their company's
+      // subscription row (the entitlement check above does the same).
+      const { data: subscription } = await supabase
+        .from('company_subscriptions')
+        .select('plan, status, current_period_end, stripe_subscription_id')
+        .eq('company_id', companyId)
+        .maybeSingle()
+      const plan = subscription?.plan
+      subscriptionPlan = plan === 'monthly' || plan === 'yearly' ? plan : null
+      const periodEnd = subscription?.current_period_end
+      const subscriptionId = subscription?.stripe_subscription_id
+      if (
+        !isDemo &&
+        subscription?.status === 'trialing' &&
+        typeof periodEnd === 'string' &&
+        new Date(periodEnd).getTime() > Date.now() &&
+        typeof subscriptionId === 'string' &&
+        (await firstChargeStillDue(subscriptionId, companyId))
+      ) {
+        firstChargeAt = periodEnd
+      }
     }
   }
 
@@ -80,5 +135,7 @@ export async function GET() {
     entitlementState,
     coverage,
     ...(teamAgreement ? { teamAgreement } : {}),
+    ...(subscriptionPlan ? { subscriptionPlan } : {}),
+    ...(firstChargeAt ? { firstChargeAt } : {}),
   })
 }

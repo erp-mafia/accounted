@@ -23,6 +23,20 @@ vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: vi.fn(() => ({ service: true })),
 }))
 
+// Never reach Zettle from a unit test: the remote revoke is observed, not run.
+vi.mock('../lib/oauth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/oauth')>()
+  return {
+    ...actual,
+    refreshAccessToken: vi.fn(async () => ({ access_token: 'access-1' })),
+    disconnectApplication: vi.fn(async () => undefined),
+  }
+})
+vi.mock('../lib/credentials', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/credentials')>()
+  return { ...actual, refreshTokenOf: vi.fn(() => 'plain-refresh') }
+})
+
 vi.mock('@/lib/auth/oauth-flows', () => ({
   resolveOAuthOrigin: vi.fn().mockResolvedValue('https://brand.testbrand.example'),
 }))
@@ -32,6 +46,8 @@ import { requireCapability, capabilityBlockedResponse } from '@/lib/entitlements
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { syncZettlePurchases } from '../lib/order-sync'
 import { resolveOAuthOrigin } from '@/lib/auth/oauth-flows'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { disconnectApplication, refreshAccessToken } from '../lib/oauth'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -68,6 +84,18 @@ function makeContext(supabase: unknown): ExtensionContext {
 }
 
 const USER = { id: 'user-1', is_anonymous: false }
+
+/**
+ * The next service client the route creates, answering `results` in order.
+ * Sync, backfill and disconnect look the connection up there: the encrypted
+ * refresh token is withheld from end-user roles (20260929173432).
+ */
+function serviceReturning(...results: Array<{ data?: unknown; error?: unknown }>) {
+  const service = createQueuedMockSupabase()
+  for (const result of results) service.enqueue(result)
+  vi.mocked(createServiceClientNoCookies).mockReturnValueOnce(service.supabase as never)
+  return service
+}
 
 describe('zettle extension routes', () => {
   beforeEach(() => {
@@ -179,9 +207,9 @@ describe('zettle extension routes', () => {
   })
 
   it('POST /backfill is 404 without an active connection', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-    enqueue({ data: null })
+    serviceReturning({ data: null })
     const res = await findRoute('POST', '/backfill').handler(
       makeRequest('POST', { from: '2026-01-01' }),
       makeContext(supabase),
@@ -203,9 +231,9 @@ describe('zettle extension routes', () => {
       needsReview: 0,
       skippedUnsupported: 0,
     })
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-    enqueue({
+    const service = serviceReturning({
       data: {
         id: 'c1',
         status: 'active',
@@ -216,12 +244,15 @@ describe('zettle extension routes', () => {
         last_order_synced_at: '2026-09-14T00:00:00.000Z',
       },
     })
-    enqueue({ data: [] }) // cursor update
+    enqueue({ data: [] }) // cursor update (session client)
     const res = await findRoute('POST', '/backfill').handler(
       makeRequest('POST', { from: '2026-01-01' }),
       makeContext(supabase),
     )
     expect(res.status).toBe(200)
+    expect(vi.mocked(syncZettlePurchases).mock.calls[0][0]).toBe(service.supabase)
+    expect(service.findCall('zettle_connections', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(findCall('zettle_connections', 'select')).toBeUndefined()
     const body = await res.json()
     expect(body.from).toBe('2026-01-01T00:00:00.000Z')
     expect(body.transactions.inserted).toBe(4)
@@ -248,7 +279,7 @@ describe('zettle extension routes', () => {
     })
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-    enqueue({
+    serviceReturning({
       data: {
         id: 'c1',
         status: 'active',
@@ -259,8 +290,8 @@ describe('zettle extension routes', () => {
         last_order_synced_at: '2026-09-14T00:00:00.000Z',
       },
     })
-    enqueue({ data: [] }) // cursor update
-    enqueue({ data: [] }) // cursor restore
+    enqueue({ data: [] }) // cursor update (session client)
+    enqueue({ data: [] }) // cursor restore (session client)
     const res = await findRoute('POST', '/backfill').handler(
       makeRequest('POST', { from: '2026-01-01' }),
       makeContext(supabase),
@@ -283,9 +314,9 @@ describe('zettle extension routes', () => {
       needsReview: 0,
       skippedUnsupported: 0,
     })
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, findCall } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-    enqueue({
+    const service = serviceReturning({
       data: {
         id: 'c1',
         status: 'active',
@@ -297,6 +328,66 @@ describe('zettle extension routes', () => {
     })
     const res = await findRoute('POST', '/sync').handler(makeRequest('POST'), makeContext(supabase))
     expect(res.status).toBe(200)
-    expect(syncZettlePurchases).toHaveBeenCalled()
+    expect(vi.mocked(syncZettlePurchases).mock.calls[0][0]).toBe(service.supabase)
+    expect(findCall('zettle_connections', 'select')).toBeUndefined()
+  })
+
+  it('POST /sync is 404 without an active connection', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    serviceReturning({ data: null })
+    const res = await findRoute('POST', '/sync').handler(makeRequest('POST'), makeContext(supabase))
+    expect(res.status).toBe(404)
+    expect(syncZettlePurchases).not.toHaveBeenCalled()
+  })
+
+  describe('DELETE /disconnect', () => {
+    it('returns 401 without a user', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
+      const res = await findRoute('DELETE', '/disconnect').handler(
+        makeRequest('DELETE', {}),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(401)
+      expect(createServiceClientNoCookies).not.toHaveBeenCalled()
+    })
+
+    it('returns 404 when the company has no connection', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      serviceReturning({ data: [] })
+      const res = await findRoute('DELETE', '/disconnect').handler(
+        makeRequest('DELETE', {}),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(404)
+      expect(disconnectApplication).not.toHaveBeenCalled()
+    })
+
+    it('reads the refresh token on the service role, revokes remotely, then revokes locally on the session', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      const service = serviceReturning({
+        data: [{ id: 'c1', status: 'active', organization_uuid: 'org-1', refresh_token_encrypted: 'enc' }],
+      })
+      enqueue({ data: null }) // local revoke (session client)
+      const ctx = makeContext(supabase)
+      const res = await findRoute('DELETE', '/disconnect').handler(makeRequest('DELETE', {}), ctx)
+      expect(res.status).toBe(200)
+      // Lookup: service role, pinned to the caller's company.
+      expect(service.findCall('zettle_connections', 'select')?.[0]).toContain('refresh_token_encrypted')
+      expect(service.findCall('zettle_connections', 'eq')).toEqual(['company_id', 'company-1'])
+      expect(findCall('zettle_connections', 'select')).toBeUndefined()
+      expect(refreshAccessToken).toHaveBeenCalledWith('plain-refresh')
+      expect(disconnectApplication).toHaveBeenCalledWith('access-1')
+      // The local revoke stays on the session client (RLS + writer-role trigger).
+      expect(findCall('zettle_connections', 'update')?.[0]).toMatchObject({
+        status: 'revoked',
+        refresh_token_encrypted: null,
+      })
+      expect(service.findCall('zettle_connections', 'update')).toBeUndefined()
+      expect(ctx.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'zettle.disconnected' }))
+    })
   })
 })

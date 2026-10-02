@@ -43,7 +43,7 @@ import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { eventBus } from '@/lib/events'
+import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import {
   deriveCustomerSettlementAmount,
@@ -59,7 +59,7 @@ import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 // payment/cash JE generators, which re-propagate the bag onto every leg —
 // dropping the column here silently untags the payment voucher.
 const INVOICE_MARK_PAID_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, payment_cash_account_id, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, vat_treatment_override, delivery_country, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, payment_cash_account_id, created_at, updated_at'
 
 const InvoiceMarkPaidResponse = z.object({
   id: z.string().uuid(),
@@ -160,6 +160,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           debit_amount: number
           credit_amount: number
           line_description?: string
+          dimensions?: Record<string, string>
         }[]
       | undefined
     let force = false
@@ -481,6 +482,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
               debit_amount: l.debit_amount,
               credit_amount: l.credit_amount,
               line_description: l.line_description ?? undefined,
+              // The line's own tags (DimensionsBagSchema-validated), as the
+              // dashboard mark-paid passes them through.
+              dimensions: l.dimensions,
             })),
           }
           const entry = await createJournalEntry(
@@ -647,20 +651,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       await clearSettledInvoiceSuggestions(ctx.supabase, ctx.companyId!, 'invoice', invoiceId)
     }
 
-    // Step 3: emit invoice.paid (best-effort, surfaces in warnings on fail).
-    try {
-      await eventBus.emit({
-        type: 'invoice.paid',
-        payload: {
-          invoice: updated as unknown as Invoice,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-          paymentAmount,
-          paymentDate,
-        },
-      })
-    } catch (err) {
-      ctx.log.error('invoice.paid emit failed', err as Error, {
+    // Step 3: emit invoice.paid when this payment settled the invoice in full
+    // (never on a partial; best-effort, surfaces in warnings on fail).
+    const paidEvent = await emitInvoicePaidIfSettled({
+      newStatus,
+      invoice: updated as unknown as Invoice,
+      companyId: ctx.companyId!,
+      userId: ctx.userId,
+      paymentAmount,
+      paymentDate,
+    })
+    if (paidEvent === 'emit_failed') {
+      ctx.log.error('invoice.paid emit failed', undefined, {
         invoiceId,
         companyId: ctx.companyId,
       })

@@ -3,7 +3,8 @@
  *
  * Mirrors the dashboard's `/paid` route: advances status `approved` → `paid`
  * and stamps `paid_at`. No engine interaction, no event emission (the dashboard's
- * route is also silent; the verifikation event fires from `:book`).
+ * route is also silent; the verifikation event fires from `:book`). The rule is
+ * lib/salary/mark-paid.ts, shared with the MCP tool gnubok_mark_salary_run_paid.
  *
  * Idempotent at the call level: a replay with the same Idempotency-Key returns
  * the cached response. State-wise, calling :mark-paid on an already-paid run
@@ -15,15 +16,15 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1OutcomeResponse } from '@/lib/operations/v1'
+import { markSalaryRunPaid } from '@/lib/salary/mark-paid'
 
 const SalaryRunPaid = z.object({
   id: z.string().uuid(),
   status: z.literal('paid'),
   paid_at: z.string(),
 })
-
-const MARK_PAID_COLUMNS = 'id, status, paid_at'
 
 registerEndpoint({
   operation: 'salary-runs.mark-paid',
@@ -67,26 +68,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const salaryRunId = idParse.data
 
-    const { data: existing, error: fetchErr } = await ctx.supabase
-      .from('salary_runs')
-      .select('id, status')
-      .eq('company_id', ctx.companyId!)
-      .eq('id', salaryRunId)
-      .maybeSingle()
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!existing) {
-      return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-    if ((existing as { status: string }).status !== 'approved') {
-      return v1ErrorResponseFromCode('SALARY_RUN_MARK_PAID_NOT_APPROVED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { current_status: (existing as { status: string }).status },
-      })
-    }
+    const outcome = await markSalaryRunPaid(
+      { supabase: ctx.supabase, companyId: ctx.companyId! },
+      salaryRunId,
+      { dryRun: ctx.dryRun },
+    )
+    if (!outcome.ok) return v1OutcomeResponse(outcome, ctx)
 
-    if (ctx.dryRun) {
+    if (outcome.dryRun) {
+      // The v1 preview predates the shared service and keeps its shape.
       return dryRunPreview(
         {
           id: salaryRunId,
@@ -97,25 +87,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
-    const { data, error } = await ctx.supabase
-      .from('salary_runs')
-      .update({ status: 'paid', paid_at: new Date().toISOString() })
-      .eq('company_id', ctx.companyId!)
-      .eq('id', salaryRunId)
-      .eq('status', 'approved')
-      .select(MARK_PAID_COLUMNS)
-      .maybeSingle()
-
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!data) {
-      return v1ErrorResponseFromCode('SALARY_RUN_MARK_PAID_NOT_APPROVED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: 'race' },
-      })
-    }
-
-    return ok(data, { requestId: ctx.requestId })
+    return ok(outcome.data, { requestId: ctx.requestId })
   },
 )

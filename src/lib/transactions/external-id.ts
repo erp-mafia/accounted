@@ -115,6 +115,83 @@ export function buildStableExternalIds(
   })
 }
 
+/** Splits a `buildStableExternalIds` id into its `{prefix}_{scope}_{date}_{öre}` family and index. */
+const STABLE_EXTERNAL_ID = /^(.+_\d{4}-\d{2}-\d{2}_-?\d+)_(\d+)$/
+
+/**
+ * Re-key incoming stable ids so each one names the SAME physical transaction
+ * as the stored row that carries it.
+ *
+ * The occurrence index in `buildStableExternalIds` follows the order the ASPSP
+ * returns rows in, so it identifies a transaction only while the set of
+ * same-(account, date, amount) rows never changes. When the bank books one
+ * more such transaction after an earlier sync stored the others, the newcomer
+ * can land on an index a stored row already holds and be skipped as a Layer-1
+ * duplicate, while the displaced stored transaction takes the fresh index and
+ * is content-bridged to its own stored twin: the new transaction is lost.
+ *
+ * Within each id family that already has stored rows, incoming rows pair with
+ * stored rows by: the same id with a bridging description, then any bridging
+ * description (longest stored description first, as in the content bridge),
+ * then the same id alone (a description that drifted without bridging dedups
+ * exactly as before). Paired rows take the stored row's id; the rest are new
+ * and keep their id, or take the lowest index no stored or paired row holds.
+ * Ids outside the stable format, and families with no stored rows, pass
+ * through unchanged.
+ */
+export function reconcileStableExternalIds(
+  incoming: Array<{ external_id: string; description: string }>,
+  stored: Array<{ externalId: string | null; desc: string }>
+): string[] {
+  const ids = incoming.map((tx) => tx.external_id)
+  const storedByFamily = new Map<string, Map<string, string>>()
+  for (const row of stored) {
+    const match = row.externalId ? STABLE_EXTERNAL_ID.exec(row.externalId) : null
+    if (!match) continue
+    const family = storedByFamily.get(match[1]) ?? new Map<string, string>()
+    family.set(match[0], row.desc)
+    storedByFamily.set(match[1], family)
+  }
+  const incomingByFamily = new Map<string, number[]>()
+  incoming.forEach((tx, i) => {
+    const match = STABLE_EXTERNAL_ID.exec(tx.external_id)
+    if (!match || !storedByFamily.has(match[1])) return
+    incomingByFamily.set(match[1], [...(incomingByFamily.get(match[1]) ?? []), i])
+  })
+
+  for (const [family, members] of incomingByFamily) {
+    const storedDesc = storedByFamily.get(family)!
+    const unpaired = new Set(storedDesc.keys())
+    const tryPair = (i: number, storedId: string | null): boolean => {
+      if (storedId === null || !unpaired.has(storedId)) return false
+      ids[i] = storedId
+      unpaired.delete(storedId)
+      return true
+    }
+    const bridges = (i: number, storedId: string) => descriptionsBridge(incoming[i].description, storedDesc.get(storedId))
+    const longestBridging = (i: number): string | null => {
+      let best: string | null = null
+      for (const storedId of unpaired) {
+        if (bridges(i, storedId) && (best === null || storedDesc.get(storedId)!.length > storedDesc.get(best)!.length)) {
+          best = storedId
+        }
+      }
+      return best
+    }
+    let pending = members.filter((i) => !(unpaired.has(ids[i]) && bridges(i, ids[i]) && tryPair(i, ids[i])))
+    pending = pending.filter((i) => !tryPair(i, longestBridging(i)))
+    pending = pending.filter((i) => !tryPair(i, ids[i]))
+
+    const taken = new Set([...storedDesc.keys(), ...members.filter((i) => !pending.includes(i)).map((i) => ids[i])])
+    for (const i of pending) {
+      let n = 0
+      while (taken.has(ids[i])) ids[i] = `${family}_${n++}`
+      taken.add(ids[i])
+    }
+  }
+  return ids
+}
+
 /**
  * Bucket key for the content-dedup bridge: `{date}|{öre}`, deliberately NO
  * description. Transactions that share a date and amount fall into the same

@@ -228,6 +228,15 @@ function tx(overrides: Row): Row {
   }
 }
 
+/**
+ * An anchor row (voucher link or payment allocation). company_id is NOT NULL
+ * on all three tables and always the transaction's own company, which the
+ * guard now also filters on.
+ */
+function anchor(transactionId: string, companyId = 'company-1'): Row {
+  return { company_id: companyId, transaction_id: transactionId }
+}
+
 /** Queue for a lock that is expected to succeed: fetch, then update. */
 function expectLockToSucceed(period: object) {
   results = [
@@ -344,9 +353,9 @@ describe('lockPeriod: unbooked transaction guard', () => {
         // Explicitly suppressed: "never going to book it".
         tx({ id: 'i1', is_business: null, is_ignored: true }),
       ],
-      transaction_voucher_links: [{ transaction_id: 'b2' }],
-      invoice_payments: [{ transaction_id: 'b3' }],
-      supplier_invoice_payments: [{ transaction_id: 'b4' }],
+      transaction_voucher_links: [anchor('b2')],
+      invoice_payments: [anchor('b3')],
+      supplier_invoice_payments: [anchor('b4')],
     })
 
     const result = await lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')
@@ -392,12 +401,29 @@ describe('lockPeriod: unbooked transaction guard', () => {
     const anchoredIds = rows.slice(1100).map((r) => r.id as string)
     const { client } = makeGuardClient({
       transactions: rows,
-      transaction_voucher_links: anchoredIds.map((id) => ({ transaction_id: id })),
+      transaction_voucher_links: anchoredIds.map((id) => anchor(id)),
     })
 
     await expect(lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
       /1100 banktransaktion\(er\)[\s\S]*1100 markerade som affärshändelse men utan verifikat/,
     )
+  })
+
+  it('an anchor row belonging to another company does not anchor this company\'s transaction', async () => {
+    results = [{ data: openPeriod(), error: null }]
+
+    const { client, queries } = makeGuardClient({
+      transactions: [tx({ id: 'b1', is_business: true, journal_entry_id: null })],
+      transaction_voucher_links: [anchor('b1', 'company-2')],
+    })
+
+    await expect(lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
+      /1 banktransaktion\(er\)[\s\S]*1 markerade som affärshändelse men utan verifikat/,
+    )
+    for (const table of ['transaction_voucher_links', 'invoice_payments', 'supplier_invoice_payments']) {
+      const lookup = queries.find((q) => q.table === table)
+      expect(lookup?.specs, table).toContainEqual({ col: 'company_id', op: 'eq', val: 'company-1' })
+    }
   })
 
   it('regression: the old journal_entry_id IS NULL + is_business = true guard let untriaged rows through', async () => {

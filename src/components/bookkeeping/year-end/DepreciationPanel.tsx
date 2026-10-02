@@ -8,7 +8,6 @@ import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Loader2 } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -258,7 +257,7 @@ export function DepreciationPanel({ periodId, onPosted, onTaxDirtyChange }: Depr
                 <TableCell className="text-right tabular-nums">
                   {formatCurrency(item.amount)}
                   {item.proRated && (
-                    <span className="block text-[10px] text-muted-foreground">pro-rata</span>
+                    <span className="block text-[11px] text-muted-foreground">pro-rata</span>
                   )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
@@ -266,7 +265,7 @@ export function DepreciationPanel({ periodId, onPosted, onTaxDirtyChange }: Depr
                 </TableCell>
                 <TableCell>
                   {item.existingJournalEntryId ? (
-                    <Badge variant="success">Bokförd</Badge>
+                    <span className="text-xs text-muted-foreground">Bokförd</span>
                   ) : (
                     <Badge variant="outline">Föreslagen</Badge>
                   )}
@@ -278,11 +277,9 @@ export function DepreciationPanel({ periodId, onPosted, onTaxDirtyChange }: Depr
 
         {anyPending && (
           <div className="flex justify-end">
-            <Button onClick={handlePost} disabled={posting || taxDirty}>
+            <Button onClick={handlePost} disabled={taxDirty} loading={posting}>
               {posting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
-                </>
+                'Bokför…'
               ) : (
                 'Bokför alla avskrivningar'
               )}
@@ -691,27 +688,25 @@ function TaxDepreciationCard({
               variant="outline"
               onClick={loadPreview}
               disabled={
-                previewing
-                || saving
+                saving
                 || formBlocked
               }
+              loading={previewing}
               className="w-full sm:w-auto"
             >
-              {previewing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Beräkna förslag
             </Button>
             <Button
               type="button"
               onClick={save}
               disabled={
-                saving
-                || !dirty
+                !dirty
                 || !result
                 || formBlocked
               }
+              loading={saving}
               className="w-full sm:w-auto"
             >
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Spara faktiskt avdrag
             </Button>
           </div>

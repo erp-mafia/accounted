@@ -38,10 +38,7 @@ describe('POST /api/documents/[id]/admission', () => {
     expect((await parseJsonResponse(await call({ decision: 'admit' }))).status).toBe(401)
   })
 
-  it('returns 404 outside the rollout and 400 for a bad body', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await call({ decision: 'admit' }))).status).toBe(404)
-    process.env.ARKIV_COMPANY_IDS = 'company-1'
+  it('returns 400 for a bad body', async () => {
     expect((await parseJsonResponse(await call({ decision: 'maybe' }))).status).toBe(400)
   })
 

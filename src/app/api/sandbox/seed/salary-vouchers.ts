@@ -19,6 +19,13 @@ import { SALARY_ACCOUNTS } from '@/lib/salary/account-mapping'
 const ore = (n: number) => Math.round(n * 100) / 100
 
 /**
+ * The net pay's bank account. The real booking resolves it per company
+ * (resolvePrimaryBankAccount); the sandbox books every bank leg on 1930
+ * Företagskonto, which the seed route puts in the chart itself.
+ */
+const SANDBOX_BANK_ACCOUNT = '1930'
+
+/**
  * Every account these vouchers can touch, for the seed's chart-of-accounts
  * check. seed_chart_of_accounts only lays down its 7xxx personnel block for
  * aktiebolag, and the sandbox company is an enskild firma, so all of these are
@@ -162,7 +169,7 @@ export function buildSandboxSalaryVouchers(input: SalaryVoucherInput): SalaryVou
           dimensions: {},
         },
         {
-          account_number: SALARY_ACCOUNTS.BANK,
+          account_number: SANDBOX_BANK_ACCOUNT,
           debit_amount: 0,
           credit_amount: net,
           sort_order: 2,

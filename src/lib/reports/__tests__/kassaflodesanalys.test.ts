@@ -1,24 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock trial-balance and income-statement so we can plant deterministic
-// inputs into the cash-flow generator. The generator is pure logic over
-// (TB rows, IS totals): testing it in isolation avoids re-creating the
-// Supabase mock surface for two layered generators.
+// Mock the trial balance so we can plant deterministic inputs into the
+// cash-flow generator. Every line, resultat included, is derived from these
+// rows: testing it in isolation avoids re-creating the Supabase mock surface.
 vi.mock('../trial-balance', () => ({
   generateTrialBalance: vi.fn(),
 }))
 
-vi.mock('../income-statement', () => ({
-  generateIncomeStatement: vi.fn(),
-}))
-
 import { generateKassaflodesanalys } from '../kassaflodesanalys'
 import { generateTrialBalance } from '../trial-balance'
-import { generateIncomeStatement } from '../income-statement'
-import type { TrialBalanceRow, IncomeStatementReport } from '@/types'
+import type { TrialBalanceRow } from '@/types'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
-const mockIncomeStatement = vi.mocked(generateIncomeStatement)
 
 function makeSupabase(period: { period_start: string; period_end: string } | null) {
   // Lightweight chainable mock: kassaflodesanalys only calls
@@ -50,20 +43,6 @@ function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
   }
 }
 
-function makeIs(overrides: Partial<IncomeStatementReport> = {}): IncomeStatementReport {
-  return {
-    revenue_sections: [],
-    total_revenue: 0,
-    expense_sections: [],
-    total_expenses: 0,
-    financial_sections: [],
-    total_financial: 0,
-    net_result: 0,
-    period: { start: '2024-01-01', end: '2024-12-31' },
-    ...overrides,
-  }
-}
-
 beforeEach(() => {
   vi.clearAllMocks()
 })
@@ -78,7 +57,6 @@ describe('generateKassaflodesanalys', () => {
       totalCredit: 0,
       isBalanced: true,
     })
-    mockIncomeStatement.mockResolvedValue(makeIs())
 
     const report = await generateKassaflodesanalys(
       makeSupabase(PERIOD),
@@ -100,9 +78,8 @@ describe('generateKassaflodesanalys', () => {
   it('adds back avskrivningar (100 000 kr) to löpande verksamhet', async () => {
     // Setup: 100 000 kr depreciation booked: debit 7832, credit 1219 (ack avskr).
     // Expected: avskrivningar = 100 000, added back to resultat efter finansiella.
-    // For reconciliation: bank moved 0 because depreciation is non-cash; the
-    // fixed-asset NET delta is 1219 going up in credit (i.e. asset side down),
-    // which surfaces as avyttring (debit-side negative) -> +100 000 in investing.
+    // Bank moved 0 because depreciation is non-cash: the 1219 credit is offset
+    // in investing by the same depreciation, so no phantom avyttring appears.
     //
     // To keep this test focused on the "add back" behavior, we plant zero
     // movement on classes 1-3,4-6,8 except 78xx (depreciation expense) and
@@ -129,12 +106,6 @@ describe('generateKassaflodesanalys', () => {
       totalCredit: 100000,
       isBalanced: true,
     })
-    mockIncomeStatement.mockResolvedValue(
-      makeIs({
-        total_expenses: 100000,
-        net_result: -100000,
-      })
-    )
 
     const report = await generateKassaflodesanalys(
       makeSupabase(PERIOD),
@@ -146,13 +117,9 @@ describe('generateKassaflodesanalys', () => {
     expect(report.lopande.avskrivningar).toBe(100000)
     // Result + add-back depreciation = 0 löpande
     expect(report.lopande.total).toBe(0)
-    // 1219 sits in 12xx range (investing), credit went up = debit-side delta
-    // is negative -> avyttring path. This is acceptable behavior; the
-    // reconciliation invariant is what protects us. Verify it holds:
-    // total_cash_flow should equal delta_actual on 19xx (which is 0).
+    expect(report.investerings.avyttring_anlaggningar).toBe(0)
+    expect(report.investerings.total).toBe(0)
     expect(report.reconciliation.delta_actual).toBe(0)
-    // The mock setup ensures investing offsets to make the reconciliation
-    // balance against 0 cash movement.
     expect(report.reconciliation.is_reconciled).toBe(true)
   })
 
@@ -189,7 +156,6 @@ describe('generateKassaflodesanalys', () => {
       totalCredit: 50000,
       isBalanced: false,
     })
-    mockIncomeStatement.mockResolvedValue(makeIs())
 
     const report = await generateKassaflodesanalys(
       makeSupabase(PERIOD),
@@ -237,7 +203,6 @@ describe('generateKassaflodesanalys', () => {
       totalCredit: 200000,
       isBalanced: true,
     })
-    mockIncomeStatement.mockResolvedValue(makeIs())
 
     const report = await generateKassaflodesanalys(
       makeSupabase(PERIOD),
@@ -281,7 +246,6 @@ describe('generateKassaflodesanalys', () => {
       totalCredit: 500000,
       isBalanced: true,
     })
-    mockIncomeStatement.mockResolvedValue(makeIs())
 
     const report = await generateKassaflodesanalys(
       makeSupabase(PERIOD),
@@ -319,7 +283,6 @@ describe('generateKassaflodesanalys', () => {
       totalCredit: 10000,
       isBalanced: true,
     })
-    mockIncomeStatement.mockResolvedValue(makeIs())
 
     const report = await generateKassaflodesanalys(
       makeSupabase(PERIOD),
@@ -364,7 +327,6 @@ describe('generateKassaflodesanalys', () => {
       totalCredit: 100000,
       isBalanced: true,
     })
-    mockIncomeStatement.mockResolvedValue(makeIs())
 
     const report = await generateKassaflodesanalys(
       makeSupabase(PERIOD),
@@ -377,10 +339,10 @@ describe('generateKassaflodesanalys', () => {
     expect(report.reconciliation.is_reconciled).toBe(true)
   })
 
-  it('detects mismatch when a cash movement has no balancing classification', async () => {
-    // Plant an invariant violation: 1930 went up by 10 000 but no offsetting
-    // entry on any tracked account class. This is the kind of bug a real
-    // bookkeeping error would surface as.
+  it('names an account outside every classified range instead of dropping it', async () => {
+    // 1930 went up by 10 000 against 9999, which no BAS range covers. The
+    // report used to drop it and fail the reconciliation; it now shows it as
+    // Övriga poster and names the account.
     mockTrialBalance.mockResolvedValue({
       rows: [
         makeRow({
@@ -389,8 +351,6 @@ describe('generateKassaflodesanalys', () => {
           period_debit: 10000,
           closing_debit: 10000,
         }),
-        // The "offset" is in account 9999 (out-of-range). The cash flow
-        // generator doesn't see it. is_reconciled must flag false.
         makeRow({
           account_number: '9999',
           account_class: 9,
@@ -402,7 +362,35 @@ describe('generateKassaflodesanalys', () => {
       totalCredit: 10000,
       isBalanced: true,
     })
-    mockIncomeStatement.mockResolvedValue(makeIs())
+
+    const report = await generateKassaflodesanalys(
+      makeSupabase(PERIOD),
+      'company-1',
+      'period-1'
+    )
+
+    expect(report.lopande.ovriga_poster).toBe(10000)
+    expect(report.unclassified_accounts).toEqual(['9999'])
+    expect(report.reconciliation.delta_calculated).toBe(10000)
+    expect(report.reconciliation.is_reconciled).toBe(true)
+  })
+
+  it('still flags a mismatch when the period postings do not balance', async () => {
+    // 1930 went up by 10 000 with no other side at all: every account is
+    // classified, so only unbalanced postings can leave a difference.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({
+          account_number: '1930',
+          account_class: 1,
+          period_debit: 10000,
+          closing_debit: 10000,
+        }),
+      ],
+      totalDebit: 10000,
+      totalCredit: 0,
+      isBalanced: false,
+    })
 
     const report = await generateKassaflodesanalys(
       makeSupabase(PERIOD),
@@ -423,7 +411,6 @@ describe('generateKassaflodesanalys', () => {
       totalCredit: 0,
       isBalanced: true,
     })
-    mockIncomeStatement.mockResolvedValue(makeIs())
 
     await expect(
       generateKassaflodesanalys(makeSupabase(null), 'company-1', 'period-1')
@@ -452,9 +439,6 @@ describe('generateKassaflodesanalys', () => {
       totalCredit: 0,
       isBalanced: false,
     })
-    mockIncomeStatement.mockResolvedValue(
-      makeIs({ total_expenses: 33.337, net_result: -33.337 })
-    )
 
     const report = await generateKassaflodesanalys(
       makeSupabase(PERIOD),

@@ -292,9 +292,11 @@ export async function generateTaxDeadlinesForUser(
     years = Array.from(new Set([currentYear, currentYear + 1, ...noticeYears]))
   }
 
-  // The ROT/RUT begäran deadline is data-dependent: a row for year Y only
-  // exists when Y has paid ROT/RUT invoices (Lag 2009:194 8 §, payment
-  // dates). Resolve the payment years here, in the one place that inserts
+  // The begäran deadline is data-dependent: a row for year Y only exists
+  // when Y has paid deduction invoices (ROT/RUT per Lag 2009:194 8 §, and
+  // grön teknik, which has the same 31 January rule; payment dates). The
+  // query below is kind-agnostic (deduction_total > 0), so grön teknik years
+  // count too. Resolve the payment years here, in the one place that inserts
   // and deletes rows, so every generation path agrees. Callers that pass
   // pure settings (backfill detection) leave the field undefined and simply
   // never expect rot_rut_begaran rows.
@@ -557,9 +559,11 @@ export async function generateTaxDeadlinesForUser(
 }
 
 /**
- * Create linked report period object for navigation
+ * Create linked report period object for navigation. Exported for the VAT
+ * filing record (lib/vat/filing-record-store.ts), which builds the period's
+ * deadline row itself when the company has none and must build it the same way.
  */
-function createLinkedReportPeriod(
+export function createLinkedReportPeriod(
   instance: DeadlineInstance,
   _type: TaxDeadlineType
 ): Record<string, unknown> | null {

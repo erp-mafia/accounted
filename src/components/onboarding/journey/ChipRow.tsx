@@ -32,13 +32,13 @@ export function flyToBand(el: HTMLElement, band: HTMLElement | null, frac: numbe
   const tx = c.left + frac * c.width - (r.left + r.width / 2)
   const ty = c.top + 28 - (r.top + r.height / 2)
   const ghost = el.cloneNode(true) as HTMLElement
-  ghost.style.cssText = `position:fixed; left:${r.left}px; top:${r.top}px; width:${r.width}px; margin:0; z-index:99; pointer-events:none; border:1px solid hsl(var(--border)); border-radius:99px; padding:10px 18px; background:hsl(var(--background)); font-size:13.5px; transition: transform 520ms cubic-bezier(0.5, 0, 0.2, 1), opacity 520ms var(--ease-out);`
+  ghost.style.cssText = `position:fixed; left:${r.left}px; top:${r.top}px; width:${r.width}px; margin:0; z-index:99; pointer-events:none; border:1px solid hsl(var(--border)); border-radius:99px; padding:10px 18px; background:hsl(var(--background)); font-size:13px; transition: transform 300ms var(--ease-emphasized), opacity 300ms var(--ease-out);`
   document.body.appendChild(ghost)
   requestAnimationFrame(() => {
     ghost.style.transform = `translate(${tx}px,${ty}px) scale(0.12)`
     ghost.style.opacity = '0'
   })
-  setTimeout(() => ghost.remove(), 560)
+  setTimeout(() => ghost.remove(), 340)
 }
 
 export default function ChipRow<K extends string>({

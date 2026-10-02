@@ -26,7 +26,7 @@ interface Props {
   className?: string
 }
 
-const badgeClass = 'h-4 gap-1 px-1.5 py-0 text-[10px] font-normal'
+const badgeClass = 'h-4 gap-1 px-1.5 py-0 text-[11px] font-normal'
 // Enlarges the hit area beyond the 16px badge without shifting layout.
 const hitAreaClass = 'shrink-0 p-1 -m-1'
 

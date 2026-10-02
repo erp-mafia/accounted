@@ -31,7 +31,7 @@ Every aktiebolag, handelsbolag, and ekonomisk förening is bokföringsskyldigt. 
 ### Löpande bokföring (BFL 5 kap)
 - Affärshändelser shall be bokförda in both grundbok (journal) and huvudbok (ledger)
 - Kontanta in/utbetalningar: senast nästa arbetsdag
-- Övriga affärshändelser: so snart det kan ske, which in practice means within the calendar month following the month the event occurred
+- Övriga affärshändelser: så snart det kan ske. BFNAR 2013:2 allows senareläggning if verifikationerna are kept ordered meanwhile (3.5): up to 50 days after the end of the month (3.6); 50 days after the end of the quarter if nettoomsättning normalt ≤ 3 MSEK (3.7); 60 days after räkenskapsårets end if normally ≤ 50 verifikationer (≤ 250 affärshändelser) and ≤ 1 MSEK (3.8); enskild näringsidkare within the 3.8 limits and without EU trade: until the inkomstdeklaration due date (3.9). Kontanta in/utbetalningar must still be registered in registreringsordning by next arbetsdag (certified kassaregister: 50 days after month-end, 3.10)
 - Every affärshändelse requires a verifikation
 
 ### Verifikationer (BFL 5 kap 6-7§)
@@ -55,17 +55,17 @@ A correction path that erases the original without a trace violates the law unde
 
 ### Arkivering (BFL 7 kap)
 - Räkenskapsinformation must be preserved for 7 years after the end of the calendar year the räkenskapsår ended
-- Since 1 July 2024: no requirement to keep paper originals after digitization (BFL 7 kap 6§ updated)
-- Digital storage must ensure the information cannot be altered (immutability requirement)
-- Must be accessible in Sweden (or within EU/EEA with Skatteverket notification)
+- Since 1 July 2024: no requirement to keep paper originals after digitization (BFL 7 kap 6§ updated, SFS 2024:342)
+- Digital storage must ensure the information cannot be altered (immutability requirement). Electronic documents are kept in the format and with the content they had when received or compiled (BFL 7 kap 1§ 3 st)
+- Stored in Sweden (BFL 7 kap 2§). Electronic räkenskapsinformation may be stored in another EU country, or a non-EU country with equivalent mutual-assistance instruments, if the location is reported to Skatteverket, Skatteverket/Tullverket get immediate electronic access, and a printout can be made immediately in Sweden (BFL 7 kap 3a§). Otherwise a permit from Skatteverket is needed (7 kap 4§). Paper verifikationer may only be kept abroad temporarily (7 kap 3§)
 
 ### Momssatser (current as of 2026)
 - 25% - standard rate (most goods and services)
-- 12% - food/restaurants, hotels, some cultural events
-- 6% - books, newspapers, public transport, cultural/sports events, livsmedel (temporarily from 1 April 2026 to 31 Dec 2027)
+- 12% - food (outside the temporary 6% period), restaurants/catering, hotels/camping, konstverk, certain repairs (bikes, shoes, clothes)
+- 6% - books, newspapers, public transport, cultural/sports events, dance events (danstillställningar, from 1 July 2026), livsmedel (temporarily from 1 April 2026 to 31 Dec 2027)
 - 0% - certain financial services, healthcare, education, insurance
 
-**IMPORTANT**: From 1 April 2026, livsmedel drops from 12% to 6% (tillfälligt, Prop. 2025/26:55). Restaurang/servering stays at 12%. Software must handle the transition date and the eventual reversion.
+**IMPORTANT**: From 1 April 2026, livsmedel drops from 12% to 6% (tillfälligt, Prop. 2025/26:55). Restaurang/servering stays at 12%. The reversion to 12% from 1 Jan 2028 is already enacted (SFS 2026:119). Software must handle both dates.
 
 ### Fakturakrav (ML 17 kap)
 A momsregistrerad seller's faktura must contain:

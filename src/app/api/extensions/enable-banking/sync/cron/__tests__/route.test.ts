@@ -51,15 +51,6 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD: 0.9,
 }))
 
-// The balance mirror runs against cash_accounts after every successful sync;
-// its own behavior is covered in lib/cash-accounts/__tests__/service.test.ts.
-vi.mock('@/lib/cash-accounts/service', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/cash-accounts/service')>(
-    '@/lib/cash-accounts/service',
-  )
-  return { ...actual, updateBalancesFromSync: vi.fn().mockResolvedValue(undefined) }
-})
-
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({ isConfigured: () => false, sendEmail: vi.fn() }),
 }))
@@ -74,10 +65,21 @@ import {
   AspspUnavailableError,
   ConnectorSyncError,
 } from '@/extensions/general/enable-banking/lib/api-client'
+import { BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE } from '@/lib/bank-sync/ingest-route'
 import { GET } from '../route'
 
 function makeClient(state: ClientState) {
   return {
+    rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+      const row = state.active.find(row => row.id === args.p_connection_id && row.company_id === args.p_company_id)
+      if (!row) throw new Error('Unknown sync fixture connection')
+      const payload = name === 'persist_bank_sync_result'
+        ? { last_synced_at: args.p_completed_at, status: 'active', error_message: null }
+        : { status: args.p_status, error_message: args.p_message }
+      Object.assign(row, payload)
+      state.updates.push({ ids: [row.id], payload })
+      return { data: name === 'persist_bank_sync_result' ? { applied: true } : true, error: null }
+    }),
     from: () => {
       const filters: Record<string, unknown> = {}
       let isDelete = false
@@ -118,7 +120,7 @@ function makeClient(state: ClientState) {
       }
 
       const chain: Record<string, unknown> = {}
-      const passthrough = ['select', 'not', 'gte', 'order', 'limit', 'range']
+      const passthrough = ['select', 'not', 'gte', 'order', 'limit', 'range', 'in', 'is']
       for (const method of passthrough) chain[method] = vi.fn(() => chain)
       chain.eq = vi.fn((col: string, value: unknown) => {
         filters[col] = value
@@ -541,6 +543,48 @@ describe('GET /api/extensions/enable-banking/sync/cron: failure log level', () =
 })
 
 describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave the row alone', () => {
+  it('keeps a routing conflict eligible for the next run without changing its cursor or consent status', async () => {
+    const lastSyncedAt = hoursAgo(24)
+    state.active = [connection({ last_synced_at: lastSyncedAt })]
+    mocks.syncAccountTransactions.mockRejectedValue(Object.assign(new Error('BANK_CONFIGURATION_CHANGED'), { code: 'PT409' }))
+    const response = await GET(cronRequest())
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ processed: 1, totalFailed: 1 })
+    expect(state.updates).toEqual([])
+    expect(state.active[0]).toMatchObject({ status: 'active', last_synced_at: lastSyncedAt, error_message: null })
+  })
+
+  // A drifted account selection (the stored ledger no longer matches the
+  // bound cash account) used to be just another routing conflict: no
+  // message, status active, and the only symptom a stale "Synkad" date.
+  it('stores the account selection advice on a route the guard cannot resolve, keeping the row active', async () => {
+    const lastSyncedAt = hoursAgo(24)
+    state.active = [connection({ last_synced_at: lastSyncedAt })]
+    mocks.syncAccountTransactions.mockRejectedValue(
+      Object.assign(new Error('BANK_INGEST_ROUTE_UNRESOLVED'), { code: 'PT409' }),
+    )
+
+    const response = await GET(cronRequest())
+
+    expect(await response.json()).toMatchObject({ processed: 1, totalFailed: 1 })
+    expect(state.updates).toEqual([
+      { ids: ['conn-1'], payload: { error_message: BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE } },
+    ])
+    expect(state.active[0]).toMatchObject({
+      status: 'active',
+      last_synced_at: lastSyncedAt,
+      error_message: BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE,
+    })
+  })
+
+  it('clears the stored advice on the next successful sync', async () => {
+    state.active = [connection({ last_synced_at: hoursAgo(24), error_message: BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE })]
+
+    await GET(cronRequest())
+
+    expect(state.active[0]).toMatchObject({ status: 'active', error_message: null })
+  })
+
   // 2026-09-04: a connector contract mismatch parked four canary companies in
   // 'error' with "förnya anslutningen", and users re-authorized consents that
   // were fine. Neither a connector-hop failure nor a bank refusing right now

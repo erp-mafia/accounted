@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
-import { AlertTriangle, Check, Copy, Loader2, RefreshCw, Trash2 } from 'lucide-react'
+import { AlertTriangle, Check, Copy, RefreshCw, Trash2 } from 'lucide-react'
 import type { CompanyInboundDomain, InboundDomainDnsRecord } from '@/types'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useFormat } from '@/lib/hooks/use-format'
@@ -26,10 +26,11 @@ const BASE = '/api/extensions/ext/invoice-inbox/inbox/domain'
 
 const STATUS_VARIANT: Record<
   CompanyInboundDomain['status'],
-  'secondary' | 'success' | 'destructive'
+  'secondary' | 'destructive' | null
 > = {
   pending: 'secondary',
-  verified: 'success',
+  // Verified is the normal state: muted text, not a chip (chips mark exceptions).
+  verified: null,
   failed: 'destructive',
 }
 
@@ -228,10 +229,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
                     if (e.key === 'Enter') handleClaim()
                   }}
                 />
-                <Button onClick={handleClaim} disabled={isClaiming || !domainInput.trim()}>
-                  {isClaiming ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : null}
+                <Button onClick={handleClaim} disabled={!domainInput.trim()} loading={isClaiming}>
                   {t('add_button')}
                 </Button>
               </div>
@@ -244,9 +242,15 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 min-w-0">
                 <code className="font-mono text-sm truncate">{domain.domain}</code>
-                <Badge variant={STATUS_VARIANT[domain.status]}>
-                  {statusLabels[domain.status]}
-                </Badge>
+                {STATUS_VARIANT[domain.status] ? (
+                  <Badge variant={STATUS_VARIANT[domain.status] ?? undefined}>
+                    {statusLabels[domain.status]}
+                  </Badge>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    {statusLabels[domain.status]}
+                  </span>
+                )}
               </div>
               {canManage ? (
                 <div className="flex items-center gap-2 shrink-0">
@@ -254,27 +258,19 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
                     variant="outline"
                     size="sm"
                     onClick={handleVerify}
-                    disabled={isChecking}
+                    loading={isChecking}
                   >
-                    {isChecking ? (
-                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-                    )}
+                    {!isChecking && <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
                     {t('check_again')}
                   </Button>
                   <Button
                     variant="outline"
                     size="icon"
                     onClick={handleRemove}
-                    disabled={isRemoving}
+                    loading={isRemoving}
                     aria-label={t('remove_aria')}
                   >
-                    {isRemoving ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-3.5 w-3.5" />
-                    )}
+                    {!isRemoving && <Trash2 className="h-3.5 w-3.5" />}
                   </Button>
                 </div>
               ) : null}

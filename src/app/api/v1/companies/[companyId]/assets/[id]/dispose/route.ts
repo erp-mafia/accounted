@@ -80,6 +80,8 @@ registerEndpoint({
           bas_accumulated_account: '1229',
           bas_expense_account: '7832',
           k3_components: null,
+          opening_accumulated_depreciation: 0,
+          opening_depreciation_date: null,
           notes: null,
           disposed_at: '2026-09-15',
           disposal_type: 'sale',

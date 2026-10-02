@@ -31,6 +31,7 @@ import { testConnectionAndFetchShopInfo } from '../lib/api-client'
 import { syncShopifyOrders } from '../lib/order-sync'
 import { decryptCredential } from '../lib/credentials'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 function findRoute(method: string, path: string) {
@@ -68,6 +69,18 @@ function makeContext(supabase: unknown): ExtensionContext {
 }
 
 const USER = { id: 'user-1', is_anonymous: false }
+
+/**
+ * The next service client the route creates, answering `results` in order.
+ * The sync and backfill look the connection up there: its encrypted
+ * credentials are withheld from end-user roles (20260929173432).
+ */
+function serviceReturning(...results: Array<{ data?: unknown; error?: unknown }>) {
+  const service = createQueuedMockSupabase()
+  for (const result of results) service.enqueue(result)
+  vi.mocked(createServiceClientNoCookies).mockReturnValueOnce(service.supabase as never)
+  return service
+}
 
 const VALID_CONNECT_BODY = {
   shop_domain: 'minbutik.myshopify.com',
@@ -257,9 +270,9 @@ describe('shopify extension routes', () => {
     })
 
     it('returns 404 without an active connection', async () => {
-      const { supabase, enqueue } = createQueuedMockSupabase()
+      const { supabase } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-      enqueue({ data: null })
+      serviceReturning({ data: null })
       const res = await findRoute('POST', '/sync').handler(
         makeRequest('POST'),
         makeContext(supabase),
@@ -268,9 +281,9 @@ describe('shopify extension routes', () => {
     })
 
     it('runs the sync on the service client and returns the summary', async () => {
-      const { supabase, enqueue } = createQueuedMockSupabase()
+      const { supabase, findCall } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-      enqueue({ data: { id: 'conn-1', status: 'active' } })
+      const service = serviceReturning({ data: { id: 'conn-1', status: 'active' } })
       vi.mocked(syncShopifyOrders).mockResolvedValue({
         fetched: 3,
         refundsFetched: 1,
@@ -288,7 +301,11 @@ describe('shopify extension routes', () => {
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.transactions.inserted).toBe(4)
-      expect(vi.mocked(syncShopifyOrders).mock.calls[0][0]).toEqual({ service: true })
+      expect(vi.mocked(syncShopifyOrders).mock.calls[0][0]).toBe(service.supabase)
+      // The credentialed row comes from the service role, scoped to the
+      // caller's company; the session client never selects it.
+      expect(service.findCall('shopify_connections', 'eq')).toEqual(['company_id', 'company-1'])
+      expect(findCall('shopify_connections', 'select')).toBeUndefined()
     })
   })
 
@@ -316,9 +333,9 @@ describe('shopify extension routes', () => {
     })
 
     it('returns 404 without an active connection', async () => {
-      const { supabase, enqueue } = createQueuedMockSupabase()
+      const { supabase } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-      enqueue({ data: null })
+      serviceReturning({ data: null })
       const res = await findRoute('POST', '/backfill').handler(
         makeRequest('POST', { from: '2026-01-01' }),
         makeContext(supabase),
@@ -328,12 +345,12 @@ describe('shopify extension routes', () => {
     })
 
     it('moves the cursor to the chosen date and syncs from there', async () => {
-      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-      enqueue({
+      const service = serviceReturning({
         data: { id: 'conn-1', status: 'active', last_order_synced_at: '2026-09-14T00:00:00.000Z' },
       })
-      enqueue({ data: [] }) // cursor update
+      enqueue({ data: [] }) // cursor update (session client)
       vi.mocked(syncShopifyOrders).mockResolvedValue({
         fetched: 4,
         refundsFetched: 0,
@@ -356,7 +373,8 @@ describe('shopify extension routes', () => {
       expect(updates[0][0]).toMatchObject({ last_order_synced_at: '2026-01-01T00:00:00.000Z' })
       // The sync must see the moved cursor, not the stored one, and run on
       // the service client like the manual sync.
-      expect(vi.mocked(syncShopifyOrders).mock.calls[0][0]).toEqual({ service: true })
+      expect(vi.mocked(syncShopifyOrders).mock.calls[0][0]).toBe(service.supabase)
+      expect(findCall('shopify_connections', 'select')).toBeUndefined()
       expect(vi.mocked(syncShopifyOrders).mock.calls[0][1].last_order_synced_at).toBe(
         '2026-01-01T00:00:00.000Z',
       )

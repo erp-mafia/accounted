@@ -7,6 +7,9 @@
  * forbids zero vouchers), otherwise post 2-4 verifikationer via
  * `createSalaryRunEntries()`, advance `paid` → `booked`, emit
  * `salary_run.booked`, and sync the vacation ledger (non-fatal).
+ * `createSalaryRunEntries()` posts all of the run's vouchers or none, and a
+ * retry after an interrupted posting adopts what is already in the ledger
+ * instead of posting it twice, so a run left `paid` is safe to book again.
  *
  * `advanceAndBookSalaryRun` is the pending-operation executor path for the
  * MCP tool `gnubok_book_salary_run`: the human approval of the staged
@@ -17,10 +20,19 @@
  * force-approve path): the payment-file generators hard-block on them where
  * it actually matters.
  *
- * Bookkeeping-engine errors (period locks, unbalanced entries) THROW out of
- * both functions: callers map them via their own envelope, exactly like the
- * route did before extraction. The v1 route keeps its own strict-mode mirror
- * (optimistic locking, period pre-check) on purpose.
+ * Bookkeeping-engine errors (period locks, unbalanced entries) and
+ * SalaryRunPartiallyBookedError THROW out of both functions: callers map them
+ * via their own envelope, exactly like the route did before extraction. The
+ * v1 route keeps its own strict-mode mirror (period pre-check) on purpose,
+ * but takes the same booking claim and flips through the same
+ * markClaimedRunBooked, so every door is serialized by one invariant.
+ *
+ * Booking claim (accounted#3251): reading the run as 'paid', posting its
+ * vouchers and flipping it to 'booked' are separate round trips, so a read
+ * cannot stop a concurrent call from posting the same vouchers. Every booking
+ * therefore claims the run first (claimSalaryRunBooking, one conditional
+ * UPDATE in the database). Only the claim holder posts, only the holder can
+ * flip the run to 'booked', and a holder that fails releases the claim.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -52,7 +64,7 @@ export interface BookedRunData {
   nollkorning: boolean
 }
 
-interface BookRunArgs {
+export interface BookRunArgs {
   companyId: string
   userId: string
   salaryRunId: string
@@ -91,12 +103,204 @@ async function loadRoster(
   return { ok: true, data: (data ?? []) as RosterRow[] }
 }
 
-async function bookLoadedRun(
+export type SalaryRunBookingClaim =
+  | { ok: true; claimId: string }
+  | { ok: false; reason: 'in_progress' }
+  | { ok: false; reason: 'not_paid'; currentStatus: string | null }
+  | { ok: false; reason: 'db_error'; dbError: unknown }
+
+/**
+ * Claim a paid run for this booking call before anything is posted
+ * (claim_salary_run_booking). Of two concurrent callers exactly one gets the
+ * token; the other learns why it did not: the run is held by a live booking
+ * ('in_progress'), or it is no longer paid (booked meanwhile, or never paid).
+ * A claim whose call died expires in the database after 15 minutes.
+ */
+export async function claimSalaryRunBooking(
+  supabase: SupabaseClient,
+  companyId: string,
+  salaryRunId: string,
+): Promise<SalaryRunBookingClaim> {
+  const { data: claimId, error } = await supabase.rpc('claim_salary_run_booking', {
+    p_company_id: companyId,
+    p_salary_run_id: salaryRunId,
+  })
+  if (error) return { ok: false, reason: 'db_error', dbError: error }
+  if (typeof claimId === 'string' && claimId) return { ok: true, claimId }
+
+  const { data: current, error: readError } = await supabase
+    .from('salary_runs')
+    .select('status')
+    .eq('id', salaryRunId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (readError) return { ok: false, reason: 'db_error', dbError: readError }
+  const currentStatus = (current as { status?: string } | null)?.status ?? null
+  if (currentStatus === 'paid') return { ok: false, reason: 'in_progress' }
+  return { ok: false, reason: 'not_paid', currentStatus }
+}
+
+/**
+ * Hand the run back after a booking that did not reach 'booked' (a refusal,
+ * an engine throw, a failed flip), so the user can retry at once instead of
+ * waiting out the expiry. Conditional on the token: it never touches a claim
+ * another call has taken since. Never throws: a claim that stays behind
+ * expires on its own.
+ */
+export async function releaseSalaryRunBooking(
+  supabase: SupabaseClient,
+  companyId: string,
+  salaryRunId: string,
+  claimId: string,
+  log: Logger,
+): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from('salary_runs')
+      .update({ booking_claim_id: null, booking_claimed_at: null })
+      .eq('id', salaryRunId)
+      .eq('company_id', companyId)
+      .eq('booking_claim_id', claimId)
+    if (error) {
+      log.warn('salary run booking claim not released; it expires on its own', {
+        salaryRunId,
+        message: error.message,
+      })
+    }
+  } catch (err) {
+    log.warn('salary run booking claim not released; it expires on its own', {
+      salaryRunId,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+/** The run's posted vouchers, as createSalaryRunEntries returns them. */
+export interface SalaryRunVoucherIds {
+  salaryEntry: { id: string }
+  avgifterEntry: { id: string } | null
+  vacationEntry: { id: string } | null
+  pensionEntry: { id: string } | null
+}
+
+/**
+ * paid -> booked for the call that holds the booking claim, recording the
+ * posted vouchers (none for a nollkörning) and clearing the claim in the same
+ * statement. Zero rows updated means the claim was lost: the vouchers are
+ * posted but the run does not point at them, so it is an error, logged with
+ * the entry ids, never a success.
+ */
+export async function markClaimedRunBooked(
   supabase: SupabaseClient,
   { companyId, userId, salaryRunId, log }: BookRunArgs,
+  claimId: string,
+  vouchers: SalaryRunVoucherIds | null,
+  columns = '*',
+): Promise<BookRunResult<{ run: Record<string, unknown>; entryIds: string[] }>> {
+  const entryIds: string[] = []
+  const updates: Record<string, unknown> = {
+    status: 'booked',
+    booked_at: new Date().toISOString(),
+    booked_by: userId,
+    booking_claim_id: null,
+    booking_claimed_at: null,
+  }
+  if (vouchers) {
+    updates.salary_entry_id = vouchers.salaryEntry.id
+    entryIds.push(vouchers.salaryEntry.id)
+    // No avgifter voucher for a run without avgifter (utlägg-only, F-skatt).
+    if (vouchers.avgifterEntry) {
+      updates.avgifter_entry_id = vouchers.avgifterEntry.id
+      entryIds.push(vouchers.avgifterEntry.id)
+    }
+    if (vouchers.vacationEntry) {
+      updates.vacation_entry_id = vouchers.vacationEntry.id
+      entryIds.push(vouchers.vacationEntry.id)
+    }
+    if (vouchers.pensionEntry) {
+      updates.pension_entry_id = vouchers.pensionEntry.id
+      entryIds.push(vouchers.pensionEntry.id)
+    }
+  }
+
+  const { data: bookedRun, error } = await supabase
+    .from('salary_runs')
+    .update(updates)
+    .eq('id', salaryRunId)
+    .eq('company_id', companyId)
+    .eq('status', 'paid')
+    .eq('booking_claim_id', claimId)
+    .select(columns)
+    .maybeSingle()
+
+  if (error) {
+    log.error('salary run status flip to booked failed', error as unknown as Error, {
+      salaryRunId,
+      companyId,
+      entryIds,
+    })
+    return { ok: false, code: 'SALARY_RUN_BOOK_FAILED', dbError: error }
+  }
+  if (!bookedRun) {
+    log.error(
+      'salary run booking claim lost before the status flip: posted vouchers are not linked to the run',
+      new Error('booking claim lost'),
+      { salaryRunId, companyId, entryIds },
+    )
+    return {
+      ok: false,
+      code: 'SALARY_RUN_BOOK_FAILED',
+      details: { reason: 'booking_claim_lost', entry_ids: entryIds },
+    }
+  }
+  return { ok: true, data: { run: bookedRun as unknown as Record<string, unknown>, entryIds } }
+}
+
+function bookingClaimRefusal(
+  refusal: Exclude<SalaryRunBookingClaim, { ok: true }>,
+): BookRunResult<never> {
+  if (refusal.reason === 'db_error') {
+    return { ok: false, code: 'SALARY_RUN_BOOK_FAILED', dbError: refusal.dbError }
+  }
+  if (refusal.reason === 'in_progress') return { ok: false, code: 'SALARY_RUN_BOOKING_IN_PROGRESS' }
+  if (refusal.currentStatus === 'booked') return { ok: false, code: 'SALARY_RUN_ALREADY_BOOKED' }
+  if (refusal.currentStatus === null) return { ok: false, code: 'SALARY_RUN_NOT_FOUND' }
+  return { ok: false, code: 'SALARY_RUN_BOOK_NOT_PAID', details: { current_status: refusal.currentStatus } }
+}
+
+async function bookLoadedRun(
+  supabase: SupabaseClient,
+  args: BookRunArgs,
   run: Record<string, unknown>,
   roster: RosterRow[],
 ): Promise<BookRunResult<BookedRunData>> {
+  // Claim first: before the YTD refresh, the utlägg check, the nollkörning
+  // branch and the posting, so a concurrent call for the same run posts
+  // nothing and does no side work.
+  const bookingClaim = await claimSalaryRunBooking(supabase, args.companyId, args.salaryRunId)
+  if (!bookingClaim.ok) return bookingClaimRefusal(bookingClaim)
+
+  let result: BookRunResult<BookedRunData> | undefined
+  try {
+    result = await bookClaimedRun(supabase, args, bookingClaim.claimId, run, roster)
+    return result
+  } finally {
+    // A booked run's flip already cleared the claim; anything else hands the
+    // run back so a retry can start at once (and adopts what was posted).
+    if (!result?.ok) {
+      await releaseSalaryRunBooking(supabase, args.companyId, args.salaryRunId, bookingClaim.claimId, args.log)
+    }
+  }
+}
+
+async function bookClaimedRun(
+  supabase: SupabaseClient,
+  args: BookRunArgs,
+  claimId: string,
+  run: Record<string, unknown>,
+  roster: RosterRow[],
+): Promise<BookRunResult<BookedRunData>> {
+  const { companyId, userId, salaryRunId, log } = args
   // Refresh the payslip's "Ackumulerat" snapshot before the status flip. The
   // snapshot was written at calculation time from the months authorized back
   // then; a month authorized since (the normal case when next month's run is
@@ -132,21 +336,8 @@ async function bookLoadedRun(
     Math.round(((run.total_vacation_accrual as number) ?? 0) * 100) === 0
 
   if (nothingToBook) {
-    const { data: bookedRun, error: updateError } = await supabase
-      .from('salary_runs')
-      .update({
-        status: 'booked',
-        booked_at: new Date().toISOString(),
-        booked_by: userId,
-      })
-      .eq('id', salaryRunId)
-      .eq('company_id', companyId)
-      .select()
-      .single()
-
-    if (updateError) {
-      return { ok: false, code: 'SALARY_RUN_BOOK_FAILED', dbError: updateError }
-    }
+    const flipped = await markClaimedRunBooked(supabase, args, claimId, null)
+    if (!flipped.ok) return flipped
 
     await eventBus.emit({
       type: 'salary_run.booked',
@@ -165,46 +356,22 @@ async function bookLoadedRun(
     }
 
     log.info('salary run booked as nollkörning (no journal entries)', { salaryRunId })
-    return { ok: true, data: { run: bookedRun, entryIds: [], nollkorning: true } }
+    return { ok: true, data: { run: flipped.data.run, entryIds: [], nollkorning: true } }
   }
 
   // Rows -> engine input through the same mapper the journal preview route
   // uses (overrides, F-skatt avgifter rules, dimensions all live there), so
   // the voucher the user approved on screen is the voucher that posts.
-  const { salaryEntry, avgifterEntry, vacationEntry, pensionEntry } = await createSalaryRunEntries(
+  const vouchers = await createSalaryRunEntries(
     supabase,
     companyId,
     userId,
     salaryRunDataFromRows(run as unknown as SalaryRunRow, roster),
   )
 
-  const entryIds: string[] = [salaryEntry.id, avgifterEntry.id]
-  const updates: Record<string, unknown> = {
-    status: 'booked',
-    salary_entry_id: salaryEntry.id,
-    avgifter_entry_id: avgifterEntry.id,
-    booked_at: new Date().toISOString(),
-    booked_by: userId,
-  }
-  if (vacationEntry) {
-    updates.vacation_entry_id = vacationEntry.id
-    entryIds.push(vacationEntry.id)
-  }
-  if (pensionEntry) {
-    updates.pension_entry_id = pensionEntry.id
-    entryIds.push(pensionEntry.id)
-  }
-
-  const { data: bookedRun, error: updateError } = await supabase
-    .from('salary_runs')
-    .update(updates)
-    .eq('id', salaryRunId)
-    .select()
-    .single()
-
-  if (updateError) {
-    return { ok: false, code: 'SALARY_RUN_BOOK_FAILED', dbError: updateError }
-  }
+  const flipped = await markClaimedRunBooked(supabase, args, claimId, vouchers)
+  if (!flipped.ok) return flipped
+  const { run: bookedRun, entryIds } = flipped.data
 
   // Utlägg repaid with this salary: mark the claims paid with a payout batch
   // that points at the salary verifikat (same batch mechanism as the bank

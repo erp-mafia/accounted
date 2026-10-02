@@ -67,7 +67,7 @@ export default function JournalEntryPreview({ changedAccounts, ...props }: Journ
             <span className={`flex-1 truncate ${changedAccounts?.includes(line.account) ? 'font-semibold text-foreground' : ''}`}>
               {formatAccountWithName(line.account)}
               {changedAccounts?.includes(line.account) && (
-                <span className="ml-1.5 rounded-sm bg-attn/15 px-1 font-sans text-[10px] font-medium uppercase tracking-wide text-attn">ny</span>
+                <span className="ml-1.5 rounded-sm bg-attn/15 px-1 font-sans text-[11px] font-medium uppercase tracking-wide text-attn">ny</span>
               )}
             </span>
             <span className="flex-shrink-0 tabular-nums">{formatCurrency(line.amount, 'SEK')}</span>

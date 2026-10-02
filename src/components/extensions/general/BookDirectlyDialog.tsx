@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -14,10 +15,22 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Plus, Trash2, Search, Check, BookmarkPlus } from 'lucide-react'
+import { Plus, Trash2, Search, Check, BookmarkPlus, Tags } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
+import {
+  applyCostAccountSuggestion,
+  buildBookDirectPrefillLines,
+  manualBookDirectLines,
+  reconcileBookDirectLines,
+  toBookDirectPayloadLine,
+  withExplicitAccountEdit,
+  type BookDirectFormLine,
+  type BookDirectLineRole,
+} from '@/lib/bookkeeping/book-direct-prefill'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import TemplateApplyButton from '@/components/bookkeeping/TemplateApplyButton'
@@ -25,7 +38,7 @@ import { TemplateForm } from '@/components/settings/TemplateForm'
 import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import { useCompany } from '@/contexts/CompanyContext'
-import { useAccounts, useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useAccounts, useCashAccounts, useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import {
   useSubmitWithAccountActivation,
   throwOnStructuredError,
@@ -71,14 +84,6 @@ function txSekAmount(tx: PickerTransaction): number {
   )
 }
 
-interface FormLine {
-  account_number: string
-  debit_amount: string
-  credit_amount: string
-}
-
-const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '' }
-
 // Swedish entity labels for the "Spara som mall" editor. Hard-coded to match
 // this dialog's Swedish-only surface (the shared TemplateForm handles the rest
 // of its own strings bilingually).
@@ -98,68 +103,6 @@ interface Props {
   docUrl?: string | null
   docMime?: string | null
   onSuccess: () => void | Promise<void>
-}
-
-// Compute the prefill lines. Booking is always in SEK (BFL/BFNAR), so when
-// a transaction is selected and the document is in a foreign currency, the
-// transaction's SEK amount is the canonical figure. The cost-account row
-// stays blank: the user must pick a cost account themselves.
-// bankAccount defaults to '1930' but is replaced by the resolved ledger account
-// once the cash-accounts fetch completes.
-function buildPrefillLines(
-  item: InboxItem,
-  selectedTransactionAmount: number | null = null,
-  bankAccount: string = '1930',
-): FormLine[] {
-  const docTotal = item.extracted_data?.totals?.total ?? null
-  const docVat = item.extracted_data?.totals?.vatAmount ?? null
-  const docCurrency = item.extracted_data?.invoice?.currency ?? 'SEK'
-
-  // Prefer the transaction amount when available: it's already in SEK and
-  // matches the bank movement we'll be marking as booked.
-  const total = selectedTransactionAmount != null
-    ? Math.abs(selectedTransactionAmount)
-    : docTotal
-
-  if (total == null || total <= 0) {
-    return [{ ...BLANK_LINE }, { ...BLANK_LINE }]
-  }
-
-  const totalRounded = Math.round(total * 100) / 100
-
-  // VAT prefill rules:
-  // - Foreign-currency document → skip VAT (reverse charge is the common
-  //   case; user can add it manually if needed).
-  // - SEK-denominated document with extracted VAT → split it out on 2641.
-  // - SEK without extracted VAT → leave VAT row out, single net row.
-  const useDocVat =
-    docCurrency === 'SEK' &&
-    selectedTransactionAmount == null &&
-    docVat != null &&
-    docVat > 0
-  const vatRounded = useDocVat ? Math.round((docVat ?? 0) * 100) / 100 : 0
-  const net = Math.round((totalRounded - vatRounded) * 100) / 100
-
-  const lines: FormLine[] = [
-    {
-      account_number: '',
-      debit_amount: String(net),
-      credit_amount: '',
-    },
-  ]
-  if (vatRounded > 0) {
-    lines.push({
-      account_number: '2641',
-      debit_amount: String(vatRounded),
-      credit_amount: '',
-    })
-  }
-  lines.push({
-    account_number: bankAccount,
-    debit_amount: '',
-    credit_amount: String(totalRounded),
-  })
-  return lines
 }
 
 // Rank candidates by closeness to the underlag's SEK value. `targetSek` is the
@@ -196,6 +139,16 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   const cashAccounts: CashAccount[] | null = cashAccountsLoading ? null : cachedCashAccounts
   const { periods } = useFiscalPeriods()
   const { accounts } = useAccounts()
+  // Per-line kostnadsställe/projekt (the route posts each line's bag). Same
+  // gate and row affordance as the voucher form, so its wording is reused.
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
+  // Only an explicit false changes the prefill: a non-registered company has
+  // no avdragsrätt, so the receipt's VAT is cost and no 2641 row is generated.
+  // undefined while settings load prefills as before; the reconcile effect
+  // below applies the loaded value by role.
+  const vatRegistered = companySettings?.vat_registered
+  const tJournal = useTranslations('journal_form')
   // Full BAS catalogue (static reference data, fetched once per session). Lets
   // the account picker surface standard accounts the company hasn't activated
   // yet; picking one activates it at commit via the existing
@@ -212,10 +165,20 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     return [supplier, invoiceNum].filter(Boolean).join(' · ') || 'Bokföring från inkorg'
   })
   const [notes, setNotes] = useState<string>('')
-  // Start with blank lines; they are replaced once cashAccounts resolves (see
-  // the combined prefill effect below). This mirrors the TransactionBookingDialog
-  // pattern of gating JournalEntryForm on bankAccount !== null.
-  const [lines, setLines] = useState<FormLine[]>(() => buildPrefillLines(item))
+  // Generated cost / VAT / settlement rows. Replaced when the document
+  // changes, then reconciled by role when the transaction or the resolved
+  // cash account changes (see the effects below). '1930' is only the
+  // temporary settlement default until that account resolves.
+  const [lines, setLines] = useState<BookDirectFormLine[]>(() =>
+    buildBookDirectPrefillLines(item.extracted_data, null, '1930', { vatRegistered }),
+  )
+  // Generated roles the user deleted since this item opened. Every later
+  // prefill refresh leaves them out, so picking a transaction or the cash
+  // account resolving cannot bring back a row the user removed (a deleted
+  // VAT row would otherwise return as a 2641 debit). Cleared on open and on
+  // a new item. A ref: it never drives rendering, and the reconcile effect
+  // must see the reset effect's clear in the same commit.
+  const suppressedRolesRef = useRef<Set<BookDirectLineRole>>(new Set())
 
   // Transaction picker: optional selection.
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(
@@ -233,14 +196,19 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   // shared TemplateForm before saving.
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
 
-  // Reset state when a different item opens the dialog. We pass bankAccount
-  // here but it may still be null (fetch in flight): in that case '1930' is
-  // used as a placeholder and the prefill-update effect below will overwrite
-  // the settlement line once the fetch resolves.
+  // Reset state when a different item opens the dialog. Lines are a fresh
+  // prefill (no transaction yet) on the '1930' placeholder. The reconcile
+  // effect below runs in the same commit (it also fires on open and on a new
+  // item) and moves an untouched settlement leg onto the resolved cash
+  // account. vatRegistered is read as known at open but is not a dependency:
+  // a later change is applied by role in the reconcile effect, which keeps
+  // the user's date, description, notes and transaction choice instead of
+  // resetting them on a settings revalidation.
   useEffect(() => {
     if (!open) return
+    suppressedRolesRef.current.clear()
     setEntryDate(item.extracted_data?.invoice?.invoiceDate || new Date().toISOString().slice(0, 10))
-    setLines(buildPrefillLines(item, null, bankAccount ?? '1930'))
+    setLines(buildBookDirectPrefillLines(item.extracted_data, null, '1930', { vatRegistered }))
     setSelectedTransactionId(item.matched_transaction_id)
     const supplier = item.extracted_data?.supplier?.name?.trim() || ''
     const invoiceNum = item.extracted_data?.invoice?.invoiceNumber?.trim() || ''
@@ -259,11 +227,12 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   }, [open, item.id])
 
   // Cost-account prefill from the company's own booking history for this
-  // supplier (counterparty templates). Fills only the first line's still-empty
-  // account: never a generic seed (the old silent-'5010' incident is the
-  // reason there is no fallback), never over anything the user typed, and only
-  // for expense-shaped templates (cost on debit, settlement on credit) so an
-  // income template can't plant a revenue account on a purchase.
+  // supplier (counterparty templates). Fills only a still-empty generated
+  // cost row: never a generic seed (the old silent-'5010' incident is the
+  // reason there is no fallback), never a manual or template row, never over
+  // anything the user typed, and only for expense-shaped templates (cost on
+  // debit, settlement on credit) so an income template can't plant a revenue
+  // account on a purchase. A late response must not land on row 0.
   const [accountSuggestion, setAccountSuggestion] = useState<{ account: string; counterparty: string } | null>(null)
   useEffect(() => {
     if (!open) return
@@ -286,10 +255,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
         // P&L cost on debit (4xxx-8xxx), settlement on credit: keeps private
         // and balance-sheet templates (2013, 1630, 12xx) out of a cost field.
         if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
-        setLines((current) => {
-          if (!current[0] || current[0].account_number) return current
-          return current.map((l, i) => (i === 0 ? { ...l, account_number: debit } : l))
-        })
+        setLines((current) => applyCostAccountSuggestion(current, debit))
         setAccountSuggestion({ account: debit, counterparty: match.template.counterparty_name })
       } catch {
         // Prefill is best-effort; the field simply stays blank.
@@ -366,25 +332,23 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
 
   useEffect(() => {
     if (!open) return
-    // Update amounts when the transaction selection or resolved bank account
-    // changes, but preserve user-entered account numbers. This handles "user
-    // typed cost account, then picked an SEK-denominated transaction": we
-    // want the SEK figure to flow into the line amounts without forgetting
-    // their account pick. bankAccount may be null while the fetch is in flight;
-    // pass '1930' as a safe placeholder in that case: the effect re-runs once
-    // the fetch resolves and bankAccount becomes non-null.
-    setLines((current) => {
-      const next = buildPrefillLines(item, selectedTransactionAmount, bankAccount ?? '1930')
-      return next.map((nl, i) => {
-        const existing = current[i]
-        if (!existing) return nl
-        return {
-          ...nl,
-          account_number: existing.account_number || nl.account_number,
-        }
-      })
-    })
-  }, [open, item, selectedTransactionAmount, bankAccount])
+    // Recompute generated amounts when the transaction or the resolved bank
+    // account changes. Rows match by role, so a VAT leg appearing or
+    // disappearing cannot move 2641 or its dimensions onto the settlement
+    // credit. An untouched settlement default follows the resolved cash
+    // account; an explicit account commit stays. Manual and template rows
+    // have no role and are left as they are. bankAccount is null while cash
+    // accounts load: '1930' is only the temporary generated default. A
+    // non-registered company gets no VAT row (the total stays on cost), and
+    // roles the user deleted are not generated again.
+    const next = buildBookDirectPrefillLines(
+      item.extracted_data,
+      selectedTransactionAmount,
+      bankAccount ?? '1930',
+      { vatRegistered, suppressedRoles: suppressedRolesRef.current },
+    )
+    setLines((current) => reconcileBookDirectLines(current, next))
+  }, [open, item, selectedTransactionAmount, bankAccount, vatRegistered])
 
   // Load the static BAS catalogue on first open (periods and accounts come
   // from the session cache above).
@@ -491,16 +455,44 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     [lines, accountNameMap],
   )
 
-  const updateLine = useCallback((idx: number, patch: Partial<FormLine>) => {
-    setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)))
+  const updateLine = useCallback((
+    idx: number,
+    patch: Partial<Pick<BookDirectFormLine, 'account_number' | 'debit_amount' | 'credit_amount'>>,
+  ) => {
+    setLines((prev) => prev.map((l, i) => (i === idx ? withExplicitAccountEdit(l, patch) : l)))
   }, [])
 
   const addLine = useCallback(() => {
-    setLines((prev) => [...prev, { ...BLANK_LINE }])
+    // Manual row: no generated role, so a later prefill refresh leaves it alone.
+    setLines((prev) => [...prev, { account_number: '', debit_amount: '', credit_amount: '' }])
   }, [])
 
   const removeLine = useCallback((idx: number) => {
-    setLines((prev) => prev.length <= 2 ? prev : prev.filter((_, i) => i !== idx))
+    if (lines.length <= 2) return
+    // A deleted generated row stays deleted for this item: see suppressedRolesRef.
+    const role = lines[idx]?.role
+    if (role) suppressedRolesRef.current.add(role)
+    setLines(lines.filter((_, i) => i !== idx))
+  }, [lines])
+
+  // Open/close a line's kostnadsställe/projekt row; closing clears its bag.
+  const toggleLineDimensions = useCallback((idx: number) => {
+    setLines((prev) =>
+      prev.map((l, i) => (i === idx ? { ...l, dimensions: l.dimensions ? undefined : {} } : l)),
+    )
+  }, [])
+
+  const updateLineDimension = useCallback((idx: number, dimNo: string, code: string | null) => {
+    setLines((prev) =>
+      prev.map((l, i) => {
+        if (i !== idx) return l
+        const dims = { ...(l.dimensions ?? {}) }
+        const trimmed = code?.trim()
+        if (trimmed) dims[dimNo] = trimmed
+        else delete dims[dimNo]
+        return { ...l, dimensions: dims }
+      }),
+    )
   }, [])
 
   // Outstanding imbalance from every line except `excludeIndex`.
@@ -543,13 +535,9 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       templateLines: Array<{ account_number: string; debit_amount: string; credit_amount: string }>,
       templateDescription: string,
     ) => {
-      setLines(
-        templateLines.map((l) => ({
-          account_number: l.account_number,
-          debit_amount: l.debit_amount,
-          credit_amount: l.credit_amount,
-        })),
-      )
+      // Untagged manual rows: the next prefill refresh must not reinterpret
+      // 2641 or a 19-account as generated VAT or settlement.
+      setLines(manualBookDirectLines(templateLines))
       setDescription((prev) => (prev.trim() ? prev : templateDescription))
     },
     [],
@@ -584,11 +572,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       // the user's own value. Sending undefined for a cleared prefill would
       // resurrect the text the user just deleted onto an immutable verifikat.
       notes: notes.trim(),
-      lines: lines.map((l) => ({
-        account_number: l.account_number.trim(),
-        debit_amount: parseFloat(l.debit_amount) || 0,
-        credit_amount: parseFloat(l.credit_amount) || 0,
-      })),
+      lines: lines.map(toBookDirectPayloadLine),
       transaction_id: selectedTransactionId ?? undefined,
     }
     const res = await fetch(
@@ -734,8 +718,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
               </div>
               <div className="max-h-56 overflow-y-auto rounded-lg border">
                 {isLoadingTransactions ? (
-                  <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Laddar…
+                  <div className="space-y-2 px-3 py-3" aria-busy="true" aria-label="Laddar…">
+                    {[0, 1, 2, 3].map((i) => (
+                      <Skeleton key={i} className="h-8 w-full" />
+                    ))}
                   </div>
                 ) : filteredTransactions.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground">
@@ -756,7 +742,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                               'w-full flex items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors',
                               isSelected
                                 ? 'bg-primary/10 border-l-2 border-primary'
-                                : 'border-l-2 border-transparent hover:bg-accent/40'
+                                : 'border-l-2 border-transparent hover:bg-secondary/35'
                             )}
                             onClick={() =>
                               setSelectedTransactionId(isSelected ? null : tx.id)
@@ -772,7 +758,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <p className="truncate">{tx.description}</p>
                                 {isInboxMatch && (
-                                  <Badge variant="secondary" className="shrink-0 text-[10px] px-1.5 py-0">
+                                  <Badge variant="secondary" className="shrink-0 text-[11px] px-1.5 py-0">
                                     Matchad
                                   </Badge>
                                 )}
@@ -845,7 +831,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 lägg till en rad för omvänd skattskyldighet manuellt.
               </p>
             )}
-            {accountSuggestion && lines[0]?.account_number === accountSuggestion.account && (
+            {accountSuggestion && lines.some((l) => l.role === 'cost' && l.account_number === accountSuggestion.account) && (
               <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
                 Konto {accountSuggestion.account} föreslaget från tidigare bokföringar av{' '}
@@ -863,15 +849,36 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {lines.map((line, idx) => (
-                    <tr key={idx}>
+                  {lines.flatMap((line, idx) => [
+                    <tr key={`line-${idx}`}>
                       <td className="px-3 py-2">
-                        <AccountCombobox
-                          value={line.account_number}
-                          accounts={accounts}
-                          catalog={catalog}
-                          onChange={(v) => updateLine(idx, { account_number: v })}
-                        />
+                        {/* The line's tag toggle sits with its account: a
+                            bag describes the account's line. */}
+                        <div className="flex items-center gap-1">
+                          <div className="min-w-0 flex-1">
+                            <AccountCombobox
+                              value={line.account_number}
+                              accounts={accounts}
+                              catalog={catalog}
+                              onChange={(v) => updateLine(idx, { account_number: v })}
+                            />
+                          </div>
+                          {dimensionsEnabled && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => toggleLineDimensions(idx)}
+                              disabled={isSubmitting}
+                              aria-label={tJournal('row_dimensions_aria')}
+                              aria-expanded={line.dimensions != null}
+                              title={tJournal('row_dimensions_aria')}
+                              className={cn('shrink-0', line.dimensions != null ? 'text-foreground' : 'text-muted-foreground')}
+                            >
+                              <Tags className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
                       </td>
                       <td className="px-3 py-2">
                         <Input
@@ -903,8 +910,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                         <Button
                           type="button"
                           variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
+                          size="icon-sm"
                           onClick={() => removeLine(idx)}
                           disabled={isSubmitting || lines.length <= 2}
                           aria-label="Ta bort rad"
@@ -912,8 +918,25 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </td>
-                    </tr>
-                  ))}
+                    </tr>,
+                    // The line's kostnadsställe/projekt, posted with the line.
+                    ...(dimensionsEnabled && line.dimensions != null
+                      ? [
+                          <tr key={`dims-${idx}`} className="bg-muted/20">
+                            <td colSpan={4} className="px-3 py-2">
+                              <div className="max-w-md">
+                                <LineDimensionFields
+                                  dimensions={line.dimensions}
+                                  onChange={(dimNo, code) => updateLineDimension(idx, dimNo, code)}
+                                  disabled={isSubmitting}
+                                  inputClassName="h-8"
+                                />
+                              </div>
+                            </td>
+                          </tr>,
+                        ]
+                      : []),
+                  ])}
                 </tbody>
                 <tfoot className="bg-muted/20 text-xs">
                   <tr>
@@ -993,9 +1016,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 </Button>
               </div>
               {totals.balanced ? (
-                <Badge variant="success" className="text-[11px]">
-                  Balanserad
-                </Badge>
+                <span className="text-xs text-muted-foreground">Balanserad</span>
               ) : totals.diff !== 0 ? (
                 <span className="text-xs text-muted-foreground">
                   Dubbelklicka i ett tomt beloppsfält för att fylla i differensen
@@ -1041,16 +1062,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 type="button"
                 onClick={handleSubmit}
                 disabled={!canSubmit}
+                loading={isSubmitting}
                 title={disabledReason ?? undefined}
               >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                    Bokför…
-                  </>
-                ) : (
-                  'Bokför'
-                )}
+                {isSubmitting ? 'Bokför…' : 'Bokför'}
               </Button>
             </div>
           </div>

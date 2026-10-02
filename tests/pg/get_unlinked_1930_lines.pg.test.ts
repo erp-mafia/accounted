@@ -103,7 +103,7 @@ describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
     expect(rows.find((r) => r.source_type === 'opening_balance')).toBeUndefined()
   })
 
-  it('excludes storno and correction vouchers from the unmatched-1930 set', async () => {
+  it('excludes storno vouchers but offers an unlinked correction voucher (20260923150000)', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     const fiscalPeriodId = await insertFiscalPeriod({
@@ -114,14 +114,15 @@ describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
     })
 
     // A storno and a correction voucher on 1930 (the products of the correctEntry
-    // flow), plus a normal bank voucher. Stornos/corrections are book-only
-    // reversals with no bank-feed counterpart: they must be EXCLUDED so a
-    // reconciled period doesn't show them as omatchade verifikationer.
+    // flow), plus a normal bank voucher. The storno cancels its reversed
+    // original and has no bank-feed counterpart: EXCLUDED. The correction is the
+    // live rebooking of the bank movement; unlinked, it is a real unmatched
+    // voucher and must be offered (a linked one drops out via the link check).
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-05-02', sourceType: 'storno', voucherNumber: 20, amount: 25000,
     })
-    await insertPostedJournalEntry({
+    const correctionId = await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-05-02', sourceType: 'correction', voucherNumber: 21, amount: 25000,
     })
@@ -138,7 +139,7 @@ describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
     const returnedIds = new Set(rows.map((r) => r.journal_entry_id))
     expect(returnedIds.has(bankEntryId)).toBe(true)
     expect(rows.find((r) => r.source_type === 'storno')).toBeUndefined()
-    expect(rows.find((r) => r.source_type === 'correction')).toBeUndefined()
+    expect(returnedIds.has(correctionId)).toBe(true)
   })
 
   it('still applies date_from / date_to filtering', async () => {

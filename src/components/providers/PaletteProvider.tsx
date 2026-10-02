@@ -65,7 +65,14 @@ function subscribeToPalette(onStoreChange: () => void) {
   }
 }
 
-export function PaletteProvider({ children }: { children: ReactNode }) {
+export function PaletteProvider({
+  children,
+  nonce,
+}: {
+  children: ReactNode
+  /** The request's CSP nonce (root layout): the no-flash script needs it. */
+  nonce?: string
+}) {
   const palette = useSyncExternalStore(
     subscribeToPalette,
     getPaletteSnapshot,
@@ -86,7 +93,15 @@ export function PaletteProvider({ children }: { children: ReactNode }) {
 
   return (
     <>
-      <script suppressHydrationWarning dangerouslySetInnerHTML={{ __html: paletteInitScript }} />
+      {/* The strict script-src only runs this inline script with the
+          request's nonce. Server render only, as next-themes does: the
+          browser hides the attribute once the script has run, and a client
+          render stamping it back would expose the value in the DOM. */}
+      <script
+        suppressHydrationWarning
+        nonce={typeof window === 'undefined' ? nonce : ''}
+        dangerouslySetInnerHTML={{ __html: paletteInitScript }}
+      />
       <PaletteContext.Provider value={value}>{children}</PaletteContext.Provider>
     </>
   )

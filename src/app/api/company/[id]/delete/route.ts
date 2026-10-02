@@ -6,6 +6,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
+import { getMailSearchService } from '@/lib/mail-search/service'
 
 const log = createLogger('api/company/delete')
 
@@ -236,6 +237,19 @@ export async function POST(
         })
       }
     }
+  }
+
+  // 6b. End the company's mailbox grants. Nobody can disconnect them once
+  // the company is hidden, and the receipt hunt would keep a live Gmail
+  // grant for a company that no longer exists for its members. Each one is
+  // revoked at Google (unless another company still reads that mailbox),
+  // deleted and audited, exactly as a disconnect. Through the mail-search
+  // seam, since core never imports the extension; best effort toward
+  // Google, and the archive above stands whatever happens here.
+  try {
+    await getMailSearchService().endCompanyGrants?.(companyId, user.id)
+  } catch (err) {
+    log.error('Failed to end mailbox grants on company archive', { companyId, err })
   }
 
   // 7. Write audit log row. companies has no auto-audit trigger, so do it

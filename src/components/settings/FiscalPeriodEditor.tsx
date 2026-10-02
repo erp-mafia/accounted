@@ -164,7 +164,10 @@ export function FiscalPeriodEditor() {
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(body.error || t('fp_update_failed_title'))
+        // Canonical { error: { code, message } } envelope; a bare string is
+        // still read in case a proxy answers one.
+        const message = typeof body.error === 'string' ? body.error : body.error?.message
+        throw new Error(message || t('fp_update_failed_title'))
       }
       setPeriod(body.data as FiscalPeriod)
       // Every picker reads the shared list: refresh it with the new dates.
@@ -272,20 +275,13 @@ export function FiscalPeriodEditor() {
                 onClick={handleSave}
                 disabled={
                   !isDirty ||
-                  isSaving ||
                   !startDate ||
                   !endDate ||
                   validation.error !== null
                 }
+                loading={isSaving}
               >
-                {isSaving ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('fp_saving')}
-                  </>
-                ) : (
-                  t('fp_save')
-                )}
+                {isSaving ? t('fp_saving') : t('fp_save')}
               </Button>
             </div>
           </>

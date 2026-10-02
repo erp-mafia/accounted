@@ -447,8 +447,10 @@ export default function TransactionMatchPicker({
             </p>
           ) : (
             filtered.map((c) => {
+              // A strong match is the expected case, so it reads as muted
+              // text; only the weaker tiers get a chip.
               const tier =
-                c.confidence >= 0.8 ? 'success' : c.confidence >= 0.5 ? 'warning' : 'outline'
+                c.confidence >= 0.8 ? null : c.confidence >= 0.5 ? 'warning' : 'outline'
               const tierLabel =
                 c.confidence >= 0.8
                   ? 'Stark match'
@@ -463,7 +465,7 @@ export default function TransactionMatchPicker({
                   onClick={() => void handlePick(c.id)}
                   disabled={!!matchingId}
                   className={cn(
-                    'w-full text-left flex items-center gap-3 py-3 hover:bg-muted/50 transition-colors px-2 -mx-2 rounded-sm',
+                    'w-full text-left flex items-center gap-3 py-3 hover:bg-secondary/35 transition-colors px-2 -mx-2 rounded-sm',
                     matchingId && !isMatching && 'opacity-50',
                   )}
                 >
@@ -472,9 +474,13 @@ export default function TransactionMatchPicker({
                       <span className="text-sm font-medium truncate">
                         {c.merchant_name ?? c.description ?? 'Okänd transaktion'}
                       </span>
-                      <Badge variant={tier} className="shrink-0 text-[10px]">
-                        {tierLabel}
-                      </Badge>
+                      {tier ? (
+                        <Badge variant={tier} className="shrink-0 text-[11px]">
+                          {tierLabel}
+                        </Badge>
+                      ) : (
+                        <span className="shrink-0 text-xs text-muted-foreground">{tierLabel}</span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
                       <span>{formatDate(c.date)}</span>

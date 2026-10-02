@@ -81,10 +81,12 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct-metadata', () => {
     })
 
     const response = await POST(makeRequest({ description: 'Rättad text' }), params())
-    const { body } = await parseJsonResponse<{ error: string }>(response)
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(response.status).toBe(409)
-    expect(body.error).toContain('låst')
+    // Failures answer the structured envelope (sessionFailureResponse) since the
+    // route moved onto the shared operation service; the message is in error.message.
+    expect(body.error.message).toContain('låst')
   })
 
   it('maps the tenant guard (42501) to 403', async () => {

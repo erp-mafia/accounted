@@ -30,7 +30,7 @@ export default function AiFilledIndicator({ active, label, className, title }: P
     <span
       title={title ?? 'Värdet är ifyllt av AI baserat på dokumentet'}
       className={cn(
-        'inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground',
+        'inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground',
         className,
       )}
     >

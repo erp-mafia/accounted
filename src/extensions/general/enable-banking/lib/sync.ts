@@ -11,6 +11,7 @@ import { historyWindowDays } from './history-window'
 import { bankSyncResponseSchema, connectorErrorSchema } from '@accounted/connect-contract'
 import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
 import { uploadDocument } from '@/lib/core/documents/document-service'
+import { resolveBankIngestRoute } from '@/lib/bank-sync/ingest-route'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
 import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import type { RawTransaction, IngestResult, IngestOptions } from '@/types'
@@ -93,7 +94,7 @@ const CONNECTOR_SYNC_TIMEOUT_MS = 120_000
 async function fetchBookedViaConnector(
   connector: { baseUrl: string; key: string },
   args: {
-    supabase: SupabaseClient
+    sessionId: string
     companyId: string
     connectionId: string
     account: StoredAccount
@@ -102,17 +103,6 @@ async function fetchBookedViaConnector(
     strategy?: TransactionsFetchStrategy
   },
 ): Promise<ReturnType<typeof bankSyncResponseSchema.parse>> {
-  // The PSD2 session id rests on the connection row (never on the account
-  // payload), and it stays on this installation: the service only receives
-  // it per call and proves ownership from its own ledger.
-  const { data: row, error } = await args.supabase
-    .from('bank_connections')
-    .select('session_id')
-    .eq('id', args.connectionId)
-    .maybeSingle()
-  if (error) throw new Error(`Connector bank sync could not read the connection: ${error.message}`)
-  const sessionId = (row as { session_id: string | null } | null)?.session_id
-  if (!sessionId) throw new Error('Connector bank sync requires a connection with a session id')
   // The body is read INSIDE the timeout window: a service that sends headers
   // and then stalls the body must not hold the sync open past the budget.
   const controller = new AbortController()
@@ -132,7 +122,7 @@ async function fetchBookedViaConnector(
           [CONNECTOR_COMPANY_HEADER]: args.companyId,
         },
         body: JSON.stringify({
-          session_id: sessionId,
+          session_id: args.sessionId,
           account_uid: args.account.uid,
           account_currency: args.account.currency,
           date_from: args.fromDate,
@@ -213,10 +203,13 @@ export async function syncAccountTransactions(
   ingest: IngestFn = defaultIngest,
   syncOptions?: SyncOptions
 ): Promise<SyncResult> {
+  const bankRoute = await resolveBankIngestRoute(supabase, companyId, connectionId, account.uid, account.currency)
+  if (account.ledger_account && account.ledger_account !== bankRoute.ledgerAccount) {
+    throw Object.assign(new Error('Bank account configuration changed before sync; reload the connection'), { code: 'PT409' })
+  }
   console.log('[enable-banking] syncAccountTransactions starting', {
     connectionId,
     accountUid: account.uid,
-    accountIban: account.iban,
     fromDate,
     toDate,
     strategy: syncOptions?.strategy,
@@ -237,7 +230,7 @@ export async function syncAccountTransactions(
   let historyNarrowed = false
   if (connector) {
     const remote = await fetchBookedViaConnector(connector, {
-      supabase,
+      sessionId: bankRoute.sessionId,
       companyId,
       connectionId,
       account,
@@ -406,22 +399,11 @@ export async function syncAccountTransactions(
     }
   })
 
-  const ingestOptions: IngestOptions = {}
+  const ingestOptions: IngestOptions = { bankRoute, settlementAccount: bankRoute.ledgerAccount }
   if (syncOptions?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true
   if (syncOptions?.rawInsertOnly) ingestOptions.rawInsertOnly = true
   // Per-account ledger routing: the mapping engine consumes settlementAccount
-  // for the bank-side leg, falling back to '1930' when unset.
-  if (account.ledger_account) ingestOptions.settlementAccount = account.ledger_account
-  const ingestResult = await ingest(supabase, companyId, userId, rawTransactions, ingestOptions)
-
-  console.log('[enable-banking] Ingest result', {
-    connectionId,
-    accountUid: account.uid,
-    imported: ingestResult.imported,
-    duplicates: ingestResult.duplicates,
-    errors: ingestResult.errors,
-  })
-
+  // for the bank-side leg. The verified route also guards the database insert.
   // Archive raw PSD2 API responses as räkenskapsinformation (BFL 7 kap)
   for (let i = 0; i < rawPages.length; i++) {
     try {
@@ -435,6 +417,25 @@ export async function syncAccountTransactions(
       console.error(`[enable-banking] Failed to archive raw response page ${i + 1}:`, archiveError)
       // Archival failure must not fail the sync
     }
+  }
+
+  const ingestResult = await ingest(supabase, companyId, userId, rawTransactions, ingestOptions)
+
+  console.log('[enable-banking] Ingest result', {
+    connectionId,
+    accountUid: account.uid,
+    imported: ingestResult.imported,
+    duplicates: ingestResult.duplicates,
+    errors: ingestResult.errors,
+  })
+
+
+  if (ingestResult.errors > 0) {
+    // Keep the previous cursor so a retry fetches the incomplete batch again.
+    // Successfully inserted rows already have dedup keys and are not rebooked.
+    throw Object.assign(new Error(`Bank transaction persistence failed: ${ingestResult.first_error?.message ?? `${ingestResult.errors} rows rejected`}`), {
+      code: ingestResult.first_error?.code,
+    })
   }
 
   // Update account balance, but only when the stored one has gone stale:

@@ -94,13 +94,13 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
             <Link
               key={item.ref}
               href={item.href}
-              className="group flex w-full items-start gap-3 border-b border-border px-1 py-3.5 transition-colors duration-150 hover:bg-secondary/30"
+              className="group flex w-full items-start gap-3 border-b border-border px-1 py-3.5 transition-colors duration-150 hover:bg-secondary/35"
             >
               <span className="mt-px w-[18px] shrink-0 text-muted-foreground" aria-hidden>
                 <Icon className="h-[15px] w-[15px]" />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13.5px]">{row.title}</span>
+                <span className="block truncate text-[13px]">{row.title}</span>
                 {row.sub && (
                   <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                     {row.sub}

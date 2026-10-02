@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NOTICE_PRIORITY, type Notice } from './types'
 import {
   detectBackupFailing,
@@ -50,7 +51,9 @@ export async function getCompanyNotices(
     Promise.all([
       detectNoFiscalYear(supabase, companyId),
       detectBrokenBankConnections(supabase, companyId),
-      detectSkvDisconnected(supabase, userId, companyId, now),
+      // Service role: the refresh-token presence check reads a column end-user
+      // roles cannot. userId and companyId are the authenticated caller's.
+      detectSkvDisconnected(createServiceClient(), userId, companyId, now),
       detectBackupFailing(supabase, companyId),
       detectExpiringBankConnections(supabase, companyId, now),
       detectSkvUnexplained(supabase, companyId),

@@ -88,36 +88,59 @@ export async function generateSalaryJournal(
       if (monthTo && run.period_month > monthTo) return false
       return true
     })
-    .map(sre => {
-      const emp = sre.employee as { first_name: string; last_name: string; personnummer_last4: string; employment_type: string } | null
-      const run = sre.salary_run as { period_year: number; period_month: number; payment_date: string; status: string }
-      return {
-        employeeId: sre.employee_id,
-        employeeName: emp ? `${emp.first_name} ${emp.last_name}` : 'Okänd',
-        personnummerLast4: emp?.personnummer_last4 || '????',
-        employmentType: emp?.employment_type || 'employee',
-        periodYear: run.period_year,
-        periodMonth: run.period_month,
-        paymentDate: run.payment_date,
-        grossSalary: sre.gross_salary,
-        taxWithheld: sre.tax_withheld,
-        netSalary: sre.net_salary,
-        avgifterAmount: sre.avgifter_amount,
-        avgifterRate: sre.avgifter_rate,
-        vacationAccrual: sre.vacation_accrual,
-        vacationAccrualAvgifter: sre.vacation_accrual_avgifter,
-        totalEmployerCost: sre.gross_salary + sre.avgifter_amount + sre.vacation_accrual + sre.vacation_accrual_avgifter,
-        sickDays: sre.sick_days,
-        vabDays: sre.vab_days,
-        parentalDays: sre.parental_days,
-        vacationDaysTaken: sre.vacation_days_taken,
-        salaryRunStatus: run.status,
-      }
-    })
+    .map(sre => toSalaryJournalRow(sre, sre.salary_run as SalaryJournalRunFields))
     .sort((a, b) => a.periodMonth - b.periodMonth || a.employeeName.localeCompare(b.employeeName))
 
+  const totals = salaryJournalTotals(rows)
+
+  return { rows, totals, period: { year, monthFrom, monthTo } }
+}
+
+/** The salary_runs fields a lönejournal row carries. */
+export interface SalaryJournalRunFields {
+  period_year: number
+  period_month: number
+  payment_date: string
+  status: string
+}
+
+/**
+ * One salary_run_employees row (joined with `employee:employees(first_name,
+ * last_name, personnummer_last4, employment_type)`) as a lönejournal row. The
+ * per-run bokföringsunderlag reads the same mapping, so the underlag and the
+ * lönejournal cannot disagree on what a figure means.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function toSalaryJournalRow(sre: any, run: SalaryJournalRunFields): SalaryJournalRow {
+  const emp = sre.employee as { first_name: string; last_name: string; personnummer_last4: string; employment_type: string } | null
+  return {
+    employeeId: sre.employee_id,
+    employeeName: emp ? `${emp.first_name} ${emp.last_name}` : 'Okänd',
+    personnummerLast4: emp?.personnummer_last4 || '????',
+    employmentType: emp?.employment_type || 'employee',
+    periodYear: run.period_year,
+    periodMonth: run.period_month,
+    paymentDate: run.payment_date,
+    grossSalary: sre.gross_salary,
+    taxWithheld: sre.tax_withheld,
+    netSalary: sre.net_salary,
+    avgifterAmount: sre.avgifter_amount,
+    avgifterRate: sre.avgifter_rate,
+    vacationAccrual: sre.vacation_accrual,
+    vacationAccrualAvgifter: sre.vacation_accrual_avgifter,
+    totalEmployerCost: sre.gross_salary + sre.avgifter_amount + sre.vacation_accrual + sre.vacation_accrual_avgifter,
+    sickDays: sre.sick_days,
+    vabDays: sre.vab_days,
+    parentalDays: sre.parental_days,
+    vacationDaysTaken: sre.vacation_days_taken,
+    salaryRunStatus: run.status,
+  }
+}
+
+/** Column totals, rounded to öre. */
+export function salaryJournalTotals(rows: SalaryJournalRow[]): SalaryJournalReport['totals'] {
   const r = (x: number) => Math.round(x * 100) / 100
-  const totals = {
+  return {
     grossSalary: r(rows.reduce((s, r) => s + r.grossSalary, 0)),
     taxWithheld: r(rows.reduce((s, r) => s + r.taxWithheld, 0)),
     netSalary: r(rows.reduce((s, r) => s + r.netSalary, 0)),
@@ -126,6 +149,4 @@ export async function generateSalaryJournal(
     vacationAccrualAvgifter: r(rows.reduce((s, r) => s + r.vacationAccrualAvgifter, 0)),
     totalEmployerCost: r(rows.reduce((s, r) => s + r.totalEmployerCost, 0)),
   }
-
-  return { rows, totals, period: { year, monthFrom, monthTo } }
 }

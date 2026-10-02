@@ -255,6 +255,12 @@ export type CoreEvent =
   | { type: 'mcp.tool_called'; payload: {
       tool: string                                  // e.g. 'gnubok_create_invoice'
       requiredScope: string | null                  // from TOOL_SCOPE_MAP, null if unscoped
+      // How the call picked its company: the key default (no company_id),
+      // an explicit company_id, the row of a named pending operation, a
+      // scope resolved by a cross-company tool (one row per inner call), or
+      // none for company-independent tools. Optional so older emitters and
+      // stored rows stay valid.
+      companySelection?: 'default' | 'explicit' | 'operation' | 'scope' | 'none'
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
       actorId: string | null                        // api_key id, oauth client, etc.
       actorLabel: string | null                     // human-readable actor label
@@ -262,7 +268,7 @@ export type CoreEvent =
       success: boolean                              // true iff the tool returned without throwing AND was invoked (not denied)
       isError: boolean                              // matches the JSON-RPC tool-result isError flag returned to the client
       errorCode: string | null                      // structured error code from tool-result.toToolError when applicable
-      errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
+      errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'unattended_write_blocked' | 'bridge_refused' | null
                                                     // bridge_refused: gnubok_call_tool was pointed at a write tool, or at nothing.
                                                     // invalid_arguments: the call never reached the tool because its arguments
                                                     // were rejected (unknown parameter, malformed company_id). Split out of
@@ -349,7 +355,9 @@ export type CoreEvent =
   // make the model worse: measure, don't assume).
   | { type: 'mcp.skill_loaded'; payload: {
       slug: string                                  // e.g. 'modifier/holding-ab', 'month-end-close'
-      tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
+      tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier' | 'community' | 'own'
+      bodyHash?: string
+      version?: number
       sessionId: string | null
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
       actorId: string | null
@@ -399,4 +407,3 @@ export type EventPayload<T extends CoreEventType> = Extract<CoreEvent, { type: T
 
 /** Handler function for a specific event type */
 export type EventHandler<T extends CoreEventType> = (payload: EventPayload<T>) => Promise<void> | void
-

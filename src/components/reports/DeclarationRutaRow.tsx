@@ -56,7 +56,7 @@ export function DeclarationRutaRow({
   return (
     <>
       <tr
-        className={`border-b ${hasAccounts ? 'cursor-pointer hover:bg-muted/50 transition-colors' : ''}`}
+        className={`border-b ${hasAccounts ? 'cursor-pointer hover:bg-secondary/35 transition-colors' : ''}`}
         onClick={() => hasAccounts && setExpanded((v) => !v)}
       >
         <td className="py-2">
@@ -66,7 +66,7 @@ export function DeclarationRutaRow({
               aria-expanded={expanded}
               aria-controls={panelId}
               aria-label={expanded ? `Dölj konton för ${code}` : `Visa konton för ${code}`}
-              className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded-sm align-middle hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded-sm align-middle hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={(e) => {
                 e.stopPropagation()
                 setExpanded((v) => !v)

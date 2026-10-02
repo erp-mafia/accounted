@@ -169,6 +169,7 @@ export async function askDocument(
     const startedAt = new Date().toISOString()
     const result = await getAiService().generateStructured({
       tier: 'extraction',
+      meter: { feature: 'arkiv_ask', companyId: input.companyId },
       system,
       prompt,
       maxTokens: MAX_TOKENS,

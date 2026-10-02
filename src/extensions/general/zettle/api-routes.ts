@@ -193,7 +193,12 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       })
       if (!rl.ok) return rl.response!
 
-      const { data: connection } = await auth.supabase
+      // The sync decrypts the stored refresh token, which end-user roles
+      // cannot read, so the lookup runs on the service role, scoped to the
+      // caller's active company (the dispatcher resolved it from their
+      // membership). The sync itself runs there too.
+      const serviceClient = createServiceClientNoCookies()
+      const { data: connection } = await serviceClient
         .from('zettle_connections')
         .select('*')
         .eq('company_id', auth.companyId)
@@ -205,7 +210,6 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       }
 
       try {
-        const serviceClient = createServiceClientNoCookies()
         const summary = await syncZettlePurchases(
           serviceClient,
           connection as ZettleConnection,
@@ -262,7 +266,10 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      const { data: connection } = await auth.supabase
+      // Service role for the same reason as /sync: the run needs the
+      // encrypted refresh token, which end-user roles cannot read.
+      const serviceClient = createServiceClientNoCookies()
+      const { data: connection } = await serviceClient
         .from('zettle_connections')
         .select('*')
         .eq('company_id', auth.companyId)
@@ -297,7 +304,6 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       }
 
       try {
-        const serviceClient = createServiceClientNoCookies()
         const summary = await syncZettlePurchases(
           serviceClient,
           { ...(connection as ZettleConnection), last_order_synced_at: parsed.iso },
@@ -393,8 +399,12 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       })
       if (!rl.ok) return rl.response!
 
+      // The remote revoke needs the encrypted refresh token, which end-user
+      // roles cannot read: look the row up on the service role, scoped to the
+      // caller's active company. The local revoke below stays on the session
+      // client, so RLS and the writer-role trigger still gate it.
       const body = (await request.json().catch(() => ({}))) as { connection_id?: string }
-      const base = auth.supabase
+      const base = createServiceClientNoCookies()
         .from('zettle_connections')
         .select('id, status, organization_uuid, refresh_token_encrypted')
         .eq('company_id', auth.companyId)

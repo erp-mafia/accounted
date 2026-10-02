@@ -104,7 +104,11 @@ describe('matchPairs', () => {
     enqueue({ data: { ledger_account: '1930' } }) // cash_accounts lookup
     manualLinkMock
       .mockResolvedValueOnce({ success: true })
-      .mockResolvedValueOnce({ success: false, error: 'Transaktionen är redan kopplad till en verifikation.' })
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'Transaktionen är redan kopplad till en verifikation.',
+        code: 'TRANSACTION_ALREADY_LINKED',
+      })
 
     const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
       pairs: [{ external_ids: [R1, R2], journal_entry_ids: [E1] }],
@@ -115,7 +119,7 @@ describe('matchPairs', () => {
     expect(result?.skipped).toEqual([
       {
         pair: { external_ids: [R2], journal_entry_ids: [E1] },
-        code: 'PAIR_NOT_CLOSED',
+        code: 'ALREADY_LINKED',
         message: 'Transaktionen är redan kopplad till en verifikation.',
       },
     ])
@@ -123,7 +127,9 @@ describe('matchPairs', () => {
   })
 
   it('dry run resolves proposals into pairs without writing', async () => {
-    const { supabase } = createQueuedMockSupabase()
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: R1, journal_entry_id: null, is_ignored: false }] }) // skattekonto_transactions
+    enqueue({ data: [{ id: E1, status: 'posted', voucher_series: 'A', voucher_number: 7 }] }) // journal_entries
     skvStatusMock.mockResolvedValue({
       items: {
         proposed: [
@@ -146,6 +152,26 @@ describe('matchPairs', () => {
     expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1 }])
     expect(linkMock).not.toHaveBeenCalled()
     expect(emitMock).not.toHaveBeenCalled()
+  })
+
+  it('turns a combined skattekonto proposal into ONE group pair (crm#128)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    skvStatusMock.mockResolvedValue({
+      items: {
+        proposed: [
+          { item_id: R1, proposal: { journal_entry_id: E1, confidence: 0.9, external_ids: [R1, R2] } },
+          { item_id: R2, proposal: { journal_entry_id: E1, confidence: 0.9, external_ids: [R1, R2] } },
+        ],
+      },
+    })
+    linkGroupMock.mockResolvedValue({ journal_entry_id: E1, via: 'line', skattekonto_transaction_ids: [R1, R2] })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', { use_proposals: true })
+
+    expect(result?.considered).toBe(1)
+    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2], E1)
+    expect(linkMock).not.toHaveBeenCalled()
+    expect(result?.applied.map((a) => a.external_id)).toEqual([R1, R2])
   })
 
   it('links bank pairs through manualLink with the account ledger number', async () => {
@@ -263,6 +289,7 @@ describe('matchPairs', () => {
     linkToVouchersMock.mockResolvedValue({
       success: false,
       error: 'Fördelningen (-700) stämmer inte med transaktionens belopp (-800).',
+      code: 'NOT_SETTLED',
     })
 
     const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
@@ -280,15 +307,275 @@ describe('matchPairs', () => {
     expect(emitMock).not.toHaveBeenCalled()
   })
 
-  it('a failed bank link is a PAIR_NOT_CLOSED skip, not a throw', async () => {
+  it('a failed bank link is a skip, not a throw: PAIR_NOT_CLOSED only when the verifikat does not settle the row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { ledger_account: '1930' } })
-    manualLinkMock.mockResolvedValue({ success: false, error: 'Beloppen stämmer inte' })
+    manualLinkMock.mockResolvedValue({ success: false, error: 'Verifikationen saknar rad på 1930', code: 'NOT_SETTLED' })
 
     const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
       pairs: [{ external_ids: [R1], journal_entry_ids: [E1] }],
     })
-    expect(result?.skipped[0]).toMatchObject({ code: 'PAIR_NOT_CLOSED', message: 'Beloppen stämmer inte' })
+    expect(result?.skipped[0]).toMatchObject({ code: 'PAIR_NOT_CLOSED', message: 'Verifikationen saknar rad på 1930' })
+  })
+
+  it('maps every manualLink refusal to its own skip code (feedback seq 740266: a missing verifikat read as PAIR_NOT_CLOSED)', async () => {
+    const cases: Array<[string, string]> = [
+      ['TRANSACTION_NOT_FOUND', 'NOT_FOUND'],
+      ['TRANSACTION_OTHER_ACCOUNT', 'NOT_FOUND'],
+      ['TRANSACTION_IGNORED', 'ROW_IGNORED'],
+      ['TRANSACTION_ALREADY_LINKED', 'ALREADY_LINKED'],
+      ['ENTRY_NOT_FOUND', 'ENTRY_NOT_FOUND'],
+      ['ENTRY_NOT_POSTED', 'ENTRY_NOT_FOUND'],
+      ['ENTRY_REVERSED', 'ENTRY_REVERSED'],
+      ['NOT_SETTLED', 'PAIR_NOT_CLOSED'],
+      ['LINK_RACE', 'LINK_RACE'],
+      ['WRITE_FAILED', 'UNKNOWN'],
+    ]
+    for (const [engineCode, skipCode] of cases) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { ledger_account: '1930' } })
+      manualLinkMock.mockResolvedValueOnce({ success: false, error: `refused: ${engineCode}`, code: engineCode })
+
+      const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+        pairs: [{ external_ids: [R1], journal_entry_ids: [E1] }],
+      })
+      expect(result?.skipped, engineCode).toEqual([
+        { pair: { external_ids: [R1], journal_entry_ids: [E1] }, code: skipCode, message: `refused: ${engineCode}` },
+      ])
+    }
+    // A refusal without a code (an older engine) is honest about not knowing.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1930' } })
+    manualLinkMock.mockResolvedValueOnce({ success: false, error: 'något' })
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      pairs: [{ external_ids: [R1], journal_entry_ids: [E1] }],
+    })
+    expect(result?.skipped[0].code).toBe('UNKNOWN')
+  })
+
+  it('maps a refused 1:N split the same way: a missing verifikat is ENTRY_NOT_FOUND, a bad split shape UNSUPPORTED_PAIR_SHAPE', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1930' } })
+    linkToVouchersMock
+      .mockResolvedValueOnce({ success: false, error: `Verifikationen ${E2} kunde inte hittas.`, code: 'ENTRY_NOT_FOUND' })
+      .mockResolvedValueOnce({ success: false, error: 'Transaktionen är redan matchad mot en faktura.', code: 'TRANSACTION_ALREADY_LINKED' })
+
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      `bank:${CASH}`,
+      {
+        pairs: [
+          { external_ids: [R1], journal_entry_ids: [E1, E2] },
+          { external_ids: [R2], journal_entry_ids: [E1, E2] },
+        ],
+      },
+      { dryRun: true },
+    )
+
+    expect(result?.applied).toEqual([])
+    expect(result?.skipped.map((s) => s.code)).toEqual(['ENTRY_NOT_FOUND', 'ALREADY_LINKED'])
+    expect(result?.skipped[0].message).toContain(E2)
+  })
+})
+
+describe('matchPairs dry run: every pair is checked against the ledger before anything is staged', () => {
+  const E3 = '66666666-6666-4666-8666-666666666666'
+  const TYPO = 'ecb5d7ef-e0d1-4da6-ab18-5651c2c8ec9b' // one character off a real id (feedback seq 740266)
+  const R3 = '77777777-7777-4777-8777-777777777777'
+  const R4 = '88888888-8888-4888-8888-888888888888'
+  const R5 = '99999999-9999-4999-8999-999999999999'
+  const posted = (id: string, voucher_number = 21) => ({ id, status: 'posted', voucher_series: 'A', voucher_number })
+  const bankRow = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    journal_entry_id: null,
+    is_ignored: false,
+    transaction_voucher_links: [],
+    ...over,
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    manualLinkMock.mockReset()
+    linkMock.mockReset()
+    linkGroupMock.mockReset()
+    linkToVouchersMock.mockReset()
+    emitMock.mockResolvedValue(undefined)
+  })
+
+  it('skips a pair whose verifikat is not in the company with ENTRY_NOT_FOUND naming the id, and keeps the rest', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [bankRow(R1), bankRow(R2)] }) // transactions
+    enqueue({ data: [posted(E2, 22)] }) // journal_entries: the typo matches nothing
+
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      `bank:${CASH}`,
+      {
+        pairs: [
+          { external_ids: [R1], journal_entry_ids: [TYPO] },
+          { external_ids: [R2], journal_entry_ids: [E2] },
+        ],
+      },
+      { dryRun: true },
+    )
+
+    expect(result).toMatchObject({ dry_run: true, considered: 2 })
+    expect(result?.applied).toEqual([{ external_id: R2, journal_entry_id: E2 }])
+    expect(result?.skipped).toEqual([
+      {
+        pair: { external_ids: [R1], journal_entry_ids: [TYPO] },
+        code: 'ENTRY_NOT_FOUND',
+        message: `Verifikationen ${TYPO} finns inte i företaget. Kontrollera id:t.`,
+      },
+    ])
+    // Two batched reads, both company-scoped; nothing linked or written.
+    expect(findCalls('transactions', 'eq')).toContainEqual(['company_id', COMPANY])
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['company_id', COMPANY])
+    expect(findCalls('journal_entries', 'in')).toEqual([['id', [TYPO, E2]]])
+    expect(findCalls('transactions', 'update')).toEqual([])
+    expect(manualLinkMock).not.toHaveBeenCalled()
+    expect(emitMock).not.toHaveBeenCalled()
+  })
+
+  it('checks each bank row on its own: missing, ignored, linked to a live verifikat or through a junction row; a stale pointer at a reversed entry stays linkable (#988)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        bankRow(R2, { is_ignored: true }),
+        bankRow(R3, { journal_entry_id: E2 }),
+        bankRow(R4, { journal_entry_id: E3 }),
+        bankRow(R5, { transaction_voucher_links: [{ role: 'bank_line' }] }),
+      ],
+    })
+    enqueue({ data: [posted(E1), posted(E2, 5), { id: E3, status: 'reversed', voucher_series: 'A', voucher_number: 6 }] })
+
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      `bank:${CASH}`,
+      { pairs: [{ external_ids: [R1, R2, R3, R4, R5], journal_entry_ids: [E1] }] },
+      { dryRun: true },
+    )
+
+    expect(result?.applied).toEqual([{ external_id: R4, journal_entry_id: E1 }])
+    expect(result?.skipped.map((s) => [s.pair.external_ids[0], s.code])).toEqual([
+      [R1, 'NOT_FOUND'],
+      [R2, 'ROW_IGNORED'],
+      [R3, 'ALREADY_LINKED'],
+      [R5, 'ALREADY_LINKED'],
+    ])
+    expect(result?.skipped[0].message).toBe(`Transaktionen ${R1} finns inte i företaget. Kontrollera id:t.`)
+    // The rows' pointers are read with the pair's verifikat, in one query.
+    expect(findCalls('journal_entries', 'in')).toEqual([['id', [E1, E2, E3]]])
+  })
+
+  it('refuses a reversed verifikat as ENTRY_REVERSED and a draft as ENTRY_NOT_FOUND', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [bankRow(R1), bankRow(R2)] })
+    enqueue({
+      data: [
+        { id: E1, status: 'reversed', voucher_series: 'A', voucher_number: 12 },
+        { id: E2, status: 'draft', voucher_series: 'A', voucher_number: null },
+      ],
+    })
+
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      `bank:${CASH}`,
+      {
+        pairs: [
+          { external_ids: [R1], journal_entry_ids: [E1] },
+          { external_ids: [R2], journal_entry_ids: [E2] },
+        ],
+      },
+      { dryRun: true },
+    )
+
+    expect(result?.applied).toEqual([])
+    expect(result?.skipped).toEqual([
+      {
+        pair: { external_ids: [R1], journal_entry_ids: [E1] },
+        code: 'ENTRY_REVERSED',
+        message: `Verifikat A12 (${E1}) är makulerat och kan inte kopplas.`,
+      },
+      {
+        pair: { external_ids: [R2], journal_entry_ids: [E2] },
+        code: 'ENTRY_NOT_FOUND',
+        message: `Verifikationen ${E2} är inte bokförd.`,
+      },
+    ])
+  })
+
+  it('skips a skattekonto group as a whole when one row cannot be linked (all or nothing)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: R1, journal_entry_id: null, is_ignored: false },
+        { id: R2, journal_entry_id: E2, is_ignored: false },
+      ],
+    }) // skattekonto_transactions
+    enqueue({ data: [posted(E1)] })
+
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      'skattekonto',
+      { pairs: [{ external_ids: [R1, R2], journal_entry_ids: [E1] }] },
+      { dryRun: true },
+    )
+
+    expect(result?.applied).toEqual([])
+    expect(result?.skipped).toEqual([
+      {
+        pair: { external_ids: [R1, R2], journal_entry_ids: [E1] },
+        code: 'ALREADY_LINKED',
+        message: `Skattekonto-transaktionen ${R2} är redan kopplad till en verifikation.`,
+      },
+    ])
+    expect(linkMock).not.toHaveBeenCalled()
+    expect(linkGroupMock).not.toHaveBeenCalled()
+  })
+
+  it('never sends a malformed id to the database: it is simply not found', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [bankRow(R1)] })
+
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      `bank:${CASH}`,
+      { pairs: [{ external_ids: [R1], journal_entry_ids: ['A21'] }] },
+      { dryRun: true },
+    )
+
+    expect(result?.skipped[0]).toMatchObject({ code: 'ENTRY_NOT_FOUND' })
+    // No verifikat id survived the shape check, so no verifikat query ran.
+    expect(findCalls('journal_entries', 'in')).toEqual([])
+  })
+
+  it('fails the dry run on a read error instead of staging unchecked pairs', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+
+    await expect(
+      matchPairs(
+        supabase as never,
+        COMPANY,
+        USER,
+        `bank:${CASH}`,
+        { pairs: [{ external_ids: [R1], journal_entry_ids: [E1] }] },
+        { dryRun: true },
+      ),
+    ).rejects.toMatchObject({ code: '57014' })
   })
 })
 

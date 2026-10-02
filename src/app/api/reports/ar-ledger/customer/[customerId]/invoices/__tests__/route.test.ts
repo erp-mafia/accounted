@@ -17,6 +17,7 @@ vi.mock('@/lib/bookkeeping/currency-utils', () => ({
 }))
 
 import { GET } from '../route'
+import { AR_LEDGER_STATUSES } from '@/lib/reports/ar-ledger'
 
 interface QueryResult {
   data: unknown
@@ -28,7 +29,9 @@ function buildSupabase(
   invoicesResult: QueryResult,
   entriesResult: QueryResult
 ) {
+  const invoicesIn = vi.fn().mockReturnThis()
   return {
+    invoicesIn,
     from: vi.fn().mockImplementation((table: string) => {
       if (table === 'customers') {
         return {
@@ -41,7 +44,7 @@ function buildSupabase(
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
-          in: vi.fn().mockReturnThis(),
+          in: invoicesIn,
           order: vi.fn().mockReturnThis(),
           limit: vi.fn().mockReturnThis(),
           then: (resolve: (v: QueryResult) => void) => resolve(invoicesResult),
@@ -152,5 +155,82 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
     expect(body.data.lines[0].journal_entry_id).toBe('je-1')
     expect(body.data.lines[0].voucher_number).toBe(22)
     expect(body.data.lines[0].outstanding).toBe(1250)
+  })
+
+  it('includes a partially paid invoice with its remainder outstanding (feedback seq 817399)', async () => {
+    const invoices = [
+      {
+        id: 'inv-pp',
+        invoice_number: '2026024',
+        invoice_date: '2026-06-01',
+        due_date: '2026-07-01',
+        total: 15625,
+        paid_amount: 15000,
+        currency: 'SEK',
+        exchange_rate: null,
+        remaining_amount: 625,
+        notes: null,
+      },
+    ]
+    const supabase = buildSupabase(
+      { id: 'cust-1', name: 'Kunden AB' },
+      { data: invoices, error: null },
+      { data: [], error: null }
+    )
+    authWith(supabase)
+    const req = createMockRequest(
+      '/api/reports/ar-ledger/customer/cust-1/invoices'
+    )
+    const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
+    expect(res.status).toBe(200)
+
+    // Same population as the aggregate it drills into.
+    expect(supabase.invoicesIn).toHaveBeenCalledWith('status', [...AR_LEDGER_STATUSES])
+    expect(supabase.invoicesIn).toHaveBeenCalledWith(
+      'status',
+      expect.arrayContaining(['partially_paid'])
+    )
+
+    const body = (await res.json()) as {
+      data: { lines: Array<Record<string, unknown>> }
+    }
+    expect(body.data.lines).toHaveLength(1)
+    expect(body.data.lines[0]).toMatchObject({
+      invoice_id: 'inv-pp',
+      paid_amount: 15000,
+      outstanding: 625,
+      outstanding_sek: 625,
+      debit: 625,
+    })
+  })
+
+  it('leaves out a migrated credit note whose original was imported as paid, like the aggregate', async () => {
+    const row = {
+      invoice_date: '2026-02-13',
+      due_date: '2026-03-15',
+      currency: 'SEK',
+      exchange_rate: null,
+      remaining_amount: 0,
+      notes: null,
+    }
+    authWith(
+      buildSupabase(
+        { id: 'cust-1', name: 'Callidus Tech AB' },
+        {
+          data: [
+            { ...row, id: 'inv-open', invoice_number: '10', total: 1000, paid_amount: 0, remaining_amount: 1000, status: 'sent' },
+            { ...row, id: 'inv-cn', invoice_number: '6', total: -11615, paid_amount: 0, status: 'credited' },
+          ],
+          error: null,
+        },
+        { data: [], error: null }
+      )
+    )
+    const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
+    const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as { data: { lines: Array<{ invoice_id: string }> } }
+    expect(body.data.lines.map((line) => line.invoice_id)).toEqual(['inv-open'])
   })
 })

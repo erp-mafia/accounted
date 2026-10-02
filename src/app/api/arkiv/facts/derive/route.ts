@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { deriveCompanyFacts } from '@/lib/arkiv/facts/derive-company'
 import { todayIso } from '@/lib/arkiv/agreements/dates'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -16,7 +16,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 export const maxDuration = 120
 
 export const POST = withRouteContext('arkiv.facts.derive', async (_request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   try {
     const out = await deriveCompanyFacts(createServiceClient(), ctx.companyId, todayIso(), (account) => getBASReference(account)?.account_name ?? null)
     ctx.log.info('company facts derived', { company: ctx.companyId, ...out })

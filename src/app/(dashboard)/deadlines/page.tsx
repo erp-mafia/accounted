@@ -439,14 +439,14 @@ export default function DeadlinesPage() {
         // this wrapper, so the buttons themselves must go w-full below sm
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center [&>*]:w-full sm:[&>*]:w-auto">
           {ENABLED_EXTENSION_IDS.has('calendar') && (
-            <Button variant="outline" asChild>
+            <Button size="sm" variant="outline" asChild>
               <Link href="/settings/account">
                 <CalendarPlus className="mr-2 h-4 w-4" />
                 {t('subscribe_calendar')}
               </Link>
             </Button>
           )}
-          <Button
+          <Button size="sm"
             onClick={() => setShowForm(true)}
             disabled={!canWrite}
             title={!canWrite ? t('read_only_tooltip') : undefined}

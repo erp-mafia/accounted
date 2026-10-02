@@ -12,6 +12,7 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { AttnLine } from '@/components/ui/attn-line'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
+import { DEDUCTION_TYPE_LABELS, isDeductionType } from '@/lib/invoices/rot-rut-rules'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
 
@@ -236,7 +237,10 @@ function InvoiceLineRows({ items, currency }: { items: PreviewInvoiceLine[]; cur
               <span className="text-muted-foreground font-mono"> · {item.revenue_account}</span>
             )}
             {item.deduction_type && (
-              <span className="text-muted-foreground"> · {item.deduction_type === 'rot' ? 'ROT-avdrag' : 'RUT-avdrag'}</span>
+              <span className="text-muted-foreground">
+                {' · '}
+                {isDeductionType(item.deduction_type) ? DEDUCTION_TYPE_LABELS[item.deduction_type].ledger : 'skattereduktion'}
+              </span>
             )}
             {item.accrual_period_start && item.accrual_period_end && (
               <span className="text-muted-foreground"> · periodiseras {item.accrual_period_start} till {item.accrual_period_end}</span>

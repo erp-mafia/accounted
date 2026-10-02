@@ -10,7 +10,7 @@ import {
 } from './dimension-resolver'
 import { generateSalesVatLines } from './vat-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
-import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
+import { computeDeduction, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { creditNatural } from './line-side'
@@ -125,6 +125,11 @@ function buildInvoiceDescription(
  * rate+account but different tags stay on separate lines. VAT lines carry
  * the default only (the VAT account is a function of the treatment, never of
  * a specific item).
+ *
+ * options.goodsDeliveryCountry (#2906): the invoice's delivery_country. The
+ * zero-rated reverse_charge / export lines of an invoice that stated a goods
+ * delivery abroad book the goods accounts (3108 / 3105, rutor 35 / 36)
+ * instead of the services ones (getRevenueAccount).
  */
 function generatePerRateLines(
   items: InvoiceItem[],
@@ -133,8 +138,9 @@ function generatePerRateLines(
   invoiceTagText: string,
   currency?: string | null,
   exchangeRate?: number | null,
-  options?: { deferAccruals?: boolean; defaultDimensions?: LineDimensions }
+  options?: { deferAccruals?: boolean; defaultDimensions?: LineDimensions; goodsDeliveryCountry?: string | null }
 ): CreateJournalEntryLineInput[] {
+  const goodsDeliveryCountry = options?.goodsDeliveryCountry ?? null
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = currency != null && currency !== 'SEK'
 
@@ -155,7 +161,7 @@ function generatePerRateLines(
     // Legacy fallback: single rate from invoice level. All items collapse
     // into one revenue line, so only the invoice default can apply here:
     // legacy rows predate per-item tagging anyway.
-    const revenueAccount = getRevenueAccount(invoiceVatTreatment, entityType)
+    const revenueAccount = getRevenueAccount(invoiceVatTreatment, entityType, goodsDeliveryCountry)
     const subtotal = items.reduce((sum, item) => sum + item.line_total, 0)
     const subtotalSek = toSek(subtotal)
     lines.push({
@@ -216,13 +222,14 @@ function generatePerRateLines(
     const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
       ? invoiceVatTreatment
       : getVatTreatmentForRate(rate)
-    // reverse_charge / export force the statutory revenue account (3308/3305);
-    // a per-line override only applies to ordinary domestic rates so EU/export
-    // sales keep landing in the right VAT-declaration ruta.
+    // reverse_charge / export force the statutory revenue account (3308/3305,
+    // or 3108/3105 for goods delivered abroad); a per-line override only
+    // applies to ordinary domestic rates so EU/export sales keep landing in
+    // the right VAT-declaration ruta.
     const isSpecialTreatment = treatment === 'reverse_charge' || treatment === 'export'
     const plAccount = !isSpecialTreatment && item.revenue_account
       ? item.revenue_account
-      : getRevenueAccount(treatment, entityType)
+      : getRevenueAccount(treatment, entityType, goodsDeliveryCountry)
     // Periodiserade lines credit the 29xx interim account (förutbetalda
     // intäkter) instead of revenue; the schedule dissolves it monthly. Output
     // VAT below is untouched. Moms is never deferred. Special treatments are
@@ -293,14 +300,18 @@ function generatePerRateLines(
 }
 
 /**
- * Generate ROT/RUT-avdrag debit lines from invoice items.
+ * Generate skattereduktion (ROT/RUT-avdrag, grön teknik) debit lines from
+ * invoice items.
  *
  * For each item flagged with `deduction_type`, produces a debit on BAS 1513
  * (Övriga kortfristiga fordringar, Skatteverket) for the computed
  * deduction amount. The caller must REDUCE the 1510 debit (kundfordringar)
  * by the same total: the customer only owes the post-deduction amount;
- * Skatteverket pays the rest via Husavdragstjänsten. Returns both the
- * lines and the total so callers can apply both adjustments atomically.
+ * Skatteverket pays the rest (Husavdragstjänsten for ROT/RUT, the e-tjänst
+ * Grön teknik: företag for grön teknik). Revenue and utgående moms stay on
+ * the full amount: the reduction is a claim on Skatteverket, not a price
+ * reduction. Returns both the lines and the total so callers can apply both
+ * adjustments atomically.
  *
  * Foreign-currency invoices: ROT/RUT-avdrag is a Sweden-only rule, so
  * receivables on 1513 are always recorded in SEK. We use the same SEK
@@ -335,20 +346,24 @@ function generateRotRutLines(
       // stored deduction_total and the Skatteverket claim carry the net.
       discount_percent: item.discount_percent ?? 0,
       deduction_type: item.deduction_type,
+      // Grön teknik's rate follows the installation type: the same input the
+      // stored deduction_total was computed from.
+      work_type: item.work_type,
       vat_rate: item.vat_rate,
     })
     if (amount <= 0) continue
     const amountSek = Math.round(toSek(amount) * 100) / 100
     if (amountSek <= 0) continue
     totalSek += amountSek
-    const kind = item.deduction_type === 'rot' ? 'ROT' : 'RUT'
+    // 'ROT-avdrag', 'RUT-avdrag' or 'Skattereduktion grön teknik'.
+    const kind = DEDUCTION_TYPE_LABELS[item.deduction_type].ledger
     lines.push({
       account_number: '1513',
       debit_amount: side === 'debit' ? amountSek : 0,
       credit_amount: side === 'credit' ? amountSek : 0,
       line_description: side === 'credit'
-        ? `${kind}-avdrag kreditfaktura ${invoiceTagText}`
-        : `${kind}-avdrag faktura ${invoiceTagText}`,
+        ? `${kind} kreditfaktura ${invoiceTagText}`
+        : `${kind} faktura ${invoiceTagText}`,
       // Per-item line: carries the item's merged bag like its revenue line.
       dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
     })
@@ -393,12 +408,34 @@ export async function createInvoiceJournalEntry(
    * customLines: user-edited rows from the send dialog. Booked verbatim
    * (caller validates balance); line generation is skipped entirely.
    */
-  options?: {
-    descriptionPrefix?: string
-    numberOverride?: string | null
-    customLines?: CreateJournalEntryLineInput[]
-  }
+  options?: InvoiceJournalEntryOptions
 ): Promise<JournalEntry | null> {
+  const input = await buildInvoiceJournalEntryInput(supabase, companyId, invoice, entityType, customerName, options)
+  if (!input) return null
+  return createJournalEntry(supabase, companyId, userId, input)
+}
+
+export interface InvoiceJournalEntryOptions {
+  descriptionPrefix?: string
+  numberOverride?: string | null
+  customLines?: CreateJournalEntryLineInput[]
+}
+
+/**
+ * The verifikat createInvoiceJournalEntry would post, without posting it: the
+ * fiscal period lookup is the only database read, and nothing is written. The
+ * deferred "Bokför" dry run previews these lines. Returns null when no open
+ * fiscal period covers invoice_date. Throws the same generator errors
+ * (InvoiceFxRateMissingError) the committing path throws.
+ */
+export async function buildInvoiceJournalEntryInput(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Invoice,
+  entityType: EntityType,
+  customerName?: string,
+  options?: InvoiceJournalEntryOptions
+): Promise<CreateJournalEntryInput | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, invoice.invoice_date)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for invoice date:', invoice.invoice_date)
@@ -406,7 +443,7 @@ export async function createInvoiceJournalEntry(
   }
 
   if (options?.customLines && options.customLines.length > 0) {
-    return createJournalEntry(supabase, companyId, userId, {
+    return {
       fiscal_period_id: fiscalPeriodId,
       entry_date: invoice.invoice_date,
       description: buildInvoiceDescription(
@@ -418,7 +455,7 @@ export async function createInvoiceJournalEntry(
       source_type: 'invoice_created',
       source_id: invoice.id,
       lines: options.customLines,
-    })
+    }
   }
 
   const lines: CreateJournalEntryLineInput[] = []
@@ -437,13 +474,13 @@ export async function createInvoiceJournalEntry(
       invoice.currency, invoice.exchange_rate,
       // Schedules are created right after this entry commits (send/mark-sent
       // flows), so deferring to 29xx here is safe.
-      { deferAccruals: true, defaultDimensions }
+      { deferAccruals: true, defaultDimensions, goodsDeliveryCountry: invoice.delivery_country }
     ))
   } else {
     // Fallback: no items available, use invoice-level amounts. Strict
     // conversion: a rate-less foreign header must refuse exactly like the
     // item-driven path, not post the raw foreign number as kronor.
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
+    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
     const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
 
     creditLines.push({
@@ -523,7 +560,7 @@ export async function createInvoiceJournalEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return input
 }
 
 /**
@@ -743,8 +780,9 @@ export async function createCreditNoteJournalEntry(
       creditNote.currency, creditNote.exchange_rate,
       // Credit-note items carry the original's accrual fields so the reversal
       // hits the same 29xx interim account; the original's schedule is
-      // cancelled/stornoed by the credit flow.
-      { deferAccruals: true, defaultDimensions }
+      // cancelled/stornoed by the credit flow. delivery_country is copied
+      // from the original too, so goods revenue reverses on 3105 / 3108.
+      { deferAccruals: true, defaultDimensions, goodsDeliveryCountry: creditNote.delivery_country }
     )
     // Every caller hands us items negated with -Math.abs (build-credit-note-
     // item.ts), so generatePerRateLines lands every line on the debit side
@@ -765,7 +803,7 @@ export async function createCreditNoteJournalEntry(
     // Fallback: invoice-level amounts. Same strict conversion as the
     // createInvoiceJournalEntry fallback: a rate-less foreign credit note
     // must refuse, not reverse the receivable with a mislabelled number.
-    const revenueAccount = getRevenueAccount(creditNote.vat_treatment, entityType)
+    const revenueAccount = getRevenueAccount(creditNote.vat_treatment, entityType, creditNote.delivery_country)
     const absSubtotal = Math.abs(headerToSekOrThrow(creditNote.subtotal, creditNote.subtotal_sek, creditNote.currency, creditNote.exchange_rate))
     const absVat = Math.abs(headerToSekOrThrow(creditNote.vat_amount, creditNote.vat_amount_sek, creditNote.currency, creditNote.exchange_rate))
 
@@ -832,30 +870,22 @@ export async function createCreditNoteJournalEntry(
 }
 
 /**
- * Create journal entry for kontantmetoden (cash method) when payment is received.
- * Supports per-item VAT rates. Revenue + VAT recognised at payment.
+ * The kontantmetoden (cash method) verifikat for a received payment, pure:
+ * createInvoiceCashEntry books exactly these lines and the bank-match preview
+ * shows them, so the rows a user approves or edits carry what gets booked,
+ * the invoice's dimensions included. Supports per-item VAT rates. Revenue +
+ * VAT recognised at payment.
  *
  *   Debit  1930 Företagskonto       [total]
  *   Credit 30xx Försäljning         [subtotal per rate]
  *   Credit 26xx Utgående moms       [vat per rate]  (if applicable)
  */
-export async function createInvoiceCashEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+export function buildInvoiceCashLines(
   invoice: Invoice,
-  paymentDate: string,
-  entityType: EntityType = 'enskild_firma',
+  entityType: EntityType,
   customerName?: string,
   settlementAccountNumber: string = '1930',
-  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
-): Promise<JournalEntry | null> {
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
-  if (!fiscalPeriodId) {
-    log.warn('No open fiscal period found for payment date:', paymentDate)
-    return null
-  }
-
+): { description: string; lines: CreateJournalEntryLineInput[] } {
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = invoice.currency !== 'SEK'
   const tag = invoiceTag(invoice)
@@ -870,12 +900,12 @@ export async function createInvoiceCashEntry(
     creditLines.push(...generatePerRateLines(
       invoice.items, invoice.vat_treatment, entityType, tag,
       invoice.currency, invoice.exchange_rate,
-      { defaultDimensions }
+      { defaultDimensions, goodsDeliveryCountry: invoice.delivery_country }
     ))
   } else {
     // Fallback: invoice-level amounts. Strict conversion, same rationale as
     // the createInvoiceJournalEntry fallback above.
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
+    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
     const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
 
     creditLines.push({
@@ -926,10 +956,45 @@ export async function createInvoiceCashEntry(
   lines.push(...rotRut.lines)
   lines.push(...creditLines)
 
+  return {
+    description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),
+    lines,
+  }
+}
+
+/**
+ * Create the journal entry for kontantmetoden (cash method) when payment is
+ * received: the lines of buildInvoiceCashLines, booked in the open period of
+ * the payment date. Returns null when no open period covers it.
+ */
+export async function createInvoiceCashEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  invoice: Invoice,
+  paymentDate: string,
+  entityType: EntityType = 'enskild_firma',
+  customerName?: string,
+  settlementAccountNumber: string = '1930',
+  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
+): Promise<JournalEntry | null> {
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
+  if (!fiscalPeriodId) {
+    log.warn('No open fiscal period found for payment date:', paymentDate)
+    return null
+  }
+
+  const { description, lines } = buildInvoiceCashLines(
+    invoice,
+    entityType,
+    customerName,
+    settlementAccountNumber,
+  )
+
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: paymentDate,
-    description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),
+    description,
     source_type: 'invoice_cash_payment',
     source_id: invoice.id,
     ...(bankTransaction ? { bank_booking_context: [bankBookingContext(bankTransaction, settlementAccountNumber)] } : {}),

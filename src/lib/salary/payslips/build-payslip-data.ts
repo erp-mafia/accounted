@@ -4,10 +4,22 @@
  * The per-employee PDF route and the payslip send/link surfaces must render
  * identical payslips — override coalescing, breakdown steps and masking live
  * here so the logic can't drift between callers.
+ *
+ * The one deliberate difference is the audience. The employer's own view of
+ * a payslip (the dashboard "view payslip" link) always carries every section.
+ * The copy the employee receives (the emailed token link, the bulk ZIP the
+ * employer hands out, the v1 API download) follows the company's
+ * salary_payslip_show_employer_cost / salary_payslip_show_breakdown switches
+ * until the run's payslips are issued to employees; from then on it follows
+ * the sections fixed on the run (salary_runs.payslip_show_*, written once by
+ * lib/salary/payslips/section-snapshot), so a payslip already handed out keeps
+ * the content it had (BFL 7 kap. 1 §). Callers say which copy they render;
+ * this module never guesses it.
  */
 import type { PayslipData, PayslipLineItem } from '@/lib/salary/pdf/payslip-template'
 import { hasCustomDeviationWindow, runDeviationWindow } from '@/lib/salary/deviation-period'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
+import { VAXA_STOD_REFUND_STEP_LABEL } from '@/lib/salary/vaxa-stod'
 
 const EMPLOYMENT_LABELS: Record<string, string> = {
   employee: 'Anställd',
@@ -15,7 +27,18 @@ const EMPLOYMENT_LABELS: Record<string, string> = {
   board_member: 'Styrelseledamot',
 }
 
-export interface PayslipRunSource {
+/**
+ * The sections a run's employee copy was issued with (migration
+ * 20260930200000). All null until the payslips first go to employees; the
+ * database keeps them unchanged once set.
+ */
+export interface PayslipSectionSnapshot {
+  payslip_sections_issued_at?: string | null
+  payslip_show_employer_cost?: boolean | null
+  payslip_show_breakdown?: boolean | null
+}
+
+export interface PayslipRunSource extends PayslipSectionSnapshot {
   period_year: number
   period_month: number
   payment_date: string
@@ -40,13 +63,87 @@ export type PayslipSreSource = Record<string, unknown> & {
   line_items?: Array<Record<string, unknown>> | null
 }
 
+/** The company_settings switches for the employee copy. A company without a
+ * settings row (null) gets the column defaults: both sections printed. */
+export interface PayslipSectionSettings {
+  salary_payslip_show_employer_cost?: boolean | null
+  salary_payslip_show_breakdown?: boolean | null
+}
+
+/**
+ * Who the rendered payslip is for. The employer view needs no settings; the
+ * employee copy cannot be built without them, so a caller cannot forget to
+ * read the switches.
+ */
+export type PayslipAudience =
+  | { kind: 'employer' }
+  | { kind: 'employee'; settings: PayslipSectionSettings | null }
+
+export interface PayslipSections {
+  employerCost: boolean
+  breakdown: boolean
+}
+
+/**
+ * The dashboard PDF route's `?audience=` query parameter. Absent means the
+ * employer's own view; `employee` is the copy the employer hands out (the
+ * bulk ZIP). Anything else is null so the route can refuse it instead of
+ * silently rendering a copy the caller did not ask for.
+ */
+export function parsePayslipAudienceParam(value: string | null): 'employer' | 'employee' | null {
+  if (value === null || value === '' || value === 'employer') return 'employer'
+  if (value === 'employee') return 'employee'
+  return null
+}
+
+/**
+ * The sections fixed on a run when its payslips were issued, or null when
+ * they have not been issued yet. The breakdown rule below holds here too
+ * (the database refuses a snapshot that breaks it; this keeps a hand-built
+ * row honest).
+ */
+export function issuedPayslipSections(run: PayslipSectionSnapshot | null | undefined): PayslipSections | null {
+  if (!run?.payslip_sections_issued_at) return null
+  const employerCost = run.payslip_show_employer_cost ?? true
+  return { employerCost, breakdown: employerCost && (run.payslip_show_breakdown ?? true) }
+}
+
+/**
+ * Which optional sections a copy for this audience prints.
+ *
+ * The employee copy of a run that has been issued prints what it was issued
+ * with, whatever the switches say now; before that it follows the switches.
+ *
+ * Hiding the employer cost also hides Beräkningsunderlag: the engine's steps
+ * carry the employer cost figures (Arbetsgivaravgifter, Semesteravsättning,
+ * Total arbetsgivarkostnad, avgift overrides) and stored steps have no
+ * category to filter them by, so a breakdown without them cannot be built
+ * reliably from historical runs. Showing the breakdown therefore requires
+ * showing the employer cost.
+ */
+export function payslipSectionsFor(
+  audience: PayslipAudience,
+  run?: PayslipSectionSnapshot | null,
+): PayslipSections {
+  if (audience.kind === 'employer') return { employerCost: true, breakdown: true }
+  const issued = issuedPayslipSections(run)
+  if (issued) return issued
+  const employerCost = audience.settings?.salary_payslip_show_employer_cost ?? true
+  return {
+    employerCost,
+    breakdown: employerCost && (audience.settings?.salary_payslip_show_breakdown ?? true),
+  }
+}
+
 export function buildPayslipData(params: {
   run: PayslipRunSource
   sre: PayslipSreSource
   employee: PayslipEmployeeSource
   company: { name: string; org_number: string | null }
+  audience: PayslipAudience
 }): PayslipData {
   const { run, sre, employee: emp, company } = params
+  const sections = payslipSectionsFor(params.audience, run)
 
   const lineItems: PayslipLineItem[] = ((sre.line_items || []) as Array<Record<string, unknown>>)
     .sort((a, b) => ((a.sort_order as number) || 0) - ((b.sort_order as number) || 0))
@@ -69,11 +166,13 @@ export function buildPayslipData(params: {
   }
 
   // Engine-computed breakdown rows stay for transparency; manual override
-  // rows are appended so the breakdown matches the displayed totals.
+  // rows are appended so the breakdown matches the displayed totals. The
+  // växa-stöd refund note is left out: it tells the employer to apply to
+  // Skatteverket and changes nothing on the employee's pay.
   const breakdown = sre.calculation_breakdown as {
     steps?: Array<{ label: string; formula: string; output: number }>
   } | null
-  const baseSteps = breakdown?.steps ?? []
+  const baseSteps = (breakdown?.steps ?? []).filter((step) => step.label !== VAXA_STOD_REFUND_STEP_LABEL)
   const overrideSteps: Array<{ label: string; formula: string; output: number }> = []
   const reason = (sre.override_reason as string | null) || 'manuell justering'
   if (sre.tax_withheld_override !== null && sre.tax_withheld_override !== undefined) {
@@ -97,7 +196,7 @@ export function buildPayslipData(params: {
       output: Number(sre.avgifter_amount_override),
     })
   }
-  const breakdownSteps = baseSteps.length > 0 || overrideSteps.length > 0
+  const breakdownSteps = sections.breakdown && (baseSteps.length > 0 || overrideSteps.length > 0)
     ? [...baseSteps, ...overrideSteps]
     : undefined
 
@@ -138,11 +237,15 @@ export function buildPayslipData(params: {
     taxWithheld: effectiveTax,
     netSalary: effectiveNet,
     taxReference,
-    avgifterRate: sre.avgifter_rate as number,
-    avgifterAmount: effectiveAvgifter,
-    vacationAccrual,
-    vacationAccrualAvgifter,
-    totalEmployerCost: grossSalary + effectiveAvgifter + vacationAccrual + vacationAccrualAvgifter,
+    employerCost: sections.employerCost
+      ? {
+          avgifterRate: sre.avgifter_rate as number,
+          avgifterAmount: effectiveAvgifter,
+          vacationAccrual,
+          vacationAccrualAvgifter,
+          totalEmployerCost: grossSalary + effectiveAvgifter + vacationAccrual + vacationAccrualAvgifter,
+        }
+      : null,
     ytdGross: sre.ytd_gross as number,
     ytdTax: sre.ytd_tax as number,
     ytdNet: sre.ytd_net as number | null,

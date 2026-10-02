@@ -3,19 +3,19 @@ import { getSIEJob } from '@/lib/import/sie-jobs'
 import { assessLegacySIEImport } from '@/lib/import/sie-legacy-recovery'
 
 export const SIE_IMPORT_STATUS_SCHEMA = {
-  type: 'object', additionalProperties: false,
+  type: 'object',
   properties: {
     import_id: { type: 'string' }, kind: { type: 'string', enum: ['durable', 'legacy'] },
     state: { type: 'string' }, chunks_done: { type: ['integer', 'null'] }, chunks_total: { type: ['integer', 'null'] },
     vouchers_written: { type: ['integer', 'null'] }, error_message: { type: ['string', 'null'] },
     result: { type: ['object', 'null'], additionalProperties: true },
     recovery: {
-      type: 'object', additionalProperties: false,
+      type: 'object',
       properties: {
         legacy_status: { type: 'string' }, period_resolution: { type: 'string' },
         entry_ownership: { type: 'string', enum: ['unverified'] }, mutation_available: { type: 'boolean', const: false },
         fiscal_period: {
-          type: ['object', 'null'], additionalProperties: false,
+          type: ['object', 'null'],
           properties: {
             fiscal_period_id: { type: 'string' }, period_start: { type: 'string' }, period_end: { type: 'string' },
             is_closed: { type: 'boolean' }, locked_at: { type: ['string', 'null'] }, import_hold: { type: ['string', 'null'] },
@@ -23,13 +23,13 @@ export const SIE_IMPORT_STATUS_SCHEMA = {
           required: ['fiscal_period_id', 'period_start', 'period_end', 'is_closed', 'locked_at', 'import_hold'],
         },
         period_entries: {
-          type: ['object', 'null'], additionalProperties: false,
+          type: ['object', 'null'],
           description: 'Counts for the whole fiscal period, including drafts. These do not attribute entries to this import.',
           properties: { all: { type: 'integer' }, posted: { type: 'integer' }, importOrOpening: { type: 'integer' } },
           required: ['all', 'posted', 'importOrOpening'],
         },
         company_lock: {
-          type: 'object', additionalProperties: false,
+          type: 'object',
           properties: { known: { type: 'boolean' }, through: { type: ['string', 'null'] } }, required: ['known', 'through'],
         },
         archive_reference_present: { type: 'boolean', description: 'Stored pointer only. Source bytes and hash have not been verified.' },
@@ -47,13 +47,13 @@ export const SIE_IMPORT_STATUS_SCHEMA = {
 }
 
 export const SIE_IMPORT_LIST_SCHEMA = {
-  type: 'object', additionalProperties: false,
+  type: 'object',
   properties: {
     kind: { type: 'string', const: 'list' },
     imports: {
       type: 'array',
       items: {
-        type: 'object', additionalProperties: false,
+        type: 'object',
         properties: {
           import_id: { type: 'string' }, filename: { type: ['string', 'null'] }, status: { type: ['string', 'null'] },
           job_state: { type: ['string', 'null'] }, created_at: { type: 'string' }, replaced_at: { type: ['string', 'null'] },

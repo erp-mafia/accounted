@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ============================================================
 // Mock: sequential result queue
@@ -683,5 +683,191 @@ describe('generateARLedger: historical as-of reconstruction (#1020)', () => {
 
     expect(report.entries[0].invoices[0].outstanding).toBe(2000)
     expect(report.total_outstanding).toBe(2000)
+  })
+})
+
+describe('generateARLedger: partially paid invoices (feedback seq 817399)', () => {
+  // Invoice 2026024 from the report: 15 625 invoiced, one payment of 15 000
+  // on 2026-07-01, 625 still open. The ledger used to drop it entirely.
+  const partiallyPaid = {
+    id: 'inv-pp',
+    customer_id: 'cust-s',
+    customer: { id: 'cust-s', name: 'Kunden AB' },
+    invoice_number: '2026024',
+    invoice_date: '2026-06-01',
+    due_date: '2026-07-01',
+    total: 15625,
+    paid_amount: 15000,
+    remaining_amount: 625,
+    paid_at: null,
+    currency: 'SEK',
+    status: 'partially_paid',
+  }
+  const payment = { invoice_id: 'inv-pp', amount: 15000, payment_date: '2026-07-01' }
+
+  // The first status filter recorded is the invoices query.
+  const invoiceStatusFilter = () =>
+    calls.find((c) => c.method === 'in' && c.args[0] === 'status')?.args[1]
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-28T12:00:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('live view lists it with the unpaid remainder outstanding', async () => {
+    results = [{ data: [partiallyPaid], error: null }]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(invoiceStatusFilter()).toContain('partially_paid')
+    expect(report.entries).toHaveLength(1)
+    expect(report.entries[0].customer_name).toBe('Kunden AB')
+    expect(report.entries[0].invoices[0]).toMatchObject({
+      invoice_number: '2026024',
+      total: 15625,
+      paid_amount: 15000,
+      outstanding: 625,
+      outstanding_sek: 625,
+    })
+    // Due 2026-07-01: 89 days overdue on the pinned today.
+    expect(report.entries[0].days_61_90).toBe(625)
+    expect(report.total_outstanding).toBe(625)
+    expect(report.total_overdue).toBe(625)
+    expect(report.unpaid_count).toBe(1)
+  })
+
+  it('historical view before the payment date reopens the full total', async () => {
+    results = [
+      { data: [partiallyPaid], error: null },
+      { data: [payment], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2026-06-30')
+
+    expect(invoiceStatusFilter()).toEqual(expect.arrayContaining(['partially_paid', 'paid']))
+    expect(report.entries[0].invoices[0].paid_amount).toBe(0)
+    expect(report.entries[0].invoices[0].outstanding).toBe(15625)
+    expect(report.total_outstanding).toBe(15625)
+  })
+
+  it('historical view on or after the payment date shows the remainder', async () => {
+    results = [
+      { data: [partiallyPaid], error: null },
+      { data: [payment], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2026-07-01')
+
+    expect(invoiceStatusFilter()).toContain('partially_paid')
+    expect(report.entries[0].invoices[0].paid_amount).toBe(15000)
+    expect(report.entries[0].invoices[0].outstanding).toBe(625)
+    expect(report.total_outstanding).toBe(625)
+    expect(report.unpaid_count).toBe(1)
+  })
+})
+
+describe('generateARLedger: migrated credit notes', () => {
+  // The provider migration imports every kreditfaktura as status 'credited'
+  // with nothing paid or remaining; Accounted's own credit notes are 'sent'.
+  const base = {
+    customer_id: 'cust-a',
+    customer: { id: 'cust-a', name: 'Callidus Tech AB' },
+    invoice_date: '2026-02-13',
+    due_date: '2026-03-15',
+    currency: 'SEK',
+  }
+  const migratedCreditNote = (id: string, total: number, credited_invoice_id: string | null = null) => ({
+    ...base,
+    id,
+    invoice_number: id,
+    total,
+    paid_amount: 0,
+    remaining_amount: 0,
+    status: 'credited',
+    credited_invoice_id,
+  })
+
+  it('leaves out an unlinked credit note whose original was imported as paid', async () => {
+    // Invoice 5 came in as paid and is not in the population; 1510 is 0.
+    results = [{ data: [migratedCreditNote('6', -11615)], error: null }]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.entries).toEqual([])
+    expect(report.total_outstanding).toBe(0)
+    expect(report.unpaid_count).toBe(0)
+  })
+
+  it('leaves out a linked credit note whose original is credited and fully paid', async () => {
+    results = [
+      {
+        data: [
+          { ...base, id: 'orig', invoice_number: '10', total: 5000, paid_amount: 5000, status: 'credited' },
+          migratedCreditNote('cn', -5000, 'orig'),
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.entries).toEqual([])
+    expect(report.total_outstanding).toBe(0)
+  })
+
+  it('counts a partial credit once: the provider netted it into the original', async () => {
+    // Faktura 9 694, krediterad med 4 847 i källsystemet: the original arrives
+    // with paid_amount 4 847 carrying the credit, so 4 847 is still owed.
+    results = [
+      {
+        data: [
+          { ...base, id: 'orig', invoice_number: '5922', total: 9694, paid_amount: 4847, status: 'sent' },
+          migratedCreditNote('cn', -4847, 'orig'),
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.total_outstanding).toBe(4847)
+    expect(report.entries[0].invoices.map((inv) => inv.invoice_id)).toEqual(['orig'])
+  })
+
+  it('keeps the open invoices of the same customer', async () => {
+    results = [
+      {
+        data: [
+          { ...base, id: 'open', invoice_number: '12', total: 1000, paid_amount: 0, status: 'sent' },
+          migratedCreditNote('cn', -11615),
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.total_outstanding).toBe(1000)
+    expect(report.entries[0].invoices.map((inv) => inv.invoice_id)).toEqual(['open'])
+  })
+
+  it('does not touch an in-app credit note, which is issued as sent', async () => {
+    results = [
+      {
+        data: [
+          { ...base, id: 'orig', invoice_number: '13', total: 1000, paid_amount: 1000, status: 'credited' },
+          { ...base, id: 'cn', invoice_number: '14', total: -1000, paid_amount: 0, status: 'sent', credited_invoice_id: 'orig' },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.total_outstanding).toBe(-1000)
   })
 })

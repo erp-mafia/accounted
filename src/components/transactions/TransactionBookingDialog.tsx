@@ -365,8 +365,8 @@ export default function TransactionBookingDialog({
                           </span>
                           <Button
                             variant="ghost"
-                            size="sm"
-                            className="h-6 w-6 p-0 shrink-0"
+                            size="icon-sm"
+                            className="shrink-0"
                             aria-label={t('doc_picked_remove')}
                             onClick={() =>
                               setPickedInboxDocs((prev) =>

@@ -21,10 +21,13 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
  * settings PUT: the flag gates UI visibility only (nav row + register),
  * never correctness (dimensions plan §2).
  *
- * Toggling ON runs the "Importera befintliga koder" scan
- * (POST /api/dimensions/import-existing): codes already present on
- * journal_entry_lines.dimensions but missing from the registry are created as
- * archived placeholder values, and the user is told how many were found.
+ * Toggling ON registers the codes already present on
+ * journal_entry_lines.dimensions but missing from the registry as archived
+ * placeholder values. The settings save does that itself
+ * (lib/dimensions/import-existing.ts) and answers with the count, which the
+ * user is told; when it has no count (the registration failed, or dimensions
+ * were already on) the toggle runs the scan through
+ * POST /api/dimensions/import-existing instead.
  */
 export function DimensionsToggle() {
   const t = useTranslations('dimensions')
@@ -55,7 +58,19 @@ export function DimensionsToggle() {
       }
       updateSettings({ dimensions_enabled: next })
 
-      if (next) {
+      // The save registered the codes already on lines when it turned
+      // dimensions on, and says how many.
+      const importedBySave: number | null =
+        typeof json?.dimension_codes_imported === 'number' ? json.dimension_codes_imported : null
+
+      if (next && importedBySave !== null) {
+        if (importedBySave > 0) {
+          toast({
+            title: t('settings_imported_toast_title'),
+            description: t('settings_imported_toast', { count: importedBySave }),
+          })
+        }
+      } else if (next) {
         // Import scan: registry rows for codes already used on lines. Failure
         // is non-fatal: the toggle stays on and the scan can be re-run by
         // toggling again.

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import { createMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -64,6 +64,12 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
 }))
 
+// Pass-through: one test below says which fiscal year a completed import holds.
+vi.mock('@/lib/import/sie-import', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/import/sie-import')>()
+  return { ...actual, findOverlappingPeriodImports: vi.fn(actual.findOverlappingPeriodImports) }
+})
+
 import { arcimMigrationExtension } from '../index'
 import { getConsent, resolveConsent, fetchCompanyInfoDirect } from '../lib/provider-client'
 import {
@@ -72,6 +78,7 @@ import {
   FiscalYearSelectionError,
   MAX_SELECTED_FISCAL_YEARS,
 } from '../lib/sie-fetcher'
+import { findOverlappingPeriodImports } from '@/lib/import/sie-import'
 
 type RouteHandler = (request: Request, ctx?: ExtensionContext) => Promise<Response>
 
@@ -330,5 +337,49 @@ describe('GET /sie-data: the ticked years are fetched, the rest are named (#2211
     expect(status).toBe(404)
     expect(body.error.code).toBe('PROVIDER_SIE_NO_YEARS')
     expect(body.error.message).toContain(String(CY - 7))
+  })
+})
+
+describe('GET /sie-data: previousImport per fetched file, index-aligned with rawContent', () => {
+  // The books act's provider step skips a file whose status carries
+  // previousImport (lib/onboarding-books/provider-years). Without the field
+  // it imports every file again, and a retry dies on the year already in.
+  afterEach(() => {
+    ;(findOverlappingPeriodImports as Mock).mockReset()
+  })
+
+  it('marks the year a completed import holds, at the index of its own file', async () => {
+    const previousYear = SIE_IN_WINDOW.replace(`#RAR 0 ${CY}0101 ${CY}1231`, `#RAR 0 ${CY - 1}0101 ${CY - 1}1231`)
+    ;(fetchProviderSieFiles as Mock).mockResolvedValue({
+      files: [
+        { fiscalYear: CY - 1, rawContent: previousYear },
+        { fiscalYear: CY, rawContent: SIE_IN_WINDOW },
+      ],
+      availableYears: [CY - 1, CY],
+      sourceYears: SOURCE_YEARS,
+      failedYears: [],
+      omittedYears: [],
+    })
+    ;(findOverlappingPeriodImports as Mock).mockImplementation(async (_supabase: unknown, _company: string, start: string) =>
+      start.startsWith(String(CY - 1))
+        ? [{ id: 'import-1', imported_at: `${CY}-01-15T10:00:00Z`, fiscal_year_start: `${CY - 1}-01-01`, fiscal_year_end: `${CY - 1}-12-31` }]
+        : [])
+
+    const res = await handler('/sie-data')(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+        searchParams: { consentId: 'consent-1', years: `${CY - 1},${CY}` },
+      }),
+      buildCtx(),
+    )
+    const { status, body } = await parseJsonResponse<{
+      rawContent: string[]
+      fileStatuses: { fiscalYear: number; previousImport: { id: string } | null }[]
+    }>(res)
+
+    expect(status).toBe(200)
+    expect(body.rawContent).toEqual([previousYear, SIE_IN_WINDOW])
+    expect(body.fileStatuses.map((f) => f.fiscalYear)).toEqual([CY - 1, CY])
+    expect(body.fileStatuses[0].previousImport).toMatchObject({ id: 'import-1' })
+    expect(body.fileStatuses[1].previousImport).toBeNull()
   })
 })

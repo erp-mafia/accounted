@@ -183,6 +183,9 @@ describe('POST /api/transactions/bulk-book', () => {
           { account: '2611', label: 'Utg moms 25%', side: 'credit', type: 'vat', vat_rate: 0.25 },
         ],
         is_active: true,
+        // The service re-applies the btl_select visibility rule (the v1 door
+        // runs as the service role), so the fixture carries its owner.
+        is_system: true,
       },
       error: null,
     })
@@ -593,5 +596,81 @@ describe('POST /api/transactions/bulk-book: duplicate guard', () => {
     })
     const response = await POST(request)
     expect(response.status).toBe(200)
+  })
+})
+
+/**
+ * The shared bulk-book service runs the whole dimension policy
+ * (enforceBulkBookDimensionPolicy), registry validation included, before the
+ * RPC: the RPC books in SQL and never passes through the engine's checks.
+ */
+describe('POST /api/transactions/bulk-book: dimension policy', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const emptyParams = { params: Promise.resolve({}) }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+  })
+
+  function manualLinesBody(dimensions: Record<string, string>) {
+    return {
+      tx_ids: [TX1],
+      entry_description: 'Samlingsverifikation',
+      manual_lines: [
+        { account_number: '1930', debit_amount: 100, credit_amount: 0, currency: 'SEK' },
+        { account_number: '3001', debit_amount: 0, credit_amount: 100, currency: 'SEK', dimensions },
+      ],
+    }
+  }
+
+  it('refuses an archived dimension value with 400 before the RPC', async () => {
+    enqueue({ data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-06-05' }], error: null })
+    enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null }) // chart allowlist
+    enqueue({ data: [], error: null }) // account_dimension_rules
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: [{ id: 'dim-proj', sie_dim_no: 6, name: 'Projekt', is_active: true }], error: null })
+    enqueue({ data: [{ dimension_id: 'dim-proj', code: 'P001', is_active: false }], error: null })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', { method: 'POST', body: manualLinesBody({ '6': 'P001' }) }),
+      emptyParams,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('DIMENSION_VALIDATION_FAILED')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('books when the tagged value is registered and active', async () => {
+    enqueue({ data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-06-05' }], error: null })
+    enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: [{ id: 'dim-proj', sie_dim_no: 6, name: 'Projekt', is_active: true }], error: null })
+    enqueue({ data: [{ dimension_id: 'dim-proj', code: 'P001', is_active: true }], error: null })
+    enqueue({
+      data: { ok: true, mode: 'create_new', journal_entry_id: JE, voucher_series: 'A', voucher_number: 15, linked_tx_count: 1, tx_sum: 100 },
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // event re-fetch
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', { method: 'POST', body: manualLinesBody({ '6': 'P001' }) }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'bulk_book_transactions',
+      expect.objectContaining({
+        p_new_entry: expect.objectContaining({
+          lines: expect.arrayContaining([expect.objectContaining({ account_number: '3001', dimensions: { '6': 'P001' } })]),
+        }),
+      })
+    )
   })
 })

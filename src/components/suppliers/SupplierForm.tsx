@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, Lock, X } from 'lucide-react'
+import { Lock, X } from 'lucide-react'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getCountryOptions, normalizeCountryCode } from '@/lib/vat/country-codes'
@@ -435,14 +435,12 @@ export default function SupplierForm({
       <div className="flex justify-end gap-2">
         <Button
           type="submit"
-          disabled={isLoading || !canWrite}
+          disabled={!canWrite}
+          loading={isLoading}
           title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
         >
           {isLoading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {t('submit_saving')}
-            </>
+            t('submit_saving')
           ) : !canWrite ? (
             <>
               <Lock className="mr-2 h-4 w-4" />

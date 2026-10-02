@@ -282,4 +282,59 @@ describe('POST /api/v1/companies/{companyId}/assets', () => {
       bas_asset_account: '1224',
     })
   })
+
+  // Migration from another system (desk crm#104): an asset that arrives
+  // partly depreciated. The amount is registered, never posted.
+  describe('opening accumulated depreciation', () => {
+    const migrated = {
+      ...validBody,
+      acquisition_date: '2024-01-01',
+      opening_accumulated_depreciation: 10_666.67,
+      opening_depreciation_date: '2024-12-31',
+    }
+
+    it('returns 400 VALIDATION_ERROR when the opening amount exceeds the cost', async () => {
+      const res = await POST(
+        postRequest(LIST_URL, { ...migrated, opening_accumulated_depreciation: 32_000.01 }),
+        params,
+      )
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(JSON.stringify(body)).toContain('opening_accumulated_depreciation')
+      expect(vi.mocked(createAsset)).not.toHaveBeenCalled()
+    })
+
+    it('returns 400 VALIDATION_ERROR when the opening date is in the future', async () => {
+      const res = await POST(
+        postRequest(LIST_URL, { ...migrated, opening_depreciation_date: '2999-01-01' }),
+        params,
+      )
+      expect(res.status).toBe(400)
+      expect(vi.mocked(createAsset)).not.toHaveBeenCalled()
+    })
+
+    it('creates the asset with the opening pair and echoes it in the register row', async () => {
+      vi.mocked(createAsset).mockResolvedValue({
+        ...ASSET,
+        acquisition_date: '2024-01-01',
+        opening_accumulated_depreciation: '10666.67',
+        opening_depreciation_date: '2024-12-31',
+      } as never)
+      const res = await POST(postRequest(LIST_URL, migrated), params)
+      expect(res.status).toBe(201)
+      expect(vi.mocked(createAsset)).toHaveBeenCalledWith(
+        expect.anything(),
+        COMPANY_ID,
+        'user-1',
+        expect.objectContaining({
+          opening_accumulated_depreciation: 10_666.67,
+          opening_depreciation_date: '2024-12-31',
+        }),
+      )
+      const body = await res.json()
+      expect(body.data.opening_accumulated_depreciation).toBe(10_666.67)
+      expect(body.data.opening_depreciation_date).toBe('2024-12-31')
+    })
+  })
 })

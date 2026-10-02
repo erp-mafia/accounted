@@ -239,31 +239,35 @@ describe('match_transaction_invoice: partial commit after the storno', () => {
     })
   })
 
-  it('keeps the 409 auto-reject when the CAS update races and no voucher was posted', async () => {
+  it('keeps the clean rejected path when the booking posted nothing, without touching the invoice', async () => {
+    // A null JE used to carry on to the invoice update (the soft-fail this
+    // case pinned as a 409 auto-reject on a race): on a normal run it marked
+    // the invoice paid with no verifikat. It now fails closed before the
+    // update, and with nothing posted the op is a clean rejection, not a
+    // partial commit.
     const { supabase, enqueue } = createQueuedMockSupabase()
     const updates = recordUpdates(supabase)
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: baseTransaction, error: null }) // transaction fetch
     enqueue({ data: baseInvoice, error: null }) // invoice fetch
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
-    enqueue({ data: [], error: null }) // invoice CAS update: zero rows
+    enqueue({ data: [], error: null }) // cash_accounts fallback listing -> 1930
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
-    // JE creation "succeeded" with null (e.g. no open fiscal period):
-    // nothing was posted, so today's auto-reject semantics must survive.
     mockCreateJournalEntry.mockResolvedValue(null)
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    expect(result.status).toBe('rejected')
-    expect(result.auto_rejected).toBe(true)
-    expect(result.http_status).toBe(409)
+    expect(result.status).toBe('failed')
+    expect(result.code).toBeUndefined()
+    expect(result.http_status).toBe(500)
+    expect(updates.some((u) => u.table === 'invoices')).toBe(false)
 
     const opUpdates = pendingOpUpdates(updates)
     expect(opUpdates[1]?.payload).toMatchObject({
       status: 'rejected',
-      result_data: { auto_rejected: true },
+      result_data: { http_status: 500 },
     })
   })
 })

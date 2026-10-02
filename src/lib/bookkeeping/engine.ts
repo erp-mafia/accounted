@@ -6,6 +6,7 @@ import { createLogger } from '@/lib/logger'
 import {
   AccountsNotInChartError,
   AssetDepreciationRefusedError,
+  AssetOpeningChangedError,
   BookkeepingDatabaseError,
   CannotCancelNonDraftError,
   CannotEditNonDraftError,
@@ -298,6 +299,22 @@ function buildLineInserts(
 }
 
 /**
+ * Options for posting paths whose line bags are not new user input.
+ */
+export interface CreateEntryOptions {
+  /**
+   * The line bags are copied verbatim from posted history: skip the soft
+   * registry validation, as storno and the accrual replay do. Only the
+   * year-end IB carry passes it (issue #3313): a project value archived
+   * during the year can still hold a 1470 balance, and a close must not
+   * fail on it. The tag is kept, never stripped. Never exempt source type
+   * 'opening_balance' as a whole: an import IB carries user codes on a
+   * first posting.
+   */
+  replayDimensions?: boolean
+}
+
+/**
  * Create a draft journal entry with lines (no voucher number assigned yet)
  * The entry stays in 'draft' status until commitEntry() is called.
  */
@@ -305,7 +322,8 @@ export async function createDraftEntry(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  input: CreateJournalEntryInput
+  input: CreateJournalEntryInput,
+  options: CreateEntryOptions = {}
 ): Promise<JournalEntry> {
   // Validate sides and balance
   assertLinesWellFormed(input.lines)
@@ -337,7 +355,7 @@ export async function createDraftEntry(
   // must not be able to strand the remaining months as pending and leave the
   // interim 17xx/29xx account overstated. See
   // DIMENSION_VALIDATION_EXEMPT_SOURCE_TYPES.
-  if (!isDimensionValidationExemptSource(input.source_type)) {
+  if (!options.replayDimensions && !isDimensionValidationExemptSource(input.source_type)) {
     await validateEntryDimensions(supabase, companyId, lines)
   }
 
@@ -494,10 +512,11 @@ export async function updateDraftEntry(
   entryId: string,
   input: CreateJournalEntryInput
 ): Promise<JournalEntry> {
-  // Load the entry and assert it is an editable draft.
+  // Load the entry and assert it is an editable draft. source_type is read
+  // for the dimension policy below: the stored value is authoritative.
   const { data: existing, error: loadError } = await supabase
     .from('journal_entries')
-    .select('id, status, voucher_series')
+    .select('id, status, voucher_series, source_type')
     .eq('id', entryId)
     .eq('company_id', companyId)
     .single()
@@ -516,20 +535,22 @@ export async function updateDraftEntry(
     throw new JournalEntryNotBalancedError(balance.totalDebit, balance.totalCredit, 'draft')
   }
 
-  // Same soft dimension validation as createDraftEntry: before any write, so
-  // a rejection leaves both the header and the existing lines untouched.
-  // Account dimension rules (PR10) apply first — same as create. Gate on
-  // the STORED source_type (updates preserve it; the input's copy is not
-  // authoritative here).
-  const ruleExempt = isDimensionRuleExemptSource(
-    (existing as { source_type?: string }).source_type
-  )
+  // Same dimension policy as createDraftEntry, before any write, so a
+  // rejection leaves both the header and the existing lines untouched:
+  // account dimension rules (PR10) first, then the soft registry validation.
+  // Both exemptions gate on the STORED source_type. Updates preserve it, and
+  // the input's copy is not authoritative here (the v1 update operation
+  // passes a 'manual' placeholder).
+  const storedSourceType = (existing as { source_type?: string | null }).source_type
+  const ruleExempt = isDimensionRuleExemptSource(storedSourceType)
   const rules = ruleExempt ? [] : await fetchActiveDimensionRules(supabase, companyId)
   if (rules === null) {
-    log.warn('dimension rule fetch failed — defaults/fixed skipped (fail-open)', { companyId })
+    log.warn('dimension rule fetch failed: defaults/fixed skipped (fail-open)', { companyId })
   }
   const lines = rules ? applyDimensionRules(input.lines, rules) : input.lines
-  await validateEntryDimensions(supabase, companyId, lines)
+  if (!isDimensionValidationExemptSource(storedSourceType)) {
+    await validateEntryDimensions(supabase, companyId, lines)
+  }
 
   // Entry date must fall within the selected fiscal period.
   const { data: period, error: periodError } = await supabase
@@ -992,6 +1013,9 @@ export interface AssetDepreciationLink {
   /** The amount the register row records. The RPC refuses it unless it equals
    *  what the draft voucher actually books. */
   planned_depreciation: number
+  /** Opening snapshot used to calculate this proposal, checked under the row lock. */
+  opening_accumulated_depreciation: number
+  opening_depreciation_date: string | null
 }
 
 /**
@@ -1024,6 +1048,8 @@ export async function createAssetDepreciationEntry(
     p_entry_id: draft.id,
     p_fiscal_period_id: draft.fiscal_period_id,
     p_planned_depreciation: link.planned_depreciation,
+    p_expected_opening_amount: link.opening_accumulated_depreciation,
+    p_expected_opening_date: link.opening_depreciation_date,
     p_actor_type: actor?.type ?? null,
     p_actor_label: actor?.label ?? null,
   })
@@ -1051,6 +1077,9 @@ export async function createAssetDepreciationEntry(
     // on its lock). A bad draft is 22023 and falls through as a real error.
     if (pgCode === '23505') throw new AssetDepreciationRefusedError('already_posted')
     if (pgCode === 'P0002') throw new AssetDepreciationRefusedError('asset_not_found')
+    if (pgCode === 'PT409' && error.message === 'ASSET_OPENING_CHANGED') {
+      throw new AssetOpeningChangedError()
+    }
 
     log.error('commit_asset_depreciation RPC failed', error, {
       operation: 'commit_asset_depreciation',
@@ -1133,9 +1162,10 @@ export async function createJournalEntry(
   userId: string,
   input: CreateJournalEntryInput,
   commitMethod?: string,
-  rubricVersion?: string
+  rubricVersion?: string,
+  options: CreateEntryOptions = {}
 ): Promise<JournalEntry> {
-  const draft = await createDraftEntry(supabase, companyId, userId, input)
+  const draft = await createDraftEntry(supabase, companyId, userId, input, options)
   try {
     return await commitEntry(supabase, companyId, userId, draft.id, commitMethod, rubricVersion)
   } catch (commitError) {
@@ -1352,6 +1382,63 @@ export function getSwedishLocalDate(now: Date = new Date()): string {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(now)
 }
 
+/**
+ * Cancel the verifikat a failed multi-step workflow created moments ago in
+ * this same request (compensation, never a user-facing undo: that is a storno).
+ *
+ * posted -> cancelled is gated in the database: a direct UPDATE is refused
+ * for every role, and the cancel_orphaned_entry RPC is the one door. It locks
+ * the row and cancels it in whatever state the workflow left it: a draft as
+ * it is, a posted entry only when the acting user both created and posted it
+ * within the last 15 minutes, no live verifikat references it, and its
+ * period is open and not behind the lock date. `gapExplanation`, when given, is written to
+ * voucher_gap_explanations in the same transaction when the caller may author
+ * one (team owner/admin, or a trusted backend client); otherwise it is skipped,
+ * and the cancelled header still occupies its number, so no gap opens.
+ *
+ * The cancelled header keeps its lines: together they are the retained record
+ * of how the voucher number was used, and every report excludes cancelled
+ * entries by status.
+ *
+ * Never throws: every caller is already on an error path whose own response
+ * must survive. A failure is logged and returned.
+ */
+export async function cancelOrphanedEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  entryId: string,
+  options?: { gapExplanation?: string },
+): Promise<{ error: { message: string; code?: string } | null }> {
+  try {
+    const { error } = await supabase.rpc('cancel_orphaned_entry', {
+      p_company_id: companyId,
+      p_entry_id: entryId,
+      p_user_id: userId,
+      p_gap_explanation: options?.gapExplanation ?? null,
+    })
+    if (error) {
+      log.error('orphan cleanup refused or failed (entry left as it is)', error, {
+        operation: 'cancel_orphaned_entry',
+        companyId,
+        entityType: 'journal_entry',
+        entityId: entryId,
+        pgCode: (error as { code?: string }).code,
+      })
+      return { error }
+    }
+    return { error: null }
+  } catch (err) {
+    log.error('orphan cleanup failed unexpectedly (entry left as it is)', err as Error, {
+      operation: 'cancel_orphaned_entry',
+      companyId,
+      entityType: 'journal_entry',
+      entityId: entryId,
+    })
+    return { error: { message: err instanceof Error ? err.message : String(err) } }
+  }
+}
+
 
 /**
  * Create a reversal entry for an existing journal entry
@@ -1529,8 +1616,10 @@ export async function reverseEntry(
   if (postError) {
     // As above, cleanup preserves the allocated voucher on the cancelled
     // header. A failed or ambiguous cleanup also cannot prove it unused.
-    await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
-    await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
+    // The post may still have landed (an ambiguous error), so this goes
+    // through the gated cleanup door, which cancels a draft or a fresh posted
+    // orphan alike and keeps its lines.
+    await cancelOrphanedEntry(supabase, companyId, userId, reversalEntry.id)
     throw new BookkeepingDatabaseError('post_reversal_entry', postError.message, postError.code)
   }
 
@@ -1549,8 +1638,10 @@ export async function reverseEntry(
     // Another concurrent reversal already changed the status: mark the orphaned
     // reversal as cancelled so it's excluded from reports but remains traceable.
     // Its header still occupies the voucher number, so no gap metadata applies.
-    await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
-    await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
+    // posted -> cancelled is only possible through the gated cleanup door; it
+    // refuses if the original in fact points at this reversal (an ambiguous
+    // CAS error that did land), which leaves the consistent pair intact.
+    await cancelOrphanedEntry(supabase, companyId, userId, reversalEntry.id)
     throw new EntryAlreadyReversedError()
   }
 
@@ -1761,6 +1852,32 @@ export async function reverseEntry(
           entryId,
         })
       }
+    }
+  }
+
+  // Same hazard in the asset register: a planenlig avskrivning posted from
+  // the register (commit_asset_depreciation) links its depreciation_schedules
+  // row to this voucher. Left in place, the row keeps reading as "posted"
+  // against a cancelled avskrivning: commit_asset_depreciation refuses to
+  // book the period again and the register, the årsredovisning asset note
+  // and disposal's accumulated depreciation all count an amount the ledger
+  // no longer holds. Releasing the link makes the row an unposted proposal
+  // again. enforce_depreciation_schedule_immutability permits exactly this
+  // change and only once the voucher is 'reversed' with the posted storno
+  // written above (migration 20260925194235), and the release is audited by
+  // audit_depreciation_schedule_release. Scoped to this entryId, so rows
+  // linked to any other voucher are untouched. Register-linked vouchers are
+  // always source_type 'year_end' (the RPC refuses anything else).
+  if (original.source_type === 'year_end') {
+    const { error: depreciationReleaseError } = await supabase
+      .from('depreciation_schedules')
+      .update({ journal_entry_id: null, posted_at: null })
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', entryId)
+    if (depreciationReleaseError) {
+      log.error('failed to release depreciation schedule from reversed entry', depreciationReleaseError, {
+        entryId,
+      })
     }
   }
 

@@ -99,6 +99,13 @@ jobs:
         if: steps.newmig.outputs.count != '0'
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
 
+      - name: Legacy default privileges for the history replay
+        # supabase/bootstrap.sql: the documented first step of every replay
+        # from an empty database. A no-op on this image, which still carries
+        # the legacy default; it keeps CI replaying the way a fresh project must.
+        if: steps.newmig.outputs.count != '0'
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
+
       - name: Apply the schema as it stands at the merge base
         if: steps.newmig.outputs.count != '0'
         env:
@@ -184,6 +191,13 @@ jobs:
         # is provisioned by the storage-api service at runtime, which we do
         # not run in CI. This aligns the schema with what migrations expect.
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+
+      - name: Legacy default privileges for the history replay
+        # supabase/bootstrap.sql gives the historical migrations the grant-by-
+        # default they were written against; 20260929220000 then turns it off,
+        # so a table created after it without a GRANT is as unreachable here
+        # as it will be in production.
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
 
       - name: Apply migrations
         run: |

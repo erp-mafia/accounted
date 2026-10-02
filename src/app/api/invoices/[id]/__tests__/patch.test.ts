@@ -9,7 +9,7 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -33,10 +33,25 @@ vi.mock('@/lib/invoices/vat-rules', async () => {
   const actual = await vi.importActual<typeof import('@/lib/invoices/vat-rules')>('@/lib/invoices/vat-rules')
   return {
     getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
+    deriveInvoiceVatHeader: actual.deriveInvoiceVatHeader,
     getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
     // The builder gates on the permitted set (taxed-where-performed exceptions);
     // these route tests only care that the gate reads the stubbed rates.
     getPermittedVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
+    // The builder's one rule entry (#2906): the customer path reads the
+    // stubs above; an invoice that states its own treatment uses the real one.
+    resolveInvoiceVatRules: (
+      customer: { customer_type: string; vat_number_validated?: boolean | null; country?: string | null },
+      override?: { vat_treatment: string | null; delivery_country: string | null } | null,
+    ) =>
+      override?.vat_treatment || override?.delivery_country
+        ? actual.resolveInvoiceVatRules(customer as Parameters<typeof actual.resolveInvoiceVatRules>[0], override as Parameters<typeof actual.resolveInvoiceVatRules>[1])
+        : {
+            ok: true,
+            rules: mockGetVatRules(customer.customer_type, customer.vat_number_validated, customer.country),
+            permittedRates: mockGetAvailableVatRates(customer.customer_type, customer.vat_number_validated, customer.country),
+            explainFromCustomer: true,
+          },
     // Real: the warnings channel is what the EU-customer test below pins.
     explainVatTreatment: actual.explainVatTreatment,
   }
@@ -235,6 +250,71 @@ describe('PATCH /api/invoices/[id]', () => {
     // The guard fires before the delete: from() was called for existing,
     // customer, settings, update and snapshot only, never for delete/insert.
     expect(mockSupabase.from).toHaveBeenCalledTimes(5)
+  })
+
+  it('keeps a VAT treatment the draft stated over the API: the editor never sends it (#2906)', async () => {
+    enqueue({
+      data: {
+        id: 'inv-1',
+        status: 'draft',
+        invoice_number: null,
+        journal_entry_id: null,
+        is_self_billed: false,
+        vat_treatment_override: 'export',
+        delivery_country: 'NO',
+      },
+      error: null,
+    }) // existing
+    enqueue({ data: makeCustomer({ id: 'customer-1', customer_type: 'swedish_business' }), error: null }) // customer
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings.vat_registered
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // update ... select('id')
+    enqueue({ data: [], error: null }) // snapshot existing invoice_items
+    enqueue({ data: [], error: null }) // delete invoice_items
+    enqueue({ data: null, error: null }) // insert invoice_items
+    enqueue({ data: makeInvoice({ id: 'inv-1', status: 'draft' }), error: null }) // re-select
+
+    const body = {
+      ...VALID_BODY,
+      items: [{ description: 'Pallställ', quantity: 2, unit: 'st', unit_price: 5000, vat_rate: 0 }],
+    }
+    const { status } = await parseJsonResponse(await patch('inv-1', body))
+
+    expect(status).toBe(200)
+    expect(findCall('invoices', 'update')?.[0]).toMatchObject({
+      vat_treatment: 'export',
+      moms_ruta: '36',
+      vat_treatment_override: 'export',
+      delivery_country: 'NO',
+    })
+  })
+
+  it('refuses the edit when the kept statement no longer holds (400, nothing written)', async () => {
+    enqueue({
+      data: {
+        id: 'inv-1',
+        status: 'draft',
+        invoice_number: null,
+        journal_entry_id: null,
+        is_self_billed: false,
+        vat_treatment_override: 'reverse_charge',
+        delivery_country: 'DE',
+      },
+      error: null,
+    }) // existing
+    // A Swedish number cannot carry an intra-EU supply.
+    enqueue({ data: makeCustomer({ id: 'customer-1', customer_type: 'swedish_business' }), error: null })
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await patch('inv-1', {
+        ...VALID_BODY,
+        items: [{ description: 'Pallställ', quantity: 2, unit: 'st', unit_price: 5000, vat_rate: 0 }],
+      }),
+    )
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_VAT_TREATMENT_BUYER_VAT_NUMBER_REQUIRED')
+    expect(findCall('invoices', 'update')).toBeUndefined()
   })
 
   it('returns 409 when the draft is sent/finalized concurrently (0-row update)', async () => {

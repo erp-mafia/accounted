@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo, useCallback, useId } from 'react'
 import { Input } from '@/components/ui/input'
+import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
 import { foldText } from '@/lib/bookkeeping/account-search'
 
 export interface ArticleComboboxItem {
@@ -245,7 +246,7 @@ export default function ArticleCombobox({
           ref={listRef}
           id={listboxId}
           role="listbox"
-          className="absolute z-50 top-full left-0 mt-1 w-full min-w-[16rem] max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md"
+          className={`absolute z-50 top-full left-0 mt-1 w-full min-w-[16rem] max-h-[300px] overflow-y-auto ${POPOVER_SURFACE_CLASS} ${POPOVER_ENTER_CLASS}`}
         >
           {options.map((option, index) => (
             <button
@@ -257,7 +258,7 @@ export default function ArticleCombobox({
               tabIndex={-1}
               data-highlighted={index === highlightedIndex}
               className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer ${
-                index === highlightedIndex ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
+                index === highlightedIndex ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/60'
               } ${option.muted ? 'text-muted-foreground' : ''}`}
               onPointerDown={(e) => {
                 // pointerdown, not mousedown: touch fires it natively, while

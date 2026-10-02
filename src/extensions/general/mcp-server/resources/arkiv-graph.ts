@@ -1,5 +1,5 @@
 import type { McpResource } from './types'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { getCompanyGraph } from '@/lib/arkiv/graph/snapshot'
 
 /**
@@ -15,7 +15,7 @@ export const arkivGraphResource: McpResource = {
     'The whole company as one graph: accounts with movement, counterparties, agreements, documents, registered facts, people, authorities and what is coming, as nodes with record references and links with evidence (a foreign key, a matched payment, or an aggregate). Aggregated so it stays small; gnubok_get_neighbourhood expands one node.',
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
-    if (!isArkivEnabled(companyId)) return { enabled: false, reason: 'Arkiv is not switched on for this company.' }
+    if (!isArkivBrainEnabled(companyId)) return { enabled: false, reason: 'Arkiv is not switched on for this company.' }
     const graph = await getCompanyGraph(supabase, companyId)
     return {
       ...graph,

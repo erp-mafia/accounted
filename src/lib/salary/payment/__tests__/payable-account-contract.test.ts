@@ -4,9 +4,11 @@
  * A clearing/account pair accepted at entry (employee form, server schema,
  * supplier payee resolver) must be one that every payment-file generator
  * carries, and a pair no generator can carry must be refused at entry. The
- * two used to be defined separately (entry took 5-11 account digits, the
- * Bankgirot LB field takes 10), so a value the form accepted failed the whole
- * salary file on payday with the raw account number in the error.
+ * two used to be defined separately (entry took 5-11 account digits, the old
+ * LB layout had a 10-wide account field), so a value the form accepted failed
+ * the whole salary file on payday with the raw account number in the error.
+ * The LB file now writes TK40 (12-wide account field, crm#174), so every
+ * accepted pair is carried by every generator.
  *
  * This file walks a table of shapes through every surface. Every number in it
  * is invented.
@@ -38,7 +40,7 @@ const supplierOptions = { messageId: 'TEST-5566778899-B1', createdAt: '2026-09-2
 function runBgLb(clearing: string, account: string) {
   return generateBgLb(
     lbCompany,
-    [{ name: PAYEE_NAME, clearingNumber: clearing, bankAccountNumber: account, netSalary: 25000 }],
+    [{ name: PAYEE_NAME, clearingNumber: clearing, bankAccountNumber: account, payeeNumber: 1, netSalary: 25000 }],
     lbOptions,
   )
 }
@@ -69,9 +71,9 @@ function runSupplierPain001(clearing: string, account: string) {
 }
 
 const GENERATORS = [
-  { label: 'Bankgirot LB (salary)', format: 'bg_lb', run: runBgLb },
-  { label: 'pain.001 (salary)', format: 'pain001', run: runSalaryPain001 },
-  { label: 'pain.001 (supplier)', format: 'pain001', run: runSupplierPain001 },
+  { label: 'Bankgirot LB (salary)', run: runBgLb },
+  { label: 'pain.001 (salary)', run: runSalaryPain001 },
+  { label: 'pain.001 (supplier)', run: runSupplierPain001 },
 ] as const
 
 function caught(fn: () => unknown): unknown {
@@ -122,7 +124,8 @@ describe('payable account contract: entry and payout share one definition', () =
     const accepted = SHAPES.filter((s) => resolveDomesticBankAccount(s.clearing, s.account).ok)
     expect(accepted.length).toBeGreaterThan(40)
     expect(SHAPES.length - accepted.length).toBeGreaterThan(40)
-    expect(accepted.some((s) => !(resolveDomesticBankAccount(s.clearing, s.account) as { fitsBgLb: boolean }).fitsBgLb)).toBe(true)
+    // The support-ticket shape (5-digit clearing, 10-digit account) is in the table.
+    expect(accepted.some((s) => s.clearing.replace(/\D/g, '').length === 5 && s.account.replace(/\D/g, '').length === 10)).toBe(true)
   })
 
   it.each(SHAPES.map((s) => [label(s), s] as const))('%s', (_label, shape) => {
@@ -161,18 +164,6 @@ describe('payable account contract: entry and payout share one definition', () =
         continue
       }
 
-      if (generator.format === 'bg_lb' && !resolved.fitsBgLb) {
-        // The one accepted shape the fixed-width LB field cannot hold: a
-        // named refusal that points at pain.001, never a truncated number.
-        expect(error, generator.label).toBeInstanceOf(PayeeAccountError)
-        const payeeError = error as PayeeAccountError
-        expect(payeeError.problem).toBe('bg_lb_account_too_long')
-        expect(payeeError.message).toContain(PAYEE_NAME)
-        expect(payeeError.message).toContain('pain.001')
-        expectNoNumbersIn(payeeError.message, clearing, account)
-        continue
-      }
-
       // Accepted at entry implies the generator carries it, with the routing
       // the shared definition resolved.
       expect(error, generator.label).toBeNull()
@@ -187,34 +178,33 @@ describe('payable account contract: entry and payout share one definition', () =
       expect(xml).toContain(`<Id>${resolved.accountDigits}</Id>`)
     }
 
-    if (resolved.fitsBgLb) {
-      const lines = runBgLb(clearing, account).content.split('\r\n').filter((l) => l.length > 0)
-      for (const line of lines) expect(line).toHaveLength(80)
-      const payment = lines[1]
-      expect(payment.slice(0, 2)).toBe('54')
-      expect(payment.slice(2, 6)).toBe(resolved.clearing4)
-      expect(payment.slice(6, 16)).toBe(resolved.accountDigits.padStart(10, '0'))
-    }
+    // The LB file: TK40 carries the 4-digit clearing and the account in the
+    // 12-wide field, the TK14 after it carries the amount.
+    const lines = runBgLb(clearing, account).content.split('\r\n').filter((l) => l.length > 0)
+    for (const line of lines) expect(line).toHaveLength(80)
+    const accountRecord = lines[1]
+    expect(accountRecord.slice(0, 2)).toBe('40')
+    expect(accountRecord.slice(12, 16)).toBe(resolved.clearing4)
+    expect(accountRecord.slice(16, 28)).toBe(resolved.accountDigits.padStart(12, '0'))
+    expect(lines[2].slice(0, 2)).toBe('14')
   })
 })
 
-describe('the support ticket, reproduced with an invented number', () => {
+describe('the support ticket, reproduced with an invented number (crm#174)', () => {
   // A Swedbank employee: 5-digit clearing ending in 9 and a 10-digit account
-  // beginning 96. The LB account field would need "996..." in 11 positions.
+  // beginning 96. The account field needs "996..." in 11 positions.
   const clearing = '83279'
   const account = '9612345678'
 
-  it('used to surface as "Numeriskt fält för långt (11 > 10): 996..."; now names the employee and the way out', () => {
+  it('is carried by the LB file: TK40 holds the 4-digit clearing and the 11 account digits in the 12-wide field', () => {
     expect(validateEmployeeBankAccount(clearing, account)).toEqual([])
 
-    const error = caught(() => runBgLb(clearing, account))
-    expect(error).toBeInstanceOf(PayeeAccountError)
-    const message = (error as Error).message
-    expect(message).toBe(
-      'Sara Svensson: kontonumret ryms inte i Bankgirot LB-filen (femsiffrigt clearingnummer med tiosiffrigt kontonummer). Skapa betalfilen som ISO 20022 (pain.001) i stället.',
-    )
-    expect(message).not.toContain('996')
-    expect(message).not.toContain('Numeriskt')
+    const result = runBgLb(clearing, account)
+    const lines = result.content.split('\r\n').filter((l) => l.length > 0)
+    expect(lines.map((l) => l.slice(0, 2))).toEqual(['11', '40', '14', '29'])
+    expect(lines[1].slice(12, 16)).toBe('8327')
+    expect(lines[1].slice(16, 28)).toBe('099612345678')
+    expect(result.recordCount).toBe(1)
   })
 
   it('is paid by the pain.001 file, which has no fixed-width account field', () => {
@@ -223,12 +213,15 @@ describe('the support ticket, reproduced with an invented number', () => {
     expect(xml).toContain('<Id>99612345678</Id>')
   })
 
-  it('leaves every other employee payable in the LB file once that one is handled', () => {
+  it('pays every employee on the run in one LB file, whatever the account shape', () => {
     const result = generateBgLb(
       lbCompany,
-      [{ name: 'Bo Ek', clearingNumber: '83271', bankAccountNumber: '123456789', netSalary: 1000 }],
+      [
+        { name: 'Bo Ek', clearingNumber: '83271', bankAccountNumber: '123456789', payeeNumber: 1, netSalary: 1000 },
+        { name: PAYEE_NAME, clearingNumber: clearing, bankAccountNumber: account, payeeNumber: 2, netSalary: 1000 },
+      ],
       lbOptions,
     )
-    expect(result.recordCount).toBe(1)
+    expect(result.recordCount).toBe(2)
   })
 })

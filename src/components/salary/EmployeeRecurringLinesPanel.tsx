@@ -17,7 +17,6 @@ import {
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -287,8 +286,7 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={reset} disabled={submitting}>{t('form_cancel')}</Button>
-            <Button type="button" onClick={handleAdd} disabled={submitting}>
-              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button type="button" onClick={handleAdd} loading={submitting}>
               {t('form_save')}
             </Button>
           </DialogFooter>

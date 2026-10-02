@@ -21,8 +21,10 @@
  * - Outgoing invoice: POST the BIS Billing 3 UBL XML with
  *   `content-type: application/xml`; the response carries an `integrationId`
  *   (UUID) that identifies the message at Qvalia. The same document id for the
- *   same receiver answers `409`. `integrationId` appears in several places of
- *   the response, always with the same value (by design per Qvalia). Since
+ *   same receiver answers `409`; with `?overwrite=true` (a resend after a
+ *   failed delivery) Qvalia sends it again under a new `integrationId`.
+ *   `integrationId` appears in several places of the response, always with
+ *   the same value (by design per Qvalia). Since
  *   September the docs also describe an `Idempotency-Key` request header (a
  *   repeat within 24 h returns the original response and `integrationId`);
  *   this adapter does not send it yet and relies on the 409 recovery below.
@@ -30,12 +32,15 @@
  * - Webhooks: since September Qvalia signs deliveries with HMAC-SHA256
  *   (`X-Qvalia-Signature: t=<unix>,v1=<hex>` over `<t>.<raw body>`, plus
  *   `X-Qvalia-Event-Id`; the signing secret is returned once by the first
- *   `PUT .../webhook/configure`). The payload carries `eventId`, which is the
- *   documented dedupe key, and `occurredAt` for ordering. This adapter
- *   predates that: it still authenticates on the outbound auth header the
- *   partner configures (shared secret) and dedupes on eventType +
- *   globalTransactionId + status.status. Moving to signature verification is
- *   a follow-up.
+ *   `PUT .../webhook/configure`). With QVALIA_WEBHOOK_SIGNING_SECRET set,
+ *   verifyWebhook requires that signature (raw body bytes, timing-safe,
+ *   5-minute window on the signed `t`) and ignores the shared-secret header;
+ *   without it the adapter falls back to the outbound auth header the partner
+ *   configures (shared secret, QVALIA_WEBHOOK_SECRET), which is what it did
+ *   before Qvalia signed anything. Dedupe is unchanged: eventType +
+ *   globalTransactionId + status.status, the key the status poll also writes,
+ *   so a webhook and a poll for the same transition stay one event. The
+ *   payload's `eventId` (Qvalia's dedupe key) is not used for that reason.
  * - Webhook delivery is NOT retried by Qvalia: a non-2xx answer, a timeout
  *   (10 s) or an unreachable endpoint loses the event for good, so webhooks
  *   can never be the only source of truth. `pollDeliveryStatus` is the safety
@@ -44,16 +49,25 @@
  *   (a Peppol send inside its retry window, up to 24 h; also its own event
  *   type `document_delayed`) and `warning` are non-terminal; `processed`,
  *   `processed_with_warning` and `error` are terminal. The field is still
- *   declared free text, so unknown wording must keep meaning "no change".
+ *   declared free text: the webhook mapping keeps unknown wording as "no
+ *   change", while the status poll maps only the documented values and
+ *   refuses anything else (mapQvaliaOutgoingStatus).
+ * - Outgoing status: GET `.../invoices/outgoing/status?integrationId=...`
+ *   answers `{ status, data: [record] }` with the message-log OBJECT in
+ *   `metadata.status`, not the string the docs show, and 204 for an
+ *   integrationId Qvalia does not know (verified against the sandbox
+ *   2026-09-29). See readQvaliaOutgoingStatus.
  */
 
 import { timingSafeEqual } from 'node:crypto'
 import { sha256Hex } from '@/lib/invoices/peppol-delivery'
+import { verifySignatureHeader } from '@/lib/webhooks/signing'
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
 } from '@/lib/invoices/peppol-bis-billing'
 import {
+  PEPPOL_UPSTREAM_SHAPE_CODE,
   PeppolTransportError,
   type PeppolDeliveryEvidence,
   type PeppolDeliveryStatus,
@@ -75,6 +89,9 @@ import {
 export const QVALIA_PROVIDER = 'qvalia'
 export const QVALIA_PRODUCTION_BASE_URL = 'https://api.qvalia.com'
 export const QVALIA_DEFAULT_WEBHOOK_HEADER = 'x-accounted-webhook-key'
+export const QVALIA_SIGNATURE_HEADER = 'x-qvalia-signature'
+/** Qvalia's recommended replay window for the signed timestamp. */
+export const QVALIA_SIGNATURE_TOLERANCE_SECONDS = 300
 
 export type QvaliaAuthScheme = 'apikey' | 'raw'
 
@@ -90,10 +107,20 @@ export interface QvaliaConfig {
   accountRegNo: string
   baseUrl: string
   authScheme: QvaliaAuthScheme
-  /** Shared secret Qvalia sends back on every webhook delivery. */
+  /**
+   * Shared secret Qvalia sends back in `webhookHeader` on every webhook
+   * delivery. The legacy authentication, used only while
+   * `webhookSigningSecret` is unset.
+   */
   webhookSecret: string | null
   /** Header name carrying the shared secret (compared case-insensitively). */
   webhookHeader: string
+  /**
+   * HMAC-SHA256 signing secret Qvalia returned once from the first
+   * `PUT .../webhook/configure`. When set, every webhook must carry a valid
+   * `X-Qvalia-Signature` and the shared-secret header is not consulted.
+   */
+  webhookSigningSecret?: string | null
 }
 
 export interface QvaliaTransportDeps {
@@ -126,6 +153,7 @@ export function readQvaliaConfigFromEnv(
     authScheme,
     webhookSecret: env.QVALIA_WEBHOOK_SECRET?.trim() || null,
     webhookHeader: (env.QVALIA_WEBHOOK_HEADER?.trim() || QVALIA_DEFAULT_WEBHOOK_HEADER).toLowerCase(),
+    webhookSigningSecret: env.QVALIA_WEBHOOK_SIGNING_SECRET?.trim() || null,
   }
 }
 
@@ -137,11 +165,14 @@ export type QvaliaErrorKind =
   | 'unavailable'
   | 'network'
   | 'protocol'
+  | 'shape'
 
 /**
  * One error type for every Qvalia failure. `kind` tells the caller whether a
  * retry can help: `rejected` and `duplicate` are permanent for this document,
- * everything else is operational.
+ * `shape` (an answer this adapter cannot read, code
+ * PEPPOL_UPSTREAM_SHAPE_CODE) is permanent until the adapter learns the
+ * shape, everything else is operational.
  */
 export class QvaliaApiError extends PeppolTransportError {
   readonly kind: QvaliaErrorKind
@@ -153,8 +184,9 @@ export class QvaliaApiError extends PeppolTransportError {
     cause?: unknown
   } = {}) {
     super(message, {
-      retryable: kind !== 'rejected' && kind !== 'duplicate',
+      retryable: kind !== 'rejected' && kind !== 'duplicate' && kind !== 'shape',
       detail: options.detail ?? null,
+      code: kind === 'shape' ? PEPPOL_UPSTREAM_SHAPE_CODE : null,
       cause: options.cause,
     })
     this.name = 'QvaliaApiError'
@@ -309,6 +341,18 @@ function participantsEqual(a: PeppolParticipant, b: PeppolParticipant): boolean 
     && a.identifier.replace(/[\s-]/g, '') === b.identifier.replace(/[\s-]/g, '')
 }
 
+/**
+ * Qvalia's message-log status object. The webhook carries it in `status`,
+ * `/invoices/outgoing/status` in `metadata.status`. `status` is absent until
+ * the message has an outcome (event `message-log/create`).
+ */
+export interface QvaliaMessageStatus {
+  status?: string
+  event?: string
+  deliveryMethod?: string
+  updatedAt?: string
+}
+
 /** Webhook payload shape as documented on api.qvalia.io (one flat object). */
 export interface QvaliaWebhookPayload {
   eventType: 'new_document' | 'document_delivery' | 'document_error' | string
@@ -319,12 +363,7 @@ export interface QvaliaWebhookPayload {
   occurredAt?: string
   documentId?: string
   globalTransactionId?: string
-  status?: {
-    status?: string
-    event?: string
-    deliveryMethod?: string
-    updatedAt?: string
-  }
+  status?: QvaliaMessageStatus
   error?: string | null
   peppol_metadata?: Record<string, unknown> | null
 }
@@ -393,6 +432,94 @@ export function normalizeQvaliaWebhook(payload: QvaliaWebhookPayload): QvaliaNor
   }
 }
 
+function shapeOf(value: unknown): string {
+  if (value === null) return 'null'
+  return Array.isArray(value) ? 'array' : typeof value
+}
+
+/** `detail` names the shape (types, or Qvalia's own status value), never document content. */
+function upstreamShapeError(detail: string): QvaliaApiError {
+  return new QvaliaApiError('shape', 'Qvalia answered in a shape this adapter does not know', { detail })
+}
+
+export interface QvaliaOutgoingStatus {
+  /** Qvalia's value as sent (e.g. `processed`); null while the message has no outcome. */
+  status: string | null
+  updatedAt: string | null
+}
+
+/**
+ * Read one record of `/invoices/outgoing/status`. `metadata.status` is the
+ * documented string or, as the endpoint actually answers (sandbox,
+ * 2026-09-29), the message-log object:
+ *   accepted: { event: 'message-log/create', updatedAt, deliveryMethod }
+ *   outcome:  { event: 'message-log/update', status: 'processed', updatedAt, deliveryMethod }
+ * and `metadata` is `{}` while the message log has no entry. `updatedAt`
+ * comes from the object, else `metadata`, else the record. Any other shape
+ * throws a non-retryable `shape` error instead of being skipped: a skipped
+ * record is a delivery outcome lost without a trace.
+ */
+export function readQvaliaOutgoingStatus(record: unknown): QvaliaOutgoingStatus {
+  const item = asRecord(record)
+  if (!item) throw upstreamShapeError(`status record is ${shapeOf(record)}`)
+  const metadata = asRecord(item.metadata)
+  if (!metadata) throw upstreamShapeError(`status record metadata is ${shapeOf(item.metadata)}`)
+  const updatedAt = asString(metadata.updatedAt) ?? asString(item.updatedAt)
+  const raw = metadata.status
+  if (raw === undefined) return { status: null, updatedAt }
+  if (typeof raw === 'string') return { status: raw, updatedAt }
+  const logStatus = asRecord(raw)
+  if (!logStatus) throw upstreamShapeError(`metadata.status is ${shapeOf(raw)}`)
+  const logUpdatedAt = asString(logStatus.updatedAt) ?? updatedAt
+  const value = logStatus.status
+  if (value === undefined) return { status: null, updatedAt: logUpdatedAt }
+  if (typeof value !== 'string') throw upstreamShapeError(`metadata.status.status is ${shapeOf(value)}`)
+  return { status: value, updatedAt: logUpdatedAt }
+}
+
+/**
+ * Qvalia's documented outgoing statuses (api.qvalia.io), compared without
+ * case or surrounding space. `processed`, `processed_with_warning` and
+ * `error` are final at Qvalia; `pending`, `delayed` and `warning` are not and
+ * yield no event, nor does a message without an outcome (null). A delivered
+ * message is `transport_succeeded`, not terminal for Accounted (a business
+ * response may follow); `error` is final at Qvalia, so it is `failed`. Any
+ * other value throws instead of being guessed from its wording.
+ */
+export function mapQvaliaOutgoingStatus(
+  status: string | null,
+): Pick<QvaliaNormalizedStatus, 'normalizedStatus' | 'isTerminal'> | null {
+  if (status === null) return null
+  const value = status.trim().toLowerCase()
+  switch (value) {
+    case 'pending':
+    case 'delayed':
+    case 'warning':
+      return null
+    case 'processed':
+    case 'processed_with_warning':
+      return { normalizedStatus: 'transport_succeeded', isTerminal: false }
+    case 'error':
+      return { normalizedStatus: 'failed', isTerminal: true }
+    default:
+      throw upstreamShapeError(`undocumented outgoing status ${JSON.stringify(value.slice(0, 40))}`)
+  }
+}
+
+/**
+ * The records of an `/invoices/outgoing/status` answer, `{ status, data: [record] }`.
+ * An empty `data` is no record (like the 204 for an unknown integrationId);
+ * an answer without a `data` array is a shape this adapter does not know.
+ */
+function outgoingStatusRecords(json: unknown, text: string): unknown[] {
+  const envelope = asRecord(json)
+  if (envelope && Array.isArray(envelope.data)) return envelope.data
+  const found = envelope
+    ? `data: ${shapeOf(envelope.data)}`
+    : !text.trim() ? 'empty body' : json === null ? 'non-JSON body' : `${shapeOf(json)} body`
+  throw upstreamShapeError(`status answer without a data array (${found})`)
+}
+
 /**
  * Qvalia's lookup returns document types as SMP service URLs, e.g.
  * `https://smp-test.qvalia.com/iso6523-actorid-upis::0007:5567321707/services/busdox-docid-qns::urn:oasis:...::2.1`
@@ -432,6 +559,10 @@ export function createQvaliaTransport(
   const partner = encodePathSegment(config.partnerRegNo)
   const account = encodePathSegment(config.accountRegNo)
   const transactionBase = `${config.baseUrl}/partner/${partner}/transaction/${account}`
+  // The account every document is sent from (QVALIA_ACCOUNT_REG_NO, else the
+  // partner number) is the tenant label of every delivery and event this
+  // adapter makes (PeppolTransport.tenantId).
+  const tenantId = config.accountRegNo
 
   async function request(
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
@@ -534,7 +665,14 @@ export function createQvaliaTransport(
         detail: `unsupported content type ${submission.contentType}`,
       })
     }
-    const response = await request('POST', `${transactionBase}/invoices/outgoing`, {
+    // A resend after a failed delivery (replacesSubmissionId): with
+    // `?overwrite=true` Qvalia sends the document again under a NEW
+    // integrationId instead of answering 409 for the invoice number it holds
+    // for this receiver (confirmed by Qvalia). A 409 is then never answered
+    // by adopting an earlier integrationId: that is the failed submission
+    // the resend replaces, already recorded on another delivery.
+    const overwrite = submission.replacesSubmissionId ? '?overwrite=true' : ''
+    const response = await request('POST', `${transactionBase}/invoices/outgoing${overwrite}`, {
       headers: { 'content-type': 'application/xml' },
       body: submission.document,
     })
@@ -542,7 +680,9 @@ export function createQvaliaTransport(
 
     if (!response.ok) {
       const failure = classifyHttpFailure(response.status, json, text)
-      if (failure.kind === 'duplicate') return recoverDuplicateSubmission(submission, failure)
+      if (failure.kind === 'duplicate' && !submission.replacesSubmissionId) {
+        return recoverDuplicateSubmission(submission, failure)
+      }
       throw failure
     }
 
@@ -574,10 +714,32 @@ export function createQvaliaTransport(
     return a.length === b.length && timingSafeEqual(a, b)
   }
 
+  /**
+   * ADA CASA 7.2: HMAC-SHA256 over `<t>.<raw body bytes>`, compared
+   * timing-safe, with the signed `t` inside a 5-minute window. Replays inside
+   * the window are absorbed by the event dedupe key.
+   */
+  function webhookSignatureValid(webhook: PeppolWebhookRequest, signingSecret: string): void {
+    const check = verifySignatureHeader({
+      header: webhook.headers.get(QVALIA_SIGNATURE_HEADER),
+      rawBody: webhook.rawBody,
+      secret: signingSecret,
+      toleranceSeconds: QVALIA_SIGNATURE_TOLERANCE_SECONDS,
+      nowSeconds: Math.floor(now().getTime() / 1000),
+    })
+    if (!check.ok) {
+      throw new QvaliaApiError('auth', `Qvalia webhook signature rejected: ${check.reason}`)
+    }
+  }
+
   async function verifyWebhook(webhook: PeppolWebhookRequest): Promise<PeppolVerifiedEvent[]> {
-    if (!webhookAuthorized(webhook.headers)) {
+    const signingSecret = config.webhookSigningSecret ?? null
+    if (signingSecret) {
+      webhookSignatureValid(webhook, signingSecret)
+    } else if (!webhookAuthorized(webhook.headers)) {
       throw new QvaliaApiError('auth', 'Qvalia webhook secret missing or mismatched')
     }
+    const verificationMethod = signingSecret ? 'hmac_sha256_signature' : 'shared_secret_header'
 
     let parsed: unknown
     try {
@@ -604,7 +766,10 @@ export function createQvaliaTransport(
 
       events.push({
         provider: QVALIA_PROVIDER,
-        providerTenantId: asString(payload.accountRegNo) ?? config.accountRegNo,
+        // The adapter's label, like the poll: the delivery row carries it and
+        // the lifecycle RPC refuses any other. The payload's own
+        // accountRegNo stays in rawPayload.
+        providerTenantId: tenantId,
         providerSubmissionId: integrationId,
         providerEventId: `${payload.eventType}:${transactionId}:${statusKey}`,
         idempotencyKey: null,
@@ -615,7 +780,7 @@ export function createQvaliaTransport(
         occurredAt,
         rawPayload: payload as unknown as Record<string, unknown>,
         eventSha256: payloads.length === 1 ? eventSha256 : sha256Hex(`${eventSha256}:${index}`),
-        verificationMethod: 'shared_secret_header',
+        verificationMethod,
       })
     }
 
@@ -749,10 +914,12 @@ export function createQvaliaTransport(
   }
 
   /**
-   * Outbound status by polling `/invoices/outgoing/status`: the message-log
-   * status is the same free text the `document_delivery` webhook carries, so
-   * it goes through the same mapping. An empty `metadata` (nothing has
-   * happened since acceptance) yields no event.
+   * Outbound status by polling `/invoices/outgoing/status`. The record is read
+   * by readQvaliaOutgoingStatus (the message-log object the endpoint answers
+   * with) and mapped by mapQvaliaOutgoingStatus (Qvalia's documented values;
+   * the webhook's free-text mapping is not used here). No event while the
+   * message has no outcome or a non-final one, for an empty `data` and for a
+   * 204/404; an unknown shape or value throws PEPPOL_UPSTREAM_SHAPE_CODE.
    */
   async function pollDeliveryStatus(providerSubmissionId: string): Promise<PeppolVerifiedEvent[]> {
     const url = `${transactionBase}/invoices/outgoing/status?integrationId=${encodeURIComponent(providerSubmissionId)}&includeRead=true&limit=1`
@@ -760,37 +927,28 @@ export function createQvaliaTransport(
     if (response.status === 204 || response.status === 404) return []
     const { text, json } = await readBody(response)
     if (!response.ok) throw classifyHttpFailure(response.status, json, text)
-    const data = asRecord(json)?.data ?? json
-    const items = Array.isArray(data) ? data : data ? [data] : []
     const events: PeppolVerifiedEvent[] = []
-    for (const item of items) {
-      const record = asRecord(item)
-      const metadata = asRecord(record?.metadata)
-      const status = asString(metadata?.status)
-      if (!status) continue
-      const normalized = normalizeQvaliaWebhook({
-        eventType: 'document_delivery',
-        direction: 'outgoing',
-        integrationId: providerSubmissionId,
-        status: { status },
-      })
-      if (!normalized) continue
-      const occurredAt = asString(metadata?.updatedAt) ?? asString(record?.updatedAt) ?? now().toISOString()
+    for (const record of outgoingStatusRecords(json, text)) {
+      const { status, updatedAt } = readQvaliaOutgoingStatus(record)
+      const mapped = mapQvaliaOutgoingStatus(status)
+      if (!status || !mapped) continue
       events.push({
         provider: QVALIA_PROVIDER,
-        providerTenantId: config.accountRegNo,
+        providerTenantId: tenantId,
         providerSubmissionId,
         // Same dedupe key as the webhook would use for this transition, so a
         // later webhook for the same status is a harmless duplicate.
         providerEventId: `document_delivery:${providerSubmissionId}:${status}`,
         idempotencyKey: null,
         eventCode: 'status_poll',
-        normalizedStatus: normalized.normalizedStatus,
-        isTerminal: normalized.isTerminal,
-        detail: normalized.detail,
-        occurredAt,
-        rawPayload: record ?? {},
-        eventSha256: sha256Hex(`${providerSubmissionId}:${status}:${text}`),
+        normalizedStatus: mapped.normalizedStatus,
+        isTerminal: mapped.isTerminal,
+        detail: status.slice(0, 500),
+        occurredAt: updatedAt ?? now().toISOString(),
+        rawPayload: asRecord(record) ?? {},
+        // The transition, not the answer's bytes: the same status at the same
+        // time is one event however often it is polled.
+        eventSha256: sha256Hex(`${providerSubmissionId}:${status}:${updatedAt ?? ''}`),
         verificationMethod: 'provider_poll',
       })
     }
@@ -799,6 +957,7 @@ export function createQvaliaTransport(
 
   return {
     provider: QVALIA_PROVIDER,
+    tenantId,
     lookupRecipient,
     submit,
     verifyWebhook,

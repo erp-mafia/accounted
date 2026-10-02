@@ -13,7 +13,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Loader2 } from 'lucide-react'
 
 interface EditTransactionTitleDialogProps {
   open: boolean
@@ -112,16 +111,14 @@ export default function EditTransactionTitleDialog({
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={isSaving}
-            className="min-h-11 w-full sm:w-auto"
           >
             {t('edit_title_cancel')}
           </Button>
           <Button
             onClick={() => void persist(trimmed)}
-            disabled={isSaving || !trimmed || isUnchanged}
-            className="min-h-11 w-full sm:w-auto"
+            disabled={!trimmed || isUnchanged}
+            loading={isSaving}
           >
-            {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {t('edit_title_save')}
           </Button>
         </DialogFooter>

@@ -50,21 +50,6 @@ vi.mock('../vat-entries', () => ({
       }
     }
   ),
-  generateReverseChargeLines: vi.fn().mockImplementation(
-    (baseAmount: number, vatRate: number = 0.25) => {
-      const vatAmount = Math.round(baseAmount * vatRate * 100) / 100
-      let outputAccount: string
-      switch (vatRate) {
-        case 0.12: outputAccount = '2624'; break
-        case 0.06: outputAccount = '2634'; break
-        default: outputAccount = '2614'; break
-      }
-      return [
-        { account_number: '2645', debit_amount: vatAmount, credit_amount: 0, line_description: `Fiktiv ingående moms` },
-        { account_number: outputAccount, debit_amount: 0, credit_amount: vatAmount, line_description: `Fiktiv utgående moms` },
-      ]
-    }
-  ),
   extractNetAmount: vi.fn().mockImplementation(
     (totalAmount: number, vatRate: number) => {
       if (vatRate === 0) return totalAmount
@@ -841,7 +826,7 @@ describe('createTransactionJournalEntry: dimensions propagation (PR7)', () => {
     expect(input.lines.find(l => l.account_number === '1930')?.dimensions).toBeUndefined()
   })
 
-  it('all_lines_complete: each vat_lines[i].dimensions is used per line, with NO fallback to mappingResult.dimensions', async () => {
+  it('all_lines_complete: a line the pattern does not mark as business keeps only its own bag, with NO fallback to mappingResult.dimensions', async () => {
     const tx = makeTransaction({ amount: -1250, description: 'Multi-line pattern' })
     const vatLines: VatJournalLine[] = [
       { account_number: '5410', debit_amount: 1000, credit_amount: 0, description: 'Kostnad', dimensions: { '6': 'P001' } },
@@ -892,6 +877,53 @@ describe('createTransactionJournalEntry: dimensions propagation (PR7)', () => {
     expect(input.lines.find(l => l.account_number === '1930')?.dimensions).toBeUndefined()
   })
 
+  it('all_lines_complete: an explicit bag overrides the learned bag per key on every business line, and on no other line', async () => {
+    const tx = makeTransaction({ amount: -1250, description: 'Multi-line pattern' })
+    const vatLines: VatJournalLine[] = [
+      { account_number: '2641', debit_amount: 250, credit_amount: 0, description: 'Ingående moms' },
+      { account_number: '5410', debit_amount: 600, credit_amount: 0, description: 'Kostnad', business_line: true, dimensions: { '1': 'KS01', '6': 'P001' } },
+      { account_number: '6110', debit_amount: 400, credit_amount: 0, description: 'Kontor', business_line: true },
+    ]
+    const mapping = makeMappingResult({
+      debit_account: '5410',
+      credit_account: '1930',
+      all_lines_complete: true,
+      vat_lines: vatLines,
+      dimensions: { '6': 'P002' },
+    })
+
+    await createTransactionJournalEntry(null as never, 'company-1', 'user-1', tx, mapping)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    // The explicit P002 wins over the learned P001; the learned KS01 stays.
+    expect(input.lines.find(l => l.account_number === '5410')?.dimensions).toEqual({ '1': 'KS01', '6': 'P002' })
+    // A business line with no learned bag takes the explicit one.
+    expect(input.lines.find(l => l.account_number === '6110')?.dimensions).toEqual({ '6': 'P002' })
+    expect(input.lines.find(l => l.account_number === '2641')?.dimensions).toBeUndefined()
+    expect(input.lines.find(l => l.account_number === '1930')?.dimensions).toBeUndefined()
+    assertBalanced(input)
+  })
+
+  it('all_lines_complete: without an explicit bag the business lines keep exactly the learned bags', async () => {
+    const tx = makeTransaction({ amount: 12500, description: 'Multi-line income' })
+    const vatLines: VatJournalLine[] = [
+      { account_number: '3001', debit_amount: 0, credit_amount: 10000, description: 'Försäljning', business_line: true, dimensions: { '1': 'KS01' } },
+      { account_number: '2611', debit_amount: 0, credit_amount: 2500, description: 'Utgående moms' },
+    ]
+    const mapping = makeMappingResult({
+      debit_account: '1930',
+      credit_account: '3001',
+      all_lines_complete: true,
+      vat_lines: vatLines,
+    })
+
+    await createTransactionJournalEntry(null as never, 'company-1', 'user-1', tx, mapping)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find(l => l.account_number === '3001')?.dimensions).toEqual({ '1': 'KS01' })
+    expect(input.lines.find(l => l.account_number === '2611')?.dimensions).toBeUndefined()
+  })
+
   it('default_private path never tags: even when a bag is set on the mapping', async () => {
     const tx = makeTransaction({ amount: -500, description: 'Lunch privat' })
     const mapping = makeMappingResult({
@@ -919,5 +951,103 @@ describe('createTransactionJournalEntry: dimensions propagation (PR7)', () => {
     for (const line of input.lines) {
       expect(line.dimensions).toBeUndefined()
     }
+  })
+})
+
+// The class guard for the line builder: EVERY branch that books a business
+// (cost/revenue) line must stamp the categorize-level bag on it, and only on
+// it. The VAT-free income branch once dropped it, which left every income
+// line of a non VAT-registered company and all VAT-exempt income untagged
+// while the counterparty template learned the bag as if it had been booked.
+// A new branch belongs in this table.
+describe('buildTransactionEntryLines: the business line carries the bag in every branch', () => {
+  const BAG = { '1': 'KS01', '6': 'P001' }
+  const vat = (account_number: string, debit_amount: number, credit_amount: number): VatJournalLine => ({
+    account_number,
+    debit_amount,
+    credit_amount,
+    description: account_number,
+  })
+
+  const cases: Array<{ branch: string; amount: number; mapping: Partial<MappingResult>; business: string }> = [
+    {
+      branch: 'expense with input VAT',
+      amount: -1250,
+      mapping: { debit_account: '5410', credit_account: '1930', vat_lines: [vat('2641', 250, 0)] },
+      business: '5410',
+    },
+    {
+      branch: 'expense without VAT',
+      amount: -1000,
+      mapping: { debit_account: '5410', credit_account: '1930', vat_lines: [] },
+      business: '5410',
+    },
+    {
+      branch: 'expense with reverse charge (fiktiv moms and basis pair)',
+      amount: -1000,
+      mapping: {
+        debit_account: '6540',
+        credit_account: '1930',
+        vat_lines: [vat('2645', 250, 0), vat('2614', 0, 250), vat('4535', 1000, 0), vat('4598', 0, 1000)],
+      },
+      business: '6540',
+    },
+    {
+      branch: 'income with output VAT',
+      amount: 12500,
+      mapping: { debit_account: '1930', credit_account: '3001', vat_lines: [vat('2611', 0, 2500)] },
+      business: '3001',
+    },
+    {
+      branch: 'income without VAT (not VAT-registered, or exempt income)',
+      amount: 10000,
+      mapping: { debit_account: '1930', credit_account: '3004', vat_lines: [] },
+      business: '3004',
+    },
+    {
+      branch: 'income mirroring a reverse-charge refund',
+      amount: 1000,
+      mapping: {
+        debit_account: '1930',
+        credit_account: '6540',
+        vat_lines: [vat('2645', 0, 250), vat('2614', 250, 0)],
+      },
+      business: '6540',
+    },
+    {
+      branch: 'multi-line pattern expense (business, VAT and rounding lines)',
+      amount: -1250,
+      mapping: {
+        debit_account: '5410',
+        credit_account: '1930',
+        all_lines_complete: true,
+        vat_lines: [vat('2641', 250, 0), { ...vat('5410', 999.99, 0), business_line: true }, vat('3740', 0.01, 0)],
+      },
+      business: '5410',
+    },
+    {
+      branch: 'multi-line pattern income',
+      amount: 12500,
+      mapping: {
+        debit_account: '1930',
+        credit_account: '3001',
+        all_lines_complete: true,
+        vat_lines: [{ ...vat('3001', 0, 10000), business_line: true }, vat('2611', 0, 2500)],
+      },
+      business: '3001',
+    },
+  ]
+
+  it.each(cases)('$branch', ({ amount, mapping, business }) => {
+    const tx = makeTransaction({ amount, description: 'Rad' })
+    const lines = buildTransactionEntryLines(tx, makeMappingResult({ ...mapping, dimensions: BAG }))
+
+    const businessLines = lines.filter((l) => l.account_number === business)
+    expect(businessLines).toHaveLength(1)
+    expect(businessLines[0].dimensions).toEqual(BAG)
+    for (const line of lines.filter((l) => l.account_number !== business)) {
+      expect(line.dimensions, `line ${line.account_number}`).toBeUndefined()
+    }
+    assertBalanced({ lines } as CreateJournalEntryInput)
   })
 })

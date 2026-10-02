@@ -4,11 +4,12 @@
  *
  * Single source of truth for the loading, the preconditions and the
  * `payment_file_format` / `payment_file_generated_at` stamp shared by the
- * dashboard routes (app/api/salary/runs/[id]/payment/{pain001,bg-lb}) and the
- * public endpoint (POST /api/v1/companies/:companyId/salary-runs/:id/payment-file).
- * The HTTP layers only translate the result: the dashboard keeps its legacy
- * `{ error: string }` envelope and download headers, v1 maps codes onto the
- * structured-error catalogue.
+ * dashboard routes (app/api/salary/runs/[id]/payment/{pain001,bg-lb}), the
+ * public endpoint (POST /api/v1/companies/:companyId/salary-runs/:id/payment-file)
+ * and the MCP operation (lib/operations/salary-payment-files.ts). The doors
+ * only translate the result: the dashboard keeps its legacy `{ error: string }`
+ * envelope and download headers, v1 and MCP map codes onto the
+ * structured-error catalogue through salaryPaymentFileRefusal().
  *
  * Preconditions, in the order they are checked (and the order the queries run,
  * which the dashboard route tests depend on):
@@ -20,7 +21,7 @@
  *   5. company IBAN present and BIC present or derivable (pain.001)
  *   6. the run has employees
  *   7. every employee with a positive payout has clearing + account
- *   8. every one of those accounts can be carried by the chosen format
+ *   8. every one of those accounts names a payable account
  *      (payeeAccountProblem, the same verdict the generators apply): all
  *      affected employees are named at once, never the account number
  *
@@ -42,9 +43,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getBranding } from '@/lib/branding/service'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
-import { generatePain001 } from './pain001-generator'
+import { generatePain001, pain001TransactionId } from './pain001-generator'
 import type { Pain001CompanyData, Pain001Employee } from './pain001-generator'
-import { generateBgLb } from './bg-lb-generator'
+import { generateBgLb, utbetalningsnummer } from './bg-lb-generator'
 import type { BgLbCompanyData, BgLbEmployee } from './bg-lb-generator'
 import { effectiveNetPayout } from './effective-net'
 import {
@@ -52,12 +53,14 @@ import {
   describePayeeAccountProblems,
   lookupBicByBankName,
   lookupBicByClearing,
+  maskPayeeAccount,
   normalizeBankNumber,
   payeeAccountProblem,
 } from './bank-account'
 
-export const SALARY_PAYMENT_FILE_FORMATS = ['pain001', 'bg_lb'] as const
-export type SalaryPaymentFileFormat = (typeof SALARY_PAYMENT_FILE_FORMATS)[number]
+import { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat } from './payment-format'
+
+export { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat }
 
 /** Run statuses a payment file may be generated from. */
 export const SALARY_PAYMENT_FILE_ALLOWED_STATUSES = ['approved', 'paid', 'booked'] as const
@@ -95,6 +98,33 @@ export type SalaryPaymentFileErrorCode =
 
 export type SalaryPaymentFileLoadStage = 'run' | 'company' | 'settings' | 'employees'
 
+/**
+ * One payment the file carries, in file order: the banklista line. Built from
+ * the same payee array the generator wrote, so the list and the file cannot
+ * disagree.
+ */
+export interface SalaryPaymentFilePayee {
+  employeeId: string
+  name: string
+  /** Clearing number and the last four digits of the account (maskPayeeAccount). */
+  maskedAccount: string
+  /** The amount in the file, rounded to öre. */
+  amount: number
+  /**
+   * What ties the line to its record in the file: the EndToEndId (pain.001)
+   * or the utbetalningsnummer on the TK40/TK14 pair (Bankgirot LB).
+   */
+  reference: string
+}
+
+/** The payer as the file names it. */
+export interface SalaryPaymentFilePayer {
+  name: string
+  orgNumber: string | null
+  /** The debtor IBAN (pain.001) or the sender bankgiro (LB), as written in the file. */
+  account: string
+}
+
 export interface SalaryPaymentFileError {
   ok: false
   code: SalaryPaymentFileErrorCode
@@ -127,7 +157,11 @@ export interface SalaryPaymentFileOk {
   periodLabel: string
   /** Employees that appear in the file (positive payout). */
   employeeCount: number
+  /** Sum of `payees[].amount`: the file's control sum (pain.001 CtrlSum, LB TK29). */
   totalAmount: number
+  /** The payments the file carries, in file order (the banklista). */
+  payees: SalaryPaymentFilePayee[]
+  payer: SalaryPaymentFilePayer
   /** Non-blocking Swedish annotations the caller should surface. */
   warnings: string[]
   /** Value written to payment_file_generated_at; null on a dry run. */
@@ -168,6 +202,8 @@ interface RunEmployeeRow {
     last_name: string
     clearing_number: string | null
     bank_account_number: string | null
+    /** AGI specification number: the base of the LB utbetalningsnummer. */
+    specification_number: number | null
   } | null
 }
 
@@ -178,6 +214,79 @@ function fail(
   extra: { stage?: SalaryPaymentFileLoadStage; cause?: unknown } = {},
 ): SalaryPaymentFileError {
   return { ok: false, code, format, details, ...extra }
+}
+
+/** A builder refusal in the structured-errors catalogue (lib/errors/structured-errors.ts). */
+export interface SalaryPaymentFileRefusal {
+  code: string
+  /** What the caller's envelope carries beside the code. */
+  details?: Record<string, unknown>
+  /** The builder's own explanation, for the log line. */
+  reason?: string
+}
+
+/**
+ * The structured-errors code (and details) for a builder failure, shared by
+ * the v1 route and the MCP operation so both doors answer the same code for
+ * the same state. Null for DB_ERROR and ARCHIVE_FAILED: those carry the
+ * database error in `cause`, whose SQLSTATE decides the answer (a statement
+ * timeout is transient, a constraint is not).
+ */
+export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): SalaryPaymentFileRefusal | null {
+  switch (result.code) {
+    case 'RUN_NOT_FOUND':
+      return { code: 'SALARY_RUN_NOT_FOUND' }
+    case 'RUN_NOT_READY':
+      return { code: 'SALARY_RUN_PAYMENT_FILE_NOT_READY', details: result.details }
+    case 'COMPANY_NOT_FOUND':
+      return { code: 'COMPANY_NOT_FOUND' }
+    case 'SETTINGS_MISSING':
+    case 'IBAN_MISSING':
+    case 'BIC_MISSING':
+    case 'BANKGIRO_MISSING':
+    case 'BANKGIRO_INVALID':
+      return {
+        code: 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS',
+        reason: result.code,
+        details: { format: result.format, problem: result.code.toLowerCase(), ...result.details },
+      }
+    case 'NO_EMPLOYEES':
+      return { code: 'SALARY_RUN_NO_EMPLOYEES' }
+    case 'EMPLOYEE_BANK_MISSING':
+      return {
+        code: 'SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING',
+        details: { format: result.format, ...result.details },
+      }
+    case 'EMPLOYEE_BANK_INVALID':
+      return {
+        code: 'SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID',
+        reason: String(result.details.message ?? ''),
+        details: { format: result.format, ...result.details },
+      }
+    case 'GENERATOR_FAILED':
+      return {
+        code: 'SALARY_RUN_PAYMENT_FILE_GENERATION_FAILED',
+        reason: String(result.details.message ?? ''),
+        details: { format: result.format, ...result.details },
+      }
+    case 'ARCHIVE_FAILED':
+    case 'DB_ERROR':
+      return null
+  }
+}
+
+/** The bank-list line for one payee the generator wrote. */
+function payeeLine(
+  e: { employeeId: string; name: string; clearingNumber: string; bankAccountNumber: string; netSalary: number },
+  reference: string,
+): SalaryPaymentFilePayee {
+  return {
+    employeeId: e.employeeId,
+    name: e.name,
+    maskedAccount: maskPayeeAccount(e.clearingNumber, e.bankAccountNumber),
+    amount: e.netSalary,
+    reference,
+  }
 }
 
 function resolveFormat(
@@ -290,7 +399,7 @@ export async function buildSalaryPaymentFile(
   // 6. Employees on the run.
   const { data: runEmployeesData, error: employeesErr } = await supabase
     .from('salary_run_employees')
-    .select('*, employee:employees(first_name, last_name, clearing_number, bank_account_number)')
+    .select('*, employee:employees(first_name, last_name, clearing_number, bank_account_number, specification_number)')
     .eq('salary_run_id', runId)
   if (employeesErr) return fail('DB_ERROR', format, {}, { stage: 'employees', cause: employeesErr })
 
@@ -300,7 +409,13 @@ export async function buildSalaryPaymentFile(
   // 7. Bank details, but only for employees who actually appear in the file
   // (positive payout). A zero-net employee is filtered out below, so missing
   // bank details for them must not block the file.
-  const withNet = runEmployees.map((sre) => ({ sre, effectiveNet: effectiveNetPayout(sre) }))
+  // Rounded to öre here, once: this is the amount every generator writes
+  // and the bank list shows, so the per-line amounts and the control sum are
+  // computed from the same numbers.
+  const withNet = runEmployees.map((sre) => ({
+    sre,
+    effectiveNet: Math.round(effectiveNetPayout(sre) * 100) / 100,
+  }))
   const paid = withNet.filter(({ effectiveNet }) => effectiveNet > 0)
   const skipped = withNet.length - paid.length
 
@@ -315,14 +430,14 @@ export async function buildSalaryPaymentFile(
     })
   }
 
-  // 8. Accounts the chosen format cannot carry. Checked for every paid
-  // employee before generating, so the user gets the whole list by name in one
-  // pass instead of the generator stopping at the first one. `message` is the
+  // 8. Pairs that name no payable account. Checked for every paid employee
+  // before generating, so the user gets the whole list by name in one pass
+  // instead of the generator stopping at the first one. `message` is the
   // Swedish text for the HTTP layers; like `employees` it carries names and
   // problem codes, never a clearing or account number.
   const invalidBank = paid.flatMap(({ sre }) => {
     const emp = sre.employee as NonNullable<RunEmployeeRow['employee']>
-    const problem = payeeAccountProblem(emp.clearing_number, emp.bank_account_number, format)
+    const problem = payeeAccountProblem(emp.clearing_number, emp.bank_account_number)
     if (!problem) return []
     return [{ employee_id: sre.employee_id, name: `${emp.first_name} ${emp.last_name}`, problem }]
   })
@@ -350,7 +465,16 @@ export async function buildSalaryPaymentFile(
     if (checkEmployeeAccountChecksum(clearingNumber, bankAccountNumber) === 'invalid') {
       warnings.push(`${name}: kontrollsiffran i kontonumret verkar inte stämma. Dubbelkolla numret innan filen skickas.`)
     }
-    return { name, clearingNumber, bankAccountNumber, netSalary: effectiveNet }
+    // The LB file ties account to amount with an utbetalningsnummer built on
+    // the employee's specification number; pain.001 ignores it.
+    return {
+      employeeId: sre.employee_id,
+      name,
+      clearingNumber,
+      bankAccountNumber,
+      payeeNumber: emp.specification_number ?? 0,
+      netSalary: effectiveNet,
+    }
   })
 
   const totalAmount = Math.round(employees.reduce((sum, e) => sum + e.netSalary, 0) * 100) / 100
@@ -362,6 +486,7 @@ export async function buildSalaryPaymentFile(
   let filename: string
   let contentType: SalaryPaymentFileOk['contentType']
   let charset: SalaryPaymentFileOk['charset']
+  let payees: SalaryPaymentFilePayee[]
   try {
     if (format === 'pain001') {
       const messageId = `${getBranding().appName.toUpperCase()}-${companyRow.org_number?.replace('-', '')}-${periodLabel}`
@@ -373,6 +498,7 @@ export async function buildSalaryPaymentFile(
       filename = `pain001_lon_${periodLabel}.xml`
       contentType = 'application/xml'
       charset = 'utf-8'
+      payees = employees.map((e, i) => payeeLine(e, pain001TransactionId(messageId, i)))
     } else {
       const result = generateBgLb(bgLbCompany as BgLbCompanyData, employees as BgLbEmployee[], {
         paymentDate: runRow.payment_date,
@@ -382,6 +508,9 @@ export async function buildSalaryPaymentFile(
       filename = result.filename
       contentType = 'text/plain'
       charset = 'iso-8859-1'
+      // The generator has already accepted every payee number, so this
+      // cannot throw here; it is the number the TK40/TK14 pair carries.
+      payees = employees.map((e) => payeeLine(e, utbetalningsnummer(e.payeeNumber)))
     }
   } catch (err) {
     return fail(
@@ -412,6 +541,14 @@ export async function buildSalaryPaymentFile(
     periodLabel,
     employeeCount: employees.length,
     totalAmount,
+    payees,
+    payer: pain001Company
+      ? { name: pain001Company.name, orgNumber: companyRow.org_number, account: pain001Company.iban }
+      : {
+          name: (bgLbCompany as BgLbCompanyData).name,
+          orgNumber: companyRow.org_number,
+          account: (bgLbCompany as BgLbCompanyData).senderBankgiro,
+        },
     warnings,
   }
 

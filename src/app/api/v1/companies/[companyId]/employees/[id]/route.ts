@@ -14,7 +14,8 @@
  *          personnummer attribute on the master row: a future GDPR
  *          Art.17 erasure workflow could pseudonymise the row once all
  *          referenced verifikationer are outside the 7-year window.)
- *          Hard delete is never exposed from v1.
+ *          Hard delete is never exposed from v1. The rule lives in
+ *          lib/salary/employee-soft-delete.ts.
  */
 
 import { z } from 'zod'
@@ -31,11 +32,14 @@ import {
   JAMKNING_END_REQUIRED,
   JAMKNING_START_REQUIRED,
   jamkningIssueFromDbError,
-  touchesJamkning,
-  validateJamkning,
   type JamkningFields,
-  type JamkningIssue,
 } from '@/lib/salary/jamkning-rules'
+import {
+  VAXA_START_REQUIRED,
+  validateEmployeeUpdate,
+  type EmployeeUpdateIssue,
+} from '@/lib/salary/employee-update-rules'
+import { softDeleteEmployee } from '@/lib/salary/employee-soft-delete'
 
 const EmploymentType = z.enum(['employee', 'company_owner', 'board_member'])
 const SalaryType = z.enum(['monthly', 'hourly'])
@@ -108,6 +112,12 @@ type ExistingRow = {
   personnummer: string
   [key: string]: unknown
 }
+
+/**
+ * Merged-state issues whose fix is a companion field the caller left out of
+ * the PATCH: the 400 names that key.
+ */
+const SEND_IN_SAME_PATCH = new Set([JAMKNING_START_REQUIRED, JAMKNING_END_REQUIRED, VAXA_START_REQUIRED])
 
 /**
  * Convert a freshly-fetched / updated employee row into the write-response
@@ -213,7 +223,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id',
   summary: 'Update an employee.',
   description:
-    'Partial update of an employee. Only the fields supplied in the body are changed. Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.',
+    'Partial update of an employee. Only the fields supplied in the body are changed: an omitted key is left unchanged, and an explicit null clears a nullable field (employment_end, salary amounts, tax table and municipality, bank details, contact details, Växa-stöd and jämkning dates). Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.',
   useWhen:
     'You need to change tax configuration, bank details, salary amount, or contact info on an existing employee.',
   doNotUseFor:
@@ -221,7 +231,9 @@ registerEndpoint({
   pitfalls: [
     'personnummer in the body is ignored by this endpoint. To change it you must DELETE and recreate.',
     'salary_type changes require the matching salary field in the same request: switching to monthly without monthly_salary returns 400.',
+    'A cleared field is checked against the stored row: nulling monthly_salary on a monthly employee, tax_table_number on an A-skatt employee without sidoinkomst, vaxa_stod_start while Växa-stöd is on, or only one of clearing_number/bank_account_number returns 400. To end an ongoing employment set employment_end; to reopen it send employment_end: null.',
     'tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.',
+    'vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.',
   ],
   example: {
     request: { monthly_salary: 38000, tax_municipality: 'Göteborg' },
@@ -327,53 +339,27 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       }
     }
 
-    // Merged-state Växa-stöd check. UpdateEmployeeSchema enforces consistency
-    // when both fields are present in the body, but a caller flipping
-    // `vaxa_stod_eligible: true` ALONE without supplying `vaxa_stod_start`
-    // can bypass schema-level validation if the existing row has no start.
-    // The schema cannot see the existing row; the route can.
-    const mergedVaxaEligible =
-      'vaxa_stod_eligible' in updates
-        ? (updates.vaxa_stod_eligible as boolean)
-        : ((existing as Record<string, unknown>).vaxa_stod_eligible as boolean)
-    const mergedVaxaStart =
-      'vaxa_stod_start' in updates
-        ? (updates.vaxa_stod_start as string | null)
-        : ((existing as Record<string, unknown>).vaxa_stod_start as string | null)
-    if (mergedVaxaEligible && !mergedVaxaStart) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'vaxa_stod_start',
-          message:
-            'Startdatum för Växa-stöd måste anges när Växa-stöd är aktiverat. Skicka även `vaxa_stod_start` i samma PATCH.',
-        },
-      })
-    }
-
-    // Merged-state jämkning check through the shared validator (same pattern
-    // as växa-stöd): a non-null percentage needs both dates, but the schema
-    // can only see the body. Setting jamkning_percentage to null clears the
-    // beslut and skips these checks. Only run when the PATCH touches a
-    // jamkning field: a legacy row with inconsistent jamkning_* state must
-    // not block unrelated updates (fixing it requires touching those very
-    // fields). #2058
-    const jamkningIssueDetails = (issue: JamkningIssue) => ({
+    // Merged-state rules through the one copy every door runs (#3008): the
+    // schema cannot see the existing row, so a sparse PATCH that clears a
+    // field (null) or flips a flag alone is checked on the row as it would be
+    // stored. Covers salary amount, tax table, Växa-stöd start (a caller
+    // flipping `vaxa_stod_eligible: true` alone on a row without a start),
+    // jämkning (only when the PATCH names a jämkning key, #2058) and bank
+    // details (only when they change). The first issue is returned; a
+    // missing companion field names the key to send in the same PATCH.
+    const issueDetails = (issue: EmployeeUpdateIssue) => ({
       field: issue.field,
-      message:
-        issue.message === JAMKNING_START_REQUIRED || issue.message === JAMKNING_END_REQUIRED
-          ? `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`
-          : `${issue.message}.`,
+      message: SEND_IN_SAME_PATCH.has(issue.message)
+        ? `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`
+        : `${issue.message}.`,
     })
     const mergedJamkning = { ...(existing as Record<string, unknown>), ...updates } as JamkningFields
-    if (touchesJamkning(updates)) {
-      const [issue] = validateJamkning(mergedJamkning)
-      if (issue) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: jamkningIssueDetails(issue),
-        })
-      }
+    const [issue] = validateEmployeeUpdate(existing as Record<string, unknown>, updates)
+    if (issue) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: issueDetails(issue),
+      })
     }
 
     if (Object.keys(updates).length === 0) {
@@ -414,7 +400,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       if (jamkningIssue) {
         return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
           requestId: ctx.requestId,
-          details: jamkningIssueDetails(jamkningIssue),
+          details: issueDetails(jamkningIssue),
         })
       }
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
@@ -472,41 +458,27 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       })
     }
 
-    const { data: existing, error: fetchErr } = await ctx.supabase
-      .from('employees')
-      .select('id, is_active')
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .maybeSingle()
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!existing) {
-      return v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+    // The rule (soft delete only, idempotent) lives in the service, shared
+    // with the MCP tool gnubok_delete_employee.
+    const result = await softDeleteEmployee(ctx.supabase, {
+      companyId: ctx.companyId!,
+      employeeId: idParse.data,
+      dryRun: ctx.dryRun,
+    })
+    if (!result.ok) {
+      return result.code === 'EMPLOYEE_NOT_FOUND'
+        ? v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+        : v1ErrorResponse(result.cause, ctx.log, { requestId: ctx.requestId })
     }
 
-    if (ctx.dryRun) {
+    if (!result.data.committed) {
       return dryRunPreview(
-        { ...(existing as object), is_active: false },
+        { id: result.data.employee.id, is_active: false },
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
 
-    // Already inactive → no-op (idempotent).
-    if (!(existing as { is_active: boolean }).is_active) {
-      return noContent({ requestId: ctx.requestId })
-    }
-
-    const { error } = await ctx.supabase
-      .from('employees')
-      .update({ is_active: false })
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
+    // Deactivated now, or already inactive (idempotent): 204 either way.
     return noContent({ requestId: ctx.requestId })
   },
 )

@@ -49,7 +49,7 @@ export function CalendarWeekView({
               key={index}
               onClick={() => onDayClick(date)}
               className={cn(
-                'p-2 text-center border-r last:border-r-0 hover:bg-muted/80 transition-colors',
+                'p-2 text-center border-r last:border-r-0 hover:bg-secondary/60 transition-colors',
                 isToday && 'bg-primary/10'
               )}
             >
@@ -143,7 +143,7 @@ export function CalendarWeekView({
                   key={dayIndex}
                   onClick={() => onDayClick(date)}
                   className={cn(
-                    'min-h-[40px] border-r last:border-r-0 hover:bg-muted/50 transition-colors',
+                    'min-h-[40px] border-r last:border-r-0 hover:bg-secondary/60 transition-colors',
                     isToday && 'bg-primary/5'
                   )}
                 />

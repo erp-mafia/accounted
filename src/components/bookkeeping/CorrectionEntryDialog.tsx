@@ -372,8 +372,8 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
                   </div>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 min-h-[44px] min-w-[44px] sm:order-last"
+                    size="icon-sm"
+                    className="sm:order-last"
                     onClick={() => removeLine(index)}
                     disabled={lines.length <= 2}
                   >

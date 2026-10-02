@@ -28,7 +28,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
-import { Plus, Trash2, Type } from 'lucide-react'
+import { Plus, Tags, Trash2, Type } from 'lucide-react'
 import { CURRENCIES, type Customer, type Currency, type RecurringInvoiceSchedule } from '@/types'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -49,8 +49,20 @@ import {
 } from '@/lib/invoices/recurring-placeholders'
 import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
 import UnitDatalist from '@/components/invoices/UnitDatalist'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { hasDimensionValues } from '@/lib/invoices/editor-payload'
 
 const currencies: readonly Currency[] = CURRENCIES
+
+// Compact display of a dimensions bag, e.g. "KS01 · P001" (dim-number order).
+function compactDims(dims: Record<string, string>): string {
+  return Object.entries(dims)
+    .filter(([, v]) => v)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([, v]) => v)
+    .join(' · ')
+}
 
 /**
  * Today as yyyy-mm-dd in Europe/Stockholm: the calendar the server validates
@@ -136,8 +148,22 @@ function NewRecurringScheduleForm({
   const { company } = useCompany()
   const supabase = createClient()
   const t = useTranslations('invoice_recurring_new')
+  // The per-row dimension affordances share the invoice editor's wording: a
+  // schedule's default bag becomes each generated invoice's default.
+  const tInvoice = useTranslations('invoice_editor')
   const [customers, setCustomers] = useState<Customer[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Dimension tagging (kostnadsställe/projekt). The pickers render only when
+  // company_settings.dimensions_enabled, but the stored bags always round-trip:
+  // PATCH replaces the item list wholesale, so an item sent without its bag
+  // would lose it. defaultDims is the schedule's default_dimensions (copied
+  // onto every generated invoice); per-item bags live on the form items, and a
+  // defined bag (possibly empty) means that row's panel is open.
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
+  const [defaultDims, setDefaultDims] = useState<Record<string, string>>(
+    () => ({ ...(schedule?.default_dimensions ?? {}) }),
+  )
 
   const schema = useMemo(() => {
     const itemSchema = z
@@ -151,6 +177,10 @@ function NewRecurringScheduleForm({
           .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
           .nullable()
           .optional(),
+        // Must be declared: the resolver strips undeclared keys, and a bag
+        // dropped here is erased by the wholesale item replace on save. The
+        // server validates the codes (DimensionsBagSchema).
+        dimensions: z.record(z.string(), z.string()).optional(),
       })
       .superRefine((item, ctx) => {
         // A text row is description-only (may be blank for a spacer).
@@ -278,6 +308,9 @@ function NewRecurringScheduleForm({
                     unit: it.unit,
                     unit_price: it.unit_price,
                     vat_rate: (it.vat_rate as 0 | 6 | 12 | 25 | null) ?? null,
+                    // Carried whether or not the pickers show: the save sends
+                    // the full item list back and would otherwise erase it.
+                    dimensions: hasDimensionValues(it.dimensions) ? { ...it.dimensions } : undefined,
                   }))
               : [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 }],
         }
@@ -313,7 +346,9 @@ function NewRecurringScheduleForm({
     setIsSubmitting(true)
     try {
       const { run_date, period_start, ...restFields } = data
-      const rest = { ...restFields, period_start: period_start || null }
+      // default_dimensions replaces the stored bag, so it is always sent (the
+      // state starts from the stored one, making an untouched save a no-op).
+      const rest = { ...restFields, period_start: period_start || null, default_dimensions: defaultDims }
       // Create: the chosen date is the first run. Edit: only send it when the
       // user re-phased the schedule (a different month/year than the stored
       // date aligned to the chosen day), so an unrelated edit, a day-only
@@ -412,6 +447,36 @@ function NewRecurringScheduleForm({
   )
   // Round to öre using the project monetary rule, then format.
   const subtotal = Math.round(subtotalRaw * 100) / 100
+
+  // --- Dimension tagging (same model as the supplier-invoice form) ---
+  // Closing a row's panel clears its bag so the item inherits the default.
+  function isDimOpen(index: number): boolean {
+    return items[index]?.dimensions != null
+  }
+
+  function toggleItemDimensions(index: number) {
+    setValue(`items.${index}.dimensions`, isDimOpen(index) ? undefined : {}, { shouldDirty: true })
+  }
+
+  function updateItemDimension(index: number, dimNo: string, code: string | null) {
+    const current = { ...(items[index]?.dimensions ?? {}) }
+    const trimmed = code?.trim()
+    if (trimmed) current[dimNo] = trimmed
+    else delete current[dimNo]
+    setValue(`items.${index}.dimensions`, current, { shouldDirty: true })
+  }
+
+  function setDefaultDimension(dimNo: string, code: string | null) {
+    setDefaultDims((prev) => {
+      const next = { ...prev }
+      const trimmed = code?.trim()
+      if (trimmed) next[dimNo] = trimmed
+      else delete next[dimNo]
+      return next
+    })
+  }
+
+  const defaultDimsSummary = compactDims(defaultDims)
 
   return (
     <form onSubmit={handleSubmit(onSubmit, onInvalidSubmit)} className="space-y-6">
@@ -706,6 +771,21 @@ function NewRecurringScheduleForm({
                     {errors.items[index].description?.message}
                   </p>
                 )}
+                {dimensionsEnabled && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="mt-1 -ml-2 text-muted-foreground"
+                    onClick={() => toggleItemDimensions(index)}
+                    aria-expanded={isDimOpen(index)}
+                  >
+                    <Tags className="mr-2 h-4 w-4" />
+                    {isDimOpen(index)
+                      ? tInvoice('row_menu_remove_dimensions')
+                      : tInvoice('row_menu_set_dimensions')}
+                  </Button>
+                )}
               </div>
               <div className="col-span-3 sm:col-span-2">
                 <Input
@@ -758,6 +838,24 @@ function NewRecurringScheduleForm({
                   <Trash2 className="h-4 w-4" />
                 </Button>
               </div>
+              {/* Per-item dims override: merged over the schedule default on
+                  the revenue line this item books to. */}
+              {dimensionsEnabled && isDimOpen(index) && (
+                <div className="col-span-12 space-y-1 rounded-lg border border-border bg-muted/30 p-3">
+                  <div className="max-w-md">
+                    <LineDimensionFields
+                      dimensions={items[index]?.dimensions}
+                      onChange={(dimNo, code) => updateItemDimension(index, dimNo, code)}
+                      inputClassName="h-8"
+                    />
+                  </div>
+                  {defaultDimsSummary && (
+                    <p className="text-xs text-muted-foreground">
+                      {tInvoice('row_dimensions_inherit_hint', { dims: defaultDimsSummary })}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           ))}
           <div className="flex flex-wrap gap-2">
@@ -847,6 +945,13 @@ function NewRecurringScheduleForm({
               )}
             </div>
           </div>
+          {/* Schedule-level default dims (kostnadsställe/projekt): copied onto
+              every generated invoice's default_dimensions. */}
+          {dimensionsEnabled && (
+            <div className="max-w-md">
+              <LineDimensionFields dimensions={defaultDims} onChange={setDefaultDimension} />
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -2,7 +2,6 @@
 
 import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -208,8 +207,7 @@ export function VoucherSeriesManager({ settings, onSettingsUpdated }: VoucherSer
             )
           })}
           <div className="flex justify-end px-1 pt-4">
-            <Button type="button" size="sm" onClick={handleSave} disabled={!hasChanges || isSaving}>
-              {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button type="button" size="sm" onClick={handleSave} disabled={!hasChanges} loading={isSaving}>
               {t('save_names')}
             </Button>
           </div>

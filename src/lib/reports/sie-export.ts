@@ -147,17 +147,32 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
   // serialize into #TRANS object lists, and Visma rejects files whose #TRANS
   // references an undeclared #OBJEKT (plan §5 latent bug #2: the legacy
   // cost_centers/projects read filtered is_active=true and dropped them).
-  const { data: registryDimensions } = await supabase
-    .from('dimensions')
-    .select('id, sie_dim_no, parent_sie_dim_no, name')
-    .eq('company_id', companyId)
-    .order('sie_dim_no')
+  //
+  // Paginated: PostgREST silently caps a read at 1000 rows and an SIE
+  // history can mint thousands of object codes. The unpaginated read
+  // declared every code past the cap with a synthesized name = code, a
+  // placeholder in a file kept for seven years. Both orders are unique
+  // (sie_dim_no per company, code per dimension), as fetchAllRows requires.
+  const registryDimensions = await fetchAllRows<RegistryDimension>(({ from, to }) =>
+    supabase
+      .from('dimensions')
+      .select('id, sie_dim_no, parent_sie_dim_no, name')
+      .eq('company_id', companyId)
+      .order('sie_dim_no', { ascending: true })
+      .range(from, to)
+  )
 
-  const { data: registryValues } = await supabase
-    .from('dimension_values')
-    .select('dimension_id, code, name')
-    .eq('company_id', companyId)
-    .order('code')
+  const registryValues = await fetchAllRows<RegistryValue>(
+    ({ from, to }) =>
+      supabase
+        .from('dimension_values')
+        .select('dimension_id, code, name')
+        .eq('company_id', companyId)
+        .order('dimension_id', { ascending: true })
+        .order('code', { ascending: true })
+        .range(from, to),
+    { dedupeBy: (v) => `${v.dimension_id}|${v.code}` }
+  )
 
   const lines: string[] = []
   const now = new Date()
@@ -192,7 +207,7 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
 
   // === Dimension definitions (#DIM / #UNDERDIM) + objects (#OBJEKT) ===
   lines.push(
-    ...buildDimensionSection(registryDimensions ?? [], registryValues ?? [], allLines)
+    ...buildDimensionSection(registryDimensions, registryValues, allLines)
   )
 
   // === Chart of accounts ===

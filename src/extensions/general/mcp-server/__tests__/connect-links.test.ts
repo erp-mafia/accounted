@@ -147,10 +147,27 @@ describe('onboarding connect-link tools', () => {
 
   it('skatteverket: reports connected with the token expiry', async () => {
     vi.stubEnv('SKATTEVERKET_ENABLED', 'true')
-    const { from } = listClient([{ expires_at: '2026-12-01T00:00:00Z' }])
+    const { from } = listClient([
+      { user_id: 'user-1', status: 'active', created_at: '2026-09-01T00:00:00Z', expires_at: '2026-12-01T00:00:00Z' },
+    ])
     const result = (await skvTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
     expect(result.connected).toBe(true)
+    expect(result.status).toBe('connected')
     expect(result.token_expires_at).toBe('2026-12-01T00:00:00Z')
+  })
+
+  it('skatteverket: a token flagged needs_reconsent is NOT connected (feedback seq 604946)', async () => {
+    vi.stubEnv('SKATTEVERKET_ENABLED', 'true')
+    const { from } = listClient([
+      { user_id: 'user-1', status: 'needs_reconsent', created_at: '2026-09-15T12:00:00Z', expires_at: '2026-09-15T13:27:00Z' },
+    ])
+    const result = (await skvTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
+    expect(result.connected).toBe(false)
+    expect(result.status).toBe('needs_reconsent')
+    expect(result.connect_url).toBe(
+      'https://app.example.test/api/extensions/ext/skatteverket/authorize?return_to=%2F'
+    )
+    expect(String(result.instructions)).toMatch(/expired/)
   })
 
   it('refuses to hand out a link when NEXT_PUBLIC_APP_URL is not configured', async () => {

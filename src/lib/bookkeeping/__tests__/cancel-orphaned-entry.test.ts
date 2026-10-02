@@ -1,11 +1,13 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest'
 
-const { reverseEntryMock } = vi.hoisted(() => ({
+const { reverseEntryMock, cancelOrphanedEntryMock } = vi.hoisted(() => ({
   reverseEntryMock: vi.fn(),
+  cancelOrphanedEntryMock: vi.fn(),
 }))
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   reverseEntry: reverseEntryMock,
+  cancelOrphanedEntry: cancelOrphanedEntryMock,
 }))
 
 import {
@@ -69,6 +71,8 @@ function createMockSupabase(opts: {
 beforeEach(() => {
   reverseEntryMock.mockReset()
   reverseEntryMock.mockResolvedValue(undefined)
+  cancelOrphanedEntryMock.mockReset()
+  cancelOrphanedEntryMock.mockResolvedValue({ error: null })
 })
 
 describe('recordVoucherGapExplanation', () => {
@@ -231,88 +235,44 @@ describe('reverseOrphanedJournalEntry', () => {
 })
 
 describe('cancelOrphanedPaymentEntry', () => {
-  it('cancels the voucher and records a gap explanation', async () => {
-    const { supabase, updates, inserts } = createMockSupabase({
-      orphan: { fiscal_period_id: 'fp-1', voucher_series: 'A', voucher_number: 66 },
-    })
+  // posted -> cancelled is gated in the database (migration 20260929220100):
+  // the cancel and the gap explanation run in one transaction inside the
+  // cancel_orphaned_entry RPC, reached through the engine helper.
+  it('cancels through the gated engine door and hands it the gap explanation', async () => {
+    const { supabase, updates, inserts } = createMockSupabase({})
 
     await cancelOrphanedPaymentEntry(
       supabase as never, 'company-1', 'user-1', 'je-1', 'Automatiskt makulerad: test',
     )
 
-    expect(updates).toEqual([{ status: 'cancelled' }])
-    const gaps = inserts['voucher_gap_explanations'] as Record<string, unknown>[]
-    expect(gaps).toHaveLength(1)
-    expect(gaps[0]).toEqual({
-      company_id: 'company-1',
-      user_id: 'user-1',
-      fiscal_period_id: 'fp-1',
-      voucher_series: 'A',
-      gap_start: 66,
-      gap_end: 66,
-      explanation: 'Automatiskt makulerad: test',
-    })
-  })
-
-  it('defaults the gap series to A when the voucher has none', async () => {
-    const { supabase, inserts } = createMockSupabase({
-      orphan: { fiscal_period_id: 'fp-1', voucher_series: null, voucher_number: 12 },
-    })
-
-    await cancelOrphanedPaymentEntry(
-      supabase as never, 'company-1', 'user-1', 'je-1', 'x',
+    expect(cancelOrphanedEntryMock).toHaveBeenCalledWith(
+      supabase, 'company-1', 'user-1', 'je-1', { gapExplanation: 'Automatiskt makulerad: test' },
     )
-
-    const gaps = inserts['voucher_gap_explanations'] as Record<string, unknown>[]
-    expect(gaps[0]).toMatchObject({ voucher_series: 'A' })
-  })
-
-  it('still cancels when the orphan lookup fails, but records no gap', async () => {
-    const { supabase, updates, inserts } = createMockSupabase({ orphan: null })
-
-    await cancelOrphanedPaymentEntry(
-      supabase as never, 'company-1', 'user-1', 'je-1', 'x',
-    )
-
-    expect(updates).toEqual([{ status: 'cancelled' }])
+    // No client-side status flip or separate gap insert any more: a direct
+    // UPDATE to cancelled is refused by the database, and a separate insert
+    // reopened the crash window between the two writes.
+    expect(updates).toEqual([])
     expect(inserts['voucher_gap_explanations']).toBeUndefined()
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
-  it('never throws, even when the client rejects unexpectedly', async () => {
-    const supabase = {
-      from: vi.fn().mockImplementation(() => {
-        throw new Error('network blip')
-      }),
-    }
+  it('never throws when the cleanup is refused (the CAS response must survive)', async () => {
+    cancelOrphanedEntryMock.mockResolvedValueOnce({
+      error: { message: 'was not posted within the last 15 minutes', code: '55000' },
+    })
+    const { supabase } = createMockSupabase({})
 
     await expect(
       cancelOrphanedPaymentEntry(supabase as never, 'company-1', 'user-1', 'je-1', 'x'),
     ).resolves.toBeUndefined()
   })
 
-  it('never throws when the gap insert itself fails (the CAS response must survive)', async () => {
-    const { supabase, updates } = createMockSupabase({
-      orphan: { fiscal_period_id: 'fp-1', voucher_series: 'A', voucher_number: 66 },
-      insertError: { message: 'permission denied', code: '42501' },
-    })
+  it('never throws, even when the helper rejects unexpectedly', async () => {
+    cancelOrphanedEntryMock.mockRejectedValueOnce(new Error('network blip'))
+    const { supabase } = createMockSupabase({})
 
     await expect(
       cancelOrphanedPaymentEntry(supabase as never, 'company-1', 'user-1', 'je-1', 'x'),
     ).resolves.toBeUndefined()
-    expect(updates).toEqual([{ status: 'cancelled' }])
-  })
-
-  it('does not record a gap when the cancel itself fails', async () => {
-    const { supabase, inserts } = createMockSupabase({
-      orphan: { fiscal_period_id: 'fp-1', voucher_series: 'A', voucher_number: 9 },
-      cancelError: { message: 'period locked' },
-    })
-
-    await cancelOrphanedPaymentEntry(
-      supabase as never, 'company-1', 'user-1', 'je-1', 'x',
-    )
-
-    // The voucher is still live: a gap explanation would be a lie.
-    expect(inserts['voucher_gap_explanations']).toBeUndefined()
   })
 })

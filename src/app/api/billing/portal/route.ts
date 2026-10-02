@@ -4,6 +4,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { getStripe } from '@/lib/stripe/client'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
+import { localeFromCookieHeader } from '@/i18n/config'
 
 /**
  * Create a Stripe Billing Customer Portal session so the user can manage,
@@ -52,6 +53,9 @@ export const POST = withRouteContext('billing.portal', async (request, ctx) => {
   const portal = await getStripe().billingPortal.sessions.create({
     customer: customerId,
     return_url: `${appOrigin}/settings/billing`,
+    // The portal in the language the app is shown in (sv and en are both
+    // Stripe locales); left out, Stripe picks the browser's language.
+    locale: localeFromCookieHeader(request.headers.get('cookie')),
   })
 
   return NextResponse.json({ url: portal.url })

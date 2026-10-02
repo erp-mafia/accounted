@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Input } from '@/components/ui/input'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { cn } from '@/lib/utils'
 
 interface BankOption {
@@ -155,7 +156,7 @@ export function BankNameCombobox({ defaultValue = '', value: controlledValue, on
           ref={listRef}
           id="bank-name-listbox"
           role="listbox"
-          className="absolute z-50 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-border bg-popover shadow-md"
+          className={cn('absolute z-50 mt-1 max-h-56 w-full overflow-auto', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}
         >
           {filtered.map((bank, i) => (
             <li

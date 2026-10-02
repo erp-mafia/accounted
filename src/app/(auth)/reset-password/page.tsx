@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, KeyRound } from 'lucide-react'
+import { KeyRound } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { INVITE_PROBLEM_MESSAGE_KEYS } from '@/lib/auth/consume-invite-cookie'
 import { handoffPendingInvite } from './invite-handoff'
 
@@ -222,8 +223,10 @@ function ResetPasswordInner() {
 
         <div className="rounded-lg border bg-card p-6">
           {mode === 'loading' && (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <div className="space-y-4">
+              <Skeleton className="h-4 w-1/3" />
+              <Skeleton className="h-11 w-full" />
+              <Skeleton className="h-11 w-full" />
             </div>
           )}
 
@@ -231,15 +234,12 @@ function ResetPasswordInner() {
             <div className="space-y-5">
               <Button
                 type="button"
-                className="w-full h-11"
+                size="lg" className="w-full"
                 onClick={handleConfirmLink}
-                disabled={isLoading}
+                loading={isLoading}
               >
                 {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('confirm_verifying')}
-                  </>
+                  t('confirm_verifying')
                 ) : (
                   t('confirm_button')
                 )}
@@ -282,12 +282,9 @@ function ResetPasswordInner() {
                   className="h-11 tracking-widest"
                 />
               </div>
-              <Button type="submit" className="w-full h-11" disabled={isLoading}>
+              <Button type="submit" size="lg" className="w-full" loading={isLoading}>
                 {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('code_verifying')}
-                  </>
+                  t('code_verifying')
                 ) : (
                   t('code_button')
                 )}
@@ -330,12 +327,9 @@ function ResetPasswordInner() {
                   className="h-11"
                 />
               </div>
-              <Button type="submit" className="w-full h-11" disabled={isLoading}>
+              <Button type="submit" size="lg" className="w-full" loading={isLoading}>
                 {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('submitting')}
-                  </>
+                  t('submitting')
                 ) : (
                   t('submit')
                 )}

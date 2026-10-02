@@ -2,19 +2,23 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
-import { DOC_TYPES, isDocType } from '@/lib/documents/classify/taxonomy'
-import { documentDate, documentTitle } from '@/lib/arkiv/documents/title'
+import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { documentDate, documentTitle, underlagPayload } from '@/lib/arkiv/documents/title'
 import type { Payload } from '@/lib/documents/extract/fields'
 import { searchDocumentPages, type PageHit } from '@/lib/documents/read/search'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
+import { folderQuery, isFolderKey } from '@/lib/arkiv/folders'
+import { fillTypeFromClassification } from '@/lib/documents/locked-period'
 
 /**
- * GET /api/arkiv/documents?type=&q=&year=
+ * GET /api/arkiv/documents?q=&year=
+ * GET /api/arkiv/documents?folder=&year=&offset=&limit=
  * The Arkiv table: every admitted document with its type, counterparty,
  * amount and what it is tied to. `type` is a doc_type or one of the groups
- * (agreement, authority); `q` searches page text and file names.
+ * (agreement, authority); `q` searches page text and file names. `folder`
+ * pages one folder of the Dokument tree over the whole archive, newest
+ * document date first (arkiv_document_page), with `next_offset` for the next page.
  */
 export interface ArkivDocumentRow {
   document_id: string
@@ -25,24 +29,16 @@ export interface ArkivDocumentRow {
   /** The date the document carries; the upload date stands in when it has none. */
   document_date: string | null
   doc_type: string | null
+  page_count: number | null
   counterparty: string | null
   amount: number | null
   currency: string | null
   /** An agreement's amount recurs: monthly, quarterly, yearly; null for a one-off or a non-agreement. */
   period: string | null
-  linked: { journal_entry_id: string | null; voucher: string | null; agreement_id: string | null; expected: number; facts: number; held: boolean; unclassified: boolean }
+  linked: { journal_entry_id: string | null; voucher: string | null; agreement_id: string | null; expected: number; held: boolean; unclassified: boolean; reading: boolean }
   href: string
 }
 
-const AUTHORITY = ['registration.bolagsverket', 'filing.bolagsverket', 'decision.skatteverket']
-const CORPORATE = ['minutes.board', 'minutes.agm', 'share_subscription_list', 'annual_report']
-const NAMED = new Set(['receipt', 'supplier_invoice', 'bank_statement', ...AUTHORITY, ...CORPORATE])
-const GROUPS: Record<string, string[]> = {
-  agreement: DOC_TYPES.filter((t) => t.startsWith('agreement.')),
-  authority: AUTHORITY,
-  corporate: CORPORATE,
-  other: DOC_TYPES.filter((t) => !t.startsWith('agreement.') && !NAMED.has(t)),
-}
 /** Who the document is from when it names no counterparty: the authority that issued it. */
 const ISSUER: Record<string, string> = {
   'registration.bolagsverket': 'Bolagsverket',
@@ -52,19 +48,44 @@ const ISSUER: Record<string, string> = {
 }
 
 const querySchema = z.object({
-  type: z.string().max(64).optional(),
   q: z.string().trim().max(200).optional(),
   year: z.coerce.number().int().min(2000).max(2100).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
+  folder: z.string().max(32).optional(),
+  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
 })
+
+/** A folder page is small: the tree shows the first rows and fetches more on request. */
+const FOLDER_PAGE_MAX = 200
 
 export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const parsed = validateQuery(request, querySchema)
   if (!parsed.success) return parsed.response
-  const { type, q, year, limit } = parsed.data
-  const types = type ? (GROUPS[type] ?? (isDocType(type) ? [type] : null)) : null
-  if (type && !types) return NextResponse.json({ error: 'Okänd typ.' }, { status: 400 })
+  const { q, year, limit, folder, offset } = parsed.data
+  if (folder && !isFolderKey(folder)) return NextResponse.json({ error: 'Okänd mapp.' }, { status: 400 })
+
+  // One folder, one page: the database orders and pages over the whole archive, and the rows keep that order.
+  let pageOrder: string[] | null = null
+  let nextOffset: number | null = null
+  if (folder && isFolderKey(folder)) {
+    const pageSize = Math.min(limit, FOLDER_PAGE_MAX)
+    const { mode, types: folderTypes } = folderQuery(folder)
+    const { data: page, error: pageError } = await ctx.supabase.rpc('arkiv_document_page', {
+      p_company_id: ctx.companyId,
+      p_mode: mode,
+      p_types: folderTypes,
+      p_year: year ?? null,
+      p_offset: offset,
+      // One more than asked says whether there is a next page without a count.
+      p_limit: pageSize + 1,
+    })
+    if (pageError) return NextResponse.json({ error: getErrorMessage(pageError) }, { status: 500 })
+    const ids = ((page ?? []) as Array<{ id: string }>).map((r) => r.id)
+    nextOffset = ids.length > pageSize ? offset + pageSize : null
+    pageOrder = ids.slice(0, pageSize)
+    if (pageOrder.length === 0) return NextResponse.json({ data: [], next_offset: null })
+  }
 
   let searchIds: string[] | null = null
   if (q && q.length >= 2) {
@@ -87,28 +108,32 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
 
   let query = ctx.supabase
     .from('document_attachments')
-    .select('id, created_at, file_name, doc_type, admission_state, journal_entry_id')
+    .select('id, created_at, file_name, doc_type, admission_state, journal_entry_id, journal_entry_line_id, extracted_data, page_count')
     .eq('company_id', ctx.companyId)
     .in('admission_state', ['admitted', 'held'])
     .or(NOT_STRUCTURED_MIME_FILTER)
     .order('created_at', { ascending: false })
-    .limit(limit)
-  if (types) query = query.in('doc_type', types)
+    .limit(pageOrder ? pageOrder.length : limit)
   if (searchIds) query = query.in('id', searchIds)
+  if (pageOrder) query = query.in('id', pageOrder)
   const { data, error } = await query
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
-  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; doc_type: string | null; admission_state: string; journal_entry_id: string | null }>
-  if (docs.length === 0) return NextResponse.json({ data: [] })
+  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; doc_type: string | null; admission_state: string; journal_entry_id: string | null; journal_entry_line_id?: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }>
+  if (docs.length === 0) return NextResponse.json(pageOrder ? { data: [], next_offset: nextOffset } : { data: [] })
   const ids = docs.map((d) => d.id)
+  // A document tied to a closed or locked period keeps its type on the classification (lib/documents/locked-period.ts).
+  await fillTypeFromClassification(ctx.supabase, docs)
 
   const entryIds = docs.map((d) => d.journal_entry_id).filter((id): id is string => !!id)
-  const [extractions, agreements, facts, entries] = await Promise.all([
-    ctx.supabase.from('document_extractions').select('document_id, payload').in('document_id', ids).eq('is_current', true),
-    ctx.supabase.from('agreements').select('id, source_document_id, title, counterparty_name, amount, currency, period').in('source_document_id', ids),
-    ctx.supabase.from('company_facts').select('source_document_id').in('source_document_id', ids).is('sys_to', null).neq('rank', 'deprecated'),
-    entryIds.length ? ctx.supabase.from('journal_entries').select('id, voucher_series, voucher_number').in('id', entryIds) : Promise.resolve({ data: [], error: null }),
+  // Extractions and agreements are the brain's records: outside it the row is the document, its type and its verifikat.
+  const brain = isArkivBrainEnabled(ctx.companyId)
+  const none = Promise.resolve({ data: [], error: null })
+  const [extractions, agreements, entries] = await Promise.all([
+    brain ? ctx.supabase.from('document_extractions').select('document_id, payload').in('document_id', ids).eq('is_current', true) : none,
+    brain ? ctx.supabase.from('agreements').select('id, source_document_id, title, counterparty_name, amount, currency, period').in('source_document_id', ids) : none,
+    entryIds.length ? ctx.supabase.from('journal_entries').select('id, voucher_series, voucher_number, entry_date').in('id', entryIds) : none,
   ])
-  for (const r of [extractions, agreements, facts, entries]) if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
+  for (const r of [extractions, agreements, entries]) if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
   const payloadByDoc = new Map(((extractions.data ?? []) as Array<{ document_id: string; payload: Payload }>).map((e) => [e.document_id, e.payload]))
   const agreementRows = (agreements.data ?? []) as Array<{
     id: string
@@ -120,10 +145,12 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
     period: string | null
   }>
   const agreementByDoc = new Map(agreementRows.map((a) => [a.source_document_id, a]))
-  const factCount = new Map<string, number>()
-  for (const f of (facts.data ?? []) as Array<{ source_document_id: string }>) factCount.set(f.source_document_id, (factCount.get(f.source_document_id) ?? 0) + 1)
+  const entryRows = (entries.data ?? []) as Array<{ id: string; voucher_series: string | null; voucher_number: number | null; entry_date?: string | null }>
+  // A booked document is dated by its verifikat when the document itself carries no date: the underlag for
+  // earlier years sat under the upload year otherwise (customer report 2026-09-28).
+  const entryDateOf = new Map(entryRows.filter((e) => e.entry_date).map((e) => [e.id, (e.entry_date as string).slice(0, 10)]))
   const voucherOf = new Map(
-    ((entries.data ?? []) as Array<{ id: string; voucher_series: string | null; voucher_number: number | null }>).map((e) => [
+    entryRows.map((e) => [
       e.id,
       `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`,
     ]),
@@ -143,7 +170,8 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   }
 
   const rows: ArkivDocumentRow[] = docs.map((d) => {
-    const payload = payloadByDoc.get(d.id) ?? {}
+    // The brain's reading when there is one; the inbox's Underlag reading otherwise.
+    const payload = payloadByDoc.get(d.id) ?? underlagPayload(d.extracted_data, d.doc_type)
     const agreement = agreementByDoc.get(d.id)
     const settled = (...names: string[]) => names.map((n) => payload[n]?.normalized).find((v) => v != null) ?? null
     const counterparty =
@@ -185,8 +213,9 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
       created_at: d.created_at,
       file_name: d.file_name,
       title: documentTitle({ docType: d.doc_type, fileName: d.file_name, payload, agreementTitle: agreement?.title ?? null }),
-      document_date: documentDate(d.doc_type, payload),
+      document_date: documentDate(d.doc_type, payload) ?? (d.journal_entry_id ? (entryDateOf.get(d.journal_entry_id) ?? null) : null),
       doc_type: d.doc_type,
+      page_count: d.page_count ?? null,
       counterparty,
       amount,
       currency: agreement?.currency ?? (settled('currency', 'rent_currency') as string | null) ?? (amount != null ? 'SEK' : null),
@@ -196,13 +225,22 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
         voucher: d.journal_entry_id ? (voucherOf.get(d.journal_entry_id) ?? null) : null,
         agreement_id: agreement?.id ?? null,
         expected: agreement ? (expectedCount.get(agreement.id) ?? 0) : 0,
-        facts: factCount.get(d.id) ?? 0,
         held: d.admission_state === 'held',
-        unclassified: d.admission_state === 'admitted' && (d.doc_type == null || d.doc_type === 'other'),
+        // A person is asked only about what the model read and could not name. A document with no type yet is
+        // still being read and typed (prod 2026-09-25: most archives were untyped history, and every row asked).
+        // Never for a booked document: the verifikat already says what it is, and nothing reads or types it in the background.
+        unclassified: d.admission_state === 'admitted' && d.doc_type === 'other' && !d.journal_entry_id && !d.journal_entry_line_id,
+        reading: d.admission_state === 'admitted' && d.doc_type == null && !d.journal_entry_id && !d.journal_entry_line_id,
       },
       href: agreement ? `/arkiv/avtal/${agreement.id}` : `/arkiv/dokument/${d.id}`,
     }
   })
+  if (pageOrder) {
+    // The database already filtered the year and ordered the page; keep its order.
+    const position = new Map(pageOrder.map((id, i) => [id, i]))
+    rows.sort((a, b) => (position.get(a.document_id) ?? 0) - (position.get(b.document_id) ?? 0))
+    return NextResponse.json({ data: rows, next_offset: nextOffset })
+  }
   const dated = (r: ArkivDocumentRow) => r.document_date ?? r.created_at.slice(0, 10)
   const inYear = year ? rows.filter((r) => dated(r).startsWith(String(year))) : rows
   inYear.sort((a, b) => (dated(a) < dated(b) ? 1 : dated(a) > dated(b) ? -1 : a.created_at < b.created_at ? 1 : -1))

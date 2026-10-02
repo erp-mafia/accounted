@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Loader2, Search } from 'lucide-react'
+import { Search } from 'lucide-react'
 
 interface VoucherCandidate {
   journal_entry_id: string
@@ -65,10 +65,10 @@ function voucherLabel(c: VoucherCandidate): string {
 }
 
 function confidenceBadge(confidence: number): {
-  variant: 'success' | 'secondary' | 'outline'
+  variant: 'muted' | 'secondary' | 'outline'
   key: 'high' | 'medium' | 'low'
 } {
-  if (confidence >= 0.9) return { variant: 'success', key: 'high' }
+  if (confidence >= 0.9) return { variant: 'muted', key: 'high' }
   if (confidence >= 0.7) return { variant: 'secondary', key: 'medium' }
   return { variant: 'outline', key: 'low' }
 }
@@ -261,7 +261,11 @@ export default function LinkVoucherPicker({
                         <span className="text-xs tabular-nums text-muted-foreground">
                           {formatDate(c.entry_date)}
                         </span>
-                        <Badge variant={badge.variant}>{t(`confidence_${badge.key}`)}</Badge>
+                        {badge.variant === 'muted' ? (
+                          <span className="text-xs text-muted-foreground">{t(`confidence_${badge.key}`)}</span>
+                        ) : (
+                          <Badge variant={badge.variant}>{t(`confidence_${badge.key}`)}</Badge>
+                        )}
                         {c.period_locked && (
                           <Badge variant="outline">{t('period_locked')}</Badge>
                         )}
@@ -296,15 +300,14 @@ export default function LinkVoucherPicker({
       )}
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-        <Button variant="outline" onClick={onCancel} disabled={submitting} className="min-h-11">
+        <Button variant="outline" onClick={onCancel} disabled={submitting}>
           {t('cancel')}
         </Button>
         <Button
           onClick={handleConfirm}
-          disabled={!selected || submitting}
-          className="min-h-11"
+          disabled={!selected}
+          loading={submitting}
         >
-          {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {t('confirm')}
         </Button>
       </div>

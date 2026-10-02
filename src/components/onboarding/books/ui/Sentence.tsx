@@ -1,6 +1,7 @@
 'use client'
 
 import type { ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
 
 /**
  * The one-sentence summary with Ändra under it: what will happen, in
@@ -31,9 +32,9 @@ export function Sentence({
       {hasOptions || tools ? (
         <p className="imp-tools">
           {hasOptions ? (
-            <button type="button" className="imp-change" onClick={onToggle} aria-expanded={open}>
+            <Button variant="link" size="sm" className={CHANGE_LINK_CLASS} onClick={onToggle} aria-expanded={open}>
               {open ? closeLabel : changeLabel}
-            </button>
+            </Button>
           ) : null}
           {tools}
         </p>
@@ -41,6 +42,9 @@ export function Sentence({
     </div>
   )
 }
+
+/** Ändra and its siblings: an inline dotted-underline text link on the Button primitive. */
+export const CHANGE_LINK_CLASS = 'h-auto px-0 text-[12.5px] text-foreground underline decoration-dotted underline-offset-[3px]'
 
 export function OptRows({ children }: { children: ReactNode }) {
   return <div className="opts">{children}</div>

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { LEDGER_BALANCE_STATUSES, sumAccountBalance } from '../gl-balance'
+import { LEDGER_BALANCE_STATUSES, findOpeningBalanceFloor, sumAccountBalance } from '../gl-balance'
 
 /**
  * The two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts) reads the
@@ -60,5 +60,60 @@ describe('sumAccountBalance', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ error: { message: 'statement timeout' } })
     expect(await sumAccountBalance(supabase as never, 'company-1', '1630')).toBeNull()
+  })
+})
+
+describe('findOpeningBalanceFloor', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const ib = (id: string, entry_date: string) => ({ id, entry_date, status: 'posted', source_type: 'opening_balance' })
+
+  it('floors at the latest posted IB dated on the first day of a fiscal year', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    // The mid-year entry is an ordinary payment an import labelled opening_balance.
+    enqueue({ data: [ib('ib-2025', '2025-01-01'), ib('ib-2026', '2026-01-01'), ib('mislabelled', '2026-05-12')] })
+    enqueue({
+      data: [
+        { id: 'l1', journal_entry_id: 'ib-2025', debit_amount: 722, credit_amount: 0 },
+        { id: 'l2', journal_entry_id: 'ib-2026', debit_amount: 0, credit_amount: 2768 },
+        { id: 'l3', journal_entry_id: 'mislabelled', debit_amount: 3026, credit_amount: 0 },
+      ],
+    })
+    enqueue({ data: [{ period_start: '2025-01-01' }, { period_start: '2026-01-01' }] })
+
+    const floor = await findOpeningBalanceFloor(supabase as never, 'company-1', '1630', '2026-09-27')
+
+    expect(floor).toEqual({ date: '2026-01-01', amount: -2768, entryIds: ['ib-2026'] })
+    expect(findCalls('journal_entries', 'eq')).toEqual(
+      expect.arrayContaining([['status', 'posted'], ['source_type', 'opening_balance']]),
+    )
+    expect(findCalls('journal_entries', 'lte')).toContainEqual(['entry_date', '2026-09-27'])
+    expect(findCalls('journal_entry_lines', 'eq')).toContainEqual(['account_number', '1630'])
+    expect(findCalls('fiscal_periods', 'in')).toEqual([['period_start', ['2025-01-01', '2026-01-01', '2026-05-12']]])
+  })
+
+  it('returns null when no IB touches the account, without reading the fiscal years', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    expect(await findOpeningBalanceFloor(supabase as never, 'company-1', '1630', '2026-09-27')).toBeNull()
+    expect(findCalls('fiscal_periods', 'in')).toEqual([])
+  })
+
+  it('returns null when no opening_balance entry is dated on a fiscal year start', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [ib('mislabelled', '2026-05-12')] })
+    enqueue({ data: [{ id: 'l1', journal_entry_id: 'mislabelled', debit_amount: 3026, credit_amount: 0 }] })
+    enqueue({ data: [] })
+    expect(await findOpeningBalanceFloor(supabase as never, 'company-1', '1630', '2026-09-27')).toBeNull()
+  })
+
+  it('throws on a read failure instead of guessing the floor', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [ib('ib-2026', '2026-01-01')] })
+    enqueue({ data: [{ id: 'l1', journal_entry_id: 'ib-2026', debit_amount: 100, credit_amount: 0 }] })
+    enqueue({ error: { message: 'statement timeout' } })
+    await expect(findOpeningBalanceFloor(supabase as never, 'company-1', '1630', '2026-09-27')).rejects.toThrow(
+      /statement timeout/,
+    )
   })
 })

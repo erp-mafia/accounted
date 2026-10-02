@@ -311,6 +311,46 @@ describe('generateSIEExport', () => {
     expect(eqCallsByTable['dimension_values'] ?? []).not.toContainEqual(['is_active', true])
   })
 
+  it('declares registry values past the 1000-row page with their registry names', async () => {
+    // PostgREST caps a read at 1000 rows. The registry read used to be one
+    // unpaginated query, so every code past the cap was declared with a
+    // synthesized name = code: a placeholder in a file kept seven years.
+    const firstPage = Array.from({ length: 1000 }, (_, i) => ({
+      dimension_id: 'dim-6',
+      code: `P${String(i).padStart(4, '0')}`,
+      name: `Projekt ${i}`,
+    }))
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      {
+        data: [
+          { id: 'e1', entry_date: '2024-05-02', voucher_number: 1, voucher_series: 'A', description: 'Late code', status: 'posted' },
+        ],
+        error: null,
+      },
+      {
+        data: [
+          { journal_entry_id: 'e1', account_number: '5010', debit_amount: 500, credit_amount: 0, line_description: null, dimensions: { '6': 'P1500' } },
+          { journal_entry_id: 'e1', account_number: '1930', debit_amount: 0, credit_amount: 500, line_description: null, dimensions: {} },
+        ],
+        error: null,
+      },
+      { data: [dimProjekt], error: null }, // dimensions
+      { data: firstPage, error: null }, // dimension_values, a full first page
+      { data: [{ dimension_id: 'dim-6', code: 'P1500', name: 'Villa Almgren' }], error: null }, // page 2
+      { data: [], error: null }, // RPC fallback
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#OBJEKT 6 "P1500" "Villa Almgren"')
+    expect(output).not.toContain('#OBJEKT 6 "P1500" "P1500"')
+    expect(output).toContain('#OBJEKT 6 "P0999" "Projekt 999"')
+    expect(output).toContain('\t#TRANS 5010 {6 "P1500"} 500.00 20240502')
+  })
+
   it('synthesizes #DIM and #OBJEKT for orphan line codes with no registry rows', async () => {
     // Free-text writers can still mint dimension numbers/codes until the
     // write-path PR: every referenced (dimNo, code) pair must be declared,

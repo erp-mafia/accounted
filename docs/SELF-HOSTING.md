@@ -30,6 +30,14 @@ MFA (two-factor authentication via TOTP) is **not enforced** for self-hosted dep
 
 The `supabase/migrations/` directory contains the ordered SQL files that set up the full schema, including tables, RLS policies, triggers, and functions.
 
+**First, run `supabase/bootstrap.sql` once, before any migration.** Paste it into the SQL Editor, or run it with psql against your project's connection string (Project Settings > Database):
+
+```bash
+psql "<connection string>" -v ON_ERROR_STOP=1 -f supabase/bootstrap.sql
+```
+
+Supabase projects created since 2026-05-30 no longer grant new tables to the `anon`, `authenticated` and `service_role` roles by default. Most of the historical migrations were written while they did and grant nothing themselves, so without this step every table ends up unreachable and the app answers every request with `permission denied` (42501). The bootstrap restores the old default for the replay; migration `20260929220000_own_default_privileges` turns it off again for everything created after it, and newer migrations grant their own tables. It does nothing on a database that already has the migrations applied, so it cannot hurt to run it twice. Do not repair a replay that skipped it with `GRANT ... ON ALL TABLES IN SCHEMA public`: that re-opens tables later migrations deliberately locked down. Start again from an empty database instead.
+
 **Option A: Supabase CLI (recommended):**
 
 ```bash
@@ -45,7 +53,7 @@ supabase db push
 
 **Option B: SQL Editor:**
 
-Run each file in `supabase/migrations/` in order in the Supabase SQL Editor. They must be applied sequentially: later migrations depend on earlier ones.
+Run `supabase/bootstrap.sql`, then each file in `supabase/migrations/` in order in the Supabase SQL Editor. They must be applied sequentially: later migrations depend on earlier ones.
 
 ### PostgreSQL Extensions
 
@@ -67,7 +75,7 @@ These are all available on Supabase hosted. `pg_cron` requires a paid plan: if y
 ```bash
 git clone https://github.com/erp-mafia/accounted.git
 cd accounted
-./setup.sh
+./docker/setup.sh
 ```
 
 The script checks prerequisites, prompts for your Supabase credentials, auto-generates `CRON_SECRET`, and writes everything to `.env`.
@@ -77,7 +85,7 @@ The script checks prerequisites, prompts for your Supabase credentials, auto-gen
 ```bash
 git clone https://github.com/erp-mafia/accounted.git
 cd accounted
-cp .env.docker.example .env
+cp docker/.env.example .env
 ```
 
 Edit `.env` with your values:
@@ -151,14 +159,16 @@ curl http://localhost:3000/api/health
 To build the Docker image locally instead of pulling from GHCR:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+docker compose -f docker-compose.yml -f docker/compose.build.yml up --build
 ```
 
 The locally-built image runs **unprivileged** (`USER nextjs`): the entrypoint
-populates the `.next`/`public` tmpfs mounts and substitutes the `NEXT_PUBLIC_*`
-placeholders as the `nextjs` user, so the container needs no Linux capabilities
-and runs as-is under the hardened compose defaults (`cap_drop: ALL`,
-`read_only: true`).
+populates `/app/.next` (the `next_runtime` named volume) and `/app/public` (a
+tmpfs) and substitutes the `NEXT_PUBLIC_*` placeholders as the `nextjs` user, so
+the container needs no Linux capabilities and runs as-is under the hardened
+compose defaults (`cap_drop: ALL`, `read_only: true`). The volume holds only
+that runtime copy of the bundle, rebuilt from the image on every start, so it
+needs no backup.
 
 ### Custom Port
 
@@ -339,7 +349,7 @@ Set this when you have turned public signup off in GoTrue (`disable_signup`). Th
 
 ### Connector subscription (self-hosted instances)
 
-Everything a self-hosted instance runs itself is free (AGPL). Five capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), Peppol e-invoicing (our contracted access point), company lookup (TIC) and migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and will be issued manually by Accounted (self-serve later); no keys are issued until the instance-side client wiring described below is complete.
+Everything a self-hosted instance runs itself is free (AGPL). Five capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), Peppol e-invoicing (our contracted access point), company lookup (TIC) and migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and is issued manually by Accounted on request (self-serve later): write to support@accounted.se and we set it up with you.
 
 ```bash
 GNUBOK_CONNECTOR_KEY=gnubok_ck_...            # issued by Accounted, shown once
@@ -352,7 +362,7 @@ The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docke
 curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/connector/sync/cron
 ```
 
-The **bank** and **Skatteverket** connector proxies are live on the connector service (`connect.accounted.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration through the connector ship in following releases. The instance-side client wiring is merged for both upstreams: in connector mode (key set, no own credentials for that upstream) bank sync and Skatteverket carry traffic through the hosted proxy. Keys are not yet issued: Accounted issues none until a staging end-to-end run confirms the full flow, so a key never unlocks a granted capability whose client cannot carry traffic. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
+The **bank** and **Skatteverket** connector proxies are live on the connector service (`connect.accounted.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration through the connector ship in following releases. The instance-side client wiring is merged for both upstreams: in connector mode (key set, no own credentials for that upstream) bank sync and Skatteverket carry traffic through the hosted proxy. Keys are issued manually on request (support@accounted.se), with scopes only for upstreams that carry traffic today: bank sync and Skatteverket. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
 
 **Peppol** through the connector works the same way once your key carries the `peppol` scope: leave every `QVALIA_*` variable and `PEPPOL_TRANSPORT_PROVIDER` unset, and the instance sends and receives e-invoices through Arcim's contracted access point (`connect.accounted.se/api/connect/peppol/*`). The hosted side enforces one receiving registration per company (`peppol_connections_per_company` on the key), a shared cap on registrations at the access point, and ownership: an instance can only poll status, fetch evidence and receive documents for registrations and submissions made through its own key. Delivery status arrives by polling (`/api/peppol/outbound/status/cron`), not by webhook. Which participant identifiers (organisation numbers, GLNs) a key may register and send as is recorded on the key when Arcim issues it; the licensee's own organisation number is always allowed, anything else is refused with `CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED`. Setting `QVALIA_API_KEY` or `QVALIA_PARTNER_REG_NO` switches Peppol out of connector mode onto your own access-point account. Brokered Peppol registers your companies under Arcim's access point, so the `peppol` scope is issued only where Arcim's provider terms allow it.
 
@@ -416,12 +426,26 @@ Migration 024 automatically creates the `documents` storage bucket (private, 50 
 
 ## Updating
 
-Pull the latest image and restart:
+Update the repository files, pull the latest image and restart:
 
 ```bash
+git pull
 docker compose pull
 docker compose up -d
 ```
+
+`docker compose pull` updates only the image, and `docker-compose.yml` sometimes
+has to change with it: a compose file from before [#3164](https://github.com/erp-mafia/accounted/issues/3164)
+mounts `/app/.next` as a 400 MB tmpfs, which newer images no longer fit in, and
+the container then stops at start with an error saying so. Keep local changes in
+a `docker-compose.override.yml` rather than in `docker-compose.yml`, so updating
+it never conflicts.
+
+If `git pull` refuses because you edited `docker-compose.yml` directly (for
+example, raising the `/app/.next` tmpfs size as a workaround for #3164), move any
+edits you still need into `docker-compose.override.yml`, discard the rest with
+`git checkout -- docker-compose.yml`, and run the three commands again. The
+current file no longer needs a tmpfs size for `/app/.next`.
 
 If a new release includes database migrations, apply them before restarting:
 
@@ -500,9 +524,10 @@ flowchart LR
 2. **Apply the Accounted migrations** directly via `psql`: the Supabase CLI (`db push`) assumes a cloud project, so run the SQL files against the self-hosted database container:
 
    ```bash
-   # From the repo root, stream each migration straight into the supabase-db
-   # container: glob order is already sorted, and nothing is left behind on the
-   # host or in the container.
+   # From the repo root, stream the bootstrap (see section 3) and then each
+   # migration straight into the supabase-db container: glob order is already
+   # sorted, and nothing is left behind on the host or in the container.
+   docker exec -i supabase-db psql -v ON_ERROR_STOP=1 -U postgres -d postgres < supabase/bootstrap.sql || exit 1
    for f in supabase/migrations/*.sql; do
      echo "Applying $f..."
      docker exec -i supabase-db psql -v ON_ERROR_STOP=1 -U postgres -d postgres < "$f" || exit 1
@@ -627,7 +652,7 @@ resource controls or a local Compose override. Existing deployments that
 relied on the previous two-CPU cap must reapply it before restarting with the
 new base file. Command-line deployments on Docker Compose 2.20.2 or newer and
 Docker Engine 25.0 or newer can use the version-controlled
-`docker-compose.resources.yml` overlay to restore both the cap and faster
+`docker/compose.resources.yml` overlay to restore both the cap and faster
 startup health checks; older NAS container stacks should keep using the
 portable base file alone.
 
@@ -653,6 +678,9 @@ portable base file alone.
 
 **Health check fails with "unhealthy":**
 Migrations have not been applied, or the Supabase credentials are wrong. Check that `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are correct and that migrations have been pushed.
+
+**Every request fails with `permission denied for table ...` (42501):**
+The migrations were replayed without `supabase/bootstrap.sql` first, on a project that no longer grants new tables by default (see section 3). Start again from an empty database (a new project, or a reset one), run the bootstrap, then apply the migrations. A blanket `GRANT ... ON ALL TABLES` would make the errors go away and re-open tables that are meant to be locked.
 
 **Confirmation email not arriving:**
 Check the Supabase dashboard under **Authentication > Users** to verify the signup attempt was received. On the free tier, Supabase rate-limits emails to 4/hour. Configure custom SMTP under **Authentication > SMTP Settings** for production use.

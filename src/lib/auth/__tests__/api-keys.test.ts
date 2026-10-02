@@ -299,6 +299,8 @@ describe('validateApiKey', () => {
       scopes: ['transactions:read', 'reports:read'],
       mode: 'live',
       unattendedCommitLimit: null,
+      allowedCompanyIds: null,
+      readOnlyCompanyIds: null,
     })
   })
 
@@ -322,6 +324,8 @@ describe('validateApiKey', () => {
       scopes: DEFAULT_SCOPES,
       mode: 'live',
       unattendedCommitLimit: null,
+      allowedCompanyIds: null,
+      readOnlyCompanyIds: null,
     })
   })
 
@@ -348,6 +352,8 @@ describe('validateApiKey', () => {
       scopes: ['transactions:read'],
       mode: 'test',
       unattendedCommitLimit: null,
+      allowedCompanyIds: null,
+      readOnlyCompanyIds: null,
     })
   })
 
@@ -385,6 +391,114 @@ describe('validateApiKey', () => {
         })
         const result = await validateApiKey('gnubok_sk_test-key-value')
         expect(result).toMatchObject({ unattendedCommitLimit: null })
+      }
+    })
+  })
+
+  describe('allowed company ids (per-key allowlist, migration 20260928112721)', () => {
+    it('surfaces the allowlist from the RPC row', async () => {
+      setupMockRpc({
+        data: [{
+          user_id: 'user-123',
+          company_id: 'company-456',
+          scopes: ['transactions:read'],
+          rate_limited: false,
+          allowed_company_ids: ['company-456', 'company-789'],
+        }],
+        error: null,
+      })
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({ allowedCompanyIds: ['company-456', 'company-789'] })
+    })
+
+    it('reads an absent or null value as no allowlist', async () => {
+      // Absent = a DB that has not run the migration: the key keeps reaching
+      // every membership, exactly as before the column existed.
+      for (const raw of [undefined, null]) {
+        setupMockRpc({
+          data: [{
+            user_id: 'user-123',
+            company_id: 'company-456',
+            scopes: ['transactions:read'],
+            rate_limited: false,
+            allowed_company_ids: raw,
+          }],
+          error: null,
+        })
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toMatchObject({ allowedCompanyIds: null })
+      }
+    })
+
+    it('refuses the key when the allowlist is present but empty or malformed', async () => {
+      // Fail closed: reading these as null would turn a restricted key into
+      // one that reaches every company the user belongs to.
+      for (const raw of [[], 'company-456', { 0: 'x' }, [42], ['']]) {
+        setupMockRpc({
+          data: [{
+            user_id: 'user-123',
+            company_id: 'company-456',
+            scopes: ['transactions:read'],
+            rate_limited: false,
+            allowed_company_ids: raw,
+          }],
+          error: null,
+        })
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toEqual({ error: 'Invalid API key', status: 401 })
+      }
+    })
+  })
+
+  describe('read-only company ids (per-company access level, migration 20260928112724)', () => {
+    function rpcRow(allowed: unknown, readOnly: unknown) {
+      return {
+        data: [{
+          user_id: 'user-123',
+          company_id: 'company-456',
+          scopes: ['transactions:read', 'invoices:write'],
+          rate_limited: false,
+          allowed_company_ids: allowed,
+          read_only_company_ids: readOnly,
+        }],
+        error: null,
+      }
+    }
+
+    it('surfaces the read-only companies from the RPC row', async () => {
+      setupMockRpc(rpcRow(['company-456', 'company-789'], ['company-789']))
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({
+        allowedCompanyIds: ['company-456', 'company-789'],
+        readOnlyCompanyIds: ['company-789'],
+      })
+    })
+
+    it('reads an absent or null value as no read-only company', async () => {
+      // Absent = a DB without the column, where no read-only row can exist.
+      for (const raw of [undefined, null]) {
+        setupMockRpc(rpcRow(['company-456'], raw))
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toMatchObject({ readOnlyCompanyIds: null })
+      }
+    })
+
+    it('refuses the key when the read-only list is present but unreadable or outside the allowlist', async () => {
+      // Fail closed: reading any of these as "none" would let the key write
+      // in a company the user chose read-only for.
+      const cases: Array<[unknown, unknown]> = [
+        [['company-456'], []],
+        [['company-456'], 'company-456'],
+        [['company-456'], [42]],
+        [['company-456'], ['company-789']],
+        [null, ['company-456']],
+      ]
+      for (const [allowed, readOnly] of cases) {
+        setupMockRpc(rpcRow(allowed, readOnly))
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toEqual({ error: 'Invalid API key', status: 401 })
       }
     })
   })

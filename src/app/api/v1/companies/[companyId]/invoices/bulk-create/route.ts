@@ -102,6 +102,7 @@ registerEndpoint({
     'Each per-item invoice still goes through the same VAT-rule validation as POST /invoices. A mismatched per-item vat_rate produces a per-item failure, not a whole-batch failure.',
     'Currency conversion is best-effort PER ITEM. A failed Riksbanken fetch leaves that item\'s SEK columns null but does NOT fail the item.',
     'Quotes (document_type: quote) are refused per item as VALIDATION_ERROR: a quote carries its own OF-number, valid_until and quote_status. Create quotes one at a time with POST /invoices.',
+    'A per-invoice VAT treatment (vat_treatment, delivery_country) is refused per item as VALIDATION_ERROR: create those invoices one at a time with POST /invoices.',
   ],
   example: {
     request: {
@@ -186,6 +187,24 @@ async function createOneInvoice(
         details: {
           field: 'document_type',
           message: 'Quotes are not supported by bulk-create; use POST /invoices with document_type quote.',
+        },
+      },
+    }
+  }
+
+  // The per-invoice VAT treatment (#2906) is decided by the shared invoice
+  // builder, which this path does not use yet. Refuse rather than accept the
+  // fields and silently invoice the customer's treatment instead.
+  if (input.vat_treatment != null || input.delivery_country != null) {
+    return {
+      ok: false,
+      request_index: index,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'vat_treatment and delivery_country are not supported by bulk-create.',
+        details: {
+          field: input.vat_treatment != null ? 'vat_treatment' : 'delivery_country',
+          message: 'Create this invoice with POST /invoices, which applies the per-invoice VAT treatment.',
         },
       },
     }

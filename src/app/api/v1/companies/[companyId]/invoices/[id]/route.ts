@@ -32,8 +32,8 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
-import { CreateInvoiceItemSchema } from '@/lib/api/schemas'
-import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { CreateInvoiceItemSchema, InvoiceVatOverrideShape } from '@/lib/api/schemas'
+import { buildInvoiceWriteData, type InvoiceWriteItemInput } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
@@ -63,6 +63,11 @@ const V1PatchDraftInvoiceSchema = z.object({
   // pay to. null = back to the per-currency default. Must be one of the
   // company's payee accounts, usable for the invoice currency.
   payment_cash_account_id: z.union([z.string().uuid(), z.null()]).optional(),
+  // Per-invoice VAT treatment (#2906), same fields and rules as POST
+  // /invoices. A pair: sending either replaces both; omitting both keeps the
+  // draft's. Changing it re-decides the VAT of the current lines (rebuilt
+  // through the same builder) even when items is omitted.
+  ...InvoiceVatOverrideShape,
   // FULL REPLACE when present. Same item shape as POST /invoices (article
   // linkage, ROT/RUT lines, accrual periods, per-line dimensions included).
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required').optional(),
@@ -227,7 +232,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id',
   summary: 'Update a draft invoice (metadata fields, optionally replacing line items).',
   description:
-    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag), and an optional items array. When items is present, it fully REPLACES the draft\'s line items and subtotal / VAT / total are recomputed against the invoice\'s existing customer (same validation as POST /invoices); when omitted, items and totals are unchanged. customer_id, currency, and document_type are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
+    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag), vat_treatment + delivery_country (the per-invoice VAT treatment, same rules as POST /invoices), and an optional items array. When items is present, it fully REPLACES the draft\'s line items and subtotal / VAT / total are recomputed against the invoice\'s existing customer (same validation as POST /invoices); when omitted, items and totals are unchanged. customer_id, currency, and document_type are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
   useWhen:
     'You need to correct a typo, push the due date, update a customer reference, or rewrite the line items on a draft you have not sent yet. The invoice number stays null until the first :send action.',
   doNotUseFor:
@@ -237,6 +242,7 @@ registerEndpoint({
     'A 409 INVOICE_UPDATE_NOT_DRAFT means the invoice has been sent / paid / credited / cancelled. The DELETE handler on this path uses its own code, INVOICE_DELETE_NOT_DRAFT.',
     'items is a FULL REPLACE (no per-line merge): send the complete new line set, minimum one item. Omitting items keeps the current lines untouched. VAT rates are re-validated against the customer type and totals are recomputed server-side.',
     'items are always built against the invoice\'s EXISTING customer: customer_id cannot change on PATCH.',
+    'vat_treatment and delivery_country are a pair: sending either replaces both (null clears), omitting both keeps the draft\'s. Changing them re-decides the VAT of the lines even without items: the current lines are rebuilt, so a draft whose lines carry 25 % cannot become an export of goods until its lines are 0 % (send items with vat_rate 0 or omitted). A draft that states its own treatment keeps it across edits that do not mention it, and falls back to the customer\'s treatment (the statement cleared) if a later customer change no longer supports it.',
     'default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.',
     'When items are replaced, the VAT treatment is decided again from the customer\'s current row (customer_type, vat_number validation, country), so it can differ from the draft\'s stored one: an eu_business whose country is SE gets Swedish VAT, never reverse charge. The 200 may carry meta.warnings about the treatment (same codes as POST /invoices: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, EU_BUSINESS_VAT_NUMBER_MISSING, EU_BUSINESS_COUNTRY_IS_SE, SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER, SWEDISH_VAT_TO_EXPORT_CUSTOMER). The update succeeded; the warning says why the rates are what they are.',
   ],
@@ -298,7 +304,13 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       if (body[key] !== undefined) updateData[key] = body[key]
     }
 
-    if (Object.keys(updateData).length === 0 && body.payment_cash_account_id === undefined && !body.items) {
+    const vatOverrideSent = body.vat_treatment !== undefined || body.delivery_country !== undefined
+    if (
+      Object.keys(updateData).length === 0 &&
+      body.payment_cash_account_id === undefined &&
+      !body.items &&
+      !vatOverrideSent
+    ) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'body', message: 'At least one field must be supplied for update.' },
@@ -361,16 +373,42 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     // ── Items replacement path ────────────────────────────────────────
     // Full replace + recompute via the shared write-builder (the same one
     // POST /invoices and the cookie PATCH route use), built against the
-    // invoice's EXISTING customer: customer_id is immutable on PATCH.
-    if (body.items) {
+    // invoice's EXISTING customer: customer_id is immutable on PATCH. A new
+    // VAT treatment (#2906) takes the same path: it changes what the lines
+    // may carry and what the header says, so the current lines are fed back
+    // through the builder when the body brings none.
+    if (body.items || vatOverrideSent) {
       const cur = current as Record<string, unknown>
+
+      let itemsInput: InvoiceWriteItemInput[]
+      if (body.items) {
+        itemsInput = body.items
+      } else {
+        const { data: itemRows, error: itemsFetchErr } = await ctx.supabase
+          .from('invoice_items')
+          .select(
+            'line_type, description, quantity, unit, unit_price, discount_percent, vat_rate, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
+          )
+          .eq('invoice_id', invoiceId)
+          .order('sort_order', { ascending: true })
+        if (itemsFetchErr) {
+          return v1ErrorResponse(itemsFetchErr, ctx.log, { requestId: ctx.requestId })
+        }
+        itemsInput = (itemRows ?? []) as InvoiceWriteItemInput[]
+        if (itemsInput.length === 0) {
+          return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+            requestId: ctx.requestId,
+            details: { field: 'items', message: 'The draft has no lines: send items together with vat_treatment.' },
+          })
+        }
+      }
 
       // Internal-only columns for the rebuild. Fetched separately so the
       // response/preview projection (INVOICE_PATCH_RESPONSE_COLUMNS) can
       // never leak the encrypted personnummer blob.
       const { data: internal, error: internalErr } = await ctx.supabase
         .from('invoices')
-        .select('ore_rounding, deduction_personnummer_encrypted, deduction_personnummer_last4')
+        .select('ore_rounding, deduction_personnummer_encrypted, deduction_personnummer_last4, vat_treatment_override, delivery_country')
         .eq('company_id', ctx.companyId!)
         .eq('id', invoiceId)
         .maybeSingle()
@@ -387,6 +425,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         ore_rounding: boolean | null
         deduction_personnummer_encrypted: string | null
         deduction_personnummer_last4: string | null
+        vat_treatment_override: 'standard' | 'export' | 'reverse_charge' | null
+        delivery_country: string | null
       }
 
       // Narrow projection keeps customer PII out of this path. Every column
@@ -412,7 +452,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       // ROT/RUT claim info lives per line, not on the header: surface the
       // first deduction line's values as the invoice-level inputs the
       // builder's presence checks expect (per-line values win regardless).
-      const firstDeduction = body.items.find((item) => item.deduction_type)
+      const firstDeduction = itemsInput.find((item) => item.deduction_type)
 
       const build = await buildInvoiceWriteData({
         supabase: ctx.supabase,
@@ -438,7 +478,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
             undefined,
           notes: (body.notes !== undefined ? body.notes : (cur.notes as string | null)) ?? undefined,
           // Not editable on this surface: fed back so the builder echoes the
-          // stored values instead of clearing them.
+          // stored values instead of clearing them. invoice_marking too: a
+          // treatment-only PATCH (#2906) rebuilds without the caller sending
+          // any header, and the builder writes a concrete null otherwise.
+          invoice_marking: (cur.invoice_marking as string | null) ?? undefined,
           payment_link_url: (cur.payment_link_url as string | null) ?? undefined,
           payment_link_auto: (cur.payment_link_auto as boolean | null) ?? undefined,
           ore_rounding: internalCols.ore_rounding ?? undefined,
@@ -448,7 +491,9 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
           default_dimensions:
             body.default_dimensions ??
             ((cur.default_dimensions as Record<string, string> | null) ?? {}),
-          items: body.items,
+          vat_treatment: body.vat_treatment,
+          delivery_country: body.delivery_country,
+          items: itemsInput,
         },
         // The stored personnummer exists only as ciphertext: a replace that
         // still carries deduction lines keeps the stored value.
@@ -458,6 +503,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
               last4: internalCols.deduction_personnummer_last4,
             }
           : null,
+        existingVatOverride: {
+          vat_treatment: internalCols.vat_treatment_override ?? null,
+          delivery_country: internalCols.delivery_country ?? null,
+        },
       })
       if (!build.ok) {
         if ('dbError' in build) {

@@ -3,6 +3,8 @@ import { applyVatAmountToLines, computeProposalLines, proposalLinesToFormLines, 
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import { buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
+import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { makeCategorizationTemplate, makeTransaction } from '@/tests/helpers'
 import { roundOre } from '@/lib/money'
 import type { LinePatternEntry } from '@/types'
@@ -73,6 +75,49 @@ describe('computeProposalLines', () => {
       })
       expect(lines).toContainEqual({ side: 'debet', account: '2645', amount: 250 })
       expect(lines).toContainEqual({ side: 'kredit', account: '2614', amount: 250 })
+    })
+
+    // #2919: the preview shows the basis pair the category path now books.
+    it('shows the basis pair for a category reverse charge, exactly as the engine books it', () => {
+      const tx = makeTransaction({ amount: -1000 })
+      const lines = computeProposalLines({
+        amount: -1000,
+        category: 'expense_software',
+        vatTreatment: 'reverse_charge',
+        entityType: 'aktiebolag',
+      })
+      expect(lines).toEqual([
+        { side: 'debet', account: '5420', amount: 1000 },
+        { side: 'kredit', account: '1930', amount: 1000, settlement: true },
+        { side: 'debet', account: '2645', amount: 250 },
+        { side: 'kredit', account: '2614', amount: 250 },
+        { side: 'debet', account: '4535', amount: 1000 },
+        { side: 'kredit', account: '4598', amount: 1000 },
+      ])
+      const engine = buildTransactionEntryLines(
+        tx,
+        buildMappingResultFromCategory('expense_software', tx, true, 'aktiebolag', 'reverse_charge'),
+      )
+      const asSet = (rows: Array<[string, number, number]>) => rows.map((r) => r.join(':')).sort()
+      expect(asSet(lines.map((l) => [l.account, l.side === 'debet' ? l.amount : 0, l.side === 'kredit' ? l.amount : 0])))
+        .toEqual(asSet(engine.map((l) => [l.account_number, l.debit_amount, l.credit_amount])))
+    })
+
+    it('puts the basis on the chosen kind and skips it on a basis-account override', () => {
+      const nonEu = computeProposalLines({
+        amount: -1000,
+        category: 'expense_software',
+        vatTreatment: 'reverse_charge',
+        reverseChargeKind: 'non_eu_services',
+      })
+      expect(nonEu).toContainEqual({ side: 'debet', account: '4531', amount: 1000 })
+      const onBasis = computeProposalLines({
+        amount: -1000,
+        category: 'expense_software',
+        vatTreatment: 'reverse_charge',
+        accountOverride: '4535',
+      })
+      expect(onBasis.map((l) => l.account)).toEqual(['4535', '1930', '2645', '2614'])
     })
 
     it('returns no lines without a category', () => {
@@ -205,10 +250,10 @@ describe('computeProposalLines', () => {
   })
 
   describe('legacy counterparty pair branch', () => {
-    it('emits the 2645/2614 fiktiv-moms pair (no basbelopp) for a reverse-charge pair', () => {
-      // Engine books D 6540 / K 1930 / D 2645 / K 2614 for a learned RC
-      // counterparty (legacy path); the prefill dropping the pair would book
-      // an RC expense without fiktiv moms (ruta 30/48 understated).
+    it('emits the fiktiv-moms pair and the basbelopp pair for a reverse-charge pair', () => {
+      // Engine books D 6540 / K 1930 / D 2645 / K 2614 / D 4535 / K 4598 for
+      // a learned RC counterparty (legacy path, #2919); the prefill dropping
+      // either pair would understate ruta 30/48 or rutor 20-24.
       const lines = computeProposalLines({
         amount: -12500,
         templateDebitAccount: '6540',
@@ -221,8 +266,41 @@ describe('computeProposalLines', () => {
         { side: 'kredit', account: '1930', amount: 12500, settlement: true },
         { side: 'debet', account: '2645', amount: 3125 },
         { side: 'kredit', account: '2614', amount: 3125 },
+        { side: 'debet', account: '4535', amount: 12500 },
+        { side: 'kredit', account: '4598', amount: 12500 },
       ])
       expect(sumSide(lines, 'debet')).toBe(sumSide(lines, 'kredit'))
+    })
+
+    it('mirrors both reverse-charge pairs for a refund against an RC pair, like the engine', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '6540',
+        credit_account: '1930',
+        vat_treatment: 'reverse_charge',
+      })
+      const tx = makeTransaction({ amount: 1000 })
+      const lines = computeProposalLines({
+        amount: 1000,
+        templateDebitAccount: '6540',
+        templateCreditAccount: '1930',
+        templateVatTreatment: 'reverse_charge',
+        counterpartyLegacy: true,
+      })
+      expect(lines).toEqual([
+        { side: 'debet', account: '1930', amount: 1000, settlement: true },
+        { side: 'kredit', account: '6540', amount: 1000 },
+        { side: 'kredit', account: '2645', amount: 250 },
+        { side: 'debet', account: '2614', amount: 250 },
+        { side: 'kredit', account: '4535', amount: 1000 },
+        { side: 'debet', account: '4598', amount: 1000 },
+      ])
+      const engine = buildTransactionEntryLines(
+        tx,
+        buildMappingResultFromCounterpartyTemplate({ template, matchMethod: 'exact_alias', confidence: 0.8 }, tx, 'aktiebolag'),
+      )
+      const asSet = (rows: Array<[string, number, number]>) => rows.map((r) => r.join(':')).sort()
+      expect(asSet(lines.map((l) => [l.account, l.side === 'debet' ? l.amount : 0, l.side === 'kredit' ? l.amount : 0])))
+        .toEqual(asSet(engine.map((l) => [l.account_number, l.debit_amount, l.credit_amount])))
     })
 
     it('extracts input VAT from the treatment for a normal expense pair', () => {

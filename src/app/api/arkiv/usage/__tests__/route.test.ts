@@ -21,10 +21,6 @@ beforeEach(() => {
 })
 
 describe('GET /api/arkiv/usage', () => {
-  it('is 404 outside the rollout', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await call())).status).toBe(404)
-  })
 
   it('sums the rolling year per activity for the company', async () => {
     enqueue({ data: [{ activity: 'documents', units: 3 }, { activity: 'documents', units: 2 }, { activity: 'pages_read', units: 40 }, { activity: 'asks', units: 1 }, { activity: 'nonsense', units: 9 }] })

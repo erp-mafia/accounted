@@ -106,7 +106,8 @@ export async function getUserCompanies(
           org_number,
           entity_type,
           archived_at,
-          created_at
+          created_at,
+          team_id
         )
       `)
       .eq('user_id', userId)

@@ -7,6 +7,7 @@ import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useTranslations } from 'next-intl'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
@@ -36,6 +37,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
+import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import {
   ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
   INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
@@ -52,6 +54,11 @@ import {
   type ArcimDocumentImportProblem,
   type ArcimDocumentImportState,
 } from './arcim-document-import-flow'
+import {
+  trackMigrationConnectClicked,
+  trackMigrationConnectFinished,
+  type MigrationConnectOutcome,
+} from './arcim-connect-track'
 
 type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | 'wint'
 
@@ -151,6 +158,29 @@ function clearDocumentOAuthResume(): void {
   }
 }
 
+// A connect click whose popup was blocked continues as a full-page redirect
+// and leaves this page: the provider rides along in session storage so the
+// return can report how the attempt ended (migration_connect_finished).
+const ARCIM_CONNECT_ATTEMPT_KEY = 'arcim-connect-attempt'
+
+function storeConnectAttempt(provider: ArcimProvider): void {
+  try {
+    window.sessionStorage.setItem(ARCIM_CONNECT_ATTEMPT_KEY, provider)
+  } catch {
+    // Telemetry is best-effort when browser storage is unavailable.
+  }
+}
+
+function takeConnectAttempt(): ArcimProvider | null {
+  try {
+    const stored = window.sessionStorage.getItem(ARCIM_CONNECT_ATTEMPT_KEY)
+    window.sessionStorage.removeItem(ARCIM_CONNECT_ATTEMPT_KEY)
+    return ARCIM_PROVIDERS.find(p => p.id === stored)?.id ?? null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Read the /migrate NDJSON stream: one JSON object per line. `progress`
  * events carry the orchestrator's real step labels and anchors; the stream
@@ -240,6 +270,7 @@ import {
   buildMigrateRequests,
   mergeMigrationResults,
 } from '@/extensions/general/arcim-migration/lib/migrate-plan'
+import { canSkipMappingStep } from '@/extensions/general/arcim-migration/lib/mapping-step'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ProviderMigrationProgress from './ProviderMigrationProgress'
 import { MIGRATION_RESOURCES, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
@@ -507,6 +538,12 @@ interface ConnectionStatus {
    */
   hasCompletedSieImport?: boolean
   latestCompletedSieImport?: SieImportSummary | null
+  /**
+   * The latest connect that never got a token (older than 30 minutes, not
+   * followed by a completed SIE import or an accepted connection). Optional
+   * only for a server that predates the field.
+   */
+  unfinishedConnect?: { provider: ArcimProvider; startedAt: string } | null
   entityCounts: {
     customers: number
     suppliers: number
@@ -538,8 +575,8 @@ function ProviderStep({
 }: {
   onSelect: (provider: ArcimProvider) => void
   onResync: (provider: ArcimProvider, consentId: string) => void
-  /** Run the underlag import on its own against an active Fortnox consent. */
-  onFetchDocuments: (consentId: string) => void
+  /** Run the underlag import on its own against an active consent whose provider serves underlag. */
+  onFetchDocuments: (consentId: string, provider: ArcimProvider) => void
   onDisconnect: (consentId: string) => void
   connectionStatus: ConnectionStatus | null
   isLoadingStatus: boolean
@@ -551,6 +588,14 @@ function ProviderStep({
   const sieViaApi = (id: ArcimProvider) => ARCIM_PROVIDERS.find(p => p.id === id)?.sieViaApi === true
   const allSieViaApi = activeConsents.length > 0 && activeConsents.every(c => sieViaApi(c.provider))
   const showSieRequiredBanner = !isLoadingStatus && !hasSieImport && !allSieViaApi
+  // A returning customer whose last connect stalled gets it back here. The
+  // retry follows the same gate as the provider list below: Visma and Bokio
+  // stay behind "SIE krävs först", so only the upload is offered for them.
+  const unfinished = connectionStatus?.unfinishedConnect ?? null
+  const unfinishedInfo = unfinished ? ARCIM_PROVIDERS.find(p => p.id === unfinished.provider) : undefined
+  const unfinishedCanRetry = !!unfinishedInfo
+    && !COMING_SOON_PROVIDERS.has(unfinishedInfo.id)
+    && (hasSieImport || unfinishedInfo.sieViaApi)
 
   return (
     <div className="stagger-enter space-y-8">
@@ -568,6 +613,33 @@ function ProviderStep({
           bokföringsdatan (kontoplan, verifikationer och balanser) via SIE-fil först. Gäller inte
           Fortnox, Briox, Björn Lundén och WINT, där hämtas bokföringen direkt via API:et.
         </AttnLine>
+      )}
+
+      {/* Unfinished connect: one hairline row in the shape of the active
+          connections below, with the two ways forward. */}
+      {!isLoadingStatus && unfinished && unfinishedInfo && (
+        <div className="flex flex-wrap items-center gap-3 border-y border-border py-3 sm:flex-nowrap sm:gap-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={PROVIDER_LOGOS[unfinishedInfo.id]}
+            alt=""
+            className="h-8 w-8 shrink-0 rounded-sm object-contain"
+          />
+          <p className="min-w-0 flex-1 text-sm font-medium">
+            {t('ext_arcim_unfinished_connect', { provider: unfinishedInfo.name })}
+          </p>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {unfinishedCanRetry && (
+              <Button size="sm" onClick={() => onSelect(unfinishedInfo.id)}>
+                <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                {t('ext_arcim_unfinished_connect_retry')}
+              </Button>
+            )}
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/import?mode=sie">{t('ext_arcim_unfinished_connect_sie')}</Link>
+            </Button>
+          </div>
+        </div>
       )}
 
       {/* Existing connections: quiet hairline rows, no cards. Being connected
@@ -622,11 +694,11 @@ function ProviderStep({
                         of the run that just finished; closing or reloading
                         lost it. From here it runs on its own, with the same
                         consent, without repeating the migration. */}
-                    {consent.provider === 'fortnox' && (
+                    {supportsUnderlagImport(consent.provider) && (
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => onFetchDocuments(consent.id)}
+                        onClick={() => onFetchDocuments(consent.id, consent.provider)}
                       >
                         <Paperclip className="mr-1.5 h-3.5 w-3.5" />
                         {t('ext_arcim_documents_fetch_action')}
@@ -651,8 +723,13 @@ function ProviderStep({
 
       {/* Provider selection: quiet list rows on the page, hairline-divided. */}
       {isLoadingStatus ? (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div className="divide-y divide-border" aria-busy="true">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-4 py-3">
+              <Skeleton className="h-8 w-8 shrink-0 rounded-sm" />
+              <Skeleton className="h-4 w-40" />
+            </div>
+          ))}
         </div>
       ) : (
         <div className="stagger-enter divide-y divide-border" data-no-stagger>
@@ -694,7 +771,7 @@ function ProviderStep({
                       <Badge variant="secondary">Kommer snart</Badge>
                     )}
                     {alreadyConnected && (
-                      <Badge variant="success">Ansluten</Badge>
+                      <span className="text-xs text-muted-foreground">Ansluten</span>
                     )}
                     {needsSieFirst && !comingSoon && !alreadyConnected && (
                       <Badge variant="warning">SIE krävs först</Badge>
@@ -737,6 +814,7 @@ function ConnectStep({
   authUrl,
   activationUrl,
   consentId,
+  onOpenProviderWindow,
   onTokenSubmit,
   onBack,
 }: {
@@ -748,11 +826,22 @@ function ConnectStep({
   /** Björn Lundén only: Lundify's activation redirect, when BL issued us a key. */
   activationUrl: string | null
   consentId: string | null
+  /** Opens the provider login (or Lundify activation) popup: the parent owns
+   *  it so the click and its outcome can be counted. */
+  onOpenProviderWindow: (url: string) => void
   onTokenSubmit: (apiToken: string, companyId: string) => void
   onBack: () => void
 }) {
   const t = useTranslations('extensions')
   const providerName = ARCIM_PROVIDERS.find(p => p.id === provider)?.name ?? provider
+  // What the provider requires before its login can succeed, shown before the
+  // click instead of only after a failure. Wording follows the error registry
+  // (PROVIDER_LICENSE_MISSING, PROVIDER_API_MODULE_INACTIVE).
+  const requirement = provider === 'fortnox'
+    ? t('ext_arcim_requirement_fortnox')
+    : provider === 'visma'
+      ? t('ext_arcim_requirement_visma')
+      : null
   const [apiToken, setApiToken] = useState('')
   const [companyId, setCompanyId] = useState('')
   // With the Lundify redirect on offer, the User-Key field is the fallback for
@@ -764,24 +853,6 @@ function ConnectStep({
   const hasLundifyActivation = isClientCredentials && !!activationUrl
   const manualKeyVisible = !hasLundifyActivation || showManualKey
 
-  const openProviderWindow = (url: string) => {
-    const w = 600
-    const h = 700
-    const left = window.screenX + (window.outerWidth - w) / 2
-    const top = window.screenY + (window.outerHeight - h) / 2
-    const popup = window.open(url, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
-    if (!popup) {
-      // Popup blocked: with the return value discarded, a blocked
-      // popup looked exactly like a successful one (nothing opens,
-      // nothing is said, the user clicks again). Fall back to the
-      // full-page flow instead. The callback already supports it:
-      // with no window.opener it redirects to
-      // /import?migration=connected&consentId=..., which
-      // handleOAuthReturn consumes and resumes the wizard at the
-      // preview step. Same treatment as SkatteverketConnectPanel.
-      window.location.href = url
-    }
-  }
   // WINT has no API keys: the "token" is the user's WINT login (e-post +
   // lösenord), exchanged server-side for ett tokenpar; lösenordet sparas aldrig.
   const isWintLogin = provider === 'wint'
@@ -839,28 +910,21 @@ function ConnectStep({
       {isLoading && <SpinnerLine>Förbereder anslutning...</SpinnerLine>}
 
       {error && (
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-destructive">Anslutning misslyckades</p>
-            <p className="text-sm text-muted-foreground">{error}</p>
-            {provider === 'fortnox' && (
-              <p className="text-sm text-muted-foreground">
-                Obs: Fortnox kräver ett aktivt integrationstillägg (tillkostnadsbelagd tilläggstjänst) för att kunna använda integrationer. Kontrollera att detta är aktiverat i ditt Fortnox-konto.
-              </p>
-            )}
-          </div>
-          <SieFallbackLine message="Du kan också importera din bokföringsdata manuellt via en SIE-fil." />
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-destructive">Anslutning misslyckades</p>
+          <p className="text-sm text-muted-foreground">{error}</p>
         </div>
       )}
 
       {/* OAuth flow */}
       {authType === 'oauth' && authUrl && !isLoading && (
         <div className="space-y-4">
+          {requirement && <p className="text-sm">{requirement}</p>}
           <p className="text-sm text-muted-foreground">
             Klicka nedan för att logga in i {providerName}.
             Fönstret stängs automatiskt när du är klar.
           </p>
-          <Button className="min-h-11" onClick={() => openProviderWindow(authUrl)}>
+          <Button onClick={() => onOpenProviderWindow(authUrl)}>
             Logga in i {providerName}
             <ExternalLink className="ml-2 h-4 w-4" />
           </Button>
@@ -872,7 +936,7 @@ function ConnectStep({
           providers, so the same listener resumes the wizard. */}
       {authType === 'token' && consentId && !isLoading && hasLundifyActivation && activationUrl && (
         <div className="space-y-4">
-          <Button className="min-h-11" onClick={() => openProviderWindow(activationUrl)}>
+          <Button onClick={() => onOpenProviderWindow(activationUrl)}>
             {t('ext_arcim_bl_activate_button')}
             <ExternalLink className="ml-2 h-4 w-4" />
           </Button>
@@ -953,7 +1017,7 @@ function ConnectStep({
               </div>
             )}
             <Button
-              className={cn('min-h-11', isWintLogin && 'order-3')}
+              className={cn(isWintLogin && 'order-3')}
               onClick={() => onTokenSubmit(apiToken, companyId)}
               disabled={!canSubmit}
             >
@@ -964,8 +1028,12 @@ function ConnectStep({
         </div>
       )}
 
+      {/* The manual route is offered up front, not only after a failure:
+          most customers whose connect stalled never saw it. */}
+      <SieFallbackLine message="Du kan också importera din bokföringsdata manuellt via en SIE-fil." />
+
       <div className="flex border-t border-border pt-6">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
+        <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
@@ -1113,7 +1181,7 @@ function PreviewStep({
             <p className="text-sm text-muted-foreground">{error}</p>
           </div>
           {authExpired && (
-            <Button size="sm" className="min-h-9" onClick={onReconnect} disabled={isLoading}>
+            <Button size="sm" onClick={onReconnect} disabled={isLoading}>
               <RotateCcw className="mr-2 h-4 w-4" />
               Återanslut {providerName}
             </Button>
@@ -1140,12 +1208,11 @@ function PreviewStep({
       )}
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
+        <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
         <Button
-          className="min-h-11"
           onClick={onContinue}
           disabled={isLoading || noYearSelected || tooManySelected || (!!preview && !preview.sieAvailable && !preview.hasSieData)}
         >
@@ -1207,7 +1274,7 @@ function MappingStep({
         </div>
         <SieFallbackLine message="Om problemet kvarstår kan du importera din SIE-fil manuellt istället." />
         <div className="flex border-t border-border pt-6">
-          <Button variant="outline" className="min-h-11" onClick={onBack}>
+          <Button variant="outline" onClick={onBack}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Tillbaka
           </Button>
@@ -1393,7 +1460,7 @@ function OptionsStep({
         <OptionRow
           label="Leverantörsfakturor"
           description={provider === 'fortnox'
-            ? 'Endast obetalda leverantörsfakturor hämtas. Historiska betalda fakturor finns kvar i Fortnox.'
+            ? t('ext_arcim_supplier_invoices_unpaid_only')
             : 'Alla leverantörsfakturor (betalda och obetalda)'}
           checked={options.importSupplierInvoices}
           onChange={() => toggleOption('importSupplierInvoices')}
@@ -1413,11 +1480,11 @@ function OptionsStep({
       )}
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
+        <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked || isStarting}>
+        <Button onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked || isStarting}>
           Starta migrering
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
@@ -1765,11 +1832,29 @@ function DocumentImportFollowUp({
 
   if (state.phase === 'hidden' || state.phase === 'dismissed') return null
 
+  const provider = ARCIM_PROVIDERS.find(p => p.id === state.provider)?.name ?? state.provider ?? ''
   const title = (
     <SectionKicker>
-      {standalone ? t('ext_arcim_documents_title_standalone') : t('ext_arcim_documents_title')}
+      {standalone
+        ? t('ext_arcim_documents_title_standalone', { provider })
+        : t('ext_arcim_documents_title', { provider })}
     </SectionKicker>
   )
+
+  // Underlag whose verifikat sits in a klarmarkerat or locked year: the
+  // database refuses those links, so a retry cannot help. Say which years and
+  // where to reopen them, before the import (dry run) and after it (crm#251).
+  const lockedCount = state.result?.locked ?? 0
+  const lockedYears = (state.result?.lockedPeriods ?? []).join(', ')
+  const lockedYearsLine = (key: 'ext_arcim_documents_locked_offer' | 'ext_arcim_documents_locked_result') =>
+    lockedCount > 0 ? (
+      <p className="text-sm text-muted-foreground">
+        {t(key, { count: lockedCount, years: lockedYears })}{' '}
+        <Link href="/settings/bookkeeping" className="underline underline-offset-4 hover:text-foreground">
+          {t('ext_arcim_documents_locked_open_years')}
+        </Link>
+      </p>
+    ) : null
 
   if (
     state.phase === 'discovering' ||
@@ -1778,7 +1863,7 @@ function DocumentImportFollowUp({
   ) {
     const label =
       state.phase === 'discovering'
-        ? t('ext_arcim_documents_discovering')
+        ? t('ext_arcim_documents_discovering', { provider })
         : state.phase === 'importing'
           ? t('ext_arcim_documents_importing')
           : t('ext_arcim_documents_reconnecting')
@@ -1813,14 +1898,15 @@ function DocumentImportFollowUp({
         {title}
         <p className="text-sm text-muted-foreground">
           {standalone
-            ? t('ext_arcim_documents_prompt_standalone', { count: state.found })
-            : t('ext_arcim_documents_prompt', { count: state.found })}
+            ? t('ext_arcim_documents_prompt_standalone', { count: state.found, provider })
+            : t('ext_arcim_documents_prompt', { count: state.found, provider })}
         </p>
+        {lockedYearsLine('ext_arcim_documents_locked_offer')}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Button className="min-h-11" onClick={onImport}>
-            {t('ext_arcim_documents_import_action')}
+          <Button onClick={onImport}>
+            {t('ext_arcim_documents_import_action', { provider })}
           </Button>
-          <Button variant="ghost" className="min-h-11" onClick={onDismiss}>
+          <Button variant="ghost" onClick={onDismiss}>
             {t('ext_arcim_documents_not_now')}
           </Button>
         </div>
@@ -1832,8 +1918,8 @@ function DocumentImportFollowUp({
     return (
       <section className="space-y-3" aria-live="polite">
         {title}
-        <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_empty')}</p>
-        <Button variant="outline" className="min-h-11" onClick={onDiscover}>
+        <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_empty', { provider })}</p>
+        <Button variant="outline" onClick={onDiscover}>
           <RotateCcw className="mr-2 h-4 w-4" />
           {t('ext_arcim_documents_retry_discovery')}
         </Button>
@@ -1873,13 +1959,20 @@ function DocumentImportFollowUp({
         value: failed,
         valueClassName: failed > 0 ? 'text-destructive' : 'text-foreground',
       },
+      ...(lockedCount > 0
+        ? [{
+            label: t('ext_arcim_documents_locked'),
+            value: lockedCount,
+            valueClassName: 'text-foreground',
+          }]
+        : []),
     ]
 
     return (
       <section className="space-y-4" aria-live="polite">
         {title}
         <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_result_description')}</p>
-        <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <dl className={cn('grid grid-cols-2 gap-4', outcomes.length > 4 ? 'sm:grid-cols-5' : 'sm:grid-cols-4')}>
           {outcomes.map(({ label, value, valueClassName }) => (
             <div key={label} className="flex flex-col">
               <dt className="order-2 text-xs text-muted-foreground">{label}</dt>
@@ -1894,12 +1987,21 @@ function DocumentImportFollowUp({
             {t('ext_arcim_documents_unmatched_help')}
           </p>
         )}
+        {lockedCount > 0 && (
+          <div className="space-y-3">
+            {lockedYearsLine('ext_arcim_documents_locked_result')}
+            <Button variant="outline" onClick={onDiscover}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              {t('ext_arcim_documents_retry_discovery')}
+            </Button>
+          </div>
+        )}
         {failed > 0 && (
           <div className="space-y-3">
             <p className="text-sm text-destructive">
               {t('ext_arcim_documents_partial_failure')}
             </p>
-            <Button variant="outline" className="min-h-11" onClick={onImport}>
+            <Button variant="outline" onClick={onImport}>
               <RotateCcw className="mr-2 h-4 w-4" />
               {t('ext_arcim_documents_retry_import')}
             </Button>
@@ -1927,8 +2029,8 @@ function DocumentImportFollowUp({
           ? t('ext_arcim_documents_scope_error')
           : discoveryFailed
             ? standalone
-              ? t('ext_arcim_documents_discovery_error_standalone')
-              : t('ext_arcim_documents_discovery_error')
+              ? t('ext_arcim_documents_discovery_error_standalone', { provider })
+              : t('ext_arcim_documents_discovery_error', { provider })
             : standalone
               ? t('ext_arcim_documents_import_error_standalone')
               : t('ext_arcim_documents_import_error')}
@@ -1949,7 +2051,6 @@ function DocumentImportFollowUp({
       )}
       {!scopesUnavailable && (
         <Button
-          className="min-h-11"
           onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
         >
           {reconnectRequired ? (
@@ -1975,6 +2076,7 @@ const NEXT_STEPS: { title: string; sub: string }[] = [
 ]
 
 function ResultStep({
+  provider,
   results,
   sieResults,
   omittedYears,
@@ -1989,6 +2091,8 @@ function ResultStep({
   onDismissDocuments,
   onReconnectDocuments,
 }: {
+  /** The source system, for the copy that differs per provider. */
+  provider: string | null
   results: MigrationResults | null
   sieResults: ImportResult[]
   /** Source fiscal years outside the selection: not fetched in this run. */
@@ -2037,8 +2141,8 @@ function ResultStep({
         )}
         <SieFallbackLine message="Du kan istället importera din bokföringsdata manuellt via en SIE-fil." />
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-          <Button variant="outline" className="min-h-11" onClick={onDone}>Klar</Button>
-          <Button className="min-h-11" onClick={onRetry}>
+          <Button variant="outline" onClick={onDone}>Klar</Button>
+          <Button onClick={onRetry}>
             <RotateCcw className="mr-2 h-4 w-4" />
             Försök igen
           </Button>
@@ -2050,6 +2154,8 @@ function ResultStep({
   if (documentsOnly) {
     // Nothing was migrated in this run, so no verdict, stats or next steps:
     // the underlag flow is the whole page.
+    const documentProvider =
+      ARCIM_PROVIDERS.find(p => p.id === documentImportState.provider)?.name ?? documentImportState.provider ?? ''
     return (
       <div className="stagger-enter space-y-8">
         <div>
@@ -2057,10 +2163,10 @@ function ResultStep({
             {t('ext_arcim_documents_standalone_kicker')}
           </p>
           <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
-            {t('ext_arcim_documents_title_standalone')}
+            {t('ext_arcim_documents_title_standalone', { provider: documentProvider })}
           </h2>
           <p className="mt-3 text-[13px] text-muted-foreground">
-            {t('ext_arcim_documents_standalone_lede')}
+            {t('ext_arcim_documents_standalone_lede', { provider: documentProvider })}
           </p>
         </div>
         <DocumentImportFollowUp
@@ -2072,11 +2178,11 @@ function ResultStep({
           onReconnect={onReconnectDocuments}
         />
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-          <Button variant="outline" className="min-h-11" onClick={onDone}>
+          <Button variant="outline" onClick={onDone}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             {t('ext_arcim_documents_standalone_back')}
           </Button>
-          <Button className="min-h-11" asChild>
+          <Button asChild>
             <Link href="/bookkeeping">
               Visa bokföring
               <ExternalLink className="ml-2 h-4 w-4" />
@@ -2213,19 +2319,27 @@ function ResultStep({
         failed: false,
       })
     }
-    if (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0)) {
+    if (results.supplierInvoices) {
+      // Shown even at zero: the Fortnox import fetches only unpaid supplier
+      // invoices (filter=unpaid in lib/providers/fortnox/config.ts), so a
+      // register with every invoice paid imports none, and a hidden row read
+      // as "the supplier invoices were lost" (crm#251). The paid ones are in
+      // the ledger as the SIE file's verifikat.
+      const skipDetail = results.supplierInvoices.skipped > 0
+        ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
+        : undefined
+      const scopeDetail = provider === 'fortnox' ? t('ext_arcim_supplier_invoices_unpaid_only') : undefined
       entityLines.push({
         label: 'Leverantörsfakturor',
         value: `${results.supplierInvoices.imported} importerade`,
-        detail: results.supplierInvoices.skipped > 0
-          ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
-          : undefined,
+        detail: [skipDetail, scopeDetail].filter(Boolean).join(' ') || undefined,
         failed: entityRowStatus(results.supplierInvoices.imported, results.supplierInvoices.skipReasons) === 'error',
       })
     }
     for (const [key, count] of [
       ['vat', (results.salesInvoices?.vatUnresolved ?? 0) + (results.supplierInvoices?.vatUnresolved ?? 0)],
       ['fx', (results.salesInvoices?.fxUnresolved ?? 0) + (results.supplierInvoices?.fxUnresolved ?? 0)],
+      ['rows', results.supplierInvoices?.rowsMismatch ?? 0],
     ] as const) {
       if (count > 0) entityLines.push({ label: t(`ext_arcim_job_warning_${key}`),
         value: t('ext_arcim_job_warning_count', { count }), failed: false })
@@ -2407,18 +2521,18 @@ function ResultStep({
       )}
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onDone}>
+        <Button variant="outline" onClick={onDone}>
           <RotateCcw className="mr-2 h-4 w-4" />
           Ny migrering
         </Button>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <Button variant="outline" className="min-h-11" asChild>
+          <Button variant="outline" asChild>
             <Link href="/customers">
               Visa kunder
               <ExternalLink className="ml-2 h-4 w-4" />
             </Link>
           </Button>
-          <Button className="min-h-11" asChild>
+          <Button asChild>
             <Link href="/bookkeeping">
               Visa bokföring
               <ExternalLink className="ml-2 h-4 w-4" />
@@ -2785,6 +2899,55 @@ export default function ArcimMigrationWorkspace({
     stopOAuthPopupWatchRef.current = null
   }, [])
 
+  // The connect click being measured (migration_connect_clicked). The first
+  // outcome clears it, so one click reports at most one
+  // migration_connect_finished.
+  const connectAttemptRef = useRef<ArcimProvider | null>(null)
+  const startConnectAttempt = useCallback((provider: ArcimProvider) => {
+    connectAttemptRef.current = provider
+    trackMigrationConnectClicked(provider)
+  }, [])
+  const finishConnectAttempt = useCallback((outcome: MigrationConnectOutcome) => {
+    const provider = connectAttemptRef.current
+    if (!provider) return
+    connectAttemptRef.current = null
+    trackMigrationConnectFinished(provider, outcome)
+  }, [])
+
+  // First connect: the provider login, or Lundify's activation for Björn
+  // Lundén. Both answer through the same popup and postMessage listener.
+  const handleOpenProviderWindow = useCallback((url: string) => {
+    if (selectedProvider) startConnectAttempt(selectedProvider)
+    const w = 600
+    const h = 700
+    const left = window.screenX + (window.outerWidth - w) / 2
+    const top = window.screenY + (window.outerHeight - h) / 2
+    const popup = window.open(url, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+    if (!popup) {
+      // Popup blocked: with the return value discarded, a blocked
+      // popup looked exactly like a successful one (nothing opens,
+      // nothing is said, the user clicks again). Fall back to the
+      // full-page flow instead. The callback already supports it:
+      // with no window.opener it redirects to
+      // /import?migration=connected&consentId=..., which
+      // handleOAuthReturn consumes and resumes the wizard at the
+      // preview step. Same treatment as SkatteverketConnectPanel.
+      if (selectedProvider) storeConnectAttempt(selectedProvider)
+      window.location.href = url
+      return
+    }
+    // Closing the login window before it answers is an outcome of its own.
+    // The popup posts its result and then closes, but the message can reach
+    // this window after the close is observed. Here the close only records
+    // telemetry, so the watch waits 3 s instead of the default 0.5 s: a late
+    // success or error stops it first and is recorded as what it was.
+    clearOAuthPopupWatch()
+    stopOAuthPopupWatchRef.current = watchArcimOAuthPopup(popup, () => {
+      stopOAuthPopupWatchRef.current = null
+      finishConnectAttempt('window_closed')
+    }, 500, 3000)
+  }, [selectedProvider, startConnectAttempt, clearOAuthPopupWatch, finishConnectAttempt])
+
   const clearDocumentReconnectFailureCleanup = useCallback(() => {
     if (documentReconnectFailureCleanupRef.current) {
       window.clearTimeout(documentReconnectFailureCleanupRef.current)
@@ -2906,7 +3069,7 @@ export default function ArcimMigrationWorkspace({
       provider,
       migrationSucceeded,
     })
-    if (provider !== 'fortnox' || !migrationSucceeded) return
+    if (!supportsUnderlagImport(provider) || !migrationSucceeded) return
 
     try {
       const result = await requestArcimDocumentImport(currentConsentId, true)
@@ -2937,11 +3100,12 @@ export default function ArcimMigrationWorkspace({
     }
   }, [])
 
-  // Run the underlag import on its own against an active Fortnox consent.
-  // Same discovery, import and scope-reconnect path as the tail of a
-  // migration; only the surrounding page differs (no migration verdict).
-  const handleFetchDocuments = useCallback(async (existingConsentId: string) => {
-    setSelectedProvider('fortnox')
+  // Run the underlag import on its own against an active consent (Fortnox or
+  // Bokio). Same discovery, import and, for Fortnox, scope-reconnect path as
+  // the tail of a migration; only the surrounding page differs (no migration
+  // verdict).
+  const handleFetchDocuments = useCallback(async (existingConsentId: string, provider: ArcimProvider) => {
+    setSelectedProvider(provider)
     setConsentId(existingConsentId)
     setError(null)
     setMigrationResults(null)
@@ -2952,7 +3116,7 @@ export default function ArcimMigrationWorkspace({
     documentReconnectActionRef.current = null
     setDocumentsOnly(true)
     setStep('result')
-    await runDocumentDiscovery(existingConsentId, 'fortnox', true)
+    await runDocumentDiscovery(existingConsentId, provider, true)
   }, [clearDocumentReconnectFailureCleanup, runDocumentDiscovery])
 
   const handleDocumentReconnect = useCallback(() => {
@@ -3021,6 +3185,7 @@ export default function ArcimMigrationWorkspace({
   const handleTokenSubmit = useCallback(async (apiToken: string, companyId: string) => {
     if (!consentId || !selectedProvider) return
 
+    startConnectAttempt(selectedProvider)
     setIsLoading(true)
     setError(null)
 
@@ -3042,13 +3207,15 @@ export default function ArcimMigrationWorkspace({
       }
 
       // Token stored: consent is now accepted, proceed to preview
+      finishConnectAttempt('success')
       await loadPreview(consentId)
     } catch (err) {
+      finishConnectAttempt('provider_error')
       setError(displayError(err, 'Kunde inte ansluta'))
     } finally {
       setIsLoading(false)
     }
-  }, [consentId, selectedProvider, loadPreview])
+  }, [consentId, selectedProvider, loadPreview, startConnectAttempt, finishConnectAttempt])
 
   // Handle OAuth callback via URL params
   const handleOAuthReturn = useCallback(async () => {
@@ -3078,15 +3245,19 @@ export default function ArcimMigrationWorkspace({
           await runDocumentImport(callbackConsentId)
         }
       } else {
+        const attempt = takeConnectAttempt()
+        if (attempt) trackMigrationConnectFinished(attempt, 'success')
         await loadPreview(callbackConsentId)
       }
     } else if (migrationStatus === 'error') {
       const callbackProvider = url.searchParams.get('provider') as ArcimProvider | null
       const reason = url.searchParams.get('reason') || 'OAuth-anslutningen misslyckades. Försök igen.'
+      const cancelled = url.searchParams.get('cancelled') === '1'
       url.searchParams.delete('migration')
       url.searchParams.delete('provider')
       url.searchParams.delete('reason')
       url.searchParams.delete('consentId')
+      url.searchParams.delete('cancelled')
       window.history.replaceState({}, '', url.pathname)
       clearDocumentOAuthResume()
       if (documentResume && callbackConsentId) {
@@ -3102,6 +3273,8 @@ export default function ArcimMigrationWorkspace({
         )
         return
       }
+      const attempt = takeConnectAttempt()
+      if (attempt) trackMigrationConnectFinished(attempt, cancelled ? 'cancelled' : 'provider_error')
       setError(reason)
       toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
       if (callbackProvider) {
@@ -3125,21 +3298,29 @@ export default function ArcimMigrationWorkspace({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Deep-linked provider preselect (onboarding branch question). Only when
-  // this mount is not an OAuth return (that flow owns the wizard state), and
-  // only for providers whose SIE comes via API: visma/bokio must first see
-  // the provider list with its "SIE krävs först" gate, which depends on
-  // async connection status.
+  // Deep-linked provider preselect (onboarding branch question, and the
+  // unfinished-connect retry). Only when this mount is not an OAuth return
+  // (that flow owns the wizard state). Visma and Bokio need a completed SIE
+  // import first, so for them the preselect waits for the connection status
+  // and leaves the provider list with its "SIE krävs först" gate in place
+  // when that import is missing.
   const preselectedRef = useRef(false)
   useEffect(() => {
     if (preselectedRef.current || !initialProvider) return
     if (new URL(window.location.href).searchParams.get('migration')) return
     const provider = ARCIM_PROVIDERS.find((p) => p.id === initialProvider)
-    if (!provider || COMING_SOON_PROVIDERS.has(provider.id) || !provider.sieViaApi) return
+    if (!provider || COMING_SOON_PROVIDERS.has(provider.id)) return
+    if (!provider.sieViaApi) {
+      if (isLoadingStatus) return
+      if (!connectionStatus?.hasCompletedSieImport) {
+        preselectedRef.current = true
+        return
+      }
+    }
     preselectedRef.current = true
     void handleSelectProvider(provider.id)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialProvider])
+  }, [initialProvider, isLoadingStatus, connectionStatus])
 
   // Listen for postMessage from OAuth popup
   useEffect(() => {
@@ -3162,6 +3343,7 @@ export default function ArcimMigrationWorkspace({
           }
           return
         }
+        finishConnectAttempt('success')
         loadPreview(event.data.consentId)
       } else if (event.data?.type === 'arcim-oauth-error') {
         clearOAuthPopupWatch()
@@ -3185,6 +3367,9 @@ export default function ArcimMigrationWorkspace({
           )
           return
         }
+        // access_denied at the provider arrives flagged `cancelled` by the
+        // callback: the customer chose to stop, the provider did not fail.
+        finishConnectAttempt(event.data.cancelled === true ? 'cancelled' : 'provider_error')
         setError(reason)
         toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
       }
@@ -3195,6 +3380,7 @@ export default function ArcimMigrationWorkspace({
     clearOAuthPopupWatch,
     clearDocumentReconnectFailureCleanup,
     documentImportState.problem,
+    finishConnectAttempt,
     loadPreview,
     runDocumentDiscovery,
     runDocumentImport,
@@ -3242,11 +3428,9 @@ export default function ArcimMigrationWorkspace({
         setMigrationOptions(prev => ({ ...prev, importSIEData: false }))
       }
 
-      const needsVatReview = enrichedMappings.some(mapping =>
-        mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
-      )
-      // Auto-skip only when there is neither account mapping nor VAT review work.
-      if ((data.mappingStats.unmapped === 0 && !needsVatReview) || data.allImported) {
+      // Auto-skip only when the page has nothing to ask: no blank target, no
+      // VAT review, and no class 9 account suggested onto 2999 OBS-konto.
+      if (canSkipMappingStep(enrichedMappings, { unmapped: data.mappingStats.unmapped, allImported: data.allImported })) {
         setStep('options')
       }
     } catch (err) {
@@ -3605,6 +3789,7 @@ export default function ArcimMigrationWorkspace({
           authUrl={authUrl}
           activationUrl={activationUrl}
           consentId={consentId}
+          onOpenProviderWindow={handleOpenProviderWindow}
           onTokenSubmit={handleTokenSubmit}
           onBack={() => {
             setStep('provider')
@@ -3672,6 +3857,7 @@ export default function ArcimMigrationWorkspace({
 
       {step === 'result' && (
         <ResultStep
+          provider={preview?.consent.provider ?? selectedProvider}
           results={migrationResults}
           sieResults={sieImportResults}
           omittedYears={sieData?.omittedYears ?? []}
@@ -3685,7 +3871,7 @@ export default function ArcimMigrationWorkspace({
             setStep('options')
           }}
           onDiscoverDocuments={() => {
-            if (consentId) void runDocumentDiscovery(consentId, 'fortnox', true)
+            if (consentId) void runDocumentDiscovery(consentId, documentImportState.provider, true)
           }}
           onImportDocuments={() => {
             if (consentId) void runDocumentImport(consentId)

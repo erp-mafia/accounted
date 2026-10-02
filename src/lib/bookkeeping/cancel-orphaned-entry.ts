@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { cancelOrphanedEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { getUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
 
 const log = createLogger('cancel-orphaned-entry')
@@ -126,6 +126,11 @@ export async function reverseOrphanedJournalEntry(
  * match routes previously returned MATCH_SI_NOT_OPEN and left the voucher
  * orphaned in the ledger.
  *
+ * The cancel and the gap explanation run in one database transaction through
+ * the engine's gated cleanup door (cancel_orphaned_entry): a posted voucher
+ * can only be cancelled there, and only as the fresh orphan of the acting
+ * user's own workflow. The voucher keeps its lines.
+ *
  * Best-effort by design: the CAS conflict response is already correct for
  * the caller, so failures here are logged loudly rather than thrown.
  */
@@ -137,64 +142,22 @@ export async function cancelOrphanedPaymentEntry(
   explanation: string,
 ): Promise<void> {
   try {
-    const { data: orphan, error: fetchError } = await supabase
-      .from('journal_entries')
-      .select('fiscal_period_id, voucher_series, voucher_number')
-      .eq('id', journalEntryId)
-      .eq('company_id', companyId)
-      .single()
-
-    if (fetchError) {
-      log.error('failed to load orphaned payment voucher for cancellation', fetchError, {
+    const { error } = await cancelOrphanedEntry(supabase, companyId, userId, journalEntryId, {
+      gapExplanation: explanation,
+    })
+    if (error) {
+      // The voucher stays posted and visible; this line carries what an
+      // operator needs to storno it and document the gap by hand.
+      log.error('failed to cancel orphaned payment voucher (manual cleanup needed)', error, {
         companyId,
         journalEntryId,
-      })
-    }
-
-    // Recovery breadcrumb BEFORE mutating: the cancel and the gap insert are
-    // separate statements, so a crash between them would leave a cancelled
-    // voucher with no gap explanation (BFNAR 2013:2 requires one). This line
-    // carries everything an operator needs to write it manually.
-    if (orphan) {
-      log.info('cancelling orphaned payment voucher', {
-        companyId,
-        journalEntryId,
-        voucherSeries: orphan.voucher_series || 'A',
-        voucherNumber: orphan.voucher_number,
-        fiscalPeriodId: orphan.fiscal_period_id,
-        explanation,
-      })
-    }
-
-    const { error: cancelError } = await supabase
-      .from('journal_entries')
-      .update({ status: 'cancelled' })
-      .eq('id', journalEntryId)
-      .eq('company_id', companyId)
-
-    if (cancelError) {
-      log.error('failed to cancel orphaned payment voucher (manual cleanup needed)', cancelError, {
-        companyId,
-        journalEntryId,
-      })
-      return
-    }
-
-    if (orphan) {
-      await recordVoucherGapExplanation(supabase, {
-        companyId,
-        userId,
-        fiscalPeriodId: orphan.fiscal_period_id,
-        voucherSeries: orphan.voucher_series || 'A',
-        voucherNumber: orphan.voucher_number,
         explanation,
       })
     }
   } catch (err) {
     // Hard never-throw guarantee: the caller is about to return the correct
-    // CAS-conflict response, and an unexpected rejection here (network blip,
-    // driver error) must not replace it with a 500. The orphan stays posted
-    // and visible; the breadcrumb above covers manual recovery.
+    // CAS-conflict response, and an unexpected rejection here must not
+    // replace it with a 500.
     log.error('unexpected failure while cancelling orphaned payment voucher', err as Error, {
       companyId,
       journalEntryId,

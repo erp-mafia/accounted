@@ -32,6 +32,7 @@ import {
 import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
 import { agiReportingPeriod, formatAgiPeriodDashed } from './reporting-period'
 import { runDeviationWindow } from '../deviation-period'
+import { VAXA_STOD_AGI_FIELDS_RETIRED_FROM } from '../vaxa-stod'
 import {
   resolveTaxableBenefits,
   staleBenefitTotalRefusal,
@@ -49,9 +50,9 @@ import type { Logger } from '@/lib/logger'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
 // this, columns added by recent migrations (removed_from_agi,
-// benefits_adjusted, vaxa_stod_eligible, employment_start,
-// housing_benefit_type) reaching the mapper as null/undefined would silently
-// fall back to Boolean(undefined) = false and mis-emit regulatory flags.
+// benefits_adjusted, housing_benefit_type) reaching the mapper as
+// null/undefined would silently fall back to Boolean(undefined) = false and
+// mis-emit regulatory flags.
 // Zod produces an explicit error instead.
 const EmployeeJoinSchema = z
   .object({
@@ -59,8 +60,6 @@ const EmployeeJoinSchema = z
     specification_number: z.number().int().min(1, 'employee.specification_number måste vara ≥ 1'),
     f_skatt_status: z.string(),
     monthly_salary: z.number().nullable().optional(),
-    vaxa_stod_eligible: z.boolean().nullable().optional(),
-    employment_start: z.string().nullable().optional(),
     housing_benefit_type: z.enum(['smahus', 'ej_smahus']).nullable().optional(),
   })
   .passthrough()
@@ -222,7 +221,7 @@ export async function generateAgiDeclaration(
   const { data: runEmployees } = await supabase
     .from('salary_run_employees')
     .select(
-      '*, employee:employees(personnummer, specification_number, f_skatt_status, monthly_salary, vaxa_stod_eligible, employment_start, housing_benefit_type), line_items:salary_line_items(*)',
+      '*, employee:employees(personnummer, specification_number, f_skatt_status, monthly_salary, housing_benefit_type), line_items:salary_line_items(*)',
     )
     .eq('salary_run_id', salaryRunId)
 
@@ -315,12 +314,6 @@ export async function generateAgiDeclaration(
     return parsed.data
   })
 
-  // Cutoff for the Växa-stöd FK062/FK063 split: pre-2024-05-01 hires get the
-  // legacy "första anställda"-flag (FK062); 2024-05-01 and later get the
-  // utvidgat växa-stöd flag (FK063). Cutoff from Skatteverket spec (Prop.
-  // 2023/24:80, RAML revisionshistorik 1.19).
-  const VAXA_STOD_FK063_CUTOFF = '2024-05-01'
-
   // The förmånsvärde Skatteverket gets is the value AFTER what the employee
   // paid for the benefit, the same value the engine taxed
   // (lib/salary/benefit-payments.ts). Resolved per payslip up front and
@@ -340,6 +333,26 @@ export async function generateAgiDeclaration(
       continue
     }
     const who = `Anställd ${sre.employee?.specification_number ?? '?'}`
+    // A row calculated at the old reduced växa-stöd sats would be declared
+    // under standard at 10,21 %: an under-declaration from 202601, when the
+    // IU must carry the full avgifter (Lag 2025:1334). The engine no longer
+    // writes such rows; one stored before that is refused, not filed.
+    if (
+      sre.avgifter_category === 'vaxa_stod' &&
+      agiPeriod.periodYear * 100 + agiPeriod.periodMonth >= VAXA_STOD_AGI_FIELDS_RETIRED_FROM
+    ) {
+      return {
+        ok: false,
+        code: 'AGI_INCOMPLETE_DATA',
+        details: {
+          missing_fields: ['avgifter_category'],
+          message:
+            `${who}: arbetsgivaravgifterna är beräknade med växa-stödets nedsatta sats, som inte gäller från ` +
+            'redovisningsperiod 2026-01 (Lag 2025:1334). Räkna om lönekörningen så att fulla avgifter redovisas, ' +
+            'och ansök om växa-stöd hos Skatteverket i efterhand.',
+        },
+      }
+    }
     const resolution = resolveTaxableBenefits(
       (sre.line_items ?? []).map((li) => ({ itemType: li.item_type, amount: li.amount ?? 0 })),
     )
@@ -405,29 +418,6 @@ export async function generateAgiDeclaration(
 
       const absenceEvents = absenceByEmployee.get(sre.employee_id)
 
-      let vaxaStod: 'forsta_anstalld' | 'vaxa_stod' | undefined
-      if (emp?.vaxa_stod_eligible) {
-        vaxaStod =
-          emp.employment_start && emp.employment_start < VAXA_STOD_FK063_CUTOFF
-            ? 'forsta_anstalld'
-            : 'vaxa_stod'
-      }
-
-      // Växa-stöd (employment-start-gated relief, 10.21 % avgifter) and the
-      // ungdomsrabatt (age-gated relief, 'youth' avgifter_category) are
-      // distinct statutory programs and must not be claimed for the same
-      // employee in the same period. Catching this at generation time
-      // avoids emitting an FK062/FK063 flag inconsistent with the FK061
-      // category total.
-      if (vaxaStod && sre.avgifter_category === 'youth') {
-        throw new AGIIncompleteDataError(
-          `Anställd ${emp?.specification_number ?? '?'}: kan inte kombinera växa-stöd ` +
-            '(FK062/FK063) med ungdomsrabatt (avgifter_category="youth"): programmen är ömsesidigt uteslutande. ' +
-            'Välj ett av dem under anställdas inställningar.',
-          ['vaxa_stod_eligible', 'avgifter_category'],
-        )
-      }
-
       const isFSkatt = isFSkattRow(sre)
       // Honor advanced-mode per-employee overrides set during review.
       // F-skatt rows ignore avgifter overrides (see isFSkattRow invariant).
@@ -454,7 +444,6 @@ export async function generateAgiDeclaration(
         housingBenefit,
         benefitOther: benefitOther > 0 ? benefitOther : undefined,
         benefitsAdjusted: Boolean(sre.benefits_adjusted),
-        vaxaStod,
         sickDays: (sre.sick_days ?? 0) > 0 ? (sre.sick_days ?? 0) : undefined,
         vabDays: (sre.vab_days ?? 0) > 0 ? (sre.vab_days ?? 0) : undefined,
         parentalDays:
@@ -531,31 +520,6 @@ export async function generateAgiDeclaration(
   const totalAvgifterAmount = declared.totalAmount
   const totalAvgifterBasis = declared.totalUnderlag
 
-  // FK499 sjuklönekostnad: the sjuklön actually paid across all employees:
-  // 80 % of the lost pay for days 1-14 (the sick_day2_14 row covers day one
-  // too since SjLL 6 § 2019) less the karensavdrag rows. Day 15+ is
-  // Försäkringskassan.
-  const calcParams = ((run.calculation_params as Record<string, unknown>) ?? {}) as {
-    sjuklonRate?: number
-    sjuklon_rate?: number
-  }
-  const sjuklonRate = calcParams.sjuklonRate ?? calcParams.sjuklon_rate ?? 0.8
-  let totalSjuklonekostnad = 0
-  for (const sre of activeEmployees) {
-    const monthly = sre.monthly_salary ?? 0
-    if (!monthly) continue
-    const dailyRate = monthly / 21
-    const lineItems = (sre.line_items ?? []) as Array<{ item_type: string; amount?: number | null; quantity?: number | null }>
-    for (const li of lineItems) {
-      if (li.item_type === 'sick_day2_14') {
-        const days = li.quantity ?? 0
-        totalSjuklonekostnad += dailyRate * sjuklonRate * days
-      } else if (li.item_type === 'sick_karens') {
-        totalSjuklonekostnad -= Math.abs(li.amount ?? 0)
-      }
-    }
-  }
-
   // FK497 SummaSkatteavdr must equal the sum of FK001 on active IUs (not
   // run.total_tax, which includes removed rows). Same for FK487.
   // Coalesce override → computed so manual jämkning/FoU adjustments flow
@@ -575,7 +539,6 @@ export async function generateAgiDeclaration(
     totalTax,
     totalAvgifterBasis,
     totalAvgifterAmount,
-    totalSjuklonekostnad: truncateToWholeKronor(totalSjuklonekostnad),
     avgifterByCategory,
   }
 
