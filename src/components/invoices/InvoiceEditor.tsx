@@ -137,6 +137,7 @@ import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/edi
 import { proposeDraftSendLines } from '@/lib/invoices/editor/voucher-preview'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { planYourReferencePrefill } from '@/lib/invoices/editor/customer-reference'
 import {
   invoiceDateLock,
   resolveDetailsChips,
@@ -739,6 +740,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // correct, so the first resolution must only RECORD the baseline, never snap.
   // A fresh form has no such baseline, so there the first pick does snap.
   const didSeedVatSnapBaseline = useRef(!(isEditMode || isCopyMode))
+  // The Er referens the editor filled in from the customer card itself
+  // (lib/invoices/editor/customer-reference.ts); null once it is the user's.
+  const prefilledReferenceRef = useRef<string | null>(null)
 
   // Edit mode: the claim card's property fields are restored from the first
   // line that names the property (ROT or grön teknik: stamped onto every
@@ -1508,6 +1512,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }, [company?.id, watchDocumentType, isEditMode, initial?.invoice_number])
 
   useEffect(() => {
+    // False only while a saved draft's own customer resolves the first time.
+    const userPicked = didInitialCustomerSync.current
     if (watchCustomerId) {
       const customer = customers.find((c) => c.id === watchCustomerId)
       setSelectedCustomer(customer || null)
@@ -1556,7 +1562,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         didInitialCustomerSync.current = true
       }
     }
-  }, [watchCustomerId, customers, setValue, getValues])
+    // Er referens from the customer card's contact person: into an empty
+    // field, replacing only what the editor itself put there, never what the
+    // user typed. Not on the first resolution of a saved draft (its own
+    // value stands), and never for a received självfaktura (no references).
+    if (mode === 'self_billed' || !userPicked) return
+    const customer = watchCustomerId ? customers.find((c) => c.id === watchCustomerId) : null
+    if (watchCustomerId && !customer) return
+    const current = getValues('your_reference') ?? ''
+    const plan = planYourReferencePrefill({
+      current,
+      prefilled: prefilledReferenceRef.current,
+      contactPerson: customer?.contact_person ?? null,
+    })
+    prefilledReferenceRef.current = plan.prefilled
+    if (plan.value !== current) setValue('your_reference', plan.value, { shouldDirty: true })
+  }, [watchCustomerId, customers, setValue, getValues, mode])
 
   // One-click VIES check from the draft (#2749). /api/vat/validate has
   // already stamped the customer row; mirror it on the local copy so the
