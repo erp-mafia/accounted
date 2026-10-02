@@ -576,11 +576,11 @@ describe('invoice email templates', () => {
       // An IBAN payee prints IBAN and BIC; the bank name only rides along
       // with a domestic account number (the merged Bankkonto row).
       for (const rendered of [html, text]) {
-        expect(rendered).toContain('SE4550000000058398257466')
+        expect(rendered).toContain('SE45 5000 0000 0583 9825 7466')
         expect(rendered).toContain('ESSESESS')
         expect(rendered).not.toContain('Legacy SEK Bank')
         expect(rendered).not.toContain('5037-1231231')
-        expect(rendered).not.toContain('SE0011111111111111111111')
+        expect(rendered).not.toContain('SE00 1111 1111 1111 1111 1111')
         expect(rendered).not.toContain('NDEASESS')
       }
     })

@@ -140,7 +140,7 @@ describe('processOverdueReminders: payment-account gate before writes', () => {
     expect(state.inserts.filter((i) => i.table === 'invoice_reminders')).toHaveLength(1)
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
     const html = (mockSendEmail.mock.calls[0][0] as { html: string }).html
-    expect(html).toContain('DE89370400440532013000')
-    expect(html).not.toContain('SE4550000000058398257466')
+    expect(html).toContain('DE89 3704 0044 0532 0130 00')
+    expect(html).not.toContain('SE45 5000 0000 0583 9825 7466')
   })
 })

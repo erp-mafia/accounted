@@ -313,9 +313,9 @@ describe('payment details follow the invoice currency', () => {
     const html = generateReminderEmailHtml(data)
     const text = generateReminderEmailText(data)
     for (const out of [html, text]) {
-      expect(out).toContain('DE89370400440532013000')
+      expect(out).toContain('DE89 3704 0044 0532 0130 00')
       expect(out).toContain('DEUTDEFF')
-      expect(out).not.toContain('SE4550000000058398257466')
+      expect(out).not.toContain('SE45 5000 0000 0583 9825 7466')
       expect(out).not.toContain('ESSESESS')
     }
   })
@@ -325,8 +325,8 @@ describe('payment details follow the invoice currency', () => {
     const html = generateReminderEmailHtml(data)
     const text = generateReminderEmailText(data)
     for (const out of [html, text]) {
-      expect(out).toContain('SE4550000000058398257466')
-      expect(out).not.toContain('DE89370400440532013000')
+      expect(out).toContain('SE45 5000 0000 0583 9825 7466')
+      expect(out).not.toContain('DE89 3704 0044 0532 0130 00')
     }
   })
 
@@ -340,7 +340,7 @@ describe('payment details follow the invoice currency', () => {
     })
     const data = { ...baseData, company: sekOnly, invoice: eurInvoice }
     for (const out of [generateReminderEmailHtml(data), generateReminderEmailText(data)]) {
-      expect(out).not.toContain('SE4550000000058398257466')
+      expect(out).not.toContain('SE45 5000 0000 0583 9825 7466')
       expect(out).not.toContain('Svenska Banken')
     }
   })

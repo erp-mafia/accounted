@@ -22,6 +22,7 @@
  * Pure and isomorphic (no fs, no crypto): the invoice editor can import it.
  */
 import type { Currency } from '@/types'
+import { formatIbanGroups } from '@/lib/company/connection-iban'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import {
   invoicePrintsBankgiro,
@@ -143,6 +144,26 @@ function bankAccountValue(company: InvoicePaymentRowsCompany): string | null {
   return bank ? `${bank}, ${number}` : number
 }
 
+/**
+ * Swish numbers are stored as bare digits; print them the way Swedes read
+ * them: a business number (123) as "123 118 11 89", a mobile number as
+ * "070-123 45 67". Anything else prints as stored.
+ */
+export function formatSwishForDisplay(value: string | null): string | null {
+  if (!value) return value
+  const digits = value.replace(/\D/g, '')
+  if (digits.length !== 10) return value
+  if (digits.startsWith('123')) return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6, 8)} ${digits.slice(8)}`
+  if (digits.startsWith('07')) return `${digits.slice(0, 3)}-${digits.slice(3, 6)} ${digits.slice(6, 8)} ${digits.slice(8)}`
+  return value
+}
+
+/** IBANs print in groups of four ("SE45 5000 0000 ..."), as banks show them. */
+export function formatIbanForDisplay(value: string | null): string | null {
+  if (!value) return value
+  return formatIbanGroups(value.replace(/\s/g, '').toUpperCase())
+}
+
 export function buildInvoicePaymentRows({
   company,
   invoice,
@@ -161,8 +182,8 @@ export function buildInvoicePaymentRows({
   push('bankgiro', invoicePrintsBankgiro(company) ? clean(company.bankgiro) : null)
   push('plusgiro', invoicePrintsPlusgiro(company) ? clean(company.plusgiro) : null)
   push('bank_account', bankAccountValue(company))
-  push('swish', invoicePrintsSwish(company) ? clean(company.swish) : null)
-  push('iban', clean(company.iban))
+  push('swish', invoicePrintsSwish(company) ? formatSwishForDisplay(clean(company.swish)) : null)
+  push('iban', formatIbanForDisplay(clean(company.iban)))
   push('bic', clean(company.bic))
   // Non-IBAN foreign routing: the label names the identifier the customer's
   // bank asks for (USD ABA routing number, GBP sort code).

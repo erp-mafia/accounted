@@ -163,3 +163,15 @@ describe('buildInvoicePaymentRows: row budget', () => {
     expect(keys(list)).toEqual(['bankgiro', 'plusgiro', 'bank_account', 'swish', 'iban', 'bic', 'ocr'])
   })
 })
+
+describe('payment row display formatting', () => {
+  it('groups a business Swish number and an IBAN the way banks print them', async () => {
+    const { formatSwishForDisplay, formatIbanForDisplay } = await import('@/lib/invoices/payment-rows')
+    expect(formatSwishForDisplay('1231181189')).toBe('123 118 11 89')
+    expect(formatSwishForDisplay('0701234567')).toBe('070-123 45 67')
+    expect(formatSwishForDisplay('12345')).toBe('12345')
+    expect(formatSwishForDisplay(null)).toBe(null)
+    expect(formatIbanForDisplay('SE4550000000058398257466')).toBe('SE45 5000 0000 0583 9825 7466')
+    expect(formatIbanForDisplay('se45 5000 0000 0583 9825 7466')).toBe('SE45 5000 0000 0583 9825 7466')
+  })
+})
