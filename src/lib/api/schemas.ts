@@ -2872,7 +2872,12 @@ export const UpdateSettingsSchema = z.object({
   invoice_show_swish: z.boolean().optional(),
   // Superseded by invoice_qr_mode: still accepted (and stored) so existing
   // API callers keep working, but no longer read when rendering an invoice.
-  invoice_show_payment_qr: z.boolean().optional(),
+  // The describe reaches the MCP settings tool and the API skill, so a caller
+  // learns that setting it changes nothing.
+  invoice_show_payment_qr: z
+    .boolean()
+    .optional()
+    .describe('Superseded by invoice_qr_mode: accepted for compatibility, no longer changes the PDF.'),
   // The one payment QR code invoices print (lib/invoices/payment-qr.ts).
   invoice_qr_mode: InvoiceQrModeSchema.optional(),
   invoice_show_logo: z.boolean().optional(),
