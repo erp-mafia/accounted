@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Invoices (2026-10)
+
+- **Momsfri sellers can issue invoices** (#2861, 2026-10-01): \`POST /invoices/{id}/mark-sent\` and \`POST /invoices/{id}/send\` accept a draft whose \`moms_ruta\` is \`null\` when the company has \`vat_registered=false\` and the invoice's \`vat_treatment\` is \`exempt\`. The create paths have always stored \`null\` for such a seller (it files no momsdeklaration, so there is no box), yet these two verbs refused every such draft with \`400 VALIDATION_ERROR\` (\`field: moms_ruta\`). No box is invented: \`moms_ruta\` stays \`null\` on the issued invoice, and the verifikat is the one the dashboard books. Any other draft without \`moms_ruta\` is still refused as before. On \`/send\`, the \`moms_ruta\` check now runs after the customer e-mail check, so a draft missing both answers \`400 INVOICE_SEND_NO_CUSTOMER_EMAIL\` first.
+
 ### Webhooks: endpoint verification (2026-09)
 
 - **Behaviour change: webhook URLs must pass an ownership handshake before events are delivered** (#3191, 2026-09-29). Accounted POSTs a signed \`webhook.verification\` event whose \`data.object.challenge\` the endpoint returns as \`{"challenge": "..."}\` with a 2xx within 10 seconds ([contract](/docs/api/webhooks#endpoint-verification)). New webhooks start \`pending\` and receive nothing until they pass; a changed \`webhook_url\` starts over. Run the handshake with the new \`POST /webhooks/{id}/verify\` (\`422 WEBHOOK_VERIFICATION_FAILED\` with \`details.reason\` on a failure, \`429\` inside a 10-second cooldown); Accounted also retries on its own.
