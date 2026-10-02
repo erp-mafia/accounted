@@ -8,29 +8,14 @@
  * invoices render exactly as before.
  */
 import { describe, expect, it } from 'vitest'
-import type { ReactElement, ReactNode } from 'react'
+import type { ReactElement } from 'react'
 import { Font, pdf } from '@react-pdf/renderer'
 import layoutDocument from '@react-pdf/layout'
 import { GRON_TEKNIK_BASE_NOTICE, InvoicePDF, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import type { InvoiceItem } from '@/types'
-
-/** Every string leaf in the element tree, in document order. */
-function textLeaves(node: ReactNode, out: string[] = []): string[] {
-  if (node === null || node === undefined || typeof node === 'boolean') return out
-  if (typeof node === 'string' || typeof node === 'number') {
-    out.push(String(node))
-    return out
-  }
-  if (Array.isArray(node)) {
-    for (const child of node) textLeaves(child, out)
-    return out
-  }
-  const element = node as ReactElement<{ children?: ReactNode }>
-  if (element.props) textLeaves(element.props.children, out)
-  return out
-}
+import { treeText } from './pdf-tree'
 
 interface LaidOutNode {
   type: string
@@ -141,26 +126,27 @@ const company = makeCompanySettings({ f_skatt: true })
 const customer = makeCustomer({ name: 'Kund Privat' })
 
 function render(invoice: InvoicePdfInvoice, items: InvoiceItem[], language?: 'sv' | 'en'): string {
-  return textLeaves(InvoicePDF({ invoice, customer, items, company, language })).join('\n')
+  // The footer keeps each statutory part whole with no-break spaces.
+  return treeText(InvoicePDF({ invoice, customer, items, company, language })).replaceAll('\u00a0', ' ')
 }
 
 describe('invoice PDF: grön teknik', () => {
   it('states the total and the reduction incl. moms, the buyer and the F-skatt approval', () => {
     const text = render(gronInvoice(), gronItems())
-    expect(text).toContain('Totalt inkl. moms:')
-    expect(text).toContain('Skattereduktion grön teknik:')
-    expect(text).not.toContain('Skattereduktion ROT/RUT:')
+    expect(text).toContain('Totalt inkl. moms')
+    expect(text).toContain('Skattereduktion grön teknik')
+    expect(text).not.toContain('Skattereduktion ROT/RUT')
     expect(text).toContain('Kund Privat')
     expect(text).toContain('19911030-XXXX')
     expect(text).toContain('Godkänd för F-skatt')
-    expect(text).toContain('Fastighetsbeteckning:')
+    expect(text).toContain('Fastighetsbeteckning')
     expect(text).toContain('Exempelby 1:1')
   })
 
   it('separates the installation cost from övriga kostnader and names the type of work', () => {
     const text = render(gronInvoice(), gronItems())
-    expect(text).toContain('Arbete och material:')
-    expect(text).toContain('Övriga kostnader:')
+    expect(text).toContain('Arbete och material')
+    expect(text).toContain('Övriga kostnader')
     expect(text).toMatch(/100\s000,00 SEK inkl\. moms/)
     expect(text).toMatch(/1\s250,00 SEK inkl\. moms/)
     expect(text).toContain('Grön teknik, Installation av solceller: Montage solceller')
@@ -207,17 +193,17 @@ describe('invoice PDF: grön teknik', () => {
       i.deduction_type ? { ...i, housing_designation: null, apartment_number: '1201', brf_org_number: '799900-0040' } : i,
     )
     const text = render(gronInvoice(), items)
-    expect(text).toContain('Lägenhetsnummer:')
+    expect(text).toContain('Lägenhetsnummer')
     expect(text).toContain('1201')
-    expect(text).toContain('Bostadsrättsföreningens org.nr:')
+    expect(text).toContain('Bostadsrättsföreningens org.nr')
     expect(text).toContain('799900-0040')
   })
 
   it('translates the chrome on an English invoice', () => {
     const text = render(gronInvoice(), gronItems(), 'en')
-    expect(text).toContain('Total incl. VAT:')
-    expect(text).toContain('Green technology tax reduction:')
-    expect(text).toContain('Labor and material:')
+    expect(text).toContain('Total incl. VAT')
+    expect(text).toContain('Green technology tax reduction')
+    expect(text).toContain('Labor and material')
     expect(text).toContain('Green technology, Installation av solceller: Montage solceller')
   })
 
@@ -226,10 +212,10 @@ describe('invoice PDF: grön teknik', () => {
       item({ deduction_type: 'rot', work_type: 'EL', deduction_amount: 7500, housing_designation: null, apartment_number: '1201', brf_org_number: '799900-0040' }),
     ]
     const text = render(gronInvoice({ deduction_total: 7500, subtotal: 20000, vat_amount: 5000, total: 25000 }), rotItems)
-    expect(text).toContain('Skattereduktion ROT/RUT:')
-    expect(text).not.toContain('Totalt inkl. moms:')
-    expect(text).not.toContain('Bostadsrättsföreningens org.nr:')
-    expect(text).not.toContain('Arbete och material:')
+    expect(text).toContain('Skattereduktion ROT/RUT')
+    expect(text).not.toContain('Totalt inkl. moms')
+    expect(text).not.toContain('Bostadsrättsföreningens org.nr')
+    expect(text).not.toContain('Arbete och material')
     expect(text).toContain('Endast arbetskostnad har inkluderats')
     expect(text).toContain('ROT, EL: Montage solceller')
   })
