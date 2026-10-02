@@ -436,6 +436,21 @@ describe('POST /api/invoices/preview-pdf', () => {
       }
     })
 
+    // The settings preview (InvoicePreviewCard) renders for a real customer
+    // and must send a sample number: without one the bank-app code has no
+    // reference and the preview beside "QR-kod på fakturan" shows none.
+    it('builds the bank-app code for a real customer only when a number is sent', async () => {
+      const withoutNumber = { ...validBody, invoice_number: undefined }
+
+      const unnumbered = await preview(withoutNumber)
+      expect(unnumbered.headers.get('X-Invoice-Qr')).toBe('none:no_invoice_number')
+      expect(lastRenderProps().invoice.invoice_number).toBeNull()
+
+      const sampled = await preview({ ...withoutNumber, invoice_number: '1' })
+      expect(sampled.headers.get('X-Invoice-Qr')).toBe('bank_app')
+      expect(lastRenderProps().invoice.invoice_number).toBe('1')
+    })
+
     it('returns 400 for a qr_mode that is not a mode, before rendering', async () => {
       const response = await POST(
         createMockRequest('/api/invoices/preview-pdf', {
