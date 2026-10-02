@@ -4884,6 +4884,8 @@
     "preview_pdf": "Förhandsgranska",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
     "customer_card_title": "Kund",
+    "customer_deleted": "Kunden är borttagen",
+    "customer_missing_action": "Välj en kund på utkastet under Redigera, eller ta bort utkastet.",
     "org_number_label": "Org.nr: {value}",
     "vat_number_label": "VAT: {value}",
     "items_card_title": "Fakturarader",

@@ -40,6 +40,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import {
   finishIssuedInvoice,
   markInvoiceSentAndBook,
@@ -345,6 +346,9 @@ export async function sendInvoiceViaPeppol(
   // it (submitStagedDocument). Refuse up front what issuance would refuse,
   // before any number is taken.
   if (wasDraft) {
+    // No buyer, nothing to send (customer deleted, crm#263), and no number
+    // spent on finding that out.
+    if (invoiceLacksCustomer(invoice)) return refuse('INVOICE_CUSTOMER_MISSING')
     const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice, { persist: !dryRun })
     if (!payeeSnapshot.ok) return refuse(payeeSnapshot.code, { details: payeeSnapshot.details })
     invoice.payment_details = payeeSnapshot.payee

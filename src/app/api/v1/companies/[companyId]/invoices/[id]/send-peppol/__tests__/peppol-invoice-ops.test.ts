@@ -454,6 +454,20 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
     }
   })
 
+  it('409 INVOICE_CUSTOMER_MISSING for a draft whose customer was deleted: no number, no network (crm#263)', async () => {
+    const client = sendClient({
+      invoices: { data: invoiceRow({ status: 'draft', invoice_number: null, customer_id: null, customer: null }), error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await send()
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CUSTOMER_MISSING')
+    expect(rpcNames(client)).not.toContain('generate_invoice_number')
+    expect(wrote(client)).toBe(false)
+    expect(transport.submit).not.toHaveBeenCalled()
+  })
+
   it('numbers a draft before building the document and issues it before the network gets it', async () => {
     const client = sendClient({
       invoices: { data: invoiceRow({ status: 'draft', invoice_number: null }), error: null },

@@ -102,6 +102,7 @@ import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
 
 const InvoiceSendBody = z.object({
@@ -151,6 +152,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'Email service must be configured: without RESEND_API_KEY + RESEND_FROM_EMAIL (or an SMTP relay via EMAIL_PROVIDER=smtp) the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.',
     'Customer must have an email address. 400 INVOICE_SEND_NO_CUSTOMER_EMAIL otherwise.',
+    'An invoice without a customer (customer_id null, e.g. its customer was deleted) is refused with 409 INVOICE_CUSTOMER_MISSING before anything changes. Set customer_id on the draft or delete it.',
     'A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED): its F-series number is preserved for compliance but the document is not a valid faktura.',
     'The journal entry is posted before the email leaves: a refusal (400 MANDATORY_DIMENSION_MISSING or DIMENSION_VALIDATION_FAILED, a locked period, ...) returns the engine\'s error, the invoice stays in `draft` and no email is sent. Fix the tag or the period and send again.',
     'Email failure with nothing booked (kontantmetoden, deferred booking, proforma) returns 502 INVOICE_SEND_PROVIDER_FAILED with the invoice back in `draft`; the F-series number stays consumed (same orphan window as :mark-sent). Email failure after the journal entry posted returns 502 INVOICE_SEND_ISSUED_NOT_DELIVERED: the invoice stays issued (`sent`, booked, PDF archived) and must be delivered another way; do not call :send again.',
@@ -332,7 +334,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Step 2: customer email.
+    // Step 2: customer email. A draft whose customer was deleted (crm#263)
+    // has no buyer at all: say that, not "no email".
+    if (invoiceLacksCustomer(typed)) {
+      return v1ErrorResponseFromCode('INVOICE_CUSTOMER_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+      })
+    }
     const customer = typed.customer
     if (!customer?.email?.trim() || !EMAIL_PATTERN.test(customer.email.trim())) {
       return v1ErrorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', ctx.log, {

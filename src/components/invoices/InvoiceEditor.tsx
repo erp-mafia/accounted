@@ -680,7 +680,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // draft carries a ROT/RUT claim. Create mode keeps the original empty form.
     defaultValues: initial
       ? {
-          customer_id: initial.customer_id,
+          // Null when the draft's customer was deleted (crm#263): start empty
+          // so the user picks one and the required-customer message applies.
+          customer_id: initial.customer_id ?? '',
           invoice_date: initial.invoice_date,
           due_date: initial.due_date,
           valid_until:

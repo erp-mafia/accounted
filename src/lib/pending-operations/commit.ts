@@ -151,6 +151,7 @@ import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-tra
 import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
 import { attachDocumentToTransaction } from '@/lib/transactions/document-attach'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
 import { submitSIEJob, requestSIEJobAction } from '@/lib/import/sie-jobs'
 import type { AccountMapping } from '@/lib/import/types'
@@ -388,6 +389,16 @@ type ExecutorResult = {
   // the approval can be given again once the other call is done instead of
   // the op being consumed as 'rejected'.
   returnToPending?: boolean
+}
+
+/** A draft without a customer (crm#263): refused before anything changes. */
+function customerMissingResult(): ExecutorResult {
+  const entry = getErrorEntry('INVOICE_CUSTOMER_MISSING')
+  return {
+    error: entry?.message_sv ?? 'Fakturan saknar kund.',
+    errorCode: 'INVOICE_CUSTOMER_MISSING',
+    status: entry?.httpStatus ?? 409,
+  }
 }
 
 /**
@@ -2964,6 +2975,8 @@ async function commitSendInvoice(
     }
   }
 
+  // The customer was deleted while the draft pointed at it (crm#263).
+  if (invoiceLacksCustomer(invoice)) return customerMissingResult()
   const customer = invoice.customer as Customer
   if (!customer.email?.trim()) return { error: 'Customer has no email address', status: 400 }
 
@@ -3301,6 +3314,8 @@ async function commitMarkInvoiceSent(
     }
   }
   if (invoice.status !== 'draft') return { error: 'Only draft invoices can be marked as sent', status: 409 }
+  // Before the number below is taken (crm#263): the draft stays deletable.
+  if (invoiceLacksCustomer(invoice)) return customerMissingResult()
 
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')

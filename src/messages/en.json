@@ -4884,6 +4884,8 @@
     "preview_pdf": "Preview",
     "viewer_disabled_tooltip": "You only have read-only access to this company",
     "customer_card_title": "Customer",
+    "customer_deleted": "Customer deleted",
+    "customer_missing_action": "Choose a customer for the draft under Edit, or delete the draft.",
     "org_number_label": "Org. no: {value}",
     "vat_number_label": "VAT: {value}",
     "items_card_title": "Invoice lines",

@@ -77,6 +77,7 @@ vi.mock('@/lib/core/documents/document-service', async (importOriginal) => ({
 }))
 
 import { commitPendingOperation } from '../commit'
+import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 
 const customer = makeCustomer({ id: 'cust-1', name: 'Kund AB', email: 'kund@example.se' })
 
@@ -247,5 +248,30 @@ describe('commitPendingOperation: mark_invoice_sent issues fail closed', () => {
     expect(result.error).toContain('Konto 3001 kräver Projekt')
     expect(findCalls('invoices', 'update')).toEqual([[{ status: 'sent' }], [{ status: 'draft' }]])
     expect(mocks.recordManualInvoiceDelivery).not.toHaveBeenCalled()
+  })
+})
+
+// invoices.customer_id is ON DELETE SET NULL: a draft whose customer was
+// deleted comes back with customer_id and the join null (crm#263). Neither
+// executor may number, issue or email it, and neither may crash on it.
+describe('commitPendingOperation: an invoice without a customer is refused before anything changes', () => {
+  const orphanDraft = () => ({ ...draftInvoice(), invoice_number: null, customer_id: null, customer: null })
+
+  it.each(['send_invoice', 'mark_invoice_sent'] as const)('%s answers INVOICE_CUSTOMER_MISSING', async (type) => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: orphanDraft(), error: null })
+    enqueue({ data: null, error: null }) // dispatcher reject
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op(type))
+
+    // A 409 is the dispatcher's auto-reject: the staged op no longer fits.
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('INVOICE_CUSTOMER_MISSING')
+    expect(result.error).toContain('Fakturan saknar kund')
+    expect(vi.mocked(ensureInvoiceNumber)).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toEqual([])
+    expect(mocks.sendTrackedInvoiceEmail).not.toHaveBeenCalled()
   })
 })

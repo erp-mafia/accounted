@@ -779,6 +779,7 @@ Returns the invoice as application/pdf. The descriptive filename contains compan
 - Drafts (no invoice_number yet) render with an "utkast" filename. The PDF carries no F-series number: do not treat it as a finalized invoice.
 - PDF rendering can take several hundred milliseconds for invoices with many line items. Cache on the client if requesting repeatedly.
 - Credit notes embed the original invoice's löpnummer per ML 17 kap 22-23§: if the original was hard-deleted (not possible via Accounted but theoretically via a manual DB edit), the reference is omitted.
+- An invoice without a customer (customer_id null, e.g. its customer was deleted) has no buyer to print: 409 INVOICE_CUSTOMER_MISSING. Set customer_id on the draft or delete it.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1064,6 +1065,7 @@ The full send pipeline: preflight PDF render → allocate F-series number atomic
 - Idempotency-Key is mandatory.
 - Email service must be configured: without RESEND_API_KEY + RESEND_FROM_EMAIL (or an SMTP relay via EMAIL_PROVIDER=smtp) the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.
 - Customer must have an email address. 400 INVOICE_SEND_NO_CUSTOMER_EMAIL otherwise.
+- An invoice without a customer (customer_id null, e.g. its customer was deleted) is refused with 409 INVOICE_CUSTOMER_MISSING before anything changes. Set customer_id on the draft or delete it.
 - A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED): its F-series number is preserved for compliance but the document is not a valid faktura.
 - The journal entry is posted before the email leaves: a refusal (400 MANDATORY_DIMENSION_MISSING or DIMENSION_VALIDATION_FAILED, a locked period, ...) returns the engine's error, the invoice stays in `draft` and no email is sent. Fix the tag or the period and send again.
 - Email failure with nothing booked (kontantmetoden, deferred booking, proforma) returns 502 INVOICE_SEND_PROVIDER_FAILED with the invoice back in `draft`; the F-series number stays consumed (same orphan window as :mark-sent). Email failure after the journal entry posted returns 502 INVOICE_SEND_ISSUED_NOT_DELIVERED: the invoice stays issued (`sent`, booked, PDF archived) and must be delivered another way; do not call :send again.

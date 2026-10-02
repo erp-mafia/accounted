@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import { DetailSection, DefRow } from '@/components/ui/detail-section'
+import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { AttnLine } from '@/components/ui/attn-line'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -166,7 +166,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
 
   const customer = invoice.customer
   const sendMode = getCreditNoteSendMode({
-    customerHasEmail: !!createdCreditNote?.customer.email,
+    customerHasEmail: !!createdCreditNote?.customer?.email,
     isSandbox,
     canEmail,
   })
@@ -232,7 +232,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
         <DefRow label={t('date_label')}>
           <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
         </DefRow>
-        <DefRow label={t('customer_label')}>{customer.name}</DefRow>
+        <DefRow label={t('customer_label')}>{customer?.name ?? <DefEmpty />}</DefRow>
         <DefRow label={t('vat_treatment_label')}>{getVatTreatmentLabel(invoice.vat_treatment)}</DefRow>
       </DetailSection>
 

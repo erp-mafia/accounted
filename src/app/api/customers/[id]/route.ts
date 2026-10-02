@@ -3,6 +3,7 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber, vatValidationColumns } from '@/lib/vat/vies-client'
 import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
+import { checkCustomerDeletable } from '@/lib/customers/delete-guard'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
@@ -267,6 +268,18 @@ export const DELETE = withRouteContext(
     const { id } = await params
     const { supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ customerId: id })
+
+    // invoices, sales_orders, projects and deadlines reference customers
+    // ON DELETE SET NULL, so the delete itself never refuses: it would leave
+    // invoices without their buyer (crm#263). Refuse while anything that
+    // needs the customer still points at it.
+    const check = await checkCustomerDeletable(supabase, companyId, id)
+    if (!check.deletable) {
+      return errorResponseFromCode(check.code, opLog, {
+        requestId,
+        details: { dependents: check.dependents },
+      })
+    }
 
     const { error, count } = await supabase
       .from('customers')

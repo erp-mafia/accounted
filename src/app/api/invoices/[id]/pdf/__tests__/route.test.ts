@@ -195,6 +195,23 @@ describe('GET /api/invoices/[id]/pdf', () => {
       expect(renderToBufferMock).not.toHaveBeenCalled()
     })
 
+    it('refuses an invoice whose customer was deleted, so the preview shows why (crm#263)', async () => {
+      enqueue({ data: { ...invoice, status: 'draft', customer_id: null, customer: null }, error: null })
+
+      const response = await GET(
+        createMockRequest('/api/invoices/invoice-1/pdf', {
+          searchParams: { disposition: 'inline', probe: '1' },
+        }),
+        createMockRouteParams({ id: 'invoice-1' }),
+      )
+      const body = await response.json()
+
+      expect(response.status).toBe(409)
+      expect(body.error.code).toBe('INVOICE_CUSTOMER_MISSING')
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+      expect(renderToBufferMock).not.toHaveBeenCalled()
+    })
+
     it('ignores any other probe value and renders', async () => {
       enqueue({ data: invoice, error: null })
       enqueue({ data: company, error: null })
