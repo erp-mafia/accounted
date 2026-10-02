@@ -140,11 +140,12 @@ export function payslipSectionsFor(
  * was calculated with, not the ones on the employee today.
  *
  * The engine writes the reference it used onto the run row
- * (salary_run_employees.tax_table_number / tax_column / tax_table_year, at
- * run creation and again at every calculation), so a payslip downloaded
- * after the employee moved to another table still names the table the tax
- * was withheld under (BFL 7 kap. 1 §). A run row with none of the three set
- * predates the snapshot and falls back to the employee. A snapshot without a
+ * (salary_run_employees.tax_table_number / tax_column at run creation, and
+ * all three of tax_table_number / tax_column / tax_table_year at every
+ * calculation), so a payslip downloaded after the employee moved to another
+ * table still names the table the tax was withheld under (BFL 7 kap. 1 §).
+ * A run row with none of the three set never had the snapshot written; that
+ * defensive case falls back to the employee. A snapshot without a
  * table number means the run was taxed without one: it prints Schablon 30%
  * even if the employee has a table now. The column falls back to 1 the same
  * way the engine does (run-calculation: `emp.tax_column || 1`).

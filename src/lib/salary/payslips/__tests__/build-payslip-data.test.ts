@@ -179,7 +179,7 @@ describe('buildPayslipData: tax table the run used (#3400)', () => {
     expect(data.taxReference).toBe('Tabell 33, kol 1')
   })
 
-  it('falls back to the employee row for an old run without the snapshot', () => {
+  it('falls back to the employee row for a run row that never had the snapshot written', () => {
     const data = buildPayslipData({
       run,
       sre: sre({ tax_table_number: null, tax_column: null, tax_table_year: null }),
