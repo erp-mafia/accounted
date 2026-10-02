@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { proposeDraftSendLines, type DraftVoucherInput } from '@/lib/invoices/editor/voucher-preview'
+import {
+  proposeCreditNoteSendLines,
+  proposeDraftSendLines,
+  type DraftVoucherInput,
+} from '@/lib/invoices/editor/voucher-preview'
+import { makeInvoice } from '@/tests/helpers'
+import type { InvoiceItem } from '@/types'
 
 function input(overrides: Partial<DraftVoucherInput> = {}): DraftVoucherInput {
   return {
@@ -86,5 +92,50 @@ describe('proposeDraftSendLines', () => {
   it('shows nothing without a priced row', () => {
     expect(proposeDraftSendLines(input({ items: [{ line_type: 'text' }] }))).toEqual([])
     expect(proposeDraftSendLines(input({ items: [] }))).toEqual([])
+  })
+})
+
+describe('proposeCreditNoteSendLines', () => {
+  const original = () => ({
+    ...makeInvoice({
+      id: 'original-1',
+      invoice_number: '1043',
+      status: 'sent',
+      currency: 'SEK',
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      vat_treatment: 'standard_25',
+    }),
+    items: [
+      {
+        id: 'item-1',
+        invoice_id: 'original-1',
+        sort_order: 0,
+        line_type: 'product',
+        description: 'Konsulttid',
+        quantity: 1,
+        unit: 'st',
+        unit_price: 1000,
+        line_total: 1000,
+        vat_rate: 25,
+        vat_amount: 250,
+      } as InvoiceItem,
+    ],
+  })
+
+  it('reverses the original: 1510 credited, sales and VAT debited', () => {
+    const lines = proposeCreditNoteSendLines(original(), { entityType: 'aktiebolag', today: '2026-10-05' })
+    const byAccount = Object.fromEntries(lines.map((l) => [l.account_number, l]))
+    expect(byAccount['1510'].credit_amount).toBe('1250')
+    expect(byAccount['1510'].debit_amount).toBe('')
+    expect(byAccount['2611'].debit_amount).toBe('250')
+    const sales = lines.find((l) => l.account_number.startsWith('30'))
+    expect(sales?.debit_amount).toBe('1000')
+  })
+
+  it('shows nothing for an original without a number', () => {
+    const unnumbered = { ...original(), invoice_number: null, external_invoice_number: null }
+    expect(proposeCreditNoteSendLines(unnumbered, { entityType: 'aktiebolag', today: '2026-10-05' })).toEqual([])
   })
 })

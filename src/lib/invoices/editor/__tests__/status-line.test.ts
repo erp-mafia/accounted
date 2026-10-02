@@ -32,6 +32,15 @@ describe('resolveEditorStatusLine', () => {
     ).toEqual({ kind: 'step', step: { kind: 'customer' } })
   })
 
+  it('then an invoice date that would book into a locked period', () => {
+    expect(
+      resolveEditorStatusLine(input({ dateLock: 'closed_period', missing: ['payee'], pageCount: 2 })),
+    ).toEqual({ kind: 'date_locked', lock: 'closed_period' })
+    expect(
+      resolveEditorStatusLine(input({ nextStep: { kind: 'customer' }, dateLock: 'company_lock' })),
+    ).toEqual({ kind: 'step', step: { kind: 'customer' } })
+  })
+
   it('then a faktura without payment details', () => {
     expect(resolveEditorStatusLine(input({ missing: ['payee'] }))).toEqual({ kind: 'payee_missing' })
   })

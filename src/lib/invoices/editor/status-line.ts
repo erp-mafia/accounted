@@ -1,4 +1,5 @@
 import type { InvoiceDocumentType } from '@/types'
+import type { InvoiceDateLock } from './details'
 
 /**
  * The invoice editor's one status line, under the live preview: the first
@@ -13,6 +14,8 @@ export type PageSplitCause = 'note' | 'rows' | 'deduction'
 export type EditorStatusLine<TStep> =
   /** The form's next missing field (customer, dates, rows, ...): ochre, with a jump link. */
   | { kind: 'step'; step: TStep }
+  /** The invoice date is in a locked or closed period: sending would book into it. */
+  | { kind: 'date_locked'; lock: InvoiceDateLock }
   /** A faktura whose payment details print nothing the customer can pay to. */
   | { kind: 'payee_missing' }
   /** The last preview request failed; the previous render stays on screen. */
@@ -33,6 +36,8 @@ export interface StatusLineInput<TStep extends { kind: string }> {
   notes: string
   productRowCount: number
   hasDeduction: boolean
+  /** invoiceDateLock() of the invoice date, passed only when sending books it. */
+  dateLock?: InvoiceDateLock | null
 }
 
 // A note this long fills a third of a page or more on its own: the likeliest
@@ -64,6 +69,7 @@ export function resolveEditorStatusLine<TStep extends { kind: string }>(
   input: StatusLineInput<TStep>,
 ): EditorStatusLine<TStep> {
   if (input.nextStep.kind !== 'ready') return { kind: 'step', step: input.nextStep }
+  if (input.dateLock) return { kind: 'date_locked', lock: input.dateLock }
   // Only a faktura carries a payment area; a quote, proforma or följesedel
   // without bank details is complete.
   if (input.documentType === 'invoice' && input.missing.includes('payee')) return { kind: 'payee_missing' }

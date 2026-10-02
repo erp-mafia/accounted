@@ -23,7 +23,7 @@ export interface PdfPreviewState extends PdfPreviewMeta {
   error: string | null
 }
 
-const EMPTY_META: PdfPreviewMeta = { pageCount: null, qr: null, missing: [], exchangeRate: null }
+const EMPTY_META: PdfPreviewMeta = { pageCount: null, qr: null, missing: [], exchangeRate: null, exchangeRateDate: null }
 
 /**
  * POST /api/invoices/preview-pdf with the serialized request body. A new

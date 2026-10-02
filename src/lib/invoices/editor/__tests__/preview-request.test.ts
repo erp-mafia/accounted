@@ -126,12 +126,14 @@ describe('readPdfPreviewMeta', () => {
       'X-Invoice-Qr': 'none:no_printed_giro',
       'X-Invoice-Missing': 'customer,payee',
       'X-Invoice-Exchange-Rate': '11.42',
+      'X-Invoice-Exchange-Rate-Date': '2026-10-01',
     })
     expect(readPdfPreviewMeta(headers)).toEqual({
       pageCount: 2,
       qr: 'none:no_printed_giro',
       missing: ['customer', 'payee'],
       exchangeRate: 11.42,
+      exchangeRateDate: '2026-10-01',
     })
   })
 
@@ -141,6 +143,7 @@ describe('readPdfPreviewMeta', () => {
       qr: null,
       missing: [],
       exchangeRate: null,
+      exchangeRateDate: null,
     })
   })
 })

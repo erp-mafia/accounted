@@ -1,8 +1,14 @@
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { roundOre } from '@/lib/money'
+import {
+  buildCreditNoteFields,
+  creditNoteNumber,
+  creditNoteOriginalReference,
+} from '@/lib/invoices/build-credit-note'
+import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import type { DeductionType, EntityType, InvoiceItem, VatTreatment } from '@/types'
+import type { DeductionType, EntityType, Invoice, InvoiceItem, VatTreatment } from '@/types'
 
 /**
  * The verifikation the editor's send confirm shows before anything exists:
@@ -85,4 +91,49 @@ export function proposeDraftSendLines(input: DraftVoucherInput): FormLine[] {
     },
     entityType: input.entityType,
   })
+}
+
+/**
+ * The reversal the credit page's confirm shows: the kreditfaktura POST
+ * /api/invoices creates for this invoice (buildCreditNoteFields and
+ * buildCreditNoteItem, the same derivation as the create route and the
+ * credit preview), proposed the way SendInvoiceDialog proposes it for a
+ * saved credit note. [] when it cannot be stated in kronor before it exists
+ * (a foreign-currency original without its rate) or the original has no
+ * number to refer to.
+ */
+export function proposeCreditNoteSendLines(
+  original: Invoice & { items: InvoiceItem[] },
+  options: { entityType: EntityType; today: string },
+): FormLine[] {
+  const reference = creditNoteOriginalReference(original)
+  if (!reference) return []
+  const fields = buildCreditNoteFields(original, { originalReference: reference, today: options.today })
+  const items = original.items.map(
+    (item, index) => ({ ...buildCreditNoteItem('credit-preview', item), id: `credit-${index}` }) as InvoiceItem,
+  )
+  try {
+    return proposeSendLines({
+      invoice: {
+        invoice_number: creditNoteNumber(reference),
+        total: fields.total,
+        total_sek: fields.total_sek,
+        subtotal: fields.subtotal,
+        subtotal_sek: fields.subtotal_sek,
+        vat_amount: fields.vat_amount,
+        vat_amount_sek: fields.vat_amount_sek,
+        currency: fields.currency,
+        exchange_rate: fields.exchange_rate,
+        vat_treatment: fields.vat_treatment,
+        delivery_country: fields.delivery_country,
+        credited_invoice_id: fields.credited_invoice_id,
+        items,
+        default_dimensions: fields.default_dimensions,
+      },
+      entityType: options.entityType,
+    })
+  } catch {
+    // A missing FX rate on a foreign original: the confirm says how it books instead.
+    return []
+  }
 }

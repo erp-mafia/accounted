@@ -65,6 +65,8 @@ export interface PdfPreviewMeta {
   missing: string[]
   /** X-Invoice-Exchange-Rate on a foreign currency (preliminary on a draft). */
   exchangeRate: number | null
+  /** X-Invoice-Exchange-Rate-Date: the Riksbank date of that rate. */
+  exchangeRateDate: string | null
 }
 
 export function readPdfPreviewMeta(headers: { get(name: string): string | null }): PdfPreviewMeta {
@@ -76,5 +78,6 @@ export function readPdfPreviewMeta(headers: { get(name: string): string | null }
     qr: headers.get('X-Invoice-Qr'),
     missing: missing ? missing.split(',').map((m) => m.trim()).filter(Boolean) : [],
     exchangeRate: Number.isFinite(rate) && rate > 0 ? rate : null,
+    exchangeRateDate: headers.get('X-Invoice-Exchange-Rate-Date') || null,
   }
 }
