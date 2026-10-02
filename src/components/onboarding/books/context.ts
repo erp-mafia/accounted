@@ -12,4 +12,10 @@ export interface BooksCtx {
   loadFindings: () => Promise<BooksFindings | null>
   /** Error text a redirect brought back (?bank_error=, ?skv_error=). */
   landedError: string | null
+  /**
+   * The user is leaving the act (a skip was confirmed). Import loops ask it
+   * before starting the next year or file: the one running finishes on the
+   * server, the rest are not started (lib/onboarding-books/skip).
+   */
+  isLeaving: () => boolean
 }

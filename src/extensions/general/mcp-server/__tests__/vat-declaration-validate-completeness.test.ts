@@ -235,6 +235,26 @@ describe('gnubok_vat_declaration_validate', () => {
     expect(result.completeness_ok).toBe(true)
   })
 
+  // #3387: the declaration carries the class 3 accounts that reach no ruta.
+  // The rutor look consistent, so only that list can surface the gap.
+  it('warns about a revenue account without a ruta and still reports completeness ok', async () => {
+    mockCalculateVatDeclaration.mockResolvedValue({
+      rutor: CLEAN,
+      revenueAccountsWithoutRuta: [
+        { account_number: '3543', account_name: 'Faktureringsavgift', amount: 1250 },
+      ],
+    })
+    skvOk()
+
+    const result = await run()
+
+    const finding = result.completeness_checks.find((c) => c.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA')
+    expect(finding?.status).toBe('WARNING')
+    expect(finding?.message).toMatch(/3543 Faktureringsavgift/)
+    expect(finding?.rutor).toEqual(['ruta05', 'ruta42'])
+    expect(result.completeness_ok).toBe(true)
+  })
+
   it('arithmetic_ok is false when Skatteverket returns an ERROR, independently of completeness', async () => {
     setDeclaration(CLEAN)
     skvOk({

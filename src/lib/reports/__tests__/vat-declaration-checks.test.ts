@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { VatDeclarationRutor } from '@/types'
 import { runVatDeclarationChecks } from '../vat-declaration-checks'
+import { isFilingBlocked } from '../vat-filing-gate'
 
 const emptyRutor: VatDeclarationRutor = {
   ruta05: 0, ruta06: 0, ruta07: 0, ruta08: 0,
@@ -625,5 +626,80 @@ describe('runVatDeclarationChecks', () => {
     expect(codes).toContain('TAXABLE_SALES_WITHOUT_OUTPUT')
     expect(codes).toContain('RC_BASIS_MISSING')
     expect(codes).toContain('IMPORT_BASE_WITHOUT_OUTPUT')
+  })
+})
+
+// #3387: revenue on a class 3 account the declaration cannot classify reaches
+// no ruta, while its output VAT on 2611 still reaches ruta 10. With other
+// ruta 05 sales in the period every rutor-level check stays green, so the
+// finding needs the account list the declaration carries.
+describe('REVENUE_ACCOUNT_WITHOUT_RUTA', () => {
+  // 10 000 kr on 3001 with its 2 500 kr moms, plus 1 250 kr of moms on 2611 for
+  // sales booked on an unconfigured account: rutor-consistent on their own.
+  const rutor: VatDeclarationRutor = {
+    ...emptyRutor,
+    ruta05: 10000,
+    ruta10: 2812.5,
+    ruta49: 2812.5,
+  }
+
+  it('is silent without the account list, which is exactly the hole', () => {
+    expect(runVatDeclarationChecks(rutor)).toEqual([])
+    expect(runVatDeclarationChecks(rutor, undefined, { revenueAccountsWithoutRuta: [] })).toEqual([])
+  })
+
+  it('warns, naming the account and its amount, and does not block filing', () => {
+    const findings = runVatDeclarationChecks(rutor, undefined, {
+      revenueAccountsWithoutRuta: [
+        { account_number: '3543', account_name: 'Faktureringsavgift', amount: 1250 },
+      ],
+    })
+
+    expect(findings).toHaveLength(1)
+    const [finding] = findings
+    expect(finding.code).toBe('REVENUE_ACCOUNT_WITHOUT_RUTA')
+    expect(finding.status).toBe('WARNING')
+    // \s, not a literal space: sv-SE groups thousands with a no-break space.
+    expect(finding.message).toMatch(/Intäktskontot 3543 Faktureringsavgift \(1\s250,00 kr\)/)
+    expect(finding.message).toMatch(/Kontoplanen/)
+    expect(finding.message).toMatch(/momskod/)
+    expect(finding.message).toMatch(/ruta 05/)
+    expect(finding.detail).toMatch(/hindrar inte inlämning/)
+    expect(finding.rutor).toEqual(['ruta05', 'ruta42'])
+    expect(isFilingBlocked(findings)).toBe(false)
+  })
+
+  it('names at most five accounts and counts the rest', () => {
+    const accounts = ['3510', '3520', '3530', '3540', '3550', '3560', '3570'].map((n) => ({
+      account_number: n,
+      account_name: `Konto ${n}`,
+      amount: 100,
+    }))
+    const [finding] = runVatDeclarationChecks(rutor, undefined, {
+      revenueAccountsWithoutRuta: accounts,
+    })
+
+    expect(finding.message).toMatch(/^7 intäktskonton/)
+    expect(finding.message).toContain('3550 Konto 3550')
+    expect(finding.message).not.toContain('3560 Konto 3560')
+    expect(finding.message).toMatch(/och 2 till/)
+  })
+
+  it('keeps a net debit balance (a rabatt) visible with its sign', () => {
+    const [finding] = runVatDeclarationChecks(rutor, undefined, {
+      revenueAccountsWithoutRuta: [{ account_number: '3731', account_name: '', amount: -500 }],
+    })
+
+    expect(finding.message).toMatch(/Intäktskontot 3731 \(.500,00 kr\)/)
+  })
+
+  it('sits with the sales checks and leaves their order intact', () => {
+    const codes = runVatDeclarationChecks(
+      { ...emptyRutor, ruta05: 10000, ruta49: 0 },
+      undefined,
+      { revenueAccountsWithoutRuta: [{ account_number: '3543', account_name: 'X', amount: 1 }] },
+    ).map((f) => f.code)
+
+    expect(codes).toEqual(['TAXABLE_SALES_WITHOUT_OUTPUT', 'REVENUE_ACCOUNT_WITHOUT_RUTA'])
   })
 })

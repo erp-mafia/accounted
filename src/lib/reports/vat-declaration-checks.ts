@@ -1,4 +1,4 @@
-import type { VatDeclarationRutor } from '@/types'
+import type { VatDeclarationRutor, VatRevenueAccountWithoutRuta } from '@/types'
 
 /**
  * Local pre-flight checks for the momsdeklaration, run BEFORE the SKV
@@ -50,6 +50,7 @@ export interface VatDeclarationCheck {
     | 'IMPORT_OUTPUT_WITHOUT_BASE'
     | 'OUTPUT_VAT_WITHOUT_SALES_BASE'
     | 'SALES_OUTPUT_VAT_SHORTFALL'
+    | 'REVENUE_ACCOUNT_WITHOUT_RUTA'
   status: VatDeclarationCheckStatus
   /** Swedish user-facing message; safe to render directly in the UI. */
   message: string
@@ -67,6 +68,79 @@ export interface VatDeclarationCheck {
  * of its own.
  */
 export type VatCheckAccountTotals = ReadonlyMap<string, { debit: number; credit: number }>
+
+/**
+ * Account-level facts about the declared period that the rutor alone cannot
+ * carry. Every field is optional: an absent field keeps its check silent
+ * rather than reading as "nothing found".
+ */
+export interface VatDeclarationCheckContext {
+  /**
+   * Class 3 accounts with a balance that reach no ruta, exactly as
+   * `revenueAccountsWithoutRuta()` (lib/reports/vat-declaration.ts) derives
+   * them from the declaration's own account resolution, or as
+   * `VatDeclaration.revenueAccountsWithoutRuta` carries them over HTTP.
+   */
+  revenueAccountsWithoutRuta?: readonly VatRevenueAccountWithoutRuta[]
+}
+
+/** How many accounts REVENUE_ACCOUNT_WITHOUT_RUTA names before summarising the rest. */
+const REVENUE_ACCOUNTS_NAMED_MAX = 5
+
+function formatOre(amount: number): string {
+  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function describeRevenueAccount(account: VatRevenueAccountWithoutRuta): string {
+  const label = account.account_name
+    ? `${account.account_number} ${account.account_name}`
+    : account.account_number
+  return `${label} (${formatOre(account.amount)} kr)`
+}
+
+/**
+ * REVENUE_ACCOUNT_WITHOUT_RUTA (#3387): revenue booked on a class 3 account the
+ * declaration cannot classify reaches no ruta at all, while the output VAT
+ * booked with it on 2611/2621/2631 still reaches rutor 10-12 by account number.
+ * Ruta 49 stays right and ruta 05 is understated, and when the company has any
+ * other ruta 05 sales none of the rutor-level checks can see it: the base is
+ * missing from both sides of their comparison.
+ *
+ * WARNING, never ERROR: the account may just as well be momsfri or not a sale
+ * at all, and the declaration deliberately does not infer ruta 05 for it (an
+ * open founder decision). The user is told which accounts and how much, and
+ * where to fix it: the momskod on the account in Kontoplan.
+ */
+function revenueAccountWithoutRutaFinding(
+  accounts: readonly VatRevenueAccountWithoutRuta[],
+): VatDeclarationCheck {
+  const named = accounts.slice(0, REVENUE_ACCOUNTS_NAMED_MAX).map(describeRevenueAccount)
+  const rest = accounts.length - named.length
+  const list = rest > 0 ? `${named.join(', ')} och ${rest} till` : named.join(', ')
+  const lead =
+    accounts.length === 1
+      ? `Intäktskontot ${list} saknar momskod och momssats, så beloppet kommer inte med i någon ruta.`
+      : `${accounts.length} intäktskonton saknar momskod och momssats, så beloppen kommer inte med ` +
+        `i någon ruta: ${list}.`
+  return {
+    code: 'REVENUE_ACCOUNT_WITHOUT_RUTA',
+    status: 'WARNING',
+    message:
+      `${lead} Är det momspliktig försäljning blir ruta 05 för låg, medan momsen på ` +
+      '2611/2621/2631 ändå redovisas i ruta 10-12. Ange momskod på kontot i Kontoplanen, ' +
+      'till exempel Försäljning Sverige, 25 % (ruta 05) eller Momsfri försäljning (ruta 42). ' +
+      'Avser kontot inte försäljning, sätt momssats 0 % på kontot.',
+    detail:
+      'Deklarationen tar med ett intäktskonto (klass 3) när kontot har en momskod, en ' +
+      'momssats på 25, 12 eller 6 % eller en fast ruta enligt BAS, till exempel 3001 i ' +
+      'ruta 05. De här kontona ' +
+      'har ingetdera, och deklarationen gissar inte ruta 05 eftersom kontot lika gärna kan ' +
+      'avse momsfri försäljning. Utgående moms följer däremot kontonumret (2611/2621/2631 ' +
+      'till ruta 10-12), så moms att betala (ruta 49) påverkas inte, bara ' +
+      'försäljningsunderlaget. Varningen hindrar inte inlämning.',
+    rutor: ['ruta05', 'ruta42'],
+  }
+}
 
 /**
  * The two BAS accounts that carry the deductible input half of an omvänd-
@@ -102,8 +176,11 @@ function reverseChargeInputVat(accountTotals: VatCheckAccountTotals): number {
  *
  * `accountTotals` is optional and only sharpens `RC_INPUT_VAT_MISMATCH`: with it
  * the check compares the reverse-charge output against the reverse-charge INPUT
- * accounts, without it against the ruta 48 aggregate (see there). Every other
- * check reads the rutor alone.
+ * accounts, without it against the ruta 48 aggregate (see there).
+ *
+ * `context` is optional and only feeds `REVENUE_ACCOUNT_WITHOUT_RUTA`, which
+ * needs account-level facts the rutor cannot carry. Every other check reads
+ * the rutor alone.
  *
  * Returns an empty array when the declaration looks consistent. Order
  * within the returned array is stable so the UI can rely on it for
@@ -112,6 +189,7 @@ function reverseChargeInputVat(accountTotals: VatCheckAccountTotals): number {
 export function runVatDeclarationChecks(
   rutor: VatDeclarationRutor,
   accountTotals?: VatCheckAccountTotals,
+  context: VatDeclarationCheckContext = {},
 ): VatDeclarationCheck[] {
   const findings: VatDeclarationCheck[] = []
 
@@ -321,6 +399,14 @@ export function runVatDeclarationChecks(
         'löpande) och varningen kan lämnas utan åtgärd.',
       rutor: ['ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12'],
     })
+  }
+
+  // Revenue that reaches no ruta at all is invisible to every sales check above:
+  // it is missing from rutor 05-08 while its output VAT sits in rutor 10-12, so
+  // the binary pair clears and the proportional one only gets MORE lenient.
+  const revenueWithoutRuta = context.revenueAccountsWithoutRuta ?? []
+  if (revenueWithoutRuta.length > 0) {
+    findings.push(revenueAccountWithoutRutaFinding(revenueWithoutRuta))
   }
 
   // SKV §4.1.1.4 rules 5 and 6: import base and import output VAT require each

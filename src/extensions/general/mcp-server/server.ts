@@ -147,6 +147,7 @@ import {
   detectMomsredovisning,
   rutorFromTotals,
   rcInputTotalsFromDeclaration,
+  revenueAccountsWithoutRuta,
   calculateVatDeclaration,
   resolvePeriodDates,
   type MomsredovisningDetection,
@@ -484,7 +485,7 @@ import { getUserCompanies } from '@/lib/company/context'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler: no duplicate call needed here.
 import { CURRENCIES } from '@/types'
-import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
+import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, VatRevenueAccountWithoutRuta, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -3115,6 +3116,11 @@ async function computeVatReportWithRutor(
  * aggregate to the reverse-charge input accounts (2645/2647). Both call sites
  * have it in hand, so both pass it; the parameter stays optional only because
  * the check itself degrades gracefully without it.
+ *
+ * `revenueWithoutRuta` feeds REVENUE_ACCOUNT_WITHOUT_RUTA (#3387). The validate
+ * tool passes the list its declaration carries; the close check passes nothing
+ * and it is derived here from the same account totals and dynamic account
+ * resolution its rutor came from, through core's revenueAccountsWithoutRuta.
  */
 async function runVatCompletenessChecks(
   supabase: SupabaseClient,
@@ -3126,6 +3132,7 @@ async function runVatCompletenessChecks(
   accountTotals?: VatCheckAccountTotals,
   dynamicVatAccounts?: Awaited<ReturnType<typeof fetchDynamicVatAccounts>>,
   rcBasisByRate?: { r25: number; r12: number; r6: number },
+  revenueWithoutRuta?: VatRevenueAccountWithoutRuta[],
 ): Promise<VatDeclarationCheck[]> {
   let scan: RcBasisGapScan
   try {
@@ -3143,7 +3150,15 @@ async function runVatCompletenessChecks(
         rcBasisByRate: rcBasisByRate ?? rcBasisTotalsByRate(accountTotals, dynamicVatAccounts),
       }
     : undefined
-  return withRcBasisGapFindings(runVatDeclarationChecks(rutor, accountTotals), scan, evidence)
+  const revenueAccounts = revenueWithoutRuta ??
+    (accountTotals && dynamicVatAccounts
+      ? revenueAccountsWithoutRuta(accountTotals, dynamicVatAccounts)
+      : undefined)
+  return withRcBasisGapFindings(
+    runVatDeclarationChecks(rutor, accountTotals, { revenueAccountsWithoutRuta: revenueAccounts }),
+    scan,
+    evidence,
+  )
 }
 
 /** Wire shape for a completeness finding on the MCP surface. */
@@ -3245,6 +3260,16 @@ export const BANK_ROWS_MISSING_HINT =
   'gnubok_create_transactions. Koppla dem sedan till de befintliga verifikaten i Stäm av eller med ' +
   'gnubok_reconcile_match: ingenting bokförs på nytt, så kategorisera dem inte. En PDF i Underlag ' +
   'eller en signerad avstämning ersätter inte bankraderna.'
+
+/**
+ * Hint for the REVENUE_ACCOUNT_WITHOUT_RUTA finding (#3387): the fix is on the
+ * account, not in the ledger, and it is the user's call which ruta the sales
+ * belong in. Exported so the test can pin the contract.
+ */
+export const REVENUE_ACCOUNT_WITHOUT_RUTA_HINT =
+  'Fråga användaren vad kontot avser och sätt sedan default_vat_treatment på kontot med ' +
+  'gnubok_update_account (standard_25/reduced_12/reduced_6 för ruta 05, exempt för ruta 42). ' +
+  'Avser kontot inte försäljning, sätt default_vat_rate 0. Inga verifikat ändras.'
 
 /**
  * Completeness codes that describe the omvänd-skattskyldighet pair. They keep
@@ -3944,7 +3969,9 @@ export async function computeVatCloseCheck(
       // add basis pairs, that would double-count rutor 20-24.
       hint: check.code === 'RC_BASIS_MISSING' && check.status === 'ERROR'
         ? RC_BASIS_MISSING_HINT
-        : check.rutor?.length
+        : check.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA'
+          ? REVENUE_ACCOUNT_WITHOUT_RUTA_HINT
+          : check.rutor?.length
           ? `Granska ${check.rutor.join(', ')} i huvudboken innan inlämning (gnubok_get_general_ledger).`
           : 'Granska underlaget i huvudboken innan inlämning (gnubok_get_general_ledger).',
       check_code: check.code,
@@ -17742,6 +17769,7 @@ export const tools: McpTool[] = [
         rcInputTotalsFromDeclaration(declaration),
         undefined,
         declaration.rcBasisByRate,
+        declaration.revenueAccountsWithoutRuta,
       )
       const completenessOk = !isFilingBlocked(completenessChecks)
 
