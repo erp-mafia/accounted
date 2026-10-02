@@ -5,7 +5,7 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import {
   BOOKS_GATE_COOKIE,
   BOOKS_GATE_MAX_AGE_SECONDS,
-  booksGateEnabled,
+  shouldArmBooksGate,
 } from '@/lib/onboarding/books-gate'
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
@@ -75,10 +75,9 @@ export async function createCompanyFromOnboarding(params: {
   // (specialized accountant agent composer, MCP briefing) can read the same
   // Bolagsverket-sourced data the form used. Empty for manual entry paths.
   ticLookup?: CompanyLookupResult | null
-  // First company of a fresh account (journey mode='first'): arm the books
-  // gate so the dashboard stays closed until act two ran or was skipped
-  // (issue #2438). Adding a company from inside the app never arms it.
-  booksGate?: boolean
+  // No books-gate flag: whether the first-session gate arms is decided
+  // server-side from the user's memberships (shouldArmBooksGate), because
+  // "Lägg till företag" reaches the same journey page a new account does.
 }): Promise<{ companyId?: string; error?: string }> {
   try {
     return await createCompanyFromOnboardingImpl(params)
@@ -97,7 +96,6 @@ async function createCompanyFromOnboardingImpl(params: {
   settings: Record<string, unknown>
   fiscalPeriod: { startDate: string; endDate: string; name: string }
   ticLookup?: CompanyLookupResult | null
-  booksGate?: boolean
 }): Promise<{ companyId?: string; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -194,6 +192,13 @@ async function createCompanyFromOnboardingImpl(params: {
     }
   }
 
+  // Read before the create: afterwards the new company is itself a live
+  // membership and every user would look like a returning one.
+  const armBooksGate = shouldArmBooksGate({
+    teamKind: (teamRow as { kind?: string } | null)?.kind,
+    hasLiveCompany: await hasLiveCompany(supabase, user.id),
+  })
+
   // Steps 1-5 (company + owner via RPC, org number, TIC snapshot, chart,
   // settings, fiscal period, tax deadlines, with rollback) are shared with
   // the MCP and v1 creation paths: lib/company/create-company.ts.
@@ -223,9 +228,9 @@ async function createCompanyFromOnboardingImpl(params: {
     console.error('[createCompanyFromOnboarding] setActiveCompany failed', err)
   }
 
-  // 7. Arm the first-session books gate. Non-fatal: without the cookie the
-  // user simply lands on Hem with the checklist, exactly as before.
-  if (params.booksGate && booksGateEnabled()) {
+  // 7. Arm the first-session books gate for a first company only. Non-fatal:
+  // without the cookie the user simply lands on Hem with the checklist.
+  if (armBooksGate) {
     try {
       const cookieStore = await cookies()
       cookieStore.set(BOOKS_GATE_COOKIE, newCompanyId, {
@@ -244,3 +249,20 @@ async function createCompanyFromOnboardingImpl(params: {
   return { companyId: newCompanyId }
 }
 
+/**
+ * Whether the user is a member of at least one non-archived company. null
+ * when the read failed, so the caller can tell "none" from "unknown".
+ */
+async function hasLiveCompany(supabase: SupabaseClient, userId: string): Promise<boolean | null> {
+  const { data, error } = await supabase
+    .from('company_members')
+    .select('company_id, companies!inner(archived_at)')
+    .eq('user_id', userId)
+    .is('companies.archived_at', null)
+    .limit(1)
+  if (error) {
+    console.error('[createCompanyFromOnboarding] membership read failed', error)
+    return null
+  }
+  return (data ?? []).length > 0
+}

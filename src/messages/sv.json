@@ -10503,6 +10503,8 @@
     "skip_all": "Hoppa över tills vidare",
     "skip_all_cost": "Utan bokföring är {appName} tomt: inga siffror, inga avstämningar, ingen moms.",
     "skip_all_confirm": "Hoppa över ändå",
+    "skip_title": "Hoppa över resten av guiden?",
+    "skip_running": "En import som redan har startat blir klar i bakgrunden, men år som inte har börjat importeras inte. Du kommer till importsidan, där du följer importen, kan ångra den och lägga till de år som saknas.",
     "sie_title": "Ladda upp SIE-filen",
     "sie_sub": "Exportera SIE 4 från det gamla systemet. Vi läser in år för år och visar allt som händer.",
     "sie_sub_first": "{provider} lämnar inte ut bokföringen via sitt API. Börja med en SIE 4-fil, sedan hämtar vi kunder, leverantörer och fakturor därifrån.",

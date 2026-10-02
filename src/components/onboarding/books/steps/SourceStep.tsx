@@ -11,8 +11,9 @@ import type { BooksCtx } from '../context'
  * Var fanns bokföringen innan? One column of equal rows: the providers with
  * their logo, the SIE file as the last row of the same list, a new business
  * as one quiet row below it. Visma and Bokio go SIE first (their API does
- * not hand out the ledger); the rest log in. No skip: the books come in, or
- * the business is new. Under the list, before anything leaves the old
+ * not hand out the ledger); the rest log in. No skip row in the list: the
+ * books come in, or the business is new (the shell's "Hoppa över tills
+ * vidare" is the way out). Under the list, before anything leaves the old
  * system: where the data will live, in the two facts the privacy policy and
  * the DPA already state (Stockholm, TLS 1.3 and AES-256). Nothing here that
  * is not yet true.

@@ -10503,6 +10503,8 @@
     "skip_all": "Skip for now",
     "skip_all_cost": "Without the books {appName} is empty: no figures, no reconciliations, no VAT.",
     "skip_all_confirm": "Skip anyway",
+    "skip_title": "Skip the rest of the guide?",
+    "skip_running": "An import that has already started finishes in the background, but years that have not started are not imported. You land on the import page, where you can follow the import, undo it and add the missing years.",
     "sie_title": "Upload the SIE file",
     "sie_sub": "Export SIE 4 from the old system. We read it year by year and show everything that happens.",
     "sie_sub_first": "{provider} does not hand out the ledger through its API. Start with a SIE 4 file, then we fetch customers, suppliers and invoices from there.",

@@ -262,7 +262,7 @@
 /* one column of actions: the primary alone, the quiet choice under it */
 .jny-qactions.is-stack { flex-direction: column; gap: 14px; }
 /* Tillbaka for the whole act: the page's top left corner, level with the rail, one place on every step */
-.bks-backrow { position: sticky; top: 0; z-index: 3; align-self: stretch; background: hsl(var(--background)); text-align: left; }
+.bks-backrow { position: sticky; top: 0; z-index: 3; align-self: stretch; background: hsl(var(--background)); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .imp-info { max-width: 480px; margin: 10px auto 0; font-size: 12.5px; line-height: 1.55; color: hsl(var(--muted-foreground)); animation: jnyQIn 300ms var(--ease-emphasized); }
 
 /* the fetch: what was on the page fades out in place, the chart fades in where it stood */
