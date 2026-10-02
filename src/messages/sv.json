@@ -6075,7 +6075,7 @@
     "drop_surface_prompt": "Släpp filen här för att bifoga underlaget",
     "compact_prompt": "Dra och släpp eller klicka",
     "prompt": "Dra och släpp filer här",
-    "format_hint": "PDF eller bild (max 10 MB)",
+    "format_hint": "PDF, bild, Office-dokument eller CSV (max 10 MB)",
     "uploaded": "Uppladdad",
     "error": "Fel",
     "remove_file": "Ta bort fil",
