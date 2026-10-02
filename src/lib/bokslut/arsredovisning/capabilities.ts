@@ -1,5 +1,5 @@
 import { flagEnabled } from '@/lib/env/public-flags'
-import { isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
+import { isEntityType, preparesArsredovisning, supportsIxbrl } from '@/lib/company/entity-type'
 import type { AnnualReportEligibilityResult, AnnualReportFramework } from './compliance-types'
 
 export interface AnnualReportCapabilities {
@@ -40,7 +40,10 @@ export function getAnnualReportCapabilities(
 ): AnnualReportCapabilities {
   const releaseGateOpen = flagEnabled(process.env.NEXT_PUBLIC_BOLAGSVERKET_FILING_ENABLED)
   const formPrepared = isEntityType(entityType) && preparesArsredovisning(entityType)
-  const ixbrlEnabled = formPrepared && framework === 'k2'
+  // A form the product prepares but no Bolagsverket taxonomy covers (an
+  // ekonomisk förening) files the PDF package on paper.
+  const formHasTaxonomy = formPrepared && supportsIxbrl(entityType)
+  const ixbrlEnabled = formHasTaxonomy && framework === 'k2'
   const eligible = eligibility?.digital_filing_eligible ?? false
   return {
     paper: {
@@ -58,7 +61,9 @@ export function getAnnualReportCapabilities(
         ? FORM_NOT_PREPARED_REASON
         : ixbrlEnabled
           ? null
-          : 'iXBRL-generering stöds ännu endast för K2.',
+          : !formHasTaxonomy
+            ? 'iXBRL-generering stöds ännu endast för aktiebolag (K2-taxonomin täcker inte den här företagsformen).'
+            : 'iXBRL-generering stöds ännu endast för K2.',
     },
     connected_filing: {
       enabled: releaseGateOpen && ixbrlEnabled && eligible,
@@ -68,7 +73,9 @@ export function getAnnualReportCapabilities(
         : !formPrepared
           ? FORM_NOT_PREPARED_REASON
           : !ixbrlEnabled
-            ? 'Direktinlämning stöds ännu endast för K2.'
+            ? !formHasTaxonomy
+              ? 'Direktinlämning stöds ännu endast för aktiebolag.'
+              : 'Direktinlämning stöds ännu endast för K2.'
             : !eligible
               ? 'Årsredovisningen uppfyller inte alla behörighets- och fullständighetskrav.'
               : null,

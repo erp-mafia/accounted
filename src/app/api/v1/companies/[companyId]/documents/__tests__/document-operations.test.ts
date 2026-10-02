@@ -263,6 +263,28 @@ describe('DELETE /api/v1/companies/:companyId/documents/:id', () => {
     expect(wrote(free)).toBe(false)
   })
 
+  // crm#230: the v1 door (and the MCP tool behind the same operation) refuses
+  // every record that holds a document, on the commit path and in the dry run.
+  it.each<{ pin: string; tables: Record<string, TableResp>; code: string }>([
+    { pin: 'supplier invoice underlag', tables: { supplier_invoices: { data: [{ id: 'si-1' }], error: null } }, code: 'DOC_DELETE_SUPPLIER_INVOICE_UNDERLAG' },
+    { pin: 'utlägg underlag', tables: { expense_claims: { data: [{ id: 'ec-1' }], error: null } }, code: 'DOC_DELETE_EXPENSE_CLAIM_UNDERLAG' },
+    {
+      pin: 'a booked inbox item',
+      tables: { invoice_inbox_items: { data: [{ created_journal_entry_id: JE_ID, created_supplier_invoice_id: null }], error: null } },
+      code: 'DOC_DELETE_BOOKED_INBOX_ITEM',
+    },
+    { pin: 'a bank transaction', tables: { transactions: { data: [{ id: TX_ID }], error: null } }, code: 'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION' },
+  ])('409 $code for $pin, commit and dry run alike, writing nothing', async ({ tables, code }) => {
+    for (const query of ['', '?dry_run=true']) {
+      const client = makeClient({ company_members: MEMBER, document_attachments: { data: docRow(), error: null }, ...tables })
+      mockServiceClient.mockReturnValue(client)
+      const res = await del(query)
+      expect(res.status).toBe(409)
+      expect((await res.json()).error.code).toBe(code)
+      expect(wrote(client)).toBe(false)
+    }
+  })
+
   it('deletes an unlinked document and its stored file', async () => {
     const client = makeClient({
       company_members: MEMBER,

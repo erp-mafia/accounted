@@ -43,7 +43,7 @@ import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { eventBus } from '@/lib/events'
+import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import {
   deriveCustomerSettlementAmount,
@@ -651,20 +651,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       await clearSettledInvoiceSuggestions(ctx.supabase, ctx.companyId!, 'invoice', invoiceId)
     }
 
-    // Step 3: emit invoice.paid (best-effort, surfaces in warnings on fail).
-    try {
-      await eventBus.emit({
-        type: 'invoice.paid',
-        payload: {
-          invoice: updated as unknown as Invoice,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-          paymentAmount,
-          paymentDate,
-        },
-      })
-    } catch (err) {
-      ctx.log.error('invoice.paid emit failed', err as Error, {
+    // Step 3: emit invoice.paid when this payment settled the invoice in full
+    // (never on a partial; best-effort, surfaces in warnings on fail).
+    const paidEvent = await emitInvoicePaidIfSettled({
+      newStatus,
+      invoice: updated as unknown as Invoice,
+      companyId: ctx.companyId!,
+      userId: ctx.userId,
+      paymentAmount,
+      paymentDate,
+    })
+    if (paidEvent === 'emit_failed') {
+      ctx.log.error('invoice.paid emit failed', undefined, {
         invoiceId,
         companyId: ctx.companyId,
       })

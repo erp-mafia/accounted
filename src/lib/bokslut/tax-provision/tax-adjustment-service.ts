@@ -6,21 +6,72 @@ import type {
   TaxAdjustmentSnapshot,
   TaxAdjustmentType,
 } from '../types'
+import type { EntityType } from '@/types'
+import { resolveCompanyEntityType, supportsMemberCapital } from '@/lib/company/entity-type'
 
-export const DETECTED_TAX_ADJUSTMENT_ACCOUNTS = [
+interface DetectedTaxAdjustmentAccount {
+  accountNumber: string
+  sourceKey: string
+  adjustmentType: TaxAdjustmentType
+  description: string
+}
+
+export const DETECTED_TAX_ADJUSTMENT_ACCOUNTS: readonly DetectedTaxAdjustmentAccount[] = [
   {
     accountNumber: '6992',
     sourceKey: 'account:6992',
-    adjustmentType: 'non_deductible_expense' as const,
+    adjustmentType: 'non_deductible_expense',
     description: 'Övriga externa kostnader, ej avdragsgilla',
   },
   {
     accountNumber: '8423',
     sourceKey: 'account:8423',
-    adjustmentType: 'non_deductible_expense' as const,
+    adjustmentType: 'non_deductible_expense',
     description: 'Räntekostnader för skatter och avgifter',
   },
-] as const
+]
+
+/**
+ * Membership fees of an ekonomisk förening are not taxable income for the
+ * association (Skatteverket, "Deklarera för en ekonomisk förening"): the
+ * chart seeds 3901 Medlemsavgifter for them, and the balance is proposed as
+ * an INK2S 4.5c deduction. The matching administration cost is not
+ * deductible (4.3c); it cannot be derived from the ledger, so the wizard
+ * asks for it as a manual adjustment (see the INK2 engine warning).
+ */
+export const MEMBERSHIP_FEE_ACCOUNT = '3901'
+
+const EKONOMISK_FORENING_DETECTED_ACCOUNTS: readonly DetectedTaxAdjustmentAccount[] = [
+  {
+    accountNumber: MEMBERSHIP_FEE_ACCOUNT,
+    sourceKey: `account:${MEMBERSHIP_FEE_ACCOUNT}`,
+    adjustmentType: 'non_taxable_income',
+    description: 'Medlemsavgifter, ej skattepliktiga (INK2S 4.5c)',
+  },
+]
+
+/** Detected-account rules for a legal form; the base list applies to every form. */
+export function detectedTaxAdjustmentAccounts(
+  entityType: EntityType | null,
+): readonly DetectedTaxAdjustmentAccount[] {
+  // Member-capital forms (an ekonomisk förening) are financed by members.
+  if (entityType !== null && supportsMemberCapital(entityType)) {
+    return [...DETECTED_TAX_ADJUSTMENT_ACCOUNTS, ...EKONOMISK_FORENING_DETECTED_ACCOUNTS]
+  }
+  return DETECTED_TAX_ADJUSTMENT_ACCOUNTS
+}
+
+async function resolveFormForAdjustments(
+  supabase: SupabaseClient,
+  companyId: string,
+  entityType?: EntityType,
+): Promise<EntityType | null> {
+  if (entityType) return entityType
+  // A failed lookup propagates: silently falling back to the form-neutral
+  // rules would drop 3901 for an ekonomisk förening and understate INK2S
+  // 4.5c, so the taxable base would be wrong without anyone noticing.
+  return resolveCompanyEntityType(supabase, companyId)
+}
 
 const MANUAL_ADJUSTMENTS = [
   {
@@ -60,14 +111,17 @@ export interface SaveTaxAdjustmentsInput {
     /** INK2S 4.14 a: prior years' unused deficit to deduct this year. */
     deficitCarryforward: number
   }
-  detectedAccounts: Record<(typeof DETECTED_TAX_ADJUSTMENT_ACCOUNTS)[number]['accountNumber'], boolean>
+  /** Keyed by account number; an account missing from the map is excluded. */
+  detectedAccounts: Record<string, boolean>
 }
 
 export async function loadTaxAdjustmentSnapshot(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
+  entityType?: EntityType,
 ): Promise<TaxAdjustmentSnapshot> {
+  const form = await resolveFormForAdjustments(supabase, companyId, entityType)
   const [trialBalance, persistedResult] = await Promise.all([
     generateTrialBalance(supabase, companyId, fiscalPeriodId, {
       closingEntry: 'exclude-all-year-end',
@@ -90,9 +144,16 @@ export async function loadTaxAdjustmentSnapshot(
     trialBalance.rows.map((row) => [row.account_number, row]),
   )
 
-  const detectedItems: TaxAdjustmentItem[] = DETECTED_TAX_ADJUSTMENT_ACCOUNTS.map((config) => {
+  const detectedItems: TaxAdjustmentItem[] = detectedTaxAdjustmentAccounts(form).map((config) => {
     const row = trialBalanceByAccount.get(config.accountNumber)
-    const amount = roundOre(Math.max(0, (row?.closing_debit ?? 0) - (row?.closing_credit ?? 0)))
+    // An expense account carries its balance on the debit side, a revenue
+    // account on the credit side; the adjustment is always the positive
+    // balance in the account's own direction.
+    const debit = row?.closing_debit ?? 0
+    const credit = row?.closing_credit ?? 0
+    const amount = roundOre(
+      Math.max(0, config.adjustmentType === 'non_taxable_income' ? credit - debit : debit - credit),
+    )
     const persisted = persistedByKey.get(config.sourceKey)
     return {
       sourceKey: config.sourceKey,
@@ -128,8 +189,10 @@ export async function saveTaxAdjustments(
   fiscalPeriodId: string,
   userId: string,
   input: SaveTaxAdjustmentsInput,
+  entityType?: EntityType,
 ): Promise<void> {
-  const current = await loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId)
+  const form = await resolveFormForAdjustments(supabase, companyId, entityType)
+  const current = await loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, form ?? undefined)
   const detectedAmounts = new Map(
     current.items
       .filter((item) => item.source === 'detected')
@@ -137,7 +200,7 @@ export async function saveTaxAdjustments(
   )
 
   const rows = [
-    ...DETECTED_TAX_ADJUSTMENT_ACCOUNTS.map((config) => ({
+    ...detectedTaxAdjustmentAccounts(form).map((config) => ({
       company_id: companyId,
       user_id: userId,
       fiscal_period_id: fiscalPeriodId,
@@ -147,7 +210,7 @@ export async function saveTaxAdjustments(
       description: config.description,
       account_number: config.accountNumber,
       amount: detectedAmounts.get(config.sourceKey) ?? 0,
-      included: input.detectedAccounts[config.accountNumber],
+      included: input.detectedAccounts[config.accountNumber] ?? false,
     })),
     {
       company_id: companyId,

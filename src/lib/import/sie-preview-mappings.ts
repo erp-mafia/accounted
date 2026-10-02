@@ -1,11 +1,47 @@
 import { isAccountNumber } from '@/lib/invariants/account-number'
-import { isSystemAccount, isValidBASRange } from './account-mapper'
-import type { AccountMapping, ParsedSIEFile, SIEAccount } from './types'
+import { isSystemAccount, isValidBASRange, suggestMappings, type MappableAccount } from './account-mapper'
+import type { AccountMapping, ParsedSIEFile, SIEAccount, SIEAccountMappingRecord } from './types'
 
 /** BAS 2999 OBS-konto: where a source system's class 9 observation postings land. */
 const OBS_ACCOUNT = '2999'
 const OBS_ACCOUNT_NAME = 'OBS-konto'
 const isClass9Account = (account: string) => /^9\d{3}$/.test(account)
+
+/**
+ * The one mapping decision every SIE entry runs: the file upload
+ * (/api/import/sie/parse), the provider fetch (arcim-migration /sie-data),
+ * execute without supplied mappings, the v1 API and the MCP preflight.
+ *
+ * Stored mappings and the target list only suggest. The file's own usage then
+ * decides, so a class 9 account carrying amounts lands on 2999 even when a
+ * previous import stored a 9xxx target for it or the company's chart already
+ * holds that 9xxx row. Only the upload ran this second half before (#3312):
+ * every provider fetch rebuilt the 9xxx target the job's class check refuses.
+ *
+ * `accounts` narrows which source accounts get a mapping (a caller that
+ * filters out system accounts); usage is always read from the whole parse.
+ */
+export function suggestSIEMappings(parsed: ParsedSIEFile, targets: MappableAccount[],
+  stored?: SIEAccountMappingRecord[], accounts: SIEAccount[] = parsed.accounts) {
+  return prepareSIEPreviewMappings(parsed, suggestMappings(accounts, targets, stored))
+}
+
+/**
+ * The class 9 source accounts the rule below sent to 2999 OBS-konto. A flow
+ * with a mapping page shows them there for review; a flow without one names
+ * them. A 2999 target chosen by hand (matchType 'manual') is not listed.
+ */
+export function obsAccountsOf(
+  mappings: ReadonlyArray<Pick<AccountMapping, 'sourceAccount' | 'targetAccount'> & { matchType: string }>,
+): string[] {
+  const accounts = new Set<string>()
+  for (const mapping of mappings) {
+    if (mapping.targetAccount === OBS_ACCOUNT && mapping.matchType === 'class' && isClass9Account(mapping.sourceAccount)) {
+      accounts.add(mapping.sourceAccount)
+    }
+  }
+  return [...accounts].sort()
+}
 
 /** Preview evidence only. Execution revalidates the original file independently. */
 export function prepareSIEPreviewMappings(parsed: ParsedSIEFile, suggested: AccountMapping[]) {

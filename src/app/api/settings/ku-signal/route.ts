@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
+import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
 /**
  * Accounts whose postings indicate a kontrolluppgifter obligation:
  * 2898 outtagen vinstutdelning (KU31 on utdelning), 2393/2893 lån från
@@ -42,7 +43,9 @@ export const GET = withRouteContext(
       })
     }
 
-    if (settings?.entity_type !== 'aktiebolag') {
+    // KU31 on utdelning and KU20 on interest to members apply to every form
+    // that files INK2 (aktiebolag, ekonomisk förening).
+    if (!isEntityType(settings?.entity_type) || !usesInk2(settings.entity_type)) {
       return NextResponse.json({ data: { has_ku_signal: false } })
     }
 

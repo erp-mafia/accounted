@@ -67,7 +67,6 @@ import {
 } from '@/lib/invoices/issue-and-book-invoice'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
-import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { booksInvoicesOnIssue, cashPartialBlockReason, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
@@ -119,6 +118,7 @@ import {
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher, type LinkInvoiceToVoucherResult } from '@/lib/invoices/voucher-matching'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { planTransactionInvoiceMatch } from '@/lib/invoices/match-payment-plan'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import {
   alreadyExplainedDetails,
@@ -134,6 +134,7 @@ import {
   type LinkSupplierInvoiceToVoucherResult,
 } from '@/lib/invoices/supplier-voucher-matching'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import {
   findCashMethodUnbookedAllocations,
   type BatchAllocationRef,
@@ -145,15 +146,18 @@ import {
   type BatchAllocationResult,
 } from '@/lib/invoices/clear-settled-batch-allocations'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
+import { emitBatchAllocationEvents } from '@/lib/transactions/batch-allocation-events'
 import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
 import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
 import { attachDocumentToTransaction } from '@/lib/transactions/document-attach'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
 import { submitSIEJob, requestSIEJobAction } from '@/lib/import/sie-jobs'
 import type { AccountMapping } from '@/lib/import/types'
 import { AccountsNotInChartError, isBookkeepingError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { extensionRegistry } from '@/lib/extensions/registry'
+import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import {
   SkatteverketRecoverableError,
   type SkatteverketCommitServices,
@@ -174,7 +178,7 @@ import {
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { resolveInvoicePayeeChoice, resolveInvoiceSettlementAccount, snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import {
   describeMissingInvoicePaymentAccount,
@@ -385,6 +389,16 @@ type ExecutorResult = {
   // the approval can be given again once the other call is done instead of
   // the op being consumed as 'rejected'.
   returnToPending?: boolean
+}
+
+/** A draft without a customer (crm#263): refused before anything changes. */
+function customerMissingResult(): ExecutorResult {
+  const entry = getErrorEntry('INVOICE_CUSTOMER_MISSING')
+  return {
+    error: entry?.message_sv ?? 'Fakturan saknar kund.',
+    errorCode: 'INVOICE_CUSTOMER_MISSING',
+    status: entry?.httpStatus ?? 409,
+  }
 }
 
 /**
@@ -2894,29 +2908,23 @@ async function commitMarkInvoicePaid(
   }
 
   // Notify subscribers: invoice.paid fans out to registered webhooks
-  // (lib/webhooks/handler.ts). Best-effort: the payment is already committed,
-  // so an emit failure must not fail the operation. Parity with the v1 and
-  // dashboard mark-paid routes, which previously emitted while this path did not.
-  try {
-    await eventBus.emit({
-      type: 'invoice.paid',
-      payload: {
-        invoice: {
-          ...(invoice as Invoice),
-          status: newStatus,
-          paid_amount: newPaidAmount,
-          remaining_amount: newRemaining,
-          paid_at: paidAt ?? (invoice as Invoice).paid_at,
-        } as Invoice,
-        companyId,
-        userId,
-        paymentAmount,
-        paymentDate,
-      },
-    })
-  } catch (err) {
-    log.warn('invoice.paid emit failed', err)
-  }
+  // (lib/webhooks/handler.ts) once, when this payment settles the invoice in
+  // full. Best-effort: the payment is already committed, so an emit failure
+  // never fails the operation (the helper logs it).
+  await emitInvoicePaidIfSettled({
+    newStatus,
+    invoice: {
+      ...(invoice as Invoice),
+      status: newStatus,
+      paid_amount: newPaidAmount,
+      remaining_amount: newRemaining,
+      paid_at: paidAt ?? (invoice as Invoice).paid_at,
+    } as Invoice,
+    companyId,
+    userId,
+    paymentAmount,
+    paymentDate,
+  })
 
   return { data: { status: newStatus, remaining_amount: newRemaining, journal_entry_id: journalEntryId } }
 }
@@ -2967,6 +2975,8 @@ async function commitSendInvoice(
     }
   }
 
+  // The customer was deleted while the draft pointed at it (crm#263).
+  if (invoiceLacksCustomer(invoice)) return customerMissingResult()
   const customer = invoice.customer as Customer
   if (!customer.email?.trim()) return { error: 'Customer has no email address', status: 400 }
 
@@ -3090,6 +3100,22 @@ async function commitSendInvoice(
     return { error: `Failed to assign invoice number: ${err instanceof Error ? err.message : 'unknown'}`, status: 500 }
   }
 
+  // Auto-create an online payment link (extension-provided, e.g. Stripe) now
+  // that the number exists, so the email button and PDF QR carry it: the same
+  // shared step the dashboard send, the v1 send and the recurring auto-send
+  // run. A failure never blocks the send: the faktura is legally valid
+  // without a link, so it degrades to a warning, as on the dashboard.
+  const { failure: paymentLinkFailure } = await applyPaymentLinkToInvoice(
+    supabase,
+    companyId,
+    userId,
+    invoice as Invoice,
+    log,
+  )
+  if (paymentLinkFailure) {
+    log.warn('payment link creation failed on agent send', { invoiceId, reason: paymentLinkFailure })
+  }
+
   // Override `status` to 'sent' on the in-memory copy. The DB flip happens
   // when the invoice is issued, right before the email; rendering with the
   // stale 'draft' status would stamp the customer's PDF with "UTKAST".
@@ -3100,6 +3126,7 @@ async function commitSendInvoice(
     { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
   )
   const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
+  const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
       invoice: renderableInvoice,
@@ -3109,6 +3136,7 @@ async function commitSendInvoice(
       originalInvoiceNumber,
       branding,
       swishQrDataUrl,
+      paymentLinkQrDataUrl,
     })
   )
 
@@ -3248,6 +3276,10 @@ async function commitSendInvoice(
   })
 
   const warnings = [
+    // The raw provider/DB reason is logged above; the agent-facing text stays Swedish.
+    ...(paymentLinkFailure
+      ? ['Betalningslänken kunde inte skapas. Fakturan skickades utan betalningslänk.']
+      : []),
     ...(result.trackingWarning ? ['Delivery history requires reconciliation.'] : []),
     ...issued.partialFailures.map((failure) => failure.reason),
   ]
@@ -3282,6 +3314,8 @@ async function commitMarkInvoiceSent(
     }
   }
   if (invoice.status !== 'draft') return { error: 'Only draft invoices can be marked as sent', status: 409 }
+  // Before the number below is taken (crm#263): the draft stays deletable.
+  if (invoiceLacksCustomer(invoice)) return customerMissingResult()
 
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
@@ -3456,85 +3490,28 @@ async function commitMatchTransactionInvoice(
     }
   }
 
-  // FX resolution: parity with the dashboard and v1 match routes. paidAmount
-  // MUST be denominated in the INVOICE's currency (the unit of
-  // invoices.paid_amount / remaining_amount and invoice_payments.amount).
-  // This path previously fed the raw bank amount straight in, which (a)
-  // rejected exact whole-krona settlements of öre-carrying invoices and (b)
-  // would corrupt the column units on a cross-currency match.
-  const txIsForeign = !!transaction.currency && transaction.currency !== 'SEK'
-  if (
-    txIsForeign &&
-    transaction.amount_sek == null &&
-    !(transaction.exchange_rate != null && transaction.exchange_rate > 0)
-  ) {
-    return {
-      error:
-        getErrorEntry('MATCH_INVOICE_TX_FX_RATE_MISSING')?.message_sv ??
-        'Transaktionen saknar valutakurs och SEK-belopp.',
-      status: 400,
-    }
-  }
-  const txAbsSek =
-    Math.round(
-      resolveSekAmount(
-        Math.abs(transaction.amount),
-        transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
-        transaction.currency,
-        transaction.exchange_rate,
-      ) * 100,
-    ) / 100
-
-  let fx: { required: false } | { required: true; rate: number; paidInInvoiceCurrency: number } = {
-    required: false,
-  }
-  if (transaction.currency !== invoice.currency) {
-    let rate: number | null = null
-    try {
-      const rateInfo = await fetchExchangeRate(
-        invoice.currency as Currency,
-        new Date(transaction.date),
-        supabase,
-      )
-      if (rateInfo && rateInfo.rate > 0) rate = rateInfo.rate
-    } catch {
-      rate = null
-    }
-    if (rate == null) {
-      return {
-        error:
-          getErrorEntry('MATCH_INVOICE_FX_RATE_UNAVAILABLE')?.message_sv ??
-          'Ingen valutakurs tillgänglig för betalningsdatumet.',
-        status: 400,
-      }
-    }
-    fx = {
-      required: true,
-      rate,
-      paidInInvoiceCurrency: Math.round((txAbsSek / rate) * 10000) / 10000,
-    }
-  }
-  const paidAmount = fx.required ? fx.paidInInvoiceCurrency : transaction.amount
-
-  // Overshoot guard + paid/remaining math: shared with the dashboard and v1
-  // routes via planInvoicePayment. This agent/MCP path previously had NO guard,
-  // so a 1500 payment on a 1000 invoice was silently accepted (paid_amount >
-  // total, AR over-credited). Pure-SEK settlements absorb sub-krona
-  // öresavrundning (booked to 3740 by buildInvoicePaymentClearingLines) so a
-  // whole-krona payment settles in full, exactly as on the other two routes.
+  // FX resolution (paidAmount in the INVOICE's currency) + overshoot guard +
+  // paid/remaining math, through the one helper the staging tools run too, so
+  // a match refused here is refused when it is staged (crm#253). This agent
+  // path previously had NO overshoot guard, so a 1500 payment on a 1000
+  // invoice was silently accepted (paid_amount > total, AR over-credited).
   // Runs BEFORE the storno + JE below, so a rejected match leaves the
   // transaction untouched and never burns a voucher number.
-  const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
-  const payment = planInvoicePayment(invoice, paidAmount, { absorbOreRounding: pureSek })
-  if (!payment.ok) {
+  const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice)
+  if (!matchPlan.ok) {
     return {
-      error:
-        getErrorEntry('MATCH_AMOUNT_EXCEEDS_REMAINING')?.message_sv ??
-        'Transaktionsbeloppet är större än fakturans återstående belopp.',
+      error: getErrorEntry(matchPlan.code)?.message_sv ?? matchPlan.code,
+      errorCode: matchPlan.code,
       status: 400,
+      // The amounts the stage-time refusal names, so an op staged before that
+      // guard (or whose invoice changed since) is just as actionable here.
+      ...(matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING'
+        ? { data: { currency: matchPlan.currency, ...matchPlan.details } }
+        : {}),
     }
   }
-  const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+  const { fx } = matchPlan
+  const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = matchPlan.plan
   const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
   // Read-only prevalidation, deliberately hoisted ABOVE the irreversible
@@ -3776,17 +3753,18 @@ async function commitMatchTransactionInvoice(
     })
     .eq('id', transactionId)
 
+  const settledInvoice = {
+    ...(invoice as Invoice),
+    status: newStatus,
+    paid_at: paidAt,
+    paid_amount: newPaidAmount,
+    remaining_amount: newRemaining,
+  } as Invoice
   try {
     await eventBus.emit({
       type: 'invoice.match_confirmed',
       payload: {
-        invoice: {
-          ...(invoice as Invoice),
-          status: newStatus,
-          paid_at: paidAt,
-          paid_amount: newPaidAmount,
-          remaining_amount: newRemaining,
-        } as Invoice,
+        invoice: settledInvoice,
         transaction: {
           ...(transaction as Transaction),
           invoice_id: invoiceId,
@@ -3800,6 +3778,16 @@ async function commitMatchTransactionInvoice(
       },
     })
   } catch { /* non-critical */ }
+  // A match that settles the invoice in full is its invoice.paid transition,
+  // exactly as on the dashboard and v1 match routes.
+  await emitInvoicePaidIfSettled({
+    newStatus,
+    invoice: settledInvoice,
+    paymentAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
+    paymentDate: transaction.date,
+    userId,
+    companyId,
+  })
 
   return { data: { invoice_status: newStatus, paid_amount: newPaidAmount, journal_entry_id: journalEntryId } }
 }
@@ -6970,6 +6958,16 @@ async function commitMatchBatchAllocate(
   // them on the source tx. Same helper as the HTTP twin
   // (app/api/transactions/[id]/match-batch/route.ts) so the two cannot drift.
   await clearSettledBatchAllocationSuggestions(supabase, companyId, result.allocations ?? [], txId)
+
+  // Same events as the HTTP twin (match_confirmed per allocation, invoice.paid
+  // / supplier_invoice.paid per allocation settled in full), through the same
+  // helper. This door used to emit nothing, so webhooks never heard of an
+  // agent-approved samlingsbetalning. Best-effort: the RPC has committed.
+  await emitBatchAllocationEvents(
+    supabase,
+    { companyId, userId, transactionId: txId, allocations: result.allocations ?? [] },
+    log,
+  )
 
   // The override was acted on: durable behandlingshistorik record (BFNAR
   // 2013:2 p. 9.16), same event the categorize guard writes.

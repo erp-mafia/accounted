@@ -50,7 +50,8 @@ import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { mergeParsedSIEFiles } from '@/lib/import/sie-merge'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
-import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
+import { getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
+import { suggestSIEMappings } from '@/lib/import/sie-preview-mappings'
 import { applySourceVatCodes } from '@/lib/import/account-vat-treatment'
 import { fortnoxVatCodeToTreatment } from '@/lib/providers/fortnox/vat-codes'
 import { loadMappings, generateImportPreview, findOverlappingPeriodImports } from '@/lib/import/sie-import'
@@ -1306,7 +1307,13 @@ export const arcimMigrationExtension: Extension = {
           // such an account was impossible to map onto. See
           // ./lib/mapping-targets.
           const mappingTargets = await buildMappingTargets(supabase, companyId, moduleLog)
-          let mappings = suggestMappings(allAccounts, mappingTargets, existingRecords)
+          // The same decision the file upload makes, over the whole dataset
+          // (#3312). A class 9 account with amounts in any selected year goes
+          // to 2999; without this a stored 9xxx mapping, the chart's own 9xxx
+          // row or the onboarding step's self-map handed the job a 9xxx target
+          // it refuses, on every retry. Unused definitions are still kept.
+          const decided = suggestSIEMappings(merged, mappingTargets, existingRecords, allAccounts)
+          let mappings = decided.mappings
 
           // The momskod each account has in the source system. SIE4 #KONTO
           // carries none, so without this the mapping step can only guess
@@ -1335,6 +1342,9 @@ export const arcimMigrationExtension: Extension = {
           log.info(`Account mapping: ${allAccounts.length} unique accounts across ${sieFiles.length} files, ${mappingStats.unmapped} unmapped`)
 
           const preview = generateImportPreview(merged, mappings)
+          // Definitions the decision left out of the mapping (unused numbers
+          // no chart can hold) are named, as the upload's preview names them.
+          preview.archivedOnlyAccounts = decided.archivedOnlyAccounts
 
           // Detect prior imports by *fiscal period overlap*, not file hash.
           // Providers embed the export-time #GEN date in every SIE export so
@@ -2024,6 +2034,7 @@ export const arcimMigrationExtension: Extension = {
             skipped: result.skipped,
             unmatched: result.unmatched,
             failed: result.failed,
+            locked: result.locked,
             partial: result.partial,
             nextCursor: result.nextCursor,
           })

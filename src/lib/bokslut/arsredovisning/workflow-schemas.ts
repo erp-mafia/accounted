@@ -108,6 +108,37 @@ export const narrativeShape = {
     .nullable()
     .optional()
     .describe('ÅRL 5:20 §: medelantal anställda as a whole number; null uses the computed average.'),
+  // ÅRL 6 kap. 3 §: förvaltningsberättelse disclosures of an ekonomisk
+  // förening. Stored for every form; rendered and required only for the
+  // ekonomisk förening (completeness AR-EF-MEMBER-INFO).
+  member_count_change: sanitizedText(2000)
+    .nullable()
+    .optional()
+    .describe('ÅRL 6 kap. 3 § (ekonomisk förening): change in the number of members during the year.'),
+  insatser_repayable_next_year: z
+    .number()
+    .min(0)
+    .max(1_000_000_000_000)
+    .nullable()
+    .optional()
+    .transform((value) =>
+      value === null || value === undefined ? value : Math.round(value * 100) / 100,
+    )
+    .describe('ÅRL 6 kap. 3 § (ekonomisk förening): insatser to repay next fiscal year, SEK; 0 when none.'),
+  forlagsinsatser_dividend_right: sanitizedText(2000)
+    .nullable()
+    .optional()
+    .describe('ÅRL 6 kap. 3 § (ekonomisk förening): the distribution right förlagsinsatser carry.'),
+  forlagsinsatser_redeemable_two_years: z
+    .number()
+    .min(0)
+    .max(1_000_000_000_000)
+    .nullable()
+    .optional()
+    .transform((value) =>
+      value === null || value === undefined ? value : Math.round(value * 100) / 100,
+    )
+    .describe('ÅRL 6 kap. 3 § (ekonomisk förening): förlagsinsatser redeemable within two years, SEK; 0 when none.'),
   long_term_debt_over_five_years_confirmed: z.boolean().optional(),
   securities_pledged_confirmed: z.boolean().optional(),
   contingent_liabilities_confirmed: z.boolean().optional(),

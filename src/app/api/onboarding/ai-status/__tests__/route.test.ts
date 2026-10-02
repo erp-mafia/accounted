@@ -36,15 +36,31 @@ describe('GET /api/onboarding/ai-status', () => {
 
   it('returns the connected clients from one api_keys read scoped to the caller', async () => {
     enqueue({ data: [{ client: 'claude' }, { client: null }, { client: 'cursor' }], error: null })
-    const { status, body } = await parseJsonResponse<{ data: { connected: string[] } }>(
+    const { status, body } = await parseJsonResponse<{ data: { connected: string[]; agentConnected: boolean } }>(
       await GET(createMockRequest('/api/onboarding/ai-status'), CTX),
     )
     expect(status).toBe(200)
-    expect(body.data).toEqual({ connected: ['claude'] })
+    expect(body.data).toEqual({ connected: ['claude'], agentConnected: true })
     // No ledger, no findings: the poll costs exactly this one read.
     expect(supabase.from.mock.calls).toEqual([['api_keys']])
     expect(findCalls('api_keys', 'eq')).toContainEqual(['user_id', 'user-1'])
     expect(findCalls('api_keys', 'is')).toContainEqual(['revoked_at', null])
+  })
+
+  it('reads a key that names no client as a connected agent', async () => {
+    enqueue({ data: [{ client: null }], error: null })
+    const { body } = await parseJsonResponse<{ data: { connected: string[]; agentConnected: boolean } }>(
+      await GET(createMockRequest('/api/onboarding/ai-status'), CTX),
+    )
+    expect(body.data).toEqual({ connected: [], agentConnected: true })
+  })
+
+  it('reads no live key as not connected', async () => {
+    enqueue({ data: [], error: null })
+    const { body } = await parseJsonResponse<{ data: { connected: string[]; agentConnected: boolean } }>(
+      await GET(createMockRequest('/api/onboarding/ai-status'), CTX),
+    )
+    expect(body.data).toEqual({ connected: [], agentConnected: false })
   })
 
   it('answers 500, not an empty list, when the read fails', async () => {

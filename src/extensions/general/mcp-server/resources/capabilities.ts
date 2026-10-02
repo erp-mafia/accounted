@@ -1,5 +1,7 @@
 import type { McpResource } from './types'
 import { TOOL_SCOPE_MAP, hasScope } from '@/lib/auth/api-keys'
+import { resolveCompanyEntityType, UnknownEntityTypeError } from '@/lib/company/entity-type'
+import { offersPayroll } from '@/lib/company/offers-payroll'
 
 interface Capability {
   tool: string
@@ -27,9 +29,19 @@ export const capabilitiesResource: McpResource = {
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('bookkeeping_locked_through, vat_registered, pays_salaries')
+      .select('bookkeeping_locked_through, vat_registered, pays_salaries, entity_type')
       .eq('company_id', companyId)
       .maybeSingle()
+
+    // Same resolution as the dashboard layout: company_settings first, the
+    // canonical companies row when it is missing. A missing or unknown form
+    // leaves payroll to the pays_salaries flag alone; a failed companies read
+    // propagates so the caller retries instead of seeing a wrong blocker.
+    const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+      .catch((err: unknown) => {
+        if (err instanceof UnknownEntityTypeError) return null
+        throw err
+      })
 
     const periodIsLocked = !!activePeriod?.locked_at || !!activePeriod?.is_closed
     const periodMissing = !activePeriod
@@ -46,8 +58,10 @@ export const capabilitiesResource: McpResource = {
             ? 'Company-wide bookkeeping lock is in effect'
             : null,
       'invoices:write': periodMissing ? 'No fiscal period covers today\'s date' : null,
-      'payroll:write': !settings?.pays_salaries
-        ? 'Company is not configured to pay salaries (settings.pays_salaries=false)'
+      // The dashboard's payroll rule: on by default for a juridisk person,
+      // opt-in through pays_salaries for a personnummer-based form.
+      'payroll:write': !offersPayroll(entityType, settings?.pays_salaries)
+        ? 'Payroll is not turned on for this company (settings.pays_salaries=false; only a juridisk person has it by default)'
         : null,
     }
 

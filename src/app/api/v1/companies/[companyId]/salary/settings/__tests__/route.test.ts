@@ -143,6 +143,8 @@ const SAMPLE_ROW = {
   preferred_payment_format: 'pain001',
   salary_default_bank: 'swedbank',
   salary_net_rounding: true,
+  salary_payslip_show_employer_cost: true,
+  salary_payslip_show_breakdown: true,
   default_voucher_series_per_source_type: {
     manual: 'A',
     invoice_created: 'B',
@@ -151,7 +153,7 @@ const SAMPLE_ROW = {
 }
 
 const SALARY_SETTINGS_SELECT =
-  'salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type'
+  'salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_payslip_show_employer_cost, salary_payslip_show_breakdown, salary_calculation_policy, default_voucher_series_per_source_type'
 
 /** What a row that never touched the conventions ({} or missing) reads as. */
 const DEFAULT_POLICY = {
@@ -222,6 +224,8 @@ describe('GET /api/v1/companies/:companyId/salary/settings', () => {
       preferred_payment_format: 'pain001',
       salary_default_bank: 'swedbank',
       salary_net_rounding: true,
+      salary_payslip_show_employer_cost: true,
+      salary_payslip_show_breakdown: true,
       salary_calculation_policy: DEFAULT_POLICY,
       salary_voucher_series: 'K',
     })
@@ -249,6 +253,8 @@ describe('GET /api/v1/companies/:companyId/salary/settings', () => {
       preferred_payment_format: 'pain001',
       salary_default_bank: null,
       salary_net_rounding: false,
+      salary_payslip_show_employer_cost: true,
+      salary_payslip_show_breakdown: true,
       salary_calculation_policy: DEFAULT_POLICY,
       salary_voucher_series: 'A',
     })
@@ -433,6 +439,12 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
     ['an unknown payment format', { preferred_payment_format: 'sepa' }, 'preferred_payment_format'],
     ['an unknown bank', { salary_default_bank: 'danske' }, 'salary_default_bank'],
     ['a non-boolean rounding flag', { salary_net_rounding: 'yes' }, 'salary_net_rounding'],
+    [
+      'a non-boolean employer-cost payslip flag',
+      { salary_payslip_show_employer_cost: 'no' },
+      'salary_payslip_show_employer_cost',
+    ],
+    ['a non-boolean breakdown payslip flag', { salary_payslip_show_breakdown: 0 }, 'salary_payslip_show_breakdown'],
   ])('returns 400 for %s', async (_label, body, field) => {
     const supabaseMock = makeFlexibleSupabase({ company_members: MEMBER })
     mockServiceClient.mockReturnValue(supabaseMock)
@@ -501,6 +513,8 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
       preferred_payment_format: 'pain001',
       salary_default_bank: 'swedbank',
       salary_net_rounding: true,
+      salary_payslip_show_employer_cost: true,
+      salary_payslip_show_breakdown: true,
       salary_calculation_policy: DEFAULT_POLICY,
       salary_voucher_series: 'L',
     })
@@ -628,6 +642,8 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
       preferred_payment_format: 'pain001',
       salary_default_bank: 'swedbank',
       salary_net_rounding: true,
+      salary_payslip_show_employer_cost: true,
+      salary_payslip_show_breakdown: true,
       salary_calculation_policy: DEFAULT_POLICY,
       salary_voucher_series: 'L',
     })
@@ -657,6 +673,8 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
       preferred_payment_format: 'pain001',
       salary_default_bank: null,
       salary_net_rounding: false,
+      salary_payslip_show_employer_cost: true,
+      salary_payslip_show_breakdown: true,
       // The insert leaves the map to the DB default (the standard set), so
       // the preview says what the created row will say: K, not the no-row
       // fallback A.
@@ -674,6 +692,8 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
       preferred_payment_format: 'pain001',
       salary_default_bank: null,
       salary_net_rounding: false,
+      salary_payslip_show_employer_cost: true,
+      salary_payslip_show_breakdown: true,
       default_voucher_series_per_source_type: STANDARD_VOUCHER_SERIES_MAP,
     }
     const supabaseMock = makeFlexibleSupabase({
@@ -699,6 +719,8 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
       preferred_payment_format: 'pain001',
       salary_default_bank: null,
       salary_net_rounding: false,
+      salary_payslip_show_employer_cost: true,
+      salary_payslip_show_breakdown: true,
       salary_calculation_policy: DEFAULT_POLICY,
       salary_voucher_series: 'K',
     })
@@ -721,6 +743,8 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
       preferred_payment_format: 'pain001',
       salary_default_bank: null,
       salary_net_rounding: false,
+      salary_payslip_show_employer_cost: true,
+      salary_payslip_show_breakdown: true,
       default_voucher_series_per_source_type: { ...STANDARD_VOUCHER_SERIES_MAP, salary_payment: 'L' },
     }
     const updatedRow = { ...winnerRow, salary_pay_day: 27, salary_deviation_period: 'previous_month' }
@@ -769,6 +793,8 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
             preferred_payment_format: 'pain001',
             salary_default_bank: null,
             salary_net_rounding: false,
+            salary_payslip_show_employer_cost: true,
+            salary_payslip_show_breakdown: true,
             default_voucher_series_per_source_type: {
               ...STANDARD_VOUCHER_SERIES_MAP,
               salary_payment: 'L',
@@ -945,6 +971,69 @@ describe('PATCH salary_calculation_policy', () => {
       sick_rate: 'annual_hourly',
       long_leave: 'calendar_after_five_workdays',
     })
+    expect(supabaseMock.settingsUpdates()).toHaveLength(0)
+  })
+})
+
+describe('payslip section switches (crm#202)', () => {
+  it('reports the stored switches on GET', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: MEMBER,
+        company_settings: {
+          data: { ...SAMPLE_ROW, salary_payslip_show_employer_cost: false, salary_payslip_show_breakdown: false },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await getSalarySettings(makeGetRequest(URL), companyParams(COMPANY_ID))
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.salary_payslip_show_employer_cost).toBe(false)
+    expect(body.data.salary_payslip_show_breakdown).toBe(false)
+  })
+
+  it('writes only the switch the caller supplied and returns it', async () => {
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: MEMBER,
+      company_settings: [
+        { data: SAMPLE_ROW, error: null },
+        { data: { ...SAMPLE_ROW, salary_payslip_show_employer_cost: false }, error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateSalarySettings(
+      makePatchRequest(URL, { salary_payslip_show_employer_cost: false }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const payload = supabaseMock.settingsUpdates()[0] as Record<string, unknown>
+    expect(JSON.parse(JSON.stringify(payload))).toEqual({ salary_payslip_show_employer_cost: false })
+    const body = await res.json()
+    expect(body.data.salary_payslip_show_employer_cost).toBe(false)
+    expect(body.data.salary_payslip_show_breakdown).toBe(true)
+  })
+
+  it('previews a switch on dry run without writing', async () => {
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: MEMBER,
+      company_settings: { data: SAMPLE_ROW, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateSalarySettings(
+      makePatchRequest(`${URL}?dry_run=true`, { salary_payslip_show_breakdown: false }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.salary_payslip_show_breakdown).toBe(false)
+    expect(body.data.preview.salary_payslip_show_employer_cost).toBe(true)
     expect(supabaseMock.settingsUpdates()).toHaveLength(0)
   })
 })

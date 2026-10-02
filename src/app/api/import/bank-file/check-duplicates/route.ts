@@ -5,6 +5,9 @@ import { BankFileCheckDuplicatesSchema } from '@/lib/api/schemas'
 import { generateExternalId } from '@/lib/import/bank-file/parser'
 import { previewDuplicates } from '@/lib/transactions/dedup-preview'
 import type { ParsedBankTransaction } from '@/lib/import/bank-file/types'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * POST /api/import/bank-file/check-duplicates

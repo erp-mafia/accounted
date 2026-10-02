@@ -7,7 +7,7 @@ import useSWR from 'swr'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
-import { AI_CLIENTS, aiConnectAction, aiPrefilledChatLink, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, aiConnectAction, aiPrefilledChatLink, openAiConnector, pickConnectedAiClient, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -18,7 +18,7 @@ import { KindsIntro } from './KindsIntro'
 import type { ItemKind } from './hues'
 import { trackInstructions } from './track'
 import { ConnectHero } from './ConnectHero'
-import { fetchConnections, readAgents, readCatalog, readOptions, readUsage, simulatedClient, type SkillSummary } from './data'
+import { fetchConnections, readAgents, readCatalog, readOptions, readUsage, simulatedClient, simulatedConnection, type SkillSummary } from './data'
 import styles from './skills.module.css'
 
 
@@ -46,15 +46,15 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
     skill.tier === 'own' && !!skill.installations[0])
 
   // ── connection: asked on load and whenever the user comes back to the tab ──
-  const [connected, setConnected] = useState<AiClient[] | null>(null)
+  const [connection, setConnection] = useState<AiConnection | null>(null)
   const [pending, setPending] = useState<AiClient | null>(null)
   const [checkedOnce, setCheckedOnce] = useState(false)
   const pollerRef = useRef<AiStatusPoller | null>(null)
   useEffect(() => {
     const simulated = simulatedClient()
     const poller = createAiStatusPoller({
-      fetchStatus: simulated ? async () => [simulated] : fetchConnections,
-      onStatus: setConnected,
+      fetchStatus: simulated ? async () => simulatedConnection(simulated) : fetchConnections,
+      onStatus: setConnection,
       isHidden: () => document.visibilityState === 'hidden',
     })
     pollerRef.current = poller
@@ -69,11 +69,15 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
       pollerRef.current = null
     }
   }, [])
-  const isConnected = (connected?.length ?? 0) > 0
+  // Any live agent key opens the page, also one that names no client (an
+  // older key, Cursor): offering the connect again only fails in the client
+  // with "a connector with this URL already exists". Work is still handed to
+  // a verified client, or Claude by default.
+  const isConnected = connection?.connected ?? false
   // Once an AI is connected nothing is pending any more.
   const waitingFor = isConnected ? null : pending
-  const state: PageState = connected === null ? 'loading' : isConnected ? 'open' : waitingFor ? 'waiting' : 'locked'
-  const client = pickConnectedAiClient(connected ?? [], waitingFor ?? undefined) ?? waitingFor ?? 'claude'
+  const state: PageState = connection === null ? 'loading' : isConnected ? 'open' : waitingFor ? 'waiting' : 'locked'
+  const client = pickConnectedAiClient(connection?.clients ?? [], waitingFor ?? undefined) ?? waitingFor ?? 'claude'
   const agents = useSWR(['/api/agents', companyId, client], ([url, , c]) => readAgents(`${url}?client=${c}`))
 
   const companyIndustry = agents.data?.agents[0]?.company.find((c) => c.tier === 'vertical')?.id ?? null

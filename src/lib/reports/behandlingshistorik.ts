@@ -335,7 +335,7 @@ const SETTINGS_FIELDS: Record<string, string> = {
   auto_lock_period_days: 'Automatisk låsning (dagar)',
   defer_invoice_booking: 'Bokför kundfakturor vid betalning',
   ore_rounding: 'Öresavrundning',
-  rot_rut_enabled: 'ROT/RUT',
+  rot_rut_enabled: 'Påminnelse begäran ROT/RUT och grön teknik',
   oss_enabled: 'OSS',
   ioss_enabled: 'IOSS',
   employer_registered: 'Registrerad arbetsgivare',

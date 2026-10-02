@@ -1,3 +1,5 @@
+import { getRevenueAccount } from '@/lib/bookkeeping/invoice-accounts'
+import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
@@ -12,10 +14,17 @@ import {
   ownerSettlementAccount,
   parseEntityType,
   preparesArsredovisning,
+  requiresAuditorRegardlessOfSize,
+  booksCurrentTax,
   resolveCompanyEntityType,
   resultClosingAccounts,
   simplifiedYearEndRegelverk,
+  supportsAccountingFramework,
+  supportsCorporateTaxDispositions,
+  supportsMemberCapital,
+  usesInk2,
   usesPersonnummerAsOrgNumber,
+  templateAccountForForm,
 } from '@/lib/company/entity-type'
 
 function stubSupabase(companyRow: { entity_type: string } | null, error: { message: string } | null = null) {
@@ -27,8 +36,13 @@ function stubSupabase(companyRow: { entity_type: string } | null, error: { messa
 }
 
 describe('entity-type: parsing', () => {
-  it('lists the three supported forms', () => {
-    expect([...ENTITY_TYPES]).toEqual(['enskild_firma', 'aktiebolag', 'ideell_forening'])
+  it('lists the supported forms', () => {
+    expect([...ENTITY_TYPES]).toEqual([
+      'enskild_firma',
+      'aktiebolag',
+      'ideell_forening',
+      'ekonomisk_forening',
+    ])
   })
 
   it('narrows known values and rejects everything else', () => {
@@ -42,9 +56,19 @@ describe('entity-type: parsing', () => {
   })
 
   it('byEntityType refuses a corrupt value at runtime', () => {
-    expect(byEntityType('ideell_forening', { enskild_firma: 1, aktiebolag: 2, ideell_forening: 3 })).toBe(3)
+    expect(byEntityType('ideell_forening', {
+      enskild_firma: 1,
+      aktiebolag: 2,
+      ideell_forening: 3,
+      ekonomisk_forening: 4,
+    })).toBe(3)
     expect(() =>
-      byEntityType('stiftelse' as never, { enskild_firma: 1, aktiebolag: 2, ideell_forening: 3 }),
+      byEntityType('stiftelse' as never, {
+        enskild_firma: 1,
+        aktiebolag: 2,
+        ideell_forening: 3,
+        ekonomisk_forening: 4,
+      }),
     ).toThrow(UnknownEntityTypeError)
   })
 })
@@ -90,6 +114,11 @@ describe('entity-type: domain facts', () => {
       closingName: 'Årets resultat',
       priorYearCarry: '2068',
     })
+    expect(resultClosingAccounts('ekonomisk_forening')).toEqual({
+      closing: '2099',
+      closingName: 'Årets resultat',
+      priorYearCarry: '2098',
+    })
   })
 
   it('settles owner money on the form-specific account, 2890 for a förening', () => {
@@ -99,6 +128,8 @@ describe('entity-type: domain facts', () => {
     expect(ownerSettlementAccount('aktiebolag', 'contribution')).toBe('2893')
     expect(ownerSettlementAccount('ideell_forening', 'withdrawal')).toBe('2890')
     expect(ownerSettlementAccount('ideell_forening', 'contribution')).toBe('2890')
+    expect(ownerSettlementAccount('ekonomisk_forening', 'withdrawal')).toBe('2890')
+    expect(ownerSettlementAccount('ekonomisk_forening', 'contribution')).toBe('2890')
   })
 
   it('keeps the form-specific defaults', () => {
@@ -112,6 +143,50 @@ describe('entity-type: domain facts', () => {
     expect(defaultAccountingMethod('ideell_forening')).toBe('accrual')
     expect(simplifiedYearEndRegelverk('ideell_forening')).toBe('K1')
     expect(simplifiedYearEndRegelverk('aktiebolag')).toBe('K2')
+    expect(preparesArsredovisning('ekonomisk_forening')).toBe(true)
+    expect(fiscalYearLockedToCalendar('ekonomisk_forening')).toBe(false)
+    expect(usesPersonnummerAsOrgNumber('ekonomisk_forening')).toBe(false)
+    expect(defaultAccountingMethod('ekonomisk_forening')).toBe('accrual')
+    expect(simplifiedYearEndRegelverk('ekonomisk_forening')).toBe('K2')
+    expect(usesInk2('ekonomisk_forening')).toBe(true)
+    expect(supportsCorporateTaxDispositions('ekonomisk_forening')).toBe(true)
+    expect(requiresAuditorRegardlessOfSize('ekonomisk_forening')).toBe(true)
+    expect(supportsMemberCapital('ekonomisk_forening')).toBe(true)
+    expect(supportsAccountingFramework('ekonomisk_forening', 'K2')).toBe(true)
+    // K3 opens for the form with its own equity statement (phase 2).
+    expect(supportsAccountingFramework('ekonomisk_forening', 'K3')).toBe(false)
+    expect(requiresAuditorRegardlessOfSize('aktiebolag')).toBe(false)
+    expect(supportsMemberCapital('aktiebolag')).toBe(false)
+  })
+
+  it('gives an ekonomisk förening the AB override accounts, with owner accounts on 2890', () => {
+    expect(templateAccountForForm('ekonomisk_forening', '3100', '3004')).toBe('3004')
+    expect(templateAccountForForm('ekonomisk_forening', '6991', '7610')).toBe('7610')
+    expect(templateAccountForForm('ekonomisk_forening', '2013', '2893')).toBe('2890')
+    expect(templateAccountForForm('ekonomisk_forening', '5410', undefined)).toBe('5410')
+    // The three account resolvers must agree for the same posting.
+    expect(getRevenueAccount('exempt', 'ekonomisk_forening')).toBe('3004')
+    expect(getDefaultAccountForCategory('expense_education', 'ekonomisk_forening')).toBe('7610')
+    // The ideell förening keeps its base-account behaviour.
+    expect(templateAccountForForm('ideell_forening', '3100', '3004')).toBe('3100')
+  })
+
+  it('taxes an ekonomisk förening as a juridisk person, like an AB and unlike both other forms', () => {
+    // IL 65 kap. 10 § (bolagsskatt), IL 30 kap. 5 § (periodiseringsfond 25 %)
+    // and the INK2 return apply to the aktiebolag and the ekonomisk förening.
+    for (const form of ['aktiebolag', 'ekonomisk_forening'] as const) {
+      expect(usesInk2(form)).toBe(true)
+      expect(booksCurrentTax(form)).toBe(true)
+      expect(supportsCorporateTaxDispositions(form)).toBe(true)
+      expect(preparesArsredovisning(form)).toBe(true)
+    }
+    for (const form of ['enskild_firma', 'ideell_forening'] as const) {
+      expect(usesInk2(form)).toBe(false)
+      expect(booksCurrentTax(form)).toBe(false)
+      expect(supportsCorporateTaxDispositions(form)).toBe(false)
+      expect(supportsAccountingFramework(form, 'K2')).toBe(false)
+      expect(supportsAccountingFramework(form, 'K3')).toBe(false)
+    }
   })
 })
 
@@ -122,6 +197,7 @@ describe('entity-type: creation flag', () => {
 
   it('hides ideell_forening until the flag is on', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
+    vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', '')
     expect(isEntityTypeCreatable('ideell_forening')).toBe(false)
     expect(isEntityTypeCreatable('aktiebolag')).toBe(true)
     expect(creatableEntityTypes()).toEqual(['enskild_firma', 'aktiebolag'])
@@ -129,7 +205,19 @@ describe('entity-type: creation flag', () => {
 
   it('offers ideell_forening when the flag is on', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
+    vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', '')
     expect(isEntityTypeCreatable('ideell_forening')).toBe(true)
     expect(creatableEntityTypes()).toEqual(['enskild_firma', 'aktiebolag', 'ideell_forening'])
+  })
+
+  it('offers ekonomisk_forening only when its flag is on', () => {
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
+    vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', 'true')
+    expect(isEntityTypeCreatable('ekonomisk_forening')).toBe(true)
+    expect(creatableEntityTypes()).toEqual([
+      'enskild_firma',
+      'aktiebolag',
+      'ekonomisk_forening',
+    ])
   })
 })

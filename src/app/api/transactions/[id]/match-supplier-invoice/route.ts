@@ -14,6 +14,7 @@ import { MatchSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
+import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { SupplierInvoice, Transaction } from '@/types'
@@ -331,19 +332,20 @@ export const POST = withRouteContext(
       newState: { status: newStatus, paid_amount: newPaidAmount, remaining_amount: newRemaining },
     })
 
+    const settledInvoice = {
+      ...invoice,
+      status: newStatus,
+      remaining_amount: newRemaining,
+      paid_amount: newPaidAmount,
+      paid_at: paidAt,
+      payment_journal_entry_id: journalEntryId,
+      transaction_id: transactionId,
+    } as SupplierInvoice
     try {
       eventBus.emit({
         type: 'supplier_invoice.match_confirmed',
         payload: {
-          supplierInvoice: {
-            ...invoice,
-            status: newStatus,
-            remaining_amount: newRemaining,
-            paid_amount: newPaidAmount,
-            paid_at: paidAt,
-            payment_journal_entry_id: journalEntryId,
-            transaction_id: transactionId,
-          } as SupplierInvoice,
+          supplierInvoice: settledInvoice,
           transaction: {
             ...transaction,
             supplier_invoice_id,
@@ -358,6 +360,17 @@ export const POST = withRouteContext(
     } catch (err) {
       txLog.warn('supplier_invoice.match_confirmed event emission failed', err as Error)
     }
+    // A match that settles the invoice in full is its supplier_invoice.paid
+    // transition; a partial match is not. The CAS update above admits one
+    // winner, so this fires once. paymentAmount is the debt settled, in
+    // invoice currency, same as the payment row.
+    await emitSupplierInvoicePaidIfSettled({
+      newStatus,
+      supplierInvoice: settledInvoice,
+      paymentAmount: settledAmount,
+      userId: user.id,
+      companyId,
+    })
 
     return NextResponse.json({
       success: true,

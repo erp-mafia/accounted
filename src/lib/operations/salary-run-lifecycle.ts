@@ -65,6 +65,7 @@ export const salaryRunsSendPayslips = defineOperation({
       'Employees without an email address are skipped and counted in `skipped`, not an error: fix the address with PATCH /employees/{id} and send again.',
       'Refused with 403 from the sandbox company (SALARY_PAYSLIPS_SEND_SANDBOX) and without the email capability (SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED).',
       'Not idempotent towards the recipients: a replay with a new Idempotency-Key emails everyone again.',
+      'The first send (or the first employee-copy PDF, whichever comes first) fixes which payslip sections the employee copy of this run prints, from salary_payslip_show_employer_cost / salary_payslip_show_breakdown at that moment. Changing those settings afterwards never changes a payslip of this run that employees already have; re-sending keeps the fixed sections.',
     ],
     example: {
       response: {

@@ -27,6 +27,7 @@
  * never an unbook (the voucher is immutable per BFL).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { DeductionType } from '@/types'
 import {
   createRotRutPayoutEntry,
   createRotRutPayoutSetEntry,
@@ -68,7 +69,7 @@ export interface SettleRotRutPayoutParams {
 export interface SettledRotRutPayoutRequest {
   id: string
   name: string
-  deduction_type: 'rot' | 'rut'
+  deduction_type: DeductionType
   status: string
   requested_total: number | string
   decided_total: number | string | null
@@ -106,7 +107,7 @@ const SETTLED_REQUEST_COLUMNS =
 interface PayoutRequestRow {
   id: string
   name: string
-  deduction_type: 'rot' | 'rut'
+  deduction_type: DeductionType
   status: string
   requested_total: number | string
   decided_total: number | string | null

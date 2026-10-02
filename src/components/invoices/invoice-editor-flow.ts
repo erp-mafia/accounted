@@ -1,5 +1,6 @@
 import { addDays, differenceInCalendarDays, format, isValid, parseISO } from 'date-fns'
 import { foldText } from '@/lib/bookkeeping/account-search'
+import { gronTeknikWorkType } from '@/lib/invoices/rot-rut-rules'
 
 /**
  * Pure derivations behind the invoice editor's snabbflöde shell:
@@ -58,26 +59,29 @@ export interface NextStepInput {
   requiresPersonnummer: boolean
   personnummer: string
   /**
-   * A ROT line exists AND a deduction amount is claimed (fastighetsbeteckning
-   * is then required). Derive via deriveRequiresHousing so the gate provably
-   * matches the ROT/RUT claim card's mount condition.
+   * A ROT or grön teknik line exists AND a deduction amount is claimed
+   * (fastighetsbeteckning is then required). Derive via deriveRequiresHousing
+   * so the gate provably matches the claim card's mount condition.
    */
   requiresHousing: boolean
   housingDesignation: string
 }
 
 /**
- * The housing (fastighetsbeteckning) requirement behind NextStepInput. A ROT
- * line alone is not enough: the claim card only mounts while a deduction
- * amount is claimed (deductionTotal > 0), so a ROT-flagged line whose amount
- * is still zero (transient state while typing) must not produce a housing
- * step, or the next-step link would try to focus an unmounted field.
+ * The housing (fastighetsbeteckning) requirement behind NextStepInput. ROT
+ * and grön teknik both name the property (RUT does not). A flagged line
+ * alone is not enough: the claim card only mounts while a deduction amount
+ * is claimed (deductionTotal > 0), so a flagged line whose amount is still
+ * zero (transient state while typing) must not produce a housing step, or
+ * the next-step link would try to focus an unmounted field.
  */
 export function deriveRequiresHousing(input: {
   hasRotLine: boolean
+  /** A grön teknik line: requires the property exactly like ROT. */
+  hasGronTeknikLine?: boolean
   deductionTotal: number
 }): boolean {
-  return input.hasRotLine && input.deductionTotal > 0
+  return (input.hasRotLine || input.hasGronTeknikLine === true) && input.deductionTotal > 0
 }
 
 /**
@@ -85,6 +89,26 @@ export function deriveRequiresHousing(input: {
  * customer -> dates -> first incomplete line -> payment link -> ROT/RUT claim
  * fields -> self-billed extras -> ready.
  */
+/**
+ * The installation type a row starts with when it is flagged grön teknik: the
+ * one the invoice's other grön teknik rows already carry (the first valid
+ * one), so an installer picks "solceller" once per invoice instead of on
+ * every labour and material row. Null when no other row has one: the user
+ * chooses.
+ */
+export function defaultGronTeknikWorkType(
+  items: ReadonlyArray<{ deduction_type?: string | null; work_type?: string | null } | undefined>,
+  index: number,
+): string | null {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (i === index || item?.deduction_type !== 'gron_teknik') continue
+    const type = gronTeknikWorkType(item.work_type)
+    if (type) return type.code
+  }
+  return null
+}
+
 export function deriveNextStep(input: NextStepInput): NextStep {
   if (!input.customerSelected) return { kind: 'customer' }
   if (!input.invoiceDate) return { kind: 'invoice_date' }
@@ -125,8 +149,6 @@ export type ForvalChip =
   | { kind: 'valid_until'; date: string }
   | { kind: 'received'; date: string }
   | { kind: 'delivery'; date: string }
-  | { kind: 'your_reference'; reference: string }
-  | { kind: 'invoice_marking'; marking: string }
   | { kind: 'payment_link'; mode: 'auto' | 'manual' }
   | { kind: 'ore_off' }
   | { kind: 'dims'; dims: string }
@@ -141,8 +163,6 @@ export interface ForvalChipsInput {
   validUntil?: string
   receivedDate: string
   deliveryDate: string
-  yourReference: string
-  invoiceMarking: string
   paymentLink: 'auto' | 'manual' | null
   oreRounding: boolean
   /** Compact display of the invoice-level default dims, or null when none. */
@@ -155,6 +175,10 @@ export interface ForvalChipsInput {
  * deviating value MUST surface here: in edit/copy mode the draft may carry a
  * proforma type, an EUR currency, a payment link or dimension defaults that
  * would otherwise round-trip invisibly through PATCH.
+ *
+ * The references (Vår referens, Er referens, Fakturamärkning) are not
+ * collapsed settings: they are per-invoice data rendered in the visible head
+ * of the editor next to the customer (crm#136, crm#187), so they need no chip.
  */
 export function deriveForvalChips(input: ForvalChipsInput): ForvalChip[] {
   const chips: ForvalChip[] = []
@@ -183,12 +207,6 @@ export function deriveForvalChips(input: ForvalChipsInput): ForvalChip[] {
   }
   if (!input.isSelfBilled && input.deliveryDate) {
     chips.push({ kind: 'delivery', date: input.deliveryDate })
-  }
-  if (!input.isSelfBilled && input.yourReference.trim()) {
-    chips.push({ kind: 'your_reference', reference: input.yourReference.trim() })
-  }
-  if (!input.isSelfBilled && input.invoiceMarking.trim()) {
-    chips.push({ kind: 'invoice_marking', marking: input.invoiceMarking.trim() })
   }
   if (!input.isSelfBilled && input.paymentLink) {
     chips.push({ kind: 'payment_link', mode: input.paymentLink })

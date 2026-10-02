@@ -29,6 +29,7 @@ export const SE_IDEELL_FORENING: LegalFormProfile = {
     retained: '2067',
     hasOwners: false,
     settlement: { withdrawal: '2890', contribution: '2890' },
+    memberCapital: false,
   },
   filings: {
     incomeReturn: null,
@@ -36,6 +37,8 @@ export const SE_IDEELL_FORENING: LegalFormProfile = {
     corporateTaxDispositions: false,
     arsredovisning: false,
     frameworks: ['K1'],
+    ixbrl: false,
+    auditorAlwaysRequired: false,
   },
   glossary: { entity: 'föreningen', owner: 'Medlem', meeting: 'årsmöte' },
 }

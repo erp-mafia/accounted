@@ -148,6 +148,7 @@ function toUpdatePayload(c: CompanySettingsChanges) {
     invoice_show_bankgiro: c.invoice_show_bankgiro,
     invoice_show_plusgiro: c.invoice_show_plusgiro,
     invoice_show_swish: c.invoice_show_swish,
+    invoice_show_payment_qr: c.invoice_show_payment_qr,
     invoice_show_logo: c.invoice_show_logo,
     invoice_show_company_name: c.invoice_show_company_name,
     invoice_company_name_position: c.invoice_company_name_position,
@@ -183,6 +184,8 @@ function toUpdatePayload(c: CompanySettingsChanges) {
     salary_pay_day: c.salary_pay_day,
     salary_default_bank: c.salary_default_bank,
     salary_net_rounding: c.salary_net_rounding,
+    salary_payslip_show_employer_cost: c.salary_payslip_show_employer_cost,
+    salary_payslip_show_breakdown: c.salary_payslip_show_breakdown,
     salary_calculation_policy: c.salary_calculation_policy,
     salary_deviation_period: c.salary_deviation_period,
     salary_vacation_year_basis: c.salary_vacation_year_basis,
@@ -203,6 +206,32 @@ function refuse(code: string, messageSv?: string, details?: Record<string, unkno
   }
 }
 
+/** Why the semesterår basis cannot change right now; the one place that rule lives. */
+export type VacationBasisChangeCheck =
+  | { changeable: true }
+  | { changeable: false; code: 'SETTINGS_VACATION_BASIS_OPEN_BALANCES' }
+  | { changeable: false; code: 'UNKNOWN_ERROR'; error: unknown }
+
+/**
+ * Whether the vacation-year basis (salary_vacation_year_basis) may move.
+ * Changing the boundary while OPEN vacation-ledger rows exist would orphan
+ * them (rows are keyed by vacation_year_start), so it is refused until the
+ * current year is closed. A failed check fails closed. The save below asks
+ * this; the salary settings page asks it too, to lock the choice up front
+ * with the same reason instead of letting a save fail.
+ */
+export async function checkVacationBasisChange(
+  ctx: Pick<OperationContext, 'supabase' | 'companyId'>,
+): Promise<VacationBasisChangeCheck> {
+  const { count: openRows, error } = await ctx.supabase
+    .from('employee_vacation_balances')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', ctx.companyId)
+    .eq('status', 'open')
+  if (error) return { changeable: false, code: 'UNKNOWN_ERROR', error }
+  if ((openRows ?? 0) > 0) return { changeable: false, code: 'SETTINGS_VACATION_BASIS_OPEN_BALANCES' }
+  return { changeable: true }
+}
 
 export async function updateCompanySettings(
   ctx: OperationContext,
@@ -284,22 +313,19 @@ export async function updateCompanySettings(
     }
   }
 
-  // Vacation year basis (payroll gap-closure 3.1): changing the boundary
-  // while OPEN vacation-ledger rows exist would orphan them (rows are keyed
-  // by vacation_year_start). Close the current year first.
+  // Vacation year basis (payroll gap-closure 3.1): not while open
+  // vacation-ledger rows exist (checkVacationBasisChange).
   if (
     body.salary_vacation_year_basis !== undefined &&
     body.salary_vacation_year_basis !== oldSettings?.salary_vacation_year_basis
   ) {
-    const { count: openRows, error: openRowsError } = await supabase
-      .from('employee_vacation_balances')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .eq('status', 'open')
-    // Fail closed: a failed check must not let the basis change through
-    // and orphan open vacation-ledger rows.
-    if (openRowsError) return { ok: false, code: 'UNKNOWN_ERROR', error: openRowsError }
-    if ((openRows ?? 0) > 0) return refuse('SETTINGS_VACATION_BASIS_OPEN_BALANCES')
+    const basisCheck = await checkVacationBasisChange({ supabase, companyId })
+    if (!basisCheck.changeable) {
+      // Fail closed: a failed check must not let the basis change through
+      // and orphan open vacation-ledger rows.
+      if (basisCheck.code === 'UNKNOWN_ERROR') return { ok: false, code: 'UNKNOWN_ERROR', error: basisCheck.error }
+      return refuse(basisCheck.code)
+    }
   }
 
   // Turning VAT registration off retires the VAT-dependent flags, and
@@ -562,7 +588,7 @@ export async function getCompanySettings(ctx: OperationContext): Promise<Operati
   const { data, error } = await ctx.supabase
     .from('company_settings')
     .select(
-      'entity_type, company_name, org_number, address_line1, address_line2, postal_code, city, country, phone, email, website, default_our_reference, tax_contact_name, tax_contact_phone, tax_contact_email, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, invoice_payment_accounts, invoice_prefix, next_invoice_number, next_arrival_number, invoice_default_days, invoice_default_notes, ore_rounding, invoice_show_ocr, invoice_show_bankgiro, invoice_show_plusgiro, invoice_show_swish, invoice_show_logo, invoice_show_company_name, invoice_company_name_position, invoice_late_fee_text, invoice_credit_terms_text, invoice_payment_links_enabled, invoice_email_texts, invoice_email_cc_addresses, invoice_email_bcc_addresses, invoice_email_reply_to, invoice_primary_color, invoice_accent_color, invoice_font_family, invoice_header_text, invoice_footer_text, send_invoice_reminders, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, reminder_text_overrides, reminder_fee_enabled, reminder_fee_amount, reminder_interest_rate_override, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, sector_slug, dimensions_enabled, mileage_enabled, sales_orders_enabled, quotes_enabled, proforma_enabled, recurring_invoices_enabled, self_billing_enabled, salary_vacation_year_basis, f_skatt, vat_registered, vat_number, moms_period, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled, fiscal_year_start_month, preliminary_tax_monthly, pays_salaries, employer_registered, employer_seasonal, accounting_method, defer_invoice_booking, aktiekapital, antal_aktier, bookkeeping_locked_through, auto_lock_period_days, onboarding_complete',
+      'entity_type, company_name, org_number, address_line1, address_line2, postal_code, city, country, phone, email, website, default_our_reference, tax_contact_name, tax_contact_phone, tax_contact_email, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, invoice_payment_accounts, invoice_prefix, next_invoice_number, next_arrival_number, invoice_default_days, invoice_default_notes, ore_rounding, invoice_show_ocr, invoice_show_bankgiro, invoice_show_plusgiro, invoice_show_swish, invoice_show_payment_qr, invoice_show_logo, invoice_show_company_name, invoice_company_name_position, invoice_late_fee_text, invoice_credit_terms_text, invoice_payment_links_enabled, invoice_email_texts, invoice_email_cc_addresses, invoice_email_bcc_addresses, invoice_email_reply_to, invoice_primary_color, invoice_accent_color, invoice_font_family, invoice_header_text, invoice_footer_text, send_invoice_reminders, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, reminder_text_overrides, reminder_fee_enabled, reminder_fee_amount, reminder_interest_rate_override, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, sector_slug, dimensions_enabled, mileage_enabled, sales_orders_enabled, quotes_enabled, proforma_enabled, recurring_invoices_enabled, self_billing_enabled, salary_vacation_year_basis, f_skatt, vat_registered, vat_number, moms_period, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled, fiscal_year_start_month, preliminary_tax_monthly, pays_salaries, employer_registered, employer_seasonal, accounting_method, defer_invoice_booking, aktiekapital, antal_aktier, bookkeeping_locked_through, auto_lock_period_days, onboarding_complete',
     )
     .eq('company_id', ctx.companyId)
     .maybeSingle()

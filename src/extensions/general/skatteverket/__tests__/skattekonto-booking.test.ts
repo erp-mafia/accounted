@@ -90,6 +90,35 @@ function enqueueRules(
   if (!primarySekRow) enqueue({ data: null })
 }
 
+const AB_ONLY_RULE = {
+  id: 'ab-1', priority: 15, pattern: 'slutlig skatt',
+  amount_min: null, amount_max: null, company_type: 'aktiebolag',
+  counter_account: '2510', counter_account_ef: null,
+  label: 'Slutlig skatt (bolagsskatt)', active: true, requires_employer: false,
+}
+
+describe('guessCounterAccount: rules scoped to a legal form', () => {
+  it('applies an aktiebolag rule to an ekonomisk förening (same bolagsskatt on 2510, IL 65 kap. 10 §)', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueueRules(enqueue, [AB_ONLY_RULE, ...SEED_RULES])
+    const guess = await guessCounterAccount(
+      supabase as unknown as SupabaseClient, 'company-1', 'Slutlig skatt 2025', 'ekonomisk_forening',
+    )
+    expect(guess?.account).toBe('2510')
+  })
+
+  it('keeps an aktiebolag rule away from forms that do not book their own income tax', async () => {
+    for (const entityType of ['enskild_firma', 'ideell_forening'] as const) {
+      const { supabase, enqueue } = makeSupabase()
+      enqueueRules(enqueue, [AB_ONLY_RULE, ...SEED_RULES])
+      const guess = await guessCounterAccount(
+        supabase as unknown as SupabaseClient, 'company-1', 'Slutlig skatt 2025', entityType,
+      )
+      expect(guess?.account, entityType).not.toBe('2510')
+    }
+  })
+})
+
 describe('guessCounterAccount', () => {
   it('routes "Inbetalning bokförd" via __PRIMARY_SEK__ sentinel to 1930 fallback', async () => {
     const { supabase, enqueue } = makeSupabase()

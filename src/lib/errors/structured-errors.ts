@@ -152,6 +152,29 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
       description: 'Use a live key for this endpoint, or pick an endpoint that supports dry-run.',
     },
   },
+  // Webhook endpoint ownership handshake (lib/webhooks/verification.ts).
+  WEBHOOK_NOT_VERIFIED: {
+    httpStatus: 409,
+    message_sv:
+      'Webhookens mottagaradress är inte verifierad. Inga händelser skickas dit förrän den har klarat verifieringen.',
+    message_en:
+      'The webhook endpoint has not passed the ownership verification handshake, so no events are sent to it.',
+    remediation: {
+      description:
+        'Make the endpoint answer the webhook.verification request with 2xx and {"challenge": "<the value sent>"}, then call POST /api/v1/companies/{companyId}/webhooks/{id}/verify.',
+    },
+  },
+  WEBHOOK_VERIFICATION_FAILED: {
+    httpStatus: 422,
+    message_sv:
+      'Webhookens mottagaradress klarade inte verifieringen. Den måste svara med samma challenge-värde som skickades.',
+    message_en:
+      'The webhook endpoint did not pass the verification handshake: it must answer with 2xx and {"challenge": "<the value sent>"} within 10 seconds.',
+    remediation: {
+      description:
+        'Read details.reason, fix the receiver, then call POST /api/v1/companies/{companyId}/webhooks/{id}/verify again.',
+    },
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1129,10 +1152,12 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ett balanskonto (klass 1-2) kan bara användas på rader utan moms. Använd ett intäktskonto (3xxx) för momspliktiga rader.',
     message_en: 'A balance-sheet account (class 1-2) can only be used on zero-VAT lines. Use a revenue account (3xxx) for VAT-bearing lines.',
   },
+  // Code name kept for wire stability; it covers every skattereduktion kind
+  // (ROT, RUT, grön teknik), so the text names none of them.
   INVOICE_CREATE_ROT_RUT_VALIDATION: {
     httpStatus: 400,
-    message_sv: 'ROT/RUT-avdraget kunde inte valideras. Kontrollera personnummer och fastighetsbeteckning.',
-    message_en: 'ROT/RUT deduction failed validation. Check personnummer and housing designation.',
+    message_sv: 'Skattereduktionen kunde inte valideras. Kontrollera personnummer, fastighetsbeteckning och raderna med avdrag.',
+    message_en: 'The tax reduction failed validation. Check the personnummer, the property designation and the deduction lines.',
   },
   INVOICE_CREATE_ACCRUAL_INVALID: {
     httpStatus: 400,
@@ -1161,8 +1186,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_CREATE_ROT_RUT_PERSONNUMMER_INVALID: {
     httpStatus: 400,
-    message_sv: 'Personnumret för ROT/RUT-avdraget är ogiltigt.',
-    message_en: 'The personnummer provided for the ROT/RUT deduction is invalid.',
+    message_sv: 'Personnumret för skattereduktionen är ogiltigt.',
+    message_en: 'The personnummer provided for the tax reduction is invalid.',
   },
   // Rot/rut begäran om utbetalning (Skatteverkets husavdragstjänst)
   ROT_RUT_REQUEST_NOT_FOUND: {
@@ -1656,6 +1681,19 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en: 'Customer has no email address.',
     remediation: { description: 'Add an email address on the customer record before sending.' },
   },
+  // customer_id is null, usually because the customer was deleted while the
+  // draft existed (crm#263). Without a buyer there is no invoice to issue or
+  // render (ML 17 kap 24 §).
+  INVOICE_CUSTOMER_MISSING: {
+    httpStatus: 409,
+    message_sv: 'Fakturan saknar kund. Välj en kund på utkastet under Redigera, eller ta bort utkastet.',
+    message_en: 'The invoice has no customer. Choose a customer for the draft under Edit, or delete the draft.',
+    remediation: {
+      description:
+        'The invoice has no customer (customer_id is null, usually because the customer was deleted). Set customer_id on the draft (gnubok_update_invoice, or PATCH the invoice) or delete the draft (gnubok_delete_draft_invoice). An invoice is never issued or rendered without a buyer.',
+      tool: 'gnubok_update_invoice',
+    },
+  },
   INVOICE_SEND_TOO_MANY_RECIPIENTS: {
     httpStatus: 400,
     message_sv: 'Ett fakturautskick får ha högst 20 mottagare totalt.',
@@ -2133,8 +2171,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   SALES_ORDER_SOURCE_UNSUPPORTED_LINES: {
     httpStatus: 400,
-    message_sv: 'Underlaget innehåller rader som inte kan föras över till en kundorder (ROT/RUT-avdrag, periodisering eller negativt antal). Skapa kundordern manuellt.',
-    message_en: 'The source document has lines that cannot be carried into a sales order (ROT/RUT deduction, accrual period or negative quantity). Create the sales order manually.',
+    message_sv: 'Underlaget innehåller rader som inte kan föras över till en kundorder (skattereduktion som ROT, RUT eller grön teknik, periodisering eller negativt antal). Skapa kundordern manuellt.',
+    message_en: 'The source document has lines that cannot be carried into a sales order (a tax reduction such as ROT, RUT or green technology, an accrual period or a negative quantity). Create the sales order manually.',
   },
   SALES_ORDER_CUSTOMER_VAT_CHANGED: {
     httpStatus: 409,
@@ -2304,8 +2342,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   // default, requested from settings, enabled with a sending cap.
   PEPPOL_ACCESS_REQUIRED: {
     httpStatus: 403,
-    message_sv: 'Peppol är inte aktiverat för det här bolaget. Begär åtkomst under Inställningar > Fakturering > E-faktura via Peppol, så aktiverar vi det.',
-    message_en: 'Peppol is not enabled for this company. Request access under Settings > Invoicing > E-invoicing via Peppol and we will enable it.',
+    message_sv: 'Peppol är inte aktiverat för det här bolaget. Begär åtkomst under Inställningar > Kopplingar > E-faktura via Peppol, så aktiverar vi det.',
+    message_en: 'Peppol is not enabled for this company. Request access under Settings > Connections > E-invoicing via Peppol and we will enable it.',
   },
   PEPPOL_SEND_LIMIT_REACHED: {
     httpStatus: 409,
@@ -2352,8 +2390,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   // behind PEPPOL_SEND_PRECONDITION_FAILED's prefix.
   CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED: {
     httpStatus: 422,
-    message_sv: 'Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Fakturering > E-faktura via Peppol, eller kontakta support.',
-    message_en: 'The company\'s Peppol id is not registered with the access point. Switch on receiving under Settings > Invoicing > E-invoicing via Peppol, or contact support.',
+    message_sv: 'Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Kopplingar > E-faktura via Peppol, eller kontakta support.',
+    message_en: 'The company\'s Peppol id is not registered with the access point. Switch on receiving under Settings > Connections > E-invoicing via Peppol, or contact support.',
   },
   CONNECTOR_SCOPE_MISSING: {
     httpStatus: 403,
@@ -3920,6 +3958,41 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_en:
       'The document is linked to a journal entry and is accounting records under BFL 7 kap 2 §: it must be kept for 7 years and cannot be deleted. Upload a new version instead.',
   },
+  // The other records that hold a document (lib/documents/deletion.ts); the
+  // Swedish texts are DOCUMENT_DELETE_REFUSALS' there, word for word.
+  DOC_DELETE_SUPPLIER_INVOICE_UNDERLAG: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget hör till en registrerad leverantörsfaktura och utgör räkenskapsinformation enligt Bokföringslagen (5 kap 6-7 §§ och 7 kap). Det ska bevaras i minst 7 år och får inte raderas så länge leverantörsfakturan finns kvar.',
+    message_en:
+      'The document is the underlag of a registered supplier invoice and is accounting records under BFL (5 kap 6-7 §§, 7 kap): it must be kept for 7 years and cannot be deleted while the supplier invoice exists.',
+    remediation: {
+      description:
+        'A supplier invoice (supplier_invoices.document_id) holds this document, and it stays as long as the supplier invoice does. A supplier invoice registered by mistake and not yet booked or paid can be deleted first (DELETE /api/v1/companies/{companyId}/supplier-invoices/{id}); a booked one is credited instead, and its underlag is kept.',
+    },
+  },
+  DOC_DELETE_EXPENSE_CLAIM_UNDERLAG: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget hör till ett registrerat utlägg och utgör räkenskapsinformation enligt Bokföringslagen (5 kap 6-7 §§ och 7 kap). Det ska bevaras i minst 7 år och får inte raderas så länge utlägget finns kvar.',
+    message_en:
+      'The document is the underlag of a registered expense claim and is accounting records under BFL (5 kap 6-7 §§, 7 kap): it must be kept for 7 years and cannot be deleted while the expense claim exists.',
+    remediation: {
+      description:
+        'An expense claim (expense_claims.document_id) holds this document, and it stays as long as the expense claim does.',
+    },
+  },
+  DOC_DELETE_BOOKED_INBOX_ITEM: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget hör till en mottagen faktura som redan har bokförts eller blivit en leverantörsfaktura. Det utgör räkenskapsinformation enligt Bokföringslagen 7 kap och ska bevaras i minst 7 år i det skick det togs emot, så det får inte raderas.',
+    message_en:
+      'The document belongs to a received invoice that has already been booked or turned into a supplier invoice. It is accounting records under BFL 7 kap and must be kept for 7 years in the form it was received, so it cannot be deleted.',
+    remediation: {
+      description:
+        'An inbox item that created a journal entry or a supplier invoice (invoice_inbox_items.created_journal_entry_id or created_supplier_invoice_id) holds this document as its file or as the received Peppol XML (channel_context.peppol_xml_document_id). It is kept; the files of an inbox item that was never booked can still be discarded.',
+    },
+  },
   DOC_ATTACH_REPLACES_POSTED: {
     httpStatus: 409,
     message_sv: 'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
@@ -4078,6 +4151,48 @@ const CUSTOMER: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Kunden har fakturor och kan inte tas bort.',
     message_en: 'Customer cannot be deleted while invoices reference it.',
+  },
+  // A hard delete refused because rows still point at the customer and the
+  // database would silently null them (ON DELETE SET NULL), crm#263.
+  // lib/customers/delete-guard.ts picks the code; details.dependents has
+  // every count.
+  CUSTOMER_HAS_ISSUED_INVOICES: {
+    httpStatus: 409,
+    message_sv:
+      'Kunden kan inte tas bort eftersom den finns på fakturor som ska sparas i sju år, även makulerade. Fakturorna behöver kundens namn och adress.',
+    message_en:
+      "The customer cannot be deleted because it is on invoices that must be kept for seven years, cancelled ones included. The invoices need the customer's name and address.",
+    remediation: {
+      description:
+        'An invoice row stores no copy of the buyer, so a customer on an issued or numbered invoice (cancelled included) is kept for the retention period (ML 17 kap 24 §, BFL 7 kap 2 §). To take it out of the roster, archive it instead: DELETE /api/v1/companies/{companyId}/customers/{id} sets archived_at once no invoice is open.',
+    },
+  },
+  CUSTOMER_HAS_DRAFT_INVOICES: {
+    httpStatus: 409,
+    message_sv: 'Kunden har fakturautkast. Ta bort utkasten först, sedan kan kunden tas bort.',
+    message_en: 'The customer has draft invoices. Delete the drafts first, then delete the customer.',
+    remediation: {
+      description:
+        'Unnumbered drafts point at this customer and would lose it. Delete them first (gnubok_delete_draft_invoice, or DELETE /api/v1/companies/{companyId}/invoices/{id}), then retry. details.dependents.draft_invoices says how many.',
+      tool: 'gnubok_delete_draft_invoice',
+    },
+  },
+  CUSTOMER_HAS_SALES_ORDERS: {
+    httpStatus: 409,
+    message_sv: 'Kunden har kundorder. Ta bort dem först, sedan kan kunden tas bort.',
+    message_en: 'The customer has sales orders. Delete them first, then delete the customer.',
+    remediation: {
+      description:
+        'Sales orders point at this customer and would lose it. Delete them first (a confirmed order is cancelled before it can be deleted), then retry.',
+    },
+  },
+  CUSTOMER_HAS_RECURRING_INVOICES: {
+    httpStatus: 409,
+    message_sv: 'Kunden har en återkommande faktura. Ta bort den först, sedan kan kunden tas bort.',
+    message_en: 'The customer has a recurring invoice. Delete it first, then delete the customer.',
+    remediation: {
+      description: 'A recurring invoice schedule points at this customer. Delete the schedule first, then retry.',
+    },
   },
   CUSTOMER_NO_PERSONAL_NUMBER: {
     httpStatus: 404,
@@ -4981,6 +5096,17 @@ const SALARY: Record<string, StructuredErrorEntry> = {
       description:
         'A generated payment file is kept for seven years, so the run it belongs to stays. Edit the draft run instead (gnubok_set_run_salary, gnubok_update_salary_run), or leave it unbooked.',
       tool: 'gnubok_update_salary_run',
+    },
+  },
+  DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget är kopplat till en banktransaktion och kan inte tas bort. Koppla bort det från transaktionen först.',
+    message_en:
+      'The document is attached to a bank transaction and cannot be deleted. Detach it from the transaction first.',
+    remediation: {
+      description:
+        'The document is the underlag of a bank transaction (transactions.document_id). Detach it from the transaction first (POST /api/v1/companies/{companyId}/transactions/{id}/detach-document), then delete it. A document linked to a verifikat is never deleted.',
     },
   },
   RECORD_STILL_REFERENCED: {

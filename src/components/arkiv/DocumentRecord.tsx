@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,6 +15,8 @@ import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import { primaryFields, schemaForType } from '@/lib/documents/extract/schemas'
 import { formatCurrency, formatDateLong } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { DefList, DefRow, Section, SourceLink, inlineHref } from './DefList'
 import { DocumentDecision } from './DocumentDecision'
@@ -29,6 +32,7 @@ import { useFieldLabel } from './useFieldLabel'
  */
 export function DocumentRecord({ documentId, initialPage = null }: { documentId: string; initialPage?: number | null }) {
   const t = useTranslations('arkiv')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const fieldLabel = useFieldLabel()
   const [view, setView] = useState<DocumentRecordView | null>(null)
@@ -40,6 +44,8 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
   // a document held at the door gets its one question here too.
   const [deciding, setDeciding] = useState<'held' | 'type' | null>(null)
   const { toast } = useToast()
+  const router = useRouter()
+  const { dialogProps: deleteDialogProps, confirm: confirmDelete } = useDestructiveConfirm()
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/arkiv/documents/${documentId}`)
@@ -88,6 +94,34 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
     }
   }, [load])
 
+  // Offered only where the server would take it (view.deletable, canDeleteDocument): a document tied to a verifikat
+  // is räkenskapsinformation and stays. The server still has the last word, so a refusal shows its own message.
+  // An agreement read from the document goes with it (agreements.source_document_id cascades), so the confirm says so.
+  const handleDelete = async (fileName: string, agreementTitle: string | null) => {
+    const ok = await confirmDelete(
+      {
+        title: t('record_delete_title', { name: fileName }),
+        description: agreementTitle
+          ? `${t('record_delete_description')} ${t('record_delete_agreement', { title: agreementTitle })}`
+          : t('record_delete_description'),
+        confirmLabel: t('record_delete_confirm'),
+        cancelLabel: tCommon('cancel'),
+      },
+      async () => {
+        const res = await fetch(`/api/documents/${documentId}`, { method: 'DELETE' }).catch(() => null)
+        if (!res?.ok) {
+          const body = res ? await res.json().catch(() => null) : null
+          toast({ title: t('record_delete_failed'), description: body ? getErrorMessage(body, { locale: locale as ErrorLocale }) : undefined, variant: 'destructive' })
+          throw new Error(String(res?.status ?? 'network'))
+        }
+      },
+    )
+    if (!ok) return
+    toast({ title: t('record_deleted') })
+    router.push('/arkiv')
+    router.refresh()
+  }
+
   if (failed) return <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>
   if (!view) return <Skeleton className="h-40 w-full" />
 
@@ -127,19 +161,28 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
         title={view.title}
         description={meta}
         action={
-          // One action: the viewer below has its own "open in a new tab" link, so the header asks the document's one open question.
-          view.admission_state === 'held' ? (
-            <Button size="sm" onClick={() => setDeciding('held')}>
-              {t('graph_waiting_held')}
-            </Button>
-          ) : (
-            <Button size="sm" variant="outline" onClick={() => setDeciding('type')}>
-              {/* A booked document is not a question: the verifikat already says what it is. */}
-              {(view.doc_type && view.doc_type !== 'other') || view.journal_entry ? t('record_change_type') : t('linked_say_what')}
-            </Button>
-          )
+          // The viewer below has its own "open in a new tab" link, so the header asks the document's one open question,
+          // with a quiet delete beside it for a document nothing is booked on (crm#230).
+          <div className="flex items-center gap-2">
+            {view.deletable ? (
+              <Button size="sm" variant="ghost" onClick={() => void handleDelete(view.file_name, view.agreement?.title ?? null)}>
+                {t('record_delete')}
+              </Button>
+            ) : null}
+            {view.admission_state === 'held' ? (
+              <Button size="sm" onClick={() => setDeciding('held')}>
+                {t('graph_waiting_held')}
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" onClick={() => setDeciding('type')}>
+                {/* A booked document is not a question: the verifikat already says what it is. */}
+                {(view.doc_type && view.doc_type !== 'other') || view.journal_entry ? t('record_change_type') : t('linked_say_what')}
+              </Button>
+            )}
+          </div>
         }
       />
+      <DestructiveConfirmDialog {...deleteDialogProps} />
       <DocumentDecision
         doc={
           deciding

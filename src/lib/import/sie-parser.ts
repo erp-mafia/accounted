@@ -11,12 +11,19 @@
  */
 
 import { monthsBetween } from '@/lib/bookkeeping/validate-period-duration'
+import { roundOre } from '@/lib/money'
+import {
+  describeObjectBalancePlan,
+  planObjectBalances,
+  SIE_DEFAULT_ACCUMULATING_DIMENSIONS,
+} from './sie-object-balances'
 import type {
   SIEType,
   SIEEncoding,
   SIEHeader,
   SIEAccount,
   SIEBalance,
+  SIEObjectBalance,
   SIEVoucher,
   SIETransactionLine,
   SIEDimension,
@@ -543,7 +550,8 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   const vouchers: SIEVoucher[] = []
   const dimensions: SIEDimension[] = []
   const dimensionValues: SIEDimensionValue[] = []
-  let objectBalanceCount = 0
+  const objectOpeningBalances: SIEObjectBalance[] = []
+  const objectClosingBalances: SIEObjectBalance[] = []
 
   // Track current voucher being parsed (inside #VER { ... })
   let currentVoucher: SIEVoucher | null = null
@@ -796,6 +804,40 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           break
         }
 
+        case 'OIB':
+        case 'OUB': {
+          // #OIB / #OUB yearIndex accountNumber {dimNo "code"} amount [quantity]
+          // Opening/closing balance per object (SIE type 3, optional in 4E).
+          // Parsed so the import can split the IB per project (issue #3313);
+          // which dimensions carry into IB is decided there, not here.
+          const yearIndex = parseInt(parseStringField(fields[1]), 10)
+          const account = parseStringField(fields[2])
+          const objectListRaw = fields[3]
+          if (!Number.isInteger(yearIndex) || !account || !objectListRaw?.startsWith('{')) {
+            addIssue(issues, 'warning', lineNum, `Ogiltig objektbalansrad (#${tag}): raden hoppas över`, tag)
+            break
+          }
+          const amount = parseAmountField(fields[4], tag, issues, lineNum, account, yearIndex)
+          if (amount === null) break
+          const objects = parseObjectList(objectListRaw, issues, lineNum)
+          const pairs = objects ? Object.entries(objects) : []
+          if (pairs.length !== 1) {
+            addIssue(
+              issues,
+              'warning',
+              lineNum,
+              `#${tag} ${account} ska ange exakt ett objekt ({dimension "kod"}): raden hoppas över`,
+              tag
+            )
+            break
+          }
+          const [dimNo, code] = pairs[0]
+          const row: SIEObjectBalance = { yearIndex, account, dimNo, code, amount }
+          if (fields[5]) row.quantity = parseNumberField(fields[5])
+          ;(tag === 'OIB' ? objectOpeningBalances : objectClosingBalances).push(row)
+          break
+        }
+
         case 'VER': {
           // #VER series number date "description" [regdate] [signature]
           // Some programs quote all fields, so strip quotes from number/date too
@@ -925,14 +967,8 @@ export function parseSIEFile(content: string): ParsedSIEFile {
         }
 
         default:
-          // Unknown tag - add info issue for notable ones. OIB/OUB (per-object
-          // opening/closing balances) are counted and surfaced as ONE info
-          // issue below: dimension reporting is P&L-only in v1, so
-          // object-level balance records have no consumer yet, but dropping
-          // them must never be silent (#866 review).
-          if (tag === 'OIB' || tag === 'OUB') {
-            objectBalanceCount++
-          } else if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'PBUDGET', 'PSALDO'].includes(tag)) {
+          // Unknown tag - add info issue for notable ones.
+          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'PBUDGET', 'PSALDO'].includes(tag)) {
             addIssue(issues, 'info', lineNum, `Okänd tagg: #${tag}, ignoreras`, tag)
           }
       }
@@ -951,6 +987,8 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   const definedAccountNumbers = new Set(accounts.map((a) => a.number))
   const referencedAccounts = new Set<string>()
 
+  // Object balances (#OIB/#OUB) add no accounts: they only split the IB of
+  // accounts the file declares or balances, never demand a mapping of their own.
   for (const balance of [...openingBalances, ...closingBalances, ...resultBalances]) {
     if (balance.account && !definedAccountNumbers.has(balance.account)) {
       referencedAccounts.add(balance.account)
@@ -1003,15 +1041,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 
   // Dimension visibility: the preview step renders parse issues, so these
   // make dimension handling explicit BEFORE the user executes the import.
-  if (objectBalanceCount > 0) {
-    addIssue(
-      issues,
-      'info',
-      0,
-      `${objectBalanceCount} objektbalansrader (#OIB/#OUB) hoppades över: balanser per objekt stöds inte ännu`,
-      'OIB'
-    )
-  }
+  // Object balances (#OIB/#OUB) get theirs below, once the result exists.
   const taggedLineCount = vouchers.reduce(
     (sum, v) => sum + v.lines.filter((l) => l.dimensions).length,
     0
@@ -1030,12 +1060,14 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   const currentFiscalYear = header.fiscalYears.find((fy) => fy.yearIndex === 0)
   const totalTransactionLines = vouchers.reduce((sum, v) => sum + v.lines.length, 0)
 
-  return {
+  const result: ParsedSIEFile = {
     header,
     accounts,
     openingBalances,
     closingBalances,
     resultBalances,
+    objectOpeningBalances,
+    objectClosingBalances,
     vouchers,
     dimensions,
     dimensionValues,
@@ -1047,6 +1079,89 @@ export function parseSIEFile(content: string): ParsedSIEFile {
       fiscalYearStart: currentFiscalYear?.start || null,
       fiscalYearEnd: currentFiscalYear?.end || null,
     },
+  }
+  addObjectBalanceIssues(result)
+  return result
+}
+
+/**
+ * Preview issues for #OIB/#OUB (issue #3313): what the IB split will do with
+ * the file's object balances, by outcome with counts, plus a consistency
+ * check of #OUB 0 against #OIB 0 and the year's tagged transactions. The
+ * preview has no company, so it assumes the SIE convention (projekt,
+ * dimension 6, accumulates); the import itself reads the company registry.
+ */
+function addObjectBalanceIssues(parsed: ParsedSIEFile): void {
+  const { rows, source } = getEffectiveObjectOpeningBalances(parsed)
+  if (rows.length > 0) {
+    const plan = planObjectBalances(rows, SIE_DEFAULT_ACCUMULATING_DIMENSIONS)
+    for (const issue of describeObjectBalancePlan(plan, source === 'prior_year_oub' ? 'prior_oub' : 'oib')) {
+      addIssue(parsed.issues, issue.severity, 0, issue.message, 'OIB')
+    }
+  } else if (source === 'none') {
+    const unused = (parsed.objectOpeningBalances ?? []).filter((b) => b.yearIndex === 0).length
+    if (unused > 0) {
+      addIssue(
+        parsed.issues,
+        'info',
+        0,
+        `${unused} objektbalanser (#OIB) används inte: filen har ingen ingående balans per konto (#IB) att fördela per objekt`,
+        'OIB'
+      )
+    }
+  }
+
+  // #OUB 0 = the effective opening object balances (#OIB 0, or #OUB -1 when
+  // the IB is derived from #UB -1) + that object's tagged movements in the
+  // file, per balance-sheet account. Only meaningful when the file carries
+  // both the closing object balances and the year's vouchers; exporters that
+  // write no #OUB at all are not flagged. Skipped when the file has no
+  // per-account IB at all (source 'none', e.g. an IB #VER stands in for it):
+  // there is no opening object balance to compare against. Informational:
+  // never blocks the import.
+  if (source === 'none') return
+  const closing = (parsed.objectClosingBalances ?? []).filter(
+    (b) => b.yearIndex === 0 && isBalanceSheetAccount(b.account)
+  )
+  if (closing.length === 0 || parsed.vouchers.length === 0) return
+
+  const key = (account: string, dimNo: string, code: string) => `${account}\u0000${dimNo}\u0000${code}`
+  const expected = new Map<string, number>()
+  const actual = new Map<string, number>()
+  const add = (target: Map<string, number>, k: string, amount: number) =>
+    target.set(k, roundOre((target.get(k) ?? 0) + amount))
+  for (const b of rows) {
+    if (isBalanceSheetAccount(b.account)) add(expected, key(b.account, b.dimNo, b.code), b.amount)
+  }
+  for (const b of closing) add(actual, key(b.account, b.dimNo, b.code), b.amount)
+  for (const voucher of parsed.vouchers) {
+    for (const line of voucher.lines) {
+      if (!line.dimensions || !isBalanceSheetAccount(line.account)) continue
+      for (const [dimNo, code] of Object.entries(line.dimensions)) {
+        add(expected, key(line.account, dimNo, code), line.amount)
+      }
+    }
+  }
+
+  const mismatches: string[] = []
+  for (const k of new Set([...expected.keys(), ...actual.keys()])) {
+    if (Math.abs(roundOre((expected.get(k) ?? 0) - (actual.get(k) ?? 0))) >= 0.01) mismatches.push(k)
+  }
+  if (mismatches.length > 0) {
+    const sample = mismatches
+      .slice(0, 3)
+      .map((k) => {
+        const [account, dimNo, code] = k.split('\u0000')
+        return `konto ${account} objekt ${dimNo} "${code}"`
+      })
+      .join(', ')
+    addIssue(
+      parsed.issues,
+      'warning',
+      0,
+      `${mismatches.length} objekt har en utgående balans (#OUB) som inte stämmer med ingående balans (#OIB) plus årets taggade transaktioner i filen (${sample}): kontrollera exporten`,
+      'OUB'
+    )
   }
 }
 
@@ -1146,6 +1261,44 @@ export function getEffectiveOpeningBalances(parsed: ParsedSIEFile): {
     .map((b) => ({ ...b, yearIndex: 0 }))
 
   return { balances: derived, derivedFromPriorYearUB: derived.length > 0 }
+}
+
+/**
+ * The object balances (#OIB/#OUB) that belong to the effective opening
+ * balances, mirroring getEffectiveOpeningBalances' precedence exactly
+ * (issue #3313): #OIB 0 next to explicit #IB 0; #OUB -1 (balance-sheet
+ * accounts, re-labeled to year 0) when the IB is derived from #UB -1; none
+ * when an opening-balance #VER stands in for the IB (its #TRANS lines carry
+ * their own object lists).
+ */
+export function getEffectiveObjectOpeningBalances(parsed: ParsedSIEFile): {
+  rows: SIEObjectBalance[]
+  source: ObjectOpeningBalanceSource
+} {
+  const effective = getEffectiveOpeningBalances(parsed)
+  const source: ObjectOpeningBalanceSource =
+    effective.balances.length === 0 ? 'none' : effective.derivedFromPriorYearUB ? 'prior_year_oub' : 'oib'
+  return { rows: selectObjectOpeningBalances(parsed, source), source }
+}
+
+export type ObjectOpeningBalanceSource = 'oib' | 'prior_year_oub' | 'none'
+
+/**
+ * The object rows for a resolved source. Split out so the resumable import
+ * job, which seals the source in its manifest at snapshot time (the global
+ * opening-voucher check needs every voucher), selects the same rows later.
+ */
+export function selectObjectOpeningBalances(
+  parsed: Pick<ParsedSIEFile, 'objectOpeningBalances' | 'objectClosingBalances'>,
+  source: ObjectOpeningBalanceSource
+): SIEObjectBalance[] {
+  if (source === 'oib') return (parsed.objectOpeningBalances ?? []).filter((b) => b.yearIndex === 0)
+  if (source === 'prior_year_oub') {
+    return (parsed.objectClosingBalances ?? [])
+      .filter((b) => b.yearIndex === -1 && isBalanceSheetAccount(b.account))
+      .map((b) => ({ ...b, yearIndex: 0 }))
+  }
+  return []
 }
 
 /**

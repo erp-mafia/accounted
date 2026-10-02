@@ -21,4 +21,9 @@ describe('invoice list query shape', () => {
       'rot_rut_items:rot_rut_payout_request_items(request:rot_rut_payout_requests(id, status, created_at))',
     )
   })
+
+  it('embeds each deduction line\'s kind, so a grön teknik invoice never reads "Att begära"', () => {
+    expect(source).toContain('deduction_lines:invoice_items(deduction_type)')
+    expect(source).toContain(".not('deduction_lines.deduction_type', 'is', null)")
+  })
 })

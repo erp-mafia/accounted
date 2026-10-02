@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { parseTeamMembersPayload } from '@/components/settings/members-payload'
+import { isInviteExpired } from '@/components/settings/invite-expiry'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatDateLong } from '@/lib/utils'
 
@@ -396,7 +397,7 @@ export function TeamPanel() {
       {/* Pending invitations continue the same list, visually quieter. */}
       {canManage &&
         invitations.map((inv) => {
-          const expired = new Date(inv.expires_at) <= new Date()
+          const expired = isInviteExpired(inv.expires_at)
           return (
             <div
               key={inv.id}

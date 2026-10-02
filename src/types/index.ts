@@ -2,12 +2,17 @@
 // per form under lib/company/forms/ (docs/LEGAL-FORMS.md); call sites read a
 // capability through lib/company/entity-type.ts and never compare the form to
 // a string. Adding a member here fails compilation until the profile exists.
-export type EntityType = 'enskild_firma' | 'aktiebolag' | 'ideell_forening'
+export type EntityType =
+  | 'enskild_firma'
+  | 'aktiebolag'
+  | 'ideell_forening'
+  | 'ekonomisk_forening'
 
 // Swedish accounting framework. K2 (BFNAR 2016:10) is the default simplified
 // ruleset for smaller AB; K3 (BFNAR 2012:1) is the principles-based ruleset
 // required for medium-to-large AB and permitted voluntarily for smaller ones.
-// Only meaningful for entity_type='aktiebolag'.
+// Only meaningful for legal forms that prepare an annual report. Eligibility
+// for a specific framework is resolved through lib/company/entity-type.ts.
 export type AccountingFramework = 'k2' | 'k3'
 
 // Company role for multi-tenant access
@@ -419,9 +424,11 @@ export interface CompanySettings {
   periodisk_sammanstallning_filing_method: TaxFilingMethod
   // Annual kontrolluppgifter (KU10/KU20/KU31) reminder, due 31 January.
   kontrolluppgifter_enabled: boolean
-  // ROT/RUT begäran om utbetalning reminder, due 31 January after the
-  // payment year (Lag 2009:194 8 §). Rows are only generated for years
-  // that actually have paid ROT/RUT invoices.
+  // Begäran om utbetalning reminder (ROT/RUT and grön teknik), due 31
+  // January after the payment year (Lag 2009:194 8 § for ROT/RUT; the same
+  // 31 January rule for grön teknik per Skatteverket). Rows are only
+  // generated for years that actually have paid deduction invoices. The
+  // column name is kept for wire stability.
   rot_rut_enabled: boolean
   // Long-tail deadlines, explicit opt-in only ("Fler deadlines" in tax
   // settings). OSS/IOSS are EU-law deadlines that never move to the next
@@ -523,6 +530,8 @@ export interface CompanySettings {
   invoice_show_bankgiro: boolean
   invoice_show_plusgiro: boolean
   invoice_show_swish: boolean
+  // Bank-app payment QR (UsingQR) in the PDF payment box (default false).
+  invoice_show_payment_qr: boolean
   invoice_show_logo: boolean
   invoice_show_company_name: boolean
   invoice_company_name_position: 'header' | 'footer'
@@ -614,6 +623,11 @@ export interface CompanySettings {
   // Öresavrundning (migration 20260813143000): round each net payout up to
   // whole kronor; the 0-99 öre diff books on 3740 via a derived line item.
   salary_net_rounding: boolean
+  // Payslip sections on the copy the employee receives (migration
+  // 20260930200000): Arbetsgivarkostnad and Beräkningsunderlag. Default true;
+  // the employer's own view always prints both (build-payslip-data).
+  salary_payslip_show_employer_cost: boolean
+  salary_payslip_show_breakdown: boolean
   // Avvikelseperiod (migration 20260918120000): the month a new salary run
   // reads absence and worked days from. 'previous_month' is the common
   // Swedish setup (innevarande månads lön, föregående månads avvikelser).
@@ -1589,6 +1603,16 @@ export interface InvoiceDelivery {
   updated_at: string
 }
 
+/**
+ * The skattereduktion an invoice line can carry (invoice_items.deduction_type,
+ * rot_rut_payout_requests.deduction_type). ROT and RUT are the two husavdrag
+ * Skatteverket handles in "Rot och rut: företag"; gron_teknik is the separate
+ * skattereduktion för grön teknik (e-tjänst "Grön teknik: företag"). The
+ * rot_rut_* table, route and column names are kept for wire stability.
+ * Runtime list, labels and rates: lib/invoices/rot-rut-rules.ts.
+ */
+export type DeductionType = 'rot' | 'rut' | 'gron_teknik'
+
 // Invoice Item
 export interface InvoiceItem {
   id: string
@@ -1648,23 +1672,26 @@ export interface InvoiceItem {
   accrual_period_end?: string | null
   accrual_balance_account?: string | null
 
-  // ROT/RUT-avdrag (Sweden's tax deduction for household services / home
-  // renovation). When `deduction_type` is set, the system computes
-  // `deduction_amount` from the rules in lib/invoices/rot-rut-rules.ts
-  // and posts the receivable to BAS 1513 (Skatteverket). v1 deducts on
-  // the full line total; future work can use `labor_hours` to honour the
-  // labor-only restriction.
+  // Skattereduktion (ROT/RUT-avdrag, or grön teknik). When `deduction_type`
+  // is set, the system computes `deduction_amount` from the rules in
+  // lib/invoices/rot-rut-rules.ts and posts the receivable to BAS 1513
+  // (Skatteverket). The whole flagged line is the base: ROT/RUT flag labour
+  // lines only, grön teknik flags labour and material lines.
   //
   // All fields are optional in TypeScript even though Postgres has
   // defaults: legacy rows pulled before the schema change carry
   // `undefined` in JS land, and many existing test fixtures predate the
   // ROT/RUT migration. Treat undefined the same as null/0 throughout.
-  deduction_type?: 'rot' | 'rut' | null
+  deduction_type?: DeductionType | null
   deduction_amount?: number
   labor_hours?: number | null
-  /** Skatteverket arbetstypskod (e.g. 'BYGG', 'STAD'). See ROT_WORK_TYPES / RUT_WORK_TYPES. */
+  /**
+   * Skatteverket arbetstypskod (e.g. 'BYGG', 'STAD', 'INSTALLATION_SOLCELLER').
+   * See ROT_WORK_TYPES / RUT_WORK_TYPES / GRON_TEKNIK_WORK_TYPES. For grön
+   * teknik it also decides the rate (15 or 50 %).
+   */
   work_type?: string | null
-  /** Fastighetsbeteckning. Required for ROT, optional for RUT. */
+  /** Fastighetsbeteckning. Required for ROT and grön teknik, optional for RUT. */
   housing_designation?: string | null
   /** Lägenhetsnummer. Optional, used for ROT in flerbostadshus. */
   apartment_number?: string | null
@@ -2870,8 +2897,11 @@ export type TaxDeadlineType =
   | 'skatteinbetalning'
   | 'inkomstdeklaration_ef'
   | 'inkomstdeklaration_ab'
+  | 'inkomstdeklaration_ekonomisk_forening'
   | 'arsredovisning'
+  | 'arsredovisning_ekonomisk_forening'
   | 'arsstamma'
+  | 'foreningsstamma'
   | 'periodisk_sammanstallning'
   | 'kontrolluppgifter'
   | 'rot_rut_begaran'
@@ -4521,6 +4551,12 @@ export interface SalaryRun {
   notes: string | null
   is_correction: boolean
   corrects_run_id: string | null
+  // Payslip sections the employee copy was issued with (migration
+  // 20260930200000). All null until the payslips first go to employees;
+  // written once (lib/salary/payslips/section-snapshot).
+  payslip_sections_issued_at: string | null
+  payslip_show_employer_cost: boolean | null
+  payslip_show_breakdown: boolean | null
   created_at: string
   updated_at: string
   // Relations

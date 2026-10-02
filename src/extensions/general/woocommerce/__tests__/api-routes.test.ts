@@ -126,6 +126,48 @@ describe('woocommerce extension routes', () => {
       const body = await res.json()
       expect(body.configured).toBe(true)
       expect(body.connection.id).toBe('c1')
+      expect(body.connection.skipped_currency_orders).toBeUndefined()
+    })
+
+    it('attaches the durable skipped-orders list to its store', async () => {
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: [{ id: 'c1', status: 'active', store_url: 'https://shop.example.se' }] })
+      const order = {
+        order_id: 7,
+        order_number: '7',
+        order_date: '2026-08-01',
+        currency: '&euro;',
+        first_seen_at: '2026-09-01T00:00:00.000Z',
+        last_seen_at: '2026-09-01T00:00:00.000Z',
+      }
+      enqueue({
+        data: [{ key: 'skipped_currency_orders:shop.example.se', value: { orders: [order] } }],
+      })
+      const res = await findRoute('GET', '/status').handler(
+        makeRequest('GET'),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.connections[0].skipped_currency_orders).toEqual({ count: 1, orders: [order] })
+      // Read on the caller's own client, scoped to the company.
+      expect(calls).toContainEqual({ table: 'extension_data', method: 'eq', args: ['company_id', 'company-1'] })
+    })
+
+    it('still answers when the skipped-orders list cannot be read', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: [{ id: 'c1', status: 'active', store_url: 'https://shop.example.se' }] })
+      enqueue({ error: { message: 'boom' } })
+      const res = await findRoute('GET', '/status').handler(
+        makeRequest('GET'),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.connections[0].id).toBe('c1')
+      expect(body.connections[0].skipped_currency_orders).toBeUndefined()
     })
   })
 
@@ -339,6 +381,7 @@ describe('woocommerce extension routes', () => {
         removed: 0,
         frozenFlagged: 0,
         crossMarked: 0,
+        unknownCurrency: 0,
         errors: 0,
       })
       const res = await findRoute('POST', '/sync').handler(
@@ -372,6 +415,7 @@ describe('woocommerce extension routes', () => {
       removed: 0,
       frozenFlagged: 0,
       crossMarked: 0,
+      unknownCurrency: 0,
       errors: 0,
     }
 

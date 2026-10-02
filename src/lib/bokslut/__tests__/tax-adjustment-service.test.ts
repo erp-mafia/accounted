@@ -45,7 +45,7 @@ beforeEach(() => {
 
 describe('loadTaxAdjustmentSnapshot', () => {
   it('detects Miles account balances as non-deductible expenses', async () => {
-    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1')
+    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
 
     expect(snapshot.nonDeductibleExpenses).toBe(5_244)
     expect(snapshot.nonTaxableIncome).toBe(0)
@@ -57,6 +57,15 @@ describe('loadTaxAdjustmentSnapshot', () => {
       amount: 2_250,
       included: true,
     })
+  })
+
+  it('fails loudly instead of dropping form-specific accounts when the company row cannot be resolved', async () => {
+    // Without a form the snapshot would silently fall back to the base
+    // accounts and omit 3901 for an ekonomisk förening; the lookup error
+    // must surface instead.
+    await expect(loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1')).rejects.toThrow(
+      /entity_type/,
+    )
   })
 
   it('honors saved exclusions and includes manual adjustments', async () => {
@@ -83,6 +92,7 @@ describe('loadTaxAdjustmentSnapshot', () => {
       ]),
       'company-1',
       'period-1',
+      'aktiebolag',
     )
 
     expect(snapshot.nonDeductibleExpenses).toBe(3_094)
@@ -114,6 +124,7 @@ describe('loadTaxAdjustmentSnapshot', () => {
       ]),
       'company-1',
       'period-1',
+      'aktiebolag',
     )
 
     expect(snapshot.nonTaxableIncome).toBe(1_000)
@@ -121,5 +132,44 @@ describe('loadTaxAdjustmentSnapshot', () => {
     const deficit = snapshot.items.find((item) => item.sourceKey === 'manual:deficit_carryforward')
     expect(deficit?.adjustmentType).toBe('deficit_carryforward')
     expect(deficit?.included).toBe(true)
+  })
+})
+
+describe('loadTaxAdjustmentSnapshot: ekonomisk förening membership fees', () => {
+  it('proposes the 3901 credit balance as non-taxable income (INK2S 4.5c) for the form only', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        { account_number: '3901', closing_debit: 0, closing_credit: 48_000 },
+        { account_number: '6992', closing_debit: 1_000, closing_credit: 0 },
+      ],
+      totalDebit: 1_000,
+      totalCredit: 48_000,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+
+    const forening = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'ekonomisk_forening')
+    expect(forening.items.find((item) => item.accountNumber === '3901')).toMatchObject({
+      adjustmentType: 'non_taxable_income',
+      amount: 48_000,
+      included: true,
+    })
+    expect(forening.nonTaxableIncome).toBe(48_000)
+    expect(forening.nonDeductibleExpenses).toBe(1_000)
+
+    const ab = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
+    expect(ab.items.find((item) => item.accountNumber === '3901')).toBeUndefined()
+    expect(ab.nonTaxableIncome).toBe(0)
+  })
+
+  it('never proposes a debit balance on 3901 as income', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [{ account_number: '3901', closing_debit: 500, closing_credit: 0 }],
+      totalDebit: 500,
+      totalCredit: 0,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'ekonomisk_forening')
+    expect(snapshot.items.find((item) => item.accountNumber === '3901')?.amount).toBe(0)
+    expect(snapshot.nonTaxableIncome).toBe(0)
   })
 })

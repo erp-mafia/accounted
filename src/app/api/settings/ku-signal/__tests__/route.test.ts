@@ -49,6 +49,19 @@ describe('GET /api/settings/ku-signal', () => {
     expect(res.status).toBe(401)
   })
 
+  it('reports a KU signal for an ekonomisk förening with vinstutdelning postings, like an aktiebolag', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: { id: 'user-1' },
+      supabase: supabaseWithEntityType('ekonomisk_forening'),
+      error: null,
+    })
+    fetchEntryLinesMock.mockResolvedValue([{ account_number: '2898' }])
+    const { body } = await parseJsonResponse<{ data: { has_ku_signal: boolean } }>(
+      await GET(createMockRequest('/api/settings/ku-signal'), { params: Promise.resolve({}) }),
+    )
+    expect(body.data.has_ku_signal).toBe(true)
+  })
+
   it('reports a KU signal when an aktiebolag has utdelning/ägarlån postings', async () => {
     requireAuthMock.mockResolvedValue({
       user: { id: 'user-1' },

@@ -89,20 +89,6 @@ export function canRecordInitialSetup(role: string | null | undefined): boolean 
 }
 
 /**
- * Done-state for the "Anslut till Claude" step. The only thing that means
- * "connected" is a live API key minted by the MCP OAuth token route: it
- * exists exactly when a client (claude.ai, Claude Desktop, Claude Code)
- * completed the first-call sign-in. `oauthKeyCount` is the head count of
- * that user's unrevoked rows named by OAUTH_MCP_KEY_NAME (lib/auth/api-keys).
- * Before issue #2133 the step ticked on the in-app AI-profile flag, which
- * has nothing to do with Claude; the step could show done for a user who
- * never connected and stay open for one who had.
- */
-export function claudeStepDone(input: { oauthKeyCount: number | null | undefined }): boolean {
-  return (input.oauthKeyCount ?? 0) > 0
-}
-
-/**
  * The MCP server URL we hand to a client. `tool_namespace` is load-bearing
  * (without it the server hands out legacy `gnubok_` tool names), `client`
  * is a telemetry-only distribution marker, and the origin comes from the

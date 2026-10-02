@@ -751,7 +751,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  // The invoice has no customer (deleted while the draft existed, crm#263):
+  // nobody to number, send or issue it to. The server refuses as well
+  // (INVOICE_CUSTOMER_MISSING); this says so before a dialog opens.
+  function refuseWithoutCustomer(): boolean {
+    if (invoice?.customer) return false
+    toast({
+      title: t('customer_deleted'),
+      description: t('customer_missing_action'),
+      variant: 'destructive',
+    })
+    return true
+  }
+
   function openSendDialog(mode: 'email' | 'manual') {
+    if (refuseWithoutCustomer()) return
     setSendDialogMode(mode)
     setShowSendDialog(true)
   }
@@ -1401,6 +1415,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // the real number is allocated atomically on confirm and may differ by one if
   // another invoice is created in between.
   async function openFinalizeDialog() {
+    if (refuseWithoutCustomer()) return
     setNextNumberPreview(null)
     setShowFinalizeDialog(true)
     try {
@@ -1514,8 +1529,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     return null
   }
 
+  // Null when the customer was deleted (invoices.customer_id is ON DELETE SET
+  // NULL): the page must still render so the draft can be fixed or deleted.
   const customer = invoice.customer
-  const customerHasEmail = !!customer.email
+  const customerHasEmail = !!customer?.email
   const docType = ((invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice') as InvoiceDocumentType
   const isProforma = docType === 'proforma'
   const isQuote = docType === 'quote'
@@ -1601,16 +1618,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // the rest is claimed from Skatteverket. Same helper as the PDF and the
   // invoice email so all three surfaces state the same "Att betala".
   const amountToPay = getAmountToPay(invoice, { ore_rounding: oreRounding })
-  const deductionItems = invoice.items.filter(
-    (i) => i.deduction_type === 'rot' || i.deduction_type === 'rut',
-  )
+  const deductionItems = invoice.items.filter((i) => Boolean(i.deduction_type))
   const hasRot = deductionItems.some((i) => i.deduction_type === 'rot')
   const hasRut = deductionItems.some((i) => i.deduction_type === 'rut')
+  // Grön teknik never shares an invoice with ROT/RUT (refused at creation).
+  const hasGronTeknik = deductionItems.some((i) => i.deduction_type === 'gron_teknik')
   const deductionKindLabel = hasRot && hasRut ? 'ROT/RUT' : hasRot ? 'ROT' : 'RUT'
+  const deductionRowLabel = hasGronTeknik
+    ? t('deduction_row_gron_teknik')
+    : t('deduction_row', { kind: deductionKindLabel })
   const showDeduction = amountToPay.deductionApplies && !isDeliveryNote
-  // Fastighetsbeteckning / lägenhet live on the ROT lines (one property per
-  // invoice in practice); the first ROT line carries the value.
-  const rotItem = deductionItems.find((i) => i.deduction_type === 'rot')
+  // Fastighetsbeteckning / lägenhet live on the ROT and grön teknik lines
+  // (one property per invoice in practice); the first such line carries it.
+  const rotItem = deductionItems.find((i) => i.deduction_type === 'rot' || i.deduction_type === 'gron_teknik')
   const rotHousing = rotItem?.housing_designation ?? null
   const rotApartment = rotItem?.apartment_number ?? null
   const rotBrf = rotItem?.brf_org_number ?? null
@@ -1618,7 +1638,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // "RUT · Städning · 4 tim" under a claimed line, so the claim is visible on
   // the item itself, not only in the PDF. The amount lives in the totals block.
   const deductionLineInfo = (item: InvoiceItem): string => {
-    const parts = [item.deduction_type === 'rot' ? 'ROT' : 'RUT']
+    const parts = [
+      item.deduction_type === 'gron_teknik'
+        ? tInvoices('rot_rut_type_gron_teknik')
+        : item.deduction_type === 'rot' ? 'ROT' : 'RUT',
+    ]
     const label = workTypeLabel(item.work_type)
     if (label) parts.push(label)
     if (item.labor_hours && item.labor_hours > 0) {
@@ -1694,7 +1718,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 : { label: statusLabel('sent'), exception: false }
 
   const metaParts = [
-    customer.name,
+    customer?.name,
     t('created_at', { date: formatDate(invoice.created_at) }),
     latestCompletedDelivery?.sent_at
       ? t('sent_on', { date: formatDate(latestCompletedDelivery.sent_at) })
@@ -2135,7 +2159,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           invoice is what it is. A non-momsregistrerad seller charges nothing
           and has nothing to explain. After a successful check the invoice is
           refetched so the sentence flips to what the lines still carry. */}
-      {isEditableDraft && vatRegistered !== false && (
+      {isEditableDraft && vatRegistered !== false && customer && (
         <VatTreatmentNotice
           customer={customer}
           lineVatRates={invoice.items
@@ -2183,43 +2207,53 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           on the left, the facts on the right. */}
       <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
         <DetailSection kicker={t('customer_card_title')}>
-          <DefRow label={t('def_customer')}>
-            <Link href={`/customers/${customer.id}`} className="hover:underline">
-              {customer.name}
-            </Link>
-          </DefRow>
-          {customer.customer_type !== 'individual' && customer.org_number && (
-            <DefRow label={t('def_org_number')}>
-              <span className="tabular-nums">{customer.org_number}</span>
+          {customer ? (
+            <>
+              <DefRow label={t('def_customer')}>
+                <Link href={`/customers/${customer.id}`} className="hover:underline">
+                  {customer.name}
+                </Link>
+              </DefRow>
+              {customer.customer_type !== 'individual' && customer.org_number && (
+                <DefRow label={t('def_org_number')}>
+                  <span className="tabular-nums">{customer.org_number}</span>
+                </DefRow>
+              )}
+              {customer.customer_type !== 'individual' && customer.vat_number && (
+                <DefRow label={t('def_vat_number')}>{customer.vat_number}</DefRow>
+              )}
+              <DefRow label={t('def_email')}>
+                {customer.email ? (
+                  <a href={`mailto:${customer.email}`} className="hover:underline">
+                    {customer.email}
+                  </a>
+                ) : (
+                  <DefEmpty />
+                )}
+              </DefRow>
+              {customer.phone && <DefRow label={t('def_phone')}>{customer.phone}</DefRow>}
+              <DefRow label={t('def_address')}>
+                {customer.address_line1 || customer.city ? (
+                  <div>
+                    {customer.address_line1 && <p>{customer.address_line1}</p>}
+                    {customer.address_line2 && <p>{customer.address_line2}</p>}
+                    <p>
+                      {[customer.postal_code, customer.city].filter(Boolean).join(' ')}
+                      {customer.country && customer.country !== 'SE' && `, ${getCountryName(customer.country, locale === 'en' ? 'en' : 'sv')}`}
+                    </p>
+                  </div>
+                ) : (
+                  <DefEmpty />
+                )}
+              </DefRow>
+            </>
+          ) : (
+            // The customer was deleted while the invoice pointed at it
+            // (crm#263): say so instead of failing the whole page.
+            <DefRow label={t('def_customer')}>
+              <span className="text-muted-foreground">{t('customer_deleted')}</span>
             </DefRow>
           )}
-          {customer.customer_type !== 'individual' && customer.vat_number && (
-            <DefRow label={t('def_vat_number')}>{customer.vat_number}</DefRow>
-          )}
-          <DefRow label={t('def_email')}>
-            {customer.email ? (
-              <a href={`mailto:${customer.email}`} className="hover:underline">
-                {customer.email}
-              </a>
-            ) : (
-              <DefEmpty />
-            )}
-          </DefRow>
-          {customer.phone && <DefRow label={t('def_phone')}>{customer.phone}</DefRow>}
-          <DefRow label={t('def_address')}>
-            {customer.address_line1 || customer.city ? (
-              <div>
-                {customer.address_line1 && <p>{customer.address_line1}</p>}
-                {customer.address_line2 && <p>{customer.address_line2}</p>}
-                <p>
-                  {[customer.postal_code, customer.city].filter(Boolean).join(' ')}
-                  {customer.country && customer.country !== 'SE' && `, ${getCountryName(customer.country, locale === 'en' ? 'en' : 'sv')}`}
-                </p>
-              </div>
-            ) : (
-              <DefEmpty />
-            )}
-          </DefRow>
           {invoice.your_reference && (
             <DefRow label={t('your_reference_label')}>
               {invoice.your_reference.split(',').map((ref) => ref.trim()).join(', ')}
@@ -2277,7 +2311,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   <span className="text-muted-foreground">{t('deduction_personnummer_unreadable')}</span>
                 )}
               </DefRow>
-              {hasRot && (
+              {(hasRot || hasGronTeknik) && (
                 <DefRow label={t('deduction_property_label')}>
                   {rotHousing ? (
                     <span>
@@ -2303,7 +2337,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </DefRow>
               )}
               <DefRow label={t('deduction_status_label')}>
-                {payoutRequests.length === 0 ? (
+                {hasGronTeknik && payoutRequests.length === 0 ? (
+                  // No grön teknik file yet: the payout is requested in
+                  // Skatteverkets e-tjänst. The link opens the figures it
+                  // asks for, on this invoice's row.
+                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="text-muted-foreground">{t('deduction_claim_gron_teknik')}</span>
+                    {skvClaimable && (
+                      <Link
+                        href={`/invoices/rot-rut?new=1&type=gron_teknik&invoice=${invoice.id}`}
+                        className={cn(ROW_ACTION_CLASS, 'whitespace-nowrap')}
+                      >
+                        {t('deduction_claim_gron_teknik_cta')}
+                      </Link>
+                    )}
+                  </span>
+                ) : payoutRequests.length === 0 ? (
                   <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span className="text-muted-foreground">{t('deduction_claim_none')}</span>
                     {skvClaimable && (
@@ -2512,7 +2561,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 <span>{formatCurrency(rounding.displayed, invoice.currency)}</span>
               </div>
               <div className="flex justify-between gap-4">
-                <span className="text-muted-foreground">{t('deduction_row', { kind: deductionKindLabel })}</span>
+                <span className="text-muted-foreground">{deductionRowLabel}</span>
                 <span>{formatCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency)}</span>
               </div>
               {/* Skatteverket refused (part of) the deduction and the reclaim

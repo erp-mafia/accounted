@@ -17,11 +17,38 @@ vi.mock('@/lib/salary/payslips/build-payslip-data', () => ({
   buildPayslipData: vi.fn(() => ({})),
   payslipFileName: vi.fn(() => 'lonespec_Test_2026-06.pdf'),
 }))
+vi.mock('@/lib/salary/payslips/section-snapshot', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/payslips/section-snapshot')>()),
+  issuePayslipSections: vi.fn(),
+}))
 
 import { GET } from '../route'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolvePayslipToken } from '@/lib/salary/payslips/links'
 import { buildPayslipData } from '@/lib/salary/payslips/build-payslip-data'
+import { issuePayslipSections } from '@/lib/salary/payslips/section-snapshot'
+
+const NOT_ISSUED = {
+  payslip_sections_issued_at: null,
+  payslip_show_employer_cost: null,
+  payslip_show_breakdown: null,
+}
+
+function liveLink() {
+  return {
+    ok: true as const,
+    link: {
+      id: 'link-1',
+      company_id: 'company-1',
+      salary_run_id: 'run-1',
+      employee_id: 'emp-1',
+      token_hash: 'h',
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      revoked_at: null,
+      access_count: 0,
+    },
+  }
+}
 
 // Distinct valid-format tokens per test — the route's rate-limit map is
 // module-level state shared across this file.
@@ -32,6 +59,7 @@ describe('GET /api/payslip/[token]/pdf', () => {
     vi.clearAllMocks()
     const { supabase } = createQueuedMockSupabase()
     vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    vi.mocked(issuePayslipSections).mockResolvedValue({ ok: true, snapshot: NOT_ISSUED })
   })
 
   it('returns 400 for malformed tokens', async () => {
@@ -97,7 +125,13 @@ describe('GET /api/payslip/[token]/pdf', () => {
       { data: { id: 'run-1', period_year: 2026, period_month: 6, payment_date: '2026-06-25' } },
       { data: { employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc' }, line_items: [] } },
       { data: { name: 'Bolaget AB', org_number: null } },
-      { data: { company_name: 'Ny Firma AB' } },
+      {
+        data: {
+          company_name: 'Ny Firma AB',
+          salary_payslip_show_employer_cost: false,
+          salary_payslip_show_breakdown: true,
+        },
+      },
     ])
 
     const response = await GET(
@@ -113,6 +147,19 @@ describe('GET /api/payslip/[token]/pdf', () => {
     // frozen onboarding companies.name.
     expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
       expect.objectContaining({ company: { name: 'Ny Firma AB', org_number: null } }),
+    )
+    // The link is the employee's copy: the company's section switches travel
+    // with it (crm#202).
+    expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audience: {
+          kind: 'employee',
+          settings: expect.objectContaining({
+            salary_payslip_show_employer_cost: false,
+            salary_payslip_show_breakdown: true,
+          }),
+        },
+      }),
     )
   })
 
@@ -148,5 +195,96 @@ describe('GET /api/payslip/[token]/pdf', () => {
     expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
       expect.objectContaining({ company: { name: 'Bolaget AB', org_number: '5560000000' } }),
     )
+  })
+
+  it('returns 500 instead of printing hidden sections when the switches cannot be read', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    vi.mocked(resolvePayslipToken).mockResolvedValue({
+      ok: true,
+      link: {
+        id: 'link-1',
+        company_id: 'company-1',
+        salary_run_id: 'run-1',
+        employee_id: 'emp-1',
+        token_hash: 'h',
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+        revoked_at: null,
+        access_count: 0,
+      },
+    })
+    enqueueMany([
+      { data: { id: 'run-1', period_year: 2026, period_month: 6, payment_date: '2026-06-25' } },
+      { data: { employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc' }, line_items: [] } },
+      { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+      { data: null, error: { message: 'timeout' } },
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/payslip/t/pdf'),
+      createMockRouteParams({ token: token('H') }),
+    )
+
+    expect(response.status).toBe(500)
+    expect(vi.mocked(buildPayslipData)).not.toHaveBeenCalled()
+  })
+  it('renders the sections the run was issued with, not the switches as they are now', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    vi.mocked(resolvePayslipToken).mockResolvedValue(liveLink())
+    const run = { id: 'run-1', status: 'booked', period_year: 2026, period_month: 6, payment_date: '2026-06-25' }
+    const hiddenNow = {
+      company_name: null,
+      salary_payslip_show_employer_cost: false,
+      salary_payslip_show_breakdown: false,
+    }
+    enqueueMany([
+      { data: run },
+      { data: { employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc' }, line_items: [] } },
+      { data: { name: 'Bolaget AB', org_number: null } },
+      { data: hiddenNow },
+    ])
+    const issuedShown = {
+      payslip_sections_issued_at: '2026-06-24T08:00:00.000Z',
+      payslip_show_employer_cost: true,
+      payslip_show_breakdown: true,
+    }
+    vi.mocked(issuePayslipSections).mockResolvedValue({ ok: true, snapshot: issuedShown })
+
+    const response = await GET(
+      createMockRequest('/api/payslip/t/pdf'),
+      createMockRouteParams({ token: token('I') }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(vi.mocked(issuePayslipSections)).toHaveBeenCalledWith(supabase, {
+      companyId: 'company-1',
+      run,
+      settings: hiddenNow,
+    })
+    expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
+      expect.objectContaining({ run: { ...run, ...issuedShown } }),
+    )
+  })
+
+  it('returns 500 and renders nothing when the issued sections cannot be fixed or read', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    vi.mocked(resolvePayslipToken).mockResolvedValue(liveLink())
+    enqueueMany([
+      { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 6, payment_date: '2026-06-25' } },
+      { data: { employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc' }, line_items: [] } },
+      { data: { name: 'Bolaget AB', org_number: null } },
+      { data: { company_name: null } },
+    ])
+    vi.mocked(issuePayslipSections).mockResolvedValue({ ok: false, error: new Error('timeout') })
+
+    const response = await GET(
+      createMockRequest('/api/payslip/t/pdf'),
+      createMockRouteParams({ token: token('J') }),
+    )
+
+    expect(response.status).toBe(500)
+    expect(vi.mocked(buildPayslipData)).not.toHaveBeenCalled()
   })
 })

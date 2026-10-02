@@ -1,5 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { previewPath } from '@/lib/documents/preview'
+import { ALLOWED_DOCUMENT_TYPES } from '@/lib/documents/upload-types'
+import {
+  DOCUMENT_DELETE_REFUSALS,
+  canDeleteDocument,
+  documentDeleteRefusal,
+  readDocumentDeletePins,
+  type DocumentDeleteBlock,
+  type DocumentDeleteRefusalCode,
+} from '@/lib/documents/deletion'
 import { after } from 'next/server'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { dbError } from '@/lib/errors/db-error'
@@ -198,57 +207,10 @@ export async function createDocumentSignedUrl(
 }
 
 export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024 // 10 MB
-/**
- * Office, OpenDocument, RTF and CSV documents (agreements, minutes, statements
- * arriving as files rather than PDFs). Read by the Arkiv reading layer
- * (lib/documents/read). Kept here, not imported from there, so this module
- * stays free of the reader's dependencies.
- */
-export const OFFICE_DOCUMENT_TYPES = [
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/msword',
-  'application/vnd.ms-excel',
-  'application/vnd.ms-powerpoint',
-  'application/vnd.oasis.opendocument.text',
-  'application/vnd.oasis.opendocument.spreadsheet',
-  'application/vnd.oasis.opendocument.presentation',
-  'application/rtf',
-  'text/rtf',
-  'text/csv',
-]
-export const ALLOWED_DOCUMENT_TYPES = [
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  // The iPhone default. Verified by its ISO-BMFF brand like any other image,
-  // read by the vision model after a decode, served to the viewer as JPEG.
-  // Before 2026-09-24 the app's own drop zone refused it while the MCP and
-  // the channels took it.
-  'image/heic',
-  'image/heif',
-  ...OFFICE_DOCUMENT_TYPES,
-]
-
-/** What a browser leaves blank or generic: a HEIC arrives with no type or as application/octet-stream (prod, 2026-09-24). */
-const EXTENSION_TYPES: Record<string, string> = {
-  pdf: 'application/pdf',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
-  heic: 'image/heic',
-  heif: 'image/heif',
-}
-
-/** The declared type, or the one the file extension implies when the browser declared none or only the generic one. */
-export function declaredDocumentType(file: { name?: string | null; type?: string | null }): string {
-  if (file.type && file.type !== 'application/octet-stream') return file.type
-  const ext = (file.name ?? '').toLowerCase().split('.').pop() ?? ''
-  return EXTENSION_TYPES[ext] ?? file.type ?? ''
-}
+// The upload allowlist and the declared-type reading live in one pure module
+// that the browser drop zones import too (crm#268); re-exported here so
+// server callers keep importing them from the document service.
+export { ALLOWED_DOCUMENT_TYPES, OFFICE_DOCUMENT_TYPES, declaredDocumentType } from '@/lib/documents/upload-types'
 
 /**
  * Validate file size and MIME type before upload.
@@ -1315,15 +1277,34 @@ export async function linkToJournalEntry(
 
 export type DeleteDocumentResult =
   | { ok: true; document: Pick<DocumentAttachment, 'id' | 'file_name'> }
-  | { ok: false; reason: 'not_found' | 'linked_to_entry'; status: number; message: string }
+  | { ok: false; reason: 'not_found'; status: number; message: string }
+  | {
+      ok: false
+      /** 'linked_to_entry' for a verifikat link (block 'verifikat'), 'pinned' for any other record that holds it. */
+      reason: 'linked_to_entry' | 'pinned'
+      block: DocumentDeleteBlock
+      code: DocumentDeleteRefusalCode
+      status: number
+      message: string
+    }
 
 /**
- * Delete a document if and only if it is not yet linked to a journal entry.
+ * Delete a document if and only if nothing holds it: the rule is
+ * documentDeleteRefusal() in lib/documents/deletion.ts, shared with the Arkiv
+ * record's offer so the two cannot disagree.
  *
  * BFL 7 kap 2§: once a document is attached to a verifikation it becomes
  * räkenskapsinformation and may not be deleted within the 7-year retention
  * window. Linked docs must be superseded via createNewVersion() instead.
- * The block_document_deletion() trigger is the DB-level backstop.
+ * The block_document_deletion() trigger is the DB-level backstop. The
+ * underlag of a registered supplier invoice or utlägg, the file or received
+ * Peppol XML of a booked inbox item, and a bank transaction's underlag are
+ * refused the same way, each with its own Swedish sentence.
+ *
+ * A record that pins the document through a RESTRICT foreign key between the
+ * pin read and the delete (a bank transaction's underlag) is still refused by
+ * the database; the error is thrown with its SQLSTATE intact so
+ * lib/errors/foreign-key-refusal.ts answers it.
  */
 export async function deleteDocument(
   supabase: SupabaseClient,
@@ -1332,7 +1313,7 @@ export async function deleteDocument(
 ): Promise<DeleteDocumentResult> {
   const { data: doc, error: fetchError } = await supabase
     .from('document_attachments')
-    .select('id, file_name, storage_path, journal_entry_id, user_id')
+    .select('id, file_name, storage_path, journal_entry_id, journal_entry_line_id, user_id')
     .eq('id', documentId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -1346,13 +1327,19 @@ export async function deleteDocument(
     }
   }
 
-  if (doc.journal_entry_id) {
+  // The verifikat link needs no further read; the other pins are read only
+  // for a document it lets go.
+  const refusal = canDeleteDocument(doc)
+    ? documentDeleteRefusal(doc, await readDocumentDeletePins(supabase, companyId, documentId))
+    : documentDeleteRefusal(doc, { supplierInvoice: false, expenseClaim: false, bankTransaction: false, inboxItems: [] })
+  if (refusal) {
     return {
       ok: false,
-      reason: 'linked_to_entry',
+      reason: refusal.block === 'verifikat' ? 'linked_to_entry' : 'pinned',
+      block: refusal.block,
+      code: refusal.code,
       status: 409,
-      message:
-        'Underlaget är knutet till en verifikation och utgör räkenskapsinformation enligt Bokföringslagen 7 kap 2§. Räkenskapsinformation ska bevaras i minst 7 år och får inte raderas. Använd "Ersätt med ny version" om underlaget behöver korrigeras.',
+      message: refusal.message,
     }
   }
 
@@ -1368,12 +1355,18 @@ export async function deleteDocument(
       return {
         ok: false,
         reason: 'linked_to_entry',
+        block: 'verifikat',
+        code: DOCUMENT_DELETE_REFUSALS.verifikat.code,
         status: 409,
         message:
           'Underlaget kan inte tas bort på grund av Bokföringslagens bevarandekrav (7 kap 2§).',
       }
     }
-    throw new Error(`Failed to delete document: ${msg}`)
+    // Keep the driver's code and text: a record that still pins the document
+    // (a bank transaction's underlag, ON DELETE RESTRICT) is a 23503 the
+    // shared foreign-key refusal mapping answers with a 409 and a sentence
+    // that says what to do, instead of a 500.
+    throw dbError(deleteError, null)
   }
 
   if (doc.storage_path) {

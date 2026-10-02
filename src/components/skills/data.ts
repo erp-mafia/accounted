@@ -6,21 +6,31 @@ import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import type { CommunityMeta } from '@/lib/agent-skills/community'
 import { isCheckable } from '@/lib/agent-skills/agents'
 import type { RegistrySkillId } from '@/lib/agent-skills/registry'
-import { AI_CLIENTS, type AiClient } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import type { ItemKind, Presence } from './hues'
 
 /** Reads shared by the Agenter list and an agent's page. */
 export type SkillSummary = Omit<CatalogSkill, 'body'>
 
-/** Null when the status is unavailable: a failed read never makes a connected client look disconnected. */
-export async function fetchConnections(signal: AbortSignal): Promise<AiClient[] | null> {
+/**
+ * Null when the status is unavailable: a failed read never makes a connected
+ * client look disconnected. `connected` is any live agent key, also one that
+ * names no client; `clients` is who work can be handed to (AiConnection).
+ */
+export async function fetchConnections(signal: AbortSignal): Promise<AiConnection | null> {
   try {
     const response = await fetch('/api/ai/connections', { signal })
     if (!response.ok) return null
-    return (await response.json()).data as AiClient[]
+    const body = (await response.json()) as { data: AiClient[]; agentConnected?: boolean }
+    return aiConnectionFromWire(body.data, body.agentConnected)
   } catch {
     return null
   }
+}
+
+/** Dev only: the connection /skills?ai=… simulates (see simulatedClient). */
+export function simulatedConnection(client: AiClient): AiConnection {
+  return { connected: true, clients: [client] }
 }
 
 /**

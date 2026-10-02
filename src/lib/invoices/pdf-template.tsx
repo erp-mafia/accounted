@@ -8,10 +8,14 @@ import {
   Image,
   Link,
   StyleSheet,
+  Svg,
+  Path,
+  Rect,
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'
+import { bankPaymentQrSymbol, buildBankPaymentQrPayload } from '@/lib/invoices/bank-payment-qr'
 import {
   BUNDLED_INVOICE_FONT_FAMILIES,
   INVOICE_LOGO_MAX_HEIGHT_PT,
@@ -22,6 +26,7 @@ import { CUSTOM_INVOICE_FONT_RENDER_PREFIX } from '@/lib/invoices/pdf-fonts'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { isTextLikeLine } from '@/lib/invoices/display'
 import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
+import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
 import { unitLabel } from '@/lib/invoices/unit-labels'
@@ -95,26 +100,88 @@ export const wrapDescriptionWords = wrapWholeWordsWithin(DESCRIPTION_COLUMN_PT)
 export const wrapFullWidthWords = wrapWholeWordsWithin(FULL_WIDTH_BOX_PT)
 
 /**
- * Whether a free-text block is short enough to be kept on one page.
+ * Keeping free text together across a page break.
  *
- * `wrap={false}` keeps a block from splitting across pages, but react-pdf
- * places a non-splittable block that is taller than a page anyway and
- * everything past the page edge is lost. Blocks that could plausibly be that
- * tall (line descriptions and notes, both multi-line) are only kept together
- * when a line estimate says they fit comfortably; past that they are allowed
- * to split, which is the lesser evil.
+ * `wrap={false}` keeps a block from splitting across pages: when it does not
+ * fit below what is already on the page it moves to the next page whole. But
+ * react-pdf places a non-splittable block that is taller than a whole page
+ * anyway, and everything past the page edge is lost. The decision is made
+ * before layout, so a block of free text (line descriptions, notes) is kept
+ * together only when a line estimate says it fits on an empty page; past
+ * that it may split, which is the lesser evil.
  *
  * The estimate counts rendered lines, not source lines: a token wider than
  * the column is chunked by the wrap callback and each chunk can take a line
- * of its own. The cap is small enough that even the tallest font a company
- * can pick (bundled Source Serif 4 at about 13.7pt per line, or an uploaded
- * font at 20pt) keeps 12 lines under 250pt, a third of the usable page
- * height, so a kept-together block can never be taller than a page.
+ * of its own.
+ *
+ * How many estimated lines may be kept together is derived from the page:
+ *
+ *   lines * fontSize * linePitch * estimateError + chrome <= usable height
+ *
+ * - usable height: A4 (841.89pt) minus the page padding top and bottom,
+ *   761.89pt. A block that moved to a fresh page has all of it.
+ * - chrome: the block's own margin, padding and border.
+ * - line pitch: react-pdf sets a line at (ascent - descent + lineGap) of the
+ *   font, per pt of font size. The built-in fonts measure 1.10 (Helvetica),
+ *   1.12 (Times-Roman), 1.13 (Courier), 1.326 (Source Sans 3) and 1.371
+ *   (Source Serif 4); 1.4 covers them all.
+ * - estimate error: the estimate uses Helvetica widths at 10pt plus 10% and
+ *   4pt per space. Text of narrow letters (i, l) is its worst case. In
+ *   Times-Roman and the bundled fonts those glyphs are at most 1.14 times
+ *   the estimated width (Times 'l' at 278 units against 222 * 1.1), and
+ *   ordinary prose comes out under the estimate; 1.35 covers both. Courier is
+ *   fixed-width, every glyph and space 600 units: ordinary prose renders up
+ *   to 1.31 times the estimated lines in the narrowest description column, a
+ *   run of narrow letters up to 600 / (222 * 1.1) = 2.46 times. Courier gets
+ *   2.5.
+ *
+ * Notes (9pt, 38pt of box chrome) come to 42 lines and a line description
+ * (10pt, 13pt of row chrome) to 39 (Courier: 22 and 21): some 420pt in
+ * Helvetica, just over half the usable height, and still on the page in the
+ * worst built-in case.
+ *
+ * An uploaded font can have any metrics, so it keeps the policy the earlier
+ * fixed cap of 12 came from: an assumed pitch of 2 (20pt per line at 10pt)
+ * and no more than a third of the page, an error factor of 3. That still
+ * comes to 12 or 13 lines.
+ */
+const A4_HEIGHT_PT = 841.89
+export const PAGE_PADDING_PT = 40
+export const USABLE_PAGE_HEIGHT_PT = A4_HEIGHT_PT - 2 * PAGE_PADDING_PT
+export const BUILT_IN_FONT_LINE_PITCH = 1.4
+export const BUILT_IN_FONT_ESTIMATE_ERROR = 1.35
+export const COURIER_ESTIMATE_ERROR = 2.5
+const UPLOADED_FONT_LINE_PITCH = 2
+const UPLOADED_FONT_ESTIMATE_ERROR = 3
+
+/** styles.noticeText and styles.noticeBox: 9pt text; marginTop 12, padding 12, border 1. */
+export const NOTICE_FONT_SIZE_PT = 9
+export const NOTICE_BOX_CHROME_PT = 12 + 2 * 12 + 2 * 1
+/** styles.tableRow: 10pt text (the page's, inherited); paddingVertical 6, borderBottom 1. */
+export const TABLE_ROW_FONT_SIZE_PT = 10
+export const TABLE_ROW_CHROME_PT = 2 * 6 + 1
+
+export function keepTogetherLineCap(fontFamily: string, fontSizePt: number, chromePt: number): number {
+  const uploaded = fontFamily.startsWith(CUSTOM_INVOICE_FONT_RENDER_PREFIX)
+  const pitch = uploaded ? UPLOADED_FONT_LINE_PITCH : BUILT_IN_FONT_LINE_PITCH
+  const error = uploaded
+    ? UPLOADED_FONT_ESTIMATE_ERROR
+    : fontFamily === 'Courier'
+      ? COURIER_ESTIMATE_ERROR
+      : BUILT_IN_FONT_ESTIMATE_ERROR
+  return Math.floor((USABLE_PAGE_HEIGHT_PT - chromePt) / (fontSizePt * pitch * error))
+}
+
+/**
+ * The fixed cap for the ROT/RUT box. Its estimate only sees the line
+ * descriptions, not the title, rows and notices or the kind and amount
+ * printed around each description, so the derivation above does not hold
+ * for it. 12 lines at 20pt stay under a third of the page, which leaves the
+ * other two thirds for what the estimate does not count.
  */
 export const MAX_KEEP_TOGETHER_LINES = 12
 
-export function fitsOnOnePage(text: string | null | undefined, budgetPt: number): boolean {
-  if (!text) return true
+export function estimateLines(text: string, budgetPt: number): number {
   let lines = 0
   for (const line of text.split('\n')) {
     let chunkLines = 0
@@ -127,9 +194,25 @@ export function fitsOnOnePage(text: string | null | undefined, budgetPt: number)
     }
     const flowingLines = Math.ceil(flowingWidth / budgetPt)
     lines += chunkLines + Math.max(chunkLines === 0 ? 1 : 0, flowingLines)
-    if (lines > MAX_KEEP_TOGETHER_LINES) return false
   }
-  return true
+  return lines
+}
+
+export function fitsOnOnePage(text: string | null | undefined, budgetPt: number, maxLines: number): boolean {
+  if (!text) return true
+  return estimateLines(text, budgetPt) <= maxLines
+}
+
+/**
+ * Free text split into paragraphs at blank lines, for a block that may have
+ * to split: each paragraph is then kept together on its own, so the break
+ * falls between paragraphs instead of inside one. A paragraph carries the
+ * blank lines that follow it, so the pieces rendered one after another lay
+ * out line for line like the whole text: react-pdf drops a single trailing
+ * newline and renders each further one as an empty line.
+ */
+export function splitParagraphs(text: string): string[] {
+  return text.split(/(?<=\n[^\S\n]*\n)(?=[^\n]*\S)/)
 }
 
 /**
@@ -218,6 +301,20 @@ const LABELS = {
     deductionWorkType: 'Arbete:',
     deductionLaborHours: 'Arbetstimmar:',
     deductionNotice: 'Köparen ansöker om utbetalning hos Skatteverket via fakturamodellen. Säljaren begär utbetalning för den del köparen inte betalat.',
+    // Skattereduktion för grön teknik: Skatteverket asks the invoice to state
+    // the total and the reduction incl. moms, what the installation cost
+    // (arbete och material) apart from övriga kostnader, and the property
+    // (fastighetsbeteckning, or the förening's orgnr + lägenhetsnummer).
+    deductionRowGronTeknik: 'Skattereduktion grön teknik:',
+    totalInclVat: 'Totalt inkl. moms:',
+    deductionBrfOrgNumber: 'Bostadsrättsföreningens org.nr:',
+    gronTeknikKind: 'Grön teknik',
+    gronTeknikEligibleCost: 'Arbete och material:',
+    gronTeknikOtherCost: 'Övriga kostnader:',
+    inclVatSuffix: 'inkl. moms',
+    // Fakturamodellen: the seller requests the payout ("Det är du som
+    // företagare som ansöker om utbetalning", Skatteverket, grön teknik).
+    gronTeknikPayoutNotice: 'Säljaren begär utbetalningen från Skatteverket när köparen har betalat sin del (fakturamodellen).',
     toCredit: 'Att kreditera:',
     toPay: 'Att betala:',
     // A quote is not a payment request, so its grand total is a neutral sum.
@@ -248,6 +345,7 @@ const LABELS = {
     paymentReference: 'Betalningsreferens:',
     invoiceNumber: 'Fakturanummer:',
     swishQrCaption: 'Skanna för att betala med Swish',
+    bankPaymentQrCaption: 'Skanna med din bankapp',
     payOnline: 'Betala online:',
     paymentLinkQrCaption: 'Skanna för att betala online',
     // Footer
@@ -304,6 +402,14 @@ const LABELS = {
     deductionWorkType: 'Service type:',
     deductionLaborHours: 'Labor hours:',
     deductionNotice: 'The customer claims the deduction via fakturamodellen at Skatteverket. The seller requests payment from the agency for the portion not paid by the customer.',
+    deductionRowGronTeknik: 'Green technology tax reduction:',
+    totalInclVat: 'Total incl. VAT:',
+    deductionBrfOrgNumber: 'Housing cooperative org. no.:',
+    gronTeknikKind: 'Green technology',
+    gronTeknikEligibleCost: 'Labor and material:',
+    gronTeknikOtherCost: 'Other costs:',
+    inclVatSuffix: 'incl. VAT',
+    gronTeknikPayoutNotice: 'The seller requests the payout from Skatteverket once the customer has paid their share (fakturamodellen).',
     toCredit: 'To credit:',
     toPay: 'Total due:',
     totalQuote: 'Total:',
@@ -331,6 +437,7 @@ const LABELS = {
     paymentReference: 'Payment reference:',
     invoiceNumber: 'Invoice number:',
     swishQrCaption: 'Scan to pay with Swish',
+    bankPaymentQrCaption: 'Scan with your banking app',
     payOnline: 'Pay online:',
     paymentLinkQrCaption: 'Scan to pay online',
     orgNoLong: 'Reg. no.:',
@@ -349,6 +456,22 @@ const LABELS = {
 // Swish on invoices (the number row + the payment QR). When true, the Swish row
 // and QR render on the invoice PDF and the settings "Visa Swish" toggle is live.
 export const SHOW_SWISH_ON_INVOICE = true
+
+// QR codes in the payment box sit in a row from its top-right corner, just
+// below "Att betala": the Swish QR first, then the payment-link QR, then the
+// bank-app QR (crm#249), each 96pt wide with a 14pt gap. A third code would
+// leave the payment rows too narrow, so the bank-app QR then starts a second
+// row under the Swish QR.
+export const PAYMENT_QR_PT = 96
+export const PAYMENT_QR_STEP_PT = 110
+// One QR row: the symbol, a two-line caption (room for the tallest bundled
+// font) and a 10pt gap.
+export const PAYMENT_QR_ROW_STEP_PT = 134
+// The corner QRs are absolutely positioned, so they do not stretch the box.
+// With the bank-app QR the box is at least this tall (15pt padding, one QR
+// row, the bottom padding), plus one row step when it sits on the second
+// row, so the symbol never spills over the block below.
+export const PAYMENT_QR_SECTION_MIN_HEIGHT_PT = 160
 
 /**
  * Render a stored VAT notice in the document language.
@@ -370,6 +493,17 @@ export function localizeVatNotice(text: string, lang: PdfLang): string {
 // statutory Swedish concept and has no formal English equivalent.
 const DEDUCTION_LABOR_ONLY_NOTICE =
   'Endast arbetskostnad har inkluderats i underlaget för ROT/RUT-avdrag enligt Skatteverkets fakturamodell.'
+
+// Grön teknik counterpart, Swedish-only for the same reason. Skatteverket
+// gives the reduction "för kostnaden för arbete och material", while
+// "resor, utrustning eller projektering i samband med installationen" do not
+// qualify (Så fungerar skattereduktionen för grön teknik, företag). The box
+// already prints both sums ("Arbete och material", "Övriga kostnader"), so
+// the notice only states the rule, once, after the per-line breakdown and
+// joined with the payout sentence: every line here can push the payment
+// details onto a second page.
+export const GRON_TEKNIK_BASE_NOTICE =
+  'Skattereduktionen för grön teknik räknas på arbete och material för installationen, inklusive moms; övriga kostnader ingår inte.'
 
 // Resolved branding values used by the stylesheet. Keeping the resolved shape
 // distinct from the prop shape lets us validate the font allowlist in one
@@ -450,7 +584,7 @@ function createStyles(branding?: InvoiceBranding) {
   const b = resolveBranding(branding)
   return StyleSheet.create({
     page: {
-      padding: 40,
+      padding: PAGE_PADDING_PT,
       fontSize: 10,
       fontFamily: b.fontFamily,
     },
@@ -633,7 +767,7 @@ function createStyles(branding?: InvoiceBranding) {
       borderColor: '#dee2e6',
     },
     noticeText: {
-      fontSize: 9,
+      fontSize: NOTICE_FONT_SIZE_PT,
       color: '#495057',
     },
     creditNoteBox: {
@@ -932,6 +1066,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // current branding. createStyles() with no argument returns the original
   // hardcoded stylesheet: the default code path is unchanged.
   const styles = createStyles(branding)
+  // How many estimated lines of free text a table row or the notes box may
+  // hold and still be kept on one page, in this render's font.
+  const fontFamily = resolveBranding(branding).fontFamily
+  const rowLineCap = keepTogetherLineCap(fontFamily, TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)
+  const noteLineCap = keepTogetherLineCap(fontFamily, NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)
   const isCreditNote = !!invoice.credited_invoice_id
   // ROT/RUT personnummer as printed in the deduction box: YYYYMMDD-XXXX.
   // Derived from the stored ciphertext unless the caller already masked a
@@ -947,6 +1086,36 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // Amount-less product rows count as text too (isTextLikeLine), so they
   // neither print zeros nor seed an empty per-rate VAT group.
   const billableItems = items.filter((item) => !isTextLikeLine(item))
+
+  // Skattereduktion för grön teknik. It never shares an invoice with ROT/RUT
+  // (refused at creation), so its presence decides the whole deduction
+  // block: the reduction row, the total incl. moms, the property, what the
+  // installation cost apart from övriga kostnader, and the notice. ROT/RUT
+  // invoices render exactly as before.
+  const hasGronTeknik = items.some((item) => item.deduction_type === 'gron_teknik')
+  const lineInclVat = (item: InvoiceItem): number => roundOre((item.line_total ?? 0) + (item.vat_amount ?? 0))
+  const gronTeknikEligibleCost = hasGronTeknik
+    ? roundOre(billableItems.filter((item) => item.deduction_type === 'gron_teknik').reduce((sum, item) => sum + lineInclVat(item), 0))
+    : 0
+  // Several installation types on one invoice: Skatteverket asks for their
+  // costs apart ("ska du särskilja kostnader för de olika
+  // installationstyperna"), one row per type in its list order.
+  const gronTeknikCostByType = hasGronTeknik
+    ? GRON_TEKNIK_WORK_TYPES.map((type) => ({
+        label: type.label,
+        amount: roundOre(
+          billableItems
+            .filter((item) => item.deduction_type === 'gron_teknik' && item.work_type?.trim() === type.code)
+            .reduce((sum, item) => sum + lineInclVat(item), 0),
+        ),
+        present: billableItems.some(
+          (item) => item.deduction_type === 'gron_teknik' && item.work_type?.trim() === type.code,
+        ),
+      })).filter((type) => type.present)
+    : []
+  const gronTeknikOtherCost = hasGronTeknik
+    ? roundOre(billableItems.filter((item) => !item.deduction_type).reduce((sum, item) => sum + lineInclVat(item), 0))
+    : 0
 
   // Check if items have mixed VAT rates
   const hasPerLineVat = billableItems.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
@@ -982,6 +1151,27 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // recomputation of the deduction-aware total; the fallback to the amount to
   // pay covers legacy rows marked paid before paid_amount was recorded.
   const paidState = resolvePdfPaidState(invoice, docType, isCreditNote, amountToPay.toPay)
+  // Bank-app payment QR (UsingQR, crm#249), built from the very figures this
+  // page prints: "Att betala" (the remainder on a partly paid invoice), the
+  // printed giro, and the OCR reference when the OCR row is printed. Drawn as
+  // vector paths, so every render path gets it without a pre-rendered image.
+  const bankPaymentQrPayload = buildBankPaymentQrPayload({
+    company,
+    invoice,
+    amountDue: paidState ? paidState.remainingAmount : amountToPay.toPay,
+    lang,
+  })
+  const bankPaymentQr = bankPaymentQrPayload ? bankPaymentQrSymbol(bankPaymentQrPayload) : null
+  // Where the bank-app QR goes, and the room the payment rows leave for the
+  // QR column (they wrap before it instead of running under the white square).
+  const otherCornerQrs = (swishQrDataUrl ? 1 : 0) + (paymentLinkQrDataUrl ? 1 : 0)
+  const bankPaymentQrSlot = otherCornerQrs < 2 ? otherCornerQrs : 0
+  const bankPaymentQrRow = otherCornerQrs < 2 ? 0 : 1
+  const bankPaymentQrSectionStyle = {
+    minHeight: PAYMENT_QR_SECTION_MIN_HEIGHT_PT + bankPaymentQrRow * PAYMENT_QR_ROW_STEP_PT,
+    // At most two QR columns: the rows end 14pt before the leftmost one.
+    paddingRight: 15 + PAYMENT_QR_STEP_PT * Math.min(otherCornerQrs + 1, 2),
+  }
   // Draft watermark (#2437): genuine drafts, plus the corrupt-state case of a
   // non-cancelled invoice that somehow lacks a number. Cancelled wins (the
   // MAKULERAD banner below), and the interactive preview has its own title.
@@ -1209,7 +1399,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <View
                   key={index}
                   style={styles.tableRow}
-                  wrap={!fitsOnOnePage(item.description, FULL_WIDTH_BOX_PT)}
+                  wrap={!fitsOnOnePage(item.description, FULL_WIDTH_BOX_PT, rowLineCap)}
                 >
                   <Text style={[styles.colDescription, { width: '100%' }]} hyphenationCallback={wrapFullWidthWords}>
                     {item.description || ' '}
@@ -1219,7 +1409,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <View
                   key={index}
                   style={styles.tableRow}
-                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_COLUMN_PT)}
+                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_COLUMN_PT, rowLineCap)}
                 >
                   <Text style={styles.colDescription} hyphenationCallback={wrapDescriptionWords}>{item.description}</Text>
                   <Text style={styles.colQty}>{item.quantity}</Text>
@@ -1245,10 +1435,22 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         </View>
 
         {/* Notes: directly under the line items they annotate and above the
-            totals, the placement Swedish invoice readers expect. */}
+            totals, the placement Swedish invoice readers expect. The box
+            moves to the next page whole whenever it fits on one; a note too
+            long for any page splits between its paragraphs, each of which is
+            kept together in turn when it fits. */}
         {invoice.notes && (
-          <View style={styles.noticeBox} wrap={!fitsOnOnePage(invoice.notes, FULL_WIDTH_BOX_PT)}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{invoice.notes}</Text>
+          <View style={styles.noticeBox} wrap={!fitsOnOnePage(invoice.notes, FULL_WIDTH_BOX_PT, noteLineCap)}>
+            {splitParagraphs(invoice.notes).map((paragraph, index) => (
+              <Text
+                key={index}
+                style={styles.noticeText}
+                hyphenationCallback={wrapFullWidthWords}
+                wrap={!fitsOnOnePage(paragraph, FULL_WIDTH_BOX_PT, noteLineCap)}
+              >
+                {paragraph}
+              </Text>
+            ))}
           </View>
         )}
 
@@ -1299,9 +1501,17 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                       <Text style={[styles.totalValue, { fontSize: 8 }]}>{formatPdfCurrency(rounding.roundingDelta, 'SEK', lang)}</Text>
                     </View>
                   )}
+                  {showDeduction && hasGronTeknik && (
+                    // Grön teknik: "Fakturans totala belopp och
+                    // skattereduktionens storlek", both incl. moms.
+                    <View style={styles.totalRow}>
+                      <Text style={styles.totalLabel}>{L.totalInclVat}</Text>
+                      <Text style={styles.totalValue}>{formatPdfCurrency(rounding.displayed, invoice.currency, lang)}</Text>
+                    </View>
+                  )}
                   {showDeduction && (
                     <View style={styles.totalRow}>
-                      <Text style={styles.totalLabel}>{L.deductionRow}</Text>
+                      <Text style={styles.totalLabel}>{hasGronTeknik ? L.deductionRowGronTeknik : L.deductionRow}</Text>
                       <Text style={styles.totalValue}>
                         {/* deduction_total is stored as a positive magnitude;
                             -Math.abs() keeps the row a reduction even if the
@@ -1360,7 +1570,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         {!isDeliveryNote && !isCreditNote && (invoice.deduction_total ?? 0) > 0 && (
           // Kept on one page while the per-line breakdown (which carries the
           // line descriptions, possibly multi-line) is short enough; past
-          // that it may split rather than be clipped.
+          // that it may split rather than be clipped. Fixed cap: the estimate
+          // does not see the rest of the box (MAX_KEEP_TOGETHER_LINES).
           <View
             style={styles.deductionBox}
             wrap={
@@ -1370,6 +1581,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   .map((i) => i.description)
                   .join('\n'),
                 FULL_WIDTH_BOX_PT,
+                MAX_KEEP_TOGETHER_LINES,
               )
             }
           >
@@ -1386,6 +1598,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               // null when only RUT lines exist (RUT doesn't require it).
               const housing = items.find((i) => i.housing_designation)?.housing_designation
               const apartment = items.find((i) => i.apartment_number)?.apartment_number
+              // Grön teknik in a bostadsrätt: the förening's orgnr goes with
+              // the lägenhetsnummer.
+              const brf = hasGronTeknik ? items.find((i) => i.brf_org_number)?.brf_org_number : null
               return (
                 <>
                   {housing && (
@@ -1400,27 +1615,71 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                       <Text style={styles.deductionValue}>{apartment}</Text>
                     </View>
                   )}
+                  {brf && (
+                    <View style={styles.deductionRow}>
+                      <Text style={styles.deductionLabel}>{L.deductionBrfOrgNumber}</Text>
+                      <Text style={styles.deductionValue}>{brf}</Text>
+                    </View>
+                  )}
                 </>
               )
             })()}
-            {/* Labor-only disclaimer (Skatteverket fakturamodellen). Per ML
-                17 kap, only the labor portion qualifies; material must be
-                invoiced separately. */}
-            <Text style={styles.deductionNotice}>{DEDUCTION_LABOR_ONLY_NOTICE}</Text>
+            {hasGronTeknik && (
+              <>
+                {gronTeknikCostByType.length > 1 ? (
+                  gronTeknikCostByType.map((type, idx) => (
+                    <View key={type.label} style={styles.deductionRow}>
+                      <Text style={styles.deductionLabel}>{idx === 0 ? L.gronTeknikEligibleCost : ''}</Text>
+                      <Text style={styles.deductionValue}>
+                        {`${type.label}: ${formatPdfCurrency(type.amount, invoice.currency, lang)} ${L.inclVatSuffix}`}
+                      </Text>
+                    </View>
+                  ))
+                ) : (
+                  <View style={styles.deductionRow}>
+                    <Text style={styles.deductionLabel}>{L.gronTeknikEligibleCost}</Text>
+                    <Text style={styles.deductionValue}>
+                      {`${formatPdfCurrency(gronTeknikEligibleCost, invoice.currency, lang)} ${L.inclVatSuffix}`}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.deductionRow}>
+                  <Text style={styles.deductionLabel}>{L.gronTeknikOtherCost}</Text>
+                  <Text style={styles.deductionValue}>
+                    {`${formatPdfCurrency(gronTeknikOtherCost, invoice.currency, lang)} ${L.inclVatSuffix}`}
+                  </Text>
+                </View>
+              </>
+            )}
+            {/* What the base covers (Skatteverket fakturamodellen): labor
+                only for ROT/RUT, material invoiced separately. Grön teknik
+                prints its base once, after the breakdown (below). */}
+            {!hasGronTeknik && (
+              <Text style={styles.deductionNotice}>{DEDUCTION_LABOR_ONLY_NOTICE}</Text>
+            )}
             {/* Per-line breakdown: one row per eligible item with kind,
                 work type if present and the deducted amount. */}
             {items
               .filter((i) => i.deduction_type)
               .map((i, idx) => {
-                const kind = i.deduction_type === 'rot' ? 'ROT' : 'RUT'
-                const work = i.work_type ? `, ${i.work_type}` : ''
+                // Grön teknik rows name the installation type (Skatteverket:
+                // "vilken typ av arbete"); ROT/RUT rows keep printing the code.
+                const isGronTeknik = i.deduction_type === 'gron_teknik'
+                const kind = isGronTeknik ? L.gronTeknikKind : i.deduction_type === 'rot' ? 'ROT' : 'RUT'
+                const workText = isGronTeknik ? (workTypeLabel(i.work_type) ?? i.work_type) : i.work_type
+                const work = workText ? `, ${workText}` : ''
                 return (
                   <Text key={idx} style={styles.deductionLineItem} hyphenationCallback={wrapFullWidthWords}>
                     {`${kind}${work}: ${i.description}, ${formatPdfCurrency(i.deduction_amount ?? 0, invoice.currency, lang)}`}
                   </Text>
                 )
               })}
-            <Text style={styles.deductionNotice}>{L.deductionNotice}</Text>
+            {/* Grön teknik: labor and material, övriga kostnader excluded,
+                and the seller requests the payout: one notice. ROT/RUT keep
+                their own notice as it was. */}
+            <Text style={styles.deductionNotice}>
+              {hasGronTeknik ? `${GRON_TEKNIK_BASE_NOTICE} ${L.gronTeknikPayoutNotice}` : L.deductionNotice}
+            </Text>
           </View>
         )}
 
@@ -1444,7 +1703,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Payment information - not shown for credit notes, proformas, quotes, or delivery notes */}
         {!isCreditNote && !isProforma && !isQuote && !isDeliveryNote && (
-          <View style={styles.paymentSection} wrap={false}>
+          <View
+            style={bankPaymentQr ? [styles.paymentSection, bankPaymentQrSectionStyle] : styles.paymentSection}
+            wrap={false}
+          >
             <Text style={styles.paymentTitle}>{L.paymentHeading}</Text>
             {invoice.payment_link_url && (
               <View style={styles.paymentRow}>
@@ -1547,6 +1809,31 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               <View style={{ position: 'absolute', top: 15, right: swishQrDataUrl ? 125 : 15, width: 96, alignItems: 'center' }}>
                 <Image src={paymentLinkQrDataUrl} style={{ width: 96, height: 96 }} />
                 <Text style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}>{L.paymentLinkQrCaption}</Text>
+              </View>
+            )}
+            {/* Bank-app QR: next free slot in the row, or the second row
+                when two codes already sit there. White behind the symbol and
+                its quiet zone, as the format asks; nothing drawn over it. */}
+            {bankPaymentQr && (
+              <View
+                style={{
+                  position: 'absolute',
+                  top: 15 + bankPaymentQrRow * PAYMENT_QR_ROW_STEP_PT,
+                  right: 15 + PAYMENT_QR_STEP_PT * bankPaymentQrSlot,
+                  width: PAYMENT_QR_PT,
+                  alignItems: 'center',
+                }}
+              >
+                <Svg width={PAYMENT_QR_PT} height={PAYMENT_QR_PT} viewBox={`0 0 ${bankPaymentQr.size} ${bankPaymentQr.size}`}>
+                  <Rect x={0} y={0} width={bankPaymentQr.size} height={bankPaymentQr.size} fill="#ffffff" />
+                  <Path d={bankPaymentQr.path} fill="#000000" />
+                </Svg>
+                <Text
+                  style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}
+                  hyphenationCallback={wrapDescriptionWords}
+                >
+                  {L.bankPaymentQrCaption}
+                </Text>
               </View>
             )}
           </View>

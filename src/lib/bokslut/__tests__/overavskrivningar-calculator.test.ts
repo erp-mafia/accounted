@@ -145,6 +145,38 @@ describe('calculateOveravskrivningar', () => {
     ])
   })
 
+  it('applies räkenskapsenlig avskrivning to an ekonomisk förening exactly as to an AB (IL 18 kap.)', async () => {
+    const asset = makeAsset()
+    vi.mocked(listAssets).mockResolvedValue([asset])
+    mockPostedDepreciation(asset)
+    mockTrialBalance([
+      row('1220', { period_debit: 100_000, closing_debit: 100_000 }),
+      row('1229', { period_credit: 20_000, closing_credit: 20_000 }),
+    ])
+
+    const result = await calculateOveravskrivningar({
+      supabase: makeSupabase() as never,
+      companyId: 'company-1',
+      fiscalPeriod: PERIOD,
+      entityType: 'ekonomisk_forening',
+    })
+
+    expect(result.status).toBe('ready')
+    expect(result.targetReserve).toBe(10_000)
+  })
+
+  it('is not applicable to forms without juridisk-person dispositioner', async () => {
+    for (const entityType of ['enskild_firma', 'ideell_forening', 'handelsbolag']) {
+      const result = await calculateOveravskrivningar({
+        supabase: makeSupabase() as never,
+        companyId: 'company-1',
+        fiscalPeriod: PERIOD,
+        entityType,
+      })
+      expect(result.status, entityType).toBe('not_applicable')
+    }
+  })
+
   it('requires a release when the existing reserve exceeds the lawful target', async () => {
     const asset = makeAsset({
       acquisition_date: '2020-01-01',

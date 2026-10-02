@@ -116,7 +116,7 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
       <div className="px-1">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="font-sans text-sm font-medium">INK2 (Aktiebolag)</h3>
+              <h3 className="font-sans text-sm font-medium">Inkomstdeklaration 2 (INK2)</h3>
               <p className="text-sm text-muted-foreground mt-1">
                 {data.companyInfo.companyName} · {data.fiscalYear.name}
                 {data.companyInfo.orgNumber && ` · Org.nr: ${data.companyInfo.orgNumber}`}

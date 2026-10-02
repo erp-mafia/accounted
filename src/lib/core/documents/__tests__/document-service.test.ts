@@ -1538,6 +1538,32 @@ describe('dual-layout read helpers', () => {
   })
 })
 
+/**
+ * The five pin reads deleteDocument() makes after the document row
+ * (readDocumentDeletePins, in its order): supplier invoices, expense claims,
+ * bank transactions, inbox items by file, inbox items by received Peppol XML.
+ */
+function pinResults(pins: {
+  supplierInvoice?: boolean
+  expenseClaim?: boolean
+  bankTransaction?: boolean
+  inboxFile?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null }>
+  inboxXml?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null }>
+} = {}): Array<{ data: unknown; error: null }> {
+  return [
+    { data: pins.supplierInvoice ? [{ id: 'si-1' }] : [], error: null },
+    { data: pins.expenseClaim ? [{ id: 'ec-1' }] : [], error: null },
+    { data: pins.bankTransaction ? [{ id: 'tx-1' }] : [], error: null },
+    { data: pins.inboxFile ?? [], error: null },
+    { data: pins.inboxXml ?? [], error: null },
+  ]
+}
+
+const LOOSE_DOC = {
+  data: { id: 'doc-1', file_name: 'a.pdf', storage_path: 'documents/user-1/1_a.pdf', journal_entry_id: null, journal_entry_line_id: null, user_id: 'user-1' },
+  error: null,
+}
+
 describe('deleteDocument', () => {
   it('removes BOTH key layouts via the service-role client so no readable orphan copy survives', async () => {
     const company = 'company-1'
@@ -1554,6 +1580,7 @@ describe('deleteDocument', () => {
         },
         error: null,
       },
+      ...pinResults(),
       { data: null, error: null }, // delete
     ]
 
@@ -1624,6 +1651,7 @@ describe('deleteDocument', () => {
         },
         error: null,
       },
+      ...pinResults(),
       { data: null, error: { message: 'blocked by Bokföringslagen retention trigger' } },
     ]
 
@@ -1634,6 +1662,107 @@ describe('deleteDocument', () => {
 
     expect(result).toMatchObject({ ok: false, reason: 'linked_to_entry', status: 409 })
     expect(serviceRemove).not.toHaveBeenCalled()
+  })
+
+  // crm#230: every record that holds a document is refused here, the one rule
+  // behind the dashboard, v1 and MCP deletes, not only in what Arkiv offers.
+  it.each([
+    {
+      pin: 'the underlag of a registered supplier invoice',
+      pins: { supplierInvoice: true },
+      code: 'DOC_DELETE_SUPPLIER_INVOICE_UNDERLAG',
+      block: 'supplier_invoice',
+      says: 'leverantörsfaktura',
+    },
+    { pin: 'the underlag of an utlägg', pins: { expenseClaim: true }, code: 'DOC_DELETE_EXPENSE_CLAIM_UNDERLAG', block: 'expense_claim', says: 'utlägg' },
+    {
+      pin: 'the file of an inbox item booked through a verifikat',
+      pins: { inboxFile: [{ created_journal_entry_id: 'je-1', created_supplier_invoice_id: null }] },
+      code: 'DOC_DELETE_BOOKED_INBOX_ITEM',
+      block: 'booked_inbox_item',
+      says: 'mottagen faktura',
+    },
+    {
+      pin: 'the received Peppol XML of an e-invoice turned into a supplier invoice',
+      pins: { inboxXml: [{ created_journal_entry_id: null, created_supplier_invoice_id: 'si-1' }] },
+      code: 'DOC_DELETE_BOOKED_INBOX_ITEM',
+      block: 'booked_inbox_item',
+      says: 'i det skick det togs emot',
+    },
+    {
+      pin: 'the underlag of a bank transaction',
+      pins: { bankTransaction: true },
+      code: 'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION',
+      block: 'bank_transaction',
+      says: 'banktransaktion',
+    },
+  ])('refuses $pin with a 409 and a Swedish sentence, deleting nothing', async ({ pins, code, block, says }) => {
+    results = [LOOSE_DOC, ...pinResults(pins)]
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+    const supabase = makeClient()
+
+    const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+    expect(result).toMatchObject({ ok: false, reason: 'pinned', status: 409, code, block })
+    expect(result.ok === false && result.message).toContain(says)
+    // Six reads (the row and its five pins), and no delete was ever built.
+    const builders = supabase.from.mock.results.map((r) => r.value as { delete: ReturnType<typeof vi.fn> })
+    expect(builders.every((b) => b.delete.mock.calls.length === 0)).toBe(true)
+    expect(serviceRemove).not.toHaveBeenCalled()
+  })
+
+  it('reads the pins scoped to the company, with the Peppol XML read through channel_context', async () => {
+    results = [LOOSE_DOC, ...pinResults(), { data: null, error: null }]
+    serviceClientOverride = makeClient()
+    const supabase = makeClient()
+
+    const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+    expect(result.ok).toBe(true)
+    const tables = supabase.from.mock.calls.map((c) => c[0])
+    expect(tables).toEqual([
+      'document_attachments',
+      'supplier_invoices',
+      'expense_claims',
+      'transactions',
+      'invoice_inbox_items',
+      'invoice_inbox_items',
+      'document_attachments',
+    ])
+    const eqs = (i: number) => (supabase.from.mock.results[i].value as { eq: ReturnType<typeof vi.fn> }).eq.mock.calls
+    for (const i of [1, 2, 3, 4, 5]) expect(eqs(i)).toContainEqual(['company_id', 'company-1'])
+    expect(eqs(5)).toContainEqual(['channel_context->>peppol_xml_document_id', 'doc-1'])
+  })
+
+  it('lets the files of an inbox item that was never booked go', async () => {
+    results = [LOOSE_DOC, ...pinResults({ inboxFile: [{ created_journal_entry_id: null, created_supplier_invoice_id: null }] }), { data: null, error: null }]
+    serviceClientOverride = makeClient()
+
+    const result = await deleteDocument(makeClient() as never, 'company-1', 'doc-1')
+
+    expect(result.ok).toBe(true)
+  })
+
+  it('throws, deleting nothing, when a pin cannot be read: an unknown pin is never free', async () => {
+    results = [LOOSE_DOC, { data: null, error: { message: 'statement timeout', code: '57014' } }, ...pinResults().slice(1)]
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+    const supabase = makeClient()
+
+    await expect(deleteDocument(supabase as never, 'company-1', 'doc-1')).rejects.toMatchObject({ code: '57014' })
+    expect(supabase.from).toHaveBeenCalledTimes(6)
+    expect(serviceRemove).not.toHaveBeenCalled()
+  })
+
+  it('reads no pins for a document a verifikat line holds', async () => {
+    results = [{ data: { ...LOOSE_DOC.data, journal_entry_line_id: 'line-1' }, error: null }]
+    const supabase = makeClient()
+
+    const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+    expect(result).toMatchObject({ ok: false, reason: 'linked_to_entry', code: 'DOC_DELETE_LINKED', block: 'verifikat' })
+    expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -50,6 +50,7 @@ export interface WooSyncPayload {
     updated?: number
     unchanged?: number
     errors?: number
+    unknownCurrency?: number
     revoked?: boolean
     deadlineReached?: boolean
   } | null
@@ -58,6 +59,11 @@ export interface WooSyncPayload {
 type SyncCounts = {
   fetched: number
   imported: number
+  /**
+   * Orders skipped because the store wrote no usable currency code. Said in
+   * its own sentence (syncing again does not help), zero when there were none.
+   */
+  unknownCurrency: number
 }
 
 export type WooSyncSummary =
@@ -91,11 +97,15 @@ export function syncSummary(payload: WooSyncPayload | null): WooSyncSummary {
   // "imported" in the user-facing sentence = new rows this run (inserts).
   const imported = typeof summary.inserted === 'number' ? summary.inserted : 0
   const errors = typeof summary.errors === 'number' ? summary.errors : 0
+  const unknownCurrency =
+    typeof summary.unknownCurrency === 'number' ? summary.unknownCurrency : 0
 
   if (summary.deadlineReached === true) {
-    return { reason: 'partial', values: { fetched, imported, errors } }
+    return { reason: 'partial', values: { fetched, imported, unknownCurrency, errors } }
   }
   if (fetched === 0) return { reason: 'empty' }
-  if (errors > 0) return { reason: 'errors', values: { fetched, imported, errors } }
-  return { reason: 'feed', values: { fetched, imported } }
+  if (errors > 0) {
+    return { reason: 'errors', values: { fetched, imported, unknownCurrency, errors } }
+  }
+  return { reason: 'feed', values: { fetched, imported, unknownCurrency } }
 }

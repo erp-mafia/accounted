@@ -5,7 +5,7 @@ import {
   formatCounterpartyName,
   toCounterpartyTemplateId,
 } from '@/lib/bookkeeping/counterparty-templates'
-import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, type BookingTemplate, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
+import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, templateAppliesToForm, type BookingTemplate, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
 import { proposalFromTemplate, type BookingProposal, type ProposalSource } from '@/lib/bookkeeping/proposal'
 import type {
   Transaction,
@@ -296,7 +296,7 @@ export function getRecentlyUsedTemplates(
     if (!template) continue
 
     // Filter by entity applicability
-    if (entityType && template.entity_applicability !== 'all' && template.entity_applicability !== entityType) continue
+    if (entityType && !templateAppliesToForm(template, entityType)) continue
 
     // Filter by direction
     if (direction && template.direction !== direction && template.direction !== 'transfer') continue
@@ -395,7 +395,7 @@ function templateForAccount(account: string, direction: 'expense' | 'income', en
     (t) =>
       (t.direction === direction || t.direction === 'transfer') &&
       (direction === 'expense' ? t.debit_account : t.credit_account) === account &&
-      (!entityType || t.entity_applicability === 'all' || t.entity_applicability === entityType),
+      (!entityType || templateAppliesToForm(t, entityType)),
   )
 }
 

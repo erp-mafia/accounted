@@ -101,7 +101,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { resolveDetachErrorMessage } from '@/components/transactions/detach-underlag'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary } from '@/types'
+import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary, DeductionType } from '@/types'
 import { mutate as globalMutate } from 'swr'
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
@@ -395,7 +395,7 @@ async function fetchPotentialMatches(
   const rotRutRequests: PotentialRotRutPayoutRequest[] = ((rotRutResult.data ?? []) as Array<{
     id: string
     name: string
-    deduction_type: 'rot' | 'rut'
+    deduction_type: DeductionType
     status: string
     requested_total: number | string
     decided_total: number | string | null

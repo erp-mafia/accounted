@@ -67,6 +67,23 @@ const { propagateUnderlagMock } = vi.hoisted(() => ({
 vi.mock('@/lib/transactions/inbox-underlag', () => ({
   propagateUnderlagForBookedTransaction: propagateUnderlagMock,
 }))
+// Booking-time duplicate guard: the DB-backed detector is stubbed ("no
+// duplicate" by default) so these tests exercise the route's wiring, not the
+// detection queries, which are unit-tested in
+// lib/transactions/__tests__/booking-duplicate-detection.test.ts. The real
+// module is spread so its pure helpers keep their behaviour.
+const { detectDupMock, appendHistoryMock } = vi.hoisted(() => ({
+  detectDupMock: vi.fn(),
+  appendHistoryMock: vi.fn(),
+}))
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/booking-duplicate-detection')>()),
+  detectBookingDuplicate: detectDupMock,
+}))
+vi.mock('@/lib/processing-history/append', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/processing-history/append')>()),
+  appendProcessingHistory: appendHistoryMock,
+}))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { BookkeepingDatabaseError, withUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
@@ -164,6 +181,8 @@ beforeEach(() => {
   findMissingAccountsMock.mockResolvedValue([])
   reverseEntryMock.mockResolvedValue(undefined)
   createTxJE.mockResolvedValue({ id: 'je-fresh' })
+  detectDupMock.mockReset().mockResolvedValue(null)
+  appendHistoryMock.mockReset().mockResolvedValue('evt-1')
   mockValidate.mockResolvedValue({
     userId: 'user-1',
     companyId: COMPANY_ID,
@@ -705,6 +724,351 @@ describe('counterparty template with a learned bag', () => {
 
     expect(res.status).toBe(404)
     expect((await res.json()).error.code).toBe('NOT_FOUND')
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/v1/.../transactions/{id}/categorize duplicate-payment guard (parity with the dashboard route)', () => {
+  const EXISTING_JE = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const OTHER_JE = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+  // A ledger-only voucher that already books the same amount on the bank
+  // account: e.g. a supplier invoice marked paid ("Markera som betald").
+  const candidate = {
+    transaction_id: null,
+    journal_entry_id: EXISTING_JE,
+    voucher_label: 'A12',
+    entry_date: '2026-05-12',
+    description: 'Leverantörsfaktura 100 betald',
+    amount: -349.5,
+    account_number: '1930',
+    currency: null,
+    amount_in_currency: null,
+    amount_verified: true,
+    unverified_reason: null,
+  }
+
+  it('returns 401 without a valid bearer token', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(happyPathSupabase().supabase)
+
+    const res = await POST(makeRequest({ is_business: true, category: 'expense_office' }), routeParams())
+
+    expect(res.status).toBe(401)
+    expect(detectDupMock).not.toHaveBeenCalled()
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for force=true without the reviewed candidate id', async () => {
+    mockServiceClient.mockReturnValue(happyPathSupabase().supabase)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'expense_office', force: true }),
+      routeParams(),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
+  it('refuses with 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE and writes nothing when the bank line is already booked', async () => {
+    const { supabase, updates } = happyPathSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+    detectDupMock.mockResolvedValue(candidate)
+
+    const res = await POST(makeRequest({ is_business: true, category: 'expense_office' }), routeParams())
+
+    const body = await res.json()
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+    expect(body.error.details.candidate.journal_entry_id).toBe(EXISTING_JE)
+    expect(detectDupMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      expect.objectContaining({ id: TX_ID, date: '2026-05-12', amount: -349.5, currency: 'SEK' }),
+      undefined,
+    )
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(updates.transactions).toBeUndefined()
+    expect(appendHistoryMock).not.toHaveBeenCalled()
+  })
+
+  it('books over the candidate with force=true bound to it and records the dismissal in behandlingshistorik', async () => {
+    mockServiceClient.mockReturnValue(happyPathSupabase().supabase)
+    detectDupMock.mockResolvedValue(candidate)
+
+    const res = await POST(
+      makeRequest({
+        is_business: true,
+        category: 'expense_office',
+        force: true,
+        expected_duplicate_journal_entry_id: EXISTING_JE,
+      }),
+      routeParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.journal_entry_id).toBe('je-fresh')
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+    expect(appendHistoryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: COMPANY_ID,
+        aggregateId: TX_ID,
+        eventType: 'BankTransactionDuplicateDismissed',
+        payload: expect.objectContaining({
+          transaction_id: TX_ID,
+          dismissed_journal_entry_id: EXISTING_JE,
+          amount_ore: -34950,
+          via: 'api_force',
+        }),
+        actor: { type: 'user', id: 'user-1' },
+      }),
+    )
+  })
+
+  it('refuses a force=true bound to a candidate that no longer matches with TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH', async () => {
+    mockServiceClient.mockReturnValue(happyPathSupabase().supabase)
+    detectDupMock.mockResolvedValue({ ...candidate, journal_entry_id: OTHER_JE })
+
+    const res = await POST(
+      makeRequest({
+        is_business: true,
+        category: 'expense_office',
+        force: true,
+        expected_duplicate_journal_entry_id: EXISTING_JE,
+      }),
+      routeParams(),
+    )
+
+    const body = await res.json()
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH')
+    expect(body.error.details.detected_journal_entry_id).toBe(OTHER_JE)
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(appendHistoryMock).not.toHaveBeenCalled()
+  })
+
+  it('fails open when duplicate detection itself errors (no force): the booking proceeds', async () => {
+    mockServiceClient.mockReturnValue(happyPathSupabase().supabase)
+    detectDupMock.mockRejectedValue(new Error('statement timeout'))
+
+    const res = await POST(makeRequest({ is_business: true, category: 'expense_office' }), routeParams())
+
+    expect(res.status).toBe(200)
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces the duplicate refusal on a dry-run, and a bound force previews without writing the dismissal', async () => {
+    mockServiceClient.mockReturnValue(happyPathSupabase().supabase)
+    detectDupMock.mockResolvedValue(candidate)
+
+    const dryUrl = `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/categorize?dry_run=true`
+    const dryRequest = (body: unknown) => {
+      const base = makeRequest(body)
+      return new Request(dryUrl, { method: 'POST', headers: base.headers, body: JSON.stringify(body) })
+    }
+
+    const refused = await POST(dryRequest({ is_business: true, category: 'expense_office' }), routeParams())
+    expect(refused.status).toBe(409)
+    expect((await refused.json()).error.code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+
+    const forced = await POST(
+      dryRequest({
+        is_business: true,
+        category: 'expense_office',
+        force: true,
+        expected_duplicate_journal_entry_id: EXISTING_JE,
+      }),
+      routeParams(),
+    )
+    expect(forced.status).toBe(200)
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(appendHistoryMock).not.toHaveBeenCalled()
+  })
+
+  it('does not run the guard on the already-categorized fast path (the verifikat already exists)', async () => {
+    mockServiceClient.mockReturnValue(happyPathSupabase({ journal_entry_id: EXISTING_JE }).supabase)
+    detectDupMock.mockResolvedValue(candidate)
+
+    const res = await POST(makeRequest({ is_business: true, category: 'expense_office' }), routeParams())
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.already_had_journal_entry).toBe(true)
+    expect(detectDupMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/v1/.../transactions/{id}/categorize invoice-match intercept (parity with the dashboard route)', () => {
+  // A supplier payment categorized straight onto leverantörsskulder (244x)
+  // while an open supplier invoice from the same supplier covers the amount.
+  function supplierPaymentSupabase() {
+    return makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_ID,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -1250,
+            currency: 'SEK',
+            merchant_name: 'Kontorsbolaget',
+            cash_account_id: null,
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [{ id: TX_ID }], error: null },
+      ],
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      chart_of_accounts: {
+        data: { account_number: '2440', account_class: 2, default_vat_treatment: null },
+        error: null,
+      },
+      suppliers: { data: [{ id: 'sup-1' }], error: null },
+      supplier_invoices: {
+        data: [
+          {
+            id: 'si-1',
+            supplier_invoice_number: 'F-100',
+            invoice_date: '2026-04-30',
+            remaining_amount: 1250,
+            total: 1250,
+            currency: 'SEK',
+            total_sek: 1250,
+            exchange_rate: null,
+            supplier: { name: 'Kontorsbolaget AB' },
+          },
+        ],
+        error: null,
+      },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+  }
+
+  // An inbound payment categorized straight onto kundfordringar (151x) while
+  // an unpaid customer invoice covers the amount.
+  function customerReceiptSupabase() {
+    return makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_ID,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: 5000,
+            currency: 'SEK',
+            merchant_name: 'Kund AB',
+            description: 'Kund AB',
+            cash_account_id: null,
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [{ id: TX_ID }], error: null },
+      ],
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      chart_of_accounts: {
+        data: { account_number: '1510', account_class: 1, default_vat_treatment: null },
+        error: null,
+      },
+      customers: { data: [{ id: 'cust-1' }], error: null },
+      invoices: {
+        data: [
+          {
+            id: 'inv-1',
+            invoice_number: '1001',
+            invoice_date: '2026-04-12',
+            due_date: '2026-05-12',
+            remaining_amount: 5000,
+            total: 5000,
+            currency: 'SEK',
+            total_sek: 5000,
+            exchange_rate: null,
+            customer: { name: 'Kund AB' },
+          },
+        ],
+        error: null,
+      },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+  }
+
+  it('intercepts a plain 244x categorization with TX_CATEGORIZE_SUGGEST_SI_MATCH and writes nothing', async () => {
+    const { supabase, updates } = supplierPaymentSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'expense_other', account_override: '2440' }),
+      routeParams(),
+    )
+
+    const body = await res.json()
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_SUGGEST_SI_MATCH')
+    expect(body.error.details.candidates).toEqual([
+      expect.objectContaining({
+        supplier_invoice_id: 'si-1',
+        invoice_number: 'F-100',
+        remaining_amount: 1250,
+        supplier_name: 'Kontorsbolaget AB',
+      }),
+    ])
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(updates.transactions).toBeUndefined()
+  })
+
+  it('books the plain 244x categorization when confirm_no_match: true overrides the intercept', async () => {
+    mockServiceClient.mockReturnValue(supplierPaymentSupabase().supabase)
+
+    const res = await POST(
+      makeRequest({
+        is_business: true,
+        category: 'expense_other',
+        account_override: '2440',
+        confirm_no_match: true,
+      }),
+      routeParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+    const mapping = createTxJE.mock.calls[0][4] as { debit_account: string; credit_account: string }
+    expect(mapping.debit_account).toBe('2440')
+    expect(mapping.credit_account).toBe('1930')
+  })
+
+  it('surfaces the intercept on a dry-run too', async () => {
+    mockServiceClient.mockReturnValue(supplierPaymentSupabase().supabase)
+    const body = { is_business: true, category: 'expense_other', account_override: '2440' }
+    const base = makeRequest(body)
+    const res = await POST(
+      new Request(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/categorize?dry_run=true`,
+        { method: 'POST', headers: base.headers, body: JSON.stringify(body) },
+      ),
+      routeParams(),
+    )
+
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('TX_CATEGORIZE_SUGGEST_SI_MATCH')
+  })
+
+  it('intercepts a plain 151x categorization of an inbound payment with TX_CATEGORIZE_SUGGEST_CI_MATCH', async () => {
+    mockServiceClient.mockReturnValue(customerReceiptSupabase().supabase)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'income_services', account_override: '1510' }),
+      routeParams(),
+    )
+
+    const body = await res.json()
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_SUGGEST_CI_MATCH')
+    expect(body.error.details.candidates[0]).toEqual(
+      expect.objectContaining({ invoice_id: 'inv-1', customer_name: 'Kund AB' }),
+    )
     expect(createTxJE).not.toHaveBeenCalled()
   })
 })

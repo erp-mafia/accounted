@@ -143,6 +143,12 @@ const SAMPLE_WEBHOOK = {
   disabled_reason: null,
   created_at: '2026-05-15T12:00:00Z',
   updated_at: '2026-05-15T12:00:00Z',
+  verified_at: '2026-05-15T12:01:00Z',
+  verification_grace_ends_at: null,
+  verification_attempts: 1,
+  verification_last_attempt_at: '2026-05-15T12:01:00Z',
+  verification_last_error: null,
+  verification_next_attempt_at: null,
 }
 
 beforeEach(() => {
@@ -508,7 +514,14 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/test', () => {
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: {
-          data: { id: WEBHOOK_ID, api_version_pinned: '2026-05-12', active: true, disabled_at: null },
+          data: {
+            id: WEBHOOK_ID,
+            api_version_pinned: '2026-05-12',
+            active: true,
+            disabled_at: null,
+            verified_at: '2026-05-15T12:01:00Z',
+            verification_grace_ends_at: null,
+          },
           error: null,
         },
         webhook_deliveries: { data: { id: DELIVERY_ID }, error: null },

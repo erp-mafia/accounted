@@ -3,6 +3,9 @@ import { getPeriodiskSammanstallningCsv } from '@/lib/reports/filing-report-serv
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * GET /api/reports/periodisk-sammanstallning/csv

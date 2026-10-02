@@ -70,6 +70,26 @@ describe('POST /api/invoices/[id]/finalize ("Granska & skapa")', () => {
     )
   })
 
+  it('refuses a draft whose customer was deleted and spends no number on it (crm#263)', async () => {
+    const draft = makeInvoice({
+      id: 'inv-1',
+      invoice_number: null,
+      status: 'draft',
+      document_type: 'invoice',
+    })
+    enqueue({ data: { ...draft, customer_id: null }, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/finalize', { method: 'POST' }),
+      createMockRouteParams({ id: 'inv-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_CUSTOMER_MISSING')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('returns 404 INVOICE_NOT_FOUND when the invoice does not exist', async () => {
     enqueue({ data: null, error: { message: 'not found' } })
 

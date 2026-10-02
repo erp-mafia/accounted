@@ -35,11 +35,14 @@ function leaves(profile: LegalFormProfile): Record<string, unknown> {
     'equity.retained': profile.equity.retained,
     'equity.hasOwners': profile.equity.hasOwners,
     'equity.settlement': JSON.stringify(profile.equity.settlement),
+    'equity.memberCapital': profile.equity.memberCapital,
     'filings.incomeReturn': profile.filings.incomeReturn,
     'filings.booksCurrentTax': profile.filings.booksCurrentTax,
     'filings.corporateTaxDispositions': profile.filings.corporateTaxDispositions,
     'filings.arsredovisning': profile.filings.arsredovisning,
     'filings.frameworks': JSON.stringify(profile.filings.frameworks),
+    'filings.ixbrl': profile.filings.ixbrl,
+    'filings.auditorAlwaysRequired': profile.filings.auditorAlwaysRequired,
   }
 }
 
@@ -54,6 +57,7 @@ describe('legal forms: the registry', () => {
       enskild_firma: 'Enskild firma',
       aktiebolag: 'Aktiebolag',
       ideell_forening: 'Ideell förening',
+      ekonomisk_forening: 'Ekonomisk förening',
     })
   })
 

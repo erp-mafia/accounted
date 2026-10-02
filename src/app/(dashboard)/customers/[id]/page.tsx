@@ -20,7 +20,7 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import { Lock, Eye, EyeOff } from 'lucide-react'
 import { useLocale } from 'next-intl'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import { getCountryName } from '@/lib/vat/country-codes'
@@ -198,7 +198,14 @@ export default function CustomerDetailPage({
       })
 
       if (!response.ok) {
-        throw new Error('Delete failed')
+        // A refusal says why and what to do first (drafts to delete, invoices
+        // that keep the customer): show it instead of a bare "try again".
+        toast({
+          title: t('delete_failed_title'),
+          description: await getResponseErrorMessage(response, 'customer', errorLocale),
+          variant: 'destructive',
+        })
+        return
       }
 
       toast({

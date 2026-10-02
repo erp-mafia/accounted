@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { reopenExternallyClosedFiscalPeriod } from '@/lib/core/bookkeeping/fiscal-year-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 // Undo "klarmarkera": reopen a period that was marked as closed in a previous
 // bookkeeping system. The refusal codes (PERIOD_NOT_FOUND,

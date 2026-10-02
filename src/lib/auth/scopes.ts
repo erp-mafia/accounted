@@ -464,6 +464,7 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/webhooks/:id/test': 'webhooks:manage',
   'GET /api/v1/companies/:companyId/webhooks/:id/deliveries': 'webhooks:manage',
   'POST /api/v1/companies/:companyId/webhooks/:id/rotate-secret': 'webhooks:manage',
+  'POST /api/v1/companies/:companyId/webhooks/:id/verify': 'webhooks:manage',
   'POST /api/v1/webhook-deliveries/:id/retry': 'webhooks:manage',
 }
 

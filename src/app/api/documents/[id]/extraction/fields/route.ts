@@ -9,6 +9,9 @@ import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
 import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * POST /api/documents/[id]/extraction/fields  { fields: { name: value } }

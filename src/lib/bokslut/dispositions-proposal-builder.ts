@@ -44,13 +44,10 @@ export async function buildDispositionsProposal(
     .select('entity_type')
     .eq('company_id', companyId)
     .maybeSingle()
-  const entityType: DispositionsProposal['entityType'] = await resolveCompanyEntityType(
-    supabase,
-    companyId,
-    settings?.entity_type,
-  )
+  const form = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+  const entityType: DispositionsProposal['entityType'] = form
 
-  if (!supportsCorporateTaxDispositions(entityType)) {
+  if (!supportsCorporateTaxDispositions(form)) {
     // A form without corporate tax dispositions (enskild firma, ideell
     // förening) produces no bookable bokslutsdispositioner: bolagsskatt,
     // periodiseringsfond and SLP are mechanisms of the forms whose profile
@@ -86,7 +83,7 @@ export async function buildDispositionsProposal(
     fiscalPeriodId,
   )
   const [taxAdjustments, bookedTax] = await Promise.all([
-    loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
+    loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, form),
     getBookedBolagsskatt(supabase, companyId, fiscalPeriodId),
   ])
   // Income statement excludes tax posted by this year-end flow, but includes

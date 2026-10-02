@@ -299,6 +299,22 @@ function buildLineInserts(
 }
 
 /**
+ * Options for posting paths whose line bags are not new user input.
+ */
+export interface CreateEntryOptions {
+  /**
+   * The line bags are copied verbatim from posted history: skip the soft
+   * registry validation, as storno and the accrual replay do. Only the
+   * year-end IB carry passes it (issue #3313): a project value archived
+   * during the year can still hold a 1470 balance, and a close must not
+   * fail on it. The tag is kept, never stripped. Never exempt source type
+   * 'opening_balance' as a whole: an import IB carries user codes on a
+   * first posting.
+   */
+  replayDimensions?: boolean
+}
+
+/**
  * Create a draft journal entry with lines (no voucher number assigned yet)
  * The entry stays in 'draft' status until commitEntry() is called.
  */
@@ -306,7 +322,8 @@ export async function createDraftEntry(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  input: CreateJournalEntryInput
+  input: CreateJournalEntryInput,
+  options: CreateEntryOptions = {}
 ): Promise<JournalEntry> {
   // Validate sides and balance
   assertLinesWellFormed(input.lines)
@@ -338,7 +355,7 @@ export async function createDraftEntry(
   // must not be able to strand the remaining months as pending and leave the
   // interim 17xx/29xx account overstated. See
   // DIMENSION_VALIDATION_EXEMPT_SOURCE_TYPES.
-  if (!isDimensionValidationExemptSource(input.source_type)) {
+  if (!options.replayDimensions && !isDimensionValidationExemptSource(input.source_type)) {
     await validateEntryDimensions(supabase, companyId, lines)
   }
 
@@ -1145,9 +1162,10 @@ export async function createJournalEntry(
   userId: string,
   input: CreateJournalEntryInput,
   commitMethod?: string,
-  rubricVersion?: string
+  rubricVersion?: string,
+  options: CreateEntryOptions = {}
 ): Promise<JournalEntry> {
-  const draft = await createDraftEntry(supabase, companyId, userId, input)
+  const draft = await createDraftEntry(supabase, companyId, userId, input, options)
   try {
     return await commitEntry(supabase, companyId, userId, draft.id, commitMethod, rubricVersion)
   } catch (commitError) {

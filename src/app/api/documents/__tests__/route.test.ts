@@ -92,6 +92,19 @@ describe('POST /api/documents', () => {
     expect(uploadDocumentMock).not.toHaveBeenCalled()
   })
 
+  it('accepts a CSV that Windows declares as Excel and stores it as text/csv (crm#268)', async () => {
+    uploadDocumentMock.mockResolvedValue(makeDocumentAttachment({ id: 'doc-csv', file_name: 'export.csv' }))
+    const csv = new File([new TextEncoder().encode('datum;belopp\n2026-10-01;100\n')], 'export.csv', {
+      type: 'application/vnd.ms-excel',
+    })
+
+    const res = await POST(makeRequest({ file: csv }) as never, createMockRouteParams({}))
+
+    expect(res.status).toBe(200)
+    const [, , , file] = uploadDocumentMock.mock.calls[0]
+    expect(file).toEqual(expect.objectContaining({ name: 'export.csv', type: 'text/csv' }))
+  })
+
   it('returns 400 when the bytes do not match the declared type', async () => {
     uploadDocumentMock.mockRejectedValue(new Error('Filen matchar inte den angivna filtypen'))
 

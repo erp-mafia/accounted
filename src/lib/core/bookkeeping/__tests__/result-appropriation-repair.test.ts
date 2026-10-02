@@ -239,6 +239,19 @@ describe('classifyHistoricalResultRepair', () => {
     expect(result.plan).toBeNull()
   })
 
+  it('treats an ekonomisk förening like an aktiebolag: the same 2099 -> 2098 chain', () => {
+    const ab = classifyHistoricalResultRepair(snapshot({}))
+    const forening = classifyHistoricalResultRepair(
+      snapshot({ entityType: 'ekonomisk_forening' } as Partial<HistoricalResultRepairSnapshot>),
+    )
+    expect(forening.status).toBe(ab.status)
+    expect(forening.reason).toBe(ab.reason)
+    const ideell = classifyHistoricalResultRepair(
+      snapshot({ entityType: 'ideell_forening' } as Partial<HistoricalResultRepairSnapshot>),
+    )
+    expect(ideell).toMatchObject({ status: 'skipped', reason: 'non_aktiebolag' })
+  })
+
   it('skips an explicit zero opening result', () => {
     const result = classifyHistoricalResultRepair(
       snapshot({

@@ -10,6 +10,7 @@ import { contentDisposition } from '@/lib/api/content-disposition'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
@@ -67,6 +68,12 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       { error: 'Invoice not found' },
       { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
     )
+  }
+
+  // No buyer to print (customer deleted, crm#263): a clear refusal, which the
+  // preview probe below shows as a message, instead of a render that throws.
+  if (invoiceLacksCustomer(invoice)) {
+    return privateNoStore(errorResponseFromCode('INVOICE_CUSTOMER_MISSING', log, { requestId }))
   }
 
   const variant = resolveVariant(request)

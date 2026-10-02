@@ -368,6 +368,134 @@ describe('validateAnnualReportCompleteness', () => {
   })
 })
 
+describe('validateAnnualReportCompleteness: ekonomisk förening', () => {
+  function foreningReport(memberCountChange: string | null): ArsredovisningData {
+    const base = report()
+    return {
+      ...base,
+      company: { ...base.company, name: 'Testkooperativet ek. för.', entity_type: 'ekonomisk_forening' },
+      forvaltningsberattelse: {
+        ...base.forvaltningsberattelse,
+        member_disclosures: {
+          member_count_change: memberCountChange,
+          insatser_repayable_next_year: null,
+          forlagsinsatser_dividend_right: null,
+          forlagsinsatser_redeemable_two_years: null,
+        },
+      },
+    } as unknown as ArsredovisningData
+  }
+
+  it('requires the ÅRL 6 kap. 3 § member statement before filing', () => {
+    const base = input('filing')
+    const missing = validateAnnualReportCompleteness({ ...base, report: foreningReport(null) })
+    expect(missing.issues.map((issue) => issue.code)).toContain('AR-EF-MEMBER-INFO')
+    const present = validateAnnualReportCompleteness({
+      ...base,
+      report: foreningReport('Medlemsantalet ökade från 40 till 52.'),
+    })
+    expect(present.issues.map((issue) => issue.code)).not.toContain('AR-EF-MEMBER-INFO')
+  })
+
+  it('requires the dividend-right statement when förlagsinsatser are on the balance sheet (ÅRL 6 kap. 3 §)', () => {
+    const base = input('filing')
+    const withForlag = (dividendRight: string | null): ArsredovisningData => {
+      const r = foreningReport('Medlemsantalet ökade från 40 till 52.')
+      return {
+        ...r,
+        balansrakning: {
+          ...r.balansrakning,
+          equity_liabilities: [
+            ...r.balansrakning.equity_liabilities,
+            { label: 'Förlagsinsatser', semantic_key: 'balance_sheet_forlagsinsatser', current: 50_000, previous: null },
+          ],
+        },
+        forvaltningsberattelse: {
+          ...r.forvaltningsberattelse,
+          member_disclosures: {
+            ...r.forvaltningsberattelse.member_disclosures,
+            forlagsinsatser_dividend_right: dividendRight,
+          },
+        },
+      } as unknown as ArsredovisningData
+    }
+    const missing = validateAnnualReportCompleteness({ ...base, report: withForlag(null) })
+    expect(missing.issues.map((issue) => issue.code)).toContain('AR-EF-FORLAGSINSATSER-DIVIDEND')
+    const present = validateAnnualReportCompleteness({
+      ...base,
+      report: withForlag('Förlagsinsatserna ger rätt till 4 % årlig utdelning enligt stadgarna.'),
+    })
+    expect(present.issues.map((issue) => issue.code)).not.toContain('AR-EF-FORLAGSINSATSER-DIVIDEND')
+    // No förlagsinsatser: the text is optional and the PDF prints "inga".
+    const none = validateAnnualReportCompleteness({ ...base, report: foreningReport('Oförändrat medlemsantal.') })
+    expect(none.issues.map((issue) => issue.code)).not.toContain('AR-EF-FORLAGSINSATSER-DIVIDEND')
+  })
+
+  it('demands the revisionsberättelse even when the profile says none is required (EFL 8 kap. 1 §)', () => {
+    const base = input('filing')
+    const profile: AnnualReportProfile = {
+      ...base.profile,
+      auditor_report_required: false,
+      auditor_report_included: false,
+    }
+    const result = validateAnnualReportCompleteness({
+      ...base,
+      profile,
+      report: foreningReport('Oförändrat medlemsantal.'),
+    })
+    expect(result.issues.map((issue) => issue.code)).toContain('AR-AUDITOR-REPORT-MISSING')
+  })
+
+  it('never files an unanswered ÅRL 6 kap. 3 § amount as "inga"; an entered 0 is an answer', () => {
+    const base = input('filing')
+    const withAmounts = (
+      repayable: number | null,
+      redeemable: number | null,
+      forlagsinsatser: number,
+    ): ArsredovisningData => {
+      const r = foreningReport('Oförändrat medlemsantal.')
+      return {
+        ...r,
+        balansrakning: {
+          ...r.balansrakning,
+          equity_liabilities: [
+            ...r.balansrakning.equity_liabilities,
+            { label: 'Förlagsinsatser', semantic_key: 'balance_sheet_forlagsinsatser', current: forlagsinsatser, previous: null },
+          ],
+        },
+        forvaltningsberattelse: {
+          ...r.forvaltningsberattelse,
+          member_disclosures: {
+            ...r.forvaltningsberattelse.member_disclosures,
+            forlagsinsatser_dividend_right: forlagsinsatser ? 'Rätt till 4 % utdelning enligt stadgarna.' : null,
+            insatser_repayable_next_year: repayable,
+            forlagsinsatser_redeemable_two_years: redeemable,
+          },
+        },
+      } as unknown as ArsredovisningData
+    }
+    const codes = (r: ArsredovisningData) =>
+      validateAnnualReportCompleteness({ ...base, report: r }).issues.map((issue) => issue.code)
+
+    expect(codes(withAmounts(null, null, 0))).toContain('AR-EF-MEMBER-AMOUNTS')
+    // Without förlagsinsatser only the repayable insatser are asked.
+    expect(codes(withAmounts(0, null, 0))).not.toContain('AR-EF-MEMBER-AMOUNTS')
+    expect(codes(withAmounts(12_500, null, 50_000))).toContain('AR-EF-MEMBER-AMOUNTS')
+    expect(codes(withAmounts(12_500, 0, 50_000))).not.toContain('AR-EF-MEMBER-AMOUNTS')
+  })
+
+  it('cites the förening\'s own prudence rule (EFL 12 kap. 4 §), not the aktiebolag\'s', () => {
+    const value = input('draft')
+    const r = foreningReport('Oförändrat medlemsantal.')
+    r.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend = 50
+    const issue = validateAnnualReportCompleteness({ ...value, report: r }).issues.find(
+      (i) => i.code === 'AR-DIVIDEND-PRUDENCE-UNCONFIRMED',
+    )
+    expect(issue?.remediation).toContain('12 kap. 4 § lagen om ekonomiska föreningar')
+    expect(issue?.remediation).not.toContain('ABL')
+  })
+})
+
 // Feedback seq 740922: a K2 aktiebolag closed its year with eget kapital
 // 68 021,75 against a registered aktiekapital of 150 000, and its board drew
 // up the kontrollbalansräkning after balansdagen. The validation warns (ABL 25

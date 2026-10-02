@@ -106,6 +106,16 @@ function fmt(amount: number): string {
 }
 
 /**
+ * An ÅRL 6 kap. 3 § amount: an entered 0 is the statutory "inga", an
+ * unanswered one (null) prints `unanswered` so the document never states a
+ * fact the user did not give.
+ */
+function memberAmount(amount: number | null | undefined, unanswered: string): string {
+  if (amount == null) return unanswered
+  return amount === 0 ? 'inga' : `${fmt(amount)} kr`
+}
+
+/**
  * Renders ÅRL post-level statement rows (see statement-rows.ts) with a
  * jämförelseår column. Headings carry no amounts; totals get the bordered
  * bold style. The previous-year column stays empty for the company's first
@@ -173,6 +183,17 @@ function PageChrome({
 }
 
 export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
+  // An ekonomisk förening adopts the statements at its ordinarie
+  // föreningsstämma (EFL 6 kap. 9-10 §§), owns no share capital and must add
+  // the ÅRL 6 kap. 3 § member disclosures to förvaltningsberättelsen.
+  const isForening = data.company.entity_type === 'ekonomisk_forening'
+  const meeting = isForening ? 'föreningsstämman' : 'årsstämman'
+  const meetingNoun = isForening ? 'föreningsstämma' : 'årsstämma'
+  const entityNoun = isForening ? 'föreningens' : 'bolagets'
+  const member = data.forvaltningsberattelse.member_disclosures
+  const hasForlagsinsatser =
+    (data.balansrakning.equity_liabilities.find((row) => row.semantic_key === 'balance_sheet_forlagsinsatser')
+      ?.current ?? 0) !== 0
   const reportSignatureDate = data.signatures
     .map((signature) => signature.signed_at?.slice(0, 10) ?? null)
     .filter((date): date is string => date !== null)
@@ -180,7 +201,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
     .at(-1)
   const agmDispositionDecision =
     data.forvaltningsberattelse.agm_disposition_outcome === 'proposal_approved'
-      ? `Årsstämman beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`
+      ? `${isForening ? 'Föreningsstämman' : 'Årsstämman'} beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`
       : data.forvaltningsberattelse.agm_disposition_outcome === 'alternative_decision'
         ? data.forvaltningsberattelse.agm_disposition_decision
         : null
@@ -240,6 +261,26 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
           </View>
         ))}
 
+        {isForening && member && (
+          <>
+            <Text style={styles.sectionTitle}>Medlemmar och insatser</Text>
+            <Text style={styles.paragraph}>
+              Väsentliga förändringar i medlemsantalet: {member.member_count_change?.trim() || 'uppgift saknas'}
+            </Text>
+            <Text style={styles.paragraph}>
+              Insatsbelopp som ska återbetalas under nästa räkenskapsår (EFL 10 kap. 11 och 16 §§):{' '}
+              {memberAmount(member.insatser_repayable_next_year, 'uppgift saknas')}
+            </Text>
+            <Text style={styles.paragraph}>
+              Rätt till utdelning som gjorda förlagsinsatser medför: {member.forlagsinsatser_dividend_right?.trim() || 'uppgift saknas'}
+            </Text>
+            <Text style={styles.paragraph}>
+              Förlagsinsatser som har sagts upp och ska lösas in under de nästkommande två räkenskapsåren:{' '}
+              {memberAmount(member.forlagsinsatser_redeemable_two_years, hasForlagsinsatser ? 'uppgift saknas' : 'inga')}
+            </Text>
+          </>
+        )}
+
         <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
         {data.forvaltningsberattelse.egen_kapital_changes.map((r) => (
           <View key={r.label} style={styles.tableRow}>
@@ -250,20 +291,27 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
 
         <Text style={styles.sectionTitle}>Förslag till resultatdisposition</Text>
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.resultatdisposition}</Text>
-        {[
-          ['Balanserat resultat', data.forvaltningsberattelse.resultatdisposition_amounts.retained_earnings],
-          ['Fri överkursfond', data.forvaltningsberattelse.resultatdisposition_amounts.share_premium_reserve],
-          ['Årets resultat', data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result],
-          ['Summa till årsstämmans förfogande', data.forvaltningsberattelse.resultatdisposition_amounts.total],
-          ['Föreslagen utdelning', -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend],
-          ['Balanseras i ny räkning', data.forvaltningsberattelse.resultatdisposition_amounts.carried_forward],
-        ].map(([label, amount], index) => (
+        {(
+          [
+            { label: 'Balanserat resultat', amount: data.forvaltningsberattelse.resultatdisposition_amounts.retained_earnings, isTotal: false },
+            // Fri överkursfond is an aktiebolag post (ÅRL 5 kap. 14 §); a
+            // förening has no överkurs and the row is omitted, so the total
+            // rows are flagged explicitly rather than found by position.
+            ...(isForening
+              ? []
+              : [{ label: 'Fri överkursfond', amount: data.forvaltningsberattelse.resultatdisposition_amounts.share_premium_reserve, isTotal: false }]),
+            { label: 'Årets resultat', amount: data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result, isTotal: false },
+            { label: `Summa till ${meeting}s förfogande`, amount: data.forvaltningsberattelse.resultatdisposition_amounts.total, isTotal: true },
+            { label: isForening ? 'Föreslagen vinstutdelning' : 'Föreslagen utdelning', amount: -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend, isTotal: false },
+            { label: 'Balanseras i ny räkning', amount: data.forvaltningsberattelse.resultatdisposition_amounts.carried_forward, isTotal: true },
+          ] as const
+        ).map(({ label, amount, isTotal }) => (
           <View
-            key={String(label)}
-            style={index === 3 || index === 5 ? styles.tableRowTotal : styles.tableRow}
+            key={label}
+            style={isTotal ? styles.tableRowTotal : styles.tableRow}
           >
             <Text style={styles.colLabel}>{label}</Text>
-            <Text style={styles.colAmount}>{fmt(Number(amount))}</Text>
+            <Text style={styles.colAmount}>{fmt(amount)}</Text>
           </View>
         ))}
       </Page>
@@ -360,10 +408,10 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         <PageChrome data={data} pageLabel="Fastställelseintyg" />
         <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
         <Text style={styles.paragraph}>
-          Undertecknad styrelseledamot, närvarande vid årsstämman, intygar härmed
-          att resultaträkningen och balansräkningen har fastställts på årsstämma
+          Undertecknad styrelseledamot, närvarande vid {meeting}, intygar härmed
+          att resultaträkningen och balansräkningen har fastställts på {meetingNoun}
           den {data.forvaltningsberattelse.agm_date ?? '____________________'} och
-          att årsstämman beslutade om disposition av bolagets resultat i enlighet
+          att {meeting} beslutade om disposition av {entityNoun} resultat i enlighet
           med vad som anges nedan.
         </Text>
         <Text style={styles.paragraph}>
@@ -374,7 +422,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         </Text>
         <Text style={styles.sectionTitle}>Stämmans beslut om resultatdisposition</Text>
         <Text style={styles.paragraph}>
-          {agmDispositionDecision ?? 'Årsstämmans beslut har ännu inte registrerats.'}
+          {agmDispositionDecision ?? `${isForening ? 'Föreningsstämmans' : 'Årsstämmans'} beslut har ännu inte registrerats.`}
         </Text>
         <View style={styles.signatureLine}>
           <View style={styles.signatureSlot}>

@@ -128,11 +128,11 @@ describe('gnubok_get_trial_balance: dimensions filter', () => {
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
-  it('discloses a filtered saldobalans as a partial view: no IB, and is_balanced says nothing', async () => {
+  it('discloses a filtered saldobalans as a partial view: IB scoped to the value, and is_balanced says nothing', async () => {
     // A project's costs carry the tag, the bank line that paid them does
-    // not: the filtered rows are one-sided and IB is company-wide, so the
-    // answer must not read as the company's saldobalans or as an integrity
-    // failure.
+    // not: the filtered rows are one-sided and the IB is only the value's
+    // tagged IB lines (#3313), so the answer must not read as the company's
+    // saldobalans or as an integrity failure.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD_ROW, error: null }) // period info
     enqueue({ data: { dimensions_enabled: false }, error: null }) // company_settings: free-text passthrough
@@ -155,7 +155,8 @@ describe('gnubok_get_trial_balance: dimensions filter', () => {
     expect(result.partial_view).toEqual({
       complete: false,
       disclosure: 'Filtrerad (dimension 6: P001), ej fullständig rapport',
-      opening_balances_included: false,
+      opening_balances: 'dimension_scoped',
+      opening_balances_included: true,
       is_balanced_meaningful: false,
     })
   })

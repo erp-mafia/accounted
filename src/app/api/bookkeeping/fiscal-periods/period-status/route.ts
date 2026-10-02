@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * GET /api/bookkeeping/fiscal-periods/period-status?date=YYYY-MM-DD

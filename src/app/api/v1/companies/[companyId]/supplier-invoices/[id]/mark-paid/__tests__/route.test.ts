@@ -225,6 +225,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
       (call) => call.table === 'supplier_invoices' && call.method === 'update',
     )
     expect(invoiceUpdate?.args[0]).toMatchObject({ paid_at: '2026-05-12T12:00:00Z' })
+    expect(paidHandler).toHaveBeenCalledTimes(1)
     expect(paidHandler).toHaveBeenCalledWith(
       expect.objectContaining({
         supplierInvoice: expect.objectContaining({ paid_at: '2026-05-12T12:00:00Z' }),
@@ -255,6 +256,9 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
       }),
     )
 
+    const paidHandler = vi.fn()
+    eventBus.on('supplier_invoice.paid', paidHandler)
+
     const res = await markPaid(
       makeRequest({ payment_date: '2026-05-12', amount: 400 }),
       detailParams(),
@@ -264,6 +268,8 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     const body = await res.json()
     expect(body.data.status).toBe('partially_paid')
     expect(mockClearSuggestions).not.toHaveBeenCalled()
+    // 600 is still owed: supplier_invoice.paid means fully paid.
+    expect(paidHandler).not.toHaveBeenCalled()
   })
 
   const hi3gRow = {

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Currency, Customer, InvoiceDocumentType } from '@/types'
+import type { Currency, Customer, DeductionType, InvoiceDocumentType } from '@/types'
 import {
   deriveInvoiceVatHeader,
   explainVatTreatment,
@@ -101,7 +101,7 @@ export interface InvoiceWriteItemInput {
   /** Kundorder line this invoice line was created from; round-tripped on
    *  edit so the order's derived invoiced quantity never loses a link. */
   sales_order_item_id?: string | null
-  deduction_type?: 'rot' | 'rut' | null
+  deduction_type?: DeductionType | null
   labor_hours?: number | null
   work_type?: string | null
   housing_designation?: string | null
@@ -206,7 +206,7 @@ export type InvoiceWriteItemRow = {
   article_id: string | null
   revenue_account: string | null
   sales_order_item_id: string | null
-  deduction_type: 'rot' | 'rut' | null
+  deduction_type: DeductionType | null
   deduction_amount: number
   labor_hours: number | null
   work_type: string | null
@@ -462,9 +462,10 @@ export async function buildInvoiceWriteData(params: {
   let deductionPersonnummerEncrypted: string | null = null
   let deductionPersonnummerLast4: string | null = null
   if (documentType === 'invoice') {
-    // Housing info satisfies the ROT requirement in either of two shapes
-    // (Begaran.xsd V6): fastighetsbeteckning (småhus/ägarlägenhet) OR
-    // lägenhetsnummer + bostadsrättsföreningens orgnr (bostadsrätt).
+    // Housing info satisfies the ROT and grön teknik requirement in either of
+    // two shapes (Begaran.xsd V6 and V1): fastighetsbeteckning
+    // (småhus/ägarlägenhet) OR lägenhetsnummer + bostadsrättsföreningens
+    // orgnr (bostadsrätt).
     const fastighetProvided = !!input.deduction_housing_designation?.trim()
     const apartmentProvided = !!input.deduction_apartment_number?.trim()
     const brfProvided = !!input.deduction_brf_org_number?.trim()
@@ -735,6 +736,10 @@ export async function buildInvoiceWriteData(params: {
           quantity: item.quantity,
           discount_percent: discountPercent,
           deduction_type: deductionType,
+          // Grön teknik's rate follows the installation type: the same
+          // work_type validateInput carried, so deduction_total and the
+          // per-line deduction_amount can never disagree.
+          work_type: item.work_type ?? null,
           vat_rate: itemRate,
         })
       : 0
@@ -761,7 +766,9 @@ export async function buildInvoiceWriteData(params: {
       deduction_type: deductionType,
       deduction_amount: deductionAmount,
       labor_hours: documentType === 'invoice' ? (item.labor_hours ?? null) : null,
-      work_type: documentType === 'invoice' ? (item.work_type ?? null) : null,
+      // Trimmed: the rate and the claim read the code trimmed, so the stored
+      // code (printed on the PDF, sent to Skatteverket) must be the same.
+      work_type: documentType === 'invoice' ? (item.work_type?.trim() || null) : null,
       // Property info: per-line value wins, else the invoice-level claim-card
       // value is stamped onto every deduction line so the Skatteverket file
       // generator can read it off the line later. Non-deduction lines carry

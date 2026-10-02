@@ -16,6 +16,9 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 vi.mock('@/lib/salary/payment/bg-lb-generator', () => ({
   generateBgLb: vi.fn(() => ({ content: 'LBFILE', filename: 'lb_2026-03.txt' })),
+  // The bank-list reference of each payee; the fixtures carry no
+  // specification number, which the stubbed generator does not check.
+  utbetalningsnummer: vi.fn(() => '000018'),
 }))
 vi.mock('@/lib/salary/payment/effective-net', () => ({
   effectiveNetPayout: vi.fn(() => 20000),

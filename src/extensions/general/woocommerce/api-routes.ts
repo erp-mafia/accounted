@@ -10,9 +10,20 @@ import { backfillDateErrorMessage, parseBackfillFrom } from '@/lib/feed-sync/cur
 import { isWooCommerceConfigured, encryptCredential } from './lib/credentials'
 import { normalizeStoreUrl, testConnectionAndFetchStoreInfo } from './lib/api-client'
 import { buildAuthorizeUrl } from './lib/connect'
-import { syncWooCommerceOrders } from './lib/order-sync'
+import { syncWooCommerceOrders, wooStoreScope } from './lib/order-sync'
+import {
+  WOO_EXTENSION_ID,
+  parseSkippedOrders,
+  skippedOrdersKey,
+  skippedOrdersStatus,
+} from './lib/skipped-orders'
 import { MAX_BACKFILL_YEARS } from './types'
-import type { WooCommerceConnection, WooCommerceStatusResponse } from './types'
+import type {
+  WooCommerceConnection,
+  WooCommerceConnectionStatus,
+  WooCommerceConnectionStatusView,
+  WooCommerceStatusResponse,
+} from './types'
 
 // Per-user limits: connect/disconnect start outward-facing handshakes, sync
 // hits the merchant's WooCommerce host.
@@ -41,6 +52,45 @@ const NOT_CONFIGURED_MESSAGE =
 /** Columns safe to hand to the browser: never the encrypted credentials. */
 const STATUS_COLUMNS =
   'id, status, store_url, store_name, currency, error_message, connected_at, transaction_sync_enabled, last_order_synced_at'
+
+/**
+ * Attach each store's durable skipped-orders list (lib/skipped-orders) to its
+ * connection, read on the caller's client (extension_data_select lets every
+ * company member read). A failed read is logged and shows no list rather
+ * than failing the whole status call; the list itself is untouched.
+ */
+async function withSkippedOrders(
+  supabase: ExtensionContext['supabase'],
+  companyId: string,
+  connections: WooCommerceConnectionStatus[],
+  log: Pick<Console, 'warn'>,
+): Promise<WooCommerceConnectionStatusView[]> {
+  const withScope = connections.map((c) => ({
+    connection: c,
+    key: c.store_url ? skippedOrdersKey(wooStoreScope(c.store_url)) : null,
+  }))
+  const keys = withScope.flatMap((c) => (c.key ? [c.key] : []))
+  if (keys.length === 0) return connections
+  const { data, error } = await supabase
+    .from('extension_data')
+    .select('key, value')
+    .eq('company_id', companyId)
+    .eq('extension_id', WOO_EXTENSION_ID)
+    .in('key', keys)
+  if (error) {
+    log.warn('[woocommerce] Could not read the skipped-orders list', { message: error.message })
+    return connections
+  }
+  const byKey = new Map<string, unknown>(
+    ((data ?? []) as Array<{ key: string; value: unknown }>).map((row) => [row.key, row.value]),
+  )
+  return withScope.map(({ connection, key }) => {
+    const orders = key ? parseSkippedOrders(byKey.get(key)) : []
+    return orders.length > 0
+      ? { ...connection, skipped_currency_orders: skippedOrdersStatus(orders) }
+      : connection
+  })
+}
 
 type AuthedContext = {
   supabase: ExtensionContext['supabase']
@@ -158,7 +208,13 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         .limit(25)
 
       const active = (rows ?? []).filter((r) => r.status === 'active')
-      const connections = active.length > 0 ? active : rows?.[0] ? [rows[0]] : []
+      const listed = active.length > 0 ? active : rows?.[0] ? [rows[0]] : []
+      const connections = await withSkippedOrders(
+        auth.supabase,
+        auth.companyId,
+        listed as WooCommerceConnectionStatus[],
+        ctx?.log ?? console,
+      )
       const payload: WooCommerceStatusResponse = {
         configured: isWooCommerceConfigured(),
         connection: connections[0] ?? null,

@@ -17,6 +17,7 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Logger } from '@/lib/logger'
@@ -154,7 +155,11 @@ export type MarkSentAndBookResult =
     }
   | {
       ok: false
-      errorCode: 'INVOICE_MARK_SENT_STATUS_FAILED' | 'INVOICE_MARK_SENT_RACE' | 'INVOICE_MARK_SENT_BOOK_FAILED'
+      errorCode:
+        | 'INVOICE_MARK_SENT_STATUS_FAILED'
+        | 'INVOICE_MARK_SENT_RACE'
+        | 'INVOICE_MARK_SENT_BOOK_FAILED'
+        | 'INVOICE_CUSTOMER_MISSING'
       /**
        * INVOICE_MARK_SENT_BOOK_FAILED only: why no verifikat was posted, in
        * Swedish (the engine's refusal, such as a required dimension or an
@@ -186,6 +191,13 @@ export async function markInvoiceSentAndBook(
   const { supabase, companyId, userId, invoice, settings, log } = opts
   const customLines = opts.customLines ?? null
   const id = invoice.id
+
+  // No buyer, no invoice (crm#263): a draft whose customer was deleted is
+  // never issued, whichever path tries. Checked before the status flip, so
+  // nothing has changed when it refuses.
+  if (invoiceLacksCustomer(invoice)) {
+    return { ok: false, errorCode: 'INVOICE_CUSTOMER_MISSING' }
+  }
 
   const entityType = await resolveCompanyEntityType(supabase, companyId, settings.entity_type)
 
@@ -373,6 +385,12 @@ export async function issueAndBookInvoice(
   opts: IssueAndBookOptions,
 ): Promise<IssueAndBookResult> {
   const { supabase, companyId, invoice, settings, log } = opts
+
+  // Before the number below is taken: a draft without a customer (crm#263)
+  // is refused while it is still unnumbered and deletable.
+  if (invoiceLacksCustomer(invoice)) {
+    return { ok: false, errorCode: 'INVOICE_CUSTOMER_MISSING' }
+  }
 
   // An invoice that chose a bank account freezes that account's payee now,
   // from the account as it is at issue; a chosen account that can no longer

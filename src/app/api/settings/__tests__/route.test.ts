@@ -901,6 +901,78 @@ describe('PUT /api/settings', () => {
     expect(response.status).toBe(400)
   })
 
+  it('saves the bank-app payment QR switch (crm#249)', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } }, // oldSettings
+      { data: { company_id: 'company-1', invoice_show_payment_qr: true } }, // update result
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_show_payment_qr: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { invoice_show_payment_qr: boolean } }>(response)
+
+    expect(status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ invoice_show_payment_qr: true })
+    expect(body.data.invoice_show_payment_qr).toBe(true)
+  })
+
+  it('rejects a non-boolean bank-app payment QR switch', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } }, // oldSettings
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_show_payment_qr: 'on' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
+  })
+
+  it('accepts the payslip section switches (crm#202)', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } }, // oldSettings
+      {
+        data: {
+          company_id: 'company-1',
+          salary_payslip_show_employer_cost: false,
+          salary_payslip_show_breakdown: false,
+        },
+      }, // update result
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { salary_payslip_show_employer_cost: false, salary_payslip_show_breakdown: false },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      data: { salary_payslip_show_employer_cost: boolean; salary_payslip_show_breakdown: boolean }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.salary_payslip_show_employer_cost).toBe(false)
+    expect(body.data.salary_payslip_show_breakdown).toBe(false)
+  })
+
+  it('rejects a non-boolean payslip section switch', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } }, // oldSettings
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { salary_payslip_show_breakdown: 'hide' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
+  })
+
   it('allows a bank-details save when stored VAT state is incomplete (bank dialog)', async () => {
     // Pre-existing inconsistency: registered without a VAT number. The invoice
     // bank-details dialog has no VAT fields and must not be blocked by it.

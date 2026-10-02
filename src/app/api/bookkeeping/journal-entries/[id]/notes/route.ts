@@ -4,6 +4,9 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 import { setJournalEntryNote } from '@/lib/core/bookkeeping/journal-entry-edits'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 const UpdateNotesSchema = z.object({
   notes: z.string().max(2000).nullable(),

@@ -135,26 +135,31 @@ describe('generateTrialBalance: dimensions option', () => {
     expect(containsCalls).toEqual([])
   })
 
-  it('drops company-wide opening balances when filtered: amounts are dimension-scoped activity only', async () => {
+  it('scopes opening balances to the filter: the IB is the object\'s tagged IB lines (#3313)', async () => {
     seedCommon()
-    // Company-wide IB on 1930 that CANNOT be dimension-scoped.
-    mockOpeningBalances.mockResolvedValue({
-      balances: new Map([['1930', { debit: 9000, credit: 0 }]]),
+    // getOpeningBalances answers per call: the object's IB under the filter,
+    // the company-wide IB without it.
+    mockOpeningBalances.mockImplementation(async (_s, _c, _p, options) => ({
+      balances: options?.dimensions
+        ? new Map([['1930', { debit: 1200, credit: 0 }]])
+        : new Map([['1930', { debit: 9000, credit: 0 }]]),
       obEntryId: null,
-    })
+    }))
 
     const filtered = await generateTrialBalance(supabase, 'company-1', 'period-1', {
       closingEntry: 'include',
       dimensions: { '6': 'P001' },
     })
 
+    expect(mockOpeningBalances).toHaveBeenLastCalledWith(supabase, 'company-1', PERIOD, { dimensions: { '6': 'P001' } })
     const bank = filtered.rows.find((r) => r.account_number === '1930')
-    expect(bank?.opening_debit).toBe(0)
-    expect(bank?.closing_debit).toBe(500) // period activity only
+    expect(bank?.opening_debit).toBe(1200)
+    expect(bank?.closing_debit).toBe(1700) // the object's IB plus its activity
 
-    // Unfiltered keeps the IB (control).
+    // Unfiltered keeps the company-wide IB (control).
     seedCommon()
     const unfiltered = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
+    expect(mockOpeningBalances).toHaveBeenLastCalledWith(supabase, 'company-1', PERIOD, { dimensions: undefined })
     const bank2 = unfiltered.rows.find((r) => r.account_number === '1930')
     expect(bank2?.opening_debit).toBe(9000)
     expect(bank2?.closing_debit).toBe(9500)

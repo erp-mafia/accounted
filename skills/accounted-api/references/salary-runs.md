@@ -1664,18 +1664,21 @@ Example response `200`:
 
 Returns the rendered payslip (lönespecifikation) as application/pdf, byte-equivalent to the dashboard download. Content-Disposition is attachment with a filename derived from the period and employee name.
 
-**Use when:** You need the payslip document itself: archiving, forwarding to the employee outside the Accounted send flow, or attaching to an external HR system.
+**Use when:** You need the payslip document itself: archiving, forwarding to the employee outside the Accounted send flow (pass audience=employee), or attaching to an external HR system.
 **Do not use for:** The payslip DATA (amounts, line items): use GET /salary-runs/{id}/employees/{employeeId}, which is cheaper and structured. Emailing payslips to employees: POST /salary-runs/{id}/send-payslips sends each a secure link.
 
 **Pitfalls:**
 - The PDF renders whatever the run currently holds: for a draft run that has not been calculated, amounts are 0.
 - PDF rendering takes a few hundred milliseconds; cache on the client if requesting repeatedly.
+- Without audience the PDF is the employer view and always prints Arbetsgivarkostnad and Beräkningsunderlag. A PDF you forward to the employee should use audience=employee, so it matches the emailed payslip link and honours the company's section switches.
+- audience=employee on an approved, paid or booked run, from a key that also holds payroll:write on a company it may write, issues the payslip: the first employee copy of the run (or the payslip email, whichever comes first) fixes which sections it prints, and every later employee copy of that run prints the same sections even after the company changes its switches. A key with only payroll:read (or a read-only membership or connection) never fixes anything: it gets the sections the run was issued with, or the current switches while the run is not issued yet. On a draft or review run the employee copy follows the current switches and fixes nothing.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `employeeId` | path | `string` | yes |  |
+| `audience` | query | `"employer" \| "employee"` | no | employer (default): every section, the employer's own view. employee: the copy the employee receives; Arbetsgivarkostnad and Beräkningsunderlag follow salary_payslip_show_employer_cost / salary_payslip_show_breakdown (GET /salary/settings). |
 
 Response `200` (`application/pdf`).
 
@@ -1749,6 +1752,7 @@ Sends each employee on the run an email with a secure link to their lönebesked 
 - Employees without an email address are skipped and counted in `skipped`, not an error: fix the address with PATCH /employees/{id} and send again.
 - Refused with 403 from the sandbox company (SALARY_PAYSLIPS_SEND_SANDBOX) and without the email capability (SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED).
 - Not idempotent towards the recipients: a replay with a new Idempotency-Key emails everyone again.
+- The first send (or the first employee-copy PDF, whichever comes first) fixes which payslip sections the employee copy of this run prints, from salary_payslip_show_employer_cost / salary_payslip_show_breakdown at that moment. Changing those settings afterwards never changes a payslip of this run that employees already have; re-sending keeps the fixed sections.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

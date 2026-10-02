@@ -21,11 +21,16 @@
  * On HTTP 410 we additionally disable the webhook (sets disabled_at +
  * disabled_reason='HTTP 410 from receiver') so future events don't even
  * enqueue against it.
+ *
+ * A delivery whose endpoint has not passed the ownership handshake (and is not
+ * in a legacy grace window, lib/webhooks/verification.ts) is withheld: no
+ * request, counted as a failed attempt with error 'endpoint_unverified'.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { signPayload } from './signing'
 import { pinnedHttpsFetch, type PinnedFetchResult } from './pinned-fetch'
+import { verificationAllowsDelivery } from './verification'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('webhooks/dispatcher')
@@ -103,7 +108,18 @@ interface WebhookForDelivery {
   company_id: string
   webhook_url: string
   secret: string
+  verified_at: string | null
+  verification_grace_ends_at: string | null
 }
+
+/**
+ * Recorded on a delivery the dispatcher withheld because its endpoint is not
+ * verified (a changed URL still pending, or a legacy endpoint whose grace
+ * window closed). It retries on the normal backoff, so it goes out once the
+ * endpoint passes the handshake within the retry window.
+ */
+const ENDPOINT_UNVERIFIED_ERROR =
+  'endpoint_unverified: withheld until the endpoint passes the verification handshake (POST /webhooks/{id}/verify)'
 
 export interface DispatchSummary {
   picked: number
@@ -114,6 +130,11 @@ export interface DispatchSummary {
   skipped: number
   /** Claimed but handed back unattempted because the cycle budget ran out. */
   released: number
+  /**
+   * Not sent because the endpoint is not verified (no HTTP request made).
+   * The ones that thereby exhausted their attempts are also in `dead`.
+   */
+  withheld: number
   /** Rows this tick's sweep pulled out of an abandoned in_flight state. */
   recovered: number
   /** Subset of `recovered` the sweep took terminal (attempts exhausted). */
@@ -146,6 +167,7 @@ export async function dispatchDueDeliveries(args: {
     dead: 0,
     skipped: 0,
     released: 0,
+    withheld: 0,
     recovered: 0,
     recoveredDead: 0,
   }
@@ -234,6 +256,37 @@ export async function dispatchDueDeliveries(args: {
         companyId: delivery.company_id,
       })
       summary.skipped++
+      continue
+    }
+
+    // Ownership gate (ADA CASA 7.1.2), dispatch side. Fan-out already skips
+    // unverified endpoints; this catches rows enqueued while the endpoint was
+    // still deliverable (its URL changed since, or its grace window closed).
+    // No request is made; the attempt counts, so the row keeps the normal
+    // backoff and reaches a terminal state if the endpoint never verifies.
+    if (!verificationAllowsDelivery(webhook, now)) {
+      const withheld: FailedOutcome = {
+        kind: 'failed',
+        attempts: delivery.attempts + 1,
+        responseStatus: null,
+        responseBody: null,
+        responseHeaders: null,
+        error: ENDPOINT_UNVERIFIED_ERROR,
+      }
+      summary.withheld++
+      if (delivery.attempts + 1 >= MAX_ATTEMPTS) {
+        await markDead(args.supabase, delivery.id, 'endpoint_unverified', withheld)
+        summary.dead++
+      } else {
+        await markFailedForRetry(args.supabase, delivery.id, delivery.attempts, withheld, now)
+      }
+      log.info('delivery withheld: endpoint not verified', {
+        deliveryId: delivery.id,
+        webhookId: webhook.id,
+        companyId: delivery.company_id,
+        eventType: delivery.event_type,
+        attempt: delivery.attempts + 1,
+      })
       continue
     }
 
@@ -392,7 +445,7 @@ async function loadWebhooksByIds(
   // invariant at INSERT time; this is the application-layer mirror.
   const { data, error } = await supabase
     .from('webhooks')
-    .select('id, company_id, webhook_url, secret')
+    .select('id, company_id, webhook_url, secret, verified_at, verification_grace_ends_at')
     .in('id', ids)
 
   if (error || !data) {

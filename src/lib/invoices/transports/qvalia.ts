@@ -32,12 +32,15 @@
  * - Webhooks: since September Qvalia signs deliveries with HMAC-SHA256
  *   (`X-Qvalia-Signature: t=<unix>,v1=<hex>` over `<t>.<raw body>`, plus
  *   `X-Qvalia-Event-Id`; the signing secret is returned once by the first
- *   `PUT .../webhook/configure`). The payload carries `eventId`, which is the
- *   documented dedupe key, and `occurredAt` for ordering. This adapter
- *   predates that: it still authenticates on the outbound auth header the
- *   partner configures (shared secret) and dedupes on eventType +
- *   globalTransactionId + status.status. Moving to signature verification is
- *   a follow-up.
+ *   `PUT .../webhook/configure`). With QVALIA_WEBHOOK_SIGNING_SECRET set,
+ *   verifyWebhook requires that signature (raw body bytes, timing-safe,
+ *   5-minute window on the signed `t`) and ignores the shared-secret header;
+ *   without it the adapter falls back to the outbound auth header the partner
+ *   configures (shared secret, QVALIA_WEBHOOK_SECRET), which is what it did
+ *   before Qvalia signed anything. Dedupe is unchanged: eventType +
+ *   globalTransactionId + status.status, the key the status poll also writes,
+ *   so a webhook and a poll for the same transition stay one event. The
+ *   payload's `eventId` (Qvalia's dedupe key) is not used for that reason.
  * - Webhook delivery is NOT retried by Qvalia: a non-2xx answer, a timeout
  *   (10 s) or an unreachable endpoint loses the event for good, so webhooks
  *   can never be the only source of truth. `pollDeliveryStatus` is the safety
@@ -58,6 +61,7 @@
 
 import { timingSafeEqual } from 'node:crypto'
 import { sha256Hex } from '@/lib/invoices/peppol-delivery'
+import { verifySignatureHeader } from '@/lib/webhooks/signing'
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
@@ -85,6 +89,9 @@ import {
 export const QVALIA_PROVIDER = 'qvalia'
 export const QVALIA_PRODUCTION_BASE_URL = 'https://api.qvalia.com'
 export const QVALIA_DEFAULT_WEBHOOK_HEADER = 'x-accounted-webhook-key'
+export const QVALIA_SIGNATURE_HEADER = 'x-qvalia-signature'
+/** Qvalia's recommended replay window for the signed timestamp. */
+export const QVALIA_SIGNATURE_TOLERANCE_SECONDS = 300
 
 export type QvaliaAuthScheme = 'apikey' | 'raw'
 
@@ -100,10 +107,20 @@ export interface QvaliaConfig {
   accountRegNo: string
   baseUrl: string
   authScheme: QvaliaAuthScheme
-  /** Shared secret Qvalia sends back on every webhook delivery. */
+  /**
+   * Shared secret Qvalia sends back in `webhookHeader` on every webhook
+   * delivery. The legacy authentication, used only while
+   * `webhookSigningSecret` is unset.
+   */
   webhookSecret: string | null
   /** Header name carrying the shared secret (compared case-insensitively). */
   webhookHeader: string
+  /**
+   * HMAC-SHA256 signing secret Qvalia returned once from the first
+   * `PUT .../webhook/configure`. When set, every webhook must carry a valid
+   * `X-Qvalia-Signature` and the shared-secret header is not consulted.
+   */
+  webhookSigningSecret?: string | null
 }
 
 export interface QvaliaTransportDeps {
@@ -136,6 +153,7 @@ export function readQvaliaConfigFromEnv(
     authScheme,
     webhookSecret: env.QVALIA_WEBHOOK_SECRET?.trim() || null,
     webhookHeader: (env.QVALIA_WEBHOOK_HEADER?.trim() || QVALIA_DEFAULT_WEBHOOK_HEADER).toLowerCase(),
+    webhookSigningSecret: env.QVALIA_WEBHOOK_SIGNING_SECRET?.trim() || null,
   }
 }
 
@@ -696,10 +714,32 @@ export function createQvaliaTransport(
     return a.length === b.length && timingSafeEqual(a, b)
   }
 
+  /**
+   * ADA CASA 7.2: HMAC-SHA256 over `<t>.<raw body bytes>`, compared
+   * timing-safe, with the signed `t` inside a 5-minute window. Replays inside
+   * the window are absorbed by the event dedupe key.
+   */
+  function webhookSignatureValid(webhook: PeppolWebhookRequest, signingSecret: string): void {
+    const check = verifySignatureHeader({
+      header: webhook.headers.get(QVALIA_SIGNATURE_HEADER),
+      rawBody: webhook.rawBody,
+      secret: signingSecret,
+      toleranceSeconds: QVALIA_SIGNATURE_TOLERANCE_SECONDS,
+      nowSeconds: Math.floor(now().getTime() / 1000),
+    })
+    if (!check.ok) {
+      throw new QvaliaApiError('auth', `Qvalia webhook signature rejected: ${check.reason}`)
+    }
+  }
+
   async function verifyWebhook(webhook: PeppolWebhookRequest): Promise<PeppolVerifiedEvent[]> {
-    if (!webhookAuthorized(webhook.headers)) {
+    const signingSecret = config.webhookSigningSecret ?? null
+    if (signingSecret) {
+      webhookSignatureValid(webhook, signingSecret)
+    } else if (!webhookAuthorized(webhook.headers)) {
       throw new QvaliaApiError('auth', 'Qvalia webhook secret missing or mismatched')
     }
+    const verificationMethod = signingSecret ? 'hmac_sha256_signature' : 'shared_secret_header'
 
     let parsed: unknown
     try {
@@ -740,7 +780,7 @@ export function createQvaliaTransport(
         occurredAt,
         rawPayload: payload as unknown as Record<string, unknown>,
         eventSha256: payloads.length === 1 ? eventSha256 : sha256Hex(`${eventSha256}:${index}`),
-        verificationMethod: 'shared_secret_header',
+        verificationMethod,
       })
     }
 

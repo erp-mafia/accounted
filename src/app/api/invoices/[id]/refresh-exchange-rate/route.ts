@@ -7,6 +7,9 @@ import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-servic
 import { guardSandbox } from '@/lib/sandbox/guard'
 import type { Currency, Invoice } from '@/types'
 import { UUID_RE } from '@/lib/invariants/uuid'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * POST /api/invoices/[id]/refresh-exchange-rate

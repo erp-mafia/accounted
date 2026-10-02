@@ -414,14 +414,15 @@ describe('parseSIEFile', () => {
       expect(result.issues.some((i) => i.severity === 'warning' && i.message.toLowerCase().includes('objektlista'))).toBe(true)
     })
 
-    it('surfaces OIB/OUB drops and dimension presence as info issues', () => {
+    it('parses OIB/OUB and surfaces the IB split and dimension presence as info issues (#3313)', () => {
       const sie = [
         '#FLAGGA 0',
         '#SIETYP 4',
         '#RAR 0 20240101 20241231',
         '#DIM 6 "Projekt"',
+        '#IB 0 1930 5000.00',
         '#OIB 0 1930 {6 "P001"} 5000.00',
-        '#OUB 0 1930 {6 "P001"} 7000.00',
+        '#OUB 0 1930 {6 "P001"} 5000.00',
         '#VER A 1 20240115 "Taggad"',
         '{',
         '#TRANS 5010 {6 "P001"} 100.00',
@@ -430,9 +431,18 @@ describe('parseSIEFile', () => {
       ].join('\n')
 
       const result = parseSIEFile(sie)
+      expect(result.objectOpeningBalances).toEqual([
+        { yearIndex: 0, account: '1930', dimNo: '6', code: 'P001', amount: 5000 },
+      ])
+      expect(result.objectClosingBalances).toEqual([
+        { yearIndex: 0, account: '1930', dimNo: '6', code: 'P001', amount: 5000 },
+      ])
       const infos = result.issues.filter((i) => i.severity === 'info').map((i) => i.message)
-      expect(infos.some((m) => m.includes('2 objektbalansrader'))).toBe(true)
+      expect(infos.some((m) => m.includes('hoppades över'))).toBe(false)
+      expect(infos.some((m) => m.startsWith('1 objektbalanser (#OIB) fördelar den ingående balansen per projekt'))).toBe(true)
       expect(infos.some((m) => m.includes('dimensionsdata'))).toBe(true)
+      // The 1930 line of the voucher is untagged, so P001's #OUB matches its #OIB.
+      expect(result.issues.some((i) => i.tag === 'OUB')).toBe(false)
       // Silence preserved for files without any dimension data.
       const plain = parseSIEFile(['#FLAGGA 0', '#SIETYP 4', '#RAR 0 20240101 20241231'].join('\n'))
       expect(plain.issues.some((i) => i.tag === 'DIM' || i.tag === 'OIB')).toBe(false)

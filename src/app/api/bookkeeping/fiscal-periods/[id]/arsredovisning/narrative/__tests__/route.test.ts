@@ -140,6 +140,34 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
     expect(body.data.parent_company_org_number).toBe('CHE-123.456.789')
   })
 
+  it('saves the ÅRL 6 kap. 3 § member disclosures and rejects a negative amount', async () => {
+    const { enqueue } = setupSupabase()
+    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: null }) // no registrerad submission
+    enqueue({
+      data: {
+        ...narrativeRow,
+        member_count_change: 'Medlemsantalet ökade från 40 till 52.',
+        insatser_repayable_next_year: 25_000,
+      },
+    }) // upsert
+    enqueue({ data: null }) // clear narrative confirmation
+    const { status, body } = await parseJsonResponse<{
+      data: typeof narrativeRow & { member_count_change: string | null; insatser_repayable_next_year: number | null }
+    }>(
+      await POST(
+        postReq({ member_count_change: 'Medlemsantalet ökade från 40 till 52.', insatser_repayable_next_year: 25_000 }),
+        idParams,
+      ),
+    )
+    expect(status).toBe(200)
+    expect(body.data.member_count_change).toBe('Medlemsantalet ökade från 40 till 52.')
+    expect(body.data.insatser_repayable_next_year).toBe(25_000)
+
+    setupSupabase()
+    expect((await POST(postReq({ forlagsinsatser_redeemable_two_years: -1 }), idParams)).status).toBe(400)
+  })
+
   it('returns 400 for a fractional or negative medelantal anställda override', async () => {
     setupSupabase()
     expect((await POST(postReq({ medelantal_anstallda_override: 1.5 }), idParams)).status).toBe(400)

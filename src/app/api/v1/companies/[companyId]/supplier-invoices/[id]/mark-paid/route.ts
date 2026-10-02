@@ -45,7 +45,7 @@ import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-inv
 import { findDuplicatePaymentCandidatesForSupplierInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplicate-guard-history'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
-import { eventBus } from '@/lib/events'
+import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -683,22 +683,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // missing-underlag surface reads as "Underlag saknas". Never throws.
     await anchorSupplierInvoiceDocument(ctx.supabase, ctx.companyId!, invoiceId)
 
-    try {
-      await eventBus.emit({
-        type: 'supplier_invoice.paid',
-        payload: {
-          supplierInvoice: {
-            ...typed,
-            paid_at: newStatus === 'paid' ? paidAt : (typed.paid_at ?? null),
-          } as unknown as SupplierInvoice,
-          paymentAmount,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-        },
-      })
-    } catch (err) {
-      ctx.log.warn('supplier_invoice.paid emit failed', err as Error)
-    }
+    // supplier_invoice.paid once, when this payment settles the invoice in
+    // full (never on a partial). Best-effort; the helper logs a failure.
+    await emitSupplierInvoicePaidIfSettled({
+      newStatus,
+      supplierInvoice: {
+        ...typed,
+        paid_at: newStatus === 'paid' ? paidAt : (typed.paid_at ?? null),
+      } as unknown as SupplierInvoice,
+      paymentAmount,
+      companyId: ctx.companyId!,
+      userId: ctx.userId,
+    })
 
     return ok(updated, { requestId: ctx.requestId })
   },

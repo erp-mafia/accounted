@@ -20,6 +20,9 @@ import { detectPeriodisering } from '@/lib/bokslut/accruals/auto-detect'
 import type { PeriodiseringEntityType } from '@/lib/bokslut/accruals/auto-detect'
 import type { AccrualProposal } from '@/lib/bokslut/accruals/types'
 import type { JournalEntry } from '@/types'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 export const GET = withRouteContext(
   'period.accruals_preview',

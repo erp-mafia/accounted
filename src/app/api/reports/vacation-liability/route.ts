@@ -17,6 +17,9 @@ import {
   textColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { ensureInitialized } from '@/lib/init'
+
+ensureInitialized()
 
 /**
  * GET /api/reports/vacation-liability

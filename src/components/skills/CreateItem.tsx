@@ -20,7 +20,7 @@ import { Field, KnowledgeChip, KnowledgePanel, Row } from './AgentDetail'
 import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
-import { fetchConnections, readOptions, simulatedClient, withKnowledgeFailed } from './data'
+import { fetchConnections, readOptions, simulatedClient, simulatedConnection, withKnowledgeFailed } from './data'
 import { RoutineRow, RoutineRowElsewhere, sendRoutine, useRoutineTranslate } from './RoutinePanel'
 import { useClaudeTarget } from './claude-target'
 import { AI_CLIENTS, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
@@ -130,7 +130,7 @@ function Create({ companyId, companyName, backHref, edit }: { companyId: string;
   useEffect(() => {
     const simulated = simulatedClient()
     const controller = new AbortController()
-    void (simulated ? Promise.resolve([simulated]) : fetchConnections(controller.signal)).then((list) => { if (list) setConnected(list) })
+    void (simulated ? Promise.resolve(simulatedConnection(simulated)) : fetchConnections(controller.signal)).then((read) => { if (read) setConnected(read.clients) })
     return () => controller.abort()
   }, [])
   const aiClient = pickConnectedAiClient(connected ?? [])

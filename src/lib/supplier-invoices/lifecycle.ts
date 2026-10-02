@@ -11,7 +11,9 @@
  * and could not even have its due date extended.
  *
  * Keep this file in sync with update_overdue_supplier_invoices()
- * (supabase/migrations/20260727160000_supplier_invoice_overdue_symmetric.sql).
+ * (supabase/migrations/20260924204244_supplier_invoice_overdue_skip_reset_archives.sql).
+ * The SQL also skips migration-reset archives, whose rows are frozen; that is
+ * a company-level guard, not part of this row-level predicate.
  */
 
 /**

@@ -155,22 +155,31 @@ export const documentsDelete = defineOperation({
   risk: 'medium',
   reversible: false,
   docs: {
-    summary: 'Delete a document that is not linked to any verifikat.',
+    summary: 'Delete a document that no verifikat or registered record holds.',
     description:
-      'Removes the document row and its stored file. Refused once the document is linked to a journal entry: it is then räkenskapsinformation under BFL 7 kap 2 § and must be kept for 7 years (correct it with a new version instead). The database trigger enforces the same rule. Idempotent. Dry-runnable.',
-    useWhen: 'A duplicate, blank or wrong upload that no verifikat references should go.',
+      'Removes the document row and its stored file. Refused once the document is linked to a journal entry: it is then räkenskapsinformation under BFL 7 kap 2 § and must be kept for 7 years (correct it with a new version instead). The database trigger enforces the same rule. Also refused while a supplier invoice or an expense claim has it as underlag, while an inbox item that was booked or turned into a supplier invoice has it as its file or received Peppol XML, and while a bank transaction has it as underlag. Idempotent. Dry-runnable.',
+    useWhen: 'A duplicate, blank or wrong upload that no verifikat or registered record references should go.',
     doNotUseFor:
       'Taking a document off a bank transaction (POST /transactions/{id}/detach-document), discarding an inbox item (DELETE /inbox-items/{id}) or anything linked to a verifikat.',
     pitfalls: [
       'A linked document returns 409 DOC_DELETE_LINKED, whatever the verifikat\'s status.',
       'The file is removed from storage too: this cannot be undone.',
-      'A document pinned to an unbooked bank transaction is not protected by this rule: detach it first if the transaction still needs it.',
+      'A document still pinned to a bank transaction returns 409 DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION: detach it from the transaction first.',
+      'The underlag of a supplier invoice or an expense claim returns 409 DOC_DELETE_SUPPLIER_INVOICE_UNDERLAG or DOC_DELETE_EXPENSE_CLAIM_UNDERLAG, whatever its status and even before any verifikat links it.',
+      'The file or the received Peppol XML of a booked or converted inbox item returns 409 DOC_DELETE_BOOKED_INBOX_ITEM; an inbox item never booked does not hold its files.',
     ],
     example: { response: { data: { document_id: '4f1c…', deleted: true }, meta: META } },
   },
   input: z.object({ document_id: DOCUMENT_ID }),
   output: z.object({ document_id: z.string().uuid(), deleted: z.literal(true) }),
-  errorCodes: ['DOC_NOT_FOUND', 'DOC_DELETE_LINKED'],
+  errorCodes: [
+    'DOC_NOT_FOUND',
+    'DOC_DELETE_LINKED',
+    'DOC_DELETE_SUPPLIER_INVOICE_UNDERLAG',
+    'DOC_DELETE_EXPENSE_CLAIM_UNDERLAG',
+    'DOC_DELETE_BOOKED_INBOX_ITEM',
+    'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION',
+  ],
   http: {
     method: 'DELETE',
     path: '/api/v1/companies/:companyId/documents/:id',
@@ -180,7 +189,7 @@ export const documentsDelete = defineOperation({
     name: 'gnubok_delete_document',
     title: 'Delete Document',
     description:
-      'Stage deleting an uploaded document and its file. Refused for a document linked to a verifikat (räkenskapsinformation, BFL 7 kap 2 §). Use for duplicates or wrong uploads only; cannot be undone.',
+      'Stage deleting an uploaded document and its file. Refused while a verifikat (BFL 7 kap 2 §), supplier invoice, utlägg, booked inbox item or bank transaction holds it. Use for duplicates or wrong uploads only; cannot be undone.',
     keywords: ['ta bort underlag', 'radera dokument', 'ta bort kvitto', 'dubblett underlag', 'fel uppladdning'],
     stage: { pendingType: 'delete_document', title: () => 'Ta bort underlag' },
   },
