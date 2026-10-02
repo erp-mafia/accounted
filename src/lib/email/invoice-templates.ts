@@ -1,4 +1,4 @@
-import type { Invoice, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
+import type { Invoice, Customer, CompanySettings, InvoiceDocumentType, InvoiceEmailTextOverrides } from '@/types'
 import { formatDate, getCompanyDisplayName } from '@/lib/utils'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
@@ -173,6 +173,13 @@ export interface InvoiceEmailData {
   // one the "Svara direkt på detta mejl" line is left out: a reply would
   // land in the platform noreply sender.
   replyTo?: string | null
+  /**
+   * This send's own subject and message (SendInvoiceSchema email_subject /
+   * email_body), typed for this document: they win over the company texts
+   * and apply to every document type. Same placeholders; empty or
+   * whitespace-only = none.
+   */
+  overrides?: { subject?: string | null; body?: string | null }
 }
 
 function buildPlaceholderValues(data: InvoiceEmailData, lang: EmailLang): Record<string, string> {
@@ -195,24 +202,26 @@ interface ResolvedCustomTexts {
   signoff?: string
 }
 
-// Resolves the company's custom email texts for one language. Per-field
-// fallback: missing / non-string / whitespace-only values return undefined
-// and the caller uses the stock text. Returns RAW substituted strings:
-// escaping is the caller's job per output variant (HTML vs text vs subject).
-// Defensive typeof checks: rows can be written outside Zod (scripts, SQL).
+// Resolves the custom email texts for one language: this send's own
+// subject and body first (data.overrides), then the company's texts.
+// Per-field fallback: missing / non-string / whitespace-only values return
+// undefined and the caller uses the stock text. Returns RAW substituted
+// strings: escaping is the caller's job per output variant (HTML vs text vs
+// subject). Defensive typeof checks: rows can be written outside Zod
+// (scripts, SQL).
 function resolveCustomTexts(data: InvoiceEmailData, lang: EmailLang): ResolvedCustomTexts {
-  if (!isStandardInvoice(data.invoice)) return {}
-  const texts = data.company.invoice_email_texts
-  const langTexts = texts && typeof texts === 'object' ? texts[lang] : undefined
-  if (!langTexts || typeof langTexts !== 'object') return {}
   const values = buildPlaceholderValues(data, lang)
   const pick = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim() !== '' ? applyPlaceholders(v.trim(), values) : undefined
+  const texts = isStandardInvoice(data.invoice) ? data.company.invoice_email_texts : undefined
+  const langTexts = texts && typeof texts === 'object' ? texts[lang] : undefined
+  const companyTexts: InvoiceEmailTextOverrides =
+    langTexts && typeof langTexts === 'object' ? langTexts : {}
   return {
-    subject: pick(langTexts.subject),
-    greeting: pick(langTexts.greeting),
-    body: pick(langTexts.body),
-    signoff: pick(langTexts.signoff),
+    subject: pick(data.overrides?.subject) ?? pick(companyTexts.subject),
+    greeting: pick(companyTexts.greeting),
+    body: pick(data.overrides?.body) ?? pick(companyTexts.body),
+    signoff: pick(companyTexts.signoff),
   }
 }
 

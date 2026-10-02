@@ -100,6 +100,7 @@ import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
+import { InvoiceEmailOverrideShape } from '@/lib/api/schemas'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
 
@@ -110,6 +111,7 @@ const InvoiceSendBody = z.object({
   additional_bcc: z.array(z.string().trim().pipe(z.email().max(254)))
     .max(MAX_INVOICE_EMAIL_COPY_RECIPIENTS)
     .optional(),
+  ...InvoiceEmailOverrideShape,
 }).refine(
   (data) => (
     (data.additional_cc?.length ?? 0) + (data.additional_bcc?.length ?? 0)
@@ -158,6 +160,7 @@ registerEndpoint({
     'additional_cc and additional_bcc require the API key user to be an owner or admin of the company.',
     'The deprecated cc response field contains only the first address. Use cc_addresses for the complete CC list.',
     'BCC recipients are retained only in the restricted delivery archive and are omitted from normal and dry-run responses.',
+    'email_subject and email_body replace the subject and the message of this one email (the greeting and sign-off stay) and take the same placeholders as the company email texts; they are not stored on the invoice. Empty or whitespace-only means the company or stock text.',
   ],
   example: {
     request: {
@@ -694,7 +697,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // API-key context: no signed-in user to fall back to for Reply-To.
     const replyTo = resolveInvoiceReplyTo(settings)
-    const emailData = { invoice: renderableInvoice, customer, company: settings, replyTo }
+    const emailData = {
+      invoice: renderableInvoice,
+      customer,
+      company: settings,
+      replyTo,
+      // This send's own subject and message; not stored on the invoice.
+      overrides: { subject: bodyResult.data.email_subject, body: bodyResult.data.email_body },
+    }
     const subject = generateInvoiceEmailSubject(emailData)
     const html = generateInvoiceEmailHtml(emailData)
     const text = generateInvoiceEmailText(emailData)

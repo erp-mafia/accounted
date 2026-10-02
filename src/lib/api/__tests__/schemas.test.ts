@@ -28,6 +28,8 @@ import {
   UpdateInvoiceSchema,
   CreateCreditNoteSchema,
   InvoicePreviewSchema,
+  InvoiceEmailPreviewSchema,
+  SendInvoiceSchema,
   MarkInvoicePaidSchema,
   CreateRecurringScheduleSchema,
   // Customer schemas
@@ -382,6 +384,22 @@ describe('InvoicePreviewSchema', () => {
     ['a delivery country that is no country', { delivery_country: 'XX' }],
   ])('refuses %s', (_label, input) => {
     expect(InvoicePreviewSchema.safeParse(input).success).toBe(false)
+  })
+})
+
+describe('per-send email texts', () => {
+  it('lets a send replace the subject and the message, within limits', () => {
+    expect(SendInvoiceSchema.safeParse({ email_subject: 'Faktura {fakturanummer}', email_body: 'Hej!' }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_subject: null, email_body: null }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_subject: 'x'.repeat(200) }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_subject: 'x'.repeat(201) }).success).toBe(false)
+    expect(SendInvoiceSchema.safeParse({ email_body: 'x'.repeat(5000) }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_body: 'x'.repeat(5001) }).success).toBe(false)
+  })
+
+  it('previews the same texts with the draft', () => {
+    expect(InvoiceEmailPreviewSchema.safeParse({ email_subject: 'Hej', items: [] }).success).toBe(true)
+    expect(InvoiceEmailPreviewSchema.safeParse({ email_subject: 'x'.repeat(201) }).success).toBe(false)
   })
 })
 

@@ -1267,9 +1267,37 @@ export const InvoicesBulkBookSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(200),
 })
 
+export const INVOICE_EMAIL_SUBJECT_MAX_LENGTH = 200
+export const INVOICE_EMAIL_BODY_MAX_LENGTH = 5000
+
+/**
+ * This send's own email subject and message, in place of the company's
+ * texts (Inställningar > Utskick) or the stock texts. For this send only:
+ * never stored on the invoice, though the delivery history keeps the email
+ * as it was sent. Same placeholders as the company texts. Empty or
+ * whitespace-only = no override.
+ */
+export const InvoiceEmailOverrideShape = {
+  email_subject: z
+    .string()
+    .max(INVOICE_EMAIL_SUBJECT_MAX_LENGTH)
+    .nullish()
+    .describe(
+      'This send only: the email subject instead of the company text. Placeholders {fakturanummer}, {kundnamn}, {förnamn}, {företag}, {förfallodatum}, {belopp}. Not stored on the invoice.',
+    ),
+  email_body: z
+    .string()
+    .max(INVOICE_EMAIL_BODY_MAX_LENGTH)
+    .nullish()
+    .describe(
+      'This send only: the message of the email instead of the company text (the greeting and sign-off stay). Same placeholders as email_subject. Not stored on the invoice.',
+    ),
+}
+
 export const SendInvoiceSchema = MarkInvoiceSentSchema.extend({
   additional_cc: invoiceEmailAddressList.optional(),
   additional_bcc: invoiceEmailAddressList.optional(),
+  ...InvoiceEmailOverrideShape,
 }).refine(
   (data) => (
     (data.additional_cc?.length ?? 0) + (data.additional_bcc?.length ?? 0)
@@ -1280,6 +1308,11 @@ export const SendInvoiceSchema = MarkInvoiceSentSchema.extend({
     path: ['additional_cc'],
   },
 )
+
+/** POST /api/invoices/preview-email: the preview draft plus this send's own texts. */
+export const InvoiceEmailPreviewSchema = InvoicePreviewSchema.extend(InvoiceEmailOverrideShape)
+
+export type InvoiceEmailPreviewInput = z.infer<typeof InvoiceEmailPreviewSchema>
 
 // ============================================================
 // Customer schemas

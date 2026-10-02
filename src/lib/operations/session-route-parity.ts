@@ -364,6 +364,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/send-payment-confirmation': gap('P3', 'email a betalningsbekräftelse'),
   'POST /api/invoices/self-billed': gap('P3', 'register a received självfaktura'),
   'POST /api/invoices/preview-pdf': uiOnly(PREVIEW),
+  'POST /api/invoices/preview-email': uiOnly(PREVIEW),
   'POST /api/invoices/recurring': covered(['gnubok_create_recurring_schedule']),
   'PATCH /api/invoices/recurring/:id': covered(['gnubok_update_recurring_schedule']),
   'DELETE /api/invoices/recurring/:id': gap('P3', 'delete a schedule (pause is covered by gnubok_update_recurring_schedule)'),

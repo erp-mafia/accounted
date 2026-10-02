@@ -412,6 +412,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
       'oversized additional_bcc',
       { additional_bcc: Array.from({ length: 21 }, (_, index) => `archive-${index}@example.test`) },
     ],
+    ['an email_subject over 200 characters', { email_subject: 'x'.repeat(201) }],
+    ['an email_body over 5000 characters', { email_body: 'x'.repeat(5001) }],
   ])('returns VALIDATION_ERROR for %s', async (_label, requestBody) => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -489,6 +491,39 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
         ],
       }),
     )
+  })
+
+  it('writes the email with this send\'s own subject and message, without storing them', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: DRAFT_INVOICE, error: null },
+        { data: { invoice_number: '2026-0042' }, error: null },
+      ],
+      company_settings: { data: COMPANY_SETTINGS, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await sendInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`,
+        { email_subject: 'Faktura {fakturanummer} för maj', email_body: 'Hej! Här kommer majfakturan.' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const templates = await import('@/lib/email/invoice-templates')
+    const expectedData = expect.objectContaining({
+      overrides: { subject: 'Faktura {fakturanummer} för maj', body: 'Hej! Här kommer majfakturan.' },
+    })
+    expect(vi.mocked(templates.generateInvoiceEmailSubject)).toHaveBeenCalledWith(expectedData)
+    expect(vi.mocked(templates.generateInvoiceEmailHtml)).toHaveBeenCalledWith(expectedData)
+    expect(vi.mocked(templates.generateInvoiceEmailText)).toHaveBeenCalledWith(expectedData)
+    for (const payload of supabase.updates.invoices ?? []) {
+      expect(payload).not.toHaveProperty('email_subject')
+      expect(payload).not.toHaveProperty('email_body')
+    }
   })
 
   it('rejects custom recipients from a non-admin company member', async () => {
