@@ -67,7 +67,6 @@ import {
 } from '@/lib/invoices/issue-and-book-invoice'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
-import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { booksInvoicesOnIssue, cashPartialBlockReason, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
@@ -119,6 +118,7 @@ import {
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher, type LinkInvoiceToVoucherResult } from '@/lib/invoices/voucher-matching'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { planTransactionInvoiceMatch } from '@/lib/invoices/match-payment-plan'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import {
   alreadyExplainedDetails,
@@ -3475,85 +3475,28 @@ async function commitMatchTransactionInvoice(
     }
   }
 
-  // FX resolution: parity with the dashboard and v1 match routes. paidAmount
-  // MUST be denominated in the INVOICE's currency (the unit of
-  // invoices.paid_amount / remaining_amount and invoice_payments.amount).
-  // This path previously fed the raw bank amount straight in, which (a)
-  // rejected exact whole-krona settlements of öre-carrying invoices and (b)
-  // would corrupt the column units on a cross-currency match.
-  const txIsForeign = !!transaction.currency && transaction.currency !== 'SEK'
-  if (
-    txIsForeign &&
-    transaction.amount_sek == null &&
-    !(transaction.exchange_rate != null && transaction.exchange_rate > 0)
-  ) {
-    return {
-      error:
-        getErrorEntry('MATCH_INVOICE_TX_FX_RATE_MISSING')?.message_sv ??
-        'Transaktionen saknar valutakurs och SEK-belopp.',
-      status: 400,
-    }
-  }
-  const txAbsSek =
-    Math.round(
-      resolveSekAmount(
-        Math.abs(transaction.amount),
-        transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
-        transaction.currency,
-        transaction.exchange_rate,
-      ) * 100,
-    ) / 100
-
-  let fx: { required: false } | { required: true; rate: number; paidInInvoiceCurrency: number } = {
-    required: false,
-  }
-  if (transaction.currency !== invoice.currency) {
-    let rate: number | null = null
-    try {
-      const rateInfo = await fetchExchangeRate(
-        invoice.currency as Currency,
-        new Date(transaction.date),
-        supabase,
-      )
-      if (rateInfo && rateInfo.rate > 0) rate = rateInfo.rate
-    } catch {
-      rate = null
-    }
-    if (rate == null) {
-      return {
-        error:
-          getErrorEntry('MATCH_INVOICE_FX_RATE_UNAVAILABLE')?.message_sv ??
-          'Ingen valutakurs tillgänglig för betalningsdatumet.',
-        status: 400,
-      }
-    }
-    fx = {
-      required: true,
-      rate,
-      paidInInvoiceCurrency: Math.round((txAbsSek / rate) * 10000) / 10000,
-    }
-  }
-  const paidAmount = fx.required ? fx.paidInInvoiceCurrency : transaction.amount
-
-  // Overshoot guard + paid/remaining math: shared with the dashboard and v1
-  // routes via planInvoicePayment. This agent/MCP path previously had NO guard,
-  // so a 1500 payment on a 1000 invoice was silently accepted (paid_amount >
-  // total, AR over-credited). Pure-SEK settlements absorb sub-krona
-  // öresavrundning (booked to 3740 by buildInvoicePaymentClearingLines) so a
-  // whole-krona payment settles in full, exactly as on the other two routes.
+  // FX resolution (paidAmount in the INVOICE's currency) + overshoot guard +
+  // paid/remaining math, through the one helper the staging tools run too, so
+  // a match refused here is refused when it is staged (crm#253). This agent
+  // path previously had NO overshoot guard, so a 1500 payment on a 1000
+  // invoice was silently accepted (paid_amount > total, AR over-credited).
   // Runs BEFORE the storno + JE below, so a rejected match leaves the
   // transaction untouched and never burns a voucher number.
-  const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
-  const payment = planInvoicePayment(invoice, paidAmount, { absorbOreRounding: pureSek })
-  if (!payment.ok) {
+  const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice)
+  if (!matchPlan.ok) {
     return {
-      error:
-        getErrorEntry('MATCH_AMOUNT_EXCEEDS_REMAINING')?.message_sv ??
-        'Transaktionsbeloppet är större än fakturans återstående belopp.',
+      error: getErrorEntry(matchPlan.code)?.message_sv ?? matchPlan.code,
+      errorCode: matchPlan.code,
       status: 400,
+      // The amounts the stage-time refusal names, so an op staged before that
+      // guard (or whose invoice changed since) is just as actionable here.
+      ...(matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING'
+        ? { data: { currency: matchPlan.currency, ...matchPlan.details } }
+        : {}),
     }
   }
-  const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+  const { fx } = matchPlan
+  const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = matchPlan.plan
   const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
   // Read-only prevalidation, deliberately hoisted ABOVE the irreversible

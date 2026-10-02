@@ -646,4 +646,62 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     expect(result.http_status).toBe(400)
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
+
+  it('stays the authority on an overshoot of 1 kr or more: refused before anything is posted (crm#253)', async () => {
+    // Staging refuses this now too (planTransactionInvoiceMatch, shared), but
+    // an op staged before that, or one whose invoice changed since, still hits
+    // the same guard here with the same threshold.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: 814,
+        currency: 'SEK',
+        date: '2026-09-30',
+        invoice_id: null,
+        journal_entry_id: 'je-categorized',
+        cash_account_id: null,
+      },
+      error: null,
+    }) // transaction fetch (categorized: a storno would follow a pass)
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026001',
+        status: 'sent',
+        total: 812.40,
+        remaining_amount: 812.40,
+        paid_amount: 0,
+        currency: 'SEK',
+        exchange_rate: null,
+        journal_entry_id: null,
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toContain('Transaktionsbeloppet är större än fakturans återstående belopp')
+    expect(result.code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+    // The op row keeps the code and the amounts for the approver and agent.
+    const rejected = findCalls('pending_operations', 'update').at(-1)?.[0] as {
+      status: string
+      result_data: Record<string, unknown>
+    }
+    expect(rejected.status).toBe('rejected')
+    expect(rejected.result_data).toMatchObject({
+      error_code: 'MATCH_AMOUNT_EXCEEDS_REMAINING',
+      details: { currency: 'SEK', transaction_amount: 814, remaining_amount: 812.40, excess: 1.60 },
+    })
+  })
 })
