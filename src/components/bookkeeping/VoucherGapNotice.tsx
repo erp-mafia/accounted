@@ -38,6 +38,7 @@ const EXPLANATION_MAX = 500
 /** Above this the text is clamped to two lines behind "Visa mer". */
 const CLAMP_THRESHOLD = 160
 
+/** Stable row key: one gap per series and number range within a year. */
 function gapKey(gap: VoucherGap): string {
   return `${gap.series}:${gap.gap_start}:${gap.gap_end}`
 }
@@ -75,13 +76,17 @@ export default function VoucherGapNotice({
 
   const [gaps, setGaps] = useState<VoucherGap[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [target, setTarget] = useState<VoucherGap | null>(null)
+  // The gap being explained, pinned to the räkenskapsår it was opened for: a
+  // save must never attach an explanation to a year the list switched to
+  // while the dialog was open.
+  const [target, setTarget] = useState<{ gap: VoucherGap; periodId: string } | null>(null)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
   // Only the newest probe may write state: a slow earlier response for a
   // previous period or series must not paint its gaps over the current one.
   const fetchGenRef = useRef(0)
 
+  /** Fetches the gaps of the current period and series; stale replies are dropped. */
   const load = useCallback(async () => {
     if (!periodId) {
       setGaps([])
@@ -107,6 +112,13 @@ export default function VoucherGapNotice({
     void load()
   }, [load, refreshToken])
 
+  // A period or series switch invalidates the gap list the dialog was opened
+  // from, so the dialog closes rather than saving against the new scope.
+  useEffect(() => {
+    setTarget(null)
+  }, [periodId, series])
+
+  /** Shows or hides the full explanation text of one row. */
   const toggleExpanded = (key: string) => {
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -116,13 +128,16 @@ export default function VoucherGapNotice({
     })
   }
 
+  /** Opens the explain dialog for one gap of the currently shown year. */
   const openDialog = (gap: VoucherGap) => {
-    setTarget(gap)
+    if (!periodId) return
+    setTarget({ gap, periodId })
     setDraft('')
   }
 
+  /** Saves the draft through the existing voucher-gaps route, then reloads. */
   const save = async () => {
-    if (!target || !periodId) return
+    if (!target) return
     const explanation = draft.trim()
     if (!explanation) return
     setSaving(true)
@@ -131,10 +146,10 @@ export default function VoucherGapNotice({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fiscal_period_id: periodId,
-          voucher_series: target.series,
-          gap_start: target.gap_start,
-          gap_end: target.gap_end,
+          fiscal_period_id: target.periodId,
+          voucher_series: target.gap.series,
+          gap_start: target.gap.gap_start,
+          gap_end: target.gap.gap_end,
           explanation,
         }),
       })
@@ -159,7 +174,7 @@ export default function VoucherGapNotice({
   if (!periodId || gaps.length === 0) return null
 
   const joiner = t('gap_range_joiner')
-  const targetRange = target ? formatVoucherGapRange(target, joiner) : ''
+  const targetRange = target ? formatVoucherGapRange(target.gap, joiner) : ''
 
   return (
     <>

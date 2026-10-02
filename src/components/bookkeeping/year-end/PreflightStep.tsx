@@ -146,6 +146,11 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
  * is deliberately link-less too: the remedy is to re-run the check, not to
  * visit a page.
  */
+/**
+ * One blocker line with its remediation link, where a surface exists for the
+ * remedy. periodId scopes links into period-oriented lists (the verifikat
+ * list's gap rows) to the räkenskapsår this preflight is for.
+ */
 function BlockerRow({ blocker, periodId }: { blocker: DisplayBlocker; periodId: string }) {
   let href: string | null = null
   let actionLabel: string | null = null
