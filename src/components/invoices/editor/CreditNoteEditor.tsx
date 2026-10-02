@@ -21,6 +21,7 @@ import { EditorStatusLine } from './EditorStatusLine'
 import { EditorSection } from './EditorSection'
 import { SendConfirmDialog, type ConfirmVoucher } from './SendConfirmDialog'
 import { useInvoicePdfPreview } from './use-editor-previews'
+import { buildSummaryVatLines } from '@/lib/invoices/editor/summary-vat'
 import {
   resolveChannelOptions,
   resolveEffectiveChannel,
@@ -299,12 +300,24 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   const items = invoice.items ?? []
   const productCount = items.filter((item) => item.line_type !== 'text').length
   const today = new Date().toISOString().slice(0, 10)
-  const vatByRate = new Map<number, number>()
+  const vatByRate = new Map<number, { base: number; vat: number }>()
   for (const item of items) {
     if (item.line_type === 'text') continue
     const rate = item.vat_rate ?? 0
-    vatByRate.set(rate, (vatByRate.get(rate) ?? 0) + Math.abs(item.vat_amount ?? 0))
+    const group = vatByRate.get(rate) ?? { base: 0, vat: 0 }
+    vatByRate.set(rate, {
+      base: Math.round((group.base + Math.abs(item.line_total ?? 0)) * 100) / 100,
+      vat: Math.round((group.vat + Math.abs(item.vat_amount ?? 0)) * 100) / 100,
+    })
   }
+  // The same VAT lines as the invoice editor's Summering: a 0 % rate says
+  // why (the original's treatment), shown negated as the amount credited.
+  const summaryVatLines = buildSummaryVatLines({
+    vatRegistered: companySettings?.vat_registered !== false,
+    groups: Array.from(vatByRate.entries()).map(([rate, group]) => ({ rate, ...group })),
+    treatment: invoice.vat_treatment,
+  })
+  const credited = (amount: number) => (amount === 0 ? 0 : -Math.abs(amount))
   const statusLabel =
     invoice.status === 'paid' ? t('status_paid') : invoice.status === 'overdue' ? t('status_overdue') : t('status_unpaid')
   const customerLine = customer
@@ -548,13 +561,16 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
               <dl className="ml-auto mt-6 grid w-full max-w-xs grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-1 text-[13px] tabular-nums">
                 <dt className="text-muted-foreground">{t('subtotal')}</dt>
                 <dd className="text-right">{formatCurrency(-Math.abs(invoice.subtotal), currency)}</dd>
-                {Array.from(vatByRate.entries())
-                  .sort(([a], [b]) => b - a)
-                  .filter(([, amount]) => amount > 0)
-                  .map(([rate, amount]) => (
-                    <div key={rate} className="contents">
-                      <dt className="text-muted-foreground">{t('vat_at_rate', { rate })}</dt>
-                      <dd className="text-right">{formatCurrency(-amount, currency)}</dd>
+                {/* A rate with no VAT to reverse says nothing; a 0 % rate says why. */}
+                {summaryVatLines
+                  .filter((line) => line.kind === 'vat' && line.rate !== null)
+                  .map((line) => (
+                    <div key={line.rate} className="contents">
+                      <dt className="text-muted-foreground">
+                        {t('vat_at_rate', { rate: line.rate ?? 0 })}
+                        {line.kind === 'vat' && line.reason && ` · ${tShell(`vat_zero_reason_${line.reason}`)}`}
+                      </dt>
+                      <dd className="text-right">{formatCurrency(credited(line.amount), currency)}</dd>
                     </div>
                   ))}
                 {currency !== 'SEK' && invoice.total_sek ? (
@@ -563,10 +579,11 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                     <dd className="text-right">{formatCurrency(-Math.abs(invoice.total_sek))}</dd>
                   </>
                 ) : null}
-                <dt className="mt-2 border-t border-border pt-2 font-display text-xl">{t('to_credit')}</dt>
-                <dd className="mt-2 border-t border-border pt-2 text-right font-display text-xl">
-                  {formatCurrency(-Math.abs(invoice.total), currency)}
-                </dd>
+                {/* One row spanning both columns: an unbroken rule above the total. */}
+                <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t border-border pt-2 font-display text-xl">
+                  <dt>{t('to_credit')}</dt>
+                  <dd className="text-right">{formatCurrency(-Math.abs(invoice.total), currency)}</dd>
+                </div>
               </dl>
             </EditorSection>
 

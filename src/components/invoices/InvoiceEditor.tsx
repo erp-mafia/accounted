@@ -24,10 +24,12 @@ import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
+  deriveInvoiceVatHeader,
   explainVatTreatment,
   getVatRules,
   requiresSwedishVatAcknowledgement,
 } from '@/lib/invoices/vat-rules'
+import { buildSummaryVatLines } from '@/lib/invoices/editor/summary-vat'
 import {
   resolveLineVatRates,
   planCustomerSwitchVatSnap,
@@ -1707,12 +1709,24 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     const lineTotal = computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
     const lineVat = Math.round(lineTotal * rate / 100 * 100) / 100
     vatAmount += lineVat
+    // Summering groups the priced lines; a text row has no rate of its own.
+    if (item.line_type === 'text') continue
     const existing = vatByRate.get(rate) || { base: 0, vat: 0 }
-    existing.base += lineTotal
-    existing.vat += lineVat
+    existing.base = Math.round((existing.base + lineTotal) * 100) / 100
+    existing.vat = Math.round((existing.vat + lineVat) * 100) / 100
     vatByRate.set(rate, existing)
   }
   const total = subtotal + vatAmount
+  // Summering's VAT lines: a 0 % rate says why (omvänd skattskyldighet,
+  // export, momsfri) with the treatment the write path derives; a seller
+  // that is not VAT registered shows none (lib/invoices/editor/summary-vat).
+  const summaryVatLines = buildSummaryVatLines({
+    vatRegistered,
+    groups: Array.from(vatByRate.entries()).map(([rate, group]) => ({ rate, ...group })),
+    treatment: deriveInvoiceVatHeader(vatRules ?? getVatRules('swedish_business'), effectiveLineVatRates, {
+      vatRegistered,
+    }).vat_treatment,
+  })
 
   // ROT/RUT-avdrag live preview. Computed client-side for instant feedback;
   // the API recomputes server-side as the source of truth. Skipped for
@@ -4389,32 +4403,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               <dl className="ml-auto mt-6 grid w-full max-w-xs grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1 text-[13px] tabular-nums">
                 <dt className="text-muted-foreground">{t('subtotal_label')}</dt>
                 <dd className="text-right">{formatCurrency(subtotal, watchCurrency)}</dd>
-                {/* VAT rows: only when momsregistrerad. A non-registered company
-                    shows no moms line at all (subtotal === total). */}
-                {vatRegistered &&
-                  Array.from(vatByRate.entries())
-                    .sort(([a], [b]) => b - a)
-                    .map(([rate, group]) => (
-                      <Fragment key={rate}>
-                        {vatByRate.size > 1 && (
-                          <>
-                            <dt className="text-muted-foreground">{t('net_at_rate', { rate })}</dt>
-                            <dd className="text-right">{formatCurrency(group.base, watchCurrency)}</dd>
-                          </>
-                        )}
-                        {group.vat > 0 && (
-                          <>
-                            <dt className="text-muted-foreground">{t('vat_at_rate', { rate })}</dt>
-                            <dd className="text-right">{formatCurrency(group.vat, watchCurrency)}</dd>
-                          </>
-                        )}
-                      </Fragment>
-                    ))}
-                {vatRegistered && vatByRate.size === 0 && (
-                  <>
-                    <dt className="text-muted-foreground">{t('vat_label_short')}</dt>
-                    <dd className="text-right">{formatCurrency(0, watchCurrency)}</dd>
-                  </>
+                {summaryVatLines.map((line) =>
+                  line.kind === 'net' ? (
+                    <Fragment key={`net-${line.rate}`}>
+                      <dt className="text-muted-foreground">{t('net_at_rate', { rate: line.rate })}</dt>
+                      <dd className="text-right">{formatCurrency(line.amount, watchCurrency)}</dd>
+                    </Fragment>
+                  ) : (
+                    <Fragment key={`vat-${line.rate ?? 'none'}`}>
+                      <dt className="text-muted-foreground">
+                        {line.rate === null ? t('vat_label_short') : t('vat_at_rate', { rate: line.rate })}
+                        {line.reason && ` · ${tShell(`vat_zero_reason_${line.reason}`)}`}
+                      </dt>
+                      <dd className="text-right">{formatCurrency(line.amount, watchCurrency)}</dd>
+                    </Fragment>
+                  ),
                 )}
                 {/* Öresavrundning, per invoice: only when the total has öre
                     to round (SEK). Display only: the invoice keeps its öre. */}
@@ -4446,12 +4449,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     <dd className="text-right">&minus;{formatCurrency(deductionTotal, watchCurrency)}</dd>
                   </>
                 )}
-                <dt className="mt-2 border-t border-border pt-2 font-display text-xl">
-                  {isInvoiceDoc || hasAnyDeduction ? t('to_pay_label') : isQuoteDoc ? tForm('sum_label') : t('total_label')}
-                </dt>
-                <dd className="mt-2 border-t border-border pt-2 text-right font-display text-xl">
-                  {formatCurrency(displayedToPay, watchCurrency)}
-                </dd>
+                {/* One row spanning both columns, so the rule above the total
+                    is one unbroken line instead of two split by the gap. */}
+                <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t border-border pt-2 font-display text-xl">
+                  <dt>
+                    {isInvoiceDoc || hasAnyDeduction ? t('to_pay_label') : isQuoteDoc ? tForm('sum_label') : t('total_label')}
+                  </dt>
+                  <dd className="text-right">{formatCurrency(displayedToPay, watchCurrency)}</dd>
+                </div>
               </dl>
             )}
           </EditorSection>
