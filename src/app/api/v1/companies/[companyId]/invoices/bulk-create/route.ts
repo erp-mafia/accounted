@@ -408,6 +408,8 @@ async function createOneInvoice(
       our_reference: input.our_reference,
       notes: input.notes,
       document_type: documentType,
+      // The invoice's own payment QR code; null inherits the company default.
+      qr_mode: input.qr_mode ?? null,
       // Dimensions PR7: invoice-level bag; the :send JE generator applies it
       // to every line (items[].dimensions win per key).
       default_dimensions: input.default_dimensions ?? {},

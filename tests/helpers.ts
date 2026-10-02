@@ -540,6 +540,7 @@ export function makeCompanySettings(
     invoice_show_plusgiro: true,
     invoice_show_swish: true,
     invoice_show_payment_qr: false,
+    invoice_qr_mode: 'auto',
     invoice_show_logo: true,
     invoice_show_company_name: true,
     invoice_company_name_position: 'header',

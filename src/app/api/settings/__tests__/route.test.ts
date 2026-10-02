@@ -901,7 +901,7 @@ describe('PUT /api/settings', () => {
     expect(response.status).toBe(400)
   })
 
-  it('saves the bank-app payment QR switch (crm#249)', async () => {
+  it('still saves the superseded bank-app payment QR switch (crm#249), for API compatibility', async () => {
     enqueueMany([
       { data: { onboarding_complete: true } }, // oldSettings
       { data: { company_id: 'company-1', invoice_show_payment_qr: true } }, // update result
@@ -931,6 +931,38 @@ describe('PUT /api/settings', () => {
     const response = await PUT(request, { params: Promise.resolve({}) })
 
     expect(response.status).toBe(400)
+  })
+
+  it('accepts the invoice QR mode (one QR code per invoice)', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } }, // oldSettings
+      { data: { company_id: 'company-1', invoice_qr_mode: 'swish' } }, // update result
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_qr_mode: 'swish' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { invoice_qr_mode: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ invoice_qr_mode: 'swish' })
+    expect(body.data.invoice_qr_mode).toBe('swish')
+  })
+
+  it('rejects an invoice QR mode that is not one of the modes', async () => {
+    for (const value of ['all', null, true]) {
+      enqueueMany([
+        { data: { onboarding_complete: true } }, // oldSettings
+      ])
+      const request = createMockRequest('/api/settings', {
+        method: 'PUT',
+        body: { invoice_qr_mode: value },
+      })
+      const response = await PUT(request, { params: Promise.resolve({}) })
+      expect(response.status, String(value)).toBe(400)
+    }
   })
 
   it('accepts the payslip section switches (crm#202)', async () => {

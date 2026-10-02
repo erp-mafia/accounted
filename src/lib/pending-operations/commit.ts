@@ -274,7 +274,9 @@ import type {
   CreateJournalEntryLineInput,
   JournalEntrySourceType,
   FiscalPeriod,
+  InvoiceQrMode,
 } from '@/types'
+import { INVOICE_QR_MODES } from '@/types'
 
 const log = createLogger('pending-operations/commit')
 
@@ -2008,6 +2010,13 @@ async function commitCreateTransaction(
   return { data: { transaction_id: data.id } }
 }
 
+/** A staged qr_mode param: a known mode, else null (the company default). */
+function stagedQrMode(value: unknown): InvoiceQrMode | null {
+  return typeof value === 'string' && (INVOICE_QR_MODES as readonly string[]).includes(value)
+    ? (value as InvoiceQrMode)
+    : null
+}
+
 async function commitCreateInvoice(
   supabase: SupabaseClient,
   userId: string,
@@ -2285,6 +2294,9 @@ async function commitCreateInvoice(
       invoice_marking: (params.invoice_marking as string) || null,
       notes: (params.notes as string) || null,
       payment_link_url: paymentLinkUrl,
+      // Re-checked against the closed set (a hand-crafted row can't smuggle a
+      // value past the CHECK into a 500); invalid or absent inherits.
+      qr_mode: stagedQrMode(params.qr_mode),
       default_dimensions: defaultDimensions ?? {},
       payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
       payment_details: payeeChoice.fields.payment_details,
@@ -2509,6 +2521,8 @@ async function commitUpdateInvoice(
     payment_link_url: existing.payment_link_url ?? undefined,
     payment_link_auto: existing.payment_link_auto ?? undefined,
     ore_rounding: existing.ore_rounding ?? undefined,
+    // Omitted = the builder leaves the column alone; null clears it.
+    qr_mode: changes.qr_mode,
     deduction_housing_designation: firstDeduction?.housing_designation ?? undefined,
     deduction_apartment_number: firstDeduction?.apartment_number ?? undefined,
     deduction_brf_org_number: firstDeduction?.brf_org_number ?? undefined,

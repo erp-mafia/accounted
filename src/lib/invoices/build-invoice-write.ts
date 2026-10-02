@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Currency, Customer, DeductionType, InvoiceDocumentType } from '@/types'
+import type { Currency, Customer, DeductionType, InvoiceDocumentType, InvoiceQrMode } from '@/types'
 import {
   deriveInvoiceVatHeader,
   explainVatTreatment,
@@ -133,6 +133,12 @@ export interface InvoiceWriteInput {
   payment_link_auto?: boolean
   /** Per-invoice öresavrundning override (display-only). Omitted → null (inherit company setting). */
   ore_rounding?: boolean
+  /**
+   * Per-invoice QR code choice (lib/invoices/payment-qr.ts). Omitted leaves
+   * the column alone (null on create, unchanged on a draft edit); null
+   * clears it back to the company's invoice_qr_mode.
+   */
+  qr_mode?: InvoiceQrMode | null
   deduction_personnummer?: string
   deduction_housing_designation?: string
   /** ROT i bostadsrätt: lägenhetsnummer + föreningens orgnr instead of fastighetsbeteckning. */
@@ -185,6 +191,8 @@ export type InvoiceWriteFields = {
   payment_link_url: string | null
   payment_link_auto: boolean
   ore_rounding: boolean | null
+  /** Present only when the input carried qr_mode (see InvoiceWriteInput.qr_mode). */
+  qr_mode?: InvoiceQrMode | null
   document_type: InvoiceDocumentType
   deduction_total: number
   deduction_personnummer_encrypted: string | null
@@ -682,6 +690,10 @@ export async function buildInvoiceWriteData(params: {
     payment_link_auto: input.payment_link_auto ?? true,
     // Display-only öresavrundning override; null inherits company_settings.ore_rounding.
     ore_rounding: input.ore_rounding ?? null,
+    // Only when sent: every rebuild path (v1 PATCH, the update_invoice
+    // executor) feeds the stored header back field by field, and an absent
+    // key must not clear a draft's QR choice.
+    ...(input.qr_mode !== undefined ? { qr_mode: input.qr_mode } : {}),
     document_type: documentType,
     deduction_total: deductionTotal,
     deduction_personnummer_encrypted: deductionPersonnummerEncrypted,

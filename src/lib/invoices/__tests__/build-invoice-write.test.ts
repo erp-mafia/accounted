@@ -87,6 +87,27 @@ describe('buildInvoiceWriteData', () => {
     expect(withoutLink.invoiceFields.payment_link_url).toBeNull()
   })
 
+  it('writes qr_mode only when the input carries it (omitted keeps a draft\'s choice, null clears it)', async () => {
+    const customer = makeCustomer({ customer_type: 'swedish_business' })
+    const build = async (extra: Partial<InvoiceWriteInput>) => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { vat_registered: true }, error: null })
+      const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+        ...baseHeader,
+        ...extra,
+        items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+      })
+      if (!result.ok) throw new Error('build failed')
+      return result.invoiceFields
+    }
+
+    expect(await build({ qr_mode: 'swish' })).toMatchObject({ qr_mode: 'swish' })
+    expect(await build({ qr_mode: null })).toMatchObject({ qr_mode: null })
+    // supabase-js would drop an undefined key anyway; the builder leaves it
+    // out so a rebuild that does not mention the QR choice never clears it.
+    expect(await build({})).not.toHaveProperty('qr_mode')
+  })
+
   it('handles a mixed-rate invoice (vat_rate becomes null on the header)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { vat_registered: true }, error: null })

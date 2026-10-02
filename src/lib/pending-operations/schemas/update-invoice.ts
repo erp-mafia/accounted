@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { CreateInvoiceItemSchema } from '@/lib/api/schemas'
+import { CreateInvoiceItemSchema, InvoiceQrModeSchema } from '@/lib/api/schemas'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
@@ -25,6 +25,9 @@ const InvoiceChangesSchema = z
     our_reference: z.string().optional(),
     // Fakturamärkning: buyer-required marking, separate from your_reference.
     invoice_marking: z.string().max(200).optional(),
+    // The one payment QR code on the PDF; null = back to the company's
+    // invoice_qr_mode.
+    qr_mode: InvoiceQrModeSchema.nullable().optional(),
     items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required').optional(),
     // Replaces the whole bag; {} clears all tags.
     default_dimensions: DimensionsBagSchema.optional(),

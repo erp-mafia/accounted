@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 60_100
+const SIMPLE_CATALOG_CEILING = 60_200
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -662,6 +662,10 @@ describe('tools/list payload size guard', () => {
     // Re-measured 59 785 on 2026-09-23 after merging main (Arkiv phases 5
     // to 9 added ~1 540 to both catalogs); ceiling 58 800 to 60 100, ~315
     // headroom. The saving against the full catalog is unchanged.
+    // 60 100 to 60 200 on 2026-10-02: gnubok_create_invoice and
+    // gnubok_update_invoice gain qr_mode (one payment QR per invoice), an
+    // enum with the shortest descriptions that still say what null means.
+    // Measured 60 094 with them, ~106 headroom.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

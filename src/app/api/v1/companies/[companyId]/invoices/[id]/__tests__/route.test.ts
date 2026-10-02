@@ -560,6 +560,50 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     expect(captures.filter((c) => c.table === 'invoice_items')).toEqual([])
   })
 
+  it('sets and clears the invoice QR mode as a header field', async () => {
+    for (const qrMode of ['swish', null] as const) {
+      const captures: Capture[] = []
+      mockServiceClient.mockReturnValue(
+        makeFlexibleSupabase(
+          {
+            company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+            invoices: [
+              { data: DRAFT_INVOICE, error: null },
+              { data: { ...DRAFT_INVOICE, qr_mode: qrMode }, error: null },
+            ],
+          },
+          captures,
+        ),
+      )
+
+      const res = await patchInvoice(
+        makePatchRequest({ qr_mode: qrMode }),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+
+      expect(res.status, String(qrMode)).toBe(200)
+      const update = captures.find((c) => c.table === 'invoices' && c.op === 'update')
+      expect(update?.payload).toMatchObject({ qr_mode: qrMode })
+    }
+  })
+
+  it('returns 400 VALIDATION_ERROR for a QR mode that is not a mode', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ qr_mode: 'all_three' }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
   it('rejects a write without an Idempotency-Key', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

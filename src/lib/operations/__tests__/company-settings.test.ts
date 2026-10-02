@@ -45,6 +45,15 @@ describe('settings operations: field split', () => {
     expect(toSettingsResource('c1', {} as never).invoice_show_payment_qr).toBeNull()
   })
 
+  it('lets the API and MCP read and write the invoice QR mode, and refuses a value that is not a mode', () => {
+    expect(keys(settingsUpdate.input)).toContain('invoice_qr_mode')
+    expect(toSettingsResource('c1', { invoice_qr_mode: 'bank_app' } as never).invoice_qr_mode).toBe('bank_app')
+    expect(toSettingsResource('c1', {} as never).invoice_qr_mode).toBeNull()
+    const field = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape.invoice_qr_mode as z.ZodType
+    expect(field.safeParse('none').success).toBe(true)
+    expect(field.safeParse('all').success).toBe(false)
+  })
+
   it('puts every tax-relevant field the API writes in the tax profile, never in settings.update', () => {
     const general = keys(settingsUpdate.input)
     for (const field of TAX_RELEVANT_FIELDS) {

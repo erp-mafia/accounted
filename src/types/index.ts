@@ -323,6 +323,17 @@ export type Currency = (typeof CURRENCIES)[number]
 /** Currencies that need an exchange rate to reach SEK. */
 export const FOREIGN_CURRENCIES: readonly Currency[] = CURRENCIES.filter((c) => c !== 'SEK')
 
+/**
+ * The one payment QR code an invoice PDF prints (migration 20261003090000).
+ * company_settings.invoice_qr_mode is the company default; invoices.qr_mode
+ * overrides it per invoice (null inherits). auto = Swish to a private
+ * customer when usable, else the bank-app QR, else Swish, else the payment
+ * link; an explicit mode that cannot be printed prints none
+ * (lib/invoices/payment-qr.ts says why). Must match the CHECK constraints.
+ */
+export const INVOICE_QR_MODES = ['auto', 'bank_app', 'swish', 'payment_link', 'none'] as const
+export type InvoiceQrMode = (typeof INVOICE_QR_MODES)[number]
+
 export interface InvoicePaymentAccount {
   bank_name: string | null
   clearing_number: string | null
@@ -530,8 +541,12 @@ export interface CompanySettings {
   invoice_show_bankgiro: boolean
   invoice_show_plusgiro: boolean
   invoice_show_swish: boolean
-  // Bank-app payment QR (UsingQR) in the PDF payment box (default false).
+  // Superseded by invoice_qr_mode: still accepted by the settings APIs, no
+  // longer read when rendering an invoice.
   invoice_show_payment_qr: boolean
+  // The one payment QR code invoices print (default 'auto'); invoices.qr_mode
+  // overrides it per invoice.
+  invoice_qr_mode: InvoiceQrMode
   invoice_show_logo: boolean
   invoice_show_company_name: boolean
   invoice_company_name_position: 'header' | 'footer'
@@ -1459,6 +1474,9 @@ export interface Invoice {
   // company default when it is null.
   payment_cash_account_id?: string | null
   payment_details?: InvoicePaymentAccount | null
+  // Per-invoice QR code choice (migration 20261003090000); null inherits
+  // company_settings.invoice_qr_mode. Optional in TS for pre-migration fixtures.
+  qr_mode?: InvoiceQrMode | null
 
   // Notes
   notes: string | null

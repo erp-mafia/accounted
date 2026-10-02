@@ -310,6 +310,31 @@ describe('CreateInvoiceSchema: ROT/RUT line completeness', () => {
   })
 })
 
+describe('invoice QR mode (one QR code per invoice)', () => {
+  it('lets an invoice choose its QR code, or inherit the company default with null', () => {
+    for (const qr_mode of ['auto', 'bank_app', 'swish', 'payment_link', 'none', null]) {
+      const created = CreateInvoiceSchema.safeParse(validInvoice({ qr_mode }))
+      expect(created.success, String(qr_mode)).toBe(true)
+      expect(created.data?.qr_mode).toBe(qr_mode)
+      expect(UpdateInvoiceSchema.safeParse(validInvoice({ qr_mode })).success, String(qr_mode)).toBe(true)
+    }
+    // Omitted stays omitted: a draft edit without it keeps the stored choice.
+    expect(CreateInvoiceSchema.safeParse(validInvoice()).data).not.toHaveProperty('qr_mode')
+  })
+
+  it('refuses a value that is not a mode', () => {
+    expect(CreateInvoiceSchema.safeParse(validInvoice({ qr_mode: 'all' })).success).toBe(false)
+    expect(UpdateInvoiceSchema.safeParse(validInvoice({ qr_mode: '' })).success).toBe(false)
+  })
+
+  it('lets the company settings choose the default, and keeps accepting the superseded switch', () => {
+    expect(UpdateSettingsSchema.safeParse({ invoice_qr_mode: 'payment_link' }).success).toBe(true)
+    expect(UpdateSettingsSchema.safeParse({ invoice_qr_mode: null }).success).toBe(false)
+    expect(UpdateSettingsSchema.safeParse({ invoice_qr_mode: 'qr' }).success).toBe(false)
+    expect(UpdateSettingsSchema.safeParse({ invoice_show_payment_qr: true }).success).toBe(true)
+  })
+})
+
 describe('CreateInvoiceSchema', () => {
   it('accepts a valid invoice', () => {
     const result = CreateInvoiceSchema.safeParse(validInvoice())
