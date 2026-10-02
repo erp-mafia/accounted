@@ -20,6 +20,7 @@
  * on a page without its totals.
  */
 
+export const A4_WIDTH_PT = 595.28
 export const A4_HEIGHT_PT = 841.89
 
 /** Side margins, and the top edge of the identity band (page 1) and the running header (pages 2+). */

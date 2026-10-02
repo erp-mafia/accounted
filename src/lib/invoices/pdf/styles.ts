@@ -11,6 +11,7 @@ import {
 } from '@/lib/invoices/branding-constants'
 import { CUSTOM_INVOICE_FONT_RENDER_PREFIX } from '@/lib/invoices/pdf-fonts'
 import {
+  A4_WIDTH_PT,
   FOOTER_BOTTOM_PT,
   LOGO_SLOT_HEIGHT_PT,
   LOGO_SLOT_WIDTH_PT,
@@ -54,6 +55,21 @@ export const DRAFT_WATERMARK_ROTATION_DEG = -35
 export const STATUS_STAMP_ROTATION_DEG = -4
 /** Band-relative top of the stamp: under the title block, above the meta columns. */
 const STAMP_TOP_PT = 44
+/**
+ * The band's right-hand strip the stamp may cover, measured from the right
+ * margin. The widest stamp, "BETALD 2026-10-20" at 11.5pt bold with its
+ * letter spacing, padding, border and tilt, is about 150pt wide; 200 leaves
+ * air. The header text line, at the stamp's height, ends left of it.
+ */
+export const STATUS_STAMP_RESERVE_PT = 200
+/** A4 width minus the side margins: the width of the band and the flow. */
+export const CONTENT_WIDTH_PT = A4_WIDTH_PT - 2 * PAGE_MARGIN_PT
+/**
+ * The header text's width, the same for every status: a paid or cancelled
+ * re-render truncates it exactly like the original, and the stamp never
+ * strikes through it.
+ */
+export const HEADER_TEXT_MAX_WIDTH_PT = Math.floor(CONTENT_WIDTH_PT - STATUS_STAMP_RESERVE_PT)
 const STAMP_PAID_COLOR = '#2e6b4f'
 const STAMP_VOID_COLOR = '#a12a2a'
 
@@ -200,6 +216,7 @@ export function createStyles(branding?: InvoiceBranding) {
     },
     headerText: {
       marginTop: 4,
+      maxWidth: HEADER_TEXT_MAX_WIDTH_PT,
       fontSize: 8.5,
       color: b.accentColor,
       maxLines: 1,
@@ -227,12 +244,16 @@ export function createStyles(branding?: InvoiceBranding) {
     metaValue: {
       fontWeight: 'bold',
     },
-    metaLine: {
-      maxLines: 2,
-      textOverflow: 'ellipsis',
-    },
-    metaName: {
+    // The statutory party details (ML 17 kap 24 § p.5-6: seller's and
+    // buyer's full name and address) and the credit note's reference are
+    // never capped: a long name wraps and the band grows.
+    metaNameFull: {
       fontWeight: 'bold',
+    },
+    metaLineFull: {},
+    // Everything else in the columns (e-mail, kundnummer, Märkning) is held
+    // to two lines.
+    metaLine: {
       maxLines: 2,
       textOverflow: 'ellipsis',
     },
@@ -313,6 +334,11 @@ export function createStyles(branding?: InvoiceBranding) {
     totals: {
       alignSelf: 'flex-end',
       width: 250,
+    },
+    // The totals, notice, fine print and spacer after a ROT/RUT breakdown
+    // too long to keep whole (it then comes first in the block).
+    totalsAfterDeduction: {
+      marginTop: 14,
     },
     totalRow: {
       flexDirection: 'row',

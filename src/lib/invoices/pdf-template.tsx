@@ -439,6 +439,109 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
     .map((part) => part.replace(/ /g, '\u00a0'))
     .join(' · ')
 
+  // ROT/RUT / grön teknik underlag. Kept on one page while the per-line
+  // breakdown (which carries the line descriptions, possibly multi-line) is
+  // short enough; past that it may split rather than be clipped. Fixed cap:
+  // the estimate does not see the rest of the box (MAX_KEEP_TOGETHER_LINES).
+  const deductionBox = hasDeductionBox ? (
+    <View style={styles.deductionBox} wrap={!deductionFits}>
+      <Text style={styles.deductionTitle}>{L.deductionInfoHeading}</Text>
+      {deductionPersonnummerMasked && (
+        <View style={styles.deductionRow}>
+          <Text style={styles.deductionLabel}>{bareLabel(L.deductionPersonnummer)}</Text>
+          <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{deductionPersonnummerMasked}</Text>
+        </View>
+      )}
+      {(() => {
+        // The first item-level housing_designation (typical: a single
+        // property). RUT-only invoices have none.
+        const housing = items.find((i) => i.housing_designation)?.housing_designation
+        const apartment = items.find((i) => i.apartment_number)?.apartment_number
+        // Grön teknik in a bostadsrätt: the förening's orgnr goes with
+        // the lägenhetsnummer.
+        const brf = hasGronTeknik ? items.find((i) => i.brf_org_number)?.brf_org_number : null
+        return (
+          <>
+            {housing && (
+              <View style={styles.deductionRow}>
+                <Text style={styles.deductionLabel}>{bareLabel(L.deductionHousingDesignation)}</Text>
+                <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{housing}</Text>
+              </View>
+            )}
+            {apartment && (
+              <View style={styles.deductionRow}>
+                <Text style={styles.deductionLabel}>{bareLabel(L.deductionApartmentNumber)}</Text>
+                <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{apartment}</Text>
+              </View>
+            )}
+            {brf && (
+              <View style={styles.deductionRow}>
+                <Text style={styles.deductionLabel}>{bareLabel(L.deductionBrfOrgNumber)}</Text>
+                <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{brf}</Text>
+              </View>
+            )}
+          </>
+        )
+      })()}
+      {hasGronTeknik && (
+        <>
+          {gronTeknikCostByType.length > 1 ? (
+            gronTeknikCostByType.map((type, idx) => (
+              <View key={type.label} style={styles.deductionRow}>
+                <Text style={styles.deductionLabel}>{idx === 0 ? bareLabel(L.gronTeknikEligibleCost) : ''}</Text>
+                <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>
+                  {`${type.label}: ${formatPdfCurrency(type.amount, invoice.currency, lang)} ${L.inclVatSuffix}`}
+                </Text>
+              </View>
+            ))
+          ) : (
+            <View style={styles.deductionRow}>
+              <Text style={styles.deductionLabel}>{bareLabel(L.gronTeknikEligibleCost)}</Text>
+              <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>
+                {`${formatPdfCurrency(gronTeknikEligibleCost, invoice.currency, lang)} ${L.inclVatSuffix}`}
+              </Text>
+            </View>
+          )}
+          <View style={styles.deductionRow}>
+            <Text style={styles.deductionLabel}>{bareLabel(L.gronTeknikOtherCost)}</Text>
+            <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>
+              {`${formatPdfCurrency(gronTeknikOtherCost, invoice.currency, lang)} ${L.inclVatSuffix}`}
+            </Text>
+          </View>
+        </>
+      )}
+      {/* What the base covers (Skatteverket fakturamodellen): labor
+          only for ROT/RUT, material invoiced separately. Grön teknik
+          prints its base once, after the breakdown (below). */}
+      {!hasGronTeknik && (
+        <Text style={styles.deductionNotice}>{DEDUCTION_LABOR_ONLY_NOTICE}</Text>
+      )}
+      {/* Per-line breakdown: one row per eligible item with kind,
+          work type if present and the deducted amount. */}
+      {items
+        .filter((i) => i.deduction_type)
+        .map((i, idx) => {
+          // Grön teknik rows name the installation type (Skatteverket:
+          // "vilken typ av arbete"); ROT/RUT rows keep printing the code.
+          const isGronTeknik = i.deduction_type === 'gron_teknik'
+          const kind = isGronTeknik ? L.gronTeknikKind : i.deduction_type === 'rot' ? 'ROT' : 'RUT'
+          const workText = isGronTeknik ? (workTypeLabel(i.work_type) ?? i.work_type) : i.work_type
+          const work = workText ? `, ${workText}` : ''
+          return (
+            <Text key={idx} style={styles.deductionLineItem} hyphenationCallback={wrapFullWidthWords}>
+              {`${kind}${work}: ${i.description}, ${formatPdfCurrency(i.deduction_amount ?? 0, invoice.currency, lang)}`}
+            </Text>
+          )
+        })}
+      {/* Grön teknik: labor and material, övriga kostnader excluded,
+          and the seller requests the payout: one notice. ROT/RUT keep
+          their own notice as it was. */}
+      <Text style={styles.deductionNotice}>
+        {hasGronTeknik ? `${GRON_TEKNIK_BASE_NOTICE} ${L.gronTeknikPayoutNotice}` : L.deductionNotice}
+      </Text>
+    </View>
+  ) : null
+
   const descriptionCellBudget = (item: InvoiceItem) =>
     (item.discount_percent ?? 0) > 0 ? `${item.description ?? ''}\n${L.discountLine(item.discount_percent ?? 0)}` : item.description
 
@@ -501,20 +604,20 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               {invoice.delivery_date && invoice.delivery_date !== invoice.invoice_date &&
                 metaItem('delivery', L.deliveryDate, formatPdfDate(invoice.delivery_date))}
               {isCreditNote && originalInvoiceNumber && (
-                <Text style={[styles.metaLine, styles.metaSmall]} hyphenationCallback={wrapDescriptionWords}>{L.creditNoteRef(originalInvoiceNumber)}</Text>
+                <Text style={[styles.metaLineFull, styles.metaSmall]} hyphenationCallback={wrapDescriptionWords}>{L.creditNoteRef(originalInvoiceNumber)}</Text>
               )}
             </View>
 
             {/* Seller */}
             <View style={styles.metaColumn}>
               <Text style={styles.metaLabel}>{L.fromHeading}</Text>
-              <Text style={styles.metaName} hyphenationCallback={wrapDescriptionWords}>{company.company_name}</Text>
-              {company.address_line1 && <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{company.address_line1}</Text>}
-              {company.address_line2 && <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{company.address_line2}</Text>}
+              <Text style={styles.metaNameFull} hyphenationCallback={wrapDescriptionWords}>{company.company_name}</Text>
+              {company.address_line1 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{company.address_line1}</Text>}
+              {company.address_line2 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{company.address_line2}</Text>}
               {postalLine(company.postal_code, company.city) && (
-                <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{postalLine(company.postal_code, company.city)}</Text>
+                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{postalLine(company.postal_code, company.city)}</Text>
               )}
-              {sellerCountry && <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{sellerCountry}</Text>}
+              {sellerCountry && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{sellerCountry}</Text>}
               {company.email && <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{company.email}</Text>}
               {invoice.our_reference && (
                 <Text style={styles.metaReference} hyphenationCallback={wrapDescriptionWords}>
@@ -526,14 +629,14 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             {/* Buyer */}
             <View style={styles.metaColumnLast}>
               <Text style={styles.metaLabel}>{L.toHeading}</Text>
-              <Text style={styles.metaName} hyphenationCallback={wrapDescriptionWords}>{customer.name}</Text>
-              {customer.address_line1 && <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{customer.address_line1}</Text>}
-              {customer.address_line2 && <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{customer.address_line2}</Text>}
+              <Text style={styles.metaNameFull} hyphenationCallback={wrapDescriptionWords}>{customer.name}</Text>
+              {customer.address_line1 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{customer.address_line1}</Text>}
+              {customer.address_line2 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{customer.address_line2}</Text>}
               {postalLine(customer.postal_code, customer.city) && (
-                <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{postalLine(customer.postal_code, customer.city)}</Text>
+                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{postalLine(customer.postal_code, customer.city)}</Text>
               )}
               {customer.country && customer.country !== 'SE' && (
-                <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{getCountryName(customer.country, lang)}</Text>
+                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{getCountryName(customer.country, lang)}</Text>
               )}
               {/* No identifier rows for a private customer: their personnummer
                   is not required on a B2C invoice (ML 17 kap 24§ asks for name
@@ -542,10 +645,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   Skatteverket needs it. A VAT number of a private person works
                   as a personal tax identifier in some EU jurisdictions. */}
               {customer.customer_type !== 'individual' && customer.org_number && (
-                <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{bareLabel(L.orgNo)} {customer.org_number}</Text>
+                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{bareLabel(L.orgNo)} {customer.org_number}</Text>
               )}
               {customer.customer_type !== 'individual' && customer.vat_number && (
-                <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{bareLabel(L.vat)} {customer.vat_number}</Text>
+                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{bareLabel(L.vat)} {customer.vat_number}</Text>
               )}
               {/* Seller-assigned kundnummer: identifies the customer in the
                   seller's own register and carries no personal data. */}
@@ -658,227 +761,131 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             notice slot, the fine print and a spacer as tall as the payment
             area, together: it moves to the next page as a unit, and the page
             it lands on is the last one, where the payment area is drawn over
-            the spacer. */}
+            the spacer. A ROT/RUT breakdown too long to keep whole comes
+            first instead and may split; everything after it stays one unit,
+            so the totals still share the last page with the payment area. */}
         <View style={styles.totalsBlock} wrap={!deductionFits}>
-          {!isDeliveryNote && (
-            <View style={styles.totals} wrap={false}>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>{bareLabel(L.subtotal)}</Text>
-                <Text style={styles.totalValue}>{formatPdfAmount(invoice.subtotal, lang)}</Text>
-              </View>
-              {vatByRate.size > 1 ? (
-                Array.from(vatByRate.entries())
-                  .sort(([a], [b]) => b - a)
-                  .map(([rate, group]) => (
-                    <View key={rate}>
-                      <View style={styles.totalRow}>
-                        <Text style={styles.totalLabel}>{bareLabel(L.net(rate))}</Text>
-                        <Text style={styles.totalValue}>{formatPdfAmount(group.base, lang)}</Text>
-                      </View>
-                      {group.vat !== 0 && (
+          {!deductionFits && deductionBox}
+          <View style={deductionFits ? undefined : styles.totalsAfterDeduction} wrap={false}>
+            {!isDeliveryNote && (
+              <View style={styles.totals} wrap={false}>
+                <View style={styles.totalRow}>
+                  <Text style={styles.totalLabel}>{bareLabel(L.subtotal)}</Text>
+                  <Text style={styles.totalValue}>{formatPdfAmount(invoice.subtotal, lang)}</Text>
+                </View>
+                {vatByRate.size > 1 ? (
+                  Array.from(vatByRate.entries())
+                    .sort(([a], [b]) => b - a)
+                    .map(([rate, group]) => (
+                      <View key={rate}>
                         <View style={styles.totalRow}>
-                          <Text style={styles.totalLabel}>{bareLabel(L.vatRow(rate))}</Text>
-                          <Text style={styles.totalValue}>{formatPdfAmount(group.vat, lang)}</Text>
+                          <Text style={styles.totalLabel}>{bareLabel(L.net(rate))}</Text>
+                          <Text style={styles.totalValue}>{formatPdfAmount(group.base, lang)}</Text>
                         </View>
-                      )}
-                    </View>
-                  ))
-              ) : (
-                // Suppress the "Moms 0%" row only when the seller is not
-                // VAT-registered AND the invoice actually carries no VAT.
-                // A non-registered seller who states VAT (warned at create time
-                // per ML 16 kap. 23 §) still gets the totals row so the printed
-                // invoice matches what the customer is being asked to pay.
-                !(company.vat_registered === false && invoice.vat_amount === 0) && (
-                  <View style={styles.totalRow}>
-                    <Text style={styles.totalLabel}>{bareLabel(L.vatRow(invoice.vat_rate ?? (vatByRate.size === 1 ? (vatByRate.keys().next().value ?? 0) : 0)))}</Text>
-                    <Text style={styles.totalValue}>{formatPdfAmount(invoice.vat_amount, lang)}</Text>
-                  </View>
-                )
-              )}
-              {amountToPay.rounding.applies && (
-                <View style={styles.totalRow}>
-                  <Text style={styles.totalLabel}>{bareLabel(L.rounding)}</Text>
-                  <Text style={styles.totalValue}>{formatPdfAmount(amountToPay.rounding.roundingDelta, lang)}</Text>
-                </View>
-              )}
-              {amountToPay.deductionApplies && hasGronTeknik && (
-                // Grön teknik: "Fakturans totala belopp och
-                // skattereduktionens storlek", both incl. moms.
-                <View style={styles.totalRow}>
-                  <Text style={styles.totalLabel}>{bareLabel(L.totalInclVat)}</Text>
-                  <Text style={styles.totalValue}>{formatPdfAmount(amountToPay.rounding.displayed, lang)}</Text>
-                </View>
-              )}
-              {amountToPay.deductionApplies && (
-                <View style={styles.totalRow}>
-                  <Text style={styles.totalLabel}>{bareLabel(hasGronTeknik ? L.deductionRowGronTeknik : L.deductionRow)}</Text>
-                  <Text style={styles.totalValue}>
-                    {/* deduction_total is stored as a positive magnitude;
-                        -Math.abs() keeps the row a reduction even if the
-                        stored sign convention ever changes. */}
-                    {formatPdfAmount(-Math.abs(invoice.deduction_total ?? 0), lang)}
-                  </Text>
-                </View>
-              )}
-              {/* The document as issued: the same rows paid or unpaid, so a
-                  re-render paginates like the original. What is still due
-                  lives in the payment area. */}
-              <View style={styles.grandTotal}>
-                <Text style={styles.grandTotalLabel}>{bareLabel(isCreditNote ? L.toCredit : isQuote ? L.totalQuote : L.toPay)}</Text>
-                <Text style={styles.grandTotalValue}>{formatPdfCurrency(amountToPay.toPay, invoice.currency, lang)}</Text>
-              </View>
-              {/* ML 17 kap 29 §: VAT in SEK on a foreign-currency invoice. */}
-              {invoice.currency !== 'SEK' && invoice.total_sek && (
-                <View style={styles.sekRows}>
-                  {invoice.vat_amount_sek != null && invoice.vat_amount_sek !== 0 && (
-                    <View style={styles.totalRow}>
-                      <Text style={[styles.totalLabel, styles.totalSmall]}>{bareLabel(L.vatInSek(invoice.exchange_rate ?? ''))}</Text>
-                      <Text style={[styles.totalValue, styles.totalSmall]}>{formatPdfCurrency(invoice.vat_amount_sek, 'SEK', lang)}</Text>
-                    </View>
-                  )}
-                  <View style={styles.totalRow}>
-                    <Text style={[styles.totalLabel, styles.totalSmall]}>{bareLabel(L.totalInSek)}</Text>
-                    <Text style={[styles.totalValue, styles.totalSmall]}>{formatPdfCurrency(invoice.total_sek, 'SEK', lang)}</Text>
-                  </View>
-                </View>
-              )}
-            </View>
-          )}
-
-          {hasDeductionBox && (
-            // Kept on one page while the per-line breakdown (which carries the
-            // line descriptions, possibly multi-line) is short enough; past
-            // that it may split rather than be clipped. Fixed cap: the estimate
-            // does not see the rest of the box (MAX_KEEP_TOGETHER_LINES).
-            <View style={styles.deductionBox} wrap={!deductionFits}>
-              <Text style={styles.deductionTitle}>{L.deductionInfoHeading}</Text>
-              {deductionPersonnummerMasked && (
-                <View style={styles.deductionRow}>
-                  <Text style={styles.deductionLabel}>{bareLabel(L.deductionPersonnummer)}</Text>
-                  <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{deductionPersonnummerMasked}</Text>
-                </View>
-              )}
-              {(() => {
-                // The first item-level housing_designation (typical: a single
-                // property). RUT-only invoices have none.
-                const housing = items.find((i) => i.housing_designation)?.housing_designation
-                const apartment = items.find((i) => i.apartment_number)?.apartment_number
-                // Grön teknik in a bostadsrätt: the förening's orgnr goes with
-                // the lägenhetsnummer.
-                const brf = hasGronTeknik ? items.find((i) => i.brf_org_number)?.brf_org_number : null
-                return (
-                  <>
-                    {housing && (
-                      <View style={styles.deductionRow}>
-                        <Text style={styles.deductionLabel}>{bareLabel(L.deductionHousingDesignation)}</Text>
-                        <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{housing}</Text>
-                      </View>
-                    )}
-                    {apartment && (
-                      <View style={styles.deductionRow}>
-                        <Text style={styles.deductionLabel}>{bareLabel(L.deductionApartmentNumber)}</Text>
-                        <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{apartment}</Text>
-                      </View>
-                    )}
-                    {brf && (
-                      <View style={styles.deductionRow}>
-                        <Text style={styles.deductionLabel}>{bareLabel(L.deductionBrfOrgNumber)}</Text>
-                        <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>{brf}</Text>
-                      </View>
-                    )}
-                  </>
-                )
-              })()}
-              {hasGronTeknik && (
-                <>
-                  {gronTeknikCostByType.length > 1 ? (
-                    gronTeknikCostByType.map((type, idx) => (
-                      <View key={type.label} style={styles.deductionRow}>
-                        <Text style={styles.deductionLabel}>{idx === 0 ? bareLabel(L.gronTeknikEligibleCost) : ''}</Text>
-                        <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>
-                          {`${type.label}: ${formatPdfCurrency(type.amount, invoice.currency, lang)} ${L.inclVatSuffix}`}
-                        </Text>
+                        {group.vat !== 0 && (
+                          <View style={styles.totalRow}>
+                            <Text style={styles.totalLabel}>{bareLabel(L.vatRow(rate))}</Text>
+                            <Text style={styles.totalValue}>{formatPdfAmount(group.vat, lang)}</Text>
+                          </View>
+                        )}
                       </View>
                     ))
-                  ) : (
-                    <View style={styles.deductionRow}>
-                      <Text style={styles.deductionLabel}>{bareLabel(L.gronTeknikEligibleCost)}</Text>
-                      <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>
-                        {`${formatPdfCurrency(gronTeknikEligibleCost, invoice.currency, lang)} ${L.inclVatSuffix}`}
-                      </Text>
+                ) : (
+                  // Suppress the "Moms 0%" row only when the seller is not
+                  // VAT-registered AND the invoice actually carries no VAT.
+                  // A non-registered seller who states VAT (warned at create time
+                  // per ML 16 kap. 23 §) still gets the totals row so the printed
+                  // invoice matches what the customer is being asked to pay.
+                  !(company.vat_registered === false && invoice.vat_amount === 0) && (
+                    <View style={styles.totalRow}>
+                      <Text style={styles.totalLabel}>{bareLabel(L.vatRow(invoice.vat_rate ?? (vatByRate.size === 1 ? (vatByRate.keys().next().value ?? 0) : 0)))}</Text>
+                      <Text style={styles.totalValue}>{formatPdfAmount(invoice.vat_amount, lang)}</Text>
                     </View>
-                  )}
-                  <View style={styles.deductionRow}>
-                    <Text style={styles.deductionLabel}>{bareLabel(L.gronTeknikOtherCost)}</Text>
-                    <Text style={styles.deductionValue} hyphenationCallback={wrapDescriptionWords}>
-                      {`${formatPdfCurrency(gronTeknikOtherCost, invoice.currency, lang)} ${L.inclVatSuffix}`}
+                  )
+                )}
+                {amountToPay.rounding.applies && (
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>{bareLabel(L.rounding)}</Text>
+                    <Text style={styles.totalValue}>{formatPdfAmount(amountToPay.rounding.roundingDelta, lang)}</Text>
+                  </View>
+                )}
+                {amountToPay.deductionApplies && hasGronTeknik && (
+                  // Grön teknik: "Fakturans totala belopp och
+                  // skattereduktionens storlek", both incl. moms.
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>{bareLabel(L.totalInclVat)}</Text>
+                    <Text style={styles.totalValue}>{formatPdfAmount(amountToPay.rounding.displayed, lang)}</Text>
+                  </View>
+                )}
+                {amountToPay.deductionApplies && (
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>{bareLabel(hasGronTeknik ? L.deductionRowGronTeknik : L.deductionRow)}</Text>
+                    <Text style={styles.totalValue}>
+                      {/* deduction_total is stored as a positive magnitude;
+                          -Math.abs() keeps the row a reduction even if the
+                          stored sign convention ever changes. */}
+                      {formatPdfAmount(-Math.abs(invoice.deduction_total ?? 0), lang)}
                     </Text>
                   </View>
-                </>
-              )}
-              {/* What the base covers (Skatteverket fakturamodellen): labor
-                  only for ROT/RUT, material invoiced separately. Grön teknik
-                  prints its base once, after the breakdown (below). */}
-              {!hasGronTeknik && (
-                <Text style={styles.deductionNotice}>{DEDUCTION_LABOR_ONLY_NOTICE}</Text>
-              )}
-              {/* Per-line breakdown: one row per eligible item with kind,
-                  work type if present and the deducted amount. */}
-              {items
-                .filter((i) => i.deduction_type)
-                .map((i, idx) => {
-                  // Grön teknik rows name the installation type (Skatteverket:
-                  // "vilken typ av arbete"); ROT/RUT rows keep printing the code.
-                  const isGronTeknik = i.deduction_type === 'gron_teknik'
-                  const kind = isGronTeknik ? L.gronTeknikKind : i.deduction_type === 'rot' ? 'ROT' : 'RUT'
-                  const workText = isGronTeknik ? (workTypeLabel(i.work_type) ?? i.work_type) : i.work_type
-                  const work = workText ? `, ${workText}` : ''
-                  return (
-                    <Text key={idx} style={styles.deductionLineItem} hyphenationCallback={wrapFullWidthWords}>
-                      {`${kind}${work}: ${i.description}, ${formatPdfCurrency(i.deduction_amount ?? 0, invoice.currency, lang)}`}
-                    </Text>
-                  )
-                })}
-              {/* Grön teknik: labor and material, övriga kostnader excluded,
-                  and the seller requests the payout: one notice. ROT/RUT keep
-                  their own notice as it was. */}
-              <Text style={styles.deductionNotice}>
-                {hasGronTeknik ? `${GRON_TEKNIK_BASE_NOTICE} ${L.gronTeknikPayoutNotice}` : L.deductionNotice}
-              </Text>
-            </View>
-          )}
-
-          {notices.length > 0 && (
-            <View style={styles.noticeSlot} wrap={false}>
-              {notices.map((notice, index) => (
-                <Text
-                  key={index}
-                  style={index === 0 ? styles.noticeText : styles.noticeTextNext}
-                  hyphenationCallback={wrapFullWidthWords}
-                >
-                  {notice}
-                </Text>
-              ))}
-            </View>
-          )}
-
-          {/* Fine print and the payment area's reservation, kept together so
-              the last page always has room for the payment area. */}
-          {(finePrint.length > 0 || hasPaymentArea) && (
-            <View wrap={false}>
-              {finePrint.length > 0 && (
-                <View style={styles.finePrint}>
-                  {finePrint.map((text, index) => (
-                    <Text key={index} style={styles.finePrintText} hyphenationCallback={wrapFullWidthWords}>
-                      {text}
-                    </Text>
-                  ))}
+                )}
+                {/* The document as issued: the same rows paid or unpaid, so a
+                    re-render paginates like the original. What is still due
+                    lives in the payment area. */}
+                <View style={styles.grandTotal}>
+                  <Text style={styles.grandTotalLabel}>{bareLabel(isCreditNote ? L.toCredit : isQuote ? L.totalQuote : L.toPay)}</Text>
+                  <Text style={styles.grandTotalValue}>{formatPdfCurrency(amountToPay.toPay, invoice.currency, lang)}</Text>
                 </View>
-              )}
-              {hasPaymentArea && <View style={{ height: PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT }} />}
-            </View>
-          )}
+                {/* ML 17 kap 29 §: VAT in SEK on a foreign-currency invoice. */}
+                {invoice.currency !== 'SEK' && invoice.total_sek && (
+                  <View style={styles.sekRows}>
+                    {invoice.vat_amount_sek != null && invoice.vat_amount_sek !== 0 && (
+                      <View style={styles.totalRow}>
+                        <Text style={[styles.totalLabel, styles.totalSmall]}>{bareLabel(L.vatInSek(invoice.exchange_rate ?? ''))}</Text>
+                        <Text style={[styles.totalValue, styles.totalSmall]}>{formatPdfCurrency(invoice.vat_amount_sek, 'SEK', lang)}</Text>
+                      </View>
+                    )}
+                    <View style={styles.totalRow}>
+                      <Text style={[styles.totalLabel, styles.totalSmall]}>{bareLabel(L.totalInSek)}</Text>
+                      <Text style={[styles.totalValue, styles.totalSmall]}>{formatPdfCurrency(invoice.total_sek, 'SEK', lang)}</Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {deductionFits && deductionBox}
+
+            {notices.length > 0 && (
+              <View style={styles.noticeSlot} wrap={false}>
+                {notices.map((notice, index) => (
+                  <Text
+                    key={index}
+                    style={index === 0 ? styles.noticeText : styles.noticeTextNext}
+                    hyphenationCallback={wrapFullWidthWords}
+                  >
+                    {notice}
+                  </Text>
+                ))}
+              </View>
+            )}
+
+            {/* Fine print and the payment area's reservation, kept together so
+                the last page always has room for the payment area. */}
+            {(finePrint.length > 0 || hasPaymentArea) && (
+              <View wrap={false}>
+                {finePrint.length > 0 && (
+                  <View style={styles.finePrint}>
+                    {finePrint.map((text, index) => (
+                      <Text key={index} style={styles.finePrintText} hyphenationCallback={wrapFullWidthWords}>
+                        {text}
+                      </Text>
+                    ))}
+                  </View>
+                )}
+                {hasPaymentArea && <View style={{ height: PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT }} />}
+              </View>
+            )}
+          </View>
         </View>
 
         {/* Zone E: the payment area, drawn over the spacer at the bottom of

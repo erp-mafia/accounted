@@ -76,7 +76,7 @@ export const PAYMENT_AREA_LABELS = {
     creditsInvoice: 'Avser faktura',
     quoteTotal: 'Summa',
     validUntil: 'Giltig till',
-    quoteQuestions: 'Frågor om offerten',
+    quoteContact: 'Kontakt',
     email: 'E-post',
     phone: 'Telefon',
     paid: 'Betald',
@@ -98,7 +98,7 @@ export const PAYMENT_AREA_LABELS = {
     creditsInvoice: 'Credits invoice',
     quoteTotal: 'Total',
     validUntil: 'Valid until',
-    quoteQuestions: 'Questions about this quote',
+    quoteContact: 'Contact',
     email: 'Email',
     phone: 'Phone',
     paid: 'Paid',
@@ -174,6 +174,19 @@ function shortLink(url: string): string {
   return display.length > LINK_DISPLAY_MAX_CHARS ? `${display.slice(0, LINK_DISPLAY_MAX_CHARS - 3)}...` : display
 }
 
+/**
+ * The value as the area prints it. A payment link is shortened (the row
+ * links to the full URL). A bank account's number is kept on one line:
+ * the spaces inside it become no-break spaces, so only the bank name before
+ * it can wrap and no digit group of the number the customer copies lands on
+ * a line of its own.
+ */
+function displayValue(key: string, value: string): string {
+  if (key === 'payment_link') return shortLink(value)
+  if (key === 'bank_account') return value.replace(/(?<=[\d-]) (?=\d)/g, '\u00a0')
+  return value
+}
+
 function clean(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
   return trimmed ? trimmed : null
@@ -214,7 +227,7 @@ export function buildPdfPaymentArea(input: PdfPaymentAreaInput): PdfPaymentArea 
       const v = clean(value)
       if (v) contacts.push({ key, label, value: v, emphasis: false })
     }
-    contact('our_reference', A.quoteQuestions, invoice.our_reference)
+    contact('our_reference', A.quoteContact, invoice.our_reference)
     contact('email', A.email, company.email)
     contact('phone', A.phone, company.phone)
     return {
@@ -234,7 +247,7 @@ export function buildPdfPaymentArea(input: PdfPaymentAreaInput): PdfPaymentArea 
   const rows: PdfPaymentAreaRow[] = buildInvoicePaymentRows({ company, invoice, lang }).map((row) => ({
     key: row.key,
     label: bareLabel(row.label),
-    value: row.key === 'payment_link' ? shortLink(row.value) : row.value,
+    value: displayValue(row.key, row.value),
     emphasis: row.emphasis ?? false,
     ...(row.key === 'payment_link' ? { href: row.value } : {}),
   }))

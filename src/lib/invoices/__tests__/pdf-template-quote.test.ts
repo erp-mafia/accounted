@@ -95,7 +95,7 @@ describe('quote PDF (sv)', () => {
     const text = renderText(quote({ our_reference: 'Anna Säljare' }))
 
     expect(text).toContain('Offert')
-    expect(text).toContain('Frågor om offerten')
+    expect(text).toContain('Kontakt')
     expect(text).toContain('Anna Säljare')
     expect(text).toContain('offert@example.test')
     expect(text).toContain('08-000 00 00')

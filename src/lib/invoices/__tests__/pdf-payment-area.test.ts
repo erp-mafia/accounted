@@ -123,7 +123,7 @@ describe('buildPdfPaymentArea', () => {
       slot: null,
     })
     expect(area.rows.map((r) => [r.label, r.value])).toEqual([
-      ['Frågor om offerten', 'Anna Säljare'],
+      ['Kontakt', 'Anna Säljare'],
       ['E-post', 'info@example.test'],
       ['Telefon', '08-000 00 00'],
     ])
@@ -136,6 +136,22 @@ describe('buildPdfPaymentArea', () => {
     expect(documentHasPaymentArea('delivery_note', false)).toBe(false)
     expect(documentHasPaymentArea('invoice', true)).toBe(true)
     expect(documentHasPaymentArea('quote', false)).toBe(true)
+  })
+
+  it('keeps the bank account number on one line: only the bank name may wrap', () => {
+    const area = buildPdfPaymentArea({
+      ...input(),
+      company: {
+        ...input().company,
+        bank_name: 'Svenska Handelsbanken AB (publ)',
+        clearing_number: '6123',
+        account_number: '456 789 012',
+      },
+    })!
+    const bank = area.rows.find((r) => r.key === 'bank_account')!
+    expect(bank.value).toBe('Svenska Handelsbanken AB (publ), 6123-456\u00a0789\u00a0012')
+    // No plain (breakable) space between two digits of the number.
+    expect(bank.value).not.toMatch(/[\d-] \d/)
   })
 
   it('prints the payment link short and links to the full URL', () => {
