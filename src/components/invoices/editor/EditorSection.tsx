@@ -21,7 +21,9 @@ export function EditorSection({ label, aside, id, className, children }: EditorS
   return (
     <section id={id} className={cn('scroll-mt-4', className)}>
       <div className="mb-3 flex items-center justify-between gap-2 border-b border-border pb-2">
-        <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{label}</h2>
+        {/* The section kicker (as DetailSection): font-sans because h2 takes
+            the display serif from the global heading style. */}
+        <h2 className="font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</h2>
         {aside ? <div className="min-w-0 truncate text-[12.5px] text-muted-foreground">{aside}</div> : null}
       </div>
       {children}
