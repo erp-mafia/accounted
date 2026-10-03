@@ -10,6 +10,13 @@ const NAME_KEYWORDS = [
   'företag', 'foretag', 'company', 'företagsnamn', 'foretagsnamn',
 ]
 
+// Specific forms only: a bare 'nummer' or 'nr' would take Organisationsnummer,
+// Telefonnummer or Postnummer in a file that has no customer number column.
+const CUSTOMER_NUMBER_KEYWORDS = [
+  'kundnummer', 'kundnr', 'kund nr', 'kund id', 'kundid',
+  'customer number', 'customer no', 'customer nr', 'customer id',
+]
+
 const ORG_NUMBER_KEYWORDS = [
   'orgnr', 'org nr', 'orgnummer', 'org nummer', 'organisationsnummer',
   'organisationsnr', 'org', 'personnr', 'personnummer', 'org number',
@@ -81,6 +88,7 @@ export function detectCustomerColumns(headers: string[]): DetectedCustomerColumn
     reject: EXTERNAL_NUMBER_KEYWORDS,
   })
   const name_col = nameMatch?.index ?? -1
+  const customer_number_col = findColumn(headers, CUSTOMER_NUMBER_KEYWORDS, taken)
   const org_number_col = findColumn(headers, ORG_NUMBER_KEYWORDS, taken)
   const customer_type_col = findColumn(headers, CUSTOMER_TYPE_KEYWORDS, taken)
   const email_col = findColumn(headers, EMAIL_KEYWORDS, taken)
@@ -115,6 +123,7 @@ export function detectCustomerColumns(headers: string[]): DetectedCustomerColumn
     // -1 when no header looked like a name: confidence is then 0, so the
     // mapping step is shown instead of silently importing column 0 as the name.
     name_col,
+    customer_number_col,
     org_number_col,
     customer_type_col,
     email_col,

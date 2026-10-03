@@ -53,6 +53,7 @@ describe('detectCustomerColumns', () => {
       'VAT number', 'Address', 'Postal code', 'City', 'E-mail', 'Phone',
     ]
     const result = detectCustomerColumns(headers)
+    expect(result.customer_number_col).toBe(0)
     expect(result.name_col).toBe(1)
     expect(result.org_number_col).toBe(2)
     expect(result.vat_number_col).toBe(3)
@@ -71,6 +72,7 @@ describe('detectCustomerColumns', () => {
       'Adress 1', 'Postnummer', 'Ort', 'E-post', 'Telefon',
     ]
     const result = detectCustomerColumns(headers)
+    expect(result.customer_number_col).toBe(0)
     expect(result.name_col).toBe(1)
     expect(result.org_number_col).toBe(2)
     expect(result.vat_number_col).toBe(3)
@@ -115,5 +117,22 @@ describe('detectCustomerColumns', () => {
     const result = detectCustomerColumns(['Namn', 'Adress 2', 'Postnr'])
     expect(result.address_line2_col).toBe(1)
     expect(result.address_line1_col).toBeNull()
+  })
+
+  it('detects a short-form customer number header', () => {
+    const result = detectCustomerColumns(['Kundnr', 'Namn', 'Orgnr'])
+    expect(result.customer_number_col).toBe(0)
+    expect(result.name_col).toBe(1)
+    expect(result.org_number_col).toBe(2)
+  })
+
+  it('does not take another number column as the customer number', () => {
+    const headers = ['Namn', 'Organisationsnummer', 'Telefonnummer', 'Postnummer', 'Momsnr']
+    const result = detectCustomerColumns(headers)
+    expect(result.customer_number_col).toBeNull()
+    expect(result.org_number_col).toBe(1)
+    expect(result.phone_col).toBe(2)
+    expect(result.postal_code_col).toBe(3)
+    expect(result.vat_number_col).toBe(4)
   })
 })

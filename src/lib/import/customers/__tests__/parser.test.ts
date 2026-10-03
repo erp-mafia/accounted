@@ -188,4 +188,31 @@ describe('parseCustomersFile', () => {
     expect(result.rows).toHaveLength(1)
     expect(result.rows[0].name).toBe('K-001')
   })
+
+  it('reads the customer number column', () => {
+    const buffer = buildXlsx([
+      ['Kundnummer', 'Kundnamn', 'Orgnr'],
+      [1001, 'Acme AB', '5560217780'],
+      ['K-2', 'Beta AB', '5562345678'],
+      ['', 'Gamma AB', '5561234567'],
+    ])
+
+    const result = parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.detected_columns.customer_number_col).toBe(0)
+    expect(result.rows.map((r) => r.customer_number)).toEqual(['1001', 'K-2', null])
+    expect(result.rows.every((r) => r.is_valid)).toBe(true)
+  })
+
+  it('flags a customer number longer than 32 characters', () => {
+    const buffer = buildXlsx([
+      ['Kundnummer', 'Kundnamn'],
+      ['K'.repeat(33), 'Acme AB'],
+    ])
+
+    const result = parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.rows[0].is_valid).toBe(false)
+    expect(result.rows[0].validation_errors).toContain('Kundnumret får vara högst 32 tecken')
+  })
 })
