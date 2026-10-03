@@ -161,6 +161,13 @@ function generateBlanketterSru(declaration: NEDeclaration, now: Date, identity12
 
 /** Generate a complete SRU submission (INFO.SRU + BLANKETTER.SRU) for the NE-bilaga. */
 export function generateNESRUSubmission(declaration: NEDeclaration): SRUSubmission {
+  // An account outside every ruta, or an R11 that differs from the booked
+  // result, would file a näringsverksamhet that is not the one in the books.
+  // Both SRU downloads (dashboard and v1) build here, so this refuses both.
+  if (declaration.sruBlockers.length > 0) {
+    throw new Error(declaration.sruBlockers.join(' '))
+  }
+
   const now = new Date()
   const incomeYear = parseInt(getIncomeYear(declaration.fiscalYear.end), 10)
   const identity12 = formatIdentityNumber12(declaration.companyInfo.orgNumber, incomeYear)
