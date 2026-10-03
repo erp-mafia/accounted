@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { getPool, withUserContext } from './setup'
+import { getClient, getPool, withUserContext } from './setup'
 import {
   insertAuthUser,
   insertBalancedLines,
@@ -421,5 +422,46 @@ describe('D. document RPCs and leftover grants (pg)', () => {
       `SELECT 1 FROM pg_proc WHERE proname = 'seed_asset_categories'`,
     )
     expect(dropped.rows).toHaveLength(0)
+  })
+
+  // A fresh replay (supabase db push, docs/SELF-HOSTING.md) can run with a
+  // search_path that lacks `extensions`. An unqualified `vector` in these ACL
+  // lines then failed with 42704 and stopped every later migration (#2468).
+  it('grants match_* on the extensions.vector signature and replays without extensions on the search_path', async () => {
+    for (const fn of ['match_documents', 'match_booking_templates']) {
+      const { rows } = await getPool().query<{ anon: boolean; auth: boolean; svc: boolean }>(
+        `SELECT has_function_privilege('anon', $1::regprocedure, 'execute') AS anon,
+                has_function_privilege('authenticated', $1::regprocedure, 'execute') AS auth,
+                has_function_privilege('service_role', $1::regprocedure, 'execute') AS svc`,
+        [`public.${fn}(extensions.vector, integer, double precision)`],
+      )
+      expect(rows[0]).toEqual({ anon: false, auth: true, svc: true })
+    }
+
+    const aclLines = readFileSync(
+      'supabase/migrations/20260902093000_security_role_gates_membership_and_posting_integrity.sql',
+      'utf8',
+    )
+      .split('\n')
+      .filter((l) => /^(REVOKE|GRANT) EXECUTE ON FUNCTION public\.match_(documents|booking_templates)\(/.test(l))
+    expect(aclLines).toHaveLength(4)
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      await client.query('SET LOCAL search_path = public')
+      for (const stmt of aclLines) await client.query(stmt)
+      // Non-vacuous: under this search_path the unqualified type does not resolve.
+      await client.query('SAVEPOINT unqualified')
+      await expect(
+        client.query(
+          `REVOKE EXECUTE ON FUNCTION public.match_documents(vector, integer, double precision) FROM anon`,
+        ),
+      ).rejects.toMatchObject({ code: '42704' })
+      await client.query('ROLLBACK TO SAVEPOINT unqualified')
+    } finally {
+      await client.query('ROLLBACK')
+      client.release()
+    }
   })
 })
