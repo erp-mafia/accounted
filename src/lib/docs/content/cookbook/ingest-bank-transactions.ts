@@ -7,7 +7,7 @@ This is the operational companion to the [Transactions reference](/docs/api/refe
 ## What you'll need
 
 - A test API key with \`transactions:write\`, \`transactions:read\`, and \`operations:read\` scopes. (There is no \`imports:write\` scope: the bank import runs under \`transactions:write\`, and polling the operation needs \`operations:read\`.)
-- A bank statement file in one of the supported formats: CSV (SEB / Swedbank / Handelsbanken / Nordea / Nordea Business / Länsförsäkringar / ICA Banken / Skandia / Lunar / Northmill / generic CSV auto-detected), CAMT.053 XML, or a generic account-statement CSV with at minimum date + amount + description columns.
+- A bank statement file in one of the supported formats: CSV (SEB / Swedbank / Handelsbanken / Nordea / Nordea Business / Länsförsäkringar / ICA Banken / Skandia / Lunar / Northmill / Avanza / generic CSV auto-detected), CAMT.053 XML, or a generic account-statement CSV with at minimum date + amount + description columns.
 - The settlement account for the bank: typically \`1930\` for an SEK business account (check via \`GET /accounts\`). \`/imports/bank\` resolves the settlement account automatically; \`settlement_account\` is an explicit parameter of \`POST /transactions/ingest\`, not of the file upload.
 
 ## 1. Upload the bank file

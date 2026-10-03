@@ -34,6 +34,7 @@ const FORMAT_NAMES: Record<string, string> = {
   skandia: 'Skandia',
   lunar: 'Lunar',
   northmill: 'Northmill',
+  avanza: 'Avanza',
   wise: 'Wise',
   generic_csv: 'CSV (manuell mappning)',
   camt053: 'ISO 20022 camt.053',
@@ -142,6 +143,7 @@ export default function BankFileUploadStep({
                 <SelectItem value="skandia">Skandia</SelectItem>
                 <SelectItem value="lunar">Lunar</SelectItem>
                 <SelectItem value="northmill">Northmill</SelectItem>
+                <SelectItem value="avanza">Avanza</SelectItem>
                 <SelectItem value="wise">Wise</SelectItem>
                 <SelectItem value="wise_statement">{t('bank_format_wise_statement')}</SelectItem>
                 <SelectItem value="camt053">ISO 20022 camt.053 (XML)</SelectItem>
@@ -300,6 +302,12 @@ export default function BankFileUploadStep({
             <p className="font-medium">Northmill</p>
             <p className="text-muted-foreground">
               Logga in → Konto → Kontoutdrag → Ladda ner (CSV)
+            </p>
+          </div>
+          <div>
+            <p className="font-medium">Avanza</p>
+            <p className="text-muted-foreground">
+              Logga in → Min ekonomi → Konto → Se historiska transaktioner → Exportera transaktioner
             </p>
           </div>
         </CardContent>
