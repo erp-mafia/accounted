@@ -1016,6 +1016,13 @@ function BalansrapportSectionRows({
           {section.label}
         </td>
       </tr>
+      {section.note && (
+        <tr>
+          <td colSpan={5} className="px-4 pb-1.5 text-[12.5px] text-muted-foreground">
+            {section.note}
+          </td>
+        </tr>
+      )}
       {section.sections.map((child) => (
         <BalansrapportSectionRows
           key={child.key}

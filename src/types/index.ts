@@ -2471,6 +2471,8 @@ export interface BalansrapportSection {
   label: string
   /** "Summa <label>", the line under the section. */
   total_label: string
+  /** What to do about the section's accounts; set only on 'unclassified'. */
+  note?: string
   rows: BalansrapportRow[]
   sections: BalansrapportSection[]
   subtotal_ib: number
