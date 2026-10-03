@@ -11,6 +11,7 @@ function makeDeclaration(opts: {
   rutor?: Partial<NEDeclarationRutor>
   companyInfo?: Partial<NEDeclaration['companyInfo']>
   fiscalYear?: Partial<NEDeclaration['fiscalYear']>
+  extra?: Partial<Pick<NEDeclaration, 'bookedResult' | 'sruBlockers' | 'warnings'>>
 } = {}): NEDeclaration {
   const rutor: NEDeclarationRutor = {
     R1: 500000, R2: 0, R3: 0, R4: 1200,
@@ -46,6 +47,9 @@ function makeDeclaration(opts: {
       ...opts.companyInfo,
     },
     warnings: [],
+    bookedResult: rutor.R11,
+    sruBlockers: [],
+    ...opts.extra,
   }
 }
 
@@ -165,6 +169,15 @@ describe('NE-bilaga SRU generator', () => {
       expect(() =>
         generateNESRUSubmission(makeDeclaration({ companyInfo: { orgNumber: '12345' } }))
       ).toThrow(/personnummer/i)
+    })
+  })
+
+  describe('R11 check (no file that differs from the books)', () => {
+    it('refuses the file when the declaration has a blocker, naming it', () => {
+      const blocker = 'Konto 8470 Egen post (100,00 kr debet) hör inte till någon ruta i NE-bilagan.'
+      expect(() =>
+        generateNESRUSubmission(makeDeclaration({ extra: { sruBlockers: [blocker] } }))
+      ).toThrow(blocker)
     })
   })
 
