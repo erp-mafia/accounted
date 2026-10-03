@@ -113,6 +113,22 @@ describe('getStructuredError', () => {
     expect(result.remediation?.description).toContain('connects again with Godkänn ticked')
     // Scopes cannot be added to an existing key, so the generic hint is wrong here.
     expect(result.remediation?.description).not.toContain('add it to the existing key')
+    // Rejecting is not approval: a write key can still withdraw its own proposals.
+    expect(result.remediation?.description).toContain('reject (withdraw) the proposals it staged itself')
+  })
+
+  it('tells a key refused at the reject gate that it has neither approve nor a write scope', () => {
+    for (const toolName of ['gnubok_reject_pending_operation', 'accounted_reject_pending_operation']) {
+      const result = getStructuredError(
+        new Error('Insufficient scope: this API key does not have the "pending_operations:approve" scope'),
+        { attemptedScope: 'pending_operations:approve', toolName },
+      )
+      expect(result.code).toBe('INSUFFICIENT_SCOPE')
+      expect(result.remediation?.description, toolName).toContain('cannot reject agent proposals')
+      expect(result.remediation?.description, toolName).toContain('nor a write scope')
+      expect(result.remediation?.description, toolName).toContain('Att göra > Agentförslag')
+      expect(result.remediation?.description, toolName).not.toContain('add it to the existing key')
+    }
   })
 
   it('infers TRANSACTION_ALREADY_CATEGORIZED', () => {

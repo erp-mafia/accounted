@@ -117,6 +117,20 @@ function isTransientFailure(error: unknown, message: string): boolean {
   return TRANSIENT_MESSAGE_PATTERNS.some((re) => re.test(message))
 }
 
+/**
+ * The remediation for a call refused for lack of pending_operations:approve.
+ * The tool name may carry either MCP namespace (gnubok_ or accounted_).
+ */
+function approveScopeHint(toolName: string | undefined): string {
+  const appPath = 'Att göra > Agentförslag (/pending)'
+  const reconnect =
+    'the user disconnects under Inställningar > API och MCP and connects again with Godkänn ticked (permissions cannot be added to an existing connection).'
+  if (toolName && /_reject_pending_operation$/.test(toolName)) {
+    return `This connection cannot reject agent proposals: it has neither the "pending_operations:approve" scope (Godkänn) nor a write scope. The user rejects them in Accounted under ${appPath}. To let the agent approve or reject in chat, ${reconnect}`
+  }
+  return `This connection cannot approve agent proposals: it was made without the "pending_operations:approve" scope (Godkänn). The user approves them in Accounted under ${appPath}. A connection with a write scope can still reject (withdraw) the proposals it staged itself with reject_pending_operation. To let the agent approve in chat, ${reconnect}`
+}
+
 interface StructuredErrorOptions {
   /**
    * Optional: scope the agent attempted to use, for INSUFFICIENT_SCOPE remediation.
@@ -300,12 +314,15 @@ export function getStructuredError(
   // Approve gets its own hint: it is never pre-ticked on the MCP consent page
   // (founder decision 2026-10-03, issue #3408), so a default connection lacks
   // it, and the way forward is the review list in the app, or reconnecting
-  // with it ticked (scopes cannot be added to an existing key).
+  // with it ticked (scopes cannot be added to an existing key). Rejecting is
+  // not approval: a connection with a write scope may reject the proposals it
+  // staged itself, so a reject refused at the scope gate means the key has
+  // neither approve nor a write scope.
   if (code === 'INSUFFICIENT_SCOPE' && options.attemptedScope && remediation) {
     remediation = {
       ...remediation,
       description: options.attemptedScope === 'pending_operations:approve'
-        ? 'This connection cannot approve or reject agent proposals: it was made without the "pending_operations:approve" scope (Godkänn). The user approves or rejects them in Accounted under Att göra > Agentförslag (/pending). To let the agent approve in chat, the user disconnects under Inställningar > API och MCP and connects again with Godkänn ticked.'
+        ? approveScopeHint(options.toolName)
         : `The current API key does not have the "${options.attemptedScope}" scope. Mint a new key with that scope or add it to the existing key in API settings.`,
     }
   }

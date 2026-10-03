@@ -3251,7 +3251,7 @@
     "scope_payroll_read": "Read: list employees, salary runs, salary journal",
     "scope_payroll_write": "Write: create salary run, calculate, generate AGI",
     "scope_pending_operations_read": "Read: list agent proposals awaiting your approval",
-    "scope_pending_operations_approve": "Approve: approve or reject agent proposals via API and MCP, so they are booked without your review",
+    "scope_pending_operations_approve": "Approve: approve agent proposals via API and MCP, so they are booked without your review. Without it, the key can only reject its own proposals",
     "scope_documents_read": "Read: list and fetch document attachments",
     "scope_documents_write": "Write: upload and link documents to vouchers",
     "scope_companies_read": "Read: company profiles the key has access to",

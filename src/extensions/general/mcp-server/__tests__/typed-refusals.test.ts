@@ -41,6 +41,9 @@ async function refusal(name: string, args: Record<string, unknown>, supabase: un
 }
 
 const OP_ID = '0e5f0000-0000-4000-8000-000000000001'
+// Scopes the dispatcher injects for a key that may reject any proposal: an
+// API-key caller without injected scopes is refused before the status check.
+const APPROVER = ['pending_operations:read', 'pending_operations:approve']
 const DOC_ID = '0d0c0000-0000-4000-8000-000000000002'
 const JE_ID = '0a0e0000-0000-4000-8000-000000000003'
 const NO_ROW = { code: 'PGRST116', message: 'Cannot coerce the result to a single JSON object', details: 'The result contains 0 rows' }
@@ -104,7 +107,7 @@ describe('NOT_FOUND and CONFLICT: pending operations', () => {
   it('reject: an operation already rejected is CONFLICT (REST answers 409), not retryable', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: OP_ID, status: 'rejected', operation_type: 'create_voucher', risk_level: 'medium' } })
-    expect(await refusal('gnubok_reject_pending_operation', { operation_id: OP_ID }, supabase)).toMatchObject({
+    expect(await refusal('gnubok_reject_pending_operation', { operation_id: OP_ID, __keyScopes: APPROVER }, supabase)).toMatchObject({
       code: 'CONFLICT',
       retryable: false,
       message_en: 'Operation already rejected.',
@@ -115,7 +118,7 @@ describe('NOT_FOUND and CONFLICT: pending operations', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: OP_ID, status: 'pending', operation_type: 'create_voucher', risk_level: 'medium' } })
     enqueue({ data: [] }) // CAS update: 0 rows
-    expect((await refusal('gnubok_reject_pending_operation', { operation_id: OP_ID }, supabase)).code).toBe('CONFLICT')
+    expect((await refusal('gnubok_reject_pending_operation', { operation_id: OP_ID, __keyScopes: APPROVER }, supabase)).code).toBe('CONFLICT')
   })
 })
 

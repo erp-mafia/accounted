@@ -3251,7 +3251,7 @@
     "scope_payroll_read": "Läs: lista anställda, lönekörningar, lönejournal",
     "scope_payroll_write": "Skriv: skapa lönekörning, beräkna, generera AGI",
     "scope_pending_operations_read": "Läs: lista agentförslag som väntar på ditt godkännande",
-    "scope_pending_operations_approve": "Godkänn: godkänn eller avvisa agentförslag via API och MCP, då bokförs de utan din granskning",
+    "scope_pending_operations_approve": "Godkänn: godkänn agentförslag via API och MCP, då bokförs de utan din granskning. Utan Godkänn kan nyckeln bara avvisa sina egna förslag",
     "scope_documents_read": "Läs: lista och hämta dokumentbilagor",
     "scope_documents_write": "Skriv: ladda upp och koppla dokument till verifikationer",
     "scope_companies_read": "Läs: företagsprofiler nyckeln har åtkomst till",

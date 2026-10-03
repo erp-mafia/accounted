@@ -1,5 +1,5 @@
 import type { McpResource } from './types'
-import { TOOL_SCOPE_MAP, hasScope } from '@/lib/auth/api-keys'
+import { TOOL_SCOPE_MAP, keyCanCallTool } from '@/lib/auth/api-keys'
 import { resolveCompanyEntityType, UnknownEntityTypeError } from '@/lib/company/entity-type'
 import { offersPayroll } from '@/lib/company/offers-payroll'
 
@@ -67,7 +67,9 @@ export const capabilitiesResource: McpResource = {
 
     const capabilities: Capability[] = Object.entries(TOOL_SCOPE_MAP).map(
       ([tool, scope]) => {
-        const granted = hasScope(scopes, scope)
+        // The tool's scope or one of its TOOL_ALTERNATIVE_SCOPES (a write key
+        // may reject its own proposals without pending_operations:approve).
+        const granted = keyCanCallTool(tool, scopes)
         const stateReason = stateBlockers[scope] ?? null
         return {
           tool,

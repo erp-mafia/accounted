@@ -49,7 +49,7 @@ A tool that changes the books stages a pending operation instead of booking. The
 4. Never approve in a loop, in bulk, or "the rest too" without the person's explicit go for exactly that set. A yes covers what you showed, nothing more.
 5. If approving fails because the sign-in lacks the permission to approve, tell the person to approve under `/pending` in the app.
 
-`accounted call list_pending_operations` shows what is waiting. To drop one the person does not want: `accounted call reject_pending_operation '{"operation_id": "..."}'`.
+`accounted call list_pending_operations` shows what is waiting. To drop one the person does not want: `accounted call reject_pending_operation '{"operation_id": "..."}'`. Rejecting only withdraws the proposal and books nothing. A sign-in without the permission to approve can still reject the operations it staged itself (`can_reject: true` in the list); the person rejects anything else under `/pending`.
 
 ## Companies
 

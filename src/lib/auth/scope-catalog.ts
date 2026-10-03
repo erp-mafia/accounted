@@ -39,7 +39,10 @@ export const API_KEY_SCOPES = {
   // Shown to users as "Agentförslag", the name of the review list under
   // Att göra (issue #3408): "stagade operationer" read as developer jargon.
   'pending_operations:read':    { label: 'Agentförslag: läs',     description: 'Lista agentförslag som väntar på ditt godkännande' },
-  'pending_operations:approve': { label: 'Agentförslag: godkänn', description: 'Godkänn eller avvisa agentförslag via API/MCP: då bokförs de utan din granskning i appen' },
+  // Rejecting is not approval: without this scope a key with a write scope
+  // can still reject the proposals it staged itself (TOOL_ALTERNATIVE_SCOPES
+  // and lib/pending-operations/reject-authority.ts).
+  'pending_operations:approve': { label: 'Agentförslag: godkänn', description: 'Godkänn agentförslag via API/MCP: då bokförs de utan din granskning i appen. Utan Godkänn kan en nyckel med skrivbehörighet bara avvisa sina egna förslag' },
   // Reconciliation (account-keyed: bank accounts + skattekonto). Reads cover
   // the account list, the bridge and the item buckets; writes cover links
   // (match/unmatch) and ignore flags. Links never touch the ledger.
@@ -149,6 +152,21 @@ export function findStageApproveConflict(scopes: ApiKeyScope[]): ApiKeyScope | n
   if (!scopes.includes('pending_operations:approve')) return null
   return scopes.find((s) => STAGING_SCOPES.includes(s)) ?? null
 }
+
+/**
+ * Every scope through which an MCP tool can stage a pending operation: the
+ * scopes that let a key without pending_operations:approve reject (withdraw)
+ * the proposals it staged itself (lib/pending-operations/reject-authority.ts,
+ * founder decision 2026-10-03, follow-up to issue #3408).
+ *
+ * STAGING_SCOPES plus agent:write, whose gnubok_propose_fact stages a fact
+ * proposal for the Arkiv fact register. This list does not touch the
+ * segregation-of-duties control: STAGING_SCOPES (and its documented
+ * exclusion of agent:write) stays what findStageApproveConflict reads.
+ * mcp-server/__tests__/reject-own-scopes.test.ts asserts that every staging
+ * tool's TOOL_SCOPE_MAP scope is listed here.
+ */
+export const REJECT_OWN_SCOPES: readonly ApiKeyScope[] = [...STAGING_SCOPES, 'agent:write']
 
 /**
  * What the API key dialog (Inställningar › API och MCP, create key) ticks
@@ -586,6 +604,40 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // gnubok_feedback. Discovery + static skill bodies + feedback channel
   // remain public; private bodies are gated at dispatch. This lets an agent
   // orient itself before its key's scopes are known.
+}
+
+/**
+ * Tools a key may also reach WITHOUT their TOOL_SCOPE_MAP scope, through any
+ * one of the scopes listed here. The mapped scope stays the tool's scope
+ * everywhere else (the viewer and read-only-company write gates, telemetry,
+ * TOOL_COUNT_BY_SCOPE); this only widens who may call it, and the tool itself
+ * then decides per call what such a key may do.
+ *
+ * gnubok_reject_pending_operation: a key with a scope that can stage a
+ * proposal (REJECT_OWN_SCOPES) may reject (withdraw) agent proposals without
+ * pending_operations:approve, but only the ones it staged itself (founder
+ * decision 2026-10-03, follow-up to issue #3408). Rejecting never writes to
+ * the ledger. The per-operation rule lives in
+ * lib/pending-operations/reject-authority.ts.
+ */
+export const TOOL_ALTERNATIVE_SCOPES: Readonly<Record<string, readonly ApiKeyScope[]>> = {
+  gnubok_reject_pending_operation: REJECT_OWN_SCOPES,
+}
+
+/**
+ * Whether a key holding `keyScopes` may call `toolName`: the tool is unscoped,
+ * the key holds its TOOL_SCOPE_MAP scope, or it holds one of the tool's
+ * TOOL_ALTERNATIVE_SCOPES. Every surface that lists or gates tools by scope
+ * (tools/list, the dispatcher, search, the capabilities resource) asks this,
+ * so they cannot disagree about a tool with an alternative.
+ */
+export function keyCanCallTool(toolName: string, keyScopes: readonly string[]): boolean {
+  const required = TOOL_SCOPE_MAP[toolName]
+  if (!required || keyScopes.includes(required)) return true
+  // Own-property lookup: the name is caller-supplied, and index access would
+  // match inherited keys ("constructor").
+  if (!Object.hasOwn(TOOL_ALTERNATIVE_SCOPES, toolName)) return false
+  return TOOL_ALTERNATIVE_SCOPES[toolName].some((scope) => keyScopes.includes(scope))
 }
 
 /**

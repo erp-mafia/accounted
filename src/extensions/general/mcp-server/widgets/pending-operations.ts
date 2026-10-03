@@ -9,9 +9,11 @@ import type { UiWidget } from './types'
  * second click sends confirmed=true.
  * Triggered by gnubok_list_pending_operations with render_ui=true.
  * A key without pending_operations:approve (the default one-click connection
- * since issue #3408) cannot approve or reject: the list result then carries
- * can_approve=false and the widget shows where to review instead of buttons
- * that would fail on scope.
+ * since issue #3408) cannot approve: the list result then carries
+ * can_approve=false and the widget shows where to approve instead of a
+ * Godkänn button that would fail on scope. Such a key may still reject the
+ * proposals it staged itself (founder decision 2026-10-03): those rows carry
+ * can_reject=true and keep their Avvisa button.
  */
 
 export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
@@ -131,7 +133,8 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
   const pending = new Map();
   let operations = [];
   let handled = 0;
-  // false only when the list result says this key cannot approve or reject.
+  // false only when the list result says this key cannot approve. Rows it
+  // may still reject (its own proposals) carry can_reject=true.
   let canApprove = true;
   // A host that never answers must not strand a row in "Arbetar..." with its
   // buttons gone: time the RPC out so the catch path restores the row and
@@ -221,7 +224,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       return;
     }
 
-    let html = (canApprove ? '' : '<p class="readonly-note">Den h\\u00e4r anslutningen kan inte godk\\u00e4nna eller avvisa. G\\u00f6r det i Accounted under Att g\\u00f6ra \\u203a Agentf\\u00f6rslag.</p>') +
+    let html = (canApprove ? '' : '<p class="readonly-note">' + readOnlyNote() + '</p>') +
       '<table><thead><tr>' +
       '<th>Skapad</th><th>\\u00c5tg\\u00e4rd</th><th>Risk</th><th></th>' +
       '</tr></thead><tbody>';
@@ -262,6 +265,15 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
     });
   }
 
+  // Without approve: say where approval happens, and that the connection's
+  // own proposals can still be rejected here when the list has any.
+  function readOnlyNote() {
+    const anyRejectable = operations.some(function(op) { return op.can_reject === true; });
+    return anyRejectable
+      ? 'Den h\\u00e4r anslutningen kan inte godk\\u00e4nna. Godk\\u00e4nn i Accounted under Att g\\u00f6ra \\u203a Agentf\\u00f6rslag. F\\u00f6rslag som anslutningen sj\\u00e4lv har skapat kan du avvisa h\\u00e4r.'
+      : 'Den h\\u00e4r anslutningen kan inte godk\\u00e4nna eller avvisa. G\\u00f6r det i Accounted under Att g\\u00f6ra \\u203a Agentf\\u00f6rslag.';
+  }
+
   function riskChip(level) {
     if (level === 'high') return '<span class="chip high">h\\u00f6g</span>';
     if (level === 'medium') return '<span class="chip medium">medel</span>';
@@ -272,7 +284,14 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
     if (op._done === 'committed') return '<span class="check">\\u2713 Godk\\u00e4nd</span>';
     if (op._done === 'rejected') return '<span class="status-note">Avvisad</span>';
     if (op._working) return '<span class="status-note">Arbetar\\u2026</span>';
-    if (!canApprove) return '<span class="status-note">I Accounted</span>';
+    if (!canApprove) {
+      // Its own proposal: Avvisa stays, Godkänn happens in the app.
+      if (op.can_reject === true) {
+        return '<button class="reject" data-reject="' + i + '">Avvisa</button>' +
+          '<span class="status-note">Godk\\u00e4nns i Accounted</span>';
+      }
+      return '<span class="status-note">I Accounted</span>';
+    }
     let html = '';
     if (op._armed) {
       // Second click IS the positive BFL 5 kap 5\\u00a7 acknowledgment: it
