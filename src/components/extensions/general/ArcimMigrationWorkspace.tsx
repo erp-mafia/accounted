@@ -270,6 +270,7 @@ import {
   buildMigrateRequests,
   mergeMigrationResults,
 } from '@/extensions/general/arcim-migration/lib/migrate-plan'
+import { assetResultNeedsDetail } from '@/extensions/general/arcim-migration/lib/asset-result'
 import { canSkipMappingStep } from '@/extensions/general/arcim-migration/lib/mapping-step'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ProviderMigrationProgress from './ProviderMigrationProgress'
@@ -2379,7 +2380,7 @@ function ResultStep({
         value: results.assets.scopesMissing ? 'Hoppades över' : `${results.assets.imported} importerade`,
         detail: results.assets.scopesMissing
           ? 'Fortnox-anslutningen saknar behörighet till anläggningsregistret (assets-scope). Bokförda värden är ändå med via SIE.'
-          : results.assets.skipped > 0
+          : assetResultNeedsDetail(results.assets)
             ? formatSkipReasons(results.assets.skipReasons, 'asset', results.assets.errorSample) ?? `${results.assets.skipped} hoppades över`
             : undefined,
         failed: !results.assets.scopesMissing &&
@@ -2595,6 +2596,9 @@ function formatSkipReasons(
     )
   }
   if (reasons.unsupported) parts.push(`${reasons.unsupported} kunde inte tolkas`)
+  if (reasons.typeUnresolved) {
+    parts.push(`${reasons.typeUnresolved} utan tillgångstyp: standardkonton användes`)
+  }
   if (reasons.noMatch) {
     const matchLabel = entityType === 'invoice' ? 'utan matchning' : 'utan matchning'
     parts.push(`${reasons.noMatch} ${matchLabel}`)

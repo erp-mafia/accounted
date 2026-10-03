@@ -3,6 +3,7 @@ import {
   categoryForAssetAccount,
   monthsBetween,
   mapFortnoxAsset,
+  resolveAssetType,
   isImportableStatus,
   importProviderAssets,
   fortnoxAssetMarker,
@@ -12,6 +13,7 @@ import {
   type FortnoxAsset,
   type FortnoxAssetType,
 } from '../import-assets'
+import { assetResultNeedsDetail } from '../asset-result'
 
 vi.mock('@/lib/providers/resolve-consent', () => ({
   resolveConsent: vi.fn(),
@@ -399,5 +401,247 @@ describe('importProviderAssets', () => {
       skipReasons: { failed: 1 },
       errorSample: 'insert failed',
     })
+  })
+
+  // The common case the default-accounts warning exists for: every asset
+  // imports, so nothing is skipped, but one landed on its category default
+  // because its type could not be found. The result row has to say so; when
+  // it showed a detail only on skips, this run read as a clean import.
+  it('reports assets on default accounts even when nothing was skipped', async () => {
+    routeFetch(fetchSpy, [
+      { match: '/assets/types', respond: () => jsonResponse({ Types: [EQUIPMENT_TYPE] }) },
+      {
+        match: '/assets',
+        respond: () =>
+          jsonResponse({
+            Assets: [
+              LAPTOP,
+              {
+                ...LAPTOP,
+                Number: 'A-4',
+                Description: 'Utvecklingsprojekt',
+                TypeId: undefined,
+                Type: '1300 - Utveckling',
+              },
+            ],
+          }),
+      },
+    ])
+
+    const result = await importProviderAssets({
+      ...options,
+      supabase: mockSupabaseWithExistingAssets([]),
+    })
+
+    expect(result).toMatchObject({
+      total: 2,
+      imported: 2,
+      skipped: 0,
+      skipReasons: { typeUnresolved: 1 },
+    })
+    expect(assetResultNeedsDetail(result!)).toBe(true)
+    // The unresolved one carries no account of its own: createAsset fills in
+    // the category default, which is what the warning discloses.
+    const unresolvedInput = createAssetMock.mock.calls[1][3]
+    expect(unresolvedInput.bas_asset_account).toBeUndefined()
+  })
+
+  it('has nothing to add when every asset resolved its type and imported', async () => {
+    routeFetch(fetchSpy, [
+      { match: '/assets/types', respond: () => jsonResponse({ Types: [EQUIPMENT_TYPE] }) },
+      { match: '/assets', respond: () => jsonResponse({ Assets: [LAPTOP] }) },
+    ])
+
+    const result = await importProviderAssets({
+      ...options,
+      supabase: mockSupabaseWithExistingAssets([]),
+    })
+
+    expect(result).toMatchObject({ total: 1, imported: 1, skipped: 0 })
+    expect(result?.skipReasons?.typeUnresolved).toBeUndefined()
+    expect(assetResultNeedsDetail(result!)).toBe(false)
+  })
+})
+
+/**
+ * An asset acquired mid-month lost a month of its life: the plan running
+ * 2026-05-28 to 2031-04-30 is 60 months on the calendar, and the day-counting
+ * form made it 59. Every such asset then depreciated slightly too fast.
+ */
+describe('monthsBetween on the month grid', () => {
+  // The day-counting form gave 59 for both of these: 59 on the month
+  // difference, plus (30 - 28) / 30 or (30 - 17) / 30, which rounds away.
+  // A plan starting on the 1st never showed the bug, so it cannot guard it.
+  it('counts a mid-month plan as the whole 60 months', () => {
+    expect(monthsBetween('2026-05-28', '2031-04-30')).toBe(60)
+    expect(monthsBetween('2026-05-17', '2031-04-30')).toBe(60)
+  })
+
+  it('counts the same plan started on the first as 60 months too', () => {
+    expect(monthsBetween('2026-05-01', '2031-04-30')).toBe(60)
+  })
+
+  // Fortnox does not document whether DepreciationFinal is the last day of the
+  // final month or the first day after it. Both have to give the same life.
+  it('reads both end-date conventions the same way', () => {
+    expect(monthsBetween('2026-05-01', '2031-04-30')).toBe(
+      monthsBetween('2026-05-01', '2031-05-01'),
+    )
+  })
+
+  it('keeps a whole-month plan unchanged', () => {
+    expect(monthsBetween('2024-03-01', '2027-03-01')).toBe(36)
+  })
+
+  it('never returns less than a month', () => {
+    expect(monthsBetween('2026-05-01', '2026-05-01')).toBe(1)
+  })
+})
+
+/**
+ * The account triple lives on the asset type. The list endpoint reports the
+ * type as a label and does not always carry TypeId, so an id-only lookup found
+ * nothing and the asset fell back to its category default: a register whose
+ * ledger sits on 1010 arriving on 1290.
+ */
+describe('resolveAssetType', () => {
+  const TYPES: FortnoxAssetType[] = [
+    {
+      Id: 7,
+      Number: '1300',
+      Description: 'Utveckling',
+      AccountAsset: 1010,
+      AccountDepreciation: 1019,
+      AccountValueLoss: 7811,
+    },
+  ]
+  const byId = new Map(TYPES.map((type) => [type.Id as number, type]))
+
+  it('finds the type by id when the payload carries one', () => {
+    expect(resolveAssetType({ TypeId: 7 }, byId, TYPES)).toBe(TYPES[0])
+  })
+
+  it('finds the type by its label when no id is given', () => {
+    expect(resolveAssetType({ Type: '1300 - Utveckling' }, byId, TYPES)).toBe(TYPES[0])
+  })
+
+  it('accepts the number or the description alone', () => {
+    expect(resolveAssetType({ Type: '1300' }, byId, TYPES)).toBe(TYPES[0])
+    expect(resolveAssetType({ Type: 'Utveckling' }, byId, TYPES)).toBe(TYPES[0])
+  })
+
+  it('ignores case and surrounding space', () => {
+    expect(resolveAssetType({ Type: '  utveckling ' }, byId, TYPES)).toBe(TYPES[0])
+  })
+
+  it('returns nothing when neither id nor label matches', () => {
+    expect(resolveAssetType({ Type: 'Något annat' }, byId, TYPES)).toBeUndefined()
+    expect(resolveAssetType({}, byId, TYPES)).toBeUndefined()
+  })
+
+  // The whole point: with the type found, the asset lands on the accounts its
+  // ledger uses instead of the category default.
+  it('puts the asset on the type accounts once the type is found', () => {
+    const mapped = mapFortnoxAsset(
+      {
+        Number: '6',
+        Description: 'Utvecklingsprojekt',
+        AcquisitionDate: '2026-05-28',
+        // Mid-month on purpose: a start on the 1st gives 60 under the old
+        // day-counting form too, so the life assertion below would not notice
+        // the fix being reverted.
+        AcquisitionStart: '2026-05-28',
+        AcquisitionValue: 3_500_000,
+        DepreciationFinal: '2031-04-30',
+        Type: '1300 - Utveckling',
+      },
+      resolveAssetType({ Type: '1300 - Utveckling' }, byId, TYPES),
+    )
+    if (!('input' in mapped)) throw new Error('expected mapped input')
+    expect(mapped.input.bas_asset_account).toBe('1010')
+    expect(mapped.input.category).toBe('immaterial')
+    expect(mapped.input.useful_life_months).toBe(60)
+  })
+})
+
+/**
+ * Review of #2266 raised both of these: the label fallback picking silently
+ * among several candidates, and an unresolvable type still landing the asset
+ * on a category default with nothing said about it.
+ */
+describe('resolveAssetType refuses to guess', () => {
+  const base = { AccountAsset: 1010, AccountDepreciation: 1019, AccountValueLoss: 7811 }
+
+  it('returns nothing when two types share the number the label names', () => {
+    const types: FortnoxAssetType[] = [
+      { Id: 1, Number: '1300', Description: 'Utveckling', ...base },
+      { Id: 2, Number: '1300', Description: 'Programvara', ...base },
+    ]
+    expect(resolveAssetType({ Type: '1300' }, new Map(), types)).toBeUndefined()
+  })
+
+  it('returns nothing when two types share the description the label names', () => {
+    const types: FortnoxAssetType[] = [
+      { Id: 1, Number: '1220', Description: 'Inventarier', ...base },
+      { Id: 2, Number: '1230', Description: 'Inventarier', ...base },
+    ]
+    expect(resolveAssetType({ Type: 'Inventarier' }, new Map(), types)).toBeUndefined()
+  })
+
+  // The combined form identifies a type, so it still resolves even when the
+  // number alone would have been ambiguous.
+  it('still resolves on the combined form when only the number is shared', () => {
+    const types: FortnoxAssetType[] = [
+      { Id: 1, Number: '1300', Description: 'Utveckling', ...base },
+      { Id: 2, Number: '1300', Description: 'Programvara', ...base },
+    ]
+    expect(resolveAssetType({ Type: '1300 - Programvara' }, new Map(), types)?.Id).toBe(2)
+  })
+})
+
+/**
+ * From review of #2266: the separator's spacing varies between payloads, and
+ * which form a given Fortnox account carries is not something to depend on.
+ */
+describe('resolveAssetType ignores how the label is spaced', () => {
+  const TYPES: FortnoxAssetType[] = [
+    {
+      Id: 7,
+      Number: '1300',
+      Description: 'Utveckling',
+      AccountAsset: 1010,
+      AccountDepreciation: 1019,
+      AccountValueLoss: 7811,
+    },
+  ]
+
+  it.each([
+    '1300 - Utveckling',
+    '1300- Utveckling',
+    '1300 -Utveckling',
+    '1300-Utveckling',
+    '  1300  -  Utveckling  ',
+  ])('resolves %s', (label) => {
+    expect(resolveAssetType({ Type: label }, new Map(), TYPES)?.Id).toBe(7)
+  })
+
+  // The account triple has to survive the resolution, not just the match.
+  it('keeps the type accounts once resolved from an oddly spaced label', () => {
+    const mapped = mapFortnoxAsset(
+      {
+        Number: '6',
+        Description: 'Utvecklingsprojekt',
+        AcquisitionDate: '2026-05-28',
+        AcquisitionStart: '2026-05-01',
+        AcquisitionValue: 3_500_000,
+        DepreciationFinal: '2031-04-30',
+        Type: '1300-Utveckling',
+      },
+      resolveAssetType({ Type: '1300-Utveckling' }, new Map(), TYPES),
+    )
+    if (!('input' in mapped)) throw new Error('expected mapped input')
+    expect(mapped.input.bas_asset_account).toBe('1010')
+    expect(mapped.input.bas_accumulated_account).toBe('1019')
+    expect(mapped.input.bas_expense_account).toBe('7811')
   })
 })
