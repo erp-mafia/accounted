@@ -186,3 +186,22 @@ describe('anonymised statistics disclosure', () => {
     expect(backtest).toContain('is_sandbox')
   })
 })
+
+// Rate limiting runs on Upstash Redis (lib/auth/rate-limit-http.ts), connected
+// to the hosted project on 2026-09-23. The page must name it as a subprocessor,
+// in the EU region it runs in, and must not claim more data than the limiter
+// stores: counters keyed by truncated IP or user id, windows of at most an hour.
+describe('privacy page: rate-limit subprocessor', () => {
+  const page = read('app/(public)/privacy/page.tsx')
+  const limiter = read('lib/auth/rate-limit-http.ts')
+
+  it('lists Upstash when the code rate-limits through Upstash', () => {
+    expect(limiter).toMatch(/@upstash\/ratelimit/)
+    expect(page).toMatch(/>Upstash</)
+    expect(page).toMatch(/EU \(Frankfurt\)/)
+  })
+
+  it('states the retention the limiter windows actually allow', () => {
+    expect(page).toMatch(/raderas automatiskt inom en timme/)
+  })
+})

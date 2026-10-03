@@ -20,7 +20,7 @@ export default function PrivacyPolicyPage() {
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-09-11
+            Senast uppdaterad: 2026-09-23
           </p>
         </div>
 
@@ -146,6 +146,22 @@ export default function PrivacyPolicyPage() {
                       EU-baserad inferens: ingen tredjelandsöverföring. DPA, SCC
                       och DPF-certifiering. Prompter lagras ej efter anropet och
                       används ej till modellträning.
+                    </td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="py-2 pr-4 font-medium">Upstash</td>
+                    <td className="py-2 pr-4">
+                      Begränsning av antalet anrop (skydd mot överbelastning och
+                      missbruk). Lagrar endast räknare per förkortad IP-adress
+                      (sista delen borttagen) för anrop utan inloggning, och per
+                      användar-ID för vissa inloggade funktioner. Räknarna
+                      raderas automatiskt inom en timme. Inget bokföringsinnehåll
+                      skickas dit.
+                    </td>
+                    <td className="py-2 pr-4">EU (Frankfurt)</td>
+                    <td className="py-2">
+                      EU-baserad lagring: ingen tredjelandsöverföring. DPA, SCCs
+                      vid eventuell åtkomst utanför EES.
                     </td>
                   </tr>
                   <tr className="border-b">
