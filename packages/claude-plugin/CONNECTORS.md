@@ -4,7 +4,7 @@ This plugin bundles exactly one connector: the Accounted MCP server, the same se
 
 | Connector | Server | Auth | What it reaches |
 |-----------|--------|------|-----------------|
-| Accounted | `https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted` | OAuth 2.1 (PKCE). One-click consent: every scope except Approve (`pending_operations:approve`) pre-selected (adjustable in a fold); bookkeeping writes stage as agent proposals the user approves under Att göra > Agentförslag, unless the user ticks Approve. | The user's own companies in Accounted: ledger, transactions, invoices, VAT, payroll, reconciliation, year-end. |
+| Accounted | `https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted` | OAuth 2.1 (PKCE). One-click consent: every scope except Approve (`pending_operations:approve`) pre-selected (adjustable in a fold); bookkeeping writes always stage as agent proposals, which the user approves under Att göra > Agentförslag; only a user who ticks Approve lets the agent approve them in chat. | The user's own companies in Accounted: ledger, transactions, invoices, VAT, payroll, reconciliation, year-end. |
 
 ## Share link and starter prompt
 
