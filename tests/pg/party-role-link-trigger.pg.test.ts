@@ -42,9 +42,11 @@ describe('link_party_on_role_write (pg)', () => {
 
   it('creates a person party without any number for a private customer', async () => {
     const c = await seedCompany()
+    // No org_number: an individual cannot carry one since
+    // customers_individual_no_org_number (20261003181500).
     const k = await getPool().query<{ party_id: string }>(
-      `INSERT INTO public.customers (company_id, user_id, name, customer_type, personal_number, org_number)
-       VALUES ($1, $2, 'Anna Andersson', 'individual', repeat('ab', 40), '19800101-1234') RETURNING party_id`,
+      `INSERT INTO public.customers (company_id, user_id, name, customer_type, personal_number)
+       VALUES ($1, $2, 'Anna Andersson', 'individual', repeat('ab', 40)) RETURNING party_id`,
       [c.companyId, c.userId],
     )
     const p = await party(k.rows[0]!.party_id)

@@ -237,8 +237,8 @@ describe('parties substrate (pg)', () => {
       [c.companyId, c.userId, partyId],
     )
     const customer = await getPool().query<{ id: string }>(
-      `INSERT INTO public.customers (company_id, user_id, name, org_number, party_id)
-       VALUES ($1, $2, 'Dustin Sverige AB', '556666-1012', $3) RETURNING id`,
+      `INSERT INTO public.customers (company_id, user_id, name, customer_type, org_number, party_id)
+       VALUES ($1, $2, 'Dustin Sverige AB', 'swedish_business', '556666-1012', $3) RETURNING id`,
       [c.companyId, c.userId, partyId],
     )
     const linked = await getPool().query<{ n: number }>(
