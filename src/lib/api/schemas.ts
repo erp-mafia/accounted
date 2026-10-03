@@ -79,6 +79,9 @@ export const SIEJobOptionsSchema = z.object({
   markImportedNoDocRequired: z.boolean().default(false),
   onExistingPeriod: z.enum(['block','replace']).default('block'),
   supersedesImportId: z.string().uuid().optional(),
+  // The file's #ORGNR is not the company's and the user said import anyway.
+  // A submit-time gate only: submitSIEJob keeps it out of the job's input.
+  confirmOrgNumberMismatch: z.boolean().optional(),
 })
 export const SIEJobMappingsSchema = z.array(z.object({
   sourceAccount: z.string().min(1).max(40), sourceName: z.string().max(500),

@@ -5562,6 +5562,9 @@ async function commitImportSie(
   // existed must keep the file's account names, matching the UI default).
   const updateAccountNames =
     params.update_account_names === undefined ? true : Boolean(params.update_account_names)
+  // Only a literal true confirms another organisation's file: submitSIEJob
+  // checks the file's #ORGNR again at approval.
+  const confirmOrgNumberMismatch = params.confirm_org_number_mismatch === true
 
   if (!fileContent || !filename || !Array.isArray(mappings)) {
     return { error: 'file_content, filename, and mappings are required', status: 400 }
@@ -5569,6 +5572,7 @@ async function commitImportSie(
 
   const job = await submitSIEJob(supabase,companyId,userId,fileContent,mappings,{
     filename,createFiscalPeriod,importOpeningBalances,importTransactions,voucherSeries,openingBalanceSeries,updateAccountNames,
+    confirmOrgNumberMismatch,
   })
   // The approval commits submission. The durable execution has its own status.
   return {data:{import_id:job.id,operation_id:job.id,state:job.job_state,accepted:true,

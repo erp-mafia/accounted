@@ -9,6 +9,7 @@ import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { isValidBASRange } from './account-mapper'
 import { SIELegacyReviewRequiredError } from './sie-legacy-recovery'
+import { checkSIEOrgNumber } from './sie-org-number'
 
 export interface SIEJobOptions {
   filename: string
@@ -21,6 +22,10 @@ export interface SIEJobOptions {
   markImportedNoDocRequired?: boolean
   onExistingPeriod?: 'block' | 'replace'
   supersedesImportId?: string
+  /** Import a file whose #ORGNR is not the company's (ombildning, a company
+   *  registered under the wrong number). Checked at submit, never stored in
+   *  the job's input: that input is the identity an identical retry matches. */
+  confirmOrgNumberMismatch?: boolean
 }
 
 export interface SIEJobInput {
@@ -231,11 +236,25 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   const checkedOptions = SIEJobOptionsSchema.safeParse(options)
   const checkedMappings = SIEJobMappingsSchema.safeParse(mappings)
   if (!checkedOptions.success || !checkedMappings.success) throw new SIEJobValidationError('Importinställningarna eller kontomappningen är ogiltiga.')
-  options = {...checkedOptions.data,filename:options.filename}
+  const { confirmOrgNumberMismatch, ...jobOptions } = checkedOptions.data
+  options = {...jobOptions,filename:options.filename}
   mappings = checkedMappings.data
   const parsed = parseSIEFile(content)
   await resolveSIEFiscalYear(supabase,companyId,parsed)
   validateSIEJobInput(content, parsed, mappings, options)
+  // Every door passes here (dashboard, onboarding, v1, MCP approval, provider
+  // migration), so this is where another organisation's books are stopped.
+  // Not a hard block: an ombildning or a company registered under the wrong
+  // number is legitimate, so the user confirms instead.
+  const orgCheck = await checkSIEOrgNumber(supabase, companyId, parsed.header.orgNumber)
+  if (orgCheck.mismatch && !confirmOrgNumberMismatch) {
+    throw new SIEJobValidationError(
+      `SIE-filen gäller organisationsnummer ${orgCheck.fileOrgNumber}, inte företagets (${orgCheck.companyOrgNumber}).`,
+      'SIE_IMPORT_ORG_NUMBER_MISMATCH',
+      { file_org_number: orgCheck.fileOrgNumber, company_org_number: orgCheck.companyOrgNumber,
+        file_company_name: parsed.header.companyName },
+    )
+  }
   const sourceHash = await calculateFileHash(content)
   const input: SIEJobInput = { version: SIE_JOB_VERSION, sourceHash, mappings, options,
     fiscalYear:{start:parsed.stats.fiscalYearStart!,end:parsed.stats.fiscalYearEnd!} }
@@ -247,7 +266,11 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
     const { data, error } = await supabase.storage.from('sie-files').download(path)
     if (error || !data || await calculateFileHash(await data.text()) !== sourceHash) throw new Error('SIE-filen kunde inte arkiveras.')
   }
-  let originalSource:Record<string,unknown> = {format:'provided_text',path,sha256:sourceHash}
+  // The file's #ORGNR as written, so an import into another organisation's
+  // company can be counted afterwards. It lives here rather than in input,
+  // which an identical retry must match byte for byte.
+  const orgNumber = orgCheck.fileOrgNumber
+  let originalSource:Record<string,unknown> = {format:'provided_text',path,sha256:sourceHash,orgNumber}
   if (originalFile) {
     if (originalFile.size > SIE_LIMITS.fileBytes) throw new SIEJobValidationError('SIE-filen är större än 50 MB.')
     const bytes = await originalFile.arrayBuffer()
@@ -260,7 +283,7 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
         throw new Error('SIE-originalet kunde inte arkiveras.')
       }
     }
-    originalSource = {format:'original_bytes',path:originalPath,sha256:rawHash,bytes:originalFile.size,filename:originalFile.name}
+    originalSource = {format:'original_bytes',path:originalPath,sha256:rawHash,bytes:originalFile.size,filename:originalFile.name,orgNumber}
   }
   let periodId: string
   if (options.createFiscalPeriod) {
