@@ -311,3 +311,34 @@ jobs:
           curl -sf -o /dev/null "http://127.0.0.1:3000/" || (docker logs postgrest && exit 1)
 
       - run: npm run test:tools
+
+  # One stable check for the ruleset to require: a required status check matches
+  # a job name, and this workflow has four. Like Core Build, it runs even when a
+  # needed job fails or is cancelled, because a dependent of a failed job would
+  # otherwise be skipped, and a skipped required check counts as passing. None
+  # of the four jobs has a job-level `if:`, so anything but success fails it.
+  pg-real-gate:
+    name: pg-real gate
+    if: always()
+    needs: [coverage-gate, pg-upgrade, pg-real, tool-pg]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Assert every pg job succeeded
+        env:
+          COVERAGE: ${{ needs.coverage-gate.result }}
+          UPGRADE: ${{ needs.pg-upgrade.result }}
+          REAL: ${{ needs.pg-real.result }}
+          TOOLS: ${{ needs.tool-pg.result }}
+        run: |
+          set -euo pipefail
+          echo "coverage-gate=$COVERAGE pg-upgrade=$UPGRADE pg-real=$REAL tool-pg=$TOOLS"
+          failed=0
+          for r in "$COVERAGE" "$UPGRADE" "$REAL" "$TOOLS"; do
+            [ "$r" = "success" ] || failed=1
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::One or more pg-real jobs did not succeed"
+            exit 1
+          fi
