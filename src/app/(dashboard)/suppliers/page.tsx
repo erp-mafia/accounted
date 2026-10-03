@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { RegisterImportButton } from '@/components/import/RegisterImportButton'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Lock, Truck } from 'lucide-react'
 import Link from 'next/link'
@@ -139,12 +140,13 @@ export default function SuppliersPage() {
 
   return (
     <div className="space-y-8">
-      {/* Page header (concept scene 26): title + export + Ny leverantör */}
+      {/* Page header (concept scene 26): title + import + export + Ny leverantör */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <RegisterImportButton entity="suppliers" />
           <ReportExportMenu
-            size="default"
+            size="sm"
             items={[
               { format: 'xlsx', href: '/api/export/suppliers' },
               { format: 'csv', href: '/api/export/suppliers?format=csv' },
@@ -153,6 +155,7 @@ export default function SuppliersPage() {
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button
+                size="sm"
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >

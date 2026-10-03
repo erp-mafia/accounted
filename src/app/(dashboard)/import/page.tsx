@@ -5,6 +5,7 @@ import SIEJobProgress from '@/components/import/SIEJobProgress'
 import { uploadSIEFile } from '@/lib/import/sie-job-client'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
+import { parseCsvDataEntity, type CsvDataEntity } from '@/lib/import/register-import-link'
 import { fetchAccounts } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
@@ -2268,17 +2269,17 @@ function ArticlesFlow() {
 // CSV/Excel Data Import Wizard, entity selector + sub-flow
 // ============================================================
 
-type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers' | 'articles'
-
-const ENTITY_OPTIONS: { value: CSVDataEntity; label: string }[] = [
+const ENTITY_OPTIONS: { value: CsvDataEntity; label: string }[] = [
   { value: 'opening_balance', label: 'Ingående balanser' },
   { value: 'customers', label: 'Kunder' },
   { value: 'suppliers', label: 'Leverantörer' },
   { value: 'articles', label: 'Artiklar' },
 ]
 
-function CSVDataImportWizard() {
-  const [entity, setEntity] = useState<CSVDataEntity | null>('opening_balance')
+function CSVDataImportWizard({ initialEntity }: { initialEntity: CsvDataEntity | null }) {
+  // Opens on "Ingående balanser" unless a register page deep-linked a tab
+  // (/import?mode=csv_data&entity=customers, see register-import-link.ts).
+  const [entity, setEntity] = useState<CsvDataEntity | null>(initialEntity ?? 'opening_balance')
 
   return (
     <div className="space-y-6">
@@ -2368,6 +2369,7 @@ export default function ImportPage() {
   const { isSandbox, role } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
   const [initialProvider, setInitialProvider] = useState<string | null>(null)
+  const [initialCsvEntity, setInitialCsvEntity] = useState<CsvDataEntity | null>(null)
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
@@ -2412,6 +2414,11 @@ export default function ImportPage() {
       // for every other mode so a stale preselect can't survive re-entry.
       setInitialProvider(
         modeParam === 'migration' && !isSandbox ? searchParams.get('provider') : null
+      )
+      // Same for the register list pages' "Importera" button: open the
+      // CSV/Excel wizard on that register instead of on opening balances.
+      setInitialCsvEntity(
+        modeParam === 'csv_data' ? parseCsvDataEntity(searchParams.get('entity')) : null
       )
     }
     const viewParam = searchParams.get('view')
@@ -2743,6 +2750,7 @@ export default function ImportPage() {
             // preselect must be cleared here too or a re-entered migration
             // mode would auto-jump again.
             setInitialProvider(null)
+            setInitialCsvEntity(null)
           }}
         >
           <ArrowLeft className="mr-2 h-4 w-4" />
@@ -2815,7 +2823,7 @@ export default function ImportPage() {
           exactly the manual path the SIE preview offers on an IB imbalance. */}
       {mode === 'sie' && <SIEImportWizard key={searchParams.get('job') ?? 'new'} onOpenManualOpeningBalances={() => setMode('csv_data')} />}
       {mode === 'underlag' && <UnderlagImportWizard />}
-      {mode === 'csv_data' && <CSVDataImportWizard />}
+      {mode === 'csv_data' && <CSVDataImportWizard initialEntity={initialCsvEntity} />}
       {mode === 'migration' && (
         <MigrationWizard userId={userId} initialProvider={initialProvider ?? undefined} />
       )}

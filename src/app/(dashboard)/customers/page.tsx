@@ -16,6 +16,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { Plus, Users, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { RegisterImportButton } from '@/components/import/RegisterImportButton'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -271,12 +272,13 @@ function CustomersPageInner() {
 
   return (
     <div className="space-y-8">
-      {/* Page header (concept scene 25): title + export + Ny kund */}
+      {/* Page header (concept scene 25): title + import + export + Ny kund */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <RegisterImportButton entity="customers" />
           <ReportExportMenu
-            size="default"
+            size="sm"
             items={[
               { format: 'xlsx', href: '/api/export/customers' },
               { format: 'csv', href: '/api/export/customers?format=csv' },
@@ -285,6 +287,7 @@ function CustomersPageInner() {
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button
+                size="sm"
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >

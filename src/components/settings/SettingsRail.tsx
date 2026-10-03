@@ -40,13 +40,14 @@ export function SettingsRail({ display }: SettingsRailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const t = useTranslations('settings_nav')
-  const { items, groups } = useSettingsNavItems()
+  const { items, groups, searchLinks } = useSettingsNavItems()
   const activeId = useActiveSettingsSection(items)
 
   // Byrå settings scope travels as ?ctx=byra: section switches must carry it
   // along or the rail would snap back to the full company section list.
+  // Search links that leave settings (/import) never take it.
   const withCtx = (href: string) =>
-    searchParams.get('ctx') === 'byra' ? `${href}?ctx=byra` : href
+    searchParams.get('ctx') === 'byra' && href.startsWith('/settings/') ? `${href}?ctx=byra` : href
 
   if (display === 'select') {
     const activeHref = items.find((i) => i.id === activeId)?.href ?? items[0]?.href
@@ -74,7 +75,7 @@ export function SettingsRail({ display }: SettingsRailProps) {
   return (
     <nav aria-label={t('aria_label')} className="space-y-4">
       <SettingsSearch
-        items={items}
+        items={[...items, ...searchLinks]}
         groupLabel={(key) => groups.find((g) => g.key === key)?.label ?? ''}
         onPick={(href) => router.push(withCtx(href))}
       />
@@ -114,7 +115,8 @@ export function SettingsRail({ display }: SettingsRailProps) {
  * Search across the sections: matches the section name and the names of the
  * rows inside it (the `keywords_*` strings), so "Momsperiod" finds Moms och
  * skatt and "Påminnelser" finds Utskick without the user knowing where a
- * setting lives.
+ * setting lives. The search-only links (Importera, Exportera) are matched
+ * the same way and lead out of settings to their page.
  */
 function SettingsSearch({
   items,

@@ -515,7 +515,11 @@
     "keywords_invoicing": "Fakturanummer, Prefix, Betalningsvillkor, Vår referens, Fakturatyper, Offert, Proforma, Återkommande, Självfaktura, Bankkonton, Bankgiro, Swish, IBAN, Betallänk, PDF, Utskrift",
     "keywords_sending": "Avsändare, Egen domän, Svarsadress, Kopia, E-posttexter, Påminnelser, Påminnelsetexter",
     "keywords_connections": "Bank, PSD2, Skatteverket, Ombud, Peppol, E-faktura, WhatsApp, Gmail, Kvitton i mejlen, Stripe, Shopify, WooCommerce, Zettle",
-    "keywords_api": "MCP, Claude, ChatGPT, Grok, API-nycklar, OAuth"
+    "keywords_api": "MCP, Claude, ChatGPT, Grok, API-nycklar, OAuth",
+    "import": "Importera",
+    "export": "Exportera",
+    "keywords_import": "Importera kunder, Importera leverantörer, Importera artiklar, Ingående balanser, SIE-fil, Bankfil, Skattekontoutdrag, Excel, CSV, Byta system, Fortnox, Bokio, Visma, Briox, Björn Lundén",
+    "keywords_export": "SIE-export, Ladda ner bokföringen, Komplett arkiv, Säkerhetskopia, Backup"
   },
   "settings_payments": {
     "title": "Stripe",
@@ -9381,6 +9385,8 @@
     "export_subtitle": "Ladda ner bokföringen som SIE-fil eller säkerhetskopia till Google Drive",
     "tab_import": "Importera",
     "tab_export": "Exportera",
+    "register_import_button": "Importera",
+    "register_import_viewer_tooltip": "Du har endast läsbehörighet i detta företag",
     "sandbox_disabled": "Bankkoppling och migrering från andra system kräver ett riktigt konto och är avstängda i sandlådan. Filbaserad import (bankfiler, CSV/Excel och SIE) fungerar som vanligt.",
     "ib_series_label": "Verifikationsserie för ingående balanser",
     "ib_series_hint": "Välj en serie som inte används av verifikationerna i filen, annars förskjuts deras numrering",

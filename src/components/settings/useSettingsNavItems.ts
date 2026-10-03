@@ -67,7 +67,12 @@ export const SETTINGS_SECTION_PARENT: Record<string, string> = {
  * comes from CompanyContext and extension availability from the generated
  * enabled-extensions set.
  */
-export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: SettingsNavGroup[] } {
+export function useSettingsNavItems(): {
+  items: SettingsNavItem[]
+  groups: SettingsNavGroup[]
+  /** Search-only entries that link out of settings (import, export). */
+  searchLinks: SettingsNavItem[]
+} {
   const { company, byraTeam } = useCompany()
   const byraScope = useByraSettingsScope()
   const t = useTranslations('settings_nav')
@@ -118,6 +123,19 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
     .filter((d) => !byraScope || d.group === 'account')
     .map(({ show: _show, ...item }) => item)
 
+  // Pages outside settings that people look for in settings: import and
+  // export live under Bokföring (the same page also takes bank files and
+  // SIE, which are bookkeeping), so the rail search finds them and links
+  // there instead of answering "no setting by that name". Search only, never
+  // on the rail. Company-scoped, so hidden in byrå scope like the sections.
+  const searchLinks: SettingsNavItem[] =
+    hasCompany && !byraScope
+      ? [
+          item('import', '/import', 'accounting', true),
+          item('export', '/import?view=export', 'accounting', true),
+        ].map(({ show: _show, ...link }) => link)
+      : []
+
   const groupLabels: Record<SettingsGroupKey, string> = {
     account: t('group_account'),
     company: t('group_company'),
@@ -132,5 +150,5 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
     items: items.filter((i) => i.group === key),
   })).filter((g) => g.items.length > 0)
 
-  return { items, groups }
+  return { items, groups, searchLinks }
 }

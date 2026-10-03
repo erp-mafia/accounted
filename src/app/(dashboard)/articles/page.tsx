@@ -22,6 +22,7 @@ import {
 import { EmptyState } from '@/components/ui/empty-state'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { RegisterImportButton } from '@/components/import/RegisterImportButton'
 import { cn, formatCurrency } from '@/lib/utils'
 import { compareArticles } from '@/lib/articles/sort'
 import {
@@ -274,12 +275,13 @@ function ArticlesPageInner() {
 
   return (
     <div className="space-y-8">
-      {/* Page header (concept scene 27): title + export + Ny artikel */}
+      {/* Page header (concept scene 27): title + import + export + Ny artikel */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <RegisterImportButton entity="articles" />
           <ReportExportMenu
-            size="default"
+            size="sm"
             items={[
               { format: 'xlsx', href: '/api/export/articles' },
               { format: 'csv', href: '/api/export/articles?format=csv' },
@@ -288,6 +290,7 @@ function ArticlesPageInner() {
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button
+                size="sm"
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
