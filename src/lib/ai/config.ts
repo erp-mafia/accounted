@@ -45,7 +45,7 @@ export interface ResolvedAiConfig {
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5'
 // Bedrock knows Haiku 4.5 only by its versioned id; the Anthropic API only by the bare one.
-const DEFAULT_CHEAP_CLAUDE_MODEL = 'claude-haiku-4-5-20251001'
+const DEFAULT_CHEAP_CLAUDE_MODEL = 'claude-haiku-4-5'
 const DEFAULT_CHEAP_BEDROCK_MODEL = 'claude-haiku-4-5-20251001-v1:0'
 const DEFAULT_EXTRACTION_MAX_TOKENS = 8192
 const DEFAULT_PDF_MAX_PAGES = 4
