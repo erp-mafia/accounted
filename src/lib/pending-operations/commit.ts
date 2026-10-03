@@ -98,6 +98,11 @@ import {
   KontantmetodCutoffPartialError,
   postKontantmetodCutoff,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
+import {
+  isKontantmetodCutoffSuspended,
+  KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
+  kontantmetodCutoffSuspendedMessageSv,
+} from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
 import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
 import {
   AssetCorrectionBlockedError,
@@ -4275,6 +4280,9 @@ async function commitRunYearEnd(
   }
 }
 
+// Unreachable while isKontantmetodCutoffSuspended() is true (#3440): the
+// dispatcher refuses post_kontantmetod_cutoff before the claim, so a refused
+// op stays pending. A refusal in here would run after the claim and consume it.
 async function commitPostKontantmetodCutoff(
   supabase: SupabaseClient,
   userId: string,
@@ -7412,6 +7420,25 @@ async function commitPendingOperationInner(
   pendingOp: PendingOperation,
   opts: CommitOptions = {}
 ): Promise<CommitResult> {
+  // ── Kontantmetoden cut-off suspension (#3440). The cut-off as built declares
+  //    unpaid-invoice moms a second time when the invoice is paid next year.
+  //    Refused HERE, before the atomic claim and before any read or write, for
+  //    the same reason as the gates below: a refused op must stay 'pending'
+  //    (not consumed), so it is still there when the fix decides what to do
+  //    with it. The staging door reads the same switch.
+  if (
+    pendingOp.operation_type === 'post_kontantmetod_cutoff' &&
+    isKontantmetodCutoffSuspended()
+  ) {
+    return {
+      status: 'failed',
+      error: kontantmetodCutoffSuspendedMessageSv(),
+      http_status: getErrorEntry(KONTANTMETOD_CUTOFF_SUSPENDED_CODE)?.httpStatus ?? 409,
+      code: KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
+      operation_status: 'pending',
+    }
+  }
+
   // ── Capability gate (commit-time twin of the MCP dispatch gate). The actual
   //    external-service call (email / Skatteverket submit) happens below, so
   //    this is the true paid chokepoint: it also catches an op STAGED during

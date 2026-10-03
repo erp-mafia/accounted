@@ -2,6 +2,7 @@ import { defineAgentIntent } from './types'
 import { OPUS_MODEL } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 import type { PeriodStatusValue } from '@/lib/core/bookkeeping/period-service'
+import { isKontantmetodCutoffSuspended } from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
 
 // bokslut.step: "Fråga [namn]" inside the year-end (bokslut) wizard.
 //
@@ -174,7 +175,12 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
     lines.push('')
     lines.push('Arbetssätt: hjälp användaren genom STEGET de står i:')
     lines.push('1. Kör gnubok_year_end_readiness för att se vad som saknas.')
-    lines.push('2. Om kontantmetodens bokslutsavgränsning blockerar: använd gnubok_post_kontantmetod_cutoff, visa alla föreslagna verifikat och vändningar, och inhämta uttryckligt godkännande före bokföring.')
+    // #3440: while the cut-off is suspended, never send the agent to stage it.
+    lines.push(
+      isKontantmetodCutoffSuspended()
+        ? '2. Om kontantmetodens bokslutsavgränsning blockerar: den är tillfälligt avstängd medan ett fel i momsredovisningen rättas (#3440), och gnubok_post_kontantmetod_cutoff svarar KONTANTMETOD_CUTOFF_SUSPENDED. Försök inte bokföra den, och bokför aldrig kundfordringarna, leverantörsskulderna eller deras moms manuellt i stället. Säg till användaren att bokslutet för perioden får vänta tills avgränsningen går att bokföra igen; övriga steg kan förberedas.'
+        : '2. Om kontantmetodens bokslutsavgränsning blockerar: använd gnubok_post_kontantmetod_cutoff, visa alla föreslagna verifikat och vändningar, och inhämta uttryckligt godkännande före bokföring.',
+    )
     lines.push('3. Om steget är "accruals": använd gnubok_propose_accruals för periodiseringar och förklara varje förslag (när påverkar det BR/RR, varför detta belopp?).')
     lines.push('4. Om steget är "depreciation": gnubok_propose_annual_depreciation. Förklara planenlig vs. överavskrivning, K2 schablonregler vs. K3 individual.')
     lines.push('5. Om steget är "dispositioner": gnubok_propose_dispositioner. Periodiseringsfond, koncernbidrag (om holding), årets skatt.')

@@ -1,4 +1,22 @@
 import type { Skill } from '../types'
+import { isKontantmetodCutoffSuspended } from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
+
+// #3440: while the kontantmetoden cut-off is suspended, the skill must not send
+// an agent to stage it, nor let it book the cut-off by hand. The fix PR deletes
+// the suspension module and keeps the second branch of each line.
+const CUTOFF_SUSPENDED = isKontantmetodCutoffSuspended()
+
+const CUTOFF_STEP = CUTOFF_SUSPENDED
+  ? `**Temporarily suspended (#3440).** The cut-off as built would declare the moms on invoices unpaid at balansdagen a second time when they are paid next year, so \`gnubok_post_kontantmetod_cutoff\` refuses with \`KONTANTMETOD_CUTOFF_SUSPENDED\` and an already staged cut-off cannot be approved. Do not stage it, do not retry, and never book the receivables, payables or their moms by hand with \`gnubok_create_voucher\` as a workaround. Tell the user the cut-off is temporarily unavailable and that \`gnubok_run_year_end\` for this period waits until it is back. Continue with the other steps (accruals, depreciation, dispositioner preparation) and report the blocker under "Could not do".`
+  : `\`gnubok_post_kontantmetod_cutoff({ fiscal_period_id })\` stages the receivable and payable entries on balansdagen plus their reversals on day one of the next year. It is search-only: if your client does not list it, stage it through \`gnubok_stage_tool({ tool: "gnubok_post_kontantmetod_cutoff", arguments: { fiscal_period_id } })\`. The next period must exist and be open; if the tool says it is missing, tell the user and stop this step. Show every proposed line, get approval (high-risk, \`confirmed: true\`), then re-run readiness.`
+
+const CUTOFF_ROW_ACTION = CUTOFF_SUSPENDED
+  ? 'Temporarily cannot be cleared (#3440): see Step 3. The close waits; never book the cut-off by hand.'
+  : 'Step 3 below.'
+
+const CUTOFF_TOOL_NOTE = CUTOFF_SUSPENDED
+  ? 'kontantmetoden cut-off, temporarily suspended (#3440): refuses with `KONTANTMETOD_CUTOFF_SUSPENDED`'
+  : 'kontantmetoden cut-off (search-only, via `gnubok_stage_tool`)'
 
 const body = `# Årsbokslut (Year-End Close): Accounted
 
@@ -45,7 +63,7 @@ The opening balances of this year are the closing balances of the last one. Clos
 | \`unbooked_transactions\` | Bank rows in the year are neither booked nor ignored | Load \`bookkeep\`. Book or ignore each one with the user; a private one is handled per that skill, never guessed. |
 | \`draft_entries\` | Unposted drafts in the period | Ask the user to finish or discard each draft in Accounted. You cannot delete. |
 | \`unexplained_voucher_gap\` | A gap in voucher numbering with no explanation (BFNAR 2013:2) | \`gnubok_list_voucher_gaps\`, ask the user why each gap exists, then \`gnubok_explain_voucher_gap\` with their answer in Swedish. Never invent a reason. |
-| \`kontantmetod_cutoff_required\` | Kontantmetoden: open receivables and payables must be booked at balansdagen (BFL 5 kap 2 §) | Step 3 below. |
+| \`kontantmetod_cutoff_required\` | Kontantmetoden: open receivables and payables must be booked at balansdagen (BFL 5 kap 2 §) | ${CUTOFF_ROW_ACTION} |
 | \`period_locked\` | The period was locked beforehand | \`gnubok_unlock_period\` (staged, high-risk), after telling the user why: the close posts into the period and locks it itself. |
 | \`period_not_ended\` | Balansdagen has not passed | Stop. You can read proposals and prepare questions, but the close waits. |
 | \`period_already_closed\`, \`closing_entry_exists\` | Already done | Verify with \`gnubok_list_fiscal_periods\` and go to Step 7. |
@@ -67,7 +85,7 @@ Before bokslutstransaktioner, confirm with the user and the tools:
 
 ## Step 3: Kontantmetoden cut-off (only if the method is kontantmetoden)
 
-\`gnubok_post_kontantmetod_cutoff({ fiscal_period_id })\` stages the receivable and payable entries on balansdagen plus their reversals on day one of the next year. It is search-only: if your client does not list it, stage it through \`gnubok_stage_tool({ tool: "gnubok_post_kontantmetod_cutoff", arguments: { fiscal_period_id } })\`. The next period must exist and be open; if the tool says it is missing, tell the user and stop this step. Show every proposed line, get approval (high-risk, \`confirmed: true\`), then re-run readiness.
+${CUTOFF_STEP}
 
 ## Step 4: Periodiseringar and avskrivningar
 
@@ -174,7 +192,7 @@ In the user's language, short groups:
 - \`gnubok_year_end_readiness\`: blockers, warnings, optional closing-entry preview
 - \`gnubok_get_reconciliation_status\`, \`gnubok_vat_close_check\`, \`gnubok_get_trial_balance\`, \`gnubok_query_journal\`: completeness checks
 - \`gnubok_list_voucher_gaps\`, \`gnubok_explain_voucher_gap\`: BFNAR 2013:2 gaps
-- \`gnubok_post_kontantmetod_cutoff\`: kontantmetoden cut-off (search-only, via \`gnubok_stage_tool\`)
+- \`gnubok_post_kontantmetod_cutoff\`: ${CUTOFF_TOOL_NOTE}
 - \`gnubok_propose_accruals\`, \`gnubok_list_accrual_schedules\`: periodiseringar
 - \`gnubok_list_assets\`, \`gnubok_create_asset\`, \`gnubok_dispose_asset\`, \`gnubok_propose_annual_depreciation\`, \`gnubok_post_annual_depreciation\`: avskrivningar
 - \`gnubok_run_currency_revaluation\`: optional FX review before the close

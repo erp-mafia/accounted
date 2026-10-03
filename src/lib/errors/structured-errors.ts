@@ -2864,6 +2864,25 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
       'The fiscal period has no posted activity, so no year-end voucher can be created. Post or import the period activity before running year-end closing.',
     retryable: false,
   },
+  // Interim block (#3440): the kontantmetoden cut-off as built declares the
+  // moms on invoices unpaid at year end a second time when they are paid in
+  // the next year. Both doors refuse while isKontantmetodCutoffSuspended()
+  // (lib/core/bookkeeping/kontantmetod-cutoff-suspension.ts) is true: staging
+  // (gnubok_post_kontantmetod_cutoff) and approval (commitPendingOperation,
+  // before the claim, so a staged operation stays pending). The code stays
+  // registered after the fix ships: agents pattern-match on codes.
+  KONTANTMETOD_CUTOFF_SUSPENDED: {
+    httpStatus: 409,
+    message_sv:
+      'Kontantmetodens bokslutsavgränsning är tillfälligt avstängd medan ett fel i momsredovisningen rättas. Bokför inte kundfordringarna eller leverantörsskulderna manuellt i stället: bokslutet för perioden får vänta tills avgränsningen går att bokföra igen.',
+    message_en:
+      'The kontantmetoden year-end cut-off is temporarily suspended while a VAT defect is fixed (erp-mafia/accounted#3440): as built, it would declare the moms on invoices unpaid at year end a second time when they are paid in the next year. Nothing was posted.',
+    retryable: false,
+    remediation: {
+      description:
+        'Do not retry, and do not work around it: never book the year-end receivables, payables or their moms by hand (gnubok_create_voucher or any other tool), and do not stage the cut-off again through gnubok_stage_tool. Tell the user the cut-off is temporarily unavailable and that the year-end close of this kontantmetoden period waits until it is back. A cut-off operation already staged stays pending; do not approve it again. Other year-end preparation (reconciliation, accruals, depreciation) can continue.',
+    },
+  },
 }
 
 const FX: Record<string, StructuredErrorEntry> = {

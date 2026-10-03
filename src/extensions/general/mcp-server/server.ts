@@ -402,6 +402,10 @@ import {
   reverseLines,
   undatedSettlementsNote,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
+import {
+  isKontantmetodCutoffSuspended,
+  KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
+} from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
@@ -20702,10 +20706,22 @@ export const tools: McpTool[] = [
       // The `kind` strings are this tool's public contract: never rename one.
       // A blocker with no mapped code falls back to the wording heuristic
       // (which also catches legacy English messages), then to 'other'.
+      // #3440: while the cut-off is suspended, its blocker carries the
+      // suspension code and remediation, so an agent stops instead of
+      // reaching for gnubok_post_kontantmetod_cutoff or a manual voucher.
+      const cutoffSuspension = isKontantmetodCutoffSuspended()
+        ? getErrorEntry(KONTANTMETOD_CUTOFF_SUSPENDED_CODE)
+        : undefined
       const blockers = validation.blockers.map(({ code, message }) => ({
         kind: YEAR_END_BLOCKER_KIND[code] ?? classifyYearEndBlockerMessage(message),
         severity: 'high' as const,
         message,
+        ...(cutoffSuspension && code === 'KONTANTMETOD_CUTOFF_REQUIRED'
+          ? {
+              error_code: KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
+              ...(cutoffSuspension.remediation ? { remediation: cutoffSuspension.remediation } : {}),
+            }
+          : {}),
       }))
 
       let preview = null
@@ -20752,7 +20768,12 @@ export const tools: McpTool[] = [
     name: 'gnubok_post_kontantmetod_cutoff',
     keywords: ['kontantmetoden', 'bokslutsmetod', 'brytdag'],
     title: 'Post Cash-Method Year-End Cut-Off',
-    description: 'Stage the exact year-end receivable/payable cut-off and next-period reversals required for kontantmetoden. Review all proposed lines, then approve with confirmed=true.',
+    // While isKontantmetodCutoffSuspended() is true (#3440) the description
+    // leads with the suspension, so an agent planning from tools/list or
+    // search does not promise the user a cut-off it cannot stage.
+    description: isKontantmetodCutoffSuspended()
+      ? 'TEMPORARILY SUSPENDED (#3440): refuses with KONTANTMETOD_CUTOFF_SUSPENDED. Never book the year-end receivables or payables by hand instead; the close waits. Normally stages the kontantmetoden year-end cut-off and next-period reversals for approval.'
+      : 'Stage the exact year-end receivable/payable cut-off and next-period reversals required for kontantmetoden. Review all proposed lines, then approve with confirmed=true.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -20777,6 +20798,16 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+
+      // #3440: refuse before any read, so nothing is assessed or staged. The
+      // approval door (commitPendingOperation) reads the same switch for an
+      // operation staged before the suspension.
+      if (isKontantmetodCutoffSuspended()) {
+        throw codedRefusal(
+          KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
+          'The kontantmetoden year-end cut-off is temporarily suspended while a VAT defect is fixed (erp-mafia/accounted#3440): as built, it would declare the moms on invoices unpaid at year end a second time when they are paid in the next year. Nothing was staged. Do not book the year-end receivables, payables or their moms by hand as a workaround; tell the user the year-end close of this period waits until the cut-off is back.',
+        )
+      }
 
       const [{ data: period }, { data: settings }] = await Promise.all([
         supabase
@@ -26153,7 +26184,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report, plus _ar_ledger / _supplier_ledger through gnubok_call_tool: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
             '• Trust in figures: gnubok_get_trial_balance, _income_statement, _balance_sheet, _kpi_report and _general_ledger return data_status (company-wide for the range, also on filtered reports). When data_status.preliminary is true, say the figures are preliminary and mention the caveats that bear on the question; do not recite them all. When data_status.unavailable is true, say the completeness of the figures could not be checked.',
             '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) opens the approval queue where the user approves/rejects with a click. All also return structured data; other clients ignore the UI and use the data.',
-            '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.',
+            // #3440: while the cut-off is suspended, the briefing must not send
+            // an agent to the staging tool.
+            isKontantmetodCutoffSuspended()
+              ? '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, kontantmetod_cutoff_required cannot be resolved right now: the cut-off is temporarily suspended (#3440, KONTANTMETOD_CUTOFF_SUSPENDED). Tell the user the close of that period waits, and never book the year-end receivables or payables by hand instead. Once readiness is clear, gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.'
+              : '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',
             '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
             '',

@@ -28,6 +28,10 @@ import {
 } from '@/lib/bookkeeping/currency-revaluation'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
 import { assessKontantmetodCutoff, undatedSettlementsNote } from './kontantmetod-cutoff'
+import {
+  isKontantmetodCutoffSuspended,
+  kontantmetodCutoffSuspendedMessageSv,
+} from './kontantmetod-cutoff-suspension'
 import { ENTITY_TYPES, resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import { formatCurrency } from '@/lib/utils'
 import { overDisposedAmount, resultAccountLeftover, resultAccountResidual } from './prior-result-guard'
@@ -468,11 +472,16 @@ export async function validateYearEndReadiness(
       if (settingsError) throw settingsError
 
       if (settings?.accounting_method === 'cash') {
+        // #3440: while the cut-off is suspended the blocker stays (BFL 5 kap
+        // 2 § still applies), but no message may send the user to preview
+        // and post it: each says it is temporarily unavailable instead.
+        const suspended = isKontantmetodCutoffSuspended()
         if (!nextPeriod) {
           blockers.push({
             code: 'KONTANTMETOD_CUTOFF_REQUIRED',
-            message:
-              'Kontantmetodens bokslutsavgränsning kan inte bokföras förrän nästa räkenskapsår är upplagt. Skapa nästa period, förhandsgranska och bokför avgränsningen innan bokslut.',
+            message: suspended
+              ? `Kontantmetodens bokslutsavgränsning kan inte bedömas förrän nästa räkenskapsår är upplagt. ${kontantmetodCutoffSuspendedMessageSv()}`
+              : 'Kontantmetodens bokslutsavgränsning kan inte bokföras förrän nästa räkenskapsår är upplagt. Skapa nästa period, förhandsgranska och bokför avgränsningen innan bokslut.',
           })
         } else {
           const assessment = await assessKontantmetodCutoff(
@@ -500,15 +509,18 @@ export async function validateYearEndReadiness(
           if (invalidCount > 0) {
             blockers.push({
               code: 'KONTANTMETOD_CUTOFF_REQUIRED',
-              message:
-                `${invalidCount} fakturor kan inte tas med i kontantmetodens bokslutsavgränsning på grund av saknad eller oförenlig momsinställning. Rätta fakturorna och bokför avgränsningen innan bokslut.`,
+              message: suspended
+                ? `${invalidCount} fakturor kan inte tas med i kontantmetodens bokslutsavgränsning på grund av saknad eller oförenlig momsinställning. Rätta fakturorna. ${kontantmetodCutoffSuspendedMessageSv()}`
+                : `${invalidCount} fakturor kan inte tas med i kontantmetodens bokslutsavgränsning på grund av saknad eller oförenlig momsinställning. Rätta fakturorna och bokför avgränsningen innan bokslut.`,
             })
           } else if (!assessment.postings.complete) {
             blockers.push({
               code: 'KONTANTMETOD_CUTOFF_REQUIRED',
               message:
                 outstandingCount > 0
-                  ? `${outstandingCount} obetalda fakturor var utestående vid periodens slut. Förhandsgranska och bokför kontantmetodens bokslutsavgränsning med vändningar innan bokslut (BFL 5 kap 2 §).`
+                  ? suspended
+                    ? `${outstandingCount} obetalda fakturor var utestående vid periodens slut och ska tas med i kontantmetodens bokslutsavgränsning (BFL 5 kap 2 §). ${kontantmetodCutoffSuspendedMessageSv()}`
+                    : `${outstandingCount} obetalda fakturor var utestående vid periodens slut. Förhandsgranska och bokför kontantmetodens bokslutsavgränsning med vändningar innan bokslut (BFL 5 kap 2 §).`
                   : 'En tidigare kontantmetodavgränsning stämmer inte längre med reskontran. Kontrollera och rätta verifikaten innan bokslut.',
             })
           }

@@ -260,6 +260,7 @@ import {
   KONTANTMETOD_CUTOFF_DESCRIPTIONS,
   reverseLines,
 } from '../kontantmetod-cutoff'
+import { kontantmetodCutoffSuspendedMessageSv } from '../kontantmetod-cutoff-suspension'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -1044,6 +1045,33 @@ describe('validateYearEndReadiness: kontantmetoden cut-off gate', () => {
       blocker.code === 'KONTANTMETOD_CUTOFF_CHECK_FAILED',
     )).toBe(false)
     expect(result.ready).toBe(true)
+  })
+
+  // #3440 interim block: the blocker stays, but while the cut-off is
+  // suspended no message may send the user to preview and post it. The fix PR
+  // deletes these two cases with the suspension module.
+  it('keeps the blocker but says the cut-off is temporarily unavailable while #3440 is fixed', async () => {
+    const result = await validateYearEndReadiness(
+      makeFilteringClient(cashTables()) as never,
+      'company-1', 'user-1', 'fp-1',
+    )
+    const blocker = result.blockers.find((b) => b.code === 'KONTANTMETOD_CUTOFF_REQUIRED')
+    expect(result.ready).toBe(false)
+    expect(blocker?.message).toMatch(/^1 obetalda fakturor var utestående vid periodens slut/)
+    expect(blocker?.message).toContain(kontantmetodCutoffSuspendedMessageSv())
+    expect(blocker?.message).not.toMatch(/Förhandsgranska och bokför/)
+  })
+
+  it('says the same when the next fiscal year is missing', async () => {
+    vi.mocked(findNextPeriod).mockResolvedValue(null as never)
+    const result = await validateYearEndReadiness(
+      makeFilteringClient(cashTables()) as never,
+      'company-1', 'user-1', 'fp-1',
+    )
+    const blocker = result.blockers.find((b) => b.code === 'KONTANTMETOD_CUTOFF_REQUIRED')
+    expect(blocker?.message).toMatch(/^Kontantmetodens bokslutsavgränsning kan inte bedömas förrän nästa räkenskapsår är upplagt\./)
+    expect(blocker?.message).toContain(kontantmetodCutoffSuspendedMessageSv())
+    expect(blocker?.message).not.toMatch(/förhandsgranska och bokför/i)
   })
 
   it('fails closed when the cut-off query cannot run', async () => {

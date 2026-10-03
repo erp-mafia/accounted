@@ -27,6 +27,16 @@ import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
+// i3440-suspension: #3440 suspends gnubok_post_kontantmetod_cutoff before its
+// first read, which would stop this harness short of the cut-off computation
+// STOPS_AT_LAST_GATE pins. Lifted here so that coverage keeps running; the fix
+// PR deletes this mock together with
+// lib/core/bookkeeping/kontantmetod-cutoff-suspension.ts.
+vi.mock('@/lib/core/bookkeeping/kontantmetod-cutoff-suspension', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/core/bookkeeping/kontantmetod-cutoff-suspension')>()),
+  isKontantmetodCutoffSuspended: () => false,
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
   createServiceClient: vi.fn(),
