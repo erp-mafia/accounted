@@ -297,10 +297,16 @@ export function getStructuredError(
   let remediation = extractRemediation(error) ?? entry?.remediation
 
   // Specialize INSUFFICIENT_SCOPE with the actual scope name when known.
+  // Approve gets its own hint: it is never pre-ticked on the MCP consent page
+  // (founder decision 2026-10-03, issue #3408), so a default connection lacks
+  // it, and the way forward is the review list in the app, or reconnecting
+  // with it ticked (scopes cannot be added to an existing key).
   if (code === 'INSUFFICIENT_SCOPE' && options.attemptedScope && remediation) {
     remediation = {
       ...remediation,
-      description: `The current API key does not have the "${options.attemptedScope}" scope. Mint a new key with that scope or add it to the existing key in API settings.`,
+      description: options.attemptedScope === 'pending_operations:approve'
+        ? 'This connection cannot approve or reject agent proposals: it was made without the "pending_operations:approve" scope (Godkänn). The user approves or rejects them in Accounted under Att göra > Agentförslag (/pending). To let the agent approve in chat, the user disconnects under Inställningar > API och MCP and connects again with Godkänn ticked.'
+        : `The current API key does not have the "${options.attemptedScope}" scope. Mint a new key with that scope or add it to the existing key in API settings.`,
     }
   }
 

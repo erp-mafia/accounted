@@ -26,7 +26,7 @@ vi.mock('@/lib/company/context', () => ({
 
 import { POST } from '../route'
 import { decryptAuthCode, verifyPkce } from '@/lib/auth/oauth-codes'
-import { generateRefreshToken } from '@/lib/auth/api-keys'
+import { ALL_SCOPES, STAGING_SCOPES, generateRefreshToken, type ApiKeyScope } from '@/lib/auth/api-keys'
 
 function formRequest(body: Record<string, string>) {
   return new Request('http://localhost/api/mcp-oauth/token', {
@@ -407,6 +407,68 @@ describe('POST /api/mcp-oauth/token', () => {
       const res = await POST(formRequest(codeExchange))
       expect(res.status).toBe(200)
       expect(createKeyArgs(supabase).p_sod_acknowledged_at).toBeNull()
+    })
+
+    // Issue #3408: the consent click counts as the acknowledgement only when
+    // the key really gets both halves of the conflict, after the role cap.
+    describe('acknowledgement only when approve and a staging scope are both granted', () => {
+      async function exchange(scopes: ApiKeyScope[], role = 'owner') {
+        vi.mocked(decryptAuthCode).mockReturnValue({
+          userId: 'user-1',
+          codeChallenge: 'challenge',
+          redirectUri: 'https://claude.ai/api/cb',
+          scopes,
+          companyId: 'company-1',
+          exp: Date.now() + 60_000,
+        })
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(exchangeResults({ role }))
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const res = await POST(formRequest(codeExchange))
+        warn.mockRestore()
+        expect(res.status).toBe(200)
+        return createKeyArgs(supabase)
+      }
+
+      it('records nothing for the default one-click grant (every scope except approve)', async () => {
+        const created = await exchange(ALL_SCOPES.filter((s) => s !== 'pending_operations:approve'))
+        expect(created.p_scopes).toContain('transactions:write')
+        expect(created.p_sod_acknowledged_at).toBeNull()
+        expect(created.p_sod_acknowledged_by).toBeNull()
+      })
+
+      it('records nothing for approve without any staging scope', async () => {
+        const created = await exchange([
+          'transactions:read',
+          'pending_operations:read',
+          'pending_operations:approve',
+          // Writes that stage nothing (memory, webhooks) are not half of the conflict.
+          'agent:write',
+          'webhooks:manage',
+        ])
+        expect(created.p_scopes).toContain('pending_operations:approve')
+        expect(created.p_sod_acknowledged_at).toBeNull()
+        expect(created.p_sod_acknowledged_by).toBeNull()
+      })
+
+      it.each(STAGING_SCOPES)('records it for approve together with %s', async (stagingScope) => {
+        const created = await exchange([stagingScope, 'pending_operations:approve'])
+        expect(typeof created.p_sod_acknowledged_at).toBe('string')
+        expect(created.p_sod_acknowledged_by).toBe('user-1')
+      })
+
+      it('records it when an owner ticked approve on top of the full default', async () => {
+        const created = await exchange([...ALL_SCOPES])
+        expect(typeof created.p_sod_acknowledged_at).toBe('string')
+        expect(created.p_sod_acknowledged_by).toBe('user-1')
+      })
+
+      it('records nothing when the role cap strips the staging half before the key is minted', async () => {
+        const created = await exchange(['transactions:write', 'pending_operations:approve', 'reports:read'], 'viewer')
+        expect(created.p_scopes).toEqual(['reports:read'])
+        expect(created.p_sod_acknowledged_at).toBeNull()
+      })
     })
 
     it('returns 500 and mints no key when the role lookup fails', async () => {

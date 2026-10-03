@@ -65,6 +65,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
 })
 
 import { handleMcpRequest } from '../server'
+import { validateApiKey } from '@/lib/auth/api-keys'
 
 function mcpRequest(method: string, params?: Record<string, unknown>, namespace?: 'accounted'): Request {
   const url = new URL('http://localhost:3000/api/extensions/ext/mcp-server/mcp')
@@ -156,6 +157,65 @@ describe('Pending operations widget', () => {
       ).json()
       expect(withoutUi.result.isError).toBeUndefined()
       expect(withoutUi.result._meta?.ui).toBeUndefined()
+    })
+  })
+
+  // Issue #3408, founder decision 2026-10-03: approve is never pre-ticked on
+  // the consent page, so the default one-click connection cannot approve or
+  // reject. Neither the widget nor the instructions may promise it can.
+  describe('a key without pending_operations:approve', () => {
+    const withApprove = {
+      userId: 'user-1',
+      companyId: '11111111-1111-4111-8111-111111111111',
+      scopes: ['pending_operations:read', 'pending_operations:approve'],
+    }
+
+    async function instructions(): Promise<string> {
+      const res = await handleMcpRequest(mcpRequest('initialize', { protocolVersion: '2025-06-18' }))
+      return (await parseResult(res)).instructions as string
+    }
+
+    it('the list result tells the widget this key cannot approve', async () => {
+      const res = await (
+        await handleMcpRequest(
+          mcpRequest('tools/call', { name: 'gnubok_list_pending_operations', arguments: { render_ui: true } }),
+        )
+      ).json()
+      expect(res.result.isError).toBeUndefined()
+      expect(res.result.structuredContent).toMatchObject({ can_approve: false })
+
+      vi.mocked(validateApiKey).mockResolvedValueOnce(withApprove as never)
+      const approver = await (
+        await handleMcpRequest(
+          mcpRequest('tools/call', { name: 'gnubok_list_pending_operations', arguments: { render_ui: true } }),
+        )
+      ).json()
+      expect(approver.result.structuredContent).toMatchObject({ can_approve: true })
+    })
+
+    it('the widget swaps Godkänn and Avvisa for a pointer to the app when can_approve is false', () => {
+      const html = findUiWidget('ui://pending-operations/app.html')!.html
+      expect(html).toContain('canApprove = sc.can_approve !== false')
+      expect(html).toContain(`if (!canApprove) return '<span class="status-note">I Accounted</span>'`)
+      expect(html).toContain('Att g\\u00f6ra \\u203a Agentf\\u00f6rslag')
+    })
+
+    it('the instructions send the user to Att göra › Agentförslag instead of promising chat approval', async () => {
+      const text = await instructions()
+      expect(text).toContain('APPROVAL ON THIS CONNECTION')
+      expect(text).toContain('Att göra › Agentförslag')
+      expect(text).toContain('connect again with Godkänn ticked')
+      expect(text).not.toContain('APPROVAL IS A FIRST-CLASS AGENT ACTION')
+      expect(text).not.toContain('approves/rejects with a click')
+      expect(text).not.toContain('gnubok_approve_pending_operation (after user confirms in chat)')
+    })
+
+    it('a key with approve keeps the chat-approval instructions', async () => {
+      vi.mocked(validateApiKey).mockResolvedValueOnce(withApprove as never)
+      const text = await instructions()
+      expect(text).toContain('APPROVAL IS A FIRST-CLASS AGENT ACTION')
+      expect(text).toContain('approves/rejects with a click')
+      expect(text).not.toContain('APPROVAL ON THIS CONNECTION')
     })
   })
 

@@ -102,6 +102,19 @@ describe('getStructuredError', () => {
     expect(result.remediation?.resource).toBe('Accounted://capabilities')
   })
 
+  it('points a key without approve at the review list in the app (issue #3408)', () => {
+    const result = getStructuredError(
+      new Error('Insufficient scope: this API key does not have the "pending_operations:approve" scope'),
+      { attemptedScope: 'pending_operations:approve' }
+    )
+    expect(result.code).toBe('INSUFFICIENT_SCOPE')
+    expect(result.remediation?.description).toContain('"pending_operations:approve"')
+    expect(result.remediation?.description).toContain('Att göra > Agentförslag')
+    expect(result.remediation?.description).toContain('connects again with Godkänn ticked')
+    // Scopes cannot be added to an existing key, so the generic hint is wrong here.
+    expect(result.remediation?.description).not.toContain('add it to the existing key')
+  })
+
   it('infers TRANSACTION_ALREADY_CATEGORIZED', () => {
     const result = getStructuredError(new Error('Transaction already has a journal entry'))
     expect(result.code).toBe('TRANSACTION_ALREADY_CATEGORIZED')

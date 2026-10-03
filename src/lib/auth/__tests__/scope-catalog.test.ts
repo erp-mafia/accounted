@@ -9,6 +9,8 @@ import {
   type ApiKeyScope,
 } from '../scope-catalog'
 import * as apiKeys from '../api-keys'
+import sv from '@/messages/sv.json'
+import en from '@/messages/en.json'
 
 describe('SCOPE_GROUPS', () => {
   it('covers every scope in API_KEY_SCOPES exactly once', () => {
@@ -84,6 +86,53 @@ describe('API_KEY_SCOPES labels', () => {
   it('formats every label as "Område: verb"', () => {
     for (const meta of Object.values(API_KEY_SCOPES)) {
       expect(meta.label).toMatch(/^[^:]+: .+$/)
+    }
+  })
+})
+
+describe('pending_operations labels (issue #3408)', () => {
+  // The scopes behind the review list are named after it ("Agentförslag"
+  // under Att göra) on every surface that shows them: the consent page reads
+  // API_KEY_SCOPES and SCOPE_GROUPS, the API key dialog reads the messages.
+  it('names the scopes and their group Agentförslag in the catalogue', () => {
+    expect(API_KEY_SCOPES['pending_operations:read'].label).toBe('Agentförslag: läs')
+    expect(API_KEY_SCOPES['pending_operations:approve'].label).toBe('Agentförslag: godkänn')
+    expect(SCOPE_GROUPS.find((g) => g.domain === 'pending_operations')?.label).toBe('Agentförslag')
+  })
+
+  it('names the group Agentförslag / Agent proposals in the API key dialog', () => {
+    expect(sv.settings_api_keys.group_pending_operations).toBe('Agentförslag')
+    expect(en.settings_api_keys.group_pending_operations).toBe('Agent proposals')
+  })
+
+  // Scope: every label, the Agentförslag descriptions and the SoD dialog copy.
+  // Other scopes' descriptions still say "stagas"; rewording those is a
+  // follow-up outside issue #3408.
+  it('leaves no staging jargon in the scope labels, the Agentförslag copy or the SoD dialog copy', () => {
+    for (const [scope, meta] of Object.entries(API_KEY_SCOPES)) {
+      expect(meta.label, scope).not.toMatch(/stagade operationer/i)
+    }
+    for (const scope of ['pending_operations:read', 'pending_operations:approve'] as const) {
+      expect(API_KEY_SCOPES[scope].description, scope).not.toMatch(/stag|pending_operations|committa/i)
+    }
+    expect(SCOPE_GROUPS.map((g) => g.label)).not.toContain('Stagade operationer')
+    const svKeys = sv.settings_api_keys
+    const enKeys = en.settings_api_keys
+    for (const text of [
+      svKeys.scope_pending_operations_read,
+      svKeys.scope_pending_operations_approve,
+      svKeys.sod_warning,
+      svKeys.sod_dialog_description,
+    ]) {
+      expect(text).not.toMatch(/stag|pending_operations|committa/i)
+    }
+    for (const text of [
+      enKeys.scope_pending_operations_read,
+      enKeys.scope_pending_operations_approve,
+      enKeys.sod_warning,
+      enKeys.sod_dialog_description,
+    ]) {
+      expect(text).not.toMatch(/stag|pending_operations/i)
     }
   })
 })
