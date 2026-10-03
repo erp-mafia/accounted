@@ -7,27 +7,12 @@
  * defaults now render from LABELS; custom text is printed as stored.
  */
 import { describe, expect, it } from 'vitest'
-import type { ReactElement, ReactNode } from 'react'
 import { InvoicePDF, localizeVatNotice, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 import { EU_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV, getVatRules } from '@/lib/invoices/vat-rules'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
+import { treeText } from './pdf-tree'
 import type { InvoiceItem } from '@/types'
 
-/** Every string leaf in the element tree, in document order. */
-function textLeaves(node: ReactNode, out: string[] = []): string[] {
-  if (node === null || node === undefined || typeof node === 'boolean') return out
-  if (typeof node === 'string' || typeof node === 'number') {
-    out.push(String(node))
-    return out
-  }
-  if (Array.isArray(node)) {
-    for (const child of node) textLeaves(child, out)
-    return out
-  }
-  const element = node as ReactElement<{ children?: ReactNode }>
-  if (element.props) textLeaves(element.props.children, out)
-  return out
-}
 
 const items: InvoiceItem[] = [
   {
@@ -57,7 +42,8 @@ function renderText(invoice: InvoicePdfInvoice, language: 'sv' | 'en'): string {
     company,
     paymentQr: null,
   })
-  return textLeaves(tree).join('\n')
+  // The footer keeps each statutory part whole with no-break spaces.
+  return treeText(tree).replaceAll('\u00a0', ' ')
 }
 
 /** A GBP proforma to a non-EU customer, stamped with the export notice as getVatRules() writes it. */

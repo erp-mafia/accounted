@@ -7,27 +7,11 @@
  * row when neither yields anything rather than failing the render.
  */
 import { describe, expect, it, vi } from 'vitest'
-import type { ReactElement, ReactNode } from 'react'
 import { InvoicePDF, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import type { InvoiceItem } from '@/types'
-
-/** Every string leaf in the element tree, in document order. */
-function textLeaves(node: ReactNode, out: string[] = []): string[] {
-  if (node === null || node === undefined || typeof node === 'boolean') return out
-  if (typeof node === 'string' || typeof node === 'number') {
-    out.push(String(node))
-    return out
-  }
-  if (Array.isArray(node)) {
-    for (const child of node) textLeaves(child, out)
-    return out
-  }
-  const element = node as ReactElement<{ children?: ReactNode }>
-  if (element.props) textLeaves(element.props.children, out)
-  return out
-}
+import { treeText } from './pdf-tree'
 
 function renderText(invoice: InvoicePdfInvoice, language?: 'sv' | 'en'): string {
   const items: InvoiceItem[] = [
@@ -57,7 +41,7 @@ function renderText(invoice: InvoicePdfInvoice, language?: 'sv' | 'en'): string 
     company: makeCompanySettings(),
     language,
   })
-  return textLeaves(tree).join('\n')
+  return treeText(tree)
 }
 
 const rutInvoice = (overrides: Partial<InvoicePdfInvoice>): InvoicePdfInvoice => ({
@@ -98,7 +82,7 @@ describe('invoice PDF deduction box personnummer', () => {
       )
 
       expect(text).toContain('Underlag för skattereduktion')
-      expect(text).not.toContain('Personnummer:')
+      expect(text).not.toContain('Personnummer')
       expect(text).not.toContain('2385')
     } finally {
       errorSpy.mockRestore()
@@ -108,7 +92,7 @@ describe('invoice PDF deduction box personnummer', () => {
   it('never falls back to the last four digits alone', () => {
     const text = renderText(rutInvoice({ deduction_personnummer_last4: '2385' }))
 
-    expect(text).not.toContain('Personnummer:')
+    expect(text).not.toContain('Personnummer')
     expect(text).not.toContain('2385')
   })
 })
@@ -133,15 +117,17 @@ describe('invoice PDF deduction box: fakturamodellen', () => {
   })
 
   it('prints the total incl. moms before the reduction and the amount to pay', () => {
+    // The fixed layout prints totals labels without a trailing colon and the
+    // row amounts without the currency (it follows the grand total).
     const lines = renderText(rutInvoice({})).split('\n')
-    const total = lines.indexOf('Totalt inkl. moms:')
-    const reduction = lines.indexOf('Skattereduktion ROT/RUT:')
-    const toPay = lines.indexOf('Att betala:')
+    const total = lines.indexOf('Totalt inkl. moms')
+    const reduction = lines.indexOf('Skattereduktion ROT/RUT')
+    const toPay = lines.indexOf('Att betala')
 
     expect(total).toBeGreaterThan(-1)
-    expect(lines[total + 1]).toMatch(/2\s500,00 SEK/)
+    expect(lines[total + 1]).toMatch(/2\s500,00/)
     expect(reduction).toBeGreaterThan(total)
     expect(toPay).toBeGreaterThan(reduction)
-    expect(renderText(rutInvoice({}), 'en')).toContain('Total incl. VAT:')
+    expect(renderText(rutInvoice({}), 'en')).toContain('Total incl. VAT')
   })
 })

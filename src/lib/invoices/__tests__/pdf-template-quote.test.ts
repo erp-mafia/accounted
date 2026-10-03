@@ -2,30 +2,15 @@
  * Offert (quote) PDF. A quote is never a payment request: it is titled
  * OFFERT / QUOTE, states an issue date and an expiry ("Giltig till") instead
  * of a due date, carries a notice that it is neither an invoice nor a
- * betalningsanmodan, and renders no payment box (no bank account, bankgiro,
- * OCR, Swish, QR or payment link). VAT lines render as on a proforma.
+ * betalningsanmodan, and its payment area carries no payment instruction (no
+ * bank account, bankgiro, OCR, Swish, QR or payment link): only the sum, the
+ * expiry and who to ask. VAT lines render as on a proforma.
  */
 import { describe, expect, it } from 'vitest'
-import type { ReactElement, ReactNode } from 'react'
 import { InvoicePDF, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
+import { treeText } from './pdf-tree'
 import type { InvoiceItem } from '@/types'
-
-/** Every string leaf in the element tree, in document order. */
-function textLeaves(node: ReactNode, out: string[] = []): string[] {
-  if (node === null || node === undefined || typeof node === 'boolean') return out
-  if (typeof node === 'string' || typeof node === 'number') {
-    out.push(String(node))
-    return out
-  }
-  if (Array.isArray(node)) {
-    for (const child of node) textLeaves(child, out)
-    return out
-  }
-  const element = node as ReactElement<{ children?: ReactNode }>
-  if (element.props) textLeaves(element.props.children, out)
-  return out
-}
 
 const items: InvoiceItem[] = [
   {
@@ -45,6 +30,8 @@ const items: InvoiceItem[] = [
 ]
 
 const company = makeCompanySettings({
+  email: 'offert@example.test',
+  phone: '08-000 00 00',
   bank_name: 'SEB',
   clearing_number: '5000',
   account_number: '1234567',
@@ -61,7 +48,7 @@ function renderText(invoice: InvoicePdfInvoice, language: 'sv' | 'en' = 'sv'): s
     company,
     paymentQr: null,
   })
-  return textLeaves(tree).join('\n')
+  return treeText(tree)
 }
 
 const quote = (overrides: Partial<InvoicePdfInvoice> = {}): InvoicePdfInvoice =>
@@ -85,11 +72,11 @@ describe('quote PDF (sv)', () => {
 
     expect(text).toContain('OFFERT')
     expect(text).not.toContain('PROFORMAFAKTURA')
-    expect(text).toContain('Offertdatum:')
-    expect(text).toContain('Giltig till:')
+    expect(text).toContain('Offertdatum')
+    expect(text).toContain('Giltig till')
     expect(text).toContain('2026-10-02')
-    expect(text).not.toContain('Fakturadatum:')
-    expect(text).not.toContain('Förfallodatum:')
+    expect(text).not.toContain('Fakturadatum')
+    expect(text).not.toContain('Förfallodatum')
   })
 
   it('carries the quote notice and no payment information', () => {
@@ -104,10 +91,22 @@ describe('quote PDF (sv)', () => {
     expect(text).not.toContain('Betala online')
   })
 
+  it('closes with the quote area: Summa, Giltig till and who to ask, no payment rows', () => {
+    const text = renderText(quote({ our_reference: 'Anna Säljare' }))
+
+    expect(text).toContain('Offert')
+    expect(text).toContain('Kontakt')
+    expect(text).toContain('Anna Säljare')
+    expect(text).toContain('offert@example.test')
+    expect(text).toContain('08-000 00 00')
+    expect(text).not.toContain('Att betala')
+    expect(text).not.toContain('Meddelande')
+  })
+
   it('still renders the VAT lines like a proforma', () => {
     const text = renderText(quote())
 
-    expect(text).toContain('Moms 25%:')
+    expect(text).toContain('Moms 25%')
     expect(text).toContain('2\u00a0500,00 SEK')
     expect(text).toContain('12\u00a0500,00 SEK')
   })
@@ -115,7 +114,7 @@ describe('quote PDF (sv)', () => {
   it('labels the grand total Summa, never Att betala', () => {
     const text = renderText(quote())
 
-    expect(text).toContain('Summa:')
+    expect(text).toContain('Summa')
     expect(text).not.toContain('Att betala')
     expect(text).not.toContain('Att kreditera')
   })
@@ -130,7 +129,7 @@ describe('quote PDF (sv)', () => {
   it('falls back to due_date when valid_until is missing on an older row', () => {
     const text = renderText(quote({ valid_until: null, due_date: '2026-10-15' }))
 
-    expect(text).toContain('Giltig till:')
+    expect(text).toContain('Giltig till')
     expect(text).toContain('2026-10-15')
   })
 })
@@ -141,10 +140,10 @@ describe('quote PDF (en)', () => {
 
     expect(text).toContain('QUOTE')
     expect(text).not.toContain('PROFORMA INVOICE')
-    expect(text).toContain('Quote date:')
-    expect(text).toContain('Valid until:')
-    expect(text).not.toContain('Invoice date:')
-    expect(text).not.toContain('Due date:')
+    expect(text).toContain('Quote date')
+    expect(text).toContain('Valid until')
+    expect(text).not.toContain('Invoice date')
+    expect(text).not.toContain('Due date')
     expect(text).toContain('This is a quote and is not an invoice or a request for payment.')
     expect(text).not.toContain('Payment information')
     expect(text).not.toContain('Pay online')
@@ -153,7 +152,7 @@ describe('quote PDF (en)', () => {
   it('labels the grand total Total, never Total due', () => {
     const text = renderText(quote(), 'en')
 
-    expect(text).toContain('Total:')
+    expect(text).toContain('Total')
     expect(text).not.toContain('Total due')
     expect(text).not.toContain('To credit')
   })

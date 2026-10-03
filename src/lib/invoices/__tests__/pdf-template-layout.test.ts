@@ -36,7 +36,10 @@ import {
   MAX_KEEP_TOGETHER_LINES,
   NOTICE_BOX_CHROME_PT,
   NOTICE_FONT_SIZE_PT,
-  PAGE_PADDING_PT,
+  PAGE_MARGIN_PT,
+  PAGE_PADDING_BOTTOM_PT,
+  PAGE_PADDING_TOP_PT,
+  PAYMENT_AREA_HEIGHT_PT,
   TABLE_ROW_CHROME_PT,
   TABLE_ROW_FONT_SIZE_PT,
   USABLE_PAGE_HEIGHT_PT,
@@ -49,6 +52,7 @@ import {
   wrapFullWidthWords,
 } from '@/lib/invoices/pdf-template'
 import { CUSTOM_INVOICE_FONT_RENDER_PREFIX } from '@/lib/invoices/pdf-fonts'
+import { A4_HEIGHT_PT, TABLE_HEADER_HEIGHT_PT } from '@/lib/invoices/pdf/geometry'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import type { InvoiceItem } from '@/types'
 
@@ -333,7 +337,9 @@ describe('draft watermark', () => {
     expect(containsText(last, 'UTKAST')).toBe(true)
 
     // And in the actual PDF: within each page's content stream the watermark
-    // glyph run comes after the last rectangle fill.
+    // glyph run comes after the last fill (the note's and the payment area's
+    // surfaces are rounded, so they are filled paths rather than rectangles).
+    // The page with the payment area has at least one.
     const buffer = await renderToBuffer(tree)
     expect(pageCount(buffer)).toBeGreaterThan(1)
     const streams = contentStreams(buffer)
@@ -341,11 +347,10 @@ describe('draft watermark', () => {
     const watermarkRun = /\[<55>[^\]<]*<54>[^\]<]*<4b>[^\]<]*<41>[^\]<]*<53>[^\]<]*<54>[^\]<]*\]\s*TJ/
     const pagesWithWord = streams.filter((s) => watermarkRun.test(s))
     expect(pagesWithWord.length).toBe(pageCount(buffer))
+    const lastFillAt = (s: string) => Math.max(...[...s.matchAll(/(?:^|\n)(?:f|f\*|B|B\*)(?=\n|$)/g)].map((m) => m.index ?? -1), -1)
+    expect(pagesWithWord.some((s) => lastFillAt(s) > -1)).toBe(true)
     for (const s of pagesWithWord) {
-      const wordAt = s.search(watermarkRun)
-      const lastFill = Math.max(s.lastIndexOf(' re\nf'), s.lastIndexOf(' re\n'))
-      expect(lastFill).toBeGreaterThan(-1)
-      expect(wordAt).toBeGreaterThan(lastFill)
+      expect(s.search(watermarkRun)).toBeGreaterThan(lastFillAt(s))
     }
   })
 
@@ -513,13 +518,15 @@ describe('oversize free text', () => {
     expect(box?.props.wrap).toBe(false)
 
     const landedOn = new Set<number>()
-    for (const fillers of [0, 4, 8, 12, 16]) {
+    // The fixed layout keeps totals, the box and the payment area together,
+    // so it takes more filler rows to move the box to a later page.
+    for (const fillers of [0, 4, 8, 12, 16, 24, 32, 40]) {
       const filler = Array.from({ length: fillers }, (_, i) => makeItem({ sort_order: i, id: `fill-${i}`, description: `Rad ${i + 1}` }))
       const pages = await layOut(InvoicePDF({ invoice, customer, items: [...filler, ...rotItems], company }))
       expectNothingPastThePageEdge(pages)
       const texts = pages.map(textOf)
       const all = texts.join('')
-      expect(all).toContain('Totalt inkl. moms:')
+      expect(all).toContain('Totalt inkl. moms')
       expect(all).toContain('799900-0040')
       // The box is whole: its heading and its last row (the payout notice)
       // are on the same page.
@@ -572,22 +579,24 @@ describe('page breaks', () => {
   const tree = InvoicePDF({ invoice: sentInvoice(), customer, items: [makeItem()], company })
   const all = elements(tree)
 
-  it('never splits a table row, the totals, the payment box or a notice box', () => {
+  it('never splits a table row, the totals block or a notice', () => {
     const rowsWithText = all.filter((el) => containsText(el, 'Konsulttimmar') && el.props.wrap === false)
     expect(rowsWithText.length).toBeGreaterThan(0)
-    expect(all.some((el) => el.props.wrap === false && containsText(el, 'Delsumma:'))).toBe(true)
-    expect(all.some((el) => el.props.wrap === false && containsText(el, 'Betalningsinformation'))).toBe(true)
+    expect(all.some((el) => el.props.wrap === false && containsText(el, 'Delsumma'))).toBe(true)
   })
 
-  it('keeps every section heading with the content below it', () => {
-    const headings = all.filter((el) => {
-      const style = styleOf(el)
-      return style.textTransform === 'uppercase' && style.letterSpacing === 0.5
-    })
-    expect(headings.length).toBeGreaterThanOrEqual(3)
-    for (const heading of headings) {
-      expect(heading.props.minPresenceAhead).toBe(HEADING_MIN_PRESENCE_AHEAD)
-    }
+  it('draws the payment area out of the flow, at a fixed height above the footer', () => {
+    const frame = all.find((el) => el.props.fixed === true && typeof el.props.render === 'function' && styleOf(el).height === PAYMENT_AREA_HEIGHT_PT)
+    expect(frame).toBeDefined()
+    expect(styleOf(frame!)).toMatchObject({ position: 'absolute', bottom: PAGE_PADDING_BOTTOM_PT })
+  })
+
+  it('keeps the table header with the rows below it, and repeats it with the table', () => {
+    const header = all.find((el) => el.props.fixed === true && containsText(el, 'Beskrivning'))
+    expect(header).toBeDefined()
+    expect(header!.props.minPresenceAhead).toBe(HEADING_MIN_PRESENCE_AHEAD)
+    // In flow, not absolute: it takes its place at the top of each page the table continues to.
+    expect(styleOf(header!).position).toBeUndefined()
   })
 })
 
@@ -602,12 +611,11 @@ describe('notes placement', () => {
   it('renders the note after the line items and before the totals', () => {
     const noteAt = firstIndexOf(note)
     expect(noteAt).toBeGreaterThan(firstIndexOf('Konsulttimmar'))
-    expect(noteAt).toBeLessThan(firstIndexOf('Delsumma:'))
-    expect(noteAt).toBeLessThan(firstIndexOf('Betalningsinformation'))
+    expect(noteAt).toBeLessThan(firstIndexOf('Delsumma'))
   })
 
   it('leaves the statutory VAT notice where it was, after the totals', () => {
-    expect(firstIndexOf(reverseCharge)).toBeGreaterThan(firstIndexOf('Delsumma:'))
+    expect(firstIndexOf(reverseCharge)).toBeGreaterThan(firstIndexOf('Delsumma'))
   })
 
   it('keeps a short note in one unsplittable box', () => {
@@ -699,7 +707,9 @@ async function withFont(fontFamily: string) {
 
 describe('keeping free text together', () => {
   it('derives the line cap from the usable page height, the line pitch and the estimate error', () => {
-    expect(USABLE_PAGE_HEIGHT_PT).toBeCloseTo(841.89 - 2 * 40, 2)
+    // A fresh page: A4 less the running header and footer reservations and a
+    // repeated table header.
+    expect(USABLE_PAGE_HEIGHT_PT).toBeCloseTo(A4_HEIGHT_PT - PAGE_PADDING_TOP_PT - PAGE_PADDING_BOTTOM_PT - TABLE_HEADER_HEIGHT_PT, 2)
     for (const font of BUILT_IN_FONTS) {
       const worstCaseHeight = (lines: number, fontSizePt: number, chromePt: number) =>
         lines * fontSizePt * BUILT_IN_FONT_LINE_PITCH * estimateErrorFor(font) + chromePt
@@ -714,16 +724,16 @@ describe('keeping free text together', () => {
       }
     }
     // The values the template comment quotes.
-    expect(keepTogetherLineCap('Helvetica', NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(42)
+    expect(keepTogetherLineCap('Helvetica', NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(37)
     expect(keepTogetherLineCap('Helvetica', TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)).toBe(39)
-    expect(keepTogetherLineCap('Courier', NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(22)
+    expect(keepTogetherLineCap('Courier', NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(20)
     expect(keepTogetherLineCap('Courier', TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)).toBe(21)
   })
 
   it('keeps the earlier cap of about 12 lines for an uploaded font, whose metrics are unknown', () => {
     const uploaded = `${CUSTOM_INVOICE_FONT_RENDER_PREFIX}0123456789ab`
     expect(keepTogetherLineCap(uploaded, TABLE_ROW_FONT_SIZE_PT, TABLE_ROW_CHROME_PT)).toBe(MAX_KEEP_TOGETHER_LINES)
-    expect(keepTogetherLineCap(uploaded, NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(13)
+    expect(keepTogetherLineCap(uploaded, NOTICE_FONT_SIZE_PT, NOTICE_BOX_CHROME_PT)).toBe(11)
     // The template applies it: the payment-terms note may split in an uploaded font.
     const tree = InvoicePDF({
       invoice: { ...sentInvoice(), notes: PAYMENT_TERMS_NOTE },
@@ -740,11 +750,15 @@ describe('keeping free text together', () => {
     const tree = InvoicePDF({ invoice: { ...sentInvoice(), notes: 'Tack för förtroendet' }, customer, items: [makeItem()], company })
     const all = elements(tree)
     const page = styleOf(all.find((el) => el.props.size === 'A4')!)
-    expect(page.padding).toBe(PAGE_PADDING_PT)
+    expect(page).toMatchObject({
+      paddingTop: PAGE_PADDING_TOP_PT,
+      paddingBottom: PAGE_PADDING_BOTTOM_PT,
+      paddingHorizontal: PAGE_MARGIN_PT,
+    })
     expect(page.fontSize).toBe(TABLE_ROW_FONT_SIZE_PT)
 
     const box = styleOf(all.find((el) => el.props.wrap === false && containsText(el, 'Tack för förtroendet'))!)
-    expect(Number(box.marginTop) + 2 * Number(box.padding) + 2 * Number(box.borderWidth)).toBe(NOTICE_BOX_CHROME_PT)
+    expect(Number(box.marginTop) + 2 * Number(box.padding) + 2 * Number(box.borderWidth ?? 0)).toBe(NOTICE_BOX_CHROME_PT)
     const noteText = all.find((el) => el.props.children === 'Tack för förtroendet')
     expect(styleOf(noteText!).fontSize).toBe(NOTICE_FONT_SIZE_PT)
 
@@ -817,7 +831,7 @@ describe('keeping free text together', () => {
     expect(estimateLines(PAYMENT_TERMS_NOTE, FULL_WIDTH_BOX_PT)).toBeLessThanOrEqual(noteCap)
 
     // Enough rows that the note starts low on the first page.
-    const items = Array.from({ length: 16 }, (_, i) =>
+    const items = Array.from({ length: 20 }, (_, i) =>
       makeItem({ sort_order: i, id: `item-${i}`, description: `Rad ${i + 1}` }),
     )
     const invoice = { ...sentInvoice(), notes: PAYMENT_TERMS_NOTE }
@@ -836,10 +850,10 @@ describe('keeping free text together', () => {
     // All of it on the second page, which it needed: it is taller than what
     // was left below the last row on the first.
     expect(new Set(nodes.map((n) => n.page))).toEqual(new Set([1]))
-    const lastRow = placedTextNodes(pages).find((n) => textOf(n.node) === 'Rad 16')
+    const lastRow = placedTextNodes(pages).find((n) => textOf(n.node) === 'Rad 20')
     expect(lastRow?.page).toBe(0)
     const noteHeight = nodes.reduce((sum, n) => sum + n.node.box!.height, 0)
-    const spaceLeft = pages[0].box!.height - PAGE_PADDING_PT - lastRow!.bottom
+    const spaceLeft = pages[0].box!.height - PAGE_PADDING_BOTTOM_PT - lastRow!.bottom
     expect(noteHeight).toBeGreaterThan(spaceLeft)
     expectNothingPastThePageEdge(pages)
     expectNoClippedLines(nodes, 'note')
@@ -883,7 +897,7 @@ describe('keeping free text together', () => {
     const notes = 'Rubrik:\nFörsta stycket.\n\n\nAndra stycket\nmed två rader.\n  \nSista stycket.'
     const style = { fontSize: NOTICE_FONT_SIZE_PT }
     const onePage = (...children: ReactElement[]) =>
-      createElement(Document, null, createElement(Page, { size: 'A4', style: { padding: PAGE_PADDING_PT } }, createElement(View, null, ...children)))
+      createElement(Document, null, createElement(Page, { size: 'A4', style: { padding: PAGE_MARGIN_PT } }, createElement(View, null, ...children)))
     const lines = async (doc: ReactElement) => {
       const pages = await layOut(doc)
       return textNodes(pages[0]).flatMap((n) => (n.lines ?? []).map((l) => l.string ?? ''))

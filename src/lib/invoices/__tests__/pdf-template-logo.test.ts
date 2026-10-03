@@ -1,9 +1,9 @@
 /**
  * Where the company logo lands in the invoice header.
  *
- * The logo box is always drawn at the full 240x80pt reserved area (any logo
- * larger than that gets clamped to it), so the image itself is positioned
- * *inside* that box by objectFit/objectPosition. With the default centering,
+ * The logo box is always drawn at the full logo slot of the identity band
+ * (LOGO_SLOT_WIDTH_PT x LOGO_SLOT_HEIGHT_PT), and the image is scaled to fit
+ * *inside* it by objectFit/objectPosition. With the default centering,
  * a near-square logo scaled down to fit 80pt of height ends up indented by
  * half the leftover width, which reads as "the logo is not aligned with the
  * left margin" while a wide banner logo looks fine. The template therefore
@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest'
 import React from 'react'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { LOGO_SLOT_WIDTH_PT } from '@/lib/invoices/pdf/geometry'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import type { InvoiceItem } from '@/types'
 
@@ -38,9 +39,10 @@ async function makeLogoDataUrl(width: number, height: number): Promise<string> {
  * Pull the placement of the first drawn image out of a rendered PDF.
  *
  * pdfkit emits `<w> 0 0 <-h> <x> <y> cm` followed by `/<label> Do` for every
- * image, where x is relative to the enclosing translations. The logo box sits
- * at the page margin via a plain `1 0 0 1 <tx> <ty> cm`, so the absolute left
- * edge of the drawn image is that translation plus the matrix offset.
+ * image, where x is relative to the enclosing translations. The logo sits
+ * inside nested `1 0 0 1 <tx> <ty> cm` translations, each scoped by a q/Q
+ * (save/restore) pair, so the absolute left edge of the drawn image is the
+ * sum of the translations still in effect, plus the matrix offset.
  */
 function firstImagePlacement(pdf: Buffer): { x: number; width: number } {
   const raw = pdf.toString('latin1')
@@ -59,19 +61,21 @@ function firstImagePlacement(pdf: Buffer): { x: number; width: number } {
     }
   }
 
-  const placement = /(-?[\d.]+) 0 0 (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) cm\s*\/\w+ Do/
+  const op = /(-?[\d.]+) 0 0 (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) cm\s*\/\w+ Do|1 0 0 1 (-?[\d.]+) (-?[\d.]+) cm|(?<![\w/])([qQ])(?![\w])/g
   for (const stream of streams) {
-    const hit = placement.exec(stream)
-    if (!hit) continue
-
+    if (!/\/\w+ Do/.test(stream)) continue
+    const stack: number[] = []
     let translated = 0
-    const translate = /1 0 0 1 (-?[\d.]+) (-?[\d.]+) cm/g
     let step: RegExpExecArray | null
-    while ((step = translate.exec(stream)) !== null && step.index < hit.index) {
-      translated += Number(step[1])
+    while ((step = op.exec(stream)) !== null) {
+      if (step[1] !== undefined) {
+        op.lastIndex = 0
+        return { width: Number(step[1]), x: translated + Number(step[3]) }
+      }
+      if (step[5] !== undefined) translated += Number(step[5])
+      else if (step[7] === 'q') stack.push(translated)
+      else if (step[7] === 'Q') translated = stack.pop() ?? 0
     }
-
-    return { width: Number(hit[1]), x: translated + Number(hit[3]) }
   }
   throw new Error('no image draw found in the rendered PDF')
 }
@@ -114,11 +118,14 @@ describe('invoice PDF logo placement', () => {
     const placement = firstImagePlacement(await renderWithLogo(600, 160))
 
     expect(placement.x).toBeCloseTo(PAGE_MARGIN_PT, 1)
+    // Scaled into the slot, never cropped by it.
+    expect(placement.width).toBeLessThanOrEqual(LOGO_SLOT_WIDTH_PT + 0.5)
+    expect(placement.width).toBeGreaterThan(LOGO_SLOT_WIDTH_PT - 1)
   }, 30_000)
 
   it('starts a near-square logo at the left margin too', async () => {
-    // Scaled to the 80pt height cap this logo is only ~117pt wide, so it used
-    // to be centred in the 240pt box and printed ~60pt in from the margin.
+    // Scaled into the logo slot this logo is far narrower than the slot, so
+    // centred it would print well in from the margin.
     const placement = firstImagePlacement(await renderWithLogo(1500, 1024))
 
     expect(placement.width).toBeLessThan(200)
