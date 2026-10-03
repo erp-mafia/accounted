@@ -3264,7 +3264,7 @@
     "scope_agent_write": "Skriv: spara och ta bort agentens minnen om företaget",
     "group_skatteverket": "Skatteverket",
     "scope_skatteverket_write": "Skriv: lämna momsdeklaration och arbetsgivardeklaration (AGI) till Skatteverket (stagas; signeras med BankID)",
-    "sod_warning": "Du har valt Godkänn: nyckeln kan då både förbereda och godkänna bokföring utan din granskning, och när du skapar den registreras det som ditt medgivande till det.",
+    "sod_warning": "När Godkänn är valt kan nyckeln både förbereda och godkänna bokföring utan din granskning. Skapar du nyckeln registreras det som ditt medgivande till det.",
     "sod_dialog_title": "Bekräfta kombinerad behörighet",
     "sod_dialog_description": "Nyckeln får både skrivbehörighet och Godkänn för agentförslag. Den kan då både förbereda och godkänna bokföring utan din granskning. Skapa nyckeln ändå?",
     "sod_confirm": "Skapa ändå",

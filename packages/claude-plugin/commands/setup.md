@@ -9,7 +9,7 @@ The user just installed the Accounted plugin, or asked to get set up. Take them 
 Call `accounted_get_agent_briefing`.
 
 - If it succeeds, the user is connected and has a company: say so, summarise the company in one line (name, form, method, VAT period), and stop here. Point at `/accounted:start` for orientation.
-- If it fails with an authentication error, the connector is not connected yet. Tell the user: run `/mcp`, pick **accounted**, and authenticate. The browser opens Accounted's sign-in. **No account yet? Create it right there** ("Skapa konto"): BankID is fastest (about a minute, no e-mail confirmation); e-mail + password also works and asks for a 2FA app before consent. On the consent screen, read-only scopes are pre-ticked; leave **Företag: skriv** ticked so the company can be created from here. Then continue with Step 2.
+- If it fails with an authentication error, the connector is not connected yet. Tell the user: run `/mcp`, pick **accounted**, and authenticate. The browser opens Accounted's sign-in. **No account yet? Create it right there** ("Skapa konto"): BankID is fastest (about a minute, no e-mail confirmation); e-mail + password also works and asks for a 2FA app before consent. On the consent screen, every permission except **Agentförslag: godkänn** is pre-ticked; leave **Företag: skriv** ticked so the company can be created from here. Then continue with Step 2.
 - If it fails with `NO_COMPANY_YET`, the account exists but has no company yet: continue with Step 2.
 
 ## Step 2: set up the company

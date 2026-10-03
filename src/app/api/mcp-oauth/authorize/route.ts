@@ -421,36 +421,45 @@ export async function GET(request: Request) {
   const approveOffered = grantCeiling.has('pending_operations:approve')
   const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, grantCeiling)
 
-  // When approve is on offer but not pre-checked, preCheckedHasWrite means
-  // everything else is ticked (preChecked is the ceiling minus approve).
+  // preCheckedHasWrite implies the client-or-built-in branch above, so
+  // preChecked is then the ceiling minus approve: "allt utom Godkänn". A
+  // client that asked for approve alone gets nothing pre-checked; the fold
+  // then opens so the one box to tick is in view.
+  const nothingPreChecked = preChecked.size === 0
   const ledeHtml = !ceilingHasWrite
     ? `${escapeHtml(client.name)} begär läsåtkomst till ditt ${appNameLower}-konto. Inga skrivbehörigheter ingår.`
     : allPreChecked
       ? `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Alla behörigheter är förvalda; varje skrivning kräver ändå ditt godkännande innan den bokförs.`
-      : preCheckedHasWrite
-        ? `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Läs och skriv är förvalda. Godkänn är inte förvalt: det väljer du själv nedan.`
-        : `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Endast läsbehörigheter är förvalda: övriga behörigheter väljer du själv nedan.`
+      : nothingPreChecked
+        ? `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Inget är förvalt: välj själv nedan vad ${escapeHtml(client.shortName)} ska få göra.`
+        : preCheckedHasWrite
+          ? `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Allt utom Godkänn är förvalt; Godkänn väljer du själv nedan.`
+          : `${escapeHtml(client.name)} begär åtkomst till ditt ${appNameLower}-konto. Endast läsbehörigheter är förvalda: övriga behörigheter väljer du själv nedan.`
   const roleNoteHtml = roleLimited
     ? `<p class="note">Din roll i företaget är läsare, så bara läsbehörigheter kan ges här.</p>`
     : ''
   const summaryHintHtml = allPreChecked
     ? 'Alla förvalda &middot; visa och justera'
-    : preCheckedHasWrite
-      ? 'Allt utom Godkänn förvalt &middot; visa och justera'
-      : 'Endast läs förvalt &middot; visa och justera'
+    : nothingPreChecked
+      ? 'Inget förvalt &middot; välj nedan'
+      : preCheckedHasWrite
+        ? 'Allt utom Godkänn förvalt &middot; visa och justera'
+        : 'Endast läs förvalt &middot; visa och justera'
 
   // The warn box says what each level on offer means in plain words (issue
-  // #3408): read changes nothing, write turns into agent proposals the user
-  // approves, approve lets the agent approve its own proposals with no
-  // review. Nothing in it promises a review that the approve box can take
-  // away. It also says how to change the level later: scopes cannot be
-  // edited on an existing key (PATCH /api/settings/api-keys/[id] excludes
-  // them by design), so the way is to disconnect and connect again.
+  // #3408): read changes nothing, write turns bookkeeping into agent
+  // proposals the user approves (the write scopes also carry a few direct,
+  // non-ledger writes such as document uploads, so the line says so), approve
+  // lets the agent approve its own proposals with no review. Nothing in it
+  // promises a review that the approve box can take away. It also says how
+  // to change the level later: scopes cannot be edited on an existing key
+  // (PATCH /api/settings/api-keys/[id] excludes them by design), so the way
+  // is to disconnect and connect again.
   const agentName = escapeHtml(client.shortName)
   const levelLinesHtml = [
     `<li><strong>Läs:</strong> ${agentName} kan läsa och svara på frågor om bokföringen men ändrar inget.</li>`,
     ceilingHasStaging
-      ? `<li><strong>Skriv:</strong> ${agentName} förbereder förslag som du godkänner under Att göra &rsaquo; Agentförslag.</li>`
+      ? `<li><strong>Skriv:</strong> ${agentName} förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Agentförslag. Enklare saker, som att ladda upp underlag, görs direkt.</li>`
       : '',
     approveOffered
       ? `<li><strong>Godkänn:</strong> ${agentName} får godkänna sina egna förslag och då bokförs det utan din granskning.</li>`
@@ -459,14 +468,17 @@ export async function GET(request: Request) {
   // Segregation of duties: a key that can both stage and approve lets the
   // agent commit bookkeeping without a human review in the app. Mirrors
   // app/api/settings/api-keys, where the same combination needs an explicit
-  // acknowledgement. The sentence is on the page whenever the ceiling allows
-  // the combination, but hidden until the user has actually ticked approve
-  // together with a staging scope (the inline script keeps it in step with
-  // the boxes; data-staging marks STAGING_SCOPES). That is exactly when the
-  // token route records the consent click as the acknowledgement
-  // (findStageApproveConflict over the granted scopes).
+  // acknowledgement. The sentence is rendered visible whenever the ceiling
+  // allows the combination, and the inline script hides it on load and keeps
+  // it hidden until the user has actually ticked approve together with a
+  // staging scope (data-staging marks STAGING_SCOPES). That is exactly when
+  // the token route records the consent click as the acknowledgement
+  // (findStageApproveConflict over the granted scopes). Visible by default
+  // fails toward showing: without the script (JavaScript off, script blocked)
+  // the user still reads the rule before a click that may be recorded as
+  // consent to it, so the wording holds whether or not approve is ticked.
   const sodNoteHtml = findStageApproveConflict(roleCapped)
-    ? `<p class="warn-sod" id="sod-note"${findStageApproveConflict([...preChecked]) ? '' : ' hidden'}>Du har valt Godkänn: ${agentName} kan då både förbereda och godkänna bokföring utan din granskning, och ditt klick på Tillåt åtkomst registreras som ditt medgivande till det.</p>`
+    ? `<p class="warn-sod" id="sod-note">När Godkänn är valt kan ${agentName} både förbereda och godkänna bokföring utan din granskning, och ditt klick på Tillåt åtkomst registreras då som ditt medgivande till det.</p>`
     : ''
 
   // Render consent page
@@ -941,7 +953,7 @@ export async function GET(request: Request) {
       <input type="hidden" name="scope_binding_sig" value="${escapeHtml(scopeBindingSignature)}">
       ${companyPickerHtml}
 
-      <details class="scopes-details">
+      <details class="scopes-details"${nothingPreChecked ? ' open' : ''}>
         <summary>
           <span class="scopes-title">Behörigheter</span>
           <span class="scopes-summary-hint">${summaryHintHtml}</span>
@@ -986,7 +998,9 @@ export async function GET(request: Request) {
       var boxes = form.querySelectorAll('input[name="scopes"]');
       // The segregation-of-duties sentence shows only while approve is ticked
       // together with a staging scope: the same combination for which the
-      // token route records the consent click as the acknowledgement.
+      // token route records the consent click as the acknowledgement. The
+      // server renders it visible (the no-script fallback); the syncSod()
+      // call below hides it on load until that combination is ticked.
       var sodNote = document.getElementById('sod-note');
       function syncSod() {
         if (!sodNote) return;
@@ -1256,12 +1270,17 @@ export async function POST(request: Request) {
     ? boundedToClient
     : [...DEFAULT_OAUTH_SCOPES].filter(s => ceilingSet.has(s))
   if (grantedScopes.length === 0) {
+    // Two causes: the role allows none of the requested scopes, or the user
+    // ticked nothing on a page with no read default to fall back on (a
+    // client that asked for approve alone, which is never pre-ticked).
     return errorRedirect(
       request,
       redirectUri,
       state,
       'invalid_scope',
-      'None of the requested scopes are available to your role in this company'
+      roleCapped.length === 0
+        ? 'None of the requested scopes are available to your role in this company'
+        : 'No permission was ticked on the consent page; tick at least one to allow access'
     )
   }
 

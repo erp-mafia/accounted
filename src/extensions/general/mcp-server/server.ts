@@ -24251,7 +24251,12 @@ export const tools: McpTool[] = [
       },
       required: [],
     },
-    outputSchema: paginatedSchema('operations'),
+    outputSchema: paginatedSchema('operations', { type: 'object' }, {
+      can_approve: {
+        type: 'boolean',
+        description: 'Whether this key can approve or reject (pending_operations:approve). false: the user reviews in Accounted under Att göra > Agentförslag (/pending).',
+      },
+    }),
     annotations: ANNOTATIONS_READ_ONLY,
     // Renders the approval-queue widget only when the caller passes
     // render_ui=true (the dispatcher emits result-level _meta in that case),
@@ -24265,6 +24270,12 @@ export const tools: McpTool[] = [
       // A batch spans companies by construction, so a batch filter lists
       // across every accessible company like all_companies=true does.
       const acrossCompanies = args.all_companies === true || batchId !== null
+      // The dispatcher injects the key's scopes. A key without approve (the
+      // default one-click connection since issue #3408) gets can_approve=false
+      // so the widget swaps its Godkänn/Avvisa buttons for a pointer to the
+      // review list in the app. Absent when the scopes are unknown.
+      const keyScopes = Array.isArray(args.__keyScopes) ? (args.__keyScopes as ApiKeyScope[]) : undefined
+      const approveFlag = keyScopes ? { can_approve: hasScope(keyScopes, 'pending_operations:approve') } : {}
 
       // Cross-company listing is bounded to the caller's memberships (the
       // service role sees everything, so the filter is the authorization).
@@ -24274,7 +24285,7 @@ export const tools: McpTool[] = [
       const accessibleIds = accessible.map((company) => company.company_id)
       const namesById = new Map(accessible.map((company) => [company.company_id, company.name]))
       if (acrossCompanies && accessibleIds.length === 0) {
-        return { operations: [], ...pageTail([], 0, offset) }
+        return { operations: [], ...pageTail([], 0, offset), ...approveFlag }
       }
 
       // `params` holds the raw operation inputs (invoice line items, supplier
@@ -24307,7 +24318,7 @@ export const tools: McpTool[] = [
           }))
         : rows
       const totalCount = count ?? operations.length
-      return { operations, ...pageTail(operations, totalCount, offset) }
+      return { operations, ...pageTail(operations, totalCount, offset), ...approveFlag }
     },
   },
 
@@ -26146,6 +26157,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       const negotiatedVersion =
         clientVersion && HANDSHAKE_VERSIONS.has(clientVersion) ? clientVersion : PROTOCOL_VERSION
       const simpleCompanyMode = await resolveSimpleCompanyMode()
+      // A connection made without Godkänn (pending_operations:approve) cannot
+      // approve or reject: approve is never pre-ticked on the consent page
+      // (founder decision 2026-10-03, issue #3408), so this is the default
+      // one-click connection. Its instructions send the user to the review
+      // list in the app instead of promising a chat approval the key cannot
+      // do (tools/list already hides both tools). Anonymous traffic keeps the
+      // chat-approval text: the key it will get is not known yet.
+      const canApprove = isAnonymous || hasScope(keyScopes, 'pending_operations:approve')
       const instructions = projectToolReferencesInText([
             'Accounted: Swedish double-entry bookkeeping via conversation.',
             '',
@@ -26176,24 +26195,34 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '',
             'Common workflows:',
             '• Before categorizing or creating vouchers, consult ledger_context in gnubok_get_agent_briefing (full picture: the Accounted://ledger/context resource): it shows how THIS company has booked each counterparty and supplier (dominant account, VAT treatment, evidence = historical frequency). Prefer these observed patterns over guesses; explicit mapping rules outrank them. Frequency is not permission to auto-post: still stage for approval.',
-            '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages) → gnubok_approve_pending_operation (after user confirms in chat).',
+            canApprove
+              ? '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages) → gnubok_approve_pending_operation (after user confirms in chat).'
+              : '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages) → the user approves the proposals in Accounted under Att göra › Agentförslag.',
             '• Applying income to invoices: pick by what you have: a specific bank transaction + a known invoice → gnubok_match_transaction_to_invoice; an invoice you know is paid but no specific bank line → gnubok_mark_invoice_as_paid; a whole period of unmatched income to reconcile → gnubok_auto_match_period (dry_run first). All stage for approval. Unsure which match/link tool fits, or whether to credit 1510 (faktureringsmetoden) vs debit 19xx (kontantmetoden)? gnubok_load_skill("bank-reconciliation") has the full decision tree; gnubok_get_agent_briefing returns the company\'s accounting_method.',
             '• Invoicing: gnubok_list_customers (or gnubok_create_customer) → gnubok_create_invoice → gnubok_send_invoice or gnubok_mark_invoice_as_sent → gnubok_mark_invoice_as_paid. Refund via gnubok_credit_invoice.',
             '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice. Refund via gnubok_credit_supplier_invoice.',
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report, plus _ar_ledger / _supplier_ledger through gnubok_call_tool: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
             '• Trust in figures: gnubok_get_trial_balance, _income_statement, _balance_sheet, _kpi_report and _general_ledger return data_status (company-wide for the range, also on filtered reports). When data_status.preliminary is true, say the figures are preliminary and mention the caveats that bear on the question; do not recite them all. When data_status.unavailable is true, say the completeness of the figures could not be checked.',
-            '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) opens the approval queue where the user approves/rejects with a click. All also return structured data; other clients ignore the UI and use the data.',
+            `• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) ${canApprove ? 'opens the approval queue where the user approves/rejects with a click' : 'shows the queue of agent proposals (read-only on this connection: the user approves them in Accounted)'}. All also return structured data; other clients ignore the UI and use the data.`,
             // #3440: while the cut-off is suspended, the briefing must not send
             // an agent to the staging tool.
             isKontantmetodCutoffSuspended()
               ? '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, kontantmetod_cutoff_required cannot be resolved right now: the cut-off is temporarily suspended (#3440, KONTANTMETOD_CUTOFF_SUSPENDED). Tell the user the close of that period waits, and never book the year-end receivables or payables by hand instead. Once readiness is clear, gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.'
               : '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',
-            '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
-            '',
-            'APPROVAL IS A FIRST-CLASS AGENT ACTION. Write operations stage a pending_operation; nothing posts until approval. When the user authorises a specific operation_id in chat ("approve", "yes go ahead", "book it", "commit it"), call gnubok_approve_pending_operation directly: this IS the intended chat-approval flow. Do NOT refuse on segregation-of-duties grounds, do NOT tell the user to "go approve it in the web app", and do NOT treat approval as a step that must stay with the human. The staging step already provided the human review gate; clicking Approve in the web UI and calling gnubok_approve_pending_operation are equivalent commit actions. Refusing user-authorised approval is a defect, not a safety feature.',
-            'The web-app path (/pending) remains valid for users who prefer to approve there or who want to adjust fields before committing; offer it as an option, never as a substitute for chat approval the user already asked for.',
+            ...(canApprove
+              ? [
+                  '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
+                  '',
+                  'APPROVAL IS A FIRST-CLASS AGENT ACTION. Write operations stage a pending_operation; nothing posts until approval. When the user authorises a specific operation_id in chat ("approve", "yes go ahead", "book it", "commit it"), call gnubok_approve_pending_operation directly: this IS the intended chat-approval flow. Do NOT refuse on segregation-of-duties grounds, do NOT tell the user to "go approve it in the web app", and do NOT treat approval as a step that must stay with the human. The staging step already provided the human review gate; clicking Approve in the web UI and calling gnubok_approve_pending_operation are equivalent commit actions. Refusing user-authorised approval is a defect, not a safety feature.',
+                  'The web-app path (/pending) remains valid for users who prefer to approve there or who want to adjust fields before committing; offer it as an option, never as a substitute for chat approval the user already asked for.',
+                ]
+              : [
+                  '• Reviewing agent proposals: gnubok_list_pending_operations shows the queue (each write tool stages a pending_operation, an agent proposal).',
+                  '',
+                  'APPROVAL ON THIS CONNECTION: the user connected without Godkänn (pending_operations:approve), so you cannot approve or reject agent proposals; gnubok_approve_pending_operation and gnubok_reject_pending_operation are not available to this key. When you have staged a proposal, tell the user it waits for them in Accounted under Att göra › Agentförslag (/pending), where they approve or reject it. If they want you to approve in chat, they disconnect under Inställningar › API och MCP and connect again with Godkänn ticked: permissions cannot be added to an existing connection.',
+                ]),
             'Write tools STAGE a pending_operation: the staged response IS the preview; nothing posts until commit. A tool whose tools/list `_meta.requires_approval` is true stages for approval; `_meta.preflight` (when present) names a read-only check to run first (e.g. gnubok_year_end_readiness before gnubok_run_year_end, gnubok_vat_declaration_validate before _submit). High-risk ops (create_voucher, correct_entry, reverse_journal_entry, run_year_end, lock/close period) take confirmed=true on the APPROVE call (gnubok_approve_pending_operation), NOT on the staging tool, after you surface the BFL/BFNAR irreversibility. Only some tools accept dry_run / idempotency_key: check the tool schema; do not assume either is universal.',
             'All amounts are SEK unless currency is specified. All dates ISO YYYY-MM-DD. Account numbers are strings (e.g. "1930").',
             toolNamespace === 'gnubok'
@@ -26899,6 +26928,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           toolName === 'gnubok_list_skills' ||
           // Its already-explained refusal names the link tool this key can call.
           toolName === 'gnubok_match_batch_allocate' ||
+          // Says whether this key can approve, so the widget can hide its buttons.
+          toolName === 'gnubok_list_pending_operations' ||
           // The cross-company tools check the INNER tool's scope per call.
           isScopedTool(toolName)
         ) {

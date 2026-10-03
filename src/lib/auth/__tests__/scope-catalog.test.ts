@@ -105,9 +105,15 @@ describe('pending_operations labels (issue #3408)', () => {
     expect(en.settings_api_keys.group_pending_operations).toBe('Agent proposals')
   })
 
-  it('leaves no staging jargon in any scope label, description or dialog copy', () => {
+  // Scope: every label, the Agentförslag descriptions and the SoD dialog copy.
+  // Other scopes' descriptions still say "stagas"; rewording those is a
+  // follow-up outside issue #3408.
+  it('leaves no staging jargon in the scope labels, the Agentförslag copy or the SoD dialog copy', () => {
     for (const [scope, meta] of Object.entries(API_KEY_SCOPES)) {
       expect(meta.label, scope).not.toMatch(/stagade operationer/i)
+    }
+    for (const scope of ['pending_operations:read', 'pending_operations:approve'] as const) {
+      expect(API_KEY_SCOPES[scope].description, scope).not.toMatch(/stag|pending_operations|committa/i)
     }
     expect(SCOPE_GROUPS.map((g) => g.label)).not.toContain('Stagade operationer')
     const svKeys = sv.settings_api_keys

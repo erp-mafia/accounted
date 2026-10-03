@@ -3264,7 +3264,7 @@
     "scope_agent_write": "Write: save and remove the agent's memories about the company",
     "group_skatteverket": "Skatteverket",
     "scope_skatteverket_write": "Write: file VAT (momsdeklaration) and employer (AGI) declarations to Skatteverket (staged; BankID-signed)",
-    "sod_warning": "You have selected Approve: the key can then both prepare and approve bookkeeping without your review, and creating it records your consent to that.",
+    "sod_warning": "With Approve selected, the key can both prepare and approve bookkeeping without your review. Creating the key records your consent to that.",
     "sod_dialog_title": "Confirm combined permissions",
     "sod_dialog_description": "The key gets both write access and Approve for agent proposals. It can then both prepare and approve bookkeeping without your review. Create the key anyway?",
     "sod_confirm": "Create anyway",

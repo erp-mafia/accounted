@@ -684,8 +684,9 @@ describe('scope defaults for DB-registered clients', () => {
   it('states the segregation-of-duties rule when stage and approve scopes are both on offer', async () => {
     const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
     expect(html).toContain('medgivande')
-    // On the page, but hidden until approve is ticked (nothing is pre-ticked).
-    expect(html).toMatch(/<p class="warn-sod" id="sod-note" hidden>[^<]*medgivande/)
+    // Rendered visible (the no-script fallback); the inline script hides it
+    // until approve is ticked together with a staging scope.
+    expect(html).toMatch(/<p class="warn-sod" id="sod-note">[^<]*medgivande/)
 
     const readOnly = await (
       await GET(new Request(buildAuthorizeUrl({ ...params, scope: 'transactions:read' })))
@@ -753,7 +754,7 @@ describe('approve is never pre-ticked (issue #3408, founder decision 2026-10-03,
 
   it('says that everything except Godkänn is pre-selected', async () => {
     const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
-    expect(html).toContain('Läs och skriv är förvalda. Godkänn är inte förvalt: det väljer du själv nedan.')
+    expect(html).toContain('Allt utom Godkänn är förvalt; Godkänn väljer du själv nedan.')
     expect(html).toContain('Allt utom Godkänn förvalt')
     expect(html).not.toContain('Alla behörigheter är förvalda')
   })
@@ -775,7 +776,11 @@ describe('approve is never pre-ticked (issue #3408, founder decision 2026-10-03,
   it('explains read, write and approve in three plain lines, without staging jargon or a contradiction', async () => {
     const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
     expect(html).toContain('<strong>Läs:</strong> Claude kan läsa och svara på frågor om bokföringen men ändrar inget.')
-    expect(html).toContain('<strong>Skriv:</strong> Claude förbereder förslag som du godkänner under Att göra &rsaquo; Agentförslag.')
+    // Bookkeeping always stages; a few non-ledger writes (document uploads,
+    // quote status) commit directly, so the line does not promise more.
+    expect(html).toContain(
+      '<strong>Skriv:</strong> Claude förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Agentförslag. Enklare saker, som att ladda upp underlag, görs direkt.',
+    )
     expect(html).toContain('<strong>Godkänn:</strong> Claude får godkänna sina egna förslag och då bokförs det utan din granskning.')
     expect(html).toContain(
       'Behörigheterna går inte att ändra på en befintlig anslutning, så koppla från under Inställningar &rsaquo; API och MCP och anslut igen.',
@@ -810,11 +815,15 @@ describe('approve is never pre-ticked (issue #3408, founder decision 2026-10-03,
     expect(html).not.toContain('medgivande')
   })
 
-  it('renders the SoD sentence hidden while approve is unticked', async () => {
+  it('renders the SoD sentence visible, so a page whose script cannot run still states it', async () => {
+    // The click may be recorded as the acknowledgement (token route), so the
+    // sentence must not depend on JavaScript: the server renders it visible
+    // and only the inline script hides it. The wording holds either way.
     const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
     expect(html).toMatch(
-      /<p class="warn-sod" id="sod-note" hidden>Du har valt Godkänn: Claude kan då både förbereda och godkänna bokföring utan din granskning, och ditt klick på Tillåt åtkomst registreras som ditt medgivande till det\.<\/p>/,
+      /<p class="warn-sod" id="sod-note">När Godkänn är valt kan Claude både förbereda och godkänna bokföring utan din granskning, och ditt klick på Tillåt åtkomst registreras då som ditt medgivande till det\.<\/p>/,
     )
+    expect(html).not.toContain('Du har valt Godkänn')
     // The marker the script keys on matches findStageApproveConflict.
     for (const scope of STAGING_SCOPES) expect(checkboxFor(html, scope), scope).toContain('data-staging="1"')
     expect(checkboxFor(html, 'agent:write')).not.toContain('data-staging')
@@ -826,6 +835,7 @@ describe('approve is never pre-ticked (issue #3408, founder decision 2026-10-03,
     const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
     const page = runConsentScript(html)
     expect(page.sodNote).not.toBeNull()
+    // Visible as served, hidden by the script on load: approve is unticked.
     expect(page.sodNote!.hidden).toBe(true)
 
     page.set('pending_operations:approve', true)
@@ -849,6 +859,49 @@ describe('approve is never pre-ticked (issue #3408, founder decision 2026-10-03,
     expect(page.sodNote!.hidden).toBe(true)
     page.click('select-all')
     expect(page.sodNote!.hidden).toBe(false)
+  })
+
+  it('a client that asks for approve alone gets nothing pre-ticked, an open fold and a clear POST error', async () => {
+    const scope = 'pending_operations:approve'
+    for (const resolution of [CLAUDE, REGISTERED]) {
+      mocks.resolveRedirectUri.mockResolvedValue(resolution)
+      const html = await (await GET(new Request(buildAuthorizeUrl({ ...params, scope })))).text()
+      expect(checkboxFor(html, 'pending_operations:approve')).not.toContain('checked')
+      expect(checkedScopes(html)).toEqual([])
+      // Says nothing is pre-selected instead of claiming read is, and opens
+      // the fold so the one box to tick is in view.
+      expect(html).toContain('Inget är förvalt: välj själv nedan vad')
+      expect(html).toContain('Inget förvalt &middot; välj nedan')
+      expect(html).not.toContain('Endast läsbehörigheter är förvalda')
+      expect(html).toContain('<details class="scopes-details" open>')
+    }
+
+    // Allow with nothing ticked: no read default to fall back on, and the
+    // error says so instead of blaming the role.
+    const empty = await POST(
+      new Request(buildAuthorizeUrl({ ...params, scope }), { method: 'POST', body: consentForm(scope, []) }),
+    )
+    expect(empty.status).toBe(303)
+    const location = new URL(empty.headers.get('location')!)
+    expect(location.searchParams.get('error')).toBe('invalid_scope')
+    expect(location.searchParams.get('error_description')).toBe(
+      'No permission was ticked on the consent page; tick at least one to allow access',
+    )
+
+    // Ticking approve is the affirmative choice and is granted.
+    const ticked = await POST(
+      new Request(buildAuthorizeUrl({ ...params, scope }), {
+        method: 'POST',
+        body: consentForm(scope, ['pending_operations:approve']),
+      }),
+    )
+    expect(ticked.status).toBe(303)
+    expect(lastMintedPayload().scopes).toEqual(['pending_operations:approve'])
+  })
+
+  it('keeps the fold closed when something is pre-ticked', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    expect(html).toContain('<details class="scopes-details">')
   })
 
   it('labels the approve row Agentförslag with a godkänn tag', async () => {

@@ -68,8 +68,9 @@ export function createPkce(randomBytes) {
 /**
  * No `scope` parameter on purpose: like the Claude and ChatGPT connectors,
  * the consent page then pre-ticks every permission the user's role allows
- * (founder decision 2026-08-26), and the user can untick rows or choose read
- * only there. Writes stay staged for approval either way.
+ * except Approve, pending_operations:approve (founder decisions 2026-08-26
+ * and 2026-10-03), and the user can untick rows, choose read only or tick
+ * Approve there. Without Approve, writes stay staged for approval.
  *
  * @param {{ authorizationEndpoint: string, redirectUri: string, state: string, challenge: string, resource: string }} p
  */
