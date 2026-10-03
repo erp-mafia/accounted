@@ -713,6 +713,27 @@ describe('SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS', () => {
   })
 })
 
+describe('SIE_IMPORT_ORG_NUMBER_MISMATCH', () => {
+  const error = {
+    code: 'SIE_IMPORT_ORG_NUMBER_MISMATCH',
+    // What the route's envelope carries: the registry sentence.
+    message: getErrorEntry('SIE_IMPORT_ORG_NUMBER_MISMATCH')!.message_sv,
+    details: { file_org_number: '556677-8899', company_org_number: '5599887766' },
+  }
+
+  it('names both numbers in Swedish', () => {
+    expect(getErrorMessage({ error })).toBe(
+      'SIE-filen gäller organisationsnummer 556677-8899, men företaget har 5599887766. Kontrollera att det är rätt fil och rätt företag, och bekräfta för att importera ändå.',
+    )
+  })
+
+  it('falls back to the registry sentence without details, and to English for an English reader', () => {
+    expect(getErrorMessage({ error: { code: error.code, message: error.message } }))
+      .toBe(getErrorEntry('SIE_IMPORT_ORG_NUMBER_MISMATCH')!.message_sv)
+    expect(getErrorMessage({ error }, { locale: 'en' })).toBe(getErrorEntry('SIE_IMPORT_ORG_NUMBER_MISMATCH')!.message_en)
+  })
+})
+
 describe('getErrorMessage: PT409 database refusals', () => {
   it('names a registered refusal from a raw PostgREST error in either locale', () => {
     const err = { code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY' }

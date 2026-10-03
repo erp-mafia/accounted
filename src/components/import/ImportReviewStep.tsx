@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -67,6 +68,9 @@ export interface ImportExecuteOptions {
    *  own vouchers do not use, so their numbering is never shifted (#1882). */
   openingBalanceSeries: string
   markImportedNoDocRequired: boolean
+  /** The file's #ORGNR is not the company's and the user confirmed it.
+   *  The server refuses such a file without it (submitSIEJob). */
+  confirmOrgNumberMismatch?: boolean
 }
 
 export default function ImportReviewStep({
@@ -85,6 +89,7 @@ export default function ImportReviewStep({
   // Company-defined series names (presets as fallback) for the two pickers.
   const seriesLabels = companySettings?.voucher_series_labels ?? null
   const t = useTranslations('import')
+  const tNotice = useTranslations('import_notices')
   const [options, setOptions] = useState<ImportExecuteOptions>({
     createFiscalPeriod: true,
     importOpeningBalances: true,
@@ -101,6 +106,9 @@ export default function ImportReviewStep({
   // Non-zero means a re-import: the IB toggle then defaults OFF (issue #1882;
   // a field report accumulated five IB vouchers from repeated test imports).
   const [existingIbCount, setExistingIbCount] = useState(0)
+  // Another organisation's file starts only after an explicit yes.
+  const orgMismatch = preview.orgNumberMismatch === true
+  const [orgConfirmed, setOrgConfirmed] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -198,7 +206,7 @@ export default function ImportReviewStep({
   }, [isLoading])
 
   const handleExecute = () => {
-    onExecute(options)
+    onExecute(orgMismatch ? { ...options, confirmOrgNumberMismatch: orgConfirmed } : options)
   }
 
   const updateOption = <K extends keyof ImportExecuteOptions>(
@@ -556,6 +564,28 @@ export default function ImportReviewStep({
         </Card>
       )}
 
+      {orgMismatch && (
+        <div className="space-y-2">
+          <AttnLine>
+            {tNotice('sie_org_mismatch', {
+              fileOrg: preview.orgNumber ?? '?',
+              companyOrg: preview.companyOrgNumber ?? '?',
+            })}
+          </AttnLine>
+          <div className="flex items-start gap-2">
+            <Checkbox
+              id="confirm-org-number-mismatch"
+              className="mt-0.5"
+              checked={orgConfirmed}
+              onCheckedChange={(checked) => setOrgConfirmed(checked === true)}
+            />
+            <Label htmlFor="confirm-org-number-mismatch" className="text-[13px] font-normal leading-5">
+              {tNotice('sie_org_mismatch_confirm')}
+            </Label>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div role="alert" className="p-4 rounded-lg flex gap-3 bg-destructive/10 border border-destructive/20">
           <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
@@ -573,7 +603,7 @@ export default function ImportReviewStep({
         </Button>
         <Button
           onClick={handleExecute}
-          disabled={!canWrite || isLoading}
+          disabled={!canWrite || isLoading || (orgMismatch && !orgConfirmed)}
           title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
         >
           {!canWrite && <Lock className="mr-2 h-4 w-4" />}

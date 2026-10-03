@@ -3142,6 +3142,19 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_en: 'Map accounts carrying amounts to accounts 1000-8999 before importing. Target classes 0 and 9 are not supported by the balance sheet and income statement. Unused account definitions may be retained.',
     retryable: false,
   },
+  // submitSIEJob: the file's #ORGNR is not the company's. A confirmation gate
+  // like SKATTEKONTO_FILE_ORG_NUMBER_MISMATCH, not a hard block.
+  SIE_IMPORT_ORG_NUMBER_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'SIE-filen gäller ett annat organisationsnummer än företagets. Kontrollera att det är rätt fil och rätt företag, och bekräfta för att importera ändå.',
+    message_en: 'The SIE file names a different organisation number than the company. Check the file and the company, then confirm to import it anyway.',
+    retryable: false,
+    remediation: {
+      description: 'Ask the user whether this file belongs in this company (an ombildning or a company registered under the wrong number can be legitimate). Only on their yes, resend with confirm_org_number_mismatch=true (gnubok_import_sie) or options.confirmOrgNumberMismatch=true (REST).',
+      tool: 'gnubok_import_sie',
+      resource: '/import?mode=sie',
+    },
+  },
   SIE_PARSE_NO_FILE: {
     httpStatus: 400,
     message_sv: 'Ingen fil bifogad i förfrågan.',

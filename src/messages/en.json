@@ -10808,6 +10808,7 @@
     "sie_untransferred_result": "{period}: the result of {amount} has not been transferred to equity. Later balance sheets show a difference until the transfer is booked (account 8999 against e.g. 2099).",
     "sie_encoding_artifacts": "{count, plural, one {# text field looks mis-encoded} other {# text fields look mis-encoded}} (characters like ” or „ instead of å, ä, ö). Review account names and voucher texts.",
     "sie_org_mismatch": "The file belongs to organisation number {fileOrg}, not this company ({companyOrg}).",
+    "sie_org_mismatch_confirm": "I have checked that this file belongs to this company",
     "articles_price_incl_vat": "The price column \"{header}\" looks VAT-inclusive, but prices are imported excluding VAT. Check the values.",
     "articles_vat_rounded": "{count, plural, one {# row} other {# rows}} had a VAT rate that was rounded to the nearest valid one (0, 6, 12 or 25 %).",
     "articles_account_dropped": "{count, plural, one {# row} other {# rows}} had an invalid revenue account (must be class 1-3) that was ignored.",
