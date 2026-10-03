@@ -20,7 +20,7 @@ export default function DPAPage() {
             Personuppgiftsbiträdesavtal (DPA)
           </h1>
           <p className="text-sm text-muted-foreground">
-            Enligt GDPR Art. 28 &middot; Senast uppdaterad: 2026-06-03
+            Enligt GDPR Art. 28 &middot; Senast uppdaterad: 2026-10-03
           </p>
         </div>
 
@@ -71,14 +71,19 @@ export default function DPAPage() {
               <li>Tillhandahållande av bokförings- och redovisningstjänster</li>
               <li>Lagring och arkivering av bokföringsmaterial</li>
               <li>Fakturering och betalningshantering</li>
+              <li>Utskick av fakturor samt påminnelser och inkasso via ett inkasso- och
+                utskicksföretag som den Ansvarige själv aktiverar (se punkt 6)</li>
               <li>Bankkontosynkronisering (PSD2)</li>
               <li>AI-assisterad kategorisering och kvittohantering (efter separat samtycke)</li>
             </ul>
             <p>Kategorier av registrerade vars uppgifter behandlas:</p>
             <ul>
-              <li>Den Ansvariges kunder (namn, kontaktuppgifter, organisationsnummer)</li>
+              <li>Den Ansvariges kunder (namn, kontaktuppgifter, postadress, organisationsnummer,
+                för kunder som är privatpersoner även personnummer, samt fakturor och betalningar)</li>
               <li>Den Ansvariges leverantörer (namn, kontaktuppgifter, bankuppgifter)</li>
-              <li>Den Ansvarige själv (kontouppgifter, företagsinformation)</li>
+              <li>Den Ansvarige själv (kontouppgifter, företagsinformation och, om den Ansvarige
+                aktiverar inkasso och utskick, uppgifter om ägare, ledning och firmatecknare som
+                behövs för kundkännedom och signering)</li>
             </ul>
           </CardContent>
         </Card>
@@ -146,6 +151,45 @@ export default function DPAPage() {
               Biträdet ålägger genom skriftligt avtal varje underbiträde samma
               dataskyddsskyldigheter som anges i detta avtal. Biträdet förblir fullt ansvarigt
               gentemot den Ansvarige för att underbiträdet fullgör sina skyldigheter.
+            </p>
+            <p>
+              <strong>Inkasso- och utskicksföretag som den Ansvarige aktiverar.</strong> Den
+              Ansvarige kan i tjänsten aktivera ett inkasso- och utskicksföretag för utskick av
+              fakturor och för påminnelser och inkasso. Företaget anlitas inte av Biträdet och är
+              inte Biträdets underbiträde: den Ansvarige ingår själv avtal med företaget när
+              kopplingen aktiveras, och de villkor och, i förekommande fall, det
+              personuppgiftsbiträdesavtal som den Ansvarige då godkänner anger om företaget
+              behandlar uppgifterna som självständigt personuppgiftsansvarig eller som den
+              Ansvariges personuppgiftsbiträde. Den Ansvariges aktivering och val enligt nedan
+              utgör dokumenterade instruktioner enligt punkt 2, och Biträdet lämnar uppgifter till
+              företaget endast enligt dem:
+            </p>
+            <ul>
+              <li>
+                Vid aktiveringen: den Ansvariges företagsuppgifter, kontaktuppgifter och
+                utbetalningskonto, svar på frågor om kundkännedom och, för en enskild firma,
+                ägarens personnummer.
+              </li>
+              <li>
+                När den Ansvarige skickar en faktura via företaget, lämnar över den till
+                påminnelse eller inkasso, ställer in ett återkommande fakturaschema att skicka via
+                företaget eller godkänner en sammanställd omgång: fakturan och uppgifter om
+                kunden (namn, postadress och organisationsnummer eller, för privatpersoner,
+                personnummer).
+              </li>
+              <li>
+                När den Ansvarige väljer en utskickskanal för en kund: kundens
+                organisationsnummer eller personnummer, för att kontrollera att kunden kan nås
+                i den kanalen.
+              </li>
+              <li>
+                Så länge företaget har ett öppet ärende för en faktura: betalningar och
+                kreditfakturor som avser fakturan. Ärendets status, händelser och avräkningar
+                hämtas tillbaka till tjänsten.
+              </li>
+            </ul>
+            <p>
+              Inga uppgifter lämnas till företaget innan den Ansvarige har aktiverat kopplingen.
             </p>
           </CardContent>
         </Card>
