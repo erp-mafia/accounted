@@ -50,6 +50,16 @@ const eslintConfig = defineConfig([
       "no-console": "warn",
     },
   },
+  // The Skatteverket extension handles redovisare and arbetsgivare ids, which
+  // for an enskild firma are the owner's personnummer, plus declaration
+  // payloads. Raw console.* skips the redacting logger, so here it is an error.
+  {
+    files: ["src/extensions/general/skatteverket/**/*.ts", "src/extensions/general/skatteverket/**/*.tsx"],
+    ignores: ["**/__tests__/**", "**/*.test.ts", "**/*.pg.test.ts"],
+    rules: {
+      "no-console": "error",
+    },
+  },
   globalIgnores([
     ".next/**",
     "out/**",
