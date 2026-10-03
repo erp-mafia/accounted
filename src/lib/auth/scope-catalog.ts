@@ -36,8 +36,10 @@ export const API_KEY_SCOPES = {
   'skatteverket:write': { label: 'Skatteverket: skriv', description: 'Lämna momsdeklaration och arbetsgivardeklaration (AGI) till Skatteverket (stagas; signeras med BankID)' },
   'agent:read':         { label: 'Agent: läs',          description: 'Specialiserad bokföringsassistent: profil, laddade specialister/atomer, minnen (briefing + skill-katalog)' },
   'agent:write':        { label: 'Agent: skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact) och spara egna skills (create_skill)' },
-  'pending_operations:read':    { label: 'Stagade operationer: läs',     description: 'Lista pending_operations (staged writes awaiting approval)' },
-  'pending_operations:approve': { label: 'Stagade operationer: godkänn', description: 'Godkänn eller avvisa stagade operationer via API/MCP: agenten ersätter web-UI:s granskning' },
+  // Shown to users as "Agentförslag", the name of the review list under
+  // Att göra (issue #3408): "stagade operationer" read as developer jargon.
+  'pending_operations:read':    { label: 'Agentförslag: läs',     description: 'Lista agentförslag som väntar på ditt godkännande' },
+  'pending_operations:approve': { label: 'Agentförslag: godkänn', description: 'Godkänn eller avvisa agentförslag via API/MCP: då bokförs de utan din granskning i appen' },
   // Reconciliation (account-keyed: bank accounts + skattekonto). Reads cover
   // the account list, the bridge and the item buckets; writes cover links
   // (match/unmatch) and ignore flags. Links never touch the ledger.
@@ -176,7 +178,7 @@ export const SCOPE_GROUPS: readonly ScopeGroup[] = [
   { domain: 'bookkeeping',        label: 'Bokföring',           scopes: ['bookkeeping:write'] },
   { domain: 'payroll',            label: 'Löner',               scopes: ['payroll:read', 'payroll:write'] },
   { domain: 'documents',          label: 'Dokument',            scopes: ['documents:read', 'documents:write'] },
-  { domain: 'pending_operations', label: 'Stagade operationer', scopes: ['pending_operations:read', 'pending_operations:approve'] },
+  { domain: 'pending_operations', label: 'Agentförslag',        scopes: ['pending_operations:read', 'pending_operations:approve'] },
   { domain: 'agent',              label: 'Agent',               scopes: ['agent:read', 'agent:write'] },
   { domain: 'skatteverket',       label: 'Skatteverket',        scopes: ['skatteverket:write'] },
   { domain: 'compliance',         label: 'Compliance',          scopes: ['compliance:read'] },

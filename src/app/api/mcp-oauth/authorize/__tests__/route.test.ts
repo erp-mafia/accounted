@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import crypto from 'crypto'
+import vm from 'node:vm'
 import type { RedirectUriResolution } from '@/lib/auth/oauth-allowlist'
+import { ALL_SCOPES, STAGING_SCOPES, findStageApproveConflict } from '@/lib/auth/scope-catalog'
 
 type PickerCompany = { company_id: string; name: string; role: string }
 
@@ -158,6 +160,82 @@ function lastMintedPayload(): Record<string, unknown> {
   return calls[calls.length - 1]![0] as Record<string, unknown>
 }
 
+/** The scope values the rendered page has ticked, as the browser would post them. */
+function checkedScopes(html: string): string[] {
+  return [...html.matchAll(/<input type="checkbox"[^>]*name="scopes"[^>]*>/g)]
+    .map(([tag]) => tag)
+    .filter((tag) => /\schecked(\s|>)/.test(tag))
+    .map((tag) => tag.match(/value="([^"]*)"/)![1]!)
+}
+
+type FakeBox = {
+  value: string
+  checked: boolean
+  dataset: Record<string, string>
+  listeners: Array<() => void>
+  addEventListener: (type: string, fn: () => void) => void
+}
+
+/**
+ * Runs the consent page's inline script, as shipped, against a minimal DOM
+ * built from the rendered checkboxes and the segregation-of-duties sentence.
+ * The unit project has no browser DOM; the script only touches these few
+ * properties, so a fake keeps the client-side toggle under test.
+ */
+function runConsentScript(html: string) {
+  const script = html.match(/<script nonce="[^"]*">([\s\S]*?)<\/script>/)?.[1]
+  expect(script).toBeDefined()
+  const boxes: FakeBox[] = [...html.matchAll(/<input type="checkbox"[^>]*name="scopes"[^>]*>/g)].map(
+    ([tag]) => {
+      const listeners: Array<() => void> = []
+      return {
+        value: tag.match(/value="([^"]*)"/)![1]!,
+        checked: /\schecked(\s|>)/.test(tag),
+        dataset: {
+          kind: tag.match(/data-kind="([^"]*)"/)?.[1] ?? '',
+          ...(/data-staging="1"/.test(tag) ? { staging: '1' } : {}),
+        },
+        listeners,
+        addEventListener: (type: string, fn: () => void) => {
+          if (type === 'change') listeners.push(fn)
+        },
+      }
+    },
+  )
+  const sodTag = html.match(/<p[^>]*id="sod-note"[^>]*>/)?.[0]
+  const sodNote = sodTag ? { hidden: /\shidden(\s|>)/.test(sodTag) } : null
+  const clickHandlers: Record<string, () => void> = {}
+  const button = (id: string) => ({
+    addEventListener: (_type: string, fn: () => void) => {
+      clickHandlers[id] = fn
+    },
+  })
+  const form = {
+    querySelectorAll: (selector: string) => (selector === 'input[name="scopes"]' ? boxes : []),
+  }
+  const document = {
+    getElementById: (id: string) => {
+      if (id === 'consent-form') return form
+      if (id === 'sod-note') return sodNote
+      if (id === 'select-read' || id === 'select-all' || id === 'select-none') return button(id)
+      return null
+    },
+  }
+  vm.runInNewContext(script!, { document })
+  return {
+    sodNote,
+    set(value: string, checked: boolean) {
+      const box = boxes.find((b) => b.value === value)
+      expect(box, value).toBeDefined()
+      box!.checked = checked
+      box!.listeners.forEach((fn) => fn())
+    },
+    click(id: 'select-read' | 'select-all' | 'select-none') {
+      clickHandlers[id]!()
+    },
+  }
+}
+
 describe('GET /api/mcp-oauth/authorize: CSP', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -296,10 +374,11 @@ describe('GET /api/mcp-oauth/authorize: CSP', () => {
 
   it('renders both read and write rows when client passes only the legacy `mcp` scope marker', async () => {
     // Claude's connector sends scope=mcp today. The consent UI renders every
-    // scope group with ALL rows pre-checked (one-click consent, founder
-    // decision 2026-08-26): the affirmative act is the Allow click on a page
-    // that shows the full set, every write is staged for approval before it
-    // touches the ledger, and each row stays individually untickable.
+    // scope group with every row pre-checked except approve (one-click
+    // consent, founder decisions 2026-08-26 and 2026-10-03): the affirmative
+    // act is the Allow click on a page that shows the full set, every write
+    // is staged as a proposal the user approves, and each row stays
+    // individually untickable.
     const request = new Request(
       buildAuthorizeUrl({
         response_type: 'code',
@@ -319,10 +398,11 @@ describe('GET /api/mcp-oauth/authorize: CSP', () => {
     expect(html).toMatch(/value="invoices:write"/)
     expect(html).toMatch(/value="pending_operations:approve"/)
 
-    // Every row starts checked: the deliberate act is the visible Allow
+    // Write rows start checked: the deliberate act is the visible Allow
     // click, and unticking stays available per row inside the details fold.
+    // Approve is the exception: the user ticks it themselves (option B).
     expect(checkboxFor(html, 'transactions:write')).toContain('checked')
-    expect(checkboxFor(html, 'pending_operations:approve')).toContain('checked')
+    expect(checkboxFor(html, 'pending_operations:approve')).not.toContain('checked')
     expect(checkboxFor(html, 'bookkeeping:write')).toContain('checked')
 
     // The :read counterpart is pre-checked too.
@@ -604,11 +684,236 @@ describe('scope defaults for DB-registered clients', () => {
   it('states the segregation-of-duties rule when stage and approve scopes are both on offer', async () => {
     const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
     expect(html).toContain('medgivande')
+    // Rendered visible (the no-script fallback); the inline script hides it
+    // until approve is ticked together with a staging scope.
+    expect(html).toMatch(/<p class="warn-sod" id="sod-note">[^<]*medgivande/)
 
     const readOnly = await (
       await GET(new Request(buildAuthorizeUrl({ ...params, scope: 'transactions:read' })))
     ).text()
     expect(readOnly).not.toContain('medgivande')
+  })
+})
+
+describe('approve is never pre-ticked (issue #3408, founder decision 2026-10-03, option B)', () => {
+  const params = {
+    response_type: 'code',
+    redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    scope: 'mcp',
+    state: 'xyz',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
+    mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
+    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+  })
+
+  it.each([
+    ['Claude', CLAUDE],
+    ['ChatGPT', CHATGPT],
+    ['Grok', GROK],
+    ['Gemini', GEMINI],
+    ['Cursor', CURSOR],
+    ['Cursor deeplink', CURSOR_DEEPLINK],
+  ])('%s, owner: pre-ticks every scope in the ceiling except pending_operations:approve', async (_name, resolution) => {
+    mocks.resolveRedirectUri.mockResolvedValue(resolution)
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+
+    for (const scope of ALL_SCOPES) {
+      const box = checkboxFor(html, scope)
+      expect(box, scope).toBeDefined()
+      if (scope === 'pending_operations:approve') {
+        expect(box, scope).not.toContain('checked')
+      } else {
+        expect(box, scope).toContain('checked')
+      }
+    }
+    // Every write scope that stages a proposal is in the default, so the
+    // agent flow keeps working without an insufficient-scope dead-end.
+    for (const scope of STAGING_SCOPES) expect(checkboxFor(html, scope), scope).toContain('checked')
+    expect(findStageApproveConflict(checkedScopes(html) as typeof ALL_SCOPES)).toBeNull()
+  })
+
+  it('keeps approve unticked even when a client asks for it explicitly', async () => {
+    const scope = 'transactions:read transactions:write pending_operations:read pending_operations:approve'
+    for (const resolution of [CLAUDE, REGISTERED]) {
+      mocks.resolveRedirectUri.mockResolvedValue(resolution)
+      const html = await (await GET(new Request(buildAuthorizeUrl({ ...params, scope })))).text()
+      expect(checkboxFor(html, 'transactions:write')).toContain('checked')
+      expect(checkboxFor(html, 'pending_operations:read')).toContain('checked')
+      expect(checkboxFor(html, 'pending_operations:approve')).toBeDefined()
+      expect(checkboxFor(html, 'pending_operations:approve')).not.toContain('checked')
+    }
+  })
+
+  it('says that everything except Godkänn is pre-selected', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    expect(html).toContain('Allt utom Godkänn är förvalt; Godkänn väljer du själv nedan.')
+    expect(html).toContain('Allt utom Godkänn förvalt')
+    expect(html).not.toContain('Alla behörigheter är förvalda')
+  })
+
+  it('POSTing the boxes the page pre-ticks grants the write scopes without approve', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), { method: 'POST', body: consentForm('mcp', checkedScopes(html)) }),
+    )
+    expect(response.status).toBe(303)
+    const granted = lastMintedPayload().scopes as typeof ALL_SCOPES
+    expect(granted).toContain('transactions:write')
+    expect(granted).toContain('bookkeeping:write')
+    expect(granted).toContain('pending_operations:read')
+    expect(granted).not.toContain('pending_operations:approve')
+    expect(findStageApproveConflict(granted)).toBeNull()
+  })
+
+  it('explains read, write and approve in three plain lines, without staging jargon or a contradiction', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    expect(html).toContain('<strong>Läs:</strong> Claude kan läsa och svara på frågor om bokföringen men ändrar inget.')
+    // Bookkeeping always stages; a few non-ledger writes (document uploads,
+    // quote status) commit directly, so the line does not promise more.
+    expect(html).toContain(
+      '<strong>Skriv:</strong> Claude förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Agentförslag. Enklare saker, som att ladda upp underlag, görs direkt.',
+    )
+    expect(html).toContain('<strong>Godkänn:</strong> Claude får godkänna sina egna förslag och då bokförs det utan din granskning.')
+    expect(html).toContain(
+      'Behörigheterna går inte att ändra på en befintlig anslutning, så koppla från under Inställningar &rsaquo; API och MCP och anslut igen.',
+    )
+    expect(html).not.toMatch(/stagea/i)
+    expect(html).not.toContain('Varje skrivoperation kräver ditt godkännande')
+  })
+
+  it('names the actual client in the lines, never a hardcoded Claude', async () => {
+    mocks.resolveRedirectUri.mockResolvedValue(CHATGPT)
+    const chatgpt = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    expect(chatgpt).toContain('ChatGPT kan läsa och svara på frågor om bokföringen')
+    expect(chatgpt).toContain('ChatGPT får godkänna sina egna förslag')
+
+    mocks.resolveRedirectUri.mockResolvedValue({ ...REGISTERED, clientName: 'Bot <b>&</b> Co' })
+    const registered = await (
+      await GET(new Request(buildAuthorizeUrl({ ...params, redirect_uri: 'https://app.example.com/cb' })))
+    ).text()
+    expect(registered).toContain('Bot &lt;b&gt;&amp;&lt;/b&gt; Co kan läsa och svara på frågor om bokföringen')
+    expect(registered).not.toContain('<b>&</b>')
+  })
+
+  it('shows a viewer only the read line, with no approve line and no SoD sentence', async () => {
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', undefined, undefined, { role: 'viewer' }),
+    )
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    expect(html).toContain('<strong>Läs:</strong>')
+    expect(html).not.toContain('<strong>Skriv:</strong>')
+    expect(html).not.toContain('<strong>Godkänn:</strong>')
+    expect(html).not.toContain('id="sod-note"')
+    expect(html).not.toContain('medgivande')
+  })
+
+  it('renders the SoD sentence visible, so a page whose script cannot run still states it', async () => {
+    // The click may be recorded as the acknowledgement (token route), so the
+    // sentence must not depend on JavaScript: the server renders it visible
+    // and only the inline script hides it. The wording holds either way.
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    expect(html).toMatch(
+      /<p class="warn-sod" id="sod-note">När Godkänn är valt kan Claude både förbereda och godkänna bokföring utan din granskning, och ditt klick på Tillåt åtkomst registreras då som ditt medgivande till det\.<\/p>/,
+    )
+    expect(html).not.toContain('Du har valt Godkänn')
+    // The marker the script keys on matches findStageApproveConflict.
+    for (const scope of STAGING_SCOPES) expect(checkboxFor(html, scope), scope).toContain('data-staging="1"')
+    expect(checkboxFor(html, 'agent:write')).not.toContain('data-staging')
+    expect(checkboxFor(html, 'webhooks:manage')).not.toContain('data-staging')
+    expect(checkboxFor(html, 'pending_operations:approve')).not.toContain('data-staging')
+  })
+
+  it('the inline script shows the SoD sentence only while approve is ticked together with a staging scope', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    const page = runConsentScript(html)
+    expect(page.sodNote).not.toBeNull()
+    // Visible as served, hidden by the script on load: approve is unticked.
+    expect(page.sodNote!.hidden).toBe(true)
+
+    page.set('pending_operations:approve', true)
+    expect(page.sodNote!.hidden).toBe(false)
+
+    page.set('pending_operations:approve', false)
+    expect(page.sodNote!.hidden).toBe(true)
+
+    // Approve with only non-staging writes and reads: no conflict, no sentence.
+    page.click('select-none')
+    page.set('pending_operations:read', true)
+    page.set('agent:write', true)
+    page.set('webhooks:manage', true)
+    page.set('pending_operations:approve', true)
+    expect(page.sodNote!.hidden).toBe(true)
+    page.set('transactions:write', true)
+    expect(page.sodNote!.hidden).toBe(false)
+
+    // The shortcut buttons keep it in step too.
+    page.click('select-read')
+    expect(page.sodNote!.hidden).toBe(true)
+    page.click('select-all')
+    expect(page.sodNote!.hidden).toBe(false)
+  })
+
+  it('a client that asks for approve alone gets nothing pre-ticked, an open fold and a clear POST error', async () => {
+    const scope = 'pending_operations:approve'
+    for (const resolution of [CLAUDE, REGISTERED]) {
+      mocks.resolveRedirectUri.mockResolvedValue(resolution)
+      const html = await (await GET(new Request(buildAuthorizeUrl({ ...params, scope })))).text()
+      expect(checkboxFor(html, 'pending_operations:approve')).not.toContain('checked')
+      expect(checkedScopes(html)).toEqual([])
+      // Says nothing is pre-selected instead of claiming read is, and opens
+      // the fold so the one box to tick is in view.
+      expect(html).toContain('Inget är förvalt: välj själv nedan vad')
+      expect(html).toContain('Inget förvalt &middot; välj nedan')
+      expect(html).not.toContain('Endast läsbehörigheter är förvalda')
+      expect(html).toContain('<details class="scopes-details" open>')
+    }
+
+    // Allow with nothing ticked: no read default to fall back on, and the
+    // error says so instead of blaming the role.
+    const empty = await POST(
+      new Request(buildAuthorizeUrl({ ...params, scope }), { method: 'POST', body: consentForm(scope, []) }),
+    )
+    expect(empty.status).toBe(303)
+    const location = new URL(empty.headers.get('location')!)
+    expect(location.searchParams.get('error')).toBe('invalid_scope')
+    expect(location.searchParams.get('error_description')).toBe(
+      'No permission was ticked on the consent page; tick at least one to allow access',
+    )
+
+    // Ticking approve is the affirmative choice and is granted.
+    const ticked = await POST(
+      new Request(buildAuthorizeUrl({ ...params, scope }), {
+        method: 'POST',
+        body: consentForm(scope, ['pending_operations:approve']),
+      }),
+    )
+    expect(ticked.status).toBe(303)
+    expect(lastMintedPayload().scopes).toEqual(['pending_operations:approve'])
+  })
+
+  it('keeps the fold closed when something is pre-ticked', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    expect(html).toContain('<details class="scopes-details">')
+  })
+
+  it('labels the approve row Agentförslag with a godkänn tag', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    const approveRow = html.match(
+      /<div class="scope-row write">\s*<input[^>]*value="pending_operations:approve"[^>]*>[\s\S]*?<\/div>/,
+    )?.[0]
+    expect(approveRow).toBeDefined()
+    expect(approveRow).toContain('<span class="scope-name">Agentförslag</span>')
+    expect(approveRow).toContain('<span class="scope-tag">godkänn</span>')
+    expect(html).toContain('<div class="scope-group-title">Agentförslag</div>')
+    expect(html).not.toMatch(/stagade operationer/i)
   })
 })
 
@@ -777,7 +1082,7 @@ describe('Gemini custom apps', () => {
       const html = await response.text()
 
       expect(checkboxFor(html, 'transactions:write')).toContain('checked')
-      expect(checkboxFor(html, 'pending_operations:approve')).toContain('checked')
+      expect(checkboxFor(html, 'pending_operations:approve')).not.toContain('checked')
       expect(checkboxFor(html, 'transactions:read')).toContain('checked')
     },
   )

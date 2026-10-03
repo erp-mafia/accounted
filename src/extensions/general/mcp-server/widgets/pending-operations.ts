@@ -8,6 +8,10 @@ import type { UiWidget } from './types'
  * instead of agent-asserted: the widget arms the approve button and the
  * second click sends confirmed=true.
  * Triggered by gnubok_list_pending_operations with render_ui=true.
+ * A key without pending_operations:approve (the default one-click connection
+ * since issue #3408) cannot approve or reject: the list result then carries
+ * can_approve=false and the widget shows where to review instead of buttons
+ * that would fail on scope.
  */
 
 export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
@@ -102,6 +106,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
   button.reject { color: var(--text-muted); }
   .check { color: var(--success); font-weight: 600; }
   .status-note { font-size: 11px; color: var(--text-muted); }
+  .readonly-note { font-size: 12px; color: var(--text-muted); margin: 0 0 8px; }
   .error-msg { color: var(--error); font-size: 11px; margin-top: 2px; }
   .preview-row td { background: var(--bg); padding: 8px 12px; }
   .preview-row pre {
@@ -126,6 +131,8 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
   const pending = new Map();
   let operations = [];
   let handled = 0;
+  // false only when the list result says this key cannot approve or reject.
+  let canApprove = true;
   // A host that never answers must not strand a row in "Arbetar..." with its
   // buttons gone: time the RPC out so the catch path restores the row and
   // the user can retry. 30s covers slow commits (journal posting, emails).
@@ -172,6 +179,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       const sc = msg.params && msg.params.structuredContent;
       if (sc && sc.operations) {
         operations = sc.operations;
+        canApprove = sc.can_approve !== false;
         handled = 0;
         render();
       }
@@ -213,7 +221,8 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       return;
     }
 
-    let html = '<table><thead><tr>' +
+    let html = (canApprove ? '' : '<p class="readonly-note">Den h\\u00e4r anslutningen kan inte godk\\u00e4nna eller avvisa. G\\u00f6r det i Accounted under Att g\\u00f6ra \\u203a Agentf\\u00f6rslag.</p>') +
+      '<table><thead><tr>' +
       '<th>Skapad</th><th>\\u00c5tg\\u00e4rd</th><th>Risk</th><th></th>' +
       '</tr></thead><tbody>';
 
@@ -263,6 +272,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
     if (op._done === 'committed') return '<span class="check">\\u2713 Godk\\u00e4nd</span>';
     if (op._done === 'rejected') return '<span class="status-note">Avvisad</span>';
     if (op._working) return '<span class="status-note">Arbetar\\u2026</span>';
+    if (!canApprove) return '<span class="status-note">I Accounted</span>';
     let html = '';
     if (op._armed) {
       // Second click IS the positive BFL 5 kap 5\\u00a7 acknowledgment: it
