@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl'
 import { ArrowLeft, ArrowUpRight, ShieldAlert } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
+import { AttnLine } from '@/components/ui/attn-line'
 import type { PendingItem, ReviewSubmission, WithdrawnItem } from '@/lib/agent-skills/community-review'
 import { COMMUNITY_REPO } from '@/lib/agent-skills/community-repo'
 import styles from './skills.module.css'
@@ -28,9 +29,21 @@ async function readReview(url: string): Promise<ReviewData> {
  * And texts their authors withdrew: already hidden from every AI, their
  * folders still to be removed from the repository.
  */
-export function ReviewQueue() {
+export function ReviewQueue({ mfaRequired = false }: { mfaRequired?: boolean }) {
   const t = useTranslations('skills_registry')
-  const list = useSWR('/api/community/submissions', readReview)
+  // The review routes refuse a session without MFA (CASA 3.3.1); do not ask.
+  const list = useSWR(mfaRequired ? null : '/api/community/submissions', readReview)
+  if (mfaRequired) {
+    return (
+      <div className={styles.apage}>
+        <PageHeader title={t('review_title')} />
+        <Link href="/skills" className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+        <AttnLine action={{ label: t('review_mfa_action'), href: '/settings/security' }}>
+          {t('review_mfa_required')}
+        </AttnLine>
+      </div>
+    )
+  }
   return (
     <div className={styles.apage}>
       <PageHeader title={t('review_title')} />

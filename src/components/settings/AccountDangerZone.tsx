@@ -2,9 +2,8 @@
 
 import { useState, useEffect, useId } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser, signOutAndNavigate } from '@/lib/auth/session-client'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -36,7 +35,6 @@ export function AccountDangerZone() {
   const t = useTranslations('settings_account_danger')
   const tRetention = useTranslations('retention_notice')
   const errorLocale = useLocale() as ErrorLocale
-  const router = useRouter()
   const [email, setEmail] = useState<string | null>(null)
   // null = the blocker list is not known: still loading, or the read failed
   // (loadError). "Cannot read the blockers" must mean "cannot permit
@@ -58,8 +56,7 @@ export function AccountDangerZone() {
 
     async function load() {
       setLoadError(null)
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await fetchSessionUser()
       if (!cancelled) setEmail(user?.email ?? null)
 
       try {
@@ -144,7 +141,10 @@ export function AccountDangerZone() {
         throw new Error(body.error || t('delete_failed_default'))
       }
 
-      router.push('/login')
+      // The account's sessions are already gone server-side; this removes the
+      // dead session cookie and everything the browser kept for the account
+      // (storage, token, analytics identity) before leaving.
+      await signOutAndNavigate('/login', { scope: 'local' })
     } catch (err) {
       setError(err instanceof Error ? getUserErrorMessage(err) : t('delete_failed_default'))
       setIsDeleting(false)

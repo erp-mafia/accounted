@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import type { EntityType } from '@/types'
 import { CompanyContextError, getActiveCompanyId } from '@/lib/company/active-company'
 import { isMembershipActive } from '@/lib/entitlements/multi-user'
+import { httpOnlyCookieOptions } from '@/lib/supabase/cookie-options'
 
 // The resolver and its error class live in active-company.ts (no
 // `next/headers` there) so the API-key path can use them; re-exported here so
@@ -192,21 +193,10 @@ export async function setActiveCompany(
   // pattern in lib/supabase/server.ts.
   try {
     const cookieStore = await cookies()
-    cookieStore.set(COMPANY_COOKIE, companyId, {
-      path: '/',
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 365, // 1 year
-    })
+    cookieStore.set(COMPANY_COOKIE, companyId, httpOnlyCookieOptions(60 * 60 * 24 * 365))
     // Explicit-choice marker (see COMPANY_PICKED_COOKIE). No maxAge: a session
     // cookie, gone when the browser closes.
-    cookieStore.set(COMPANY_PICKED_COOKIE, '1', {
-      path: '/',
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-    })
+    cookieStore.set(COMPANY_PICKED_COOKIE, '1', httpOnlyCookieOptions())
   } catch {
     // Sealed cookie store (render phase): the DB write is what matters.
   }

@@ -8,6 +8,7 @@ import {
   shouldArmBooksGate,
 } from '@/lib/onboarding/books-gate'
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
+import { httpOnlyCookieOptions } from '@/lib/supabase/cookie-options'
 import { revalidatePath } from 'next/cache'
 import { createCompanyCore } from '@/lib/company/create-company'
 import { isEntityType, isEntityTypeCreatable } from '@/lib/company/entity-type'
@@ -237,13 +238,11 @@ async function createCompanyFromOnboardingImpl(params: {
   if (armBooksGate) {
     try {
       const cookieStore = await cookies()
-      cookieStore.set(BOOKS_GATE_COOKIE, newCompanyId, {
-        path: '/',
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: BOOKS_GATE_MAX_AGE_SECONDS,
-      })
+      cookieStore.set(
+        BOOKS_GATE_COOKIE,
+        newCompanyId,
+        httpOnlyCookieOptions(BOOKS_GATE_MAX_AGE_SECONDS),
+      )
     } catch (err) {
       console.error('[createCompanyFromOnboarding] books gate cookie failed', err)
     }

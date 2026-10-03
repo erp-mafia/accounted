@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 
 /**
  * Coverage of the invoice register (the `invoices` table) relative to the
@@ -87,7 +88,7 @@ const AR_ACCOUNTS = ['1510', '1513']
  * Returns null when the probe itself failed (unknown, not false).
  */
 async function probePreRegisterArDebits(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   coversFrom: string,
   fiscalPeriodId?: string,
@@ -109,7 +110,7 @@ async function probePreRegisterArDebits(
 }
 
 export async function fetchInvoiceRegisterCoverage(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
 ): Promise<InvoiceRegisterCoverage> {
   const { data: firstInvoice, error: firstError } = await supabase

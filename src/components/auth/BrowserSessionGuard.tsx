@@ -1,101 +1,60 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import posthog from 'posthog-js'
-import { useTranslations } from 'next-intl'
-import { Button } from '@/components/ui/button'
-import { createClient } from '@/lib/supabase/client'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
-import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
+import { useEffect } from 'react'
+import { onBrowserSessionLost } from '@/lib/supabase/browser-session-token'
 import {
-  authCookieNames,
-  duplicateAuthCookieNames,
-  scrubAuthCookies,
-} from '@/lib/auth/browser-session-cookies'
-
-/** Second look before telling the user: rides out a refresh racing the server's. */
-const RECHECK_DELAY_MS = 3_000
-
-type Probe = 'ok' | 'missing' | 'unknown'
-
-async function probeBrowserSession(): Promise<Probe> {
-  try {
-    const { data, error } = await createClient().auth.getSession()
-    if (data.session) return 'ok'
-    // A network blip during refresh is not a lost session.
-    if (error?.name === 'AuthRetryableFetchError') return 'unknown'
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'unknown'
-    return 'missing'
-  } catch {
-    return 'unknown'
-  }
-}
+  clearBrowserSessionState,
+  onSignedOutElsewhere,
+  reloadTo,
+} from '@/lib/auth/session-client'
 
 /**
- * The dashboard only renders for a user the server has authenticated, so the
- * browser's own Supabase client must hold a session too. When it does not,
- * every direct browser read runs as anon and RLS returns empty lists, which
- * reads as "my bank and accounts are gone" (PH 99). The cause we have seen is
- * a duplicate auth cookie the server and browser parse differently; see
- * lib/auth/browser-session-cookies.ts. Say so instead of showing empty pages,
- * and offer a sign-in that removes every cookie variant first, which a plain
- * sign-out does not.
+ * Leaves the dashboard as soon as the server says the session is gone.
+ *
+ * The browser no longer holds a session of its own: its Supabase client asks
+ * GET /api/auth/session-token for an access token, and the server answers
+ * from the HttpOnly session cookie. So the browser and the server can no
+ * longer disagree about who is signed in, which is what this guard used to
+ * detect (PH 99: a duplicate auth cookie the two sides parsed differently,
+ * the dashboard rendered for a user whose direct reads ran as anon).
+ *
+ * What remains is the plain case: the session ended while the page was open
+ * (revoked from another device, expired refresh token). The token endpoint
+ * answers 401, and instead of rendering empty lists the page clears what it
+ * held and goes to /login, returning here after sign-in. A session-timeout
+ * 401 is left to SessionTimeoutController, which signs out with its reason.
+ * A 403 (an MFA step-up owed) goes to /mfa/verify the same way.
+ *
+ * A sign-out in another tab ends this tab's session too (they share the
+ * cookie): that tab announces it, and this one clears what it held (token,
+ * its own sessionStorage) and leaves for /login at once (CASA 6.6.1).
  */
 export function BrowserSessionGuard() {
-  const t = useTranslations('browser_session_guard')
-  const [missing, setMissing] = useState(false)
-
   useEffect(() => {
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-
-    void (async () => {
-      if ((await probeBrowserSession()) !== 'missing' || cancelled) return
-      await new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, RECHECK_DELAY_MS)
-      })
-      if (cancelled || (await probeBrowserSession()) !== 'missing' || cancelled) return
-
-      if (isAnalyticsEnabled()) {
-        try {
-          // Counts only, never cookie values.
-          posthog.capture('browser_session_missing', {
-            auth_cookie_count: authCookieNames(document.cookie).length,
-            duplicate_auth_cookie_count: duplicateAuthCookieNames(document.cookie).length,
-          })
-        } catch {
-          // Telemetry must never affect the guard.
-        }
-      }
-      setMissing(true)
-    })()
-
+    let leaving = false
+    const leave = (target: URL, clear: boolean) => {
+      if (leaving) return
+      leaving = true
+      if (clear) clearBrowserSessionState()
+      reloadTo(target.toString())
+    }
+    const back = () => window.location.pathname + window.location.search
+    const stopLost = onBrowserSessionLost((reason) => {
+      const url =
+        reason === 'mfa_required'
+          ? new URL('/mfa/verify', window.location.origin)
+          : new URL('/login', window.location.origin)
+      if (back() !== '/') url.searchParams.set(reason === 'mfa_required' ? 'returnTo' : 'next', back())
+      leave(url, reason === 'unauthenticated')
+    })
+    const stopSignedOut = onSignedOutElsewhere(() => {
+      leave(new URL('/login', window.location.origin), true)
+    })
     return () => {
-      cancelled = true
-      if (timer !== undefined) clearTimeout(timer)
+      stopLost()
+      stopSignedOut()
     }
   }, [])
 
-  if (!missing) return null
-
-  function handleSignInAgain() {
-    resetAnalyticsIdentity()
-    scrubAuthCookies(document, window.location)
-    const url = new URL('/login', window.location.origin)
-    const next = window.location.pathname + window.location.search
-    if (next !== '/') url.searchParams.set('next', next)
-    window.location.assign(url.toString())
-  }
-
-  return (
-    <div
-      role="alert"
-      className="relative z-50 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 border-b border-border bg-secondary px-4 py-2 text-sm text-secondary-foreground"
-    >
-      <span className="text-center text-xs font-medium sm:text-sm">{t('message')}</span>
-      <Button type="button" size="sm" onClick={handleSignInAgain}>
-        {t('sign_in_again')}
-      </Button>
-    </div>
-  )
+  return null
 }

@@ -3,7 +3,12 @@
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
+import {
+  fetchMfaStatus,
+  signOutAndNavigate,
+  verifiedTotpFactor,
+  verifyTotp,
+} from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -39,7 +44,6 @@ function MfaVerifyContent() {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const supabase = createClient()
 
   // Step-up landing target. Set by callers that need AAL2 to do something
   // sensitive (set/change password, unenroll MFA, etc.): /api/account/password
@@ -49,8 +53,7 @@ function MfaVerifyContent() {
 
   useEffect(() => {
     async function loadFactor() {
-      const { data } = await supabase.auth.mfa.listFactors()
-      const verifiedFactor = data?.totp?.find(f => f.status === 'verified')
+      const verifiedFactor = verifiedTotpFactor(await fetchMfaStatus())
       if (verifiedFactor) {
         setFactorId(verifiedFactor.id)
       } else {
@@ -99,11 +102,11 @@ function MfaVerifyContent() {
     setIsLoading(true)
 
     try {
-      const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({
-        factorId,
-      })
+      // Challenge + verify run on the server, which writes the raised (AAL2)
+      // session into the HttpOnly cookie.
+      const { error: verifyError } = await verifyTotp(factorId, code)
 
-      if (challengeError) {
+      if (verifyError && verifyError.code?.startsWith('mfa_challenge')) {
         toast({
           title: t('verify_failed_title'),
           description: t('verify_challenge_failed_description'),
@@ -112,12 +115,6 @@ function MfaVerifyContent() {
         setIsLoading(false)
         return
       }
-
-      const { error: verifyError } = await supabase.auth.mfa.verify({
-        factorId,
-        challengeId: challenge.id,
-        code,
-      })
 
       if (verifyError) {
         const attempts = failedAttempts + 1
@@ -174,8 +171,7 @@ function MfaVerifyContent() {
   }
 
   const handleLogout = async () => {
-    await supabase.auth.signOut()
-    router.push('/login')
+    await signOutAndNavigate('/login')
   }
 
   return (

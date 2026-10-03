@@ -1,11 +1,9 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { createClient } from '@/lib/supabase/client'
-import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
+import { signOutAndNavigate } from '@/lib/auth/session-client'
 import { SecuritySettings } from '@/components/settings/SecuritySettings'
 import { AccountDangerZone } from '@/components/settings/AccountDangerZone'
 import {
@@ -22,17 +20,15 @@ import { useSettings } from '@/components/settings/useSettings'
  * 2026-09-24 so the profile page is only about the person.
  */
 export function SecuritySettingsContent() {
-  const router = useRouter()
-  const supabase = createClient()
   const { settings } = useSettings()
   const tCommon = useTranslations('common')
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
 
   async function handleLogout() {
-    resetAnalyticsIdentity()
-    await supabase.auth.signOut()
-    router.push('/login')
+    // Server revokes the session and deletes the HttpOnly cookie; the helper
+    // clears the browser's copies (token, storage, analytics identity).
+    await signOutAndNavigate('/login')
   }
 
   return (

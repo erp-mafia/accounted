@@ -2,7 +2,7 @@
 
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps } from 'react'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
@@ -250,7 +250,7 @@ function buildSupplierInvoiceMap(
 // are the candidate pool, so this is one small query and nothing for the
 // companies without any. Non-fatal like fetchPotentialMatches.
 async function fetchExpensePayoutMatches(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string | null,
   rows: { id: string; amount: number; currency: string | null; is_business: boolean | null; journal_entry_id: string | null }[],
 ): Promise<{ byTransaction: Map<string, ExpensePayoutDue>; people: ExpensePayoutDue[] }> {
@@ -284,7 +284,7 @@ async function fetchExpensePayoutMatches(
 // on potential_supplier_invoice_id is blocked until that FK exists in the
 // prod schema cache (see DECISIONS.md archive 2026-07-06).
 async function fetchPotentialMatches(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string | null,
   rows: {
     id: string

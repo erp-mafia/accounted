@@ -3,7 +3,7 @@
 import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser, verifyOtp } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -45,13 +45,14 @@ function ResetPasswordInner() {
   const [isLoading, setIsLoading] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => {
     let cancelled = false
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // The session is server-held (HttpOnly cookie): ask the server whether
+    // one exists instead of reading it in the browser.
+    fetchSessionUser().then((user) => {
       if (cancelled) return
-      if (session) setMode('set-password')
+      if (user) setMode('set-password')
       else if (tokenHash) setMode('confirm-link')
       else setMode('enter-code')
     })
@@ -72,7 +73,7 @@ function ResetPasswordInner() {
   const handleConfirmLink = async () => {
     if (!tokenHash) return
     setIsLoading(true)
-    const { error } = await supabase.auth.verifyOtp({
+    const { error } = await verifyOtp({
       token_hash: tokenHash,
       type: 'recovery',
     })
@@ -90,7 +91,7 @@ function ResetPasswordInner() {
   const handleVerifyCode = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setIsLoading(true)
-    const { error } = await supabase.auth.verifyOtp({
+    const { error } = await verifyOtp({
       email: email.trim(),
       token: code.trim(),
       type: 'recovery',
@@ -166,10 +167,14 @@ function ResetPasswordInner() {
       // /mfa/verify already do, and it is the only chance an invitee who
       // already has a company of their own gets: the server-side retry on
       // /onboarding never sees them. See ./invite-handoff.ts.
+      // One /api/auth/me read (only if an invite is pending) serves both:
+      // the user's MFA flags and the session's assurance levels, which the
+      // server reads from verified sources, never from the cookie.
+      let sessionUserRead: ReturnType<typeof fetchSessionUser> | null = null
+      const sessionUser = () => (sessionUserRead ??= fetchSessionUser())
       const inviteDestination = await handoffPendingInvite({
-        getUser: async () => (await supabase.auth.getUser()).data.user,
-        getAssuranceLevel: async () =>
-          (await supabase.auth.mfa.getAuthenticatorAssuranceLevel()).data,
+        getUser: sessionUser,
+        getAssuranceLevel: async () => (await sessionUser())?.aal ?? null,
         reportProblem: (problem) => {
           const keys = INVITE_PROBLEM_MESSAGE_KEYS[problem]
           toast({

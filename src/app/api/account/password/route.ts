@@ -49,6 +49,14 @@ const SetPasswordSchema = z.object({
  * If the password update succeeds but the flag write fails, we log and still
  * return success: the user has a working password and the banner will show one
  * more time, but a retry will re-flip the flag.
+ *
+ * After a successful change every OTHER session of the user is ended (CASA
+ * 2.2.2): GoTrue's logout with scope 'others', using this request's session,
+ * which itself stays signed in. That covers the settings change, the
+ * first-time set and the recovery flow (/reset-password posts here with the
+ * recovery session), so a password reset also signs out whoever was using
+ * the old one. A failed revocation is logged at error level and reported as
+ * `otherSessionsEnded: false`; the password change itself stands.
  */
 export async function POST(request: Request) {
   const { user, supabase, error: authError } = await requireAuth()
@@ -113,7 +121,34 @@ export async function POST(request: Request) {
     // banner will show once more and a retry will succeed.
   }
 
-  log.info('password set', { userId: user.id, isFirstTimeSet, flagWriteOk })
+  const otherSessionsEnded = await endOtherSessions(supabase, user.id)
 
-  return NextResponse.json({ data: { ok: true } })
+  log.info('password set', { userId: user.id, isFirstTimeSet, flagWriteOk, otherSessionsEnded })
+
+  return NextResponse.json({ data: { ok: true, otherSessionsEnded } })
+}
+
+/**
+ * Revoke every session of the user except the one making this request.
+ * Returns whether GoTrue confirmed it.
+ */
+async function endOtherSessions(
+  supabase: Awaited<ReturnType<typeof requireAuth>>['supabase'],
+  userId: string,
+): Promise<boolean> {
+  try {
+    const { error } = await supabase.auth.signOut({ scope: 'others' })
+    if (error) {
+      log.error('ending other sessions after a password change failed', {
+        userId,
+        code: error.code,
+        status: error.status,
+      })
+      return false
+    }
+    return true
+  } catch (err) {
+    log.error('ending other sessions after a password change threw', { userId, err })
+    return false
+  }
 }

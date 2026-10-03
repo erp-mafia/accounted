@@ -6,7 +6,6 @@ import Image from 'next/image'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -48,9 +47,13 @@ import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
 import {
   isSessionAuthMethod,
-  setSessionAuthMethodHint,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
+import {
+  signInWithPassword,
+  startSsoSignIn,
+  verifyOtp,
+} from '@/lib/auth/session-client'
 import type { GoTrueAuthSettings } from '@/lib/auth/gotrue-providers'
 
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
@@ -117,7 +120,6 @@ export function LoginClient({
   // yet must be able to sign up without losing that destination (issue
   // #1814). The register page re-sanitises it through safeReturnTo.
   const registerHref = nextPath === '/' ? '/register' : `/register?next=${encodeURIComponent(nextPath)}`
-  const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
   // Per-request brand merged over getBranding() defaults (WL-12): identical
   // values on default hosts, brand values on branded hosts.
@@ -181,24 +183,20 @@ export function LoginClient({
     setFormError(null)
     setIsLoading(true)
     try {
-      const ssoDomain = process.env.NEXT_PUBLIC_SSO_DOMAIN
-      const ssoProviderId = process.env.NEXT_PUBLIC_SSO_PROVIDER_ID
-      const params = ssoProviderId
-        ? { providerId: ssoProviderId }
-        : ssoDomain
-          ? { domain: ssoDomain }
-          : null
-      if (!params) {
+      // The server starts the flow (its PKCE verifier is an HttpOnly cookie)
+      // and resolves the provider from NEXT_PUBLIC_SSO_PROVIDER_ID or
+      // NEXT_PUBLIC_SSO_DOMAIN; the callback on this origin finishes it.
+      const { url, error } = await startSsoSignIn(nextPath)
+      if (error?.code === 'sso_not_configured') {
         setFormError({ kind: 'oauth', message: tAuth('saml_no_domain') })
         return
       }
-      const { error } = await supabase.auth.signInWithSSO({
-        ...params,
-        options: { redirectTo: `${window.location.origin}/auth/callback?flow=oauth&next=${encodeURIComponent(nextPath)}` },
-      })
-      if (error) {
+      if (error || !url) {
         setFormError({ kind: 'oauth', message: getErrorMessage(error, { context: 'auth', locale: errorLocale }) })
+        return
       }
+      window.location.assign(url)
+      return
     } catch (error) {
       setFormError({
         kind: 'oauth',
@@ -266,18 +264,19 @@ export function LoginClient({
 
     if (result.tokenHash && result.type) {
       try {
-        const { error } = await supabase.auth.verifyOtp({
+        // The server exchanges the one-time link and sets the HttpOnly
+        // session cookie (it also records the BankID sign-in method).
+        const { error } = await verifyOtp({
           token_hash: result.tokenHash,
-          type: result.type as 'magiclink',
+          type: 'magiclink',
         })
 
         if (error) {
-          console.error('[login] BankID verifyOtp failed', error)
+          console.error('[login] BankID verifyOtp failed', error.code ?? error.status)
           setFormError({ kind: 'bankid', message: tAuth('login_failed_bankid') })
           return
         }
 
-        setSessionAuthMethodHint('bankid')
         persistLoginMethodHint('bankid')
 
         // Check for pending invite token
@@ -327,10 +326,10 @@ export function LoginClient({
     const passwordValue = (formData.get('password') as string) || password
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { error, mfaRequired } = await signInWithPassword({
         email: emailValue,
         password: passwordValue,
-        options: captchaTokenOptions(passwordCaptchaToken),
+        captchaToken: captchaTokenOptions(passwordCaptchaToken).captchaToken ?? null,
       })
 
       if (error) {
@@ -353,13 +352,11 @@ export function LoginClient({
         return
       }
 
-      setSessionAuthMethodHint('password')
       persistLoginMethodHint('email')
 
-      // Check MFA status
-      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-
-      if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
+      // The server answers whether the new session still owes an MFA step-up
+      // (verified factor, AAL1 session), from GoTrue's own reply.
+      if (mfaRequired) {
         router.push(
           nextPath === '/'
             ? '/mfa/verify'

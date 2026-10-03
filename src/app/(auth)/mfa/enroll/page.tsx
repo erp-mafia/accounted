@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { enrollTotp, fetchSessionUser, verifyTotp } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -33,7 +33,6 @@ function MfaEnrollContent() {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const supabase = createClient()
 
   const returnTo = safeReturnTo(searchParams.get('returnTo'), '/')
 
@@ -61,9 +60,7 @@ function MfaEnrollContent() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
+      const user = await fetchSessionUser()
       if (cancelled || !user) return
       if (!userHasPassword(user)) {
         router.replace(
@@ -83,22 +80,11 @@ function MfaEnrollContent() {
     setIsEnrolling(true)
 
     try {
-      // Clean up any stale unverified factors from previous abandoned attempts
-      const { data: existingFactors } = await supabase.auth.mfa.listFactors()
-      if (existingFactors?.totp) {
-        for (const factor of existingFactors.totp) {
-          if (factor.status !== 'verified') {
-            await supabase.auth.mfa.unenroll({ factorId: factor.id })
-          }
-        }
-      }
+      // The server removes stale unverified factors from abandoned attempts
+      // first, then enrols a new TOTP factor.
+      const { data, error } = await enrollTotp(getBranding().appName.toLowerCase())
 
-      const { data, error } = await supabase.auth.mfa.enroll({
-        factorType: 'totp',
-        friendlyName: getBranding().appName.toLowerCase(),
-      })
-
-      if (error) {
+      if (error || !data) {
         toast({
           title: 'Kunde inte aktivera 2FA',
           description: getUserErrorMessage(error),
@@ -108,8 +94,8 @@ function MfaEnrollContent() {
         return
       }
 
-      setQrCode(data.totp.qr_code)
-      setSecret(data.totp.secret)
+      setQrCode(data.qrCode)
+      setSecret(data.secret)
       setFactorId(data.id)
 
       // Focus the code input after render
@@ -132,11 +118,11 @@ function MfaEnrollContent() {
     setIsVerifying(true)
 
     try {
-      const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({
-        factorId,
-      })
+      // Challenge + verify on the server; success raises the session to
+      // AAL2 in the HttpOnly cookie.
+      const { error: verifyError } = await verifyTotp(factorId, code)
 
-      if (challengeError) {
+      if (verifyError && verifyError.code?.startsWith('mfa_challenge')) {
         toast({
           title: 'Verifiering misslyckades',
           description: 'Kunde inte starta verifiering. Försök igen.',
@@ -145,12 +131,6 @@ function MfaEnrollContent() {
         setIsVerifying(false)
         return
       }
-
-      const { error: verifyError } = await supabase.auth.mfa.verify({
-        factorId,
-        challengeId: challenge.id,
-        code,
-      })
 
       if (verifyError) {
         toast({

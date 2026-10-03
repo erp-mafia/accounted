@@ -2,13 +2,12 @@
 
 import { ArrowUpRight, Sparkles } from 'lucide-react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { useAgentSheet } from './AgentSheetProvider'
 import AgentAvatar from './AgentAvatar'
 import { useCompanyOptional, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { createClient } from '@/lib/supabase/client'
+import { signOutAndNavigate } from '@/lib/auth/session-client'
 
 // Tiny client component for /chat empty state. Reads the agent identity from
 // the provider so it can show the user's chosen avatar + name above the
@@ -36,22 +35,15 @@ const SUGGESTIONS: { label: string; prompt: string }[] = [
 export default function ChatEmptyState() {
   const { identity } = useAgentSheet()
   const companyCtx = useCompanyOptional()
-  const router = useRouter()
   const isSandbox = companyCtx?.isSandbox ?? false
   const hasAi = useCapability(CAPABILITY.ai)
   const name = identity.displayName?.trim() || 'din assistent'
 
   if (isSandbox) {
     const handleCreateAccount = async () => {
-      const supabase = createClient()
-      // Sign-out is best-effort: navigate even if Supabase is unreachable
+      // Sign-out is best-effort: navigate even if the server is unreachable
       // so the button never looks dead.
-      try {
-        await supabase.auth.signOut()
-      } catch {
-        // Intentionally swallowed.
-      }
-      router.push('/register')
+      await signOutAndNavigate('/register')
     }
     return (
       <div className="hidden md:flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">

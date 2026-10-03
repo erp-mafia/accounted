@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Sun, Moon, Monitor, ExternalLink } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 import { InstallAppSection } from '@/components/settings/InstallAppSection'
 import { CalendarFeedSettings } from '@/components/settings/CalendarFeedSettings'
 import {
@@ -56,7 +57,7 @@ export function AccountSettingsContent() {
   useEffect(() => {
     let active = true
     ;(async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await fetchSessionUser()
       if (!user) { if (active) setNameLoading(false); return }
       if (active && user.email) {
         setEmail(user.email)

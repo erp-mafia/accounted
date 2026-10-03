@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { shouldUseSecureCookies } from '@/lib/supabase/cookie-options'
 import {
   SESSION_TIMEOUT_COOKIE,
   type SessionAuthMethod,
@@ -330,7 +331,7 @@ export function sessionTimeoutCookieOptions(): SessionTimeoutCookieOptions {
   return {
     path: '/',
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: shouldUseSecureCookies(),
     sameSite: 'lax',
     maxAge: COOKIE_MAX_AGE_SECONDS,
   }

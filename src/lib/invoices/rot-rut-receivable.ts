@@ -15,7 +15,7 @@
  * shared with another invoice, a credited invoice, a difference of a krona or
  * more) is not rounding, and the caller books the payout without it.
  */
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre } from '@/lib/money'
 import { ROT_RUT_RECEIVABLE_ACCOUNT } from '@/lib/invoices/apply-invoice-payment'
 
@@ -43,7 +43,7 @@ function notAttributable(reason: string): RequestReceivable {
 }
 
 export async function getRequestReceivable(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   requestId: string,
 ): Promise<RequestReceivable> {
@@ -164,7 +164,7 @@ const NO_ROUNDING: PayoutOreRounding = { rounding: 0, invoiceCount: 0 }
  * else 0 (the voucher then stays exactly as before).
  */
 export async function getPayoutOreRounding(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   request: { id: string; requested_total: number | string },
   paidAmount: number,

@@ -6972,10 +6972,6 @@
     "managed_via": "Hanteras via {domain}",
     "locked_note": "Pausat: kräver betald plan"
   },
-  "browser_session_guard": {
-    "message": "Din webbläsare skickar inte med inloggningen, så sidor kan se tomma ut. Ingen data är borta. Logga in igen så rättar det sig.",
-    "sign_in_again": "Logga in igen"
-  },
   "system_notice": {
     "high_load": "Just nu är det hög belastning i systemet. Vissa sidor kan svara långsamt eller tillfälligt ge fel. Vi jobbar på det.",
     "dismiss": "Stäng"
@@ -11165,6 +11161,8 @@
     "review_remove_folder": "Ta bort mappen",
     "review_approve": "Godkänn och publicera",
     "review_view_source": "Visa på GitHub",
+    "review_mfa_required": "Granskningen kräver inloggning med tvåfaktorsautentisering eller BankID. Aktivera tvåfaktorsautentisering under Inställningar > Säkerhet och logga in igen.",
+    "review_mfa_action": "Gå till Säkerhet",
     "review_changed": "Texten har ändrats sedan sidan laddades. Ladda om och läs igen.",
     "review_privacy_kinds": {
       "personnummer": "personnummer",

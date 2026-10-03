@@ -1395,4 +1395,93 @@ describe('updateSession redirect destinations', () => {
       expect(response.status).toBe(200)
     })
   })
+
+  describe('server-held session cookie attributes (CASA 2.3.1/2.3.2)', () => {
+    function sessionCookieValue(expiresAt: number): string {
+      const json = JSON.stringify({ access_token: 'a.b.c', refresh_token: 'r', expires_at: expiresAt })
+      return `base64-${btoa(json).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '')}`
+    }
+
+    it('hands @supabase/ssr HttpOnly, SameSite=Lax session cookie options', async () => {
+      const { createServerClient } = await import('@supabase/ssr')
+      state.user = SIGNED_IN
+
+      await run('/settings/tax')
+
+      const options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as {
+        cookieOptions?: Record<string, unknown>
+      }
+      expect(options.cookieOptions).toMatchObject({ httpOnly: true, sameSite: 'lax', path: '/' })
+    })
+
+    it('marks the session cookie Secure when the request arrived over https', async () => {
+      const { createServerClient } = await import('@supabase/ssr')
+      state.user = SIGNED_IN
+
+      await runAt('https://app.accounted.se', '/settings/tax')
+
+      const options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as {
+        cookieOptions?: Record<string, unknown>
+      }
+      expect(options.cookieOptions).toMatchObject({ httpOnly: true, secure: true })
+    })
+
+    it('rewrites a pre-HttpOnly session cookie once, keeping the session', async () => {
+      const previousUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+      process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
+      try {
+        state.user = SIGNED_IN
+        const value = sessionCookieValue(Math.floor(Date.now() / 1000) + 3600)
+
+        const response = await run('/settings/tax', {
+          headers: { cookie: `sb-project-auth-token=${value}` },
+        })
+
+        expect(response.status).toBe(200)
+        const rewritten = response.cookies.get('sb-project-auth-token')
+        expect(rewritten?.value).toBe(value)
+        expect(rewritten?.httpOnly).toBe(true)
+        expect(response.cookies.get('gnubok-session-cookie')?.value).toBeTruthy()
+      } finally {
+        if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL
+        else process.env.NEXT_PUBLIC_SUPABASE_URL = previousUrl
+      }
+    })
+
+    it('hands GoTrue calls the IP-forwarding fetch only when a secret key is configured', async () => {
+      const { createServerClient } = await import('@supabase/ssr')
+      const previous = { key: process.env.SUPABASE_SECRET_KEY, url: process.env.NEXT_PUBLIC_SUPABASE_URL }
+      try {
+        process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
+        delete process.env.SUPABASE_SECRET_KEY
+        await run('/api/health', { headers: { 'x-forwarded-for': '203.0.113.7' } })
+        let options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as { global?: { fetch?: unknown } }
+        expect(options.global).toBeUndefined()
+
+        process.env.SUPABASE_SECRET_KEY = 'sb_secret_test-key'
+        await run('/api/health', { headers: { 'x-forwarded-for': '203.0.113.7' } })
+        options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as { global?: { fetch?: unknown } }
+        expect(typeof options.global?.fetch).toBe('function')
+      } finally {
+        if (previous.key === undefined) delete process.env.SUPABASE_SECRET_KEY
+        else process.env.SUPABASE_SECRET_KEY = previous.key
+        if (previous.url === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL
+        else process.env.NEXT_PUBLIC_SUPABASE_URL = previous.url
+      }
+    })
+
+    it('writes every other proxy cookie HttpOnly (company hint, locale)', async () => {
+      state.user = SIGNED_IN
+
+      const response = await run('/settings/tax', {
+        headers: { cookie: 'gnubok-locale=en' },
+      })
+
+      expect(response.cookies.get('gnubok-company-id')?.httpOnly).toBe(true)
+      expect(response.cookies.get('gnubok-locale')?.httpOnly).toBe(true)
+      for (const header of response.headers.getSetCookie()) {
+        expect(header).toMatch(/HttpOnly/i)
+      }
+    })
+  })
 })

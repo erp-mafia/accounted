@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
 import { NON_ISSUED_INVOICE_STATUSES_FILTER } from '@/lib/invoices/matchable-statuses'
@@ -283,7 +284,7 @@ export async function getJournalEntryUnderlagReferences(
  * order (invoices, then invoice_payments) so queued test mocks stay simple.
  */
 export async function getInvoiceReferencesForJournalEntries(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   journalEntryIds: readonly string[],
 ): Promise<Map<string, string[]>> {

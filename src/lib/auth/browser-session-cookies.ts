@@ -1,17 +1,19 @@
 /**
- * Browser-side Supabase auth cookie hygiene.
+ * Browser-side Supabase auth cookie hygiene, for cookies left over from
+ * before the session became server-held.
  *
  * Why this exists: when a browser holds two cookies with the same auth
- * cookie name (same name, different Path or Domain attribute), the two sides
- * of @supabase/ssr read different ones. The server (Next's cookie parser)
- * keeps the LAST occurrence in the Cookie header, the browser client (the
- * `cookie` package over document.cookie) keeps the FIRST. The server then
- * sees a live session and renders the dashboard, while every direct browser
- * read goes out with a stale or unusable token, falls back to the anon key,
- * and RLS answers with empty lists. Signing out through supabase-js only
- * expires the Path=/ host-only variant, so "log out and in again" leaves the
- * stray duplicate behind and the problem survives; a private window works
- * because it starts without it.
+ * cookie name (same name, different Path or Domain attribute), the server
+ * (Next's cookie parser) keeps the LAST one in the Cookie header. Before the
+ * switch the browser client read the FIRST (the `cookie` package over
+ * document.cookie), so the two sides disagreed about who was signed in (PH
+ * 99). The session cookie is now HttpOnly and only the server reads it, so
+ * that disagreement is gone; but a stray script-written duplicate from
+ * before the switch can still shadow a fresh sign-in, and sign-out on the
+ * server only expires the Path=/ host-only variant it owns. The sign-out
+ * helper (lib/auth/session-client.ts) therefore still removes every
+ * script-visible variant. HttpOnly cookies are invisible here by design; the
+ * server only ever writes the one Path=/ host-only variant of those.
  *
  * The helpers here find the auth cookies and build the expiry strings that
  * remove every variant the browser can hold for the current page, whatever

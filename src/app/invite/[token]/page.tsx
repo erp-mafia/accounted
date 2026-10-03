@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { AlertCircle, Briefcase } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
-import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser, reloadTo, signOut } from '@/lib/auth/session-client'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
@@ -91,10 +91,9 @@ export default function InvitePage() {
       try {
         // Load invite info and current session in parallel: the page needs
         // both to decide which CTA to render.
-        const supabase = createClient()
-        const [inviteRes, sessionRes] = await Promise.all([
+        const [inviteRes, sessionUser] = await Promise.all([
           fetch(`/api/team/accept?token=${encodeURIComponent(token)}`),
-          supabase.auth.getUser(),
+          fetchSessionUser(),
         ])
 
         const data = await inviteRes.json()
@@ -104,7 +103,7 @@ export default function InvitePage() {
         }
 
         setInvite(data.data)
-        setCurrentUserEmail(sessionRes.data.user?.email ?? null)
+        setCurrentUserEmail(sessionUser?.email ?? null)
       } catch {
         setError(t('load_failed'))
       } finally {
@@ -185,15 +184,11 @@ export default function InvitePage() {
   }
 
   const handleSignOutAndRetry = async () => {
-    const supabase = createClient()
-    await supabase.auth.signOut()
+    await signOut()
     // Keep the invite cookie alive so the next login/register picks it up.
     document.cookie = buildInviteCookie(token, secureCookieFlag)
-    if (invite?.alreadyHasAccount) {
-      router.push('/login')
-    } else {
-      router.push(`/register?invite=${encodeURIComponent(token)}`)
-    }
+    // Full page load: nothing rendered for the previous session stays in memory.
+    reloadTo(invite?.alreadyHasAccount ? '/login' : `/register?invite=${encodeURIComponent(token)}`)
   }
 
   if (isLoading) {

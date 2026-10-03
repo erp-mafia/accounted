@@ -25,6 +25,7 @@ import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -192,7 +193,7 @@ export default function SendInvoiceDialog({
         if (settingsError) throw new Error(t('company_settings_failed'))
         if (periodsError) throw new Error(t('fiscal_period_failed'))
 
-        const [originalResult, sessionResult] = await Promise.all([
+        const [originalResult, sessionUser] = await Promise.all([
           invoice.credited_invoice_id
             ? supabase
                 .from('invoices')
@@ -201,14 +202,13 @@ export default function SendInvoiceDialog({
                 .eq('company_id', company.id)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
-          // Local session read (no network): only the signed-in address is
-          // needed, as the legacy CC fallback.
-          supabase.auth.getSession(),
+          // Only the signed-in address is needed, as the legacy CC fallback.
+          // The session is server-held, so the server answers it.
+          fetchSessionUser(),
         ])
 
         if (originalResult.error) throw new Error(t('original_invoice_failed'))
-        const sessionUser = sessionResult.data.session?.user
-        if (sessionResult.error || !sessionUser) throw new Error(t('load_failed_title'))
+        if (!sessionUser) throw new Error(t('load_failed_title'))
 
         if (cancelled) return
 

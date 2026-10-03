@@ -17,6 +17,7 @@ import {
 import { CheckCircle, Loader2, Upload } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -212,7 +213,7 @@ export default function BankingSettingsPanel() {
     if (!hasLoadedRef.current) setIsLoading(true)
     setLoadError(false)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await fetchSessionUser()
       if (!user || !company) {
         setBankConnections([])
         return

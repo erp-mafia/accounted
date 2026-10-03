@@ -6972,10 +6972,6 @@
     "managed_via": "Managed via {domain}",
     "locked_note": "Paused: requires a paid plan"
   },
-  "browser_session_guard": {
-    "message": "Your browser is not sending your sign-in, so pages may look empty. No data is lost. Sign in again to fix it.",
-    "sign_in_again": "Sign in again"
-  },
   "system_notice": {
     "high_load": "The system is under high load right now. Some pages may respond slowly or fail temporarily. We are on it.",
     "dismiss": "Close"
@@ -11165,6 +11161,8 @@
     "review_remove_folder": "Remove the folder",
     "review_approve": "Approve and publish",
     "review_view_source": "View on GitHub",
+    "review_mfa_required": "The review queue requires signing in with two-factor authentication or BankID. Turn on two-factor authentication under Settings > Security and sign in again.",
+    "review_mfa_action": "Go to Security",
     "review_changed": "The text changed since the page loaded. Reload and read it again.",
     "review_privacy_kinds": {
       "personnummer": "personal ID number",

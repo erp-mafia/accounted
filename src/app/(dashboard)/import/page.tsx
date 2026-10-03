@@ -30,6 +30,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeft, CreditCard, Landmark, Loader2, ChevronRight, Download, ShoppingBag, ShoppingCart } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
@@ -2368,8 +2369,7 @@ export default function ImportPage() {
 
   // Fetch authenticated user ID (used by the migration wizard)
   useEffect(() => {
-    const supabase = createClient()
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    fetchSessionUser().then((user) => {
       if (user) setUserId(user.id)
     })
   }, [])

@@ -23,6 +23,7 @@ import {
 import { useCompany } from '@/contexts/CompanyContext'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 
 // Bank logos shipped in public/logos/banks, matched against the connected
 // bank's display name (lowercased, spaces removed).
@@ -103,13 +104,13 @@ export function ConnectionsSettingsContent() {
     // Skatteverket tokens are per user (each user signs their own BankID
     // consent), so the readout asks for the signed-in user's token.
     const skvCount = (async () => {
-      const { data } = await supabase.auth.getUser()
-      if (!data.user) return 0
+      const user = await fetchSessionUser()
+      if (!user) return 0
       const { count } = await supabase
         .from('skatteverket_tokens')
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId)
-        .eq('user_id', data.user.id)
+        .eq('user_id', user.id)
       return count ?? 0
     })()
     Promise.allSettled([

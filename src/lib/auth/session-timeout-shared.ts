@@ -49,10 +49,3 @@ export function notifySessionExpired(response: Response): boolean {
   }
   return true
 }
-
-export function setSessionAuthMethodHint(method: SessionAuthMethod): void {
-  if (typeof document === 'undefined') return
-
-  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
-  document.cookie = `${SESSION_AUTH_METHOD_HINT_COOKIE}=${method}; Path=/; Max-Age=300; SameSite=Lax${secure}`
-}

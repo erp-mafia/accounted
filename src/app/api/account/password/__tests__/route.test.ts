@@ -21,14 +21,16 @@ type AuthMetadata = Record<string, unknown>
 function mockUserClient(opts: {
   user: { id: string; app_metadata?: AuthMetadata } | null
   updateUserError?: { message: string; status?: number; code?: string } | null
+  signOutError?: { message: string; status?: number; code?: string } | null
 }) {
   const updateUser = vi.fn().mockResolvedValue({
     data: {},
     error: opts.updateUserError ?? null,
   })
+  const signOut = vi.fn().mockResolvedValue({ error: opts.signOutError ?? null })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const supabase = { auth: { updateUser } } as any
+  const supabase = { auth: { updateUser, signOut } } as any
 
   if (opts.user) {
     requireAuthMock.mockResolvedValue({ user: opts.user, supabase, error: null })
@@ -40,7 +42,7 @@ function mockUserClient(opts: {
     })
   }
 
-  return { updateUser }
+  return { updateUser, signOut }
 }
 
 function mockService(opts: {
@@ -299,6 +301,78 @@ describe('POST /api/account/password', () => {
 
       expect(status).toBe(400)
       expect(body.error).toContain('AAL2')
+    })
+  })
+
+  describe('other sessions end after a password change (CASA 2.2.2)', () => {
+    it('revokes every other session after a change, keeping the current one', async () => {
+      const { signOut } = mockUserClient({
+        user: { id: 'user-1', app_metadata: { has_password: true } },
+      })
+      mockService({ priorAppMetadata: { has_password: true } })
+
+      const req = createMockRequest('/api/account/password', {
+        method: 'POST',
+        body: { password: STRONG_PASSWORD },
+      })
+      const { status, body } = await parseJsonResponse<{
+        data?: { ok: boolean; otherSessionsEnded: boolean }
+      }>(await POST(req))
+
+      expect(status).toBe(200)
+      expect(signOut).toHaveBeenCalledWith({ scope: 'others' })
+      expect(body.data).toEqual({ ok: true, otherSessionsEnded: true })
+    })
+
+    it('also ends other sessions on a first-time set (the recovery and BankID paths)', async () => {
+      const { signOut } = mockUserClient({
+        user: { id: 'user-1', app_metadata: { has_password: false, bankid_linked: true } },
+      })
+      mockService({ priorAppMetadata: { has_password: false, bankid_linked: true } })
+
+      const req = createMockRequest('/api/account/password', {
+        method: 'POST',
+        body: { password: STRONG_PASSWORD },
+      })
+      const { status } = await parseJsonResponse(await POST(req))
+
+      expect(status).toBe(200)
+      expect(signOut).toHaveBeenCalledWith({ scope: 'others' })
+    })
+
+    it('does not touch sessions when the change itself failed', async () => {
+      const { signOut } = mockUserClient({
+        user: { id: 'user-1', app_metadata: { has_password: true } },
+        updateUserError: { message: 'Password too similar to old', status: 400 },
+      })
+      mockService({ priorAppMetadata: { has_password: true } })
+
+      const req = createMockRequest('/api/account/password', {
+        method: 'POST',
+        body: { password: STRONG_PASSWORD },
+      })
+      await POST(req)
+
+      expect(signOut).not.toHaveBeenCalled()
+    })
+
+    it('keeps the new password and reports it when the revocation fails', async () => {
+      mockUserClient({
+        user: { id: 'user-1', app_metadata: { has_password: true } },
+        signOutError: { message: 'upstream down', status: 500 },
+      })
+      mockService({ priorAppMetadata: { has_password: true } })
+
+      const req = createMockRequest('/api/account/password', {
+        method: 'POST',
+        body: { password: STRONG_PASSWORD },
+      })
+      const { status, body } = await parseJsonResponse<{
+        data?: { ok: boolean; otherSessionsEnded: boolean }
+      }>(await POST(req))
+
+      expect(status).toBe(200)
+      expect(body.data).toEqual({ ok: true, otherSessionsEnded: false })
     })
   })
 })

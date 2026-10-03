@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { createLogger } from '@/lib/logger'
 import { PAYMENT_VOUCHER_SOURCE_TYPES } from '@/lib/invoices/backfill-invoice-payment-rows'
 
@@ -76,7 +76,7 @@ export function classifyPaymentHistoryGap(input: {
  * when the query failed: unknown must never read as "no voucher".
  */
 export async function fetchInvoicePaymentVouchers(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   invoiceId: string,
 ): Promise<PaymentVoucherRef[] | null> {
   const { data, error } = await supabase

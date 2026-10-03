@@ -22,6 +22,13 @@
  *     `/api/account/*` and `/api/company*` to COMPLETE onboarding / enroll MFA.
  *   - The MCP OAuth endpoints (`/api/mcp-oauth/*`) carry their own PKCE +
  *     single-use-code security and drive the connector authorize flow.
+ *   - The session routes that exist to reach AAL2 or to leave the session
+ *     (AAL1_SESSION_ROUTES): signing in (a stale AAL1 cookie must not block
+ *     a fresh login), MFA status/enrol/verify/unenrol, the user's own
+ *     /api/auth/me, and logout. Each authenticates itself (or needs no
+ *     session at all). /api/auth/session-token is deliberately NOT here:
+ *     it hands out a data-access token and must answer exactly like any
+ *     other API route.
  *
  * Kept as a pure function so the allowlist is unit-testable in isolation.
  */
@@ -30,6 +37,25 @@
 // under /api/extensions/ext/ authenticates via requireAuth (cookies) in the
 // dispatcher and must stay behind the gate.
 const BEARER_AUTH_PREFIXES = ['/api/v1/', '/api/extensions/ext/mcp-server/mcp']
+
+// Exact paths (and, for /api/auth/mfa, its sub-routes) of the AAL1 session
+// routes described above.
+const AAL1_SESSION_ROUTES = [
+  '/api/auth/login',
+  '/api/auth/logout',
+  '/api/auth/otp',
+  '/api/auth/sso',
+  '/api/auth/oauth',
+  '/api/auth/anonymous',
+  '/api/auth/me',
+  '/api/auth/mfa',
+]
+
+function isAal1SessionRoute(pathname: string): boolean {
+  return AAL1_SESSION_ROUTES.some(
+    (route) => pathname === route || (route === '/api/auth/mfa' && pathname.startsWith(`${route}/`)),
+  )
+}
 
 export function apiPathSkipsMfaGate(
   pathname: string,
@@ -44,6 +70,7 @@ export function apiPathSkipsMfaGate(
   return (
     pathname.startsWith('/api/account/') ||
     pathname.startsWith('/api/company') ||
-    pathname.startsWith('/api/mcp-oauth/')
+    pathname.startsWith('/api/mcp-oauth/') ||
+    isAal1SessionRoute(pathname)
   )
 }

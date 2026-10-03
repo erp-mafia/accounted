@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CompanyMigrationResetSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { CompanyMigrationResetRpcResult } from '@/types'
+import { httpOnlyCookieOptions } from '@/lib/supabase/cookie-options'
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -116,13 +117,11 @@ export const POST = withRouteContext<Params>(
         retainedCounts: result.counts,
       },
     })
-    response.cookies.set('gnubok-company-id', result.replacement_company_id, {
-      path: '/',
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 365,
-    })
+    response.cookies.set(
+      'gnubok-company-id',
+      result.replacement_company_id,
+      httpOnlyCookieOptions(60 * 60 * 24 * 365),
+    )
     return privateNoStore(response)
   },
   { requireWrite: true },

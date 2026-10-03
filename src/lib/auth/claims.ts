@@ -1,4 +1,4 @@
-import type { JwtPayload, User } from '@supabase/supabase-js'
+import type { JwtPayload, SupabaseClient, User } from '@supabase/supabase-js'
 
 /**
  * Local JWT claims to a User: shared by the API route guard (require-auth),
@@ -44,5 +44,22 @@ export function userFromClaims(claims: JwtPayload): User {
     user_metadata: claims.user_metadata ?? {},
     is_anonymous: claims.is_anonymous ?? false,
     created_at: '',
+  }
+}
+
+/**
+ * The session's assurance level from the signature-verified, iss/aud-pinned
+ * access token claims; null on any failure, so callers fail closed. Same
+ * source the proxy's MFA gate uses (never the cookie's session object).
+ */
+export async function verifiedSessionAal(supabase: Pick<SupabaseClient, 'auth'>): Promise<string | null> {
+  if (typeof supabase.auth.getClaims !== 'function') return null
+  try {
+    const { data, error } = await supabase.auth.getClaims()
+    const claims = data?.claims
+    if (error || !claims || !claimsPinned(claims)) return null
+    return typeof claims.aal === 'string' ? claims.aal : null
+  } catch {
+    return null
   }
 }

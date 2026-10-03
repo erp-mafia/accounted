@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 
 /**
  * End of the company's SIE-migration data coverage: the latest entry_date
@@ -45,7 +45,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * the company has no completed migration: callers render no marker.
  */
 export async function fetchMigrationCoverageEnd(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
 ): Promise<string | null> {
   const { data: completedImport } = await supabase
