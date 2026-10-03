@@ -81,13 +81,14 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-paid',
   summary: 'Record a payment against an invoice.',
   description:
-    'Marks a sent / overdue invoice as paid (or partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. Idempotent and dry-runnable. Emits invoice.paid.',
+    'Marks a sent / overdue / partially_paid invoice as paid (or further partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. Idempotent and dry-runnable. Emits invoice.paid.',
   useWhen:
     'A customer paid an invoice via a channel other than the synced bank account (cash, manual transfer, separate processor). Use dry-run to confirm the booking before committing.',
   doNotUseFor:
     'Reverting a payment: the public API does not expose unmark-paid. Issue a credit note via POST /:id/credit to cancel the underlying invoice instead. Bank-matched payments: those flow through the transactions endpoints.',
   pitfalls: [
     'Idempotency-Key is mandatory. Retried marks with the same key replay the cached response.',
+    'A partially_paid invoice takes further payments: each call with a new Idempotency-Key books another installment, so retry a call whose outcome you did not see with the same key. A kontantmetoden invoice never booked at issue cannot be completed once part-paid: 400 INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED (details.reason previously_partially_paid).',
     'Custom `lines` must balance (sum of debits = sum of credits, both > 0). Otherwise returns 400 INVOICE_PAID_LINES_UNBALANCED.',
     'For foreign-currency invoices, supply `exchange_rate_difference` (SEK delta vs the invoice\'s booked rate) to book the FX adjustment correctly. Omitting it on a non-SEK invoice will mis-book the FX gain/loss.',
     'Custom `lines` are journal lines and therefore SEK, while `total` / `paid_amount` / `remaining_amount` are stored in the invoice currency. The route converts the line total via `invoice.exchange_rate`; a non-SEK invoice with no exchange_rate on file returns 400 MATCH_INVOICE_BOOKING_RATE_MISSING rather than silently treating the SEK amount as invoice currency.',
@@ -225,7 +226,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    if (typed.status !== 'sent' && typed.status !== 'overdue') {
+    // partially_paid is payable (dashboard #1717): ordinary further installments
+    // and öresavrundning completions must work on the public API too. The CAS
+    // update below already allows sent/overdue/partially_paid; only this
+    // pre-flight gate was still excluding it.
+    if (
+      typed.status !== 'sent' &&
+      typed.status !== 'overdue' &&
+      typed.status !== 'partially_paid'
+    ) {
       return v1ErrorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: typed.status },

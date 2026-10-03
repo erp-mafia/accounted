@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Invoices (2026-10)
+
+- **Behaviour change: \`/mark-paid\` accepts a partially paid invoice** (#2862, 2026-10-01): \`POST /invoices/{id}/mark-paid\` now records a further payment on an invoice with \`status=partially_paid\`. It used to refuse it with \`400 INVOICE_PAID_NOT_PAYABLE\`, so the API could not record a second installment or settle the rest; the dashboard already could. The request shape is unchanged and the booking is the same as for a first payment: custom \`lines\` record another installment (the invoice stays \`partially_paid\` until \`remaining_amount\` reaches 0), and a request without \`lines\` settles the remaining balance, never the full total, and sets the invoice to \`paid\`. A kontantmetoden invoice that was never booked at issue still cannot be completed this way, because its generated entry books the whole invoice: that returns \`400 INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED\` with \`details.reason\` \`previously_partially_paid\`. **Retries:** a retry of a partial payment with a new \`Idempotency-Key\` now books a second installment, where it used to get \`400 INVOICE_PAID_NOT_PAYABLE\`. Retry a call whose outcome you did not see with the same key, which replays the first response.
+
 ### Webhooks: endpoint verification (2026-09)
 
 - **Behaviour change: webhook URLs must pass an ownership handshake before events are delivered** (#3191, 2026-09-29). Accounted POSTs a signed \`webhook.verification\` event whose \`data.object.challenge\` the endpoint returns as \`{"challenge": "..."}\` with a 2xx within 10 seconds ([contract](/docs/api/webhooks#endpoint-verification)). New webhooks start \`pending\` and receive nothing until they pass; a changed \`webhook_url\` starts over. Run the handshake with the new \`POST /webhooks/{id}/verify\` (\`422 WEBHOOK_VERIFICATION_FAILED\` with \`details.reason\` on a failure, \`429\` inside a 10-second cooldown); Accounted also retries on its own.

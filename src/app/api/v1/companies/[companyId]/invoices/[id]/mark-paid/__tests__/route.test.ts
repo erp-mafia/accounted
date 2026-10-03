@@ -626,6 +626,166 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(body.error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
   })
 
+  it('accepts a further payment on a partially_paid invoice (v1 parity with dashboard #1717)', async () => {
+    const partial = {
+      ...SENT_INVOICE,
+      status: 'partially_paid',
+      paid_amount: 5000,
+      remaining_amount: 7500,
+    }
+    const after = {
+      ...partial,
+      status: 'partially_paid',
+      paid_amount: 7500,
+      remaining_amount: 5000,
+      paid_at: '2026-05-12T12:00:00Z',
+    }
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: [
+            { data: partial, error: null },
+            { data: after, error: null },
+          ],
+          company_settings: {
+            data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+            error: null,
+          },
+          invoice_payments: { data: { id: 'ip-2' }, error: null },
+        },
+        calls,
+      ),
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        {
+          payment_date: '2026-05-12',
+          lines: [
+            { account_number: '1930', debit_amount: 2500, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: 2500 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.status).toBe('partially_paid')
+    expect(body.data.paid_amount).toBe(7500)
+    expect(body.data.remaining_amount).toBe(5000)
+    const update = calls.find((c) => c.table === 'invoices' && c.method === 'update')
+    expect(update?.args[0]).toMatchObject({
+      status: 'partially_paid',
+      paid_amount: 7500,
+      remaining_amount: 5000,
+    })
+    expect(mockClearSuggestions).not.toHaveBeenCalled()
+  })
+
+  it('settles the remaining balance of a partially_paid invoice on a no-body POST', async () => {
+    const partial = {
+      ...SENT_INVOICE,
+      status: 'partially_paid',
+      paid_amount: 5000,
+      remaining_amount: 7500,
+    }
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: [
+            { data: partial, error: null },
+            { data: { ...PAID_INVOICE }, error: null },
+          ],
+          company_settings: {
+            data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+            error: null,
+          },
+          invoice_payments: { data: { id: 'ip-3' }, error: null },
+        },
+        calls,
+      ),
+    )
+
+    const res = await markPaid(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    // Default path: no payment amount is passed, so the payment entry books
+    // what is still outstanding (remaining_amount), never the invoice total.
+    expect(mockPayment).toHaveBeenCalledTimes(1)
+    expect(mockPayment.mock.calls[0][7]).toBeUndefined()
+    expect(mockCash).not.toHaveBeenCalled()
+    expect(mockedCreateJournalEntry).not.toHaveBeenCalled()
+    const update = calls.find((c) => c.table === 'invoices' && c.method === 'update')
+    expect(update?.args[0]).toMatchObject({
+      status: 'paid',
+      remaining_amount: 0,
+      paid_amount: 12500,
+      paid_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T12:00:00Z$/),
+    })
+    // The sub-ledger row carries this installment only, not the running total.
+    const paymentInsert = calls.find(
+      (c) => c.table === 'invoice_payments' && c.method === 'insert',
+    )
+    expect(paymentInsert?.args[0]).toMatchObject({ amount: 7500 })
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
+    expect(mockClearSuggestions).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'invoice',
+      INVOICE_ID,
+    )
+  })
+
+  it('refuses to complete a never-booked kontantmetoden invoice that is partially_paid', async () => {
+    const partial = {
+      ...SENT_INVOICE,
+      status: 'partially_paid',
+      paid_amount: 5000,
+      remaining_amount: 7500,
+    }
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: partial, error: null },
+          company_settings: {
+            data: { accounting_method: 'cash', entity_type: 'enskild_firma' },
+            error: null,
+          },
+        },
+        calls,
+      ),
+    )
+
+    const res = await markPaid(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    // The generated cash entry books the full invoice, so completing a
+    // part-paid one would book revenue and VAT a second time.
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+    expect(body.error.details).toMatchObject({ reason: 'previously_partially_paid' })
+    expect(mockCash).not.toHaveBeenCalled()
+    expect(mockPayment).not.toHaveBeenCalled()
+    expect(mockedCreateJournalEntry).not.toHaveBeenCalled()
+    expect(calls.some((c) => c.table === 'invoice_payments')).toBe(false)
+    expect(calls.some((c) => c.table === 'invoices' && c.method === 'update')).toBe(false)
+  })
+
   it('rejects credit notes', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
