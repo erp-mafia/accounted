@@ -300,11 +300,15 @@ const LABELS = {
     deductionApartmentNumber: 'Lägenhetsnummer:',
     deductionWorkType: 'Arbete:',
     deductionLaborHours: 'Arbetstimmar:',
-    deductionNotice: 'Köparen ansöker om utbetalning hos Skatteverket via fakturamodellen. Säljaren begär utbetalning för den del köparen inte betalat.',
-    // Skattereduktion för grön teknik: Skatteverket asks the invoice to state
-    // the total and the reduction incl. moms, what the installation cost
-    // (arbete och material) apart from övriga kostnader, and the property
-    // (fastighetsbeteckning, or the förening's orgnr + lägenhetsnummer).
+    // Fakturamodellen, ROT, RUT and grön teknik alike: the seller requests
+    // the payout once the buyer has paid their share ("Det är du som
+    // företagare som ansöker om utbetalning", Skatteverket). The buyer never
+    // applies.
+    deductionPayoutNotice: 'Säljaren begär utbetalningen från Skatteverket när köparen har betalat sin del (fakturamodellen).',
+    // Every deduction invoice states the total and the reduction incl. moms,
+    // and the property (fastighetsbeteckning, or the förening's orgnr +
+    // lägenhetsnummer). Grön teknik also states what the installation cost
+    // (arbete och material) apart from övriga kostnader.
     deductionRowGronTeknik: 'Skattereduktion grön teknik:',
     totalInclVat: 'Totalt inkl. moms:',
     deductionBrfOrgNumber: 'Bostadsrättsföreningens org.nr:',
@@ -312,9 +316,6 @@ const LABELS = {
     gronTeknikEligibleCost: 'Arbete och material:',
     gronTeknikOtherCost: 'Övriga kostnader:',
     inclVatSuffix: 'inkl. moms',
-    // Fakturamodellen: the seller requests the payout ("Det är du som
-    // företagare som ansöker om utbetalning", Skatteverket, grön teknik).
-    gronTeknikPayoutNotice: 'Säljaren begär utbetalningen från Skatteverket när köparen har betalat sin del (fakturamodellen).',
     toCredit: 'Att kreditera:',
     toPay: 'Att betala:',
     // A quote is not a payment request, so its grand total is a neutral sum.
@@ -386,7 +387,7 @@ const LABELS = {
     deductionApartmentNumber: 'Apartment number:',
     deductionWorkType: 'Service type:',
     deductionLaborHours: 'Labor hours:',
-    deductionNotice: 'The customer claims the deduction via fakturamodellen at Skatteverket. The seller requests payment from the agency for the portion not paid by the customer.',
+    deductionPayoutNotice: 'The seller requests the payout from Skatteverket once the customer has paid their share (fakturamodellen).',
     deductionRowGronTeknik: 'Green technology tax reduction:',
     totalInclVat: 'Total incl. VAT:',
     deductionBrfOrgNumber: 'Housing cooperative org. no.:',
@@ -394,7 +395,6 @@ const LABELS = {
     gronTeknikEligibleCost: 'Labor and material:',
     gronTeknikOtherCost: 'Other costs:',
     inclVatSuffix: 'incl. VAT',
-    gronTeknikPayoutNotice: 'The seller requests the payout from Skatteverket once the customer has paid their share (fakturamodellen).',
     toCredit: 'To credit:',
     toPay: 'Total due:',
     totalQuote: 'Total:',
@@ -1044,10 +1044,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   const billableItems = items.filter((item) => !isTextLikeLine(item))
 
   // Skattereduktion för grön teknik. It never shares an invoice with ROT/RUT
-  // (refused at creation), so its presence decides the whole deduction
-  // block: the reduction row, the total incl. moms, the property, what the
-  // installation cost apart from övriga kostnader, and the notice. ROT/RUT
-  // invoices render exactly as before.
+  // (refused at creation), so its presence decides the kind-specific parts
+  // of the deduction block: the reduction row label, what the installation
+  // cost apart from övriga kostnader, and the base notice. The total incl.
+  // moms, the property and the payout notice print for every kind.
   const hasGronTeknik = items.some((item) => item.deduction_type === 'gron_teknik')
   const lineInclVat = (item: InvoiceItem): number => roundOre((item.line_total ?? 0) + (item.vat_amount ?? 0))
   const gronTeknikEligibleCost = hasGronTeknik
@@ -1449,9 +1449,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                       <Text style={[styles.totalValue, { fontSize: 8 }]}>{formatPdfCurrency(rounding.roundingDelta, 'SEK', lang)}</Text>
                     </View>
                   )}
-                  {showDeduction && hasGronTeknik && (
-                    // Grön teknik: "Fakturans totala belopp och
-                    // skattereduktionens storlek", both incl. moms.
+                  {showDeduction && (
+                    // Every deduction invoice states the total incl. moms
+                    // next to the reduction (ROT/RUT: "Total excl/incl moms
+                    // with moms amount"; grön teknik: "Fakturans totala
+                    // belopp och skattereduktionens storlek").
                     <View style={styles.totalRow}>
                       <Text style={styles.totalLabel}>{L.totalInclVat}</Text>
                       <Text style={styles.totalValue}>{formatPdfCurrency(rounding.displayed, invoice.currency, lang)}</Text>
@@ -1512,7 +1514,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* ROT/RUT-avdrag underlying details. Surfaces the masked
             personnummer (YYYYMMDD-XXXX), fastighetsbeteckning,
-            lägenhetsnummer, the per-line breakdown and the statutory notice
+            lägenhetsnummer with the förening's orgnr, the per-line
+            breakdown and the statutory notice
             about fakturamodellen. Suppressed on delivery notes (no payment
             info at all). */}
         {!isDeliveryNote && !isCreditNote && (invoice.deduction_total ?? 0) > 0 && (
@@ -1546,9 +1549,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               // null when only RUT lines exist (RUT doesn't require it).
               const housing = items.find((i) => i.housing_designation)?.housing_designation
               const apartment = items.find((i) => i.apartment_number)?.apartment_number
-              // Grön teknik in a bostadsrätt: the förening's orgnr goes with
-              // the lägenhetsnummer.
-              const brf = hasGronTeknik ? items.find((i) => i.brf_org_number)?.brf_org_number : null
+              // A bostadsrätt (ROT, grön teknik): the förening's orgnr goes
+              // with the lägenhetsnummer. Printed from whichever deduction
+              // line carries it; RUT lines normally leave it empty.
+              const brf = items.find((i) => i.brf_org_number)?.brf_org_number
               return (
                 <>
                   {housing && (
@@ -1622,11 +1626,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   </Text>
                 )
               })}
-            {/* Grön teknik: labor and material, övriga kostnader excluded,
-                and the seller requests the payout: one notice. ROT/RUT keep
-                their own notice as it was. */}
+            {/* The seller requests the payout, for every kind. Grön teknik
+                prefixes what its base covers (labor and material, övriga
+                kostnader excluded): one notice. */}
             <Text style={styles.deductionNotice}>
-              {hasGronTeknik ? `${GRON_TEKNIK_BASE_NOTICE} ${L.gronTeknikPayoutNotice}` : L.deductionNotice}
+              {hasGronTeknik ? `${GRON_TEKNIK_BASE_NOTICE} ${L.deductionPayoutNotice}` : L.deductionPayoutNotice}
             </Text>
           </View>
         )}

@@ -52,13 +52,13 @@ const NOT_ISSUED = {
 }
 
 function authed() {
-  const { supabase, enqueue, enqueueMany } = createQueuedMockSupabase()
+  const { supabase, enqueue, enqueueMany, findCall } = createQueuedMockSupabase()
   vi.mocked(requireAuth).mockResolvedValue({
     user: mockUser as never,
     supabase: supabase as never,
     error: null,
   })
-  return { supabase, enqueue, enqueueMany }
+  return { supabase, enqueue, enqueueMany, findCall }
 }
 
 // CodeRabbit on #3336: every failure is the canonical envelope withRouteContext
@@ -134,6 +134,36 @@ describe('GET /api/salary/runs/[id]/payslips/[employeeId]/pdf', () => {
     // by getCompanyDisplayName), not the frozen onboarding companies.name.
     expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
       expect.objectContaining({ company: { name: 'Ny Firma AB', org_number: '5560000000' } }),
+    )
+  })
+
+  it('hands the payslip the run row with its tax table snapshot, not just the live employee (#3400)', async () => {
+    const { enqueueMany, findCall } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', period_year: 2026, period_month: 6, payment_date: '2026-06-25' } },
+      {
+        data: {
+          tax_table_number: 33,
+          tax_column: 1,
+          tax_table_year: 2026,
+          employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc', tax_table_number: 34, tax_column: 1 },
+          line_items: [],
+        },
+      },
+      { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/payslips/emp-1/pdf'),
+      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(String(findCall('salary_run_employees', 'select')?.[0])).toMatch(/^\*,/)
+    expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sre: expect.objectContaining({ tax_table_number: 33, tax_column: 1, tax_table_year: 2026 }),
+      }),
     )
   })
 

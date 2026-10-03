@@ -12,6 +12,7 @@ import type {
   LatestVoucherPerSeries,
   ResultatrapportReport,
   BalansrapportReport,
+  BalansrapportSection,
 } from '@/types'
 import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from './latest-vouchers'
 
@@ -136,6 +137,36 @@ const styles = StyleSheet.create({
     fontFamily: 'Courier',
     fontStyle: 'italic',
     color: '#444',
+  },
+  // Balansrapport ÅRL headings: a heading (Anläggningstillgångar), its
+  // sections (Materiella anläggningstillgångar) and their Summa lines.
+  sectionHeading: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+    marginTop: 8,
+    marginBottom: 2,
+  },
+  subsectionHeading: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#444',
+    marginTop: 6,
+    marginBottom: 2,
+    paddingLeft: 12,
+  },
+  sectionTotalRow: {
+    flexDirection: 'row',
+    paddingVertical: 2,
+    marginBottom: 2,
+    borderTopWidth: 0.5,
+    borderTopColor: '#bbb',
+  },
+  classTotalLabel: {
+    flex: 1,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+    paddingLeft: 48,
   },
   summary: {
     marginTop: 18,
@@ -413,21 +444,13 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
           // flow across pages instead of being clipped.
           <View key={group.class}>
             <Text style={styles.groupHeading}>{group.class_label}</Text>
-            {group.rows.map((row) => (
-              <View key={row.account_number} style={styles.row} wrap={false}>
-                <Text style={styles.colAccount}>{row.account_number}</Text>
-                <Text style={styles.colName}>{row.account_name}</Text>
-                <Text style={styles.colAmountMuted}>{formatAmount(row.ib)}</Text>
-                <Text style={styles.colAmountMuted}>{formatAmount(row.period_change)}</Text>
-                <Text style={styles.colAmount}>{formatAmount(row.ub)}</Text>
-              </View>
+            {group.sections.map((section) => (
+              <BalansrapportSectionPDF key={section.key} section={section} depth={0} />
             ))}
             <View style={styles.subtotalRow} wrap={false}>
-              <Text style={styles.subtotalLabel}>Summa</Text>
+              <Text style={styles.classTotalLabel}>Summa {group.class_label}</Text>
               <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(group.subtotal_ib)}</Text>
-              <Text style={[styles.subtotalAmount, { color: '#666' }]}>
-                {formatAmount(group.subtotal_ub - group.subtotal_ib)}
-              </Text>
+              <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(group.subtotal_change)}</Text>
               <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_ub)}</Text>
             </View>
           </View>
@@ -473,5 +496,37 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
         <FooterBlock company={company} generatedAt={generatedAt} />
       </Page>
     </Document>
+  )
+}
+
+/**
+ * One ÅRL heading: label, then its subsections or account rows, then its
+ * Summa line. minPresenceAhead keeps a heading from ending a page alone.
+ */
+function BalansrapportSectionPDF({ section, depth }: { section: BalansrapportSection; depth: 0 | 1 }) {
+  return (
+    <View>
+      <Text style={depth === 0 ? styles.sectionHeading : styles.subsectionHeading} minPresenceAhead={30}>
+        {section.label}
+      </Text>
+      {section.sections.map((child) => (
+        <BalansrapportSectionPDF key={child.key} section={child} depth={1} />
+      ))}
+      {section.rows.map((row) => (
+        <View key={row.account_number} style={styles.row} wrap={false}>
+          <Text style={styles.colAccount}>{row.account_number}</Text>
+          <Text style={styles.colName}>{row.account_name}</Text>
+          <Text style={styles.colAmountMuted}>{formatAmount(row.ib)}</Text>
+          <Text style={styles.colAmountMuted}>{formatAmount(row.period_change)}</Text>
+          <Text style={styles.colAmount}>{formatAmount(row.ub)}</Text>
+        </View>
+      ))}
+      <View style={depth === 0 && section.sections.length > 0 ? styles.subtotalRow : styles.sectionTotalRow} wrap={false}>
+        <Text style={styles.subtotalLabel}>{section.total_label}</Text>
+        <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(section.subtotal_ib)}</Text>
+        <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(section.subtotal_change)}</Text>
+        <Text style={styles.subtotalAmount}>{formatAmount(section.subtotal_ub)}</Text>
+      </View>
+    </View>
   )
 }

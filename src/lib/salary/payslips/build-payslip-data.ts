@@ -135,6 +135,36 @@ export function payslipSectionsFor(
   }
 }
 
+/**
+ * The tax table line printed on the payslip: the table and column the run
+ * was calculated with, not the ones on the employee today.
+ *
+ * The engine writes the reference it used onto the run row
+ * (salary_run_employees.tax_table_number / tax_column at run creation, and
+ * all three of tax_table_number / tax_column / tax_table_year at every
+ * calculation), so a payslip downloaded after the employee moved to another
+ * table still names the table the tax was withheld under (BFL 7 kap. 1 §).
+ * A run row with none of the three set never had the snapshot written; that
+ * defensive case falls back to the employee. A snapshot without a
+ * table number means the run was taxed without one: it prints Schablon 30%
+ * even if the employee has a table now. The column falls back to 1 the same
+ * way the engine does (run-calculation: `emp.tax_column || 1`).
+ */
+export function payslipTaxReference(
+  sre: PayslipSreSource,
+  emp: Pick<PayslipEmployeeSource, 'tax_table_number' | 'tax_column'>,
+): string {
+  const runTable = sre.tax_table_number as number | null | undefined
+  const runColumn = sre.tax_column as number | null | undefined
+  const runYear = sre.tax_table_year as number | null | undefined
+  const hasRunSnapshot = runTable != null || runColumn != null || runYear != null
+
+  const table = hasRunSnapshot ? runTable : emp.tax_table_number
+  const column = hasRunSnapshot ? runColumn : emp.tax_column
+  if (!table) return 'Schablon 30%'
+  return `Tabell ${table}, kol ${column || 1}`
+}
+
 export function buildPayslipData(params: {
   run: PayslipRunSource
   sre: PayslipSreSource
@@ -160,10 +190,7 @@ export function buildPayslipData(params: {
       amount: li.amount as number,
     }))
 
-  let taxReference = 'Schablon 30%'
-  if (emp.tax_table_number) {
-    taxReference = `Tabell ${emp.tax_table_number}, kol ${emp.tax_column}`
-  }
+  const taxReference = payslipTaxReference(sre, emp)
 
   // Engine-computed breakdown rows stay for transparency; manual override
   // rows are appended so the breakdown matches the displayed totals. The

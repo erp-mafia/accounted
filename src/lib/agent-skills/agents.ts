@@ -161,7 +161,7 @@ export function isCheckable(connection: AgentConnection): connection is Checkabl
 export const CONNECTION_SETTINGS: Record<CheckableConnection, string> = {
   bank: '/settings/banking',
   skatteverket: '/settings/tax',
-  peppol: '/settings/invoicing',
+  peppol: '/settings/peppol',
 }
 
 /** Whether a string names a curated agent. */

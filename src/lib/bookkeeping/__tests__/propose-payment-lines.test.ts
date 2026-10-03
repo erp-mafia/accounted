@@ -33,6 +33,7 @@ function makeInvoiceInput(overrides: Partial<{
   items: InvoiceItem[]
 }> = {}) {
   return {
+    id: 'inv-1',
     invoice_number: '2025-001',
     total: 12500,
     total_sek: null,
@@ -138,12 +139,13 @@ describe('proposePaymentLines', () => {
         entityType: 'enskild_firma',
       })
 
+      // The texts are buildInvoiceCashLines', as createInvoiceCashEntry books them.
       expect(lines).toHaveLength(3)
       expect(lines[0]).toEqual({
         account_number: '1930',
         debit_amount: '12500',
         credit_amount: '',
-        line_description: 'Betalning faktura 2025-001',
+        line_description: 'Kontantbetalning kundfaktura 2025-001',
       })
       expect(lines[1]).toEqual({
         account_number: '3001',
@@ -155,7 +157,7 @@ describe('proposePaymentLines', () => {
         account_number: '2611',
         debit_amount: '',
         credit_amount: '2500',
-        line_description: 'Utgående moms 25%',
+        line_description: 'Utgående moms 25% faktura 2025-001',
       })
     })
 
@@ -677,8 +679,10 @@ describe('proposePaymentLines: ROT/RUT-avdrag (fakturamodellen)', () => {
   })
 
   it('cash method: bank gets the customer share, 1513 the avdrag, revenue + moms in full', () => {
+    // The kontantmetoden 1513 line is per item, as createInvoiceCashEntry
+    // books it, so the item carries the ROT flag deduction_total was summed from.
     const lines = proposePaymentLines({
-      invoice: rotInvoice(),
+      invoice: { ...rotInvoice(), items: [makeItem({ deduction_type: 'rot' })] },
       accountingMethod: 'cash',
       entityType: 'aktiebolag',
     })

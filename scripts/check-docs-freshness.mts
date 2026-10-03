@@ -41,6 +41,8 @@ let errors!: typeof import('@/lib/docs/content/errors')
 let reference!: typeof import('@/lib/docs/content/reference')
 let connectClaude!: typeof import('@/lib/docs/content/connect-claude')
 let anslutClaude!: typeof import('@/lib/docs/content/anslut-claude')
+let cli!: typeof import('@/lib/docs/content/cli')
+let kommandorad!: typeof import('@/lib/docs/content/kommandorad')
 let changelog!: typeof import('@/lib/docs/content/changelog')
 let versioning!: typeof import('@/lib/docs/content/versioning')
 let webhooks!: typeof import('@/lib/docs/content/webhooks')
@@ -50,6 +52,8 @@ try {
   reference = await import('@/lib/docs/content/reference')
   connectClaude = await import('@/lib/docs/content/connect-claude')
   anslutClaude = await import('@/lib/docs/content/anslut-claude')
+  cli = await import('@/lib/docs/content/cli')
+  kommandorad = await import('@/lib/docs/content/kommandorad')
   changelog = await import('@/lib/docs/content/changelog')
   versioning = await import('@/lib/docs/content/versioning')
   webhooks = await import('@/lib/docs/content/webhooks')
@@ -103,6 +107,8 @@ function buildExpectedPages(): PageCheck[] {
     { path: 'errors.md', expected: buildErrorReferenceMd() },
     { path: 'connect-claude.md', expected: connectClaude.CONNECT_CLAUDE_MD },
     { path: 'anslut-claude.md', expected: anslutClaude.ANSLUT_CLAUDE_MD },
+    { path: 'cli.md', expected: cli.CLI_MD },
+    { path: 'kommandorad.md', expected: kommandorad.KOMMANDORAD_MD },
     { path: 'changelog.md', expected: changelog.CHANGELOG_MD },
     { path: 'versioning.md', expected: versioning.VERSIONING_MD },
     { path: 'webhooks.md', expected: webhooks.WEBHOOKS_MD },

@@ -45,6 +45,14 @@ interface FileEntry {
 }
 
 type Phase = 'drop' | 'importing' | 'imported'
+
+/** The user left the act mid-import: the files not yet sent stay unsent. */
+class ImportStoppedError extends Error {
+  constructor() {
+    super('import stopped: the user left the act')
+    this.name = 'ImportStoppedError'
+  }
+}
 type Reg = null | 'card' | 'connecting' | 'token' | 'running' | 'done' | 'skipped'
 
 function yearsOf(files: FileEntry[]): string[] {
@@ -254,6 +262,9 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       let writtenSoFar = 0
       const importedAccounts: string[] = []
       for (let i = 0; i < ordered.length; i++) {
+        // The file already sent finishes on the server; the next one is not
+        // started once the user has left the act (lib/onboarding-books/skip).
+        if (ctx.isLeaving()) throw new ImportStoppedError()
         setFileIdx(i)
         setPrepared(0)
         setJobPhase('preparing')
@@ -310,7 +321,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       dispatch({ type: 'SET_WORKING', working: false })
       setReg(sieFirst ? 'card' : 'skipped')
     } catch (err) {
-      setImportError(getErrorMessage(err, { locale }))
+      setImportError(err instanceof ImportStoppedError ? t('progress_failed') : getErrorMessage(err, { locale }))
       setJobPhase(null)
       setShown(5)
       apiRef.current?.settle()

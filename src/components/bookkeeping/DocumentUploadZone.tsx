@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Upload, FileText, ImageIcon, X, Loader2 } from 'lucide-react'
 import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
+import { DOCUMENT_UPLOAD_ACCEPT, isAllowedDocumentFile } from '@/lib/documents/upload-types'
 
 export interface UploadedFile {
   id?: string
@@ -38,8 +39,6 @@ interface DocumentUploadZoneProps {
 
 let uploadCounter = 0
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
-const ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
-const ACCEPTED_EXTENSIONS = '.pdf,.jpg,.jpeg,.png,.webp,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.odt,.ods,.odp,.rtf,.csv'
 const FILE_NAME_TAIL_LENGTH = 16
 
 function TruncatedFileName({ fileName }: { fileName: string }) {
@@ -188,7 +187,10 @@ export default function DocumentUploadZone({
     const validFiles: UploadedFile[] = []
 
     for (const file of newFiles.slice(0, remaining)) {
-      if (!ACCEPTED_TYPES.includes(file.type)) {
+      // Same allowlist and type reading as POST /api/documents
+      // (lib/documents/upload-types), so a file the picker offers is never
+      // refused here and then accepted by the server, or the other way round.
+      if (!isAllowedDocumentFile(file)) {
         validFiles.push({
           file,
           status: 'error',
@@ -365,7 +367,7 @@ export default function DocumentUploadZone({
           ref={inputRef}
           type="file"
           multiple
-          accept={ACCEPTED_EXTENSIONS}
+          accept={DOCUMENT_UPLOAD_ACCEPT}
           className="hidden"
           onChange={handleInputChange}
           disabled={disabled}

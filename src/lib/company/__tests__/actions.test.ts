@@ -8,6 +8,13 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
+const cookieMocks = vi.hoisted(() => ({ set: vi.fn() }))
+
+vi.mock('next/headers', () => ({
+  cookies: vi.fn(async () => ({ set: cookieMocks.set })),
+  headers: vi.fn(async () => new Headers()),
+}))
+
 const deadlineMocks = vi.hoisted(() => ({
   regenerate: vi.fn().mockResolvedValue({ created: 1, deleted: 0 }),
 }))
@@ -463,3 +470,105 @@ describe('createCompanyFromOnboarding: TIC snapshot persistence', () => {
   })
 })
 
+
+describe('createCompanyFromOnboarding: first-session books gate', () => {
+  const params = {
+    teamId: 'personal-team',
+    settings: { entity_type: 'aktiebolag' as const, company_name: 'Ny AB' },
+    fiscalPeriod: { startDate: '2026-01-01', endDate: '2026-12-31', name: 'Räkenskapsår 2026' },
+  }
+
+  function gateCookieSets() {
+    return cookieMocks.set.mock.calls.filter(([name]) => name === 'gnubok-books-gate')
+  }
+
+  it("arms the gate for the user's first company", async () => {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+        company_members: { limit: { data: [] } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'first-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding(params)
+
+    expect(result).toEqual({ companyId: 'first-company-id' })
+    expect(gateCookieSets()).toHaveLength(1)
+    expect(gateCookieSets()[0][1]).toBe('first-company-id')
+    // Archived companies do not count as a company the user already has.
+    expect(calls).toContainEqual({ table: 'company_members', method: 'is', args: ['companies.archived_at', null] })
+    expect(calls).toContainEqual({ table: 'company_members', method: 'eq', args: ['user_id', 'user-1'] })
+  })
+
+  it('never arms the gate when the user already has a live company (added from inside the app)', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+        company_members: { limit: { data: [{ company_id: 'existing-company' }] } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'second-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding(params)
+
+    expect(result).toEqual({ companyId: 'second-company-id' })
+    expect(gateCookieSets()).toHaveLength(0)
+  })
+
+  it('never arms the gate for a client company created under a byrå team', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'byra' } } },
+        team_members: { maybeSingle: { data: { role: 'owner' } } },
+        company_members: { limit: { data: [] } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'client-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({ ...params, teamId: 'byra-team' })
+
+    expect(result).toEqual({ companyId: 'client-company-id' })
+    expect(gateCookieSets()).toHaveLength(0)
+  })
+
+  it('does not arm the gate when the membership read fails', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+        company_members: { limit: { error: { message: 'connection reset' } } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'new-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding(params)
+
+    expect(result).toEqual({ companyId: 'new-company-id' })
+    expect(gateCookieSets()).toHaveLength(0)
+  })
+
+  it('ignores a client that still asks for the gate on a second company', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+        company_members: { limit: { data: [{ company_id: 'existing-company' }] } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'second-company-id' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    // An older client bundle still sends the removed flag during a deploy.
+    await createCompanyFromOnboarding({ ...params, booksGate: true } as Parameters<typeof createCompanyFromOnboarding>[0])
+
+    expect(gateCookieSets()).toHaveLength(0)
+  })
+})

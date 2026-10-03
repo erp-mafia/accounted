@@ -103,6 +103,20 @@ describe('importProviderYears', () => {
     expect(outcome.notReached).toEqual([2026])
   })
 
+  it('starts no further year once the user has left the act, and names the rest as not reached', async () => {
+    let left = false
+    const importOne = vi.fn(async () => {
+      // The user skips while the first year runs on the server.
+      left = true
+      return ok
+    })
+    const outcome = await importProviderYears(fresh(), importOne, reasonOf, () => left)
+    expect(importOne).toHaveBeenCalledTimes(1)
+    expect(importOne).toHaveBeenCalledWith('SIE-2024')
+    expect(outcome).toEqual({ imported: [2024], alreadyImported: [], failed: null, notReached: [2025, 2026], notFetched: [] })
+    expect(providerYearsComplete(outcome)).toBe(false)
+  })
+
   it('keeps a failed import with no error text as a failure', async () => {
     const outcome = await importProviderYears(fresh(), async () => ({ success: false, errors: [] }), reasonOf)
     expect(outcome.failed).toEqual({ fiscalYear: 2024, reason: '' })

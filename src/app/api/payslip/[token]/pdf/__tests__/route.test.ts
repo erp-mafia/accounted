@@ -163,6 +163,39 @@ describe('GET /api/payslip/[token]/pdf', () => {
     )
   })
 
+  it('hands the payslip the run row with its tax table snapshot, not just the live employee (#3400)', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    vi.mocked(resolvePayslipToken).mockResolvedValue(liveLink())
+    enqueueMany([
+      { data: { id: 'run-1', period_year: 2026, period_month: 6, payment_date: '2026-06-25' } },
+      {
+        data: {
+          tax_table_number: 33,
+          tax_column: 1,
+          tax_table_year: 2026,
+          employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc', tax_table_number: 34, tax_column: 1 },
+          line_items: [],
+        },
+      },
+      { data: { name: 'Bolaget AB', org_number: null } },
+      { data: { company_name: null, salary_payslip_show_employer_cost: true, salary_payslip_show_breakdown: true } },
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/payslip/t/pdf'),
+      createMockRouteParams({ token: token('F') }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(String(findCall('salary_run_employees', 'select')?.[0])).toMatch(/^\*,/)
+    expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sre: expect.objectContaining({ tax_table_number: 33, tax_column: 1, tax_table_year: 2026 }),
+      }),
+    )
+  })
+
   it('falls back to companies.name when company_settings has no company_name', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)

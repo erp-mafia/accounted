@@ -102,12 +102,21 @@ export interface DynamicVatAccounts {
   rateByAccount: Map<string, number>
   staticRateByAccount: Map<string, number>
   rcBasisRateByAccount: Map<string, number>
+  /**
+   * Class 3 accounts this resolution cannot classify at all: no momskod
+   * (treatment) and no momssats, configured or inferred, keyed by account
+   * number to the account name. Not summed into any ruta here; the
+   * declaration reads them only to tell the user (REVENUE_ACCOUNT_WITHOUT_RUTA,
+   * #3387). An account in the fixed BAS ruta map is listed too: that map lives
+   * in vat-declaration.ts, which is where revenueAccountsWithoutRuta drops it.
+   */
+  unconfiguredRevenueAccounts: Map<string, string>
 }
 
 const emptyDynamicVatAccounts = (): DynamicVatAccounts => ({
   accounts: [], mappingByAccount: new Map(), explicitAccounts: new Set(),
   rateByAccount: new Map(), staticRateByAccount: new Map(),
-  rcBasisRateByAccount: new Map(),
+  rcBasisRateByAccount: new Map(), unconfiguredRevenueAccounts: new Map(),
 })
 
 /** Explicit account treatments win; accounts without one keep BAS fallback. */
@@ -177,7 +186,11 @@ export async function fetchDynamicVatAccounts(
 
     if (row.account_class !== 3) continue
     const rate = resolveEffectiveVatRate(row)
-    if (rate === null || !TAXABLE_RATES.includes(rate)) continue
+    if (rate === null) {
+      result.unconfiguredRevenueAccounts.set(account, row.account_name)
+      continue
+    }
+    if (!TAXABLE_RATES.includes(rate)) continue
     if (ACCOUNT_TO_BOX[account]) {
       if (RUTA_05_STATIC_RATE_ACCOUNTS.has(account)) {
         result.staticRateByAccount.set(account, rate)
