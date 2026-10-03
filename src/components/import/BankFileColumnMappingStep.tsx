@@ -22,7 +22,7 @@ import {
 } from '@/components/ui/table'
 import { ArrowLeft, ArrowRight, Columns3 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
-import { getCSVPreview, normalizeMinusSign, suggestColumnMapping } from '@/lib/import/bank-file/formats/generic-csv'
+import { getCSVPreview, normalizeMinusSign, sniffCSVDelimiter, suggestColumnMapping } from '@/lib/import/bank-file/formats/generic-csv'
 import type { GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 
 const HEADER_KEYWORDS = [
@@ -62,18 +62,10 @@ export default function BankFileColumnMappingStep({
   const [referenceCol, setReferenceCol] = useState<number>(-1)
   const [counterpartyCol, setCounterpartyCol] = useState<number>(-1)
   const [balanceCol, setBalanceCol] = useState<number>(-1)
-  // Auto-detect the most likely delimiter by counting field splits on the first line.
-  // Runs once per file. Users can still override via the dropdown.
-  const detectedDelimiter = useMemo(() => {
-    const firstLine = rawFileContent.split(/\r?\n/).find((l) => l.trim() !== '') ?? ''
-    const candidates: Array<{ d: string; count: number }> = [
-      { d: ',', count: getCSVPreview(firstLine, ',', 1)[0]?.length ?? 0 },
-      { d: ';', count: getCSVPreview(firstLine, ';', 1)[0]?.length ?? 0 },
-      { d: '\t', count: getCSVPreview(firstLine, '\t', 1)[0]?.length ?? 0 },
-    ]
-    const best = candidates.reduce((a, b) => (b.count > a.count ? b : a))
-    return best.count > 1 ? best.d : ','
-  }, [rawFileContent])
+  // Auto-detect the most likely delimiter: an Excel sep= hint if the file has
+  // one, else the candidate that splits the first prepared line into the most
+  // cells. Runs once per file. Users can still override via the dropdown.
+  const detectedDelimiter = useMemo(() => sniffCSVDelimiter(rawFileContent), [rawFileContent])
 
   const [delimiter, setDelimiter] = useState<string>(detectedDelimiter)
   const [decimalSep, setDecimalSep] = useState<',' | '.'>(',')

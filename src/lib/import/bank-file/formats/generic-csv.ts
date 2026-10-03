@@ -6,7 +6,7 @@
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue, GenericCSVColumnMapping } from '../types'
-import { prepareContent } from '../../shared/encoding'
+import { prepareContent, readSeparatorHint } from '../../shared/encoding'
 import { parseCSVLine } from './nordea'
 import { normalizeDate } from '../date-utils'
 
@@ -175,6 +175,36 @@ export function getCSVPreview(content: string, delimiter: string = ',', rows: nu
   return lines.slice(0, rows).map((line) =>
     parseCSVLine(line, delimiter).map((f) => f.trim().replace(/^"|"$/g, ''))
   )
+}
+
+/** Delimiters the manual mapping UI offers, in tie-break order. */
+export const CSV_DELIMITER_CANDIDATES: readonly string[] = [',', ';', '\t']
+
+/**
+ * Pick the delimiter the manual mapping UI opens with. The user can still
+ * override it in the dropdown.
+ *
+ * An Excel `sep=X` first line names the delimiter outright, so it wins when it
+ * names one the UI offers. Otherwise each candidate splits the first non-empty
+ * line of the PREPARED content (the real header, or the first preamble row),
+ * the candidate giving the most cells wins, ties go to the earlier candidate,
+ * and a line no candidate splits falls back to ','.
+ *
+ * Sniffing the raw first line instead would read the hint line itself, which
+ * prepareContent now drops: it prepares to nothing, every candidate scores 0,
+ * and an Excel-saved semicolon file opens in the mapper as one wide column.
+ */
+export function sniffCSVDelimiter(content: string): string {
+  const hint = readSeparatorHint(content)
+  if (hint !== null && CSV_DELIMITER_CANDIDATES.includes(hint)) return hint
+
+  const firstLine = prepareContent(content).split('\n').find((line) => line.trim() !== '') ?? ''
+  let best = { delimiter: ',', cells: 0 }
+  for (const delimiter of CSV_DELIMITER_CANDIDATES) {
+    const cells = parseCSVLine(firstLine, delimiter).length
+    if (cells > best.cells) best = { delimiter, cells }
+  }
+  return best.cells > 1 ? best.delimiter : ','
 }
 
 /** Column indices suggested for the manual mapping UI. -1 = not resolved. */

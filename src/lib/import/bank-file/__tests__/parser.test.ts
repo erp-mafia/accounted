@@ -350,6 +350,61 @@ describe('detectFileFormat', () => {
     expect(format!.id).toBe('seb')
   })
 
+  it('detects a bank export saved through Excel, past its sep= hint line', () => {
+    // Excel's hint used to be read as the header, so the file matched no
+    // format and the user was told to pick a bank by hand.
+    const excelSaved = 'sep=;\nBokföringsdag;Valutadag;Verifikationsnummer;Text;Belopp;Saldo\n2026-01-15;2026-01-15;123;SPOTIFY;-99,00;12345,67'
+    const format = detectFileFormat(excelSaved, 'export.csv')
+    expect(format).not.toBeNull()
+    expect(format!.id).toBe('seb')
+  })
+
+  it('parses an Excel-saved SEB export end to end, without counting the hint as a row', () => {
+    const excelSaved = 'sep=;\r\n' + SEB_CSV.replace(/\n/g, '\r\n')
+    const result = parseBankFile(excelSaved, 'export.csv')
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(3)
+    expect(result.stats.total_rows).toBe(3)
+    expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0)
+    expect(result.transactions[0]).toMatchObject({ date: '2024-01-15', amount: -99 })
+  })
+
+  it('does not claim a wide export as SEB when it carries no belopp column', () => {
+    // A real export (Kontohavare;Kontonr;IBAN;...;Bokföringsdag;Reskontradag;
+    // Valutadag;...;Insättning/Uttag) matched SEB on the two date columns and
+    // then failed in parse with "Kunde inte identifiera nödvändiga kolumner".
+    // Detecting is a promise that parse can read the file: falling through to
+    // the generic mapper is the honest outcome. No other detector may claim
+    // it either, so the upload page routes it to manual column mapping.
+    const wide = 'Kontohavare;Kontonr;IBAN;BIC;Kontoform;Valuta;Kontor;Bokföringsdag;Reskontradag;Valutadag;Referens;Insättning/Uttag;Bokfört saldo\nAB;123;SE1;HANDSESS;Företag;SEK;01;2026-01-15;2026-01-15;2026-01-15;SPOTIFY;-99,00;12345,67'
+    expect(detectFileFormat(wide, 'export.csv')).toBeNull()
+    expect(parseBankFile(wide, 'export.csv').format).toBe('generic_csv')
+  })
+
+  it('still detects a Kontoutdrag header whose amount is split across Insättningar/Uttag', () => {
+    // parse() reads the split pair when there is no Belopp column, so detect
+    // must accept it too: requiring Belopp would drop a file parse can read.
+    const split = [
+      'Bokföringsdag;Verifikationsnummer;Text;Insättningar;Uttag;Saldo',
+      '2026-01-15;123;LÖNEUTBETALNING;25000,00;;37345,67',
+      '2026-01-16;124;SPOTIFY;;-99,00;37246,67',
+    ].join('\n')
+    expect(detectFileFormat(split, 'kontoutdrag.csv')?.id).toBe('seb')
+    const result = parseBankFile(split, 'kontoutdrag.csv')
+    expect(result.format).toBe('seb')
+    expect(result.transactions.map((t) => t.amount)).toEqual([25000, -99])
+  })
+
+  it('detects a Kontoutdrag header whose amount column only contains "belopp"', () => {
+    // parse() looks the amount up with includes('belopp'); detect must agree.
+    const compound = [
+      'Bokföringsdag;Valutadag;Verifikationsnummer;Text;Transaktionsbelopp;Saldo',
+      '2026-01-15;2026-01-15;123;SPOTIFY;-99,00;12345,67',
+    ].join('\n')
+    expect(detectFileFormat(compound, 'kontoutdrag.csv')?.id).toBe('seb')
+    expect(parseBankFile(compound, 'kontoutdrag.csv').transactions).toHaveLength(1)
+  })
+
   it('detects SEB CSV from semicolon-delimited header with bokföringsdag', () => {
     const format = detectFileFormat(SEB_CSV, 'kontoutdrag.csv')
     expect(format).not.toBeNull()

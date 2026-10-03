@@ -44,6 +44,19 @@ function isTransaktionerHeader(headers: string[]): boolean {
   )
 }
 
+/**
+ * The amount columns parse() can read: a cell containing "belopp" (also
+ * "Transaktionsbelopp"), or the Insättningar/Uttag pair. Kept identical to
+ * parse()'s own column lookup so detect never claims a file parse rejects.
+ */
+function hasParseableAmount(headers: string[]): boolean {
+  return (
+    headers.some((h) => h.includes('belopp')) ||
+    (headers.some((h) => DEPOSIT_COLUMN_RE.test(h)) &&
+      headers.some((h) => WITHDRAWAL_COLUMN_RE.test(h)))
+  )
+}
+
 export const sebFormat: BankFileFormat = {
   id: 'seb',
   name: 'SEB',
@@ -60,9 +73,17 @@ export const sebFormat: BankFileFormat = {
     const hasBookingDate = /bokf(ö|o)ringsda(g|tum)/.test(firstLine)
     const hasSebSecondary =
       /valuta(dag|datum)/.test(firstLine) || firstLine.includes('verifikationsnummer')
-    if (hasBookingDate && hasSebSecondary) return true
-
     const headers = firstLine.split(';').map((h) => h.trim().replace(/"/g, ''))
+    // Detecting is a promise that parse() can read the file, so the amount
+    // column has to be there too. Bokföringsdag + Valutadag is not unique to
+    // SEB: a wide export carrying both, with its amount in a column SEB does
+    // not know (e.g. a single "Insättning/Uttag"), used to match here and
+    // then fail with "Kunde inte identifiera nödvändiga kolumner". Falling
+    // through to the generic-CSV mapper is the honest outcome. The amount
+    // test mirrors parse(): a cell containing "belopp", or the split
+    // Insättningar/Uttag pair.
+    if (hasBookingDate && hasSebSecondary && hasParseableAmount(headers)) return true
+
     return isTransaktionerHeader(headers)
   },
 
