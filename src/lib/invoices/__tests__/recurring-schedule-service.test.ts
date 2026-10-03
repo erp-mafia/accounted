@@ -476,6 +476,7 @@ describe('executeRecurringSchedule auto-send', () => {
     // QR built from the renderable copy (status overridden to 'sent').
     expect(mockPaymentLinkQr).toHaveBeenCalledWith(
       expect.objectContaining({ payment_link_url: 'https://pay.example/x', status: 'sent' }),
+      expect.anything(),
     )
     expect(mockInvoicePDF).toHaveBeenCalledWith(
       expect.objectContaining({ paymentLinkQrDataUrl: 'data:image/png;base64,QR' }),

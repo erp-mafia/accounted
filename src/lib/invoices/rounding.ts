@@ -45,7 +45,11 @@ export function getDisplayTotal(
   if (!enabled || invoice.currency !== 'SEK') {
     return { displayed: invoice.total, roundingDelta: 0, applies: false }
   }
-  const rounded = Math.round(invoice.total)
+  // Half a krona rounds away from zero, so a kreditfaktura mirrors the invoice
+  // it credits: 18 562,50 shows 18 563 and -18 562,50 shows -18 563.
+  // Math.round alone rounds -18 562,50 up to -18 562, which left the credit
+  // note one krona short of the invoice on the customer's PDF.
+  const rounded = Math.sign(invoice.total) * Math.round(Math.abs(invoice.total))
   if (rounded === invoice.total) {
     return { displayed: invoice.total, roundingDelta: 0, applies: false }
   }

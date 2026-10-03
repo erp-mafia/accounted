@@ -20,7 +20,11 @@
 import { z } from 'zod'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import {
+  prepareInvoicePdfRender,
+  buildSwishQrDataUrl,
+  buildPaymentLinkQrDataUrl,
+} from '@/lib/invoices/pdf-render-helpers'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { registerEndpoint } from '@/lib/api/v1/registry'
@@ -175,7 +179,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         typed.currency,
         { paymentAccountRequired: invoiceRequiresPaymentAccount(typed), payee: typed.payment_details ?? null },
       )
+      // Same QRs as the dashboard download and the sent file.
       const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, typed as Invoice)
+      const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(typed as Invoice, renderCompany)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: typed as Invoice,
@@ -185,6 +191,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
           originalInvoiceNumber,
           branding,
           swishQrDataUrl,
+          paymentLinkQrDataUrl,
         }),
       )
     } catch (err) {

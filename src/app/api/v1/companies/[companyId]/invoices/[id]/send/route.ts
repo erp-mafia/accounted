@@ -598,7 +598,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         { paymentAccountRequired, payee: typed.payment_details ?? null },
       )
       const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
-      const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
+      const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice, renderCompany)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: renderableInvoice,

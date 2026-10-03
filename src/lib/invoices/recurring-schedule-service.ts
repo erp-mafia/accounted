@@ -695,7 +695,7 @@ async function sendInvoiceFromSchedule(
     { payee: renderableInvoice.payment_details ?? null },
   )
   const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
-  const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
+  const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice, renderCompany)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
       invoice: renderableInvoice,

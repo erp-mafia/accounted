@@ -14,7 +14,12 @@ import {
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
-import { invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'
+import {
+  invoicePrintsBankgiro,
+  invoicePrintsPlusgiro,
+  invoiceShowsOcrReference,
+} from '@/lib/invoices/ocr-reference'
+import { invoiceAmountDue, partlyPaidRemainder } from '@/lib/invoices/amount-due'
 import { bankPaymentQrSymbol, buildBankPaymentQrPayload } from '@/lib/invoices/bank-payment-qr'
 import {
   BUNDLED_INVOICE_FONT_FAMILIES,
@@ -1004,10 +1009,8 @@ export function resolvePdfPaidState(
   if (isCreditNote || docType !== 'invoice') return null
   if (invoice.status !== 'paid' && invoice.status !== 'partially_paid') return null
   const paidAmount = invoice.paid_amount ?? (invoice.status === 'paid' ? amountToPay : 0)
-  const remainingAmount =
-    invoice.status === 'paid'
-      ? 0
-      : invoice.remaining_amount ?? Math.max(0, roundOre(amountToPay - paidAmount))
+  // The same remainder every payment QR encodes (lib/invoices/amount-due).
+  const remainingAmount = invoice.status === 'paid' ? 0 : partlyPaidRemainder(invoice, amountToPay)
   return {
     kind: invoice.status,
     paidAmount,
@@ -1155,10 +1158,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // page prints: "Att betala" (the remainder on a partly paid invoice), the
   // printed giro, and the OCR reference when the OCR row is printed. Drawn as
   // vector paths, so every render path gets it without a pre-rendered image.
+  // The amount is invoiceAmountDue, the same figure the Swish QR encodes.
   const bankPaymentQrPayload = buildBankPaymentQrPayload({
     company,
     invoice,
-    amountDue: paidState ? paidState.remainingAmount : amountToPay.toPay,
+    amountDue: invoiceAmountDue(invoice, company),
     lang,
   })
   const bankPaymentQr = bankPaymentQrPayload ? bankPaymentQrSymbol(bankPaymentQrPayload) : null
@@ -1736,13 +1740,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 </Text>
               </View>
             )}
-            {company.bankgiro && (company.invoice_show_bankgiro ?? true) && (
+            {invoicePrintsBankgiro(company) && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.bankgiro}</Text>
                 <Text style={styles.paymentValue}>{company.bankgiro}</Text>
               </View>
             )}
-            {company.plusgiro && (company.invoice_show_plusgiro ?? true) && (
+            {invoicePrintsPlusgiro(company) && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.plusgiro}</Text>
                 <Text style={styles.paymentValue}>{company.plusgiro}</Text>

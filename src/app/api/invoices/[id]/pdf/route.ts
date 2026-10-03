@@ -143,7 +143,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       },
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, invoice as Invoice)
-    const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(invoice as Invoice)
+    const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(invoice as Invoice, renderCompany)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: invoice as Invoice,

@@ -19,6 +19,20 @@ describe('getDisplayTotal', () => {
     expect(r.roundingDelta).toBe(-0.4)
   })
 
+  it('rounds a credit note half krona away from zero, mirroring its invoice', () => {
+    const invoice = getDisplayTotal(inv(18562.5), co(true))
+    const credit = getDisplayTotal(inv(-18562.5), co(true))
+    expect(invoice.displayed).toBe(18563)
+    expect(credit.displayed).toBe(-18563)
+    expect(credit.roundingDelta).toBe(-0.5)
+    expect(credit.displayed).toBe(-invoice.displayed)
+  })
+
+  it('rounds other negative totals to the nearest krona', () => {
+    expect(getDisplayTotal(inv(-1234.4), co(true)).displayed).toBe(-1234)
+    expect(getDisplayTotal(inv(-1234.6), co(true)).displayed).toBe(-1235)
+  })
+
   it('does not apply when setting is disabled', () => {
     const r = getDisplayTotal(inv(1234.56), co(false))
     expect(r.applies).toBe(false)

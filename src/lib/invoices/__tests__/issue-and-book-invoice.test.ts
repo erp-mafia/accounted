@@ -52,7 +52,8 @@ vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   recordManualInvoiceDelivery: (...args: unknown[]) => mockRecordManualInvoiceDelivery(...args),
 }))
 
-import { issueAndBookInvoice, markInvoiceSentAndBook } from '../issue-and-book-invoice'
+import { archiveIssuedInvoicePdf, issueAndBookInvoice, markInvoiceSentAndBook } from '../issue-and-book-invoice'
+import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import type { CompanySettings } from '@/types'
 
 const log: Logger = {
@@ -280,5 +281,47 @@ describe('markInvoiceSentAndBook', () => {
     // Refused before the status flip: the draft is untouched.
     expect(findCalls('invoices', 'update')).toEqual([])
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('archiveIssuedInvoicePdf', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockRenderToBuffer.mockResolvedValue(Buffer.from('fake-pdf'))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+  })
+
+  function archive(invoice: ReturnType<typeof makeDraft>) {
+    return archiveIssuedInvoicePdf({
+      supabase: mockSupabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoice: invoice as never,
+      settings,
+      journalEntryId: 'je-1',
+      log,
+    })
+  }
+
+  it('archives the payment-link QR with the "Markera som skickad" PDF, like the send route', async () => {
+    const result = await archive(makeDraft({ payment_link_url: 'https://pay.example.test/inv-1' }))
+
+    expect(result).toBeNull()
+    expect(InvoicePDF).toHaveBeenCalledTimes(1)
+    expect(InvoicePDF).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // Rendered as sent (the stale draft row would stamp UTKAST).
+        invoice: expect.objectContaining({ status: 'sent' }),
+        paymentLinkQrDataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+      }),
+    )
+    expect(mockUploadDocument).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes no link QR when the invoice has no payment link', async () => {
+    await archive(makeDraft())
+
+    expect(InvoicePDF).toHaveBeenCalledWith(expect.objectContaining({ paymentLinkQrDataUrl: null }))
   })
 })

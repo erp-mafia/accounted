@@ -178,6 +178,12 @@ describe('buildBankPaymentQrPayload: reference and identity', () => {
     expect(parsed(build({ lang: 'en' })).iref).toBe('10234')
   })
 
+  it('keeps the OCR reference when it pays to a printed plusgiro behind a hidden bankgiro', () => {
+    const payload = parsed(build({ company: { plusgiro: '4567-4', invoice_show_bankgiro: false } }))
+    expect(payload.pt).toBe('PG')
+    expect(payload.iref).toBe('102343')
+  })
+
   it('formats a ten-digit org number as on the invoice and keeps a twelve-digit one', () => {
     expect(parsed(build()).cid).toBe('556677-8899')
     expect(parsed(build({ company: { org_number: '198501011234' } })).cid).toBe('198501011234')
