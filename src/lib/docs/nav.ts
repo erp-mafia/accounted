@@ -29,6 +29,8 @@ export const DOCS_NAV: DocsNavSection[] = [
       { label: 'Authentication', href: '/docs/api#authentication', summary: 'API keys, scopes, test mode.' },
       { label: 'Connect with Claude', href: '/docs/api/connect-claude', summary: 'Connect Claude via the MCP server: OAuth connector, Claude Code plugin, or npx accounted-mcp bridge.' },
       { label: 'Anslut Claude (svenska)', href: '/docs/api/anslut-claude', summary: 'Samma guide på svenska: OAuth-connector, Claude Code-plugin eller npx accounted-mcp.' },
+      { label: 'Command line (CLI)', href: '/docs/api/cli', summary: 'Every Accounted tool from a terminal, a script, or a shell agent such as Claude Code, Codex or Cursor: npm install -g accounted.' },
+      { label: 'Kommandoraden (svenska)', href: '/docs/api/kommandorad', summary: 'Samma guide på svenska: alla Accounted-verktyg från terminalen, skript och agenter med npm install -g accounted.' },
     ],
   },
   {

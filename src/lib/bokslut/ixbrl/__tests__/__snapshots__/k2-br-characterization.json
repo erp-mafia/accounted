@@ -1,0 +1,2279 @@
+{
+  "aktiebolag": {
+    "br": {
+      "TecknatEjInbetaltKapital": {
+        "current": 1000,
+        "previous": 900
+      },
+      "KoncessionerPatentLicenserVarumarkenLiknandeRattigheter": {
+        "current": 5001,
+        "previous": 4501
+      },
+      "HyresratterLiknandeRattigheter": {
+        "current": 4000,
+        "previous": 3600
+      },
+      "Goodwill": {
+        "current": 5001,
+        "previous": 4501
+      },
+      "ForskottImmateriellaAnlaggningstillgangar": {
+        "current": 6000,
+        "previous": 5400
+      },
+      "ByggnaderMark": {
+        "current": 24001,
+        "previous": 21601
+      },
+      "MaskinerAndraTekniskaAnlaggningar": {
+        "current": 10000,
+        "previous": 9000
+      },
+      "InventarierVerktygInstallationer": {
+        "current": 11001,
+        "previous": 9901
+      },
+      "ForbattringsutgifterAnnansFastighet": {
+        "current": 12000,
+        "previous": 10800
+      },
+      "OvrigaMateriellaAnlaggningstillgangar": {
+        "current": 13000,
+        "previous": 11700
+      },
+      "PagaendeNyanlaggningarForskottMateriellaAnlaggningstillgangar": {
+        "current": 29001,
+        "previous": 26101
+      },
+      "AndelarKoncernforetag": {
+        "current": 16000,
+        "previous": 14400
+      },
+      "FordringarKoncernforetagLangfristiga": {
+        "current": 17001,
+        "previous": 15301
+      },
+      "AndelarIntresseforetagGemensamtStyrdaForetag": {
+        "current": 37001,
+        "previous": 33300
+      },
+      "FordringarIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+        "current": 41001,
+        "previous": 36901
+      },
+      "AgarintressenOvrigaForetag": {
+        "current": 22000,
+        "previous": 19800
+      },
+      "FordringarOvrigaForetagAgarintresseLangfristiga": {
+        "current": 23001,
+        "previous": 20701
+      },
+      "AndraLangfristigaVardepappersinnehav": {
+        "current": 49000,
+        "previous": 44100
+      },
+      "LanDelagareNarstaende": {
+        "current": 26001,
+        "previous": 23401
+      },
+      "AndraLangfristigaFordringar": {
+        "current": 55000,
+        "previous": 49500
+      },
+      "LagerRavarorFornodenheter": {
+        "current": 29001,
+        "previous": 26101
+      },
+      "LagerVarorUnderTillverkning": {
+        "current": 30000,
+        "previous": 27000
+      },
+      "LagerFardigaVarorHandelsvaror": {
+        "current": 31000,
+        "previous": 27900
+      },
+      "PagaendeArbetenAnnansRakningOmsattningstillgangar": {
+        "current": 32001,
+        "previous": 28801
+      },
+      "ForskottTillLeverantorer": {
+        "current": 33000,
+        "previous": 29700
+      },
+      "OvrigaLagertillgangar": {
+        "current": 34000,
+        "previous": 30600
+      },
+      "Kundfordringar": {
+        "current": 71001,
+        "previous": 63901
+      },
+      "FordringarKoncernforetagKortfristiga": {
+        "current": 75001,
+        "previous": 67501
+      },
+      "FordringarIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+        "current": 79000,
+        "previous": 71100
+      },
+      "FordringarOvrigaforetagAgarintresseKortfristiga": {
+        "current": 83001,
+        "previous": 74701
+      },
+      "OvrigaFordringarKortfristiga": {
+        "current": 178791,
+        "previous": 160911
+      },
+      "UpparbetadEjFaktureradIntakt": {
+        "current": 47001,
+        "previous": 42301
+      },
+      "ForutbetaldaKostnaderUpplupnaIntakter": {
+        "current": 48000,
+        "previous": 43200
+      },
+      "AndelarKoncernforetagKortfristiga": {
+        "current": 49000,
+        "previous": 44100
+      },
+      "OvrigaKortfristigaPlaceringar": {
+        "current": 101001,
+        "previous": 90901
+      },
+      "KassaBankExklRedovisningsmedel": {
+        "current": 52000,
+        "previous": 46800
+      },
+      "Redovisningsmedel": {
+        "current": 53001,
+        "previous": 47701
+      },
+      "Aktiekapital": {
+        "current": 54000,
+        "previous": 48600
+      },
+      "EjRegistreratAktiekapital": {
+        "current": 55001,
+        "previous": 49500
+      },
+      "OverkursfondBunden": {
+        "current": 56001,
+        "previous": 50401
+      },
+      "Uppskrivningsfond": {
+        "current": 57000,
+        "previous": 51300
+      },
+      "Reservfond": {
+        "current": 177001,
+        "previous": 159301
+      },
+      "Overkursfond": {
+        "current": 61000,
+        "previous": 54900
+      },
+      "BalanseratResultat": {
+        "current": 125001,
+        "previous": 112501
+      },
+      "AretsResultatEgetKapital": {
+        "current": -1509440,
+        "previous": -1358496
+      },
+      "Periodiseringsfonder": {
+        "current": 64000,
+        "previous": 57600
+      },
+      "AckumuleradeOveravskrivningar": {
+        "current": 65001,
+        "previous": 58501
+      },
+      "OvrigaObeskattadeReserver": {
+        "current": 133000,
+        "previous": 119700
+      },
+      "AvsattningarPensionerLiknandeForpliktelserEnligtLag": {
+        "current": 68001,
+        "previous": 61201
+      },
+      "OvrigaAvsattningarPensionerLiknandeForpliktelser": {
+        "current": 69000,
+        "previous": 62100
+      },
+      "OvrigaAvsattningar": {
+        "current": 70000,
+        "previous": 63000
+      },
+      "Obligationslan": {
+        "current": 71001,
+        "previous": 63901
+      },
+      "CheckrakningskreditLangfristig": {
+        "current": 72000,
+        "previous": 64800
+      },
+      "OvrigaLangfristigaSkulderKreditinstitut": {
+        "current": 73000,
+        "previous": 65700
+      },
+      "SkulderKoncernforetagLangfristiga": {
+        "current": 74001,
+        "previous": 66601
+      },
+      "SkulderIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+        "current": 75000,
+        "previous": 67500
+      },
+      "SkulderOvrigaForetagAgarintresseLangfristiga": {
+        "current": 76000,
+        "previous": 68400
+      },
+      "OvrigaLangfristigaSkulder": {
+        "current": 77001,
+        "previous": 69301
+      },
+      "ForskottFranKunder": {
+        "current": 78000,
+        "previous": 70200
+      },
+      "CheckrakningskreditKortfristig": {
+        "current": 79000,
+        "previous": 71100
+      },
+      "OvrigaKortfristigaSkulderKreditinstitut": {
+        "current": 80001,
+        "previous": 72001
+      },
+      "PagaendeArbetenAnnansRakningKortfristigaSkulder": {
+        "current": 81000,
+        "previous": 72900
+      },
+      "FaktureradEjUpparbetadIntakt": {
+        "current": 82000,
+        "previous": 73800
+      },
+      "Leverantorsskulder": {
+        "current": 83001,
+        "previous": 74701
+      },
+      "Vaxelskulder": {
+        "current": 84000,
+        "previous": 75600
+      },
+      "SkulderKoncernforetagKortfristiga": {
+        "current": 85000,
+        "previous": 76500
+      },
+      "SkulderIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+        "current": 86001,
+        "previous": 77401
+      },
+      "SkulderOvrigaForetagAgarintresseKortfristiga": {
+        "current": 87000,
+        "previous": 78300
+      },
+      "Skatteskulder": {
+        "current": 89235,
+        "previous": 80311
+      },
+      "OvrigaKortfristigaSkulder": {
+        "current": 362002,
+        "previous": 325802
+      },
+      "UpplupnaKostnaderForutbetaldaIntakter": {
+        "current": 93000,
+        "previous": 83700
+      }
+    },
+    "totals": {
+      "rorelseintakter": {
+        "current": -1508940,
+        "previous": -1357996
+      },
+      "rorelsekostnader": {
+        "current": 500,
+        "previous": 500
+      },
+      "rorelseresultat": {
+        "current": -1509440,
+        "previous": -1358496
+      },
+      "finansiellaPoster": {
+        "current": 0,
+        "previous": 0
+      },
+      "resultatEfterFinansiellaPoster": {
+        "current": -1509440,
+        "previous": -1358496
+      },
+      "bokslutsdispositioner": {
+        "current": 0,
+        "previous": 0
+      },
+      "resultatForeSkatt": {
+        "current": -1509440,
+        "previous": -1358496
+      },
+      "aretsResultat": {
+        "current": -1509440,
+        "previous": -1358496
+      },
+      "anlaggningstillgangar": {
+        "current": 405010,
+        "previous": 364509
+      },
+      "immateriellaAnlaggningstillgangar": {
+        "current": 20002,
+        "previous": 18002
+      },
+      "materiellaAnlaggningstillgangar": {
+        "current": 99003,
+        "previous": 89103
+      },
+      "finansiellaAnlaggningstillgangar": {
+        "current": 286005,
+        "previous": 257404
+      },
+      "varulager": {
+        "current": 189002,
+        "previous": 170102
+      },
+      "kortfristigaFordringar": {
+        "current": 581795,
+        "previous": 523615
+      },
+      "kortfristigaPlaceringar": {
+        "current": 150001,
+        "previous": 135001
+      },
+      "kassaBank": {
+        "current": 105001,
+        "previous": 94501
+      },
+      "omsattningstillgangar": {
+        "current": 1025799,
+        "previous": 923219
+      },
+      "tillgangar": {
+        "current": 1431809,
+        "previous": 1288628
+      },
+      "bundetEgetKapital": {
+        "current": 399003,
+        "previous": 359102
+      },
+      "frittEgetKapital": {
+        "current": -1323439,
+        "previous": -1191095
+      },
+      "egetKapital": {
+        "current": -924436,
+        "previous": -831993
+      },
+      "obeskattadeReserver": {
+        "current": 262001,
+        "previous": 235801
+      },
+      "avsattningar": {
+        "current": 207001,
+        "previous": 186301
+      },
+      "langfristigaSkulder": {
+        "current": 518003,
+        "previous": 466203
+      },
+      "kortfristigaSkulder": {
+        "current": 1369240,
+        "previous": 1232316
+      },
+      "egetKapitalSkulder": {
+        "current": 1431809,
+        "previous": 1288628
+      }
+    },
+    "warnings": [
+      "Skatte- och momsfordringskonton 1630-1659 har ett nettokreditsaldo och har därför redovisats som skatteskuld.",
+      "Momsavräkningskonton 2610-2659 har ett nettodebetsaldo och har därför redovisats som övrig fordran.",
+      "Medlemsinsatser (2083) redovisas under Reservfond: granska klassificeringen.",
+      "Fond för yttre underhåll (2088) redovisas under Reservfond: granska klassificeringen."
+    ],
+    "unmappedAccounts": [],
+    "brRows": {
+      "assets": [
+        {
+          "label": "Tecknat men ej inbetalt kapital",
+          "current": 1000,
+          "previous": 900
+        },
+        {
+          "label": "Anläggningstillgångar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Immateriella anläggningstillgångar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Koncessioner, patent, licenser, varumärken samt liknande rättigheter",
+          "current": 5001,
+          "previous": 4501,
+          "indent": 2
+        },
+        {
+          "label": "Hyresrätter och liknande rättigheter",
+          "current": 4000,
+          "previous": 3600,
+          "indent": 2
+        },
+        {
+          "label": "Goodwill",
+          "current": 5001,
+          "previous": 4501,
+          "indent": 2
+        },
+        {
+          "label": "Förskott avseende immateriella anläggningstillgångar",
+          "current": 6000,
+          "previous": 5400,
+          "indent": 2
+        },
+        {
+          "label": "Summa immateriella anläggningstillgångar",
+          "current": 20002,
+          "previous": 18002,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Materiella anläggningstillgångar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Byggnader och mark",
+          "current": 24001,
+          "previous": 21601,
+          "indent": 2
+        },
+        {
+          "label": "Maskiner och andra tekniska anläggningar",
+          "current": 10000,
+          "previous": 9000,
+          "indent": 2
+        },
+        {
+          "label": "Inventarier, verktyg och installationer",
+          "current": 11001,
+          "previous": 9901,
+          "indent": 2
+        },
+        {
+          "label": "Förbättringsutgifter på annans fastighet",
+          "current": 12000,
+          "previous": 10800,
+          "indent": 2
+        },
+        {
+          "label": "Övriga materiella anläggningstillgångar",
+          "current": 13000,
+          "previous": 11700,
+          "indent": 2
+        },
+        {
+          "label": "Pågående nyanläggningar och förskott avseende materiella anläggningstillgångar",
+          "current": 29001,
+          "previous": 26101,
+          "indent": 2
+        },
+        {
+          "label": "Summa materiella anläggningstillgångar",
+          "current": 99003,
+          "previous": 89103,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Finansiella anläggningstillgångar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Andelar i koncernföretag",
+          "current": 16000,
+          "previous": 14400,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos koncernföretag",
+          "current": 17001,
+          "previous": 15301,
+          "indent": 2
+        },
+        {
+          "label": "Andelar i intresseföretag och gemensamt styrda företag",
+          "current": 37001,
+          "previous": 33300,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos intresseföretag och gemensamt styrda företag",
+          "current": 41001,
+          "previous": 36901,
+          "indent": 2
+        },
+        {
+          "label": "Ägarintressen i övriga företag",
+          "current": 22000,
+          "previous": 19800,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos övriga företag som det finns ett ägarintresse i",
+          "current": 23001,
+          "previous": 20701,
+          "indent": 2
+        },
+        {
+          "label": "Andra långfristiga värdepappersinnehav",
+          "current": 49000,
+          "previous": 44100,
+          "indent": 2
+        },
+        {
+          "label": "Lån till delägare eller närstående",
+          "current": 26001,
+          "previous": 23401,
+          "indent": 2
+        },
+        {
+          "label": "Andra långfristiga fordringar",
+          "current": 55000,
+          "previous": 49500,
+          "indent": 2
+        },
+        {
+          "label": "Summa finansiella anläggningstillgångar",
+          "current": 286005,
+          "previous": 257404,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Summa anläggningstillgångar",
+          "current": 405010,
+          "previous": 364509,
+          "is_total": true
+        },
+        {
+          "label": "Omsättningstillgångar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Varulager m.m.",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Råvaror och förnödenheter",
+          "current": 29001,
+          "previous": 26101,
+          "indent": 2
+        },
+        {
+          "label": "Varor under tillverkning",
+          "current": 30000,
+          "previous": 27000,
+          "indent": 2
+        },
+        {
+          "label": "Färdiga varor och handelsvaror",
+          "current": 31000,
+          "previous": 27900,
+          "indent": 2
+        },
+        {
+          "label": "Pågående arbete för annans räkning",
+          "current": 32001,
+          "previous": 28801,
+          "indent": 2
+        },
+        {
+          "label": "Förskott till leverantörer",
+          "current": 33000,
+          "previous": 29700,
+          "indent": 2
+        },
+        {
+          "label": "Övriga lagertillgångar",
+          "current": 34000,
+          "previous": 30600,
+          "indent": 2
+        },
+        {
+          "label": "Summa varulager m.m.",
+          "current": 189002,
+          "previous": 170102,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Kortfristiga fordringar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Kundfordringar",
+          "current": 71001,
+          "previous": 63901,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos koncernföretag",
+          "current": 75001,
+          "previous": 67501,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos intresseföretag och gemensamt styrda företag",
+          "current": 79000,
+          "previous": 71100,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos övriga företag som det finns ett ägarintresse i",
+          "current": 83001,
+          "previous": 74701,
+          "indent": 2
+        },
+        {
+          "label": "Övriga fordringar",
+          "current": 178791,
+          "previous": 160911,
+          "indent": 2
+        },
+        {
+          "label": "Upparbetad men ej fakturerad intäkt",
+          "current": 47001,
+          "previous": 42301,
+          "indent": 2
+        },
+        {
+          "label": "Förutbetalda kostnader och upplupna intäkter",
+          "current": 48000,
+          "previous": 43200,
+          "indent": 2
+        },
+        {
+          "label": "Summa kortfristiga fordringar",
+          "current": 581795,
+          "previous": 523615,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Kortfristiga placeringar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Andelar i koncernföretag",
+          "current": 49000,
+          "previous": 44100,
+          "indent": 2
+        },
+        {
+          "label": "Övriga kortfristiga placeringar",
+          "current": 101001,
+          "previous": 90901,
+          "indent": 2
+        },
+        {
+          "label": "Summa kortfristiga placeringar",
+          "current": 150001,
+          "previous": 135001,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Kassa och bank",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Kassa och bank",
+          "current": 52000,
+          "previous": 46800,
+          "indent": 2
+        },
+        {
+          "label": "Redovisningsmedel",
+          "current": 53001,
+          "previous": 47701,
+          "indent": 2
+        },
+        {
+          "label": "Summa kassa och bank",
+          "current": 105001,
+          "previous": 94501,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Summa omsättningstillgångar",
+          "current": 1025799,
+          "previous": 923219,
+          "is_total": true
+        },
+        {
+          "label": "Summa tillgångar",
+          "current": 1431809,
+          "previous": 1288628,
+          "is_total": true
+        }
+      ],
+      "equityLiabilities": [
+        {
+          "label": "Eget kapital",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Bundet eget kapital",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Aktiekapital",
+          "current": 54000,
+          "previous": 48600,
+          "semantic_key": "balance_sheet_share_capital",
+          "indent": 2
+        },
+        {
+          "label": "Ej registrerat aktiekapital",
+          "current": 55001,
+          "previous": 49500,
+          "indent": 2
+        },
+        {
+          "label": "Bunden överkursfond",
+          "current": 56001,
+          "previous": 50401,
+          "indent": 2
+        },
+        {
+          "label": "Uppskrivningsfond",
+          "current": 57000,
+          "previous": 51300,
+          "indent": 2
+        },
+        {
+          "label": "Reservfond",
+          "current": 177001,
+          "previous": 159301,
+          "indent": 2
+        },
+        {
+          "label": "Summa bundet eget kapital",
+          "current": 399003,
+          "previous": 359102,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Fritt eget kapital",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Överkursfond",
+          "current": 61000,
+          "previous": 54900,
+          "indent": 2
+        },
+        {
+          "label": "Balanserat resultat",
+          "current": 125001,
+          "previous": 112501,
+          "indent": 2
+        },
+        {
+          "label": "Årets resultat",
+          "current": -1509440,
+          "previous": -1358496,
+          "semantic_key": "balance_sheet_current_year_result",
+          "indent": 2
+        },
+        {
+          "label": "Summa fritt eget kapital",
+          "current": -1323439,
+          "previous": -1191095,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Summa eget kapital",
+          "current": -924436,
+          "previous": -831993,
+          "semantic_key": "balance_sheet_equity_total",
+          "is_total": true
+        },
+        {
+          "label": "Obeskattade reserver",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Periodiseringsfonder",
+          "current": 64000,
+          "previous": 57600,
+          "indent": 1
+        },
+        {
+          "label": "Ackumulerade överavskrivningar",
+          "current": 65001,
+          "previous": 58501,
+          "indent": 1
+        },
+        {
+          "label": "Övriga obeskattade reserver",
+          "current": 133000,
+          "previous": 119700,
+          "indent": 1
+        },
+        {
+          "label": "Summa obeskattade reserver",
+          "current": 262001,
+          "previous": 235801,
+          "is_total": true
+        },
+        {
+          "label": "Avsättningar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Avsättningar för pensioner och liknande förpliktelser enligt lag",
+          "current": 68001,
+          "previous": 61201,
+          "indent": 1
+        },
+        {
+          "label": "Övriga avsättningar för pensioner och liknande förpliktelser",
+          "current": 69000,
+          "previous": 62100,
+          "indent": 1
+        },
+        {
+          "label": "Övriga avsättningar",
+          "current": 70000,
+          "previous": 63000,
+          "indent": 1
+        },
+        {
+          "label": "Summa avsättningar",
+          "current": 207001,
+          "previous": 186301,
+          "is_total": true
+        },
+        {
+          "label": "Långfristiga skulder",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Obligationslån",
+          "current": 71001,
+          "previous": 63901,
+          "indent": 1
+        },
+        {
+          "label": "Checkräkningskredit",
+          "current": 72000,
+          "previous": 64800,
+          "indent": 1
+        },
+        {
+          "label": "Övriga skulder till kreditinstitut",
+          "current": 73000,
+          "previous": 65700,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till koncernföretag",
+          "current": 74001,
+          "previous": 66601,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till intresseföretag och gemensamt styrda företag",
+          "current": 75000,
+          "previous": 67500,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till övriga företag som det finns ett ägarintresse i",
+          "current": 76000,
+          "previous": 68400,
+          "indent": 1
+        },
+        {
+          "label": "Övriga skulder",
+          "current": 77001,
+          "previous": 69301,
+          "indent": 1
+        },
+        {
+          "label": "Summa långfristiga skulder",
+          "current": 518003,
+          "previous": 466203,
+          "is_total": true
+        },
+        {
+          "label": "Kortfristiga skulder",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Förskott från kunder",
+          "current": 78000,
+          "previous": 70200,
+          "indent": 1
+        },
+        {
+          "label": "Checkräkningskredit",
+          "current": 79000,
+          "previous": 71100,
+          "indent": 1
+        },
+        {
+          "label": "Övriga skulder till kreditinstitut",
+          "current": 80001,
+          "previous": 72001,
+          "indent": 1
+        },
+        {
+          "label": "Pågående arbete för annans räkning",
+          "current": 81000,
+          "previous": 72900,
+          "indent": 1
+        },
+        {
+          "label": "Fakturerad men ej upparbetad intäkt",
+          "current": 82000,
+          "previous": 73800,
+          "indent": 1
+        },
+        {
+          "label": "Leverantörsskulder",
+          "current": 83001,
+          "previous": 74701,
+          "indent": 1
+        },
+        {
+          "label": "Växelskulder",
+          "current": 84000,
+          "previous": 75600,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till koncernföretag",
+          "current": 85000,
+          "previous": 76500,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till intresseföretag och gemensamt styrda företag",
+          "current": 86001,
+          "previous": 77401,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till övriga företag som det finns ett ägarintresse i",
+          "current": 87000,
+          "previous": 78300,
+          "indent": 1
+        },
+        {
+          "label": "Skatteskulder",
+          "current": 89235,
+          "previous": 80311,
+          "indent": 1
+        },
+        {
+          "label": "Övriga skulder",
+          "current": 362002,
+          "previous": 325802,
+          "indent": 1
+        },
+        {
+          "label": "Upplupna kostnader och förutbetalda intäkter",
+          "current": 93000,
+          "previous": 83700,
+          "indent": 1
+        },
+        {
+          "label": "Summa kortfristiga skulder",
+          "current": 1369240,
+          "previous": 1232316,
+          "is_total": true
+        },
+        {
+          "label": "Summa eget kapital och skulder",
+          "current": 1431809,
+          "previous": 1288628,
+          "is_total": true
+        }
+      ]
+    },
+    "rrRows": [
+      {
+        "label": "Rörelseintäkter, lagerförändringar m.m.",
+        "current": null,
+        "previous": null,
+        "is_heading": true,
+        "indent": 0
+      },
+      {
+        "label": "Nettoomsättning",
+        "current": -1508940,
+        "previous": -1357996,
+        "indent": 1
+      },
+      {
+        "label": "Summa rörelseintäkter, lagerförändringar m.m.",
+        "current": -1508940,
+        "previous": -1357996,
+        "is_total": true
+      },
+      {
+        "label": "Rörelsekostnader",
+        "current": null,
+        "previous": null,
+        "is_heading": true,
+        "indent": 0
+      },
+      {
+        "label": "Övriga externa kostnader",
+        "current": -500,
+        "previous": -500,
+        "indent": 1
+      },
+      {
+        "label": "Summa rörelsekostnader",
+        "current": -500,
+        "previous": -500,
+        "is_total": true
+      },
+      {
+        "label": "Rörelseresultat",
+        "current": -1509440,
+        "previous": -1358496,
+        "is_total": true
+      },
+      {
+        "label": "Finansiella poster",
+        "current": null,
+        "previous": null,
+        "is_heading": true,
+        "indent": 0
+      },
+      {
+        "label": "Summa finansiella poster",
+        "current": 0,
+        "previous": 0,
+        "is_total": true
+      },
+      {
+        "label": "Resultat efter finansiella poster",
+        "current": -1509440,
+        "previous": -1358496,
+        "is_total": true
+      },
+      {
+        "label": "Resultat före skatt",
+        "current": -1509440,
+        "previous": -1358496,
+        "is_total": true
+      },
+      {
+        "label": "Skatter",
+        "current": null,
+        "previous": null,
+        "is_heading": true,
+        "indent": 0
+      },
+      {
+        "label": "Årets resultat",
+        "current": -1509440,
+        "previous": -1358496,
+        "semantic_key": "income_statement_result",
+        "is_total": true
+      }
+    ]
+  },
+  "ekonomisk_forening": {
+    "br": {
+      "TecknatEjInbetaltKapital": {
+        "current": 1000,
+        "previous": 900
+      },
+      "KoncessionerPatentLicenserVarumarkenLiknandeRattigheter": {
+        "current": 5001,
+        "previous": 4501
+      },
+      "HyresratterLiknandeRattigheter": {
+        "current": 4000,
+        "previous": 3600
+      },
+      "Goodwill": {
+        "current": 5001,
+        "previous": 4501
+      },
+      "ForskottImmateriellaAnlaggningstillgangar": {
+        "current": 6000,
+        "previous": 5400
+      },
+      "ByggnaderMark": {
+        "current": 24001,
+        "previous": 21601
+      },
+      "MaskinerAndraTekniskaAnlaggningar": {
+        "current": 10000,
+        "previous": 9000
+      },
+      "InventarierVerktygInstallationer": {
+        "current": 11001,
+        "previous": 9901
+      },
+      "ForbattringsutgifterAnnansFastighet": {
+        "current": 12000,
+        "previous": 10800
+      },
+      "OvrigaMateriellaAnlaggningstillgangar": {
+        "current": 13000,
+        "previous": 11700
+      },
+      "PagaendeNyanlaggningarForskottMateriellaAnlaggningstillgangar": {
+        "current": 29001,
+        "previous": 26101
+      },
+      "AndelarKoncernforetag": {
+        "current": 16000,
+        "previous": 14400
+      },
+      "FordringarKoncernforetagLangfristiga": {
+        "current": 17001,
+        "previous": 15301
+      },
+      "AndelarIntresseforetagGemensamtStyrdaForetag": {
+        "current": 37001,
+        "previous": 33300
+      },
+      "FordringarIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+        "current": 41001,
+        "previous": 36901
+      },
+      "AgarintressenOvrigaForetag": {
+        "current": 22000,
+        "previous": 19800
+      },
+      "FordringarOvrigaForetagAgarintresseLangfristiga": {
+        "current": 23001,
+        "previous": 20701
+      },
+      "AndraLangfristigaVardepappersinnehav": {
+        "current": 49000,
+        "previous": 44100
+      },
+      "LanDelagareNarstaende": {
+        "current": 26001,
+        "previous": 23401
+      },
+      "AndraLangfristigaFordringar": {
+        "current": 55000,
+        "previous": 49500
+      },
+      "LagerRavarorFornodenheter": {
+        "current": 29001,
+        "previous": 26101
+      },
+      "LagerVarorUnderTillverkning": {
+        "current": 30000,
+        "previous": 27000
+      },
+      "LagerFardigaVarorHandelsvaror": {
+        "current": 31000,
+        "previous": 27900
+      },
+      "PagaendeArbetenAnnansRakningOmsattningstillgangar": {
+        "current": 32001,
+        "previous": 28801
+      },
+      "ForskottTillLeverantorer": {
+        "current": 33000,
+        "previous": 29700
+      },
+      "OvrigaLagertillgangar": {
+        "current": 34000,
+        "previous": 30600
+      },
+      "Kundfordringar": {
+        "current": 71001,
+        "previous": 63901
+      },
+      "FordringarKoncernforetagKortfristiga": {
+        "current": 75001,
+        "previous": 67501
+      },
+      "FordringarIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+        "current": 79000,
+        "previous": 71100
+      },
+      "FordringarOvrigaforetagAgarintresseKortfristiga": {
+        "current": 83001,
+        "previous": 74701
+      },
+      "OvrigaFordringarKortfristiga": {
+        "current": 178791,
+        "previous": 160911
+      },
+      "UpparbetadEjFaktureradIntakt": {
+        "current": 47001,
+        "previous": 42301
+      },
+      "ForutbetaldaKostnaderUpplupnaIntakter": {
+        "current": 48000,
+        "previous": 43200
+      },
+      "AndelarKoncernforetagKortfristiga": {
+        "current": 49000,
+        "previous": 44100
+      },
+      "OvrigaKortfristigaPlaceringar": {
+        "current": 101001,
+        "previous": 90901
+      },
+      "KassaBankExklRedovisningsmedel": {
+        "current": 52000,
+        "previous": 46800
+      },
+      "Redovisningsmedel": {
+        "current": 53001,
+        "previous": 47701
+      },
+      "Uppskrivningsfond": {
+        "current": 54000,
+        "previous": 48600
+      },
+      "Medlemsinsatser": {
+        "current": 111001,
+        "previous": 99901
+      },
+      "Forlagsinsatser": {
+        "current": 57000,
+        "previous": 51300
+      },
+      "Reservfond": {
+        "current": 117001,
+        "previous": 105301
+      },
+      "BalanseratResultat": {
+        "current": 121001,
+        "previous": 108900
+      },
+      "AretsResultatEgetKapital": {
+        "current": -1324439,
+        "previous": -1191995
+      },
+      "Periodiseringsfonder": {
+        "current": 62001,
+        "previous": 55801
+      },
+      "AckumuleradeOveravskrivningar": {
+        "current": 63000,
+        "previous": 56700
+      },
+      "OvrigaObeskattadeReserver": {
+        "current": 129001,
+        "previous": 116101
+      },
+      "AvsattningarPensionerLiknandeForpliktelserEnligtLag": {
+        "current": 66000,
+        "previous": 59400
+      },
+      "OvrigaAvsattningarPensionerLiknandeForpliktelser": {
+        "current": 67001,
+        "previous": 60300
+      },
+      "OvrigaAvsattningar": {
+        "current": 68001,
+        "previous": 61201
+      },
+      "Obligationslan": {
+        "current": 69000,
+        "previous": 62100
+      },
+      "CheckrakningskreditLangfristig": {
+        "current": 70000,
+        "previous": 63000
+      },
+      "OvrigaLangfristigaSkulderKreditinstitut": {
+        "current": 71001,
+        "previous": 63901
+      },
+      "SkulderKoncernforetagLangfristiga": {
+        "current": 72000,
+        "previous": 64800
+      },
+      "SkulderIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+        "current": 73000,
+        "previous": 65700
+      },
+      "SkulderOvrigaForetagAgarintresseLangfristiga": {
+        "current": 74001,
+        "previous": 66601
+      },
+      "OvrigaLangfristigaSkulder": {
+        "current": 75000,
+        "previous": 67500
+      },
+      "ForskottFranKunder": {
+        "current": 76000,
+        "previous": 68400
+      },
+      "CheckrakningskreditKortfristig": {
+        "current": 77001,
+        "previous": 69301
+      },
+      "OvrigaKortfristigaSkulderKreditinstitut": {
+        "current": 78000,
+        "previous": 70200
+      },
+      "PagaendeArbetenAnnansRakningKortfristigaSkulder": {
+        "current": 79000,
+        "previous": 71100
+      },
+      "FaktureradEjUpparbetadIntakt": {
+        "current": 80001,
+        "previous": 72001
+      },
+      "Leverantorsskulder": {
+        "current": 81000,
+        "previous": 72900
+      },
+      "Vaxelskulder": {
+        "current": 82000,
+        "previous": 73800
+      },
+      "SkulderKoncernforetagKortfristiga": {
+        "current": 83001,
+        "previous": 74701
+      },
+      "SkulderIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+        "current": 84000,
+        "previous": 75600
+      },
+      "SkulderOvrigaForetagAgarintresseKortfristiga": {
+        "current": 85000,
+        "previous": 76500
+      },
+      "Skatteskulder": {
+        "current": 87235,
+        "previous": 78512
+      },
+      "OvrigaKortfristigaSkulder": {
+        "current": 354001,
+        "previous": 318601
+      },
+      "UpplupnaKostnaderForutbetaldaIntakter": {
+        "current": 91000,
+        "previous": 81900
+      }
+    },
+    "totals": {
+      "rorelseintakter": {
+        "current": -1323939,
+        "previous": -1191495
+      },
+      "rorelsekostnader": {
+        "current": 500,
+        "previous": 500
+      },
+      "rorelseresultat": {
+        "current": -1324439,
+        "previous": -1191995
+      },
+      "finansiellaPoster": {
+        "current": 0,
+        "previous": 0
+      },
+      "resultatEfterFinansiellaPoster": {
+        "current": -1324439,
+        "previous": -1191995
+      },
+      "bokslutsdispositioner": {
+        "current": 0,
+        "previous": 0
+      },
+      "resultatForeSkatt": {
+        "current": -1324439,
+        "previous": -1191995
+      },
+      "aretsResultat": {
+        "current": -1324439,
+        "previous": -1191995
+      },
+      "anlaggningstillgangar": {
+        "current": 405010,
+        "previous": 364509
+      },
+      "immateriellaAnlaggningstillgangar": {
+        "current": 20002,
+        "previous": 18002
+      },
+      "materiellaAnlaggningstillgangar": {
+        "current": 99003,
+        "previous": 89103
+      },
+      "finansiellaAnlaggningstillgangar": {
+        "current": 286005,
+        "previous": 257404
+      },
+      "varulager": {
+        "current": 189002,
+        "previous": 170102
+      },
+      "kortfristigaFordringar": {
+        "current": 581795,
+        "previous": 523615
+      },
+      "kortfristigaPlaceringar": {
+        "current": 150001,
+        "previous": 135001
+      },
+      "kassaBank": {
+        "current": 105001,
+        "previous": 94501
+      },
+      "omsattningstillgangar": {
+        "current": 1025799,
+        "previous": 923219
+      },
+      "tillgangar": {
+        "current": 1431809,
+        "previous": 1288628
+      },
+      "bundetEgetKapital": {
+        "current": 339002,
+        "previous": 305102
+      },
+      "frittEgetKapital": {
+        "current": -1203438,
+        "previous": -1083095
+      },
+      "egetKapital": {
+        "current": -864436,
+        "previous": -777993
+      },
+      "obeskattadeReserver": {
+        "current": 254002,
+        "previous": 228602
+      },
+      "avsattningar": {
+        "current": 201002,
+        "previous": 180901
+      },
+      "langfristigaSkulder": {
+        "current": 504002,
+        "previous": 453602
+      },
+      "kortfristigaSkulder": {
+        "current": 1337239,
+        "previous": 1203516
+      },
+      "egetKapitalSkulder": {
+        "current": 1431809,
+        "previous": 1288628
+      }
+    },
+    "warnings": [
+      "Skatte- och momsfordringskonton 1630-1659 har ett nettokreditsaldo och har därför redovisats som skatteskuld.",
+      "Momsavräkningskonton 2610-2659 har ett nettodebetsaldo och har därför redovisats som övrig fordran.",
+      "Fond för yttre underhåll (2088) redovisas under Reservfond: granska klassificeringen."
+    ],
+    "unmappedAccounts": [],
+    "brRows": {
+      "assets": [
+        {
+          "label": "Tecknat men ej inbetalt kapital",
+          "current": 1000,
+          "previous": 900
+        },
+        {
+          "label": "Anläggningstillgångar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Immateriella anläggningstillgångar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Koncessioner, patent, licenser, varumärken samt liknande rättigheter",
+          "current": 5001,
+          "previous": 4501,
+          "indent": 2
+        },
+        {
+          "label": "Hyresrätter och liknande rättigheter",
+          "current": 4000,
+          "previous": 3600,
+          "indent": 2
+        },
+        {
+          "label": "Goodwill",
+          "current": 5001,
+          "previous": 4501,
+          "indent": 2
+        },
+        {
+          "label": "Förskott avseende immateriella anläggningstillgångar",
+          "current": 6000,
+          "previous": 5400,
+          "indent": 2
+        },
+        {
+          "label": "Summa immateriella anläggningstillgångar",
+          "current": 20002,
+          "previous": 18002,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Materiella anläggningstillgångar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Byggnader och mark",
+          "current": 24001,
+          "previous": 21601,
+          "indent": 2
+        },
+        {
+          "label": "Maskiner och andra tekniska anläggningar",
+          "current": 10000,
+          "previous": 9000,
+          "indent": 2
+        },
+        {
+          "label": "Inventarier, verktyg och installationer",
+          "current": 11001,
+          "previous": 9901,
+          "indent": 2
+        },
+        {
+          "label": "Förbättringsutgifter på annans fastighet",
+          "current": 12000,
+          "previous": 10800,
+          "indent": 2
+        },
+        {
+          "label": "Övriga materiella anläggningstillgångar",
+          "current": 13000,
+          "previous": 11700,
+          "indent": 2
+        },
+        {
+          "label": "Pågående nyanläggningar och förskott avseende materiella anläggningstillgångar",
+          "current": 29001,
+          "previous": 26101,
+          "indent": 2
+        },
+        {
+          "label": "Summa materiella anläggningstillgångar",
+          "current": 99003,
+          "previous": 89103,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Finansiella anläggningstillgångar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Andelar i koncernföretag",
+          "current": 16000,
+          "previous": 14400,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos koncernföretag",
+          "current": 17001,
+          "previous": 15301,
+          "indent": 2
+        },
+        {
+          "label": "Andelar i intresseföretag och gemensamt styrda företag",
+          "current": 37001,
+          "previous": 33300,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos intresseföretag och gemensamt styrda företag",
+          "current": 41001,
+          "previous": 36901,
+          "indent": 2
+        },
+        {
+          "label": "Ägarintressen i övriga företag",
+          "current": 22000,
+          "previous": 19800,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos övriga företag som det finns ett ägarintresse i",
+          "current": 23001,
+          "previous": 20701,
+          "indent": 2
+        },
+        {
+          "label": "Andra långfristiga värdepappersinnehav",
+          "current": 49000,
+          "previous": 44100,
+          "indent": 2
+        },
+        {
+          "label": "Lån till delägare eller närstående",
+          "current": 26001,
+          "previous": 23401,
+          "indent": 2
+        },
+        {
+          "label": "Andra långfristiga fordringar",
+          "current": 55000,
+          "previous": 49500,
+          "indent": 2
+        },
+        {
+          "label": "Summa finansiella anläggningstillgångar",
+          "current": 286005,
+          "previous": 257404,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Summa anläggningstillgångar",
+          "current": 405010,
+          "previous": 364509,
+          "is_total": true
+        },
+        {
+          "label": "Omsättningstillgångar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Varulager m.m.",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Råvaror och förnödenheter",
+          "current": 29001,
+          "previous": 26101,
+          "indent": 2
+        },
+        {
+          "label": "Varor under tillverkning",
+          "current": 30000,
+          "previous": 27000,
+          "indent": 2
+        },
+        {
+          "label": "Färdiga varor och handelsvaror",
+          "current": 31000,
+          "previous": 27900,
+          "indent": 2
+        },
+        {
+          "label": "Pågående arbete för annans räkning",
+          "current": 32001,
+          "previous": 28801,
+          "indent": 2
+        },
+        {
+          "label": "Förskott till leverantörer",
+          "current": 33000,
+          "previous": 29700,
+          "indent": 2
+        },
+        {
+          "label": "Övriga lagertillgångar",
+          "current": 34000,
+          "previous": 30600,
+          "indent": 2
+        },
+        {
+          "label": "Summa varulager m.m.",
+          "current": 189002,
+          "previous": 170102,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Kortfristiga fordringar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Kundfordringar",
+          "current": 71001,
+          "previous": 63901,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos koncernföretag",
+          "current": 75001,
+          "previous": 67501,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos intresseföretag och gemensamt styrda företag",
+          "current": 79000,
+          "previous": 71100,
+          "indent": 2
+        },
+        {
+          "label": "Fordringar hos övriga företag som det finns ett ägarintresse i",
+          "current": 83001,
+          "previous": 74701,
+          "indent": 2
+        },
+        {
+          "label": "Övriga fordringar",
+          "current": 178791,
+          "previous": 160911,
+          "indent": 2
+        },
+        {
+          "label": "Upparbetad men ej fakturerad intäkt",
+          "current": 47001,
+          "previous": 42301,
+          "indent": 2
+        },
+        {
+          "label": "Förutbetalda kostnader och upplupna intäkter",
+          "current": 48000,
+          "previous": 43200,
+          "indent": 2
+        },
+        {
+          "label": "Summa kortfristiga fordringar",
+          "current": 581795,
+          "previous": 523615,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Kortfristiga placeringar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Andelar i koncernföretag",
+          "current": 49000,
+          "previous": 44100,
+          "indent": 2
+        },
+        {
+          "label": "Övriga kortfristiga placeringar",
+          "current": 101001,
+          "previous": 90901,
+          "indent": 2
+        },
+        {
+          "label": "Summa kortfristiga placeringar",
+          "current": 150001,
+          "previous": 135001,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Kassa och bank",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Kassa och bank",
+          "current": 52000,
+          "previous": 46800,
+          "indent": 2
+        },
+        {
+          "label": "Redovisningsmedel",
+          "current": 53001,
+          "previous": 47701,
+          "indent": 2
+        },
+        {
+          "label": "Summa kassa och bank",
+          "current": 105001,
+          "previous": 94501,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Summa omsättningstillgångar",
+          "current": 1025799,
+          "previous": 923219,
+          "is_total": true
+        },
+        {
+          "label": "Summa tillgångar",
+          "current": 1431809,
+          "previous": 1288628,
+          "is_total": true
+        }
+      ],
+      "equityLiabilities": [
+        {
+          "label": "Eget kapital",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Bundet eget kapital",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Medlemsinsatser",
+          "current": 111001,
+          "previous": 99901,
+          "indent": 2
+        },
+        {
+          "label": "Förlagsinsatser",
+          "current": 57000,
+          "previous": 51300,
+          "semantic_key": "balance_sheet_forlagsinsatser",
+          "indent": 2
+        },
+        {
+          "label": "Uppskrivningsfond",
+          "current": 54000,
+          "previous": 48600,
+          "indent": 2
+        },
+        {
+          "label": "Reservfond",
+          "current": 117001,
+          "previous": 105301,
+          "indent": 2
+        },
+        {
+          "label": "Summa bundet eget kapital",
+          "current": 339002,
+          "previous": 305102,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Fritt eget kapital",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 1
+        },
+        {
+          "label": "Balanserat resultat",
+          "current": 121001,
+          "previous": 108900,
+          "indent": 2
+        },
+        {
+          "label": "Årets resultat",
+          "current": -1324439,
+          "previous": -1191995,
+          "semantic_key": "balance_sheet_current_year_result",
+          "indent": 2
+        },
+        {
+          "label": "Summa fritt eget kapital",
+          "current": -1203438,
+          "previous": -1083095,
+          "is_total": true,
+          "indent": 1
+        },
+        {
+          "label": "Summa eget kapital",
+          "current": -864436,
+          "previous": -777993,
+          "semantic_key": "balance_sheet_equity_total",
+          "is_total": true
+        },
+        {
+          "label": "Obeskattade reserver",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Periodiseringsfonder",
+          "current": 62001,
+          "previous": 55801,
+          "indent": 1
+        },
+        {
+          "label": "Ackumulerade överavskrivningar",
+          "current": 63000,
+          "previous": 56700,
+          "indent": 1
+        },
+        {
+          "label": "Övriga obeskattade reserver",
+          "current": 129001,
+          "previous": 116101,
+          "indent": 1
+        },
+        {
+          "label": "Summa obeskattade reserver",
+          "current": 254002,
+          "previous": 228602,
+          "is_total": true
+        },
+        {
+          "label": "Avsättningar",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Avsättningar för pensioner och liknande förpliktelser enligt lag",
+          "current": 66000,
+          "previous": 59400,
+          "indent": 1
+        },
+        {
+          "label": "Övriga avsättningar för pensioner och liknande förpliktelser",
+          "current": 67001,
+          "previous": 60300,
+          "indent": 1
+        },
+        {
+          "label": "Övriga avsättningar",
+          "current": 68001,
+          "previous": 61201,
+          "indent": 1
+        },
+        {
+          "label": "Summa avsättningar",
+          "current": 201002,
+          "previous": 180901,
+          "is_total": true
+        },
+        {
+          "label": "Långfristiga skulder",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Obligationslån",
+          "current": 69000,
+          "previous": 62100,
+          "indent": 1
+        },
+        {
+          "label": "Checkräkningskredit",
+          "current": 70000,
+          "previous": 63000,
+          "indent": 1
+        },
+        {
+          "label": "Övriga skulder till kreditinstitut",
+          "current": 71001,
+          "previous": 63901,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till koncernföretag",
+          "current": 72000,
+          "previous": 64800,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till intresseföretag och gemensamt styrda företag",
+          "current": 73000,
+          "previous": 65700,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till övriga företag som det finns ett ägarintresse i",
+          "current": 74001,
+          "previous": 66601,
+          "indent": 1
+        },
+        {
+          "label": "Övriga skulder",
+          "current": 75000,
+          "previous": 67500,
+          "indent": 1
+        },
+        {
+          "label": "Summa långfristiga skulder",
+          "current": 504002,
+          "previous": 453602,
+          "is_total": true
+        },
+        {
+          "label": "Kortfristiga skulder",
+          "current": null,
+          "previous": null,
+          "is_heading": true,
+          "indent": 0
+        },
+        {
+          "label": "Förskott från kunder",
+          "current": 76000,
+          "previous": 68400,
+          "indent": 1
+        },
+        {
+          "label": "Checkräkningskredit",
+          "current": 77001,
+          "previous": 69301,
+          "indent": 1
+        },
+        {
+          "label": "Övriga skulder till kreditinstitut",
+          "current": 78000,
+          "previous": 70200,
+          "indent": 1
+        },
+        {
+          "label": "Pågående arbete för annans räkning",
+          "current": 79000,
+          "previous": 71100,
+          "indent": 1
+        },
+        {
+          "label": "Fakturerad men ej upparbetad intäkt",
+          "current": 80001,
+          "previous": 72001,
+          "indent": 1
+        },
+        {
+          "label": "Leverantörsskulder",
+          "current": 81000,
+          "previous": 72900,
+          "indent": 1
+        },
+        {
+          "label": "Växelskulder",
+          "current": 82000,
+          "previous": 73800,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till koncernföretag",
+          "current": 83001,
+          "previous": 74701,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till intresseföretag och gemensamt styrda företag",
+          "current": 84000,
+          "previous": 75600,
+          "indent": 1
+        },
+        {
+          "label": "Skulder till övriga företag som det finns ett ägarintresse i",
+          "current": 85000,
+          "previous": 76500,
+          "indent": 1
+        },
+        {
+          "label": "Skatteskulder",
+          "current": 87235,
+          "previous": 78512,
+          "indent": 1
+        },
+        {
+          "label": "Övriga skulder",
+          "current": 354001,
+          "previous": 318601,
+          "indent": 1
+        },
+        {
+          "label": "Upplupna kostnader och förutbetalda intäkter",
+          "current": 91000,
+          "previous": 81900,
+          "indent": 1
+        },
+        {
+          "label": "Summa kortfristiga skulder",
+          "current": 1337239,
+          "previous": 1203516,
+          "is_total": true
+        },
+        {
+          "label": "Summa eget kapital och skulder",
+          "current": 1431809,
+          "previous": 1288628,
+          "is_total": true
+        }
+      ]
+    },
+    "rrRows": [
+      {
+        "label": "Rörelseintäkter, lagerförändringar m.m.",
+        "current": null,
+        "previous": null,
+        "is_heading": true,
+        "indent": 0
+      },
+      {
+        "label": "Nettoomsättning",
+        "current": -1323939,
+        "previous": -1191495,
+        "indent": 1
+      },
+      {
+        "label": "Summa rörelseintäkter, lagerförändringar m.m.",
+        "current": -1323939,
+        "previous": -1191495,
+        "is_total": true
+      },
+      {
+        "label": "Rörelsekostnader",
+        "current": null,
+        "previous": null,
+        "is_heading": true,
+        "indent": 0
+      },
+      {
+        "label": "Övriga externa kostnader",
+        "current": -500,
+        "previous": -500,
+        "indent": 1
+      },
+      {
+        "label": "Summa rörelsekostnader",
+        "current": -500,
+        "previous": -500,
+        "is_total": true
+      },
+      {
+        "label": "Rörelseresultat",
+        "current": -1324439,
+        "previous": -1191995,
+        "is_total": true
+      },
+      {
+        "label": "Finansiella poster",
+        "current": null,
+        "previous": null,
+        "is_heading": true,
+        "indent": 0
+      },
+      {
+        "label": "Summa finansiella poster",
+        "current": 0,
+        "previous": 0,
+        "is_total": true
+      },
+      {
+        "label": "Resultat efter finansiella poster",
+        "current": -1324439,
+        "previous": -1191995,
+        "is_total": true
+      },
+      {
+        "label": "Resultat före skatt",
+        "current": -1324439,
+        "previous": -1191995,
+        "is_total": true
+      },
+      {
+        "label": "Skatter",
+        "current": null,
+        "previous": null,
+        "is_heading": true,
+        "indent": 0
+      },
+      {
+        "label": "Årets resultat",
+        "current": -1324439,
+        "previous": -1191995,
+        "semantic_key": "income_statement_result",
+        "is_total": true
+      }
+    ]
+  }
+}

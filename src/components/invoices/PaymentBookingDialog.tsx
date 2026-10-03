@@ -173,7 +173,9 @@ export default function PaymentBookingDialog({
 
         const proposed = proposePaymentLines({
           invoice: {
+            id: invoice.id,
             invoice_number: invoice.invoice_number,
+            customer_name: invoice.customer?.name ?? null,
             total: invoice.total,
             total_sek: invoice.total_sek,
             subtotal: invoice.subtotal,
@@ -183,6 +185,8 @@ export default function PaymentBookingDialog({
             currency: invoice.currency,
             exchange_rate: invoice.exchange_rate,
             vat_treatment: invoice.vat_treatment,
+            // #2906: goods delivered abroad book 3108 / 3105, as on every other door.
+            delivery_country: invoice.delivery_country,
             items: invoice.items,
             default_dimensions: invoice.default_dimensions,
             ore_rounding: invoice.ore_rounding,

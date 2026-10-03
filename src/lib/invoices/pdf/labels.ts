@@ -66,7 +66,9 @@ export const PDF_LABELS = {
     deductionApartmentNumber: 'Lägenhetsnummer:',
     deductionWorkType: 'Arbete:',
     deductionLaborHours: 'Arbetstimmar:',
-    deductionNotice: 'Köparen ansöker om utbetalning hos Skatteverket via fakturamodellen. Säljaren begär utbetalning för den del köparen inte betalat.',
+    // Fakturamodellen, ROT, RUT and grön teknik alike: the seller requests
+    // the payout once the buyer has paid their share. The buyer never applies.
+    deductionPayoutNotice: 'Säljaren begär utbetalningen från Skatteverket när köparen har betalat sin del (fakturamodellen).',
     // Skattereduktion för grön teknik: Skatteverket asks the invoice to state
     // the total and the reduction incl. moms, what the installation cost
     // (arbete och material) apart from övriga kostnader, and the property
@@ -78,9 +80,6 @@ export const PDF_LABELS = {
     gronTeknikEligibleCost: 'Arbete och material:',
     gronTeknikOtherCost: 'Övriga kostnader:',
     inclVatSuffix: 'inkl. moms',
-    // Fakturamodellen: the seller requests the payout ("Det är du som
-    // företagare som ansöker om utbetalning", Skatteverket, grön teknik).
-    gronTeknikPayoutNotice: 'Säljaren begär utbetalningen från Skatteverket när köparen har betalat sin del (fakturamodellen).',
     toCredit: 'Att kreditera:',
     toPay: 'Att betala:',
     // A quote is not a payment request, so its grand total is a neutral sum.
@@ -148,7 +147,7 @@ export const PDF_LABELS = {
     deductionApartmentNumber: 'Apartment number:',
     deductionWorkType: 'Service type:',
     deductionLaborHours: 'Labor hours:',
-    deductionNotice: 'The customer claims the deduction via fakturamodellen at Skatteverket. The seller requests payment from the agency for the portion not paid by the customer.',
+    deductionPayoutNotice: 'The seller requests the payout from Skatteverket once the customer has paid their share (fakturamodellen).',
     deductionRowGronTeknik: 'Green technology tax reduction:',
     totalInclVat: 'Total incl. VAT:',
     deductionBrfOrgNumber: 'Housing cooperative org. no.:',
@@ -156,7 +155,6 @@ export const PDF_LABELS = {
     gronTeknikEligibleCost: 'Labor and material:',
     gronTeknikOtherCost: 'Other costs:',
     inclVatSuffix: 'incl. VAT',
-    gronTeknikPayoutNotice: 'The seller requests the payout from Skatteverket once the customer has paid their share (fakturamodellen).',
     toCredit: 'To credit:',
     toPay: 'Total due:',
     totalQuote: 'Total:',

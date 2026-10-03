@@ -1,12 +1,13 @@
 /**
  * One-shot script that exports the registry-derived docs content (errors +
- * reference) plus the static Connect-with-Claude page as TypeScript modules
- * into the gnubok-website repo. Connect-with-Claude ships in both languages:
- * the docs site has no locale routing, so each language is its own page.
+ * reference) plus the static Connect-with-Claude and command-line (CLI) pages
+ * as TypeScript modules into the gnubok-website repo. Both static pages ship
+ * in two languages: the docs site has no locale routing, so each language is
+ * its own page.
  *
  * Run with `npx tsx scripts/export-docs-to-website.mts`. Re-run whenever
- * structured-errors, the v1 endpoint registry, or connect-claude materially
- * changes.
+ * structured-errors, the v1 endpoint registry, connect-claude, or cli
+ * materially changes.
  */
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -28,12 +29,14 @@ ModuleCtor._load = function (request: string, ...rest: unknown[]) {
   return originalLoad.call(this, request, ...rest)
 }
 
-let errors, reference, connectClaude, anslutClaude
+let errors, reference, connectClaude, anslutClaude, cli, kommandorad
 try {
   errors = await import('@/lib/docs/content/errors')
   reference = await import('@/lib/docs/content/reference')
   connectClaude = await import('@/lib/docs/content/connect-claude')
   anslutClaude = await import('@/lib/docs/content/anslut-claude')
+  cli = await import('@/lib/docs/content/cli')
+  kommandorad = await import('@/lib/docs/content/kommandorad')
 } finally {
   // Scope the stub to the imports that need it: leaving a global loader hook
   // patched for the rest of the process would silently disarm the guard for
@@ -116,6 +119,26 @@ if (!anslutClaudeMd) {
 write(
   'lib/docs/content/anslut-claude.generated.ts',
   `// AUTO-GENERATED from erp-base: do not hand-edit.\n// Regenerate via \`npx tsx scripts/export-docs-to-website.mts\` in erp-base.\nexport const ANSLUT_CLAUDE_MD = ${JSON.stringify(anslutClaudeMd)}\n`,
+)
+
+const cliMd = cli.CLI_MD && adaptForWebsite(cli.CLI_MD)
+if (!cliMd) {
+  console.error('Missing CLI_MD export. Inspect:', { cliKeys: Object.keys(cli) })
+  process.exit(1)
+}
+write(
+  'lib/docs/content/cli.generated.ts',
+  `// AUTO-GENERATED from erp-base: do not hand-edit.\n// Regenerate via \`npx tsx scripts/export-docs-to-website.mts\` in erp-base.\nexport const CLI_MD = ${JSON.stringify(cliMd)}\n`,
+)
+
+const kommandoradMd = kommandorad.KOMMANDORAD_MD && adaptForWebsite(kommandorad.KOMMANDORAD_MD)
+if (!kommandoradMd) {
+  console.error('Missing KOMMANDORAD_MD export. Inspect:', { kommandoradKeys: Object.keys(kommandorad) })
+  process.exit(1)
+}
+write(
+  'lib/docs/content/kommandorad.generated.ts',
+  `// AUTO-GENERATED from erp-base: do not hand-edit.\n// Regenerate via \`npx tsx scripts/export-docs-to-website.mts\` in erp-base.\nexport const KOMMANDORAD_MD = ${JSON.stringify(kommandoradMd)}\n`,
 )
 
 console.log('done.')

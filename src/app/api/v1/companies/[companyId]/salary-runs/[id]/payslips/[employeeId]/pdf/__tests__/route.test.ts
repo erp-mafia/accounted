@@ -230,6 +230,35 @@ describe('GET /api/v1/companies/[companyId]/salary-runs/[id]/payslips/[employeeI
       expect(vi.mocked(issuePayslipSections)).not.toHaveBeenCalled()
     })
 
+    it('hands the payslip the run row with its tax table snapshot, not just the live employee (#3400)', async () => {
+      const stub = makeTableStub({
+        ...rows,
+        salary_run_employees: {
+          tax_table_number: 33,
+          tax_column: 1,
+          tax_table_year: 2026,
+          employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc', tax_table_number: 34, tax_column: 1 },
+          line_items: [],
+        },
+      })
+      mockServiceClient.mockReturnValue(stub)
+
+      const res = await GET(
+        makeRequest(COMPANY_A, { headers: { Authorization: 'Bearer gnubok_sk_x' } }),
+        makeParams(COMPANY_A),
+      )
+
+      expect(res.status).toBe(200)
+      const sreIndex = stub.from.mock.calls.findIndex((c) => c[0] === 'salary_run_employees')
+      const sreChain = stub.from.mock.results[sreIndex].value as { select: ReturnType<typeof vi.fn> }
+      expect(String(sreChain.select.mock.calls[0][0])).toMatch(/^\*,/)
+      expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sre: expect.objectContaining({ tax_table_number: 33, tax_column: 1, tax_table_year: 2026 }),
+        }),
+      )
+    })
+
     function writerKey(extra: Record<string, unknown> = {}) {
       mockValidate.mockResolvedValue({
         userId: 'user-1',

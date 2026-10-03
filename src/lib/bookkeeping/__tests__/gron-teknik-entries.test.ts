@@ -235,9 +235,10 @@ describe('proposals: grön teknik', () => {
     expect(lines.find((line) => line.account_number === '1510')?.debit_amount).toBe('86250')
   })
 
-  it('the cash-method payment preview names grön teknik on its 1513 leg', () => {
+  it('the cash-method payment preview names grön teknik on its 1513 legs', () => {
     const lines = proposePaymentLines({
       invoice: {
+        id: 'invoice-1',
         invoice_number: '1001',
         total: 101250,
         total_sek: null,
@@ -255,14 +256,18 @@ describe('proposals: grön teknik', () => {
       entityType: 'aktiebolag',
     })
     expect(lines.find((line) => line.account_number === '1930')?.debit_amount).toBe('86250')
-    const leg1513 = lines.find((line) => line.account_number === '1513')
-    expect(leg1513?.debit_amount).toBe('15000')
-    expect(leg1513?.line_description).toBe('Skattereduktion grön teknik faktura 1001')
+    // One 1513 leg per item, as createInvoiceCashEntry books it.
+    const legs1513 = lines.filter((line) => line.account_number === '1513')
+    expect(legs1513.map((line) => line.debit_amount)).toEqual(['3750', '11250'])
+    for (const leg of legs1513) {
+      expect(leg.line_description).toBe('Skattereduktion grön teknik faktura 1001')
+    }
   })
 
-  it('a ROT invoice keeps the combined cash-method text', () => {
+  it('a ROT invoice names ROT on its cash-method 1513 leg, as createInvoiceCashEntry books it', () => {
     const lines = proposePaymentLines({
       invoice: {
+        id: 'invoice-1',
         invoice_number: '1001',
         total: 12500,
         total_sek: null,
@@ -279,7 +284,7 @@ describe('proposals: grön teknik', () => {
       accountingMethod: 'cash',
       entityType: 'aktiebolag',
     })
-    expect(lines.find((line) => line.account_number === '1513')?.line_description).toBe('ROT/RUT-avdrag faktura 1001')
+    expect(lines.find((line) => line.account_number === '1513')?.line_description).toBe('ROT-avdrag faktura 1001')
   })
 })
 

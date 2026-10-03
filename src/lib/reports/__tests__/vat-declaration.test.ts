@@ -105,9 +105,11 @@ import {
   getVatDeclarationSummary,
   calculateVatDeclaration,
   rcInputTotalsFromDeclaration,
+  revenueAccountsWithoutRuta,
   rutorFromTotals,
 } from '../vat-declaration'
 import { runVatDeclarationChecks } from '../vat-declaration-checks'
+import { fetchDynamicVatAccounts } from '../vat-revenue-accounts'
 import type { VatDeclaration } from '@/types'
 
 let supabase: ReturnType<typeof makeClient>
@@ -1743,5 +1745,145 @@ describe('rutorFromTotals with a 26xx momsruta override', () => {
     expect(rutor.ruta60).toBe(0)
     expect(rutor.ruta48).toBe(1350)
     expect(rutor.ruta49).toBe(0)
+  })
+})
+
+// ============================================================
+// #3387: a class 3 account the declaration cannot classify (no momskod, no
+// momssats, not in ACCOUNT_RUTA) reaches no ruta, so its sales are missing from
+// ruta 05 while their moms on 2611 still reaches ruta 10. The declaration
+// names such accounts for REVENUE_ACCOUNT_WITHOUT_RUTA and changes no figure.
+// ============================================================
+
+describe('calculateVatDeclaration: revenue accounts without a ruta (#3387)', () => {
+  it('names an unconfigured class 3 account with activity and leaves the figures alone', async () => {
+    chartAccounts = [{ account_number: '3543', account_name: 'Faktureringsavgift', default_vat_rate: null }]
+    seedLedger([
+      { account_number: '3001', debit_amount: 0, credit_amount: 10000 },
+      { account_number: '3543', debit_amount: 0, credit_amount: 1250 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 2812.5 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.revenueAccountsWithoutRuta).toEqual([
+      { account_number: '3543', account_name: 'Faktureringsavgift', amount: 1250 },
+    ])
+    // No inference: ruta 05 is still what the configured accounts say.
+    expect(result.rutor.ruta05).toBe(10000)
+    expect(result.rutor.ruta10).toBe(2812.5)
+
+    // The rutor alone look consistent; only the account list surfaces it.
+    expect(runVatDeclarationChecks(result.rutor).map((f) => f.code)).toEqual([])
+    const findings = runVatDeclarationChecks(result.rutor, undefined, {
+      revenueAccountsWithoutRuta: result.revenueAccountsWithoutRuta,
+    })
+    expect(findings.map((f) => [f.code, f.status])).toEqual([
+      ['REVENUE_ACCOUNT_WITHOUT_RUTA', 'WARNING'],
+    ])
+  })
+
+  it('measures the account in p_accounts but never in p_ruta_accounts', async () => {
+    // p_ruta_accounts is the settlement SHAPE detector; widening it would drop
+    // a plain sale booked against 2650 from its own declaration.
+    chartAccounts = [{ account_number: '3543', account_name: 'Faktureringsavgift', default_vat_rate: null }]
+    seedLedger([{ account_number: '3543', debit_amount: 0, credit_amount: 1250 }])
+
+    await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    const [, args] = supabase.rpc.mock.calls[0]
+    expect(args.p_accounts).toContain('3543')
+    expect(args.p_ruta_accounts).not.toContain('3543')
+  })
+
+  it('is silent for mapped, configured, zero-balance and non-turnover accounts', async () => {
+    chartAccounts = [
+      // Static BAS ruta 05 account without configuration: summed by number.
+      { account_number: '3001', account_name: 'Försäljning', default_vat_rate: null },
+      // Momssats set (taxable and 0 %).
+      { account_number: '3544', account_name: 'Avgift', default_vat_rate: 0.25 },
+      { account_number: '3545', account_name: 'Ej försäljning', default_vat_rate: 0 },
+      // Momskod set.
+      { account_number: '3546', account_name: 'Avgift', default_vat_rate: null, default_vat_treatment: 'exempt' },
+      // Rate inferred from number and name.
+      { account_number: '3011', account_name: 'Försäljning tjänster inom Sverige, 25 % moms', default_vat_rate: null },
+      // Unconfigured, but no balance in the period (nets to zero).
+      { account_number: '3547', account_name: 'Avgift', default_vat_rate: null },
+      // Not omsättning, booked by Accounted itself without moms.
+      { account_number: '3740', account_name: 'Öres- och kronutjämning', default_vat_rate: null },
+      { account_number: '3960', account_name: 'Valutakursvinster', default_vat_rate: null },
+    ]
+    seedLedger([
+      { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+      { account_number: '3544', debit_amount: 0, credit_amount: 1000 },
+      { account_number: '3545', debit_amount: 0, credit_amount: 1000 },
+      { account_number: '3546', debit_amount: 0, credit_amount: 1000 },
+      { account_number: '3011', debit_amount: 0, credit_amount: 1000 },
+      { account_number: '3547', debit_amount: 500, credit_amount: 500 },
+      { account_number: '3740', debit_amount: 0, credit_amount: 0.4 },
+      { account_number: '3960', debit_amount: 0, credit_amount: 120 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.revenueAccountsWithoutRuta).toEqual([])
+  })
+})
+
+describe('revenueAccountsWithoutRuta: parity with the declaration (#3387)', () => {
+  // Every case the dynamic resolution distinguishes for a class 3 account.
+  const CHART = [
+    { account_number: '3001', account_name: 'Försäljning', default_vat_rate: null },
+    { account_number: '3105', account_name: 'Export', default_vat_rate: null },
+    { account_number: '3521', account_name: 'Fakturerade frakter EU', default_vat_rate: null },
+    { account_number: '3540', account_name: 'Faktureringsavgifter', default_vat_rate: null },
+    { account_number: '3543', account_name: 'Faktureringsavgift', default_vat_rate: null },
+    { account_number: '3011', account_name: 'Försäljning tjänster inom Sverige, 25 % moms', default_vat_rate: null },
+    { account_number: '3012', account_name: 'Försäljning', default_vat_rate: 0.12 },
+    { account_number: '3013', account_name: 'Momsfri', default_vat_rate: 0 },
+    { account_number: '3211', account_name: 'VMB', default_vat_rate: 0.25 },
+    { account_number: '3550', account_name: 'Avgift', default_vat_rate: null, default_vat_treatment: 'standard_25' },
+    { account_number: '3551', account_name: 'OSS', default_vat_rate: null, default_vat_treatment: 'oss' },
+    { account_number: '3990', account_name: 'Övriga intäkter', default_vat_rate: null },
+  ]
+
+  it('lists an account exactly when the declaration sums it into no ruta and nothing classifies it', async () => {
+    chartAccounts = CHART
+    const dynamic = await fetchDynamicVatAccounts(supabase, 'company-1')
+    const configured = new Set(
+      CHART.filter((a) => a.default_vat_rate !== null || a.default_vat_treatment).map((a) => a.account_number),
+    )
+    const empty = rutorFromTotals(new Map(), dynamic)
+
+    for (const { account_number } of CHART) {
+      const totals = new Map([[account_number, { debit: 0, credit: 1000 }]])
+      const rutor = rutorFromTotals(totals, dynamic)
+      const reachesRuta = (Object.keys(rutor) as Array<keyof typeof rutor>)
+        .some((box) => rutor[box] !== empty[box])
+      const listed = revenueAccountsWithoutRuta(totals, dynamic).map((a) => a.account_number)
+
+      // Inferred-rate accounts count as classified: they reach ruta 05.
+      const classified = configured.has(account_number) || reachesRuta
+      expect({ account_number, listed: listed.includes(account_number) })
+        .toEqual({ account_number, listed: !classified })
+    }
+  })
+
+  it('lists a BAS number the moms-box mirror knows but the declaration never sums', async () => {
+    // 3521 has a box in ACCOUNT_TO_BOX (lib/vat/moms-box-mapping.ts) but not in
+    // ACCOUNT_RUTA, so the declaration drops it: the warning must say so.
+    chartAccounts = CHART
+    const dynamic = await fetchDynamicVatAccounts(supabase, 'company-1')
+    const totals = new Map([['3521', { debit: 0, credit: 400 }]])
+
+    expect(rutorFromTotals(totals, dynamic).ruta35).toBe(0)
+    expect(revenueAccountsWithoutRuta(totals, dynamic)).toEqual([
+      { account_number: '3521', account_name: 'Fakturerade frakter EU', amount: 400 },
+    ])
+  })
+
+  it('tolerates a resolution without the field (older mocks and callers)', () => {
+    const totals = new Map([['3543', { debit: 0, credit: 1 }]])
+    expect(revenueAccountsWithoutRuta(totals, {})).toEqual([])
   })
 })

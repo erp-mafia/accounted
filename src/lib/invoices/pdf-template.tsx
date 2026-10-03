@@ -459,7 +459,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         const apartment = items.find((i) => i.apartment_number)?.apartment_number
         // Grön teknik in a bostadsrätt: the förening's orgnr goes with
         // the lägenhetsnummer.
-        const brf = hasGronTeknik ? items.find((i) => i.brf_org_number)?.brf_org_number : null
+        // The förening's orgnr prints whenever a deduction line carries it
+        // (ROT in a bostadsrätt as well as grön teknik).
+        const brf = items.find((i) => i.brf_org_number)?.brf_org_number ?? null
         return (
           <>
             {housing && (
@@ -537,7 +539,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           and the seller requests the payout: one notice. ROT/RUT keep
           their own notice as it was. */}
       <Text style={styles.deductionNotice}>
-        {hasGronTeknik ? `${GRON_TEKNIK_BASE_NOTICE} ${L.gronTeknikPayoutNotice}` : L.deductionNotice}
+        {hasGronTeknik ? `${GRON_TEKNIK_BASE_NOTICE} ${L.deductionPayoutNotice}` : L.deductionPayoutNotice}
       </Text>
     </View>
   ) : null
@@ -812,9 +814,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                     <Text style={styles.totalValue}>{formatPdfAmount(amountToPay.rounding.roundingDelta, lang)}</Text>
                   </View>
                 )}
-                {amountToPay.deductionApplies && hasGronTeknik && (
-                  // Grön teknik: "Fakturans totala belopp och
-                  // skattereduktionens storlek", both incl. moms.
+                {amountToPay.deductionApplies && (
+                  // Every deduction invoice states the total incl. moms next
+                  // to the reduction (ROT/RUT: "Total excl/incl moms with moms
+                  // amount"; grön teknik: "Fakturans totala belopp och
+                  // skattereduktionens storlek").
                   <View style={styles.totalRow}>
                     <Text style={styles.totalLabel}>{bareLabel(L.totalInclVat)}</Text>
                     <Text style={styles.totalValue}>{formatPdfAmount(amountToPay.rounding.displayed, lang)}</Text>

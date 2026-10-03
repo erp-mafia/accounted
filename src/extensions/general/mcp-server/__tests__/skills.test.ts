@@ -217,7 +217,7 @@ describe('Skills registry', () => {
       // Where it lives, and that it is gated per company (with the English label for en-locale users).
       expect(text).toMatch(/invoice page in the dashboard/i)
       expect(text).toMatch(/(?:gated|access)[^.\n]*per company|per[- ]company[^.\n]*(?:access|gated)/i)
-      expect(text).toContain('Inställningar > Fakturering (Settings > Invoicing)')
+      expect(text).toContain('Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol)')
       expect(text).toMatch(/send cap/i)
       // The restrictions agents must not over-promise past (lib/invoices/peppol-bis-billing.ts).
       // Every legal form with an organisationsnummer sends; only enskild firma, whose org number
@@ -269,7 +269,7 @@ describe('Skills registry', () => {
       expect(text).not.toMatch(/\(Peppol, postal/)
       expect(text).toMatch(/send-peppol/)
       expect(text).toMatch(/per-company access grant/)
-      expect(text).toContain('Inställningar > Fakturering (Settings > Invoicing)')
+      expect(text).toContain('Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol)')
       expect(text).toMatch(/senders whose org number is not a personnummer \(every legal form except enskild firma\), standard invoices only/)
       expect(text).toMatch(/buyers whose org number is not a personnummer/)
       expect(text).toMatch(/could not be marked as sent/)

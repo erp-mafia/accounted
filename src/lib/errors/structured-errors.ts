@@ -2342,8 +2342,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   // default, requested from settings, enabled with a sending cap.
   PEPPOL_ACCESS_REQUIRED: {
     httpStatus: 403,
-    message_sv: 'Peppol är inte aktiverat för det här bolaget. Begär åtkomst under Inställningar > Fakturering > E-faktura via Peppol, så aktiverar vi det.',
-    message_en: 'Peppol is not enabled for this company. Request access under Settings > Invoicing > E-invoicing via Peppol and we will enable it.',
+    message_sv: 'Peppol är inte aktiverat för det här bolaget. Begär åtkomst under Inställningar > Kopplingar > E-faktura via Peppol, så aktiverar vi det.',
+    message_en: 'Peppol is not enabled for this company. Request access under Settings > Connections > E-invoicing via Peppol and we will enable it.',
   },
   PEPPOL_SEND_LIMIT_REACHED: {
     httpStatus: 409,
@@ -2390,8 +2390,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   // behind PEPPOL_SEND_PRECONDITION_FAILED's prefix.
   CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED: {
     httpStatus: 422,
-    message_sv: 'Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Fakturering > E-faktura via Peppol, eller kontakta support.',
-    message_en: 'The company\'s Peppol id is not registered with the access point. Switch on receiving under Settings > Invoicing > E-invoicing via Peppol, or contact support.',
+    message_sv: 'Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Kopplingar > E-faktura via Peppol, eller kontakta support.',
+    message_en: 'The company\'s Peppol id is not registered with the access point. Switch on receiving under Settings > Connections > E-invoicing via Peppol, or contact support.',
   },
   CONNECTOR_SCOPE_MISSING: {
     httpStatus: 403,
