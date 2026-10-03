@@ -4482,6 +4482,11 @@
     "joins_linked_note": "Already linked to {count, plural, one {# event} other {# events}}; together they match the 1630 lines.",
     "link_group": "Link {count} events"
   },
+  "unit_picker": {
+    "empty": "Unit",
+    "custom_placeholder": "Other unit",
+    "custom_label": "Other unit, confirm with Enter"
+  },
   "invoice_editor": {
     "amount_label": "Amount",
     "rows_count": "{count, plural, =1 {1 line} other {# lines}}",

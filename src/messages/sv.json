@@ -4482,6 +4482,11 @@
     "joins_linked_note": "Redan kopplat till {count, plural, one {# händelse} other {# händelser}}; tillsammans motsvarar de raderna på 1630.",
     "link_group": "Koppla {count} händelser"
   },
+  "unit_picker": {
+    "empty": "Enhet",
+    "custom_placeholder": "Annan enhet",
+    "custom_label": "Annan enhet, bekräfta med Enter"
+  },
   "invoice_editor": {
     "amount_label": "Belopp",
     "rows_count": "{count, plural, =1 {1 rad} other {# rader}}",

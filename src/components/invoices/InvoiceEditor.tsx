@@ -106,8 +106,7 @@ import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
-import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
-import UnitDatalist from '@/components/invoices/UnitDatalist'
+import UnitPicker from '@/components/invoices/UnitPicker'
 import {
   buildInvoiceWritePayload,
   buildSelfBilledPayload,
@@ -255,19 +254,20 @@ const ROW_ICON_BUTTON_CLASS =
 const CELL_SELECT_TRIGGER_CLASS =
   'h-7 w-auto gap-1 rounded-sm border-transparent bg-transparent px-2 py-1 text-[13px] shadow-none hover:bg-secondary/60 tabular-nums'
 
-// Antal and Enhet share one cell: one hover and focus surface around two
-// borderless inputs, so "6 tim" reads as one value.
+// Antal and Enhet share one cell: one hover and focus surface around the
+// quantity input and the unit picker, so "6 tim" reads as one value.
 const QTY_UNIT_CELL_CLASS =
   'flex items-center rounded-sm border border-transparent transition-colors duration-150 hover:bg-secondary/60 focus-within:bg-background focus-within:ring-1 focus-within:ring-ring'
 const QTY_UNIT_INPUT_CLASS =
-  'min-w-0 bg-transparent py-1 text-[13px] tabular-nums focus-visible:outline-none placeholder:text-muted-foreground/60 [&::-webkit-calendar-picker-indicator]:hidden'
+  'min-w-0 bg-transparent py-1 text-[13px] tabular-nums focus-visible:outline-none placeholder:text-muted-foreground/60'
 
 // The row table's columns: Beskrivning, Antal (with Enhet), à-pris, then Moms
 // and Avdrag only when they say something, Belopp and the row menu. Literal
-// classes so Tailwind sees every variant.
-const ROW_GRID_BASE = 'grid grid-cols-[minmax(6rem,1fr)_5.5rem_4.5rem_5rem_1.5rem] items-center gap-1'
-const ROW_GRID_ONE_EXTRA = 'grid grid-cols-[minmax(6rem,1fr)_5.5rem_4.5rem_4rem_5rem_1.5rem] items-center gap-1'
-const ROW_GRID_TWO_EXTRA = 'grid grid-cols-[minmax(6rem,1fr)_5.5rem_4.5rem_4rem_4rem_5rem_1.5rem] items-center gap-1'
+// classes so Tailwind sees every variant. Antal is wide enough for three
+// digits beside the longest suggested unit's picker ("månad").
+const ROW_GRID_BASE = 'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_5rem_1.5rem] items-center gap-1'
+const ROW_GRID_ONE_EXTRA = 'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_4rem_5rem_1.5rem] items-center gap-1'
+const ROW_GRID_TWO_EXTRA = 'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_4rem_4rem_5rem_1.5rem] items-center gap-1'
 
 // The quiet field look of the one-line note and the claim fields.
 const FIELD_LABEL_CLASS = 'text-[13px] font-normal'
@@ -2426,10 +2426,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         entryInputRef.current?.focus()
         break
       case 'row_incomplete':
-        // The unit cell is a Radix Select (not focusable via RHF): bring the
-        // row into view instead.
-        if (step.field === 'unit') scrollRowIntoView(step.index)
-        else setFocus(`items.${step.index}.${step.field}`)
+        // The unit picker's trigger carries the field ref, so every cell is
+        // reachable through setFocus.
+        setFocus(`items.${step.index}.${step.field}`)
         break
       case 'payment_link':
         focusSettingsField('payment_link_url')
@@ -3645,7 +3644,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           >
             <div ref={entryRootRef} className="relative">
               <div className="overflow-x-auto">
-                <UnitDatalist />
                 <div>
                   {/* Header row: offset by the drag-grip gutter (w-8). */}
                   <div className="pl-8">
@@ -3818,11 +3816,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                   </div>
                                 )}
                               </div>
-                              {/* Antal and Enhet: one cell. Free text with
-                                  suggestions, not a closed list: any unit the
-                                  API stores (an article imported as "l" or
-                                  "m2") must be typable here and render as
-                                  itself. */}
+                              {/* Antal and Enhet: one cell. The picker lists
+                                  every suggested unit and takes free text
+                                  under "Annan enhet": any unit the API stores
+                                  (an article imported as "pkt") stays
+                                  pickable and renders as itself. */}
                               <div
                                 className={cn(
                                   QTY_UNIT_CELL_CLASS,
@@ -3841,14 +3839,27 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                   aria-invalid={rowErrors?.quantity ? true : undefined}
                                   className={cn(QTY_UNIT_INPUT_CLASS, 'w-0 flex-1 pl-2 pr-1 text-right')}
                                 />
-                                <input
-                                  data-cell="unit"
-                                  list={UNIT_DATALIST_ID}
-                                  maxLength={UNIT_MAX_LENGTH}
-                                  {...register(`items.${index}.unit`, { onChange: () => followQuantity(index) })}
-                                  aria-label={t('unit_label')}
-                                  aria-invalid={rowErrors?.unit ? true : undefined}
-                                  className={cn(QTY_UNIT_INPUT_CLASS, 'w-10 pr-2 text-muted-foreground')}
+                                <Controller
+                                  name={`items.${index}.unit`}
+                                  control={control}
+                                  render={({ field: unitField }) => (
+                                    <UnitPicker
+                                      ref={unitField.ref}
+                                      name={unitField.name}
+                                      value={unitField.value}
+                                      onChange={(unit) => {
+                                        unitField.onChange(unit)
+                                        followQuantity(index)
+                                      }}
+                                      onBlur={unitField.onBlur}
+                                      data-cell="unit"
+                                      aria-label={t('unit_label')}
+                                      invalid={Boolean(rowErrors?.unit)}
+                                      // The cell rings on focus-within; a
+                                      // second ring inside it would double up.
+                                      className="mr-1 focus-visible:bg-secondary focus-visible:ring-0"
+                                    />
+                                  )}
                                 />
                               </div>
                               <input
@@ -4292,7 +4303,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           type="button"
                           tabIndex={-1}
                           aria-label={t('unit_label')}
-                          className={cn(ENTRY_GHOST_CLASS, 'w-10 pl-0 text-left')}
+                          className={cn(ENTRY_GHOST_CLASS, 'mr-1 inline-flex items-center gap-1 px-1')}
                           onPointerDown={(e) => {
                             if (e.pointerType === 'mouse' && e.button !== 0) return
                             e.preventDefault()
@@ -4300,6 +4311,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           }}
                         >
                           st
+                          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
                         </button>
                       </div>
                       <button

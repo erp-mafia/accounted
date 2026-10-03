@@ -7,11 +7,16 @@ describe('unitLabel', () => {
     expect(unitLabel('tim', 'en')).toBe('h')
     expect(unitLabel('dag', 'en')).toBe('day')
     expect(unitLabel('månad', 'en')).toBe('month')
+    expect(unitLabel('vecka', 'en')).toBe('week')
+    expect(unitLabel('år', 'en')).toBe('year')
+    expect(unitLabel('kvm', 'en')).toBe('m2')
   })
 
   it('leaves units that are the same in both languages alone', () => {
     expect(unitLabel('km', 'en')).toBe('km')
     expect(unitLabel('kg', 'en')).toBe('kg')
+    expect(unitLabel('m', 'en')).toBe('m')
+    expect(unitLabel('m3', 'en')).toBe('m3')
   })
 
   it('prints a Swedish document exactly as stored', () => {

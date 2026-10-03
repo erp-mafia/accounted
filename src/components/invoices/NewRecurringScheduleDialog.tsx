@@ -47,8 +47,7 @@ import {
   RECURRING_PLACEHOLDER_KEYS,
   mentionsPeriodPlaceholder,
 } from '@/lib/invoices/recurring-placeholders'
-import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
-import UnitDatalist from '@/components/invoices/UnitDatalist'
+import UnitPicker from '@/components/invoices/UnitPicker'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { hasDimensionValues } from '@/lib/invoices/editor-payload'
@@ -761,7 +760,7 @@ function NewRecurringScheduleForm({
               key={field.id}
               className="grid grid-cols-12 gap-2 items-start"
             >
-              <div className="col-span-12 sm:col-span-5">
+              <div className="col-span-12 sm:col-span-4">
                 <Input
                   placeholder={t('description_placeholder')}
                   {...register(`items.${index}.description`)}
@@ -801,16 +800,28 @@ function NewRecurringScheduleForm({
                   </p>
                 )}
               </div>
-              <div className="col-span-3 sm:col-span-1">
-                {/* Free text with suggestions, not a closed list: the API
-                    stores any unit, so an item copied from an article with an
-                    unlisted unit keeps it instead of rendering blank. */}
-                <Input
-                  list={UNIT_DATALIST_ID}
-                  maxLength={UNIT_MAX_LENGTH}
-                  placeholder={t('unit_placeholder')}
-                  aria-label={t('unit_placeholder')}
-                  {...register(`items.${index}.unit`)}
+              {/* Two columns, not one: the picker shows the unit beside its
+                  chevron, and "månad" did not fit in one. */}
+              <div className="col-span-3 sm:col-span-2">
+                {/* Every suggested unit plus free text under "Annan enhet":
+                    the API stores any unit, so an item copied from an article
+                    with an unlisted unit keeps it instead of rendering blank. */}
+                <Controller
+                  name={`items.${index}.unit`}
+                  control={control}
+                  render={({ field: unitField }) => (
+                    <UnitPicker
+                      ref={unitField.ref}
+                      name={unitField.name}
+                      value={unitField.value}
+                      onChange={unitField.onChange}
+                      onBlur={unitField.onBlur}
+                      variant="field"
+                      aria-label={t('unit_placeholder')}
+                      invalid={Boolean(errors.items?.[index]?.unit)}
+                      className="gap-1 px-3"
+                    />
+                  )}
                 />
                 {errors.items?.[index]?.unit && (
                   <p className="text-sm text-destructive mt-1">
@@ -898,9 +909,6 @@ function NewRecurringScheduleForm({
               {RECURRING_PLACEHOLDER_KEYS.map((key) => `{${key}}`).join(' ')}
             </span>
           </p>
-          {/* Last child on purpose: a datalist renders nothing, but space-y
-              would still count it as a sibling and offset the first row. */}
-          <UnitDatalist />
         </CardContent>
       </Card>
 

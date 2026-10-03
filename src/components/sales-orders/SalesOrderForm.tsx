@@ -26,8 +26,7 @@ import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { hasDimensionValues } from '@/lib/invoices/editor-payload'
 import { sortArticles } from '@/lib/articles/sort'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
-import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
-import UnitDatalist from '@/components/invoices/UnitDatalist'
+import UnitPicker from '@/components/invoices/UnitPicker'
 import { roundOre } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -474,7 +473,6 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
 
       <DetailSection kicker={t('section_lines')}>
         <div className="overflow-x-auto">
-          <UnitDatalist />
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -554,13 +552,11 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
                     </td>
                     <td className={TD_CLASS}>
                       {!isText && (
-                        <Input
+                        <UnitPicker
                           value={line.unit}
-                          onChange={(e) => updateLine(line.key, { unit: e.target.value })}
+                          onChange={(unit) => updateLine(line.key, { unit })}
                           aria-label={t('th_unit')}
-                          list={UNIT_DATALIST_ID}
-                          className={cn(CELL_INPUT_CLASS, 'w-16')}
-                          maxLength={UNIT_MAX_LENGTH}
+                          className="h-8 px-2"
                         />
                       )}
                     </td>

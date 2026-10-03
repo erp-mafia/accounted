@@ -31,8 +31,8 @@ import {
   gronTeknikWorkType,
   normalizeHouseworkType,
 } from '@/lib/invoices/rot-rut-rules'
-import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
-import UnitDatalist from '@/components/invoices/UnitDatalist'
+import { UNIT_MAX_LENGTH } from '@/lib/invoices/units'
+import UnitPicker from '@/components/invoices/UnitPicker'
 
 // A row from the currencies reference table (lib migration
 // 20260630110000_currencies_reference_table.sql).
@@ -324,17 +324,27 @@ export default function ArticleForm({
           align="baseline"
           borderless={!vatRegistered}
         >
-          {/* Free text with suggestions, not a closed list: the API stores any
-              unit up to 32 characters, so a fuel seller types "l" and an
-              article imported with a unit we do not suggest still shows it. */}
-          <SettingsInput
-            id="article-unit"
-            list={UNIT_DATALIST_ID}
-            maxLength={UNIT_MAX_LENGTH}
-            className="w-28 flex-none"
-            {...register('unit')}
+          {/* Every suggested unit plus free text under "Annan enhet": the API
+              stores any unit up to 32 characters, so an article imported with
+              a unit we do not suggest still shows it and keeps it. */}
+          <Controller
+            name="unit"
+            control={control}
+            render={({ field }) => (
+              <UnitPicker
+                ref={field.ref}
+                id="article-unit"
+                name={field.name}
+                value={field.value}
+                onChange={field.onChange}
+                onBlur={field.onBlur}
+                variant="field"
+                invalid={Boolean(errors.unit)}
+                // The boxed settings-field look (SettingsInput), at its width.
+                className="h-9 w-28 flex-none border-border bg-background px-3 text-[13px] focus-visible:border-foreground/40"
+              />
+            )}
           />
-          <UnitDatalist />
           {fieldError(errors.unit?.message)}
         </SettingsRow>
 
