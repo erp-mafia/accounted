@@ -102,6 +102,7 @@ RUN addgroup --system --gid 1001 nodejs && \
 # /app at runtime is split across the read-only image layer and writable mounts
 # (docker-compose.yml):
 #   /app/server.js, /app/node_modules/, /app/package.json   : image (read-only)
+#   /app/packs/                                              : image (read-only)
 #   /app/.next/                                              : named volume (writable)
 #   /app/public/                                             : tmpfs (writable)
 # The entrypoint runs UNPRIVILEGED as nextjs: it empties the nextjs-owned mounts,
@@ -112,6 +113,7 @@ RUN addgroup --system --gid 1001 nodejs && \
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/server.js ./server.js
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/package.json ./package.json
+COPY --from=builder --chown=nextjs:nodejs /app/packs ./packs
 
 # Baked-in templates for runtime population of the writable mounts.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/.next /opt/gnubok-template/.next
