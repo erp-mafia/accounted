@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   ALL_SCOPES,
   API_KEY_SCOPES,
+  PRE_TICKED_KEY_SCOPES,
   SCOPE_GROUPS,
+  STAGING_SCOPES,
   TOOL_COUNT_BY_SCOPE,
   TOOL_SCOPE_MAP,
+  findStageApproveConflict,
   scopeKind,
   type ApiKeyScope,
 } from '../scope-catalog'
@@ -134,6 +137,30 @@ describe('pending_operations labels (issue #3408)', () => {
     ]) {
       expect(text).not.toMatch(/stag|pending_operations/i)
     }
+  })
+})
+
+describe('PRE_TICKED_KEY_SCOPES (API key dialog default, issue #3408 option B)', () => {
+  it('ticks every scope except pending_operations:approve', () => {
+    expect(PRE_TICKED_KEY_SCOPES).not.toContain('pending_operations:approve')
+    expect([...PRE_TICKED_KEY_SCOPES].sort()).toEqual(
+      ALL_SCOPES.filter((s) => s !== 'pending_operations:approve').sort(),
+    )
+  })
+
+  it('keeps every write scope, so a default key can stage proposals', () => {
+    for (const scope of STAGING_SCOPES) expect(PRE_TICKED_KEY_SCOPES, scope).toContain(scope)
+    expect(PRE_TICKED_KEY_SCOPES).toContain('pending_operations:read')
+  })
+
+  it('is no segregation-of-duties conflict, so the default needs no acknowledgement', () => {
+    expect(findStageApproveConflict([...PRE_TICKED_KEY_SCOPES])).toBeNull()
+  })
+
+  it('tells the user in the dialog that Godkänn is not preselected', () => {
+    expect(sv.settings_api_keys.permissions_help).toMatch(/Godkänn är inte förvalt/)
+    expect(sv.settings_api_keys.permissions_help).toMatch(/Att göra › Agentförslag/)
+    expect(en.settings_api_keys.permissions_help).toMatch(/Approve is not preselected/)
   })
 })
 

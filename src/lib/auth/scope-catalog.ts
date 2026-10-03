@@ -151,6 +151,22 @@ export function findStageApproveConflict(scopes: ApiKeyScope[]): ApiKeyScope | n
 }
 
 /**
+ * What the API key dialog (Inställningar › API och MCP, create key) ticks
+ * before the user touches it: every scope except pending_operations:approve.
+ *
+ * Founder decision 2026-10-03 (issue #3408, option B), the same rule as the
+ * MCP consent page: a default key stages agent proposals that a human
+ * approves under Att göra › Agentförslag, and approve is a box the user ticks
+ * themselves. Only then does the dialog show the segregation-of-duties
+ * warning and ask for the acknowledgement. The ceiling is every scope: only
+ * an owner or admin may create a key (POST /api/settings/api-keys refuses
+ * anyone else) and their role caps nothing.
+ */
+export const PRE_TICKED_KEY_SCOPES: readonly ApiKeyScope[] = ALL_SCOPES.filter(
+  (scope) => scope !== 'pending_operations:approve',
+)
+
+/**
  * One entry per scope group, shared by every surface that lets a human pick
  * scopes (settings panel, OAuth consent page). Every scope in API_KEY_SCOPES
  * belongs to exactly one group: lib/auth/__tests__/scope-catalog.test.ts

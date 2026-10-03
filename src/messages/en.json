@@ -3207,7 +3207,7 @@
     "name_label": "Name",
     "name_placeholder": "e.g. Claude Desktop",
     "permissions_label": "Permissions",
-    "permissions_help": "Choose what the key should have access to.",
+    "permissions_help": "Choose what the key should have access to. Approve is not preselected: you approve the key's proposals yourself under To do › Agent proposals.",
     "selected_count": "{selected} of {total} selected",
     "tools_count": "{count} tools",
     "rest_badge": "REST",

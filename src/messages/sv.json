@@ -3207,7 +3207,7 @@
     "name_label": "Namn",
     "name_placeholder": "t.ex. Claude Desktop",
     "permissions_label": "Behörigheter",
-    "permissions_help": "Välj vad nyckeln ska ha åtkomst till.",
+    "permissions_help": "Välj vad nyckeln ska ha åtkomst till. Godkänn är inte förvalt: nyckelns förslag godkänner du själv under Att göra › Agentförslag.",
     "selected_count": "{selected} av {total} valda",
     "tools_count": "{count} verktyg",
     "rest_badge": "REST",
