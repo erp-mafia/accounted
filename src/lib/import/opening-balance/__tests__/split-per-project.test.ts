@@ -536,6 +536,10 @@ describe('splitOpeningBalancesPerProject', () => {
       ok: false,
       code: 'OB_SPLIT_NO_PREVIOUS_YEAR',
     })
+    // Without the chain link, only the year ending the day before counts:
+    // never an earlier year across a gap.
+    expect(noPrevious.findCalls('fiscal_periods', 'eq')).toContainEqual(['period_end', '2025-12-31'])
+    expect(noPrevious.findCalls('fiscal_periods', 'lt')).toEqual([])
 
     const noIb = setup({ fiscal_periods: lockedPeriod({ opening_balances_set: false, opening_balance_entry_id: null }) })
     expect(await splitOpeningBalancesPerProject(noIb.ctx, { fiscal_period_id: PERIOD })).toMatchObject({

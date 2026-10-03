@@ -541,17 +541,25 @@ async function readIbLines(supabase: SupabaseClient, entryId: string): Promise<C
   }))
 }
 
+/** The ISO date before an ISO date (calendar arithmetic in UTC, no time zone drift). */
+function dayBefore(isoDate: string): string {
+  const date = new Date(`${isoDate}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() - 1)
+  return date.toISOString().slice(0, 10)
+}
+
 async function readPreviousPeriod(
   supabase: SupabaseClient,
   companyId: string,
   period: PeriodRow,
 ): Promise<{ id: string; name: string | null; is_closed: boolean } | null> {
-  // The BFNAR 2013:2 continuity chain first; otherwise the latest year that
-  // ends before this one starts.
+  // The BFNAR 2013:2 continuity chain first; otherwise the year that ends the
+  // day before this one starts. Never an earlier year across a gap: its
+  // closing balances are not this year's opening basis.
   const query = supabase.from('fiscal_periods').select('id, name, is_closed, period_end').eq('company_id', companyId)
   const { data, error } = period.previous_period_id
     ? await query.eq('id', period.previous_period_id).maybeSingle()
-    : await query.lt('period_end', period.period_start).order('period_end', { ascending: false }).limit(1).maybeSingle()
+    : await query.eq('period_end', dayBefore(period.period_start)).limit(1).maybeSingle()
   if (error) throw new Error(`Failed to read the previous fiscal year: ${error.message}`)
   const row = data as { id: string; name: string | null; is_closed: boolean } | null
   return row ? { id: row.id, name: row.name ?? null, is_closed: Boolean(row.is_closed) } : null
