@@ -6,6 +6,7 @@ import {
   recoverStringWithFFFD,
   recoverWordWithFFFD,
   stripBOM,
+  prepareContent,
 } from '../encoding'
 
 describe('decodeStringContent', () => {
@@ -193,5 +194,31 @@ describe('recoverStringWithFFFD', () => {
     const once = recoverStringWithFFFD('F\uFFFDRENING')
     expect(once).toBe('FÖRENING')
     expect(recoverStringWithFFFD(once!)).toBe('FÖRENING')
+  })
+})
+
+
+// Excel writes `sep=;` as line 1 so a double-click picks the delimiter. Every
+// format detector in lib/import reads the FIRST line, so leaving it in place
+// hid the real header: a bank export saved through Excel matched no format at
+// all and landed on "Kunde inte identifiera bankformat".
+describe('prepareContent: Excel separator hint', () => {
+  it('drops the hint so the real header comes first', () => {
+    const out = prepareContent('sep=;\r\nBokföringsdag;Belopp\r\n2026-01-15;-99,00')
+    expect(out.split('\n')[0]).toBe('Bokföringsdag;Belopp')
+  })
+
+  it('handles the quoted and comma variants, and a BOM in front', () => {
+    expect(prepareContent('"sep=,"\nDatum,Belopp').split('\n')[0]).toBe('Datum,Belopp')
+    expect(prepareContent('\uFEFFsep=;\nDatum;Belopp').split('\n')[0]).toBe('Datum;Belopp')
+  })
+
+  it('leaves a data row that merely starts with sep= alone', () => {
+    const out = prepareContent('sep=1;2;3\nDatum;Belopp')
+    expect(out.split('\n')[0]).toBe('sep=1;2;3')
+  })
+
+  it('survives a file that is nothing but the hint', () => {
+    expect(prepareContent('sep=;')).toBe('')
   })
 })
