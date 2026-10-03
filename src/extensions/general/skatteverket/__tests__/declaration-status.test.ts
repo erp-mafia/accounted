@@ -141,19 +141,28 @@ describe('fetchVatDeclarationStatus', () => {
     expect(mockResolveReadAuth).toHaveBeenCalledWith(supabase, 'company-1', {
       requires: 'moms_ombud', userId: 'user-1',
     })
+    // One audited transport call per SKV view, recorded against the caller
+    // (not the token owner): 404 is a normal answer, and a 2xx must be JSON.
+    const audit = (endpoint: string) => ({
+      endpoint,
+      companyId: 'company-1',
+      userId: 'user-1',
+      agRegistreradId: '165560000167',
+      redovisningsperiod: '202603',
+      okStatuses: [404],
+      expectJson: true,
+    })
     expect(mockSkvRequestWithAuth.mock.calls[0]).toEqual([
-      USER_AUTH, 'GET', '/inlamnat/165560000167/202603',
+      USER_AUTH, 'GET', '/inlamnat/165560000167/202603', audit('inlamnat'),
     ])
     expect(mockSkvRequestWithAuth.mock.calls[1]).toEqual([
-      USER_AUTH, 'GET', '/beslutat/165560000167/202603',
+      USER_AUTH, 'GET', '/beslutat/165560000167/202603', audit('beslutat'),
     ])
-    // One regulator audit row per SKV view.
-    expect(mockWriteAudit).toHaveBeenCalledTimes(2)
-    expect(mockWriteAudit.mock.calls[0][1]).toMatchObject({ endpoint: 'inlamnat', outcome: 'ok' })
-    expect(mockWriteAudit.mock.calls[1][1]).toMatchObject({ endpoint: 'beslutat', outcome: 'ok' })
+    // The transport writes the rows; the service writes none of its own.
+    expect(mockWriteAudit).not.toHaveBeenCalled()
   })
 
-  it('404 from SKV means nothing on file: null sections, ok audit outcome', async () => {
+  it('404 from SKV means nothing on file: null sections (audited ok via okStatuses)', async () => {
     mockSkvRequestWithAuth
       .mockResolvedValueOnce(skvJson(404, {}))
       .mockResolvedValueOnce(skvJson(404, {}))
@@ -167,7 +176,7 @@ describe('fetchVatDeclarationStatus', () => {
       submitted: null,
       decided: null,
     })
-    expect(mockWriteAudit.mock.calls[0][1]).toMatchObject({ outcome: 'ok', responseStatus: 404 })
+    expect(mockSkvRequestWithAuth.mock.calls[0][3]).toMatchObject({ okStatuses: [404] })
   })
 
   it("state='submitted' only calls inlamnat and leaves decided null", async () => {
@@ -199,7 +208,7 @@ describe('fetchVatDeclarationStatus', () => {
     expect(result).toMatchObject({ ok: true, redovisningsperiod: '202606' })
   })
 
-  it('upstream non-404 error → SKATTEVERKET_API_ERROR 502 with skv_error audit', async () => {
+  it('upstream non-404 error → SKATTEVERKET_API_ERROR 502', async () => {
     mockSkvRequestWithAuth.mockResolvedValueOnce(skvJson(500, { fel: 'internt' }))
     const result = await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
       periodType: 'monthly', year: 2026, period: 3,
@@ -209,10 +218,9 @@ describe('fetchVatDeclarationStatus', () => {
     // The upstream body is logged server-side only, never forwarded to the
     // API consumer (it can leak Skatteverket system details).
     expect((result as { error: string }).error).not.toContain('internt')
-    expect(mockWriteAudit.mock.calls[0][1]).toMatchObject({ outcome: 'skv_error' })
   })
 
-  it('2xx with an unparseable body → SKATTEVERKET_API_ERROR 502 with skv_error audit', async () => {
+  it('2xx with an unparseable body → SKATTEVERKET_API_ERROR 502 (audited skv_error via expectJson)', async () => {
     mockSkvRequestWithAuth.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -225,10 +233,7 @@ describe('fetchVatDeclarationStatus', () => {
       periodType: 'monthly', year: 2026, period: 3,
     })
     expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 502 })
-    expect(mockWriteAudit.mock.calls[0][1]).toMatchObject({
-      outcome: 'skv_error',
-      responseStatus: 200,
-    })
+    expect(mockSkvRequestWithAuth.mock.calls[0][3]).toMatchObject({ expectJson: true })
   })
 
   it('SkatteverketAuthError → structured code via skvAuthCodeToStructured', async () => {

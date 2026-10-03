@@ -69,10 +69,17 @@ describe('probeCompanyGrants via the ombudsregister', () => {
     expect(result.momsOmbud.status).toBe('granted')
     expect(mockSkvRequestWithAuth).toHaveBeenCalledTimes(1)
     // System identity, ombud base URL, Accept header, huvudman filter.
-    const [auth, method, path, , options] = mockSkvRequestWithAuth.mock.calls[0]
+    const [auth, method, path, audit, , options] = mockSkvRequestWithAuth.mock.calls[0]
     expect(auth).toEqual({ mode: 'system' })
     expect(method).toBe('GET')
     expect(path).toBe(`/ombud/autentisieratOmbud?huvudman=${ORG}`)
+    // No user asked (no createdBy): audited against the company as a system call.
+    expect(audit).toEqual({
+      endpoint: 'ombud/autentisieratOmbud',
+      companyId: 'company-1',
+      userId: null,
+      agRegistreradId: ORG,
+    })
     expect(options).toMatchObject({
       baseUrl: 'https://api.test.skatteverket.se/behorighet/ombudshantering/v2',
       accept: 'application/json',
@@ -174,7 +181,7 @@ describe('probeCompanyGrants via the ombudsregister', () => {
 
 async function probeViaOmbudsregisterWith(posts: unknown[], optInDay = '2024-12-01') {
   registryAnswers(posts)
-  return probeViaOmbudsregister(ORG, optInDay, TODAY)
+  return probeViaOmbudsregister(ORG, optInDay, { companyId: 'company-1', userId: null }, TODAY)
 }
 
 describe('org-number proof: only grants signed on or after the opt-in count', () => {
@@ -317,6 +324,23 @@ describe('probeCompanyGrants service-probe fallback', () => {
 
     await probeCompanyGrants('company-1', ORG, 'user-1')
 
+    // Every probe call names the user who asked for the verification.
+    expect(mockSkvRequestWithAuth.mock.calls.map((call) => call[3])).toEqual([
+      { endpoint: 'ombud/autentisieratOmbud', companyId: 'company-1', userId: 'user-1', agRegistreradId: ORG },
+      {
+        endpoint: 'system-connection/verify/lasombud',
+        companyId: 'company-1',
+        userId: 'user-1',
+        agRegistreradId: ORG,
+      },
+      expect.objectContaining({
+        endpoint: 'system-connection/verify/moms_ombud',
+        companyId: 'company-1',
+        userId: 'user-1',
+        agRegistreradId: ORG,
+        okStatuses: [404],
+      }),
+    ])
     expect(mockRecordProbeResult).toHaveBeenCalledWith(
       expect.objectContaining({
         companyId: 'company-1',

@@ -466,7 +466,6 @@ import { skvRequest, SkatteverketAuthError, isApigwClientRefusal } from '@/exten
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/agi-submission-status'
 import { buildMomsuppgift, resolveRedovisare, resolveRedovisningsperiod } from '@/extensions/general/skatteverket/lib/declaration-prep'
-import { writeSkatteverketAudit } from '@/extensions/general/skatteverket/lib/audit'
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
 import { getSkvConnectionHealth, SKV_NEEDS_RECONSENT_MESSAGE } from './skv-connection-health'
 import { suggestToolNames } from './tool-suggest'
@@ -482,7 +481,6 @@ import {
 import type { SkattekontoLedgerTwin } from '@/types/skatteverket'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
-import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
@@ -17803,7 +17801,6 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       assertSkatteverketEnabled()
       const { periodType, year, period } = parseVatPeriodArgs(args)
-      const ctx = createExtensionContext(supabase, userId, companyId, 'skatteverket')
 
       // LOCAL pre-flight first, and deliberately outside the SKV try/catch so a
       // ledger read failure surfaces as itself rather than as a Skatteverket
@@ -17832,12 +17829,10 @@ export const tools: McpTool[] = [
         const { redovisare, redovisningsperiod, momsuppgift } =
           await buildMomsuppgift(supabase, companyId, { periodType, year, period })
         const res = await skvRequest(
-          supabase, userId, companyId, 'POST', `/kontrollera/${redovisare}/${redovisningsperiod}`, momsuppgift,
+          supabase, userId, companyId, 'POST', `/kontrollera/${redovisare}/${redovisningsperiod}`,
+          { endpoint: 'kontrollera', agRegistreradId: redovisare, redovisningsperiod },
+          momsuppgift,
         )
-        await writeSkatteverketAudit(ctx, {
-          endpoint: 'kontrollera', agRegistreradId: redovisare, redovisningsperiod,
-          outcome: res.ok ? 'ok' : 'skv_error', responseStatus: res.status,
-        })
         if (!res.ok) {
           const text = await res.text().catch(() => '')
           throw new Error(`Skatteverket svarade med ${res.status}: ${text}`)
@@ -17892,7 +17887,6 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       assertSkatteverketEnabled()
       const { periodType, year, period } = parseVatPeriodArgs(args)
-      const ctx = createExtensionContext(supabase, userId, companyId, 'skatteverket')
       // Mandatory stage-time validation: the preview carries the real
       // kontrollresultat and we never stage a declaration SKV would reject.
       // /kontrollera is read-only on SKV's side. Shares buildMomsuppgift with
@@ -17901,12 +17895,10 @@ export const tools: McpTool[] = [
         try {
           const prep = await buildMomsuppgift(supabase, companyId, { periodType, year, period })
           const res = await skvRequest(
-            supabase, userId, companyId, 'POST', `/kontrollera/${prep.redovisare}/${prep.redovisningsperiod}`, prep.momsuppgift,
+            supabase, userId, companyId, 'POST', `/kontrollera/${prep.redovisare}/${prep.redovisningsperiod}`,
+            { endpoint: 'kontrollera', agRegistreradId: prep.redovisare, redovisningsperiod: prep.redovisningsperiod },
+            prep.momsuppgift,
           )
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'kontrollera', agRegistreradId: prep.redovisare, redovisningsperiod: prep.redovisningsperiod,
-            outcome: res.ok ? 'ok' : 'skv_error', responseStatus: res.status,
-          })
           if (!res.ok) {
             const text = await res.text().catch(() => '')
             throw new Error(`Skatteverket svarade med ${res.status}: ${text}`)
@@ -17960,7 +17952,6 @@ export const tools: McpTool[] = [
       assertSkatteverketEnabled()
       const { periodType, year, period } = parseVatPeriodArgs(args)
       const state = (args.state as string) ?? 'both'
-      const ctx = createExtensionContext(supabase, userId, companyId, 'skatteverket')
       try {
         const redovisare = await resolveRedovisare(supabase, companyId)
         // Shared with validate/submit and the HTTP status service: helårsmoms
@@ -17971,11 +17962,10 @@ export const tools: McpTool[] = [
         let submitted: unknown = null
         let decided: unknown = null
         if (state === 'submitted' || state === 'both') {
-          const res = await skvRequest(supabase, userId, companyId, 'GET', `/inlamnat/${redovisare}/${redovisningsperiod}`)
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'inlamnat', agRegistreradId: redovisare, redovisningsperiod,
-            outcome: res.ok || res.status === 404 ? 'ok' : 'skv_error', responseStatus: res.status,
-          })
+          const res = await skvRequest(
+            supabase, userId, companyId, 'GET', `/inlamnat/${redovisare}/${redovisningsperiod}`,
+            { endpoint: 'inlamnat', agRegistreradId: redovisare, redovisningsperiod, okStatuses: [404] },
+          )
           if (res.status !== 404) {
             if (!res.ok) {
               const text = await res.text().catch(() => '')
@@ -17985,11 +17975,10 @@ export const tools: McpTool[] = [
           }
         }
         if (state === 'decided' || state === 'both') {
-          const res = await skvRequest(supabase, userId, companyId, 'GET', `/beslutat/${redovisare}/${redovisningsperiod}`)
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'beslutat', agRegistreradId: redovisare, redovisningsperiod,
-            outcome: res.ok || res.status === 404 ? 'ok' : 'skv_error', responseStatus: res.status,
-          })
+          const res = await skvRequest(
+            supabase, userId, companyId, 'GET', `/beslutat/${redovisare}/${redovisningsperiod}`,
+            { endpoint: 'beslutat', agRegistreradId: redovisare, redovisningsperiod, okStatuses: [404] },
+          )
           if (res.status !== 404) {
             if (!res.ok) {
               const text = await res.text().catch(() => '')
@@ -18096,7 +18085,6 @@ export const tools: McpTool[] = [
       assertSkatteverketEnabled()
       const salaryRunId = args.salary_run_id as string
       if (!salaryRunId) throw salaryRunIdRequired()
-      const ctx = createExtensionContext(supabase, userId, companyId, 'skatteverket')
       try {
         const lookup = await supabase
           .from('salary_runs')
@@ -18150,19 +18138,14 @@ export const tools: McpTool[] = [
         // and hid the local filing state it had already resolved.
         let kvittensRead: 'ok' | 'unavailable' = 'ok'
         try {
-          const res = await agiGetKvittenser({ mode: 'user', supabase, userId, companyId }, arbetsgivare, period)
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'kvittenser', agRegistreradId: arbetsgivare, redovisningsperiod: period,
-            outcome: res.ok ? 'ok' : 'skv_error', responseStatus: res.status,
-          })
+          // The transport audits the call, the gateway refusal included.
+          const res = await agiGetKvittenser(
+            { mode: 'user', supabase, userId, companyId }, arbetsgivare, period, { companyId, userId },
+          )
           if (res.ok) kvittenser = res.data.kvittenser
         } catch (err) {
           if (!isApigwClientRefusal(err)) throw err
           kvittensRead = 'unavailable'
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'kvittenser', agRegistreradId: arbetsgivare, redovisningsperiod: period,
-            outcome: 'auth_error', responseStatus: 401,
-          })
         }
         return {
           salary_run_id: salaryRunId,

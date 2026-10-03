@@ -20,14 +20,22 @@
  *   5. --djuplank <orgnr>: mint an "utse ombud" deep link for that company.
  *      Nothing changes at Skatteverket until someone signs it.
  *
- * Reads only, plus the deep link on request. Test or production follows the
- * environment (token URL and API base URLs). System auth may still be off in
- * that environment: the script switches it to shadow for its own process.
+ * Steps 4 and 5 are calls about one company, so like every such call they
+ * write a skatteverket_api_audit_log row (null user: no app user made them).
+ * They need --company <uuid>, the Accounted company the org number belongs to.
+ * Steps 2 and 3 are Accounted's own register calls as ombud: no company, no
+ * row.
+ *
+ * Reads only at Skatteverket, plus the deep link on request; steps 4 and 5
+ * also write their audit rows to the environment's database. Test or
+ * production follows the environment (token URL and API base URLs). System
+ * auth may still be off in that environment: the script switches it to
+ * shadow for its own process.
  *
  * Usage:
  *   npx tsx scripts/smoke-skv-ombud.ts
- *   npx tsx scripts/smoke-skv-ombud.ts --huvudman 165566778899
- *   npx tsx scripts/smoke-skv-ombud.ts --djuplank 165566778899
+ *   npx tsx scripts/smoke-skv-ombud.ts --huvudman 165566778899 --company <uuid>
+ *   npx tsx scripts/smoke-skv-ombud.ts --djuplank 165566778899 --company <uuid>
  *   ENV_FILE=.env.production.local npx tsx scripts/smoke-skv-ombud.ts
  */
 
@@ -68,6 +76,16 @@ const ROLE_ENV = { lasombud: 'SKATTEVERKET_OMBUD_ROLL_LASOMBUD', moms_ombud: 'SK
 function argValue(flag: string): string | null {
   const i = process.argv.indexOf(flag)
   return i >= 0 ? (process.argv[i + 1] ?? null) : null
+}
+
+/** The company a per-company call is audited against (steps 4 and 5). */
+function companyArg(): string {
+  const id = argValue('--company')
+  if (!id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    console.error('Steps 4 and 5 need --company <uuid>: the call is audited against that company.')
+    process.exit(1)
+  }
+  return id
 }
 
 /** 12-digit huvudman; a bare 10-digit org number gets the 16 prefix. */
@@ -127,7 +145,9 @@ async function main() {
     console.log(hit ? `  pin: ${env}=${hit.roll}` : `  ${key}: no role matched by description; pick its code above and set ${env}`)
   }
 
-  const grants = await step('3. GET /ombud/autentisieratOmbud', () => listOmbudGrants({}, { emptyOn404: true }))
+  const grants = await step('3. GET /ombud/autentisieratOmbud', () =>
+    listOmbudGrants({}, 'ombud_register', { emptyOn404: true })
+  )
   console.log(`\n3. ${grants.length} grants to this ombud:`)
   for (const post of grants) {
     console.log(
@@ -138,8 +158,11 @@ async function main() {
   const readFor = argValue('--huvudman')
   if (readFor) {
     const orgnr = huvudman(readFor)
-    const saldo = await step(`4. skattekonto saldo for ${orgnr}`, () => getSaldo({ mode: 'system' }, orgnr))
-    const tx = await step(`4. skattekonto transaktioner for ${orgnr}`, () => getTransaktioner({ mode: 'system' }, orgnr))
+    const actor = { companyId: companyArg(), userId: null }
+    const saldo = await step(`4. skattekonto saldo for ${orgnr}`, () => getSaldo({ mode: 'system' }, orgnr, actor))
+    const tx = await step(`4. skattekonto transaktioner for ${orgnr}`, () =>
+      getTransaktioner({ mode: 'system' }, orgnr, undefined, actor)
+    )
     console.log(`\n4. Skattekonto ${orgnr}: saldo fields ${Object.keys(saldo).join(', ')}`)
     console.log(`   transaktioner response fields ${Object.keys(tx).join(', ')}`)
   }
@@ -147,7 +170,8 @@ async function main() {
   const linkFor = argValue('--djuplank')
   if (linkFor) {
     const orgnr = huvudman(linkFor)
-    const link = await step(`5. deep link for ${orgnr}`, () => createUtseOmbudDeepLink(orgnr))
+    const actor = { companyId: companyArg(), userId: null }
+    const link = await step(`5. deep link for ${orgnr}`, () => createUtseOmbudDeepLink(orgnr, actor))
     console.log(`\n5. Deep link (valid until ${link.expiresOn}), roles ${Object.values(link.roller).join(', ')}:`)
     console.log(`   ${link.djuplank}`)
   }

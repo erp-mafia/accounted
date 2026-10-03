@@ -1,6 +1,7 @@
 import { skvRequestWithAuth, SkatteverketAuthError } from './api-client'
 import { getSkattekontoBaseUrl } from './skattekonto-client'
 import { getConnectionOrThrow, recordProbeResult, type GrantStatus, type SkvCompanyConnection } from './connection-store'
+import type { SkvAuditActor } from './audit'
 import { currentSkvEnvironment } from './resolve-auth'
 import {
   grantCountsFor,
@@ -67,12 +68,13 @@ function classifyError(err: unknown): ProbeClassification {
   return { status: 'error', detail: err instanceof Error ? err.message : String(err) }
 }
 
-async function probeLasombud(orgNumber: string): Promise<ProbeClassification> {
+async function probeLasombud(orgNumber: string, actor: SkvAuditActor): Promise<ProbeClassification> {
   try {
     const response = await skvRequestWithAuth(
       { mode: 'system' },
       'GET',
       `/skattekonton/${orgNumber}/saldo`,
+      { endpoint: 'system-connection/verify/lasombud', ...actor, agRegistreradId: orgNumber },
       undefined,
       { baseUrl: getSkattekontoBaseUrl() }
     )
@@ -100,12 +102,21 @@ function currentMomsPeriod(): string {
   return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 
-async function probeMomsOmbud(orgNumber: string): Promise<ProbeClassification> {
+async function probeMomsOmbud(orgNumber: string, actor: SkvAuditActor): Promise<ProbeClassification> {
   try {
+    const period = currentMomsPeriod()
     const response = await skvRequestWithAuth(
       { mode: 'system' },
       'GET',
-      `/utkast/${orgNumber}/${currentMomsPeriod()}`
+      `/utkast/${orgNumber}/${period}`,
+      {
+        endpoint: 'system-connection/verify/moms_ombud',
+        ...actor,
+        agRegistreradId: orgNumber,
+        redovisningsperiod: period,
+        // No draft for the period still proves the gateway authorized us.
+        okStatuses: [404],
+      }
     )
     // 404 just means no draft for the period: the gateway authorized us.
     if (response.ok || response.status === 404) {
@@ -130,10 +141,11 @@ export interface RegistryProbe {
 export async function probeViaOmbudsregister(
   orgNumber: string,
   optInDay: string,
+  actor: SkvAuditActor,
   today: string = isoDate(new Date())
 ): Promise<{ result: RegistryProbe; roles: string[] } | { result: null; reason: string }> {
   try {
-    const posts = await listOmbudGrants({ huvudman: orgNumber })
+    const posts = await listOmbudGrants({ huvudman: orgNumber }, actor)
     const summary = summarizeGrants(posts, today).get(orgNumber)
     const roles = summary?.roles ?? []
     // The company granted Accounted something, but none of it classifies as
@@ -201,7 +213,9 @@ export interface GrantProbeResult {
 /**
  * Verify both behorigheter for a company and persist the outcome.
  * The caller has already verified role + capability and resolved the
- * company's normalized 12-digit org number.
+ * company's normalized 12-digit org number. `createdBy` is the user who asked
+ * for the verification; without one the probe calls are audited as system
+ * calls (null user).
  */
 export async function probeCompanyGrants(
   companyId: string,
@@ -215,7 +229,8 @@ export async function probeCompanyGrants(
   const stored = await getConnectionOrThrow(companyId, currentSkvEnvironment())
   const optInDay =
     stored && stored.org_number === orgNumber ? isoDate(new Date(stored.created_at)) : isoDate(new Date())
-  const registry = await probeViaOmbudsregister(orgNumber, optInDay)
+  const actor: SkvAuditActor = { companyId, userId: createdBy ?? null }
+  const registry = await probeViaOmbudsregister(orgNumber, optInDay, actor)
 
   let lasombud: ProbeClassification
   let momsOmbud: ProbeClassification
@@ -224,8 +239,8 @@ export async function probeCompanyGrants(
     ;({ lasombud, momsOmbud } = registry.result)
     source = 'registry'
   } else {
-    lasombud = cannotGrant(await probeLasombud(orgNumber))
-    momsOmbud = cannotGrant(await probeMomsOmbud(orgNumber))
+    lasombud = cannotGrant(await probeLasombud(orgNumber, actor))
+    momsOmbud = cannotGrant(await probeMomsOmbud(orgNumber, actor))
     source = 'service'
     const note = ` (ombudsregister otillgängligt: ${registry.reason})`
     lasombud = { ...lasombud, detail: lasombud.detail + note }

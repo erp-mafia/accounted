@@ -25,10 +25,17 @@ vi.mock('../lib/oauth', () => ({
   exchangeCodeForTokens: vi.fn(),
 }))
 
+// The transport writes an audit row per call; these tests are about the call
+// itself, so the writer is stubbed (transport-audit.test.ts covers the rows).
+vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: vi.fn() }))
+
 import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, isApigwClientRefusal } from '../lib/api-client'
 import { __resetSystemTokenCacheForTests } from '../lib/system-auth/token-provider'
 
 const fakeSupabase = {} as unknown as Parameters<typeof skvRequest>[0]
+
+const AUDIT = { endpoint: 'test' }
+const SYSTEM_AUDIT = { endpoint: 'test', companyId: 'comp-1', userId: null }
 
 beforeEach(() => {
   process.env.SKATTEVERKET_APIGW_CLIENT_ID = 'gw-id'
@@ -47,7 +54,7 @@ describe('skvRequest: error mapping', () => {
   it('maps empty 401 → ACCESS_DENIED (likely missing APIGW subscription)', async () => {
     mockFetchStatus(401)
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -59,7 +66,7 @@ describe('skvRequest: error mapping', () => {
   it('maps 401 with body text → SESSION_EXPIRED with a clean Swedish message (no body leak)', async () => {
     mockFetchStatus(401, 'token expired')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -75,7 +82,7 @@ describe('skvRequest: error mapping', () => {
     deleteTokensMock.mockClear()
     mockFetchStatus(401, '{"error":"Token has been revoked."}')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -90,7 +97,7 @@ describe('skvRequest: error mapping', () => {
       'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="agd"',
     })
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -101,7 +108,7 @@ describe('skvRequest: error mapping', () => {
   it('maps 403 with Behörighet body → BEHORIGHET_SAKNAS', async () => {
     mockFetchStatus(403, 'Behörighet saknas för aktören')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -118,7 +125,7 @@ describe('skvRequest: error mapping', () => {
   it('maps the APIGW "required scopes are not authorized" 403 → ACCESS_DENIED, not MISSING_SCOPE', async () => {
     mockFetchStatus(403, '{"error": "The required scopes are not authorized"}')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
@@ -137,6 +144,7 @@ describe('skvRequest: error mapping', () => {
       await skvRequest(
         fakeSupabase, 'user-1', 'comp-1', 'GET',
         '/arbetsgivare/165560000000/redovisningsperioder/202608/kvittenser',
+        AUDIT,
         undefined,
         { baseUrl: 'https://api.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1' },
       )
@@ -158,7 +166,7 @@ describe('skvRequest: error mapping', () => {
       '{"error":"invalid_scope","description":"The required scope agd has been requested for that access token."}',
     )
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('MISSING_SCOPE')
@@ -168,7 +176,7 @@ describe('skvRequest: error mapping', () => {
   it('maps the SKV scope sentence alone (no invalid_scope code) → MISSING_SCOPE', async () => {
     mockFetchStatus(403, 'The required scope agd has been requested for that access token.')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('MISSING_SCOPE')
@@ -184,7 +192,7 @@ describe('skvRequest: error mapping', () => {
     })
     try {
       await skvRequest(
-        fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', undefined,
+        fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT, undefined,
         { baseUrl: 'https://api.skatteverket.se/arbetsgivardeklaration/inlamning/v1' },
       )
       expect.fail('expected throw')
@@ -211,7 +219,7 @@ describe('skvRequest: error mapping', () => {
       'WWW-Authenticate': 'Client-ID-Enforcement',
     })
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -227,7 +235,7 @@ describe('skvRequest: error mapping', () => {
   it('tags it from the challenge header alone (the gateway often sends no body)', async () => {
     mockFetchStatus(401, '', { 'WWW-Authenticate': 'Client-ID-Enforcement' })
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(isApigwClientRefusal(e)).toBe(true)
@@ -242,7 +250,7 @@ describe('skvRequest: error mapping', () => {
     ] as const) {
       mockFetchStatus(status, body)
       try {
-        await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+        await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
         expect.fail('expected throw')
       } catch (e) {
         expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
@@ -255,7 +263,7 @@ describe('skvRequest: error mapping', () => {
   it('maps generic 403 → ACCESS_DENIED', async () => {
     mockFetchStatus(403, 'Forbidden')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -266,7 +274,7 @@ describe('skvRequest: error mapping', () => {
   it('maps 429 → RATE_LIMITED (new behavior)', async () => {
     mockFetchStatus(429)
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -279,13 +287,13 @@ describe('skvRequest: error mapping', () => {
 
   it('returns the response for 5xx (caller decides retry)', async () => {
     mockFetchStatus(503, 'Service Unavailable')
-    const res = await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+    const res = await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
     expect(res.status).toBe(503)
   })
 
   it('returns the response for success', async () => {
     mockFetchStatus(200, '{"ok":true}')
-    const res = await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+    const res = await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json).toEqual({ ok: true })
@@ -316,7 +324,7 @@ describe('skvRequestWithAuth: system mode', () => {
 
   it('sends the system token and returns success responses', async () => {
     mockFetchStatus(200, '{"ok":true}')
-    const res = await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+    const res = await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
     expect(res.status).toBe(200)
     const call = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     expect((call[1] as RequestInit).headers).toMatchObject({
@@ -337,14 +345,14 @@ describe('skvRequestWithAuth: system mode', () => {
       process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID = 'sys-gw-id'
       process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_SECRET = 'sys-gw-secret'
       mockFetchStatus(200, '{}')
-      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
       expect(headersOfLastCall()).toMatchObject({ Client_Id: 'sys-gw-id', Client_Secret: 'sys-gw-secret' })
     })
 
     it('a lone system id or secret falls back to the shared pair, never a mix', async () => {
       process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID = 'sys-gw-id'
       mockFetchStatus(200, '{}')
-      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
       expect(headersOfLastCall()).toMatchObject({ Client_Id: 'gw-id', Client_Secret: 'gw-secret' })
     })
 
@@ -352,7 +360,7 @@ describe('skvRequestWithAuth: system mode', () => {
       process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID = 'sys-gw-id'
       process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_SECRET = 'sys-gw-secret'
       mockFetchStatus(200, '{}')
-      await skvRequest(fakeSupabase, 'user-1', 'company-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'company-1', 'GET', '/x', AUDIT)
       expect(headersOfLastCall()).toMatchObject({ Client_Id: 'gw-id', Client_Secret: 'gw-secret' })
     })
   })
@@ -360,7 +368,7 @@ describe('skvRequestWithAuth: system mode', () => {
   it('401 in system mode -> SYSTEM_AUTH_FAILED and NEVER touches the user token table', async () => {
     mockFetchStatus(401, '{"error":"Token has been revoked."}')
     try {
-      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -378,7 +386,7 @@ describe('skvRequestWithAuth: system mode', () => {
       'WWW-Authenticate': 'Client-ID-Enforcement',
     })
     try {
-      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('SYSTEM_AUTH_FAILED')
@@ -390,7 +398,7 @@ describe('skvRequestWithAuth: system mode', () => {
   it('403 in system mode -> OMBUD_GRANT_MISSING (company-level)', async () => {
     mockFetchStatus(403, 'Forbidden')
     try {
-      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -402,7 +410,7 @@ describe('skvRequestWithAuth: system mode', () => {
   it('403 invalid_scope in system mode -> SYSTEM_AUTH_FAILED (config, not grant)', async () => {
     mockFetchStatus(403, '{"error":"invalid_scope"}')
     try {
-      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('SYSTEM_AUTH_FAILED')
@@ -418,7 +426,7 @@ describe('skvRequestWithAuth: system mode', () => {
     // naming one and hiding the other is a coin flip presented as a diagnosis.
     mockFetchStatus(403, '{"error": "The required scopes are not authorized"}')
     try {
-      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('SYSTEM_AUTH_FAILED')
@@ -431,7 +439,7 @@ describe('skvRequestWithAuth: system mode', () => {
     process.env.SKATTEVERKET_SYSTEM_AUTH_MODE = 'off'
     global.fetch = vi.fn() as unknown as typeof fetch
     try {
-      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('SYSTEM_AUTH_FAILED')
@@ -470,7 +478,7 @@ describe('refresh-token dead-session classification', () => {
     )
 
     try {
-      await skvRequest(fakeSupabase, 'user-404', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-404', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -495,7 +503,7 @@ describe('refresh-token dead-session classification', () => {
     )
 
     try {
-      await skvRequest(fakeSupabase, 'user-400-expired', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-400-expired', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -515,7 +523,7 @@ describe('refresh-token dead-session classification', () => {
     )
 
     try {
-      await skvRequest(fakeSupabase, 'user-400-grant', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-400-grant', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -537,7 +545,7 @@ describe('refresh-token dead-session classification', () => {
     )
 
     try {
-      await skvRequest(fakeSupabase, 'user-400-client', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-400-client', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).not.toBeInstanceOf(SkatteverketAuthError)
@@ -556,7 +564,7 @@ describe('refresh-token dead-session classification', () => {
     )
 
     try {
-      await skvRequest(fakeSupabase, 'user-500', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-500', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).not.toBeInstanceOf(SkatteverketAuthError)

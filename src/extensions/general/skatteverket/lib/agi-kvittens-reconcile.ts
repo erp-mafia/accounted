@@ -5,6 +5,7 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { agiGetKvittenser } from './agi-client'
 import { isApigwClientRefusal } from './api-client'
+import { auditUserIdFor } from './audit'
 import { skatteverketConnectorMode } from './connector-mode'
 import { resolveReadAuth } from './resolve-auth'
 import { sendKvittensNotification } from './kvittens-notification'
@@ -146,7 +147,10 @@ export async function reconcileAgiDeclaration(
 
   let kvittRes: Awaited<ReturnType<typeof agiGetKvittenser>>
   try {
-    kvittRes = await agiGetKvittenser(resolved.auth, arbetsgivare, period)
+    kvittRes = await agiGetKvittenser(resolved.auth, arbetsgivare, period, {
+      companyId,
+      userId: opts.userId ?? auditUserIdFor(resolved.auth),
+    })
   } catch (err) {
     if (isApigwClientRefusal(err)) return { status: 'gateway_refused', route, asked: true }
     throw err

@@ -16,12 +16,17 @@
  *
  * SkatteverketAuthError propagates to the caller: the route maps it through
  * handleSkvError, the commit service through mapServiceError.
+ *
+ * Audit: the transport writes one row per call under the labels
+ * 'declaration/validate', 'declaration/draft' and 'declaration/lock'. The
+ * reset guards read 'declaration/lock' with outcome 'ok'; never relabel it.
+ * Nothing here is labelled 'declaration/submit': filing is the user's BankID
+ * signature at Skatteverket after the lock, not a call we make.
  */
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import type { VatPeriodType } from '@/types'
 import { skvRequest } from './api-client'
-import { writeSkatteverketAudit } from './audit'
 import { buildMomsuppgift } from './declaration-prep'
 import type { SkatteverketKontroll, SkatteverketKontrollResultat, SkatteverketUtkastResponse } from '../types'
 
@@ -74,12 +79,10 @@ export async function submitVatDeclarationChain(
   //    any state exists at Skatteverket.
   if (options.validate) {
     const kontrollera = await skvRequest(
-      supabase, userId, companyId, 'POST', `/kontrollera/${redovisare}/${redovisningsperiod}`, momsuppgift,
+      supabase, userId, companyId, 'POST', `/kontrollera/${redovisare}/${redovisningsperiod}`,
+      { endpoint: 'declaration/validate', agRegistreradId: redovisare, redovisningsperiod },
+      momsuppgift,
     )
-    await writeSkatteverketAudit(ctx, {
-      endpoint: 'declaration/validate', agRegistreradId: redovisare, redovisningsperiod,
-      outcome: kontrollera.ok ? 'ok' : 'skv_error', responseStatus: kontrollera.status,
-    })
     if (!kontrollera.ok) {
       const text = await kontrollera.text().catch(() => '')
       return {
@@ -103,12 +106,10 @@ export async function submitVatDeclarationChain(
   // 1. POST /utkast: save the draft to Eget utrymme. Overwrites any prior
   //    draft for the period, so retry after a mid-chain failure is safe.
   const utkast = await skvRequest(
-    supabase, userId, companyId, 'POST', `/utkast/${redovisare}/${redovisningsperiod}`, momsuppgift,
+    supabase, userId, companyId, 'POST', `/utkast/${redovisare}/${redovisningsperiod}`,
+    { endpoint: 'declaration/draft', agRegistreradId: redovisare, redovisningsperiod },
+    momsuppgift,
   )
-  await writeSkatteverketAudit(ctx, {
-    endpoint: 'declaration/draft', agRegistreradId: redovisare, redovisningsperiod,
-    outcome: utkast.ok ? 'ok' : 'skv_error', responseStatus: utkast.status,
-  })
   if (!utkast.ok) {
     const text = await utkast.text().catch(() => '')
     return {
@@ -133,11 +134,8 @@ export async function submitVatDeclarationChain(
   // 2. PUT /las: lock for signing; returns the BankID signeringslänk.
   const las = await skvRequest(
     supabase, userId, companyId, 'PUT', `/las/${redovisare}/${redovisningsperiod}`,
+    { endpoint: 'declaration/lock', agRegistreradId: redovisare, redovisningsperiod },
   )
-  await writeSkatteverketAudit(ctx, {
-    endpoint: 'declaration/lock', agRegistreradId: redovisare, redovisningsperiod,
-    outcome: las.ok ? 'ok' : 'skv_error', responseStatus: las.status,
-  })
   if (!las.ok) {
     const text = await las.text().catch(() => '')
     return {

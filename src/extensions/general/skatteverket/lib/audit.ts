@@ -1,26 +1,47 @@
-import type { ExtensionContext } from '@/lib/extensions/types'
 import { createServiceClient } from '@/lib/supabase/server'
+import { createLogger } from '@/lib/logger'
+import type { SkvAuth } from './api-client'
+
+const log = createLogger('skatteverket-audit')
+
+/** Who an outbound call is recorded against. */
+export interface SkvAuditActor {
+  companyId: string
+  /** The user who caused the call; null for a call the system made with no user. */
+  userId: string | null
+}
+
+/**
+ * Who an audit row names when no person asked for the call (crons,
+ * background refreshes): the user whose personal token made it, or null for
+ * a call on Accounted's own system credentials. Never a stand-in such as the
+ * company's creator. A person who asked passes their own id instead.
+ */
+export function auditUserIdFor(auth: SkvAuth): string | null {
+  return auth.mode === 'user' ? auth.userId : null
+}
+
+export type SkvAuditOutcome = 'ok' | 'validation_error' | 'skv_error' | 'auth_error' | 'internal_error'
 
 /**
  * Append an immutable row to skatteverket_api_audit_log. Errors are
  * swallowed (logged only) so an audit-table outage does not break the
  * regulator flow, but a successful primary call without an audit row
- * shows up as a noisy console.error for ops to investigate.
+ * shows up as an error log line for ops to investigate.
  *
- * Lives in its own module so the route handlers (which pass a real
- * ExtensionContext), the commit-side services, and the MCP read tools can all
- * share one audit writer. Callers that only hold (supabase, userId, companyId)
- * build a context with `createExtensionContext(supabase, userId, companyId,
- * 'skatteverket')`: cheap, no I/O, and pass it here. The `(ctx, fields)`
- * signature is preserved verbatim so the existing handlers stay byte-identical.
+ * The transport (api-client.ts, skvRequestWithAuth) calls this for every
+ * outbound call, exactly once, so no route can forget to audit and none can
+ * audit twice. The only other caller is the AGI kontrollera routes, for the
+ * 'validation_error' rows they write when they refuse a payload themselves,
+ * before any call is made: an outcome the transport never sees.
  */
 export async function writeSkatteverketAudit(
-  ctx: ExtensionContext,
+  actor: SkvAuditActor,
   fields: {
     endpoint: string
     agRegistreradId?: string | null
     redovisningsperiod?: string | null
-    outcome: 'ok' | 'validation_error' | 'skv_error' | 'auth_error' | 'internal_error'
+    outcome: SkvAuditOutcome
     responseStatus?: number | null
     skvStatus?: string | null
     requestSizeBytes?: number | null
@@ -36,8 +57,8 @@ export async function writeSkatteverketAudit(
     const { error } = await auditClient
       .from('skatteverket_api_audit_log')
       .insert({
-        company_id: ctx.companyId,
-        user_id: ctx.userId,
+        company_id: actor.companyId,
+        user_id: actor.userId,
         endpoint: fields.endpoint,
         ag_registered_id: fields.agRegistreradId ?? null,
         redovisningsperiod: fields.redovisningsperiod ?? null,
@@ -49,7 +70,8 @@ export async function writeSkatteverketAudit(
         error_message: fields.errorMessage ?? null,
       })
     if (error) {
-      ctx.log.error('skatteverket_api_audit_log insert failed', {
+      log.error('skatteverket_api_audit_log insert failed', {
+        companyId: actor.companyId,
         endpoint: fields.endpoint,
         outcome: fields.outcome,
         correlationId: fields.correlationId ?? null,
@@ -57,7 +79,8 @@ export async function writeSkatteverketAudit(
       })
     }
   } catch (err) {
-    ctx.log.error('skatteverket_api_audit_log insert threw', {
+    log.error('skatteverket_api_audit_log insert threw', {
+      companyId: actor.companyId,
       endpoint: fields.endpoint,
       correlationId: fields.correlationId ?? null,
       error: err instanceof Error ? err.message : String(err),

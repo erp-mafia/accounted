@@ -156,16 +156,19 @@ describe('POST /system-connection/deeplink', () => {
         expires_on: '2026-09-22',
       },
     })
-    expect(mockCreateDeepLink).toHaveBeenCalledWith('165560000000', ['lasombud', 'moms_ombud'])
+    // The deep-link call is audited by the transport against the caller.
+    expect(mockCreateDeepLink).toHaveBeenCalledWith(
+      '165560000000',
+      { companyId: 'company-1', userId: 'user-1' },
+      ['lasombud', 'moms_ombud'],
+    )
     expect(mockRecordProbeResult).toHaveBeenCalledWith(
       expect.objectContaining({ companyId: 'company-1', orgNumber: '165560000000', createdBy: 'user-1', error: null })
     )
     // No grant state is asserted by minting a link.
     expect(mockRecordProbeResult.mock.calls[0][0]).not.toHaveProperty('lasombud')
-    expect(mockWriteAudit).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ endpoint: 'system-connection/deeplink', agRegistreradId: '165560000000', outcome: 'ok' })
-    )
+    // No route-level row on top of the transport's.
+    expect(mockWriteAudit).not.toHaveBeenCalled()
   })
 
   it('409 ORG_NUMBER_CONTESTED when another live company claims the same org number: no link, no row', async () => {
@@ -182,7 +185,6 @@ describe('POST /system-connection/deeplink', () => {
     mockRecordProbeResult.mockResolvedValue(null)
     const res = await findRoute().handler(request(), makeContext())
     expect(res.status).toBe(500)
-    expect(mockWriteAudit).not.toHaveBeenCalled()
   })
 
   it('502 with the error code when the register refuses or the role codes are unresolved', async () => {

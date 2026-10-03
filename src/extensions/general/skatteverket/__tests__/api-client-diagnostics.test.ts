@@ -30,6 +30,10 @@ vi.mock('../lib/system-auth/token-provider', () => ({
   invalidateSystemToken: vi.fn(),
 }))
 
+// The transport writes an audit row per call; stubbed here (covered by
+// transport-audit.test.ts) so only the diagnostic log records are observed.
+vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: vi.fn() }))
+
 import { agiGetKvittenser } from '../lib/agi-client'
 import { skvRequestWithAuth, SkatteverketAuthError, type SkvAuth } from '../lib/api-client'
 
@@ -41,6 +45,8 @@ const userAuth: SkvAuth = {
   userId: 'user-1',
   companyId: 'company-1',
 }
+const actor = { companyId: 'company-1', userId: 'user-1' }
+const AUDIT = { endpoint: 'kvittenser', ...actor }
 
 beforeEach(() => {
   records.length = 0
@@ -83,7 +89,7 @@ describe('SKV authentication diagnostics after redaction', () => {
       `https://${host}/arbetsgivardeklaration/hanteraredovisningsperiod/v1`)
     respond(status)
 
-    await expect(agiGetKvittenser(userAuth, employer, '202609'))
+    await expect(agiGetKvittenser(userAuth, employer, '202609', actor))
       .rejects.toBeInstanceOf(SkatteverketAuthError)
 
     expect(authRecord(status)).toMatchObject({
@@ -106,7 +112,7 @@ describe('SKV authentication diagnostics after redaction', () => {
     vi.stubEnv('SKATTEVERKET_AGD_PERIOD_API_BASE_URL', '')
     respond(401)
 
-    await expect(agiGetKvittenser(userAuth, employer, '202609'))
+    await expect(agiGetKvittenser(userAuth, employer, '202609', actor))
       .rejects.toBeInstanceOf(SkatteverketAuthError)
 
     expect(authRecord(401)).toMatchObject({
@@ -125,7 +131,7 @@ describe('SKV authentication diagnostics after redaction', () => {
       'https://api.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1')
     respond(401)
 
-    await expect(agiGetKvittenser({ mode: 'system' }, employer, '202609'))
+    await expect(agiGetKvittenser({ mode: 'system' }, employer, '202609', { companyId: 'company-1', userId: null }))
       .rejects.toMatchObject({ code: 'SYSTEM_AUTH_FAILED' })
 
     expect(authRecord(401)).toMatchObject({
@@ -140,7 +146,7 @@ describe('SKV authentication diagnostics after redaction', () => {
   it('does not let an unmapped direct API obscure the original auth failure', async () => {
     respond(401)
 
-    await expect(skvRequestWithAuth(userAuth, 'GET', receiptPath, undefined, {
+    await expect(skvRequestWithAuth(userAuth, 'GET', receiptPath, AUDIT, undefined, {
       baseUrl: 'https://custom.example/unmapped',
     })).rejects.toMatchObject({ code: 'ACCESS_DENIED' })
 
@@ -153,7 +159,7 @@ describe('SKV authentication diagnostics after redaction', () => {
 
   it.each([200, 400, 404])('leaves HTTP %s responses and logging unchanged', async (status) => {
     respond(status)
-    const response = await skvRequestWithAuth(userAuth, 'GET', receiptPath, undefined, {
+    const response = await skvRequestWithAuth(userAuth, 'GET', receiptPath, AUDIT, undefined, {
       baseUrl: 'https://api.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1',
     })
     expect(response.status).toBe(status)

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { createLogger } from '@/lib/logger'
-import { getSkatteverketEnvironment, skvRequestWithAuth, SkatteverketAuthError } from './api-client'
+import { getSkatteverketEnvironment, skvRequestWithAuth, SkatteverketAuthError, type SkvAudit } from './api-client'
+import type { SkvAuditActor } from './audit'
 import type { SkvBehorighet } from './connection-store'
 
 const log = createLogger('skatteverket-ombud-client')
@@ -187,9 +188,23 @@ export class OmbudApiError extends Error {
   }
 }
 
-async function ombudRequest(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Response> {
+/**
+ * Whose register call this is. A company's own (the grant lookup for its org
+ * number, its deep link) is audited against that company; 'ombud_register'
+ * marks Accounted's own calls as ombud that belong to no company (the
+ * whole-register listing, /roller): the transport logs those instead, since
+ * the audit table is per company.
+ */
+export type OmbudCaller = SkvAuditActor | 'ombud_register'
+
+function ombudAudit(caller: OmbudCaller, endpoint: string, huvudman?: string): SkvAudit {
+  if (caller === 'ombud_register') return { unaudited: 'ombud_register', operation: endpoint }
+  return { endpoint, ...caller, agRegistreradId: huvudman ?? null }
+}
+
+async function ombudRequest(method: 'GET' | 'POST', path: string, audit: SkvAudit, body?: unknown): Promise<Response> {
   try {
-    return await skvRequestWithAuth({ mode: 'system' }, method, path, body, {
+    return await skvRequestWithAuth({ mode: 'system' }, method, path, audit, body, {
       baseUrl: getOmbudApiBaseUrl(),
       accept: 'application/json',
     })
@@ -256,10 +271,15 @@ export type ListOmbudGrantsFilter = {
  * pairs that with its empty-register guard (a zero result downgrades nothing).
  */
 export async function listOmbudGrants(
-  filter: ListOmbudGrantsFilter = {},
+  filter: ListOmbudGrantsFilter,
+  caller: OmbudCaller,
   options: { emptyOn404?: boolean } = {}
 ): Promise<Behorighetspost[]> {
-  const response = await ombudRequest('GET', `/ombud/autentisieratOmbud${buildQuery(filter)}`)
+  const response = await ombudRequest(
+    'GET',
+    `/ombud/autentisieratOmbud${buildQuery(filter)}`,
+    ombudAudit(caller, 'ombud/autentisieratOmbud', filter.huvudman)
+  )
   if (response.status === 404 && options.emptyOn404) return []
   const json = await readJsonOrThrow(response, 'ombud/autentisieratOmbud')
   const rows = unwrapList(json, ['behorighetsposter', 'Behorighetsposter', 'behorigheter'], 'ombud/autentisieratOmbud')
@@ -270,9 +290,13 @@ export async function listOmbudGrants(
   return parsed.data
 }
 
-/** GET /roller: all rollbeteckningar with descriptions (or one, when filtered). */
+/**
+ * GET /roller: all rollbeteckningar with descriptions (or one, when filtered).
+ * A lookup about the register itself, never about a company: not audited in
+ * the company table (see OmbudCaller).
+ */
 export async function getOmbudRoleDescriptions(roll?: string): Promise<Rollbeskrivningspost[]> {
-  const response = await ombudRequest('GET', `/roller${buildQuery({ roll })}`)
+  const response = await ombudRequest('GET', `/roller${buildQuery({ roll })}`, ombudAudit('ombud_register', 'roller'))
   const json = await readJsonOrThrow(response, 'roller')
   const rows = unwrapList(json, ['rollbeskrivningsposter', 'Rollbeskrivningsposter', 'roller'], 'roller')
   const parsed = z.array(RollbeskrivningspostSchema).safeParse(rows)
@@ -333,6 +357,7 @@ export interface UtseOmbudDeepLink {
  */
 export async function createUtseOmbudDeepLink(
   huvudman: string,
+  actor: SkvAuditActor,
   keys: readonly SkvBehorighet[] = OMBUD_ROLE_KEYS,
   giltigTom?: string,
   now: Date = new Date()
@@ -345,6 +370,7 @@ export async function createUtseOmbudDeepLink(
   const response = await ombudRequest(
     'POST',
     `/ombud/autentisieratOmbud/huvudman/${encodeURIComponent(huvudman)}/djuplank/utseombud`,
+    ombudAudit(actor, 'system-connection/deeplink', huvudman),
     body
   )
   const json = await readJsonOrThrow(response, 'djuplank/utseombud')

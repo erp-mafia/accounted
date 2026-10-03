@@ -8,7 +8,6 @@ import { skvRequestWithAuth, SkatteverketAuthError } from './api-client'
 import { resolveReadAuth } from './resolve-auth'
 import { resolveRedovisare, resolveRedovisningsperiod } from './declaration-prep'
 import { skvAuthCodeToStructured } from './error-map'
-import { writeSkatteverketAudit } from './audit'
 
 /**
  * Registry-resolved read service for filed momsdeklarationer (issue #1663).
@@ -21,7 +20,8 @@ import { writeSkatteverketAudit } from './audit'
  * Auth follows the company-scoped read model (#1673, resolve-auth.ts): the
  * caller's own token when they connected, otherwise any other member's active
  * token, otherwise system credentials with a verified ombud grant. The fetched
- * declaration belongs to the company, not to whoever pressed "Anslut".
+ * declaration belongs to the company, not to whoever pressed "Anslut". The
+ * audit rows (one per view, written by the transport) name the caller.
  *
  * Error contract: known failure modes return `{ ok: false, code, http_status,
  * error }` with structured codes so the v1 route maps them deterministically;
@@ -92,12 +92,22 @@ export async function fetchVatDeclarationStatus(
       | { ok: true; body: unknown }
       | { ok: false; failure: Extract<SkvVatDeclarationStatusResult, { ok: false }> }
     > => {
+      // 404 means "nothing on file for the period": a normal answer, not an
+      // upstream failure (okStatuses). A 2xx with an unreadable body is
+      // recorded as skv_error (expectJson) and maps to SKATTEVERKET_API_ERROR
+      // below instead of escaping as an internal 500.
       const res = await skvRequestWithAuth(
         resolved.auth, 'GET', `/${view}/${redovisare}/${redovisningsperiod}`,
+        {
+          endpoint: view,
+          companyId,
+          userId,
+          agRegistreradId: redovisare,
+          redovisningsperiod,
+          okStatuses: [404],
+          expectJson: true,
+        },
       )
-      // Parse the 2xx body BEFORE writing the audit row, so a success status
-      // with an unreadable body is recorded as skv_error, not 'ok', and maps
-      // to SKATTEVERKET_API_ERROR instead of escaping as an internal 500.
       let body: unknown = null
       let bodyUnparseable = false
       if (res.ok) {
@@ -107,16 +117,6 @@ export async function fetchVatDeclarationStatus(
           bodyUnparseable = true
         }
       }
-      // 404 means "nothing on file for the period": a normal answer, not an
-      // upstream failure. Same audit convention as the MCP status tool.
-      const upstreamOk = (res.ok && !bodyUnparseable) || res.status === 404
-      await writeSkatteverketAudit(ctx, {
-        endpoint: view,
-        agRegistreradId: redovisare,
-        redovisningsperiod,
-        outcome: upstreamOk ? 'ok' : 'skv_error',
-        responseStatus: res.status,
-      })
       if (res.status === 404) return { ok: true, body: null }
       if (!res.ok || bodyUnparseable) {
         // The upstream body is logged server-side only. Forwarding it verbatim

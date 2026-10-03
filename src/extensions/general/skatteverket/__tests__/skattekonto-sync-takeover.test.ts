@@ -211,6 +211,23 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
     getSaldoMock.mockResolvedValue(makeSaldo())
   })
 
+  it('a system-credential sync nobody asked for (the cron) is audited with no user', async () => {
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: [],
+      kommandeTransaktioner: [],
+    })
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods: none
+
+    // ctx.userId is whoever the cron put in the context; the audit rows must
+    // not name them for a call made on Accounted's own credentials.
+    await syncSkattekonto(makeCtx(), { mode: 'system' })
+
+    const systemActor = { companyId: 'company-1', userId: null }
+    expect(getSaldoMock).toHaveBeenCalledWith({ mode: 'system' }, expect.any(String), systemActor)
+    expect(getTransaktionerMock).toHaveBeenCalledWith({ mode: 'system' }, expect.any(String), undefined, systemActor)
+  })
+
   it('passes the earliest fiscal period start as datumFrom when inside the SKV window', async () => {
     getTransaktionerMock.mockResolvedValue({
       tidigareTransaktioner: [],
@@ -230,6 +247,8 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
       expect.anything(),
       expect.any(String),
       periodStart,
+      // Default personal-token sync: audited against the ctx user.
+      { companyId: 'company-1', userId: 'user-1' },
     )
   })
 
@@ -252,6 +271,7 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
       expect.anything(),
       expect.any(String),
       undefined,
+      { companyId: 'company-1', userId: 'user-1' },
     )
   })
 
@@ -272,6 +292,7 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
       expect.anything(),
       expect.any(String),
       undefined,
+      { companyId: 'company-1', userId: 'user-1' },
     )
   })
 
@@ -291,6 +312,7 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
       expect.anything(),
       expect.any(String),
       undefined,
+      { companyId: 'company-1', userId: 'user-1' },
     )
   })
 })

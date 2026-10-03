@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { skvRequestWithAuth, SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
+import { auditUserIdFor } from '@/extensions/general/skatteverket/lib/audit'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
 import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/kvittens-notification'
 import { resolveReadAuth, currentSkvEnvironment, findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
@@ -137,7 +138,17 @@ export async function GET(request: Request) {
       const response = await skvRequestWithAuth(
         resolved.auth,
         'GET',
-        `/inlamnat/${state.redovisare}/${period}`
+        `/inlamnat/${state.redovisare}/${period}`,
+        {
+          endpoint: 'inlamnat',
+          companyId,
+          // Nobody asked: the token owner on a personal token, null on
+          // system credentials. Never a stand-in user.
+          userId: auditUserIdFor(resolved.auth),
+          agRegistreradId: state.redovisare ?? null,
+          redovisningsperiod: period,
+          okStatuses: [404],
+        }
       )
 
       if (response.status === 404) {

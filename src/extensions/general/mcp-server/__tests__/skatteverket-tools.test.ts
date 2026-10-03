@@ -177,6 +177,10 @@ describe('gnubok_vat_declaration_validate', () => {
     // Only /kontrollera was called: nothing was saved at SKV.
     expect(mockSkvRequest).toHaveBeenCalledTimes(1)
     expect(mockSkvRequest.mock.calls[0][4]).toMatch(/^\/kontrollera\//)
+    // The transport audits the call under the tool's existing label.
+    expect(mockSkvRequest.mock.calls[0][5]).toEqual({
+      endpoint: 'kontrollera', agRegistreradId: '165560000000', redovisningsperiod: '202503',
+    })
   })
 })
 
@@ -459,6 +463,10 @@ describe('gnubok_vat_declaration_status: redovisningsperiod follows the räkensk
 
     expect(result.redovisningsperiod).toBe('202612')
     expect(mockSkvRequest.mock.calls.map((c) => c[4])).toEqual(['/inlamnat/165560000000/202612'])
+    // 404 is "nothing on file", audited as ok.
+    expect(mockSkvRequest.mock.calls[0][5]).toEqual({
+      endpoint: 'inlamnat', agRegistreradId: '165560000000', redovisningsperiod: '202612', okStatuses: [404],
+    })
   })
 
   it('yearly with no fiscal year ending in `year` keeps the calendar fallback', async () => {

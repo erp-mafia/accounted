@@ -186,6 +186,17 @@ describe('VAT kvittenser cron', () => {
     expect(body.signed).toBe(1)
     expect(body.errors).toBe(0)
     expect(body.results[0]).toMatchObject({ companyId: 'comp-1', period: '202606', status: 'signed' })
+    // One audited read; nobody asked, so the row names the token owner whose
+    // personal token made the call (a system-credential call would name no one).
+    expect(mockSkvRequest).toHaveBeenCalledTimes(1)
+    expect(mockSkvRequest.mock.calls[0][3]).toEqual({
+      endpoint: 'inlamnat',
+      companyId: 'comp-1',
+      userId: 'user-1',
+      agRegistreradId: '165560000000',
+      redovisningsperiod: '202606',
+      okStatuses: [404],
+    })
 
     expect(mockRecordVatFilingConfirmed).toHaveBeenCalledWith(expect.anything(), 'comp-1', {
       periodType: 'monthly',

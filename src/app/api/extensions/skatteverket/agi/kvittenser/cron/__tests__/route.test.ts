@@ -222,6 +222,10 @@ describe('AGI kvittenser cron', () => {
     expect(body.results[0].status).toBe('signed')
     // Tenant identifiers stay in internal log context only.
     expect(body.results[0]).not.toHaveProperty('companyId')
+    // The kvittens read is audited; nobody asked, so the row names the token
+    // owner whose personal token made the call, never a stand-in.
+    expect(mockAgiGetKvittenser).toHaveBeenCalledTimes(1)
+    expect(mockAgiGetKvittenser.mock.calls[0][3]).toEqual({ companyId: 'comp-1', userId: 'user-1' })
     expect(mockCompleteTaxDeadline).toHaveBeenCalledTimes(1)
     expect(mockSendKvittensNotification).toHaveBeenCalledTimes(1)
     expect(errorSpy).not.toHaveBeenCalled()

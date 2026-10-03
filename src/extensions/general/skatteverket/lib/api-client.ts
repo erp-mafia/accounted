@@ -10,6 +10,7 @@ import { refreshAccessToken } from './oauth'
 import { getTokens, storeTokens, deleteTokens } from './token-store'
 import { getSystemAccessToken, invalidateSystemToken } from './system-auth/token-provider'
 import { getSystemApiGwCredentials } from './system-auth/config'
+import { writeSkatteverketAudit, type SkvAuditOutcome } from './audit'
 import type { SkatteverketTokens } from '../types'
 
 /**
@@ -30,6 +31,141 @@ export type SkvAuth =
   | { mode: 'system' }
 
 const log = createLogger('skatteverket-api-client')
+
+/**
+ * What the transport records about one outbound call in
+ * skatteverket_api_audit_log. Every call names its endpoint label: the
+ * migration- and fiscal-year-reset guards read the labels 'declaration/lock',
+ * 'declaration/submit' and 'agi/submit' with outcome 'ok', so those strings
+ * must never change.
+ */
+export interface SkvCallAudit {
+  endpoint: string
+  /** The 12-digit identity the call is about (redovisare / arbetsgivare), when known. */
+  agRegistreradId?: string | null
+  /** YYYYMM, when the call is about one period. */
+  redovisningsperiod?: string | null
+  /**
+   * Non-2xx statuses that are a normal answer for this endpoint and are
+   * recorded as 'ok' (404 "nothing on file" on the inlamnat/beslutat reads,
+   * 409 INCORRECT_DATA on skapaGranskningsunderlag). Everything else outside
+   * 2xx is 'skv_error'.
+   */
+  okStatuses?: readonly number[]
+  /**
+   * Reads Skatteverket's own status (kontrollsvar, tillstand) from the JSON
+   * body of an 'ok' answer into skv_status. When set, an 'ok' answer whose
+   * body is not JSON is recorded as 'skv_error'.
+   */
+  skvStatusOf?: (body: unknown) => string | null | undefined
+  /** A 2xx answer only counts as 'ok' when its body is JSON. */
+  expectJson?: boolean
+}
+
+/** An audited call: the label plus the company and user it is recorded against. */
+export interface SkvAuditTarget extends SkvCallAudit {
+  companyId: string
+  /** The user who caused the call; null for a call the system made with no user. */
+  userId: string | null
+}
+
+/**
+ * Accounted's own calls as ombud to the Ombudshantering register that belong
+ * to no company (the whole-register grant listing, /roller). The audit table
+ * is per company, so these are not written there; the transport logs one
+ * line per call instead.
+ */
+export interface SkvUnauditedRegisterCall {
+  unaudited: 'ombud_register'
+  operation: string
+}
+
+export type SkvAudit = SkvAuditTarget | SkvUnauditedRegisterCall
+
+/** Facts about the outbound call, filled in by sendSkvRequest as it goes. */
+interface SkvCallTrace {
+  sent: boolean
+  status: number | null
+  correlationId: string | null
+  requestSizeBytes: number | null
+}
+
+const MAX_AUDIT_ERROR_LEN = 500
+
+async function bodyExcerpt(response: Response): Promise<string | null> {
+  try {
+    const text = await response.clone().text()
+    if (!text) return null
+    return text.length > MAX_AUDIT_ERROR_LEN ? text.slice(0, MAX_AUDIT_ERROR_LEN) + '…' : text
+  } catch {
+    return null
+  }
+}
+
+interface CallRecord {
+  outcome: SkvAuditOutcome
+  responseStatus: number | null
+  skvStatus?: string | null
+  errorMessage?: string | null
+}
+
+/** The outcome of a call that came back with a response (no thrown error). */
+async function outcomeOfResponse(response: Response, audit: SkvAudit): Promise<CallRecord> {
+  const okStatuses = 'unaudited' in audit ? undefined : audit.okStatuses
+  const normal = response.ok || (okStatuses?.includes(response.status) ?? false)
+  if (!normal) {
+    return { outcome: 'skv_error', responseStatus: response.status, errorMessage: await bodyExcerpt(response) }
+  }
+  if ('unaudited' in audit) return { outcome: 'ok', responseStatus: response.status }
+  const mustParse = audit.skvStatusOf !== undefined || (audit.expectJson === true && response.ok)
+  if (!mustParse) return { outcome: 'ok', responseStatus: response.status }
+  let body: unknown
+  try {
+    body = await response.clone().json()
+  } catch {
+    return {
+      outcome: 'skv_error',
+      responseStatus: response.status,
+      errorMessage: 'Svaret från Skatteverket var inte JSON.',
+    }
+  }
+  return { outcome: 'ok', responseStatus: response.status, skvStatus: audit.skvStatusOf?.(body) ?? null }
+}
+
+/** The outcome of a call whose answer the transport turned into an error. */
+function outcomeOfError(err: unknown, trace: SkvCallTrace): CallRecord {
+  return {
+    outcome: err instanceof SkatteverketAuthError ? 'auth_error' : 'internal_error',
+    responseStatus: trace.status,
+    errorMessage: err instanceof Error ? err.message : String(err),
+  }
+}
+
+async function recordCall(audit: SkvAudit, trace: SkvCallTrace, record: CallRecord): Promise<void> {
+  if ('unaudited' in audit) {
+    log.info('ombud register call (no company, not in the audit table)', {
+      operation: audit.operation,
+      outcome: record.outcome,
+      responseStatus: record.responseStatus,
+      correlationId: trace.correlationId,
+    })
+    return
+  }
+  await writeSkatteverketAudit(
+    { companyId: audit.companyId, userId: audit.userId },
+    {
+      endpoint: audit.endpoint,
+      agRegistreradId: audit.agRegistreradId ?? null,
+      redovisningsperiod: audit.redovisningsperiod ?? null,
+      outcome: record.outcome,
+      responseStatus: record.responseStatus,
+      skvStatus: record.skvStatus ?? null,
+      requestSizeBytes: trace.requestSizeBytes,
+      correlationId: trace.correlationId,
+      errorMessage: record.errorMessage ?? null,
+    },
+  )
+}
 
 // Cap diagnostic-body logging at 200 chars and redact any Bearer token
 // patterns. The audit (V16.1 / A.8.15) flagged that raw 401/403 bodies were
@@ -431,8 +567,8 @@ function isTokenScopeRejection(body: string): boolean {
 
 /**
  * Make an authenticated request to the Skatteverket API with the user's
- * personal BankID token. Thin wrapper kept for the ~40 existing call sites;
- * new auth-aware code calls skvRequestWithAuth directly.
+ * personal BankID token. The call is audited against that same user and
+ * company; new auth-aware code calls skvRequestWithAuth directly.
  */
 export async function skvRequest(
   supabase: SupabaseClient,
@@ -440,14 +576,56 @@ export async function skvRequest(
   companyId: string,
   method: string,
   path: string,
+  audit: SkvCallAudit,
   body?: unknown,
   options?: { baseUrl?: string; contentType?: string }
 ): Promise<Response> {
-  return skvRequestWithAuth({ mode: 'user', supabase, userId, companyId }, method, path, body, options)
+  return skvRequestWithAuth(
+    { mode: 'user', supabase, userId, companyId },
+    method,
+    path,
+    { ...audit, companyId, userId },
+    body,
+    options
+  )
 }
 
 /**
- * Make an authenticated request to the Skatteverket API.
+ * Make an authenticated request to the Skatteverket API and write exactly one
+ * row to skatteverket_api_audit_log for it (founder decision D4: every
+ * outbound call, reads included). The audit is a required argument so no
+ * call site can skip it, and no route writes its own row on top.
+ *
+ * Outcome, recorded once the call has left:
+ *   - a response in 2xx (or in audit.okStatuses)   -> 'ok' (see skvStatusOf / expectJson)
+ *   - any other response                           -> 'skv_error'
+ *   - a 401/403/429 or broker refusal mapped to SkatteverketAuthError -> 'auth_error'
+ *   - a network failure or timeout                 -> 'internal_error'
+ * A call that never left (kill switch, no token, system token unavailable)
+ * writes no row: there was no outbound call to record.
+ */
+export async function skvRequestWithAuth(
+  auth: SkvAuth,
+  method: string,
+  path: string,
+  audit: SkvAudit,
+  body?: unknown,
+  options?: { baseUrl?: string; contentType?: string; accept?: string }
+): Promise<Response> {
+  const trace: SkvCallTrace = { sent: false, status: null, correlationId: null, requestSizeBytes: null }
+  let response: Response
+  try {
+    response = await sendSkvRequest(auth, method, path, body, options, trace)
+  } catch (err) {
+    if (trace.sent) await recordCall(audit, trace, outcomeOfError(err, trace))
+    throw err
+  }
+  await recordCall(audit, trace, await outcomeOfResponse(response, audit))
+  return response
+}
+
+/**
+ * The outbound call itself.
  *
  * Automatically handles:
  * - Credential resolution per auth mode (user token refresh, or the cached
@@ -461,12 +639,13 @@ export async function skvRequest(
  * credential problem) or OMBUD_GRANT_MISSING (this company has not granted,
  * or has revoked, the behorighet).
  */
-export async function skvRequestWithAuth(
+async function sendSkvRequest(
   auth: SkvAuth,
   method: string,
   path: string,
-  body?: unknown,
-  options?: { baseUrl?: string; contentType?: string; accept?: string }
+  body: unknown,
+  options: { baseUrl?: string; contentType?: string; accept?: string } | undefined,
+  trace: SkvCallTrace
 ): Promise<Response> {
   if (isDisabled()) {
     throw new SkatteverketAuthError(
@@ -519,7 +698,8 @@ export async function skvRequestWithAuth(
     const gateway = apiGwCredentialsFor(auth)
     headers['Client_Id'] = gateway.clientId
     headers['Client_Secret'] = gateway.clientSecret
-    headers['skv_client_correlation_id'] = crypto.randomUUID()
+    trace.correlationId = crypto.randomUUID()
+    headers['skv_client_correlation_id'] = trace.correlationId
   }
   // Ombudshantering lists Accept as a required header (406 otherwise); the
   // moms/skattekonto/AGI services never needed it, so it stays opt-in.
@@ -536,12 +716,15 @@ export async function skvRequestWithAuth(
     serializedBody = typeof body === 'string' ? body : JSON.stringify(body)
   }
 
+  trace.requestSizeBytes = serializedBody === undefined ? null : Buffer.byteLength(serializedBody, 'utf8')
+  trace.sent = true
   let response = await fetch(url, {
     method,
     headers,
     body: serializedBody,
     signal: AbortSignal.timeout(15_000),
   })
+  trace.status = response.status
 
   // Connector-layer refusals FIRST: a 4xx here can come from the broker
   // itself, not Skatteverket, and the SKV-shaped sniffing below would then

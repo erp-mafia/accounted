@@ -15,6 +15,7 @@ import {
 } from '@/lib/reconciliation/skattekonto-latest'
 import { getSaldo, getTransaktioner } from './skattekonto-client'
 import { SkatteverketAuthError, type SkvAuth } from './api-client'
+import { auditUserIdFor } from './audit'
 import type {
   SkatteverketBookedTransaction,
   SkatteverketUpcomingTransaction,
@@ -242,6 +243,10 @@ export async function syncSkattekonto(
   // resolved auth: system credentials for companies with a verified lasombud
   // grant, otherwise the token of whichever member connected the company.
   auth: SkvAuth = { mode: 'user', supabase: ctx.supabase, userId: ctx.userId, companyId: ctx.companyId },
+  // Who the audit rows name. A system-credential sync nobody asked for (the
+  // cron) is a system call: null, never a stand-in user. An interactive caller
+  // on system credentials passes their own id.
+  auditUserId: string | null = auditUserIdFor(auth),
 ): Promise<SkattekontoSyncResult> {
   const omfragad = await resolveOmfragad(ctx.supabase, ctx.companyId)
 
@@ -264,8 +269,8 @@ export async function syncSkattekonto(
   let transaktioner: Awaited<ReturnType<typeof getTransaktioner>>
   try {
     ;[saldo, transaktioner] = await Promise.all([
-      getSaldo(auth, omfragad),
-      getTransaktioner(auth, omfragad, datumFrom),
+      getSaldo(auth, omfragad, { companyId: ctx.companyId, userId: auditUserId }),
+      getTransaktioner(auth, omfragad, datumFrom, { companyId: ctx.companyId, userId: auditUserId }),
     ])
   } catch (err) {
     if (err instanceof SkatteverketAuthError) {

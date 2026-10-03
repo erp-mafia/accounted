@@ -23,9 +23,16 @@ vi.mock('../lib/oauth', () => ({
   exchangeCodeForTokens: vi.fn(),
 }))
 
+// The transport writes an audit row per call; these tests are about the call
+// itself, so the writer is stubbed (transport-audit.test.ts covers the rows).
+vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: vi.fn() }))
+
 import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment } from '../lib/api-client'
 
 const fakeSupabase = {} as unknown as Parameters<typeof skvRequest>[0]
+
+const AUDIT = { endpoint: 'test' }
+const SYSTEM_AUDIT = { endpoint: 'test', companyId: 'comp-1', userId: null }
 
 const ENV_VARS = [
   'SKATTEVERKET_APIGW_CLIENT_ID',
@@ -68,7 +75,7 @@ describe('skvRequestWithAuth: connector mode', () => {
   it('routes to the data proxy with remapped headers and NO gateway credentials', async () => {
     const fetchMock = mockFetchStatus(200, '{"ok":true}')
 
-    const res = await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/deklarationer')
+    const res = await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/deklarationer', AUDIT)
     expect(res.status).toBe(200)
 
     const [url, init] = lastFetchCall(fetchMock)
@@ -87,7 +94,7 @@ describe('skvRequestWithAuth: connector mode', () => {
   it('maps a per-service baseUrl to its proxy segment', async () => {
     const fetchMock = mockFetchStatus(200, '{}')
 
-    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/kvittenser', undefined, {
+    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/kvittenser', AUDIT, undefined, {
       baseUrl: 'https://api.test.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1',
     })
 
@@ -98,7 +105,7 @@ describe('skvRequestWithAuth: connector mode', () => {
   it('mirrors the content type to the upstream content-type header on bodied requests', async () => {
     const fetchMock = mockFetchStatus(200, '{}')
 
-    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'POST', '/underlag', '<xml/>', {
+    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'POST', '/underlag', AUDIT, '<xml/>', {
       baseUrl: 'https://api.test.skatteverket.se/arbetsgivardeklaration/inlamning/v1',
       contentType: 'application/xml',
     })
@@ -114,7 +121,7 @@ describe('skvRequestWithAuth: connector mode', () => {
   it('classifies a broker key refusal as ACCESS_DENIED with connector guidance, not APIGW guidance', async () => {
     mockFetchStatus(401, '{"error":"Invalid connector key","code":"CONNECTOR_KEY_INVALID"}')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -129,7 +136,7 @@ describe('skvRequestWithAuth: connector mode', () => {
   it('classifies CONNECTOR_NOT_OWNED (ledger no longer vouches) as SESSION_EXPIRED', async () => {
     mockFetchStatus(404, '{"error":"Unknown Skatteverket connection for this key","code":"CONNECTOR_NOT_OWNED"}')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('SESSION_EXPIRED')
@@ -140,7 +147,7 @@ describe('skvRequestWithAuth: connector mode', () => {
   it('classifies CONNECTOR_RATE_LIMITED as RATE_LIMITED', async () => {
     mockFetchStatus(429, '{"error":"busy","code":"CONNECTOR_RATE_LIMITED"}')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('RATE_LIMITED')
@@ -152,7 +159,7 @@ describe('skvRequestWithAuth: connector mode', () => {
     // proxy; the pre-connector classification must keep applying.
     mockFetchStatus(403, 'Behörighet saknas för aktören')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('BEHORIGHET_SAKNAS')
@@ -166,7 +173,7 @@ describe('skvRequestWithAuth: connector mode', () => {
       'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="agd"',
     })
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('MISSING_SCOPE')
@@ -179,7 +186,7 @@ describe('skvRequestWithAuth: connector mode', () => {
     // to check, so the direct path's guidance would be a dead end.
     mockFetchStatus(401, '')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
@@ -196,7 +203,7 @@ describe('skvRequestWithAuth: connector mode', () => {
   it('gives connector guidance on the APIGW scope-contract 403 passthrough', async () => {
     mockFetchStatus(403, '{"error": "The required scopes are not authorized"}')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
@@ -232,7 +239,7 @@ describe('skvRequestWithAuth: connector mode', () => {
     )
 
     try {
-      await skvRequest(fakeSupabase, 'user-connector-dead', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-connector-dead', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -261,7 +268,7 @@ describe('skvRequestWithAuth: connector mode', () => {
     )
 
     try {
-      await skvRequest(fakeSupabase, 'user-connector-404', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-connector-404', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -291,7 +298,7 @@ describe('skvRequestWithAuth: connector mode', () => {
     )
 
     try {
-      await skvRequest(fakeSupabase, 'user-connector-502', 'comp-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-connector-502', 'comp-1', 'GET', '/x', AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).not.toBeInstanceOf(SkatteverketAuthError)
@@ -309,7 +316,7 @@ describe('skvRequestWithAuth: connector mode is OFF with own credentials (direct
     process.env.SKATTEVERKET_API_BASE_URL = 'https://api.test.example/moms'
     const fetchMock = mockFetchStatus(200, '{"ok":true}')
 
-    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/deklarationer')
+    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/deklarationer', AUDIT)
 
     const [url, init] = lastFetchCall(fetchMock)
     expect(url).toBe('https://api.test.example/moms/deklarationer')
@@ -334,7 +341,7 @@ describe('skvRequestWithAuth: connector mode is OFF with own credentials (direct
     process.env.CONNECT_SKV_CANARY_COMPANIES = 'comp-1'
     const fetchMock = mockFetchStatus(200, '{"ok":true}')
 
-    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/deklarationer')
+    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/deklarationer', AUDIT)
     const [canaryUrl, canaryInit] = lastFetchCall(fetchMock)
     expect(canaryUrl).toBe('https://app.hosted.example/api/connect/skv/api/moms/deklarationer')
     const canaryHeaders = canaryInit.headers as Record<string, string>
@@ -343,7 +350,7 @@ describe('skvRequestWithAuth: connector mode is OFF with own credentials (direct
     expect(canaryHeaders['Client_Id']).toBeUndefined()
     expect(canaryHeaders['Client_Secret']).toBeUndefined()
 
-    await skvRequest(fakeSupabase, 'user-1', 'comp-2', 'GET', '/deklarationer')
+    await skvRequest(fakeSupabase, 'user-1', 'comp-2', 'GET', '/deklarationer', AUDIT)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const [directUrl, directInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
     expect(directUrl).toBe('https://api.test.example/moms/deklarationer')
@@ -358,7 +365,7 @@ describe('skvRequestWithAuth: system mode is never brokered', () => {
     const fetchMock = mockFetchStatus(200, '{}')
     try {
       const { skvRequestWithAuth } = await import('../lib/api-client')
-      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)

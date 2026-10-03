@@ -1,4 +1,5 @@
 import { skvRequestWithAuth, type SkvAuth } from './api-client'
+import type { SkvAuditActor } from './audit'
 import type {
   SkatteverketSaldoResponse,
   SkatteverketTransaktionerResponse,
@@ -94,11 +95,13 @@ export class SkatteverketSkattekontoError extends Error {
  * GET /skattekonton/{omfragad}/saldo
  *
  * @param omfragad 10/12-digit org/personnummer (formatRedovisare format)
+ * @param actor    Who the audit row names (null user: a system call)
  * @param datum    Optional ISO date (YYYY-MM-DD); fetch balance as of date
  */
 export async function getSaldo(
   auth: SkvAuth,
   omfragad: string,
+  actor: SkvAuditActor,
   datum?: string,
 ): Promise<SkatteverketSaldoResponse> {
   const qs = datum ? `?datum=${encodeURIComponent(datum)}` : ''
@@ -106,6 +109,7 @@ export async function getSaldo(
     auth,
     'GET',
     `/skattekonton/${omfragad}/saldo${qs}`,
+    { endpoint: 'skattekonto/saldo', ...actor, agRegistreradId: omfragad },
     undefined,
     { baseUrl: getSkattekontoBaseUrl() },
   )
@@ -121,19 +125,22 @@ export async function getSaldo(
  * GET /skattekonton/{omfragad}/transaktioner
  *
  * @param omfragad   10/12-digit org/personnummer
+ * @param actor      Who the audit row names (null user: a system call)
  * @param datumFrom  Optional ISO date (YYYY-MM-DD). Defaults at SKV to
  *                   555 days back; max lookback is 915 days.
  */
 export async function getTransaktioner(
   auth: SkvAuth,
   omfragad: string,
-  datumFrom?: string,
+  datumFrom: string | undefined,
+  actor: SkvAuditActor,
 ): Promise<SkatteverketTransaktionerResponse> {
   const qs = datumFrom ? `?datumFrom=${encodeURIComponent(datumFrom)}` : ''
   const response = await skvRequestWithAuth(
     auth,
     'GET',
     `/skattekonton/${omfragad}/transaktioner${qs}`,
+    { endpoint: 'skattekonto/transaktioner', ...actor, agRegistreradId: omfragad },
     undefined,
     { baseUrl: getSkattekontoBaseUrl() },
   )

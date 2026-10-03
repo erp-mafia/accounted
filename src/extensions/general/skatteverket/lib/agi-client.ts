@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { skvRequest, skvRequestWithAuth, type SkvAuth } from './api-client'
+import type { SkvAuditActor } from './audit'
 import type {
   SkatteverketAGIErrorBody,
   SkatteverketAGIGranskningsunderlagResponse,
@@ -40,7 +41,39 @@ import type {
  * Note: skvRequest already maps 401/403/429 to SkatteverketAuthError. AGI
  * 400/404/409 carry the SkatteverketAGIErrorBody envelope, which we surface
  * via Result.error so callers can render meddelandeTillAnvandare verbatim.
+ *
+ * Audit: every function passes its own endpoint label to the transport,
+ * which writes one skatteverket_api_audit_log row per call. 'agi/submit' is
+ * read by the migration-reset guard and must not change. Calls addressed by
+ * inlamningId alone take the arbetsgivare and period as `scope` so the row
+ * still says what it was about (null when the caller cannot know).
  */
+
+/** What an inlamningId-addressed call was about, for its audit row. */
+export interface AgiAuditScope {
+  agRegistreradId: string | null
+  redovisningsperiod: string | null
+}
+
+function periodScope(arbetsgivare: string, period: string) {
+  return { agRegistreradId: arbetsgivare, redovisningsperiod: period }
+}
+
+/** The arbetsgivare and period a kontrollera payload names (spec v1.7 §7-8). */
+function kontrolleraScope(payload: Record<string, unknown>): AgiAuditScope {
+  const id = payload.agRegistreradId
+  const period = payload.redovisningsPeriod
+  return {
+    agRegistreradId: typeof id === 'string' ? id : null,
+    redovisningsperiod: typeof period === 'string' ? period : null,
+  }
+}
+
+/** kontrollresultat / kontrollsvar status, for skv_status. */
+function statusField(body: unknown): string | null {
+  const status = (body as { status?: unknown } | null)?.status
+  return typeof status === 'string' ? status : null
+}
 
 const DEFAULT_INLAMNING_BASE_URL =
   'https://api.test.skatteverket.se/arbetsgivardeklaration/inlamning/v1'
@@ -87,6 +120,7 @@ export async function agiPostUnderlag(
   userId: string,
   companyId: string,
   xml: string,
+  scope: AgiAuditScope,
 ): Promise<Result<SkatteverketAGIUnderlagResponse>> {
   const response = await skvRequest(
     supabase,
@@ -94,6 +128,7 @@ export async function agiPostUnderlag(
     companyId,
     'POST',
     '/underlag',
+    { endpoint: 'agi/submit', ...scope },
     xml,
     {
       baseUrl: getInlamningBaseUrl(),
@@ -122,6 +157,7 @@ export async function agiGetKontrollresultat(
   userId: string,
   companyId: string,
   inlamningId: number,
+  scope: AgiAuditScope,
 ): Promise<Result<SkatteverketAGIKontrollresultat>> {
   const response = await skvRequest(
     supabase,
@@ -129,6 +165,7 @@ export async function agiGetKontrollresultat(
     companyId,
     'GET',
     `/underlag/${inlamningId}/kontrollresultat`,
+    { endpoint: 'agi/kontrollresultat', ...scope, skvStatusOf: statusField },
     undefined,
     { baseUrl: getInlamningBaseUrl() },
   )
@@ -161,6 +198,7 @@ export async function agiSparaUnderlag(
   userId: string,
   companyId: string,
   inlamningId: number,
+  scope: AgiAuditScope,
 ): Promise<Result<unknown>> {
   const response = await skvRequest(
     supabase,
@@ -168,6 +206,7 @@ export async function agiSparaUnderlag(
     companyId,
     'POST',
     `/underlag/${inlamningId}/spara`,
+    { endpoint: 'agi/spara', ...scope },
     undefined,
     { baseUrl: getInlamningBaseUrl() },
   )
@@ -193,6 +232,7 @@ export async function agiAvbrytUnderlag(
   userId: string,
   companyId: string,
   inlamningId: number,
+  scope: AgiAuditScope,
 ): Promise<Result<unknown>> {
   const response = await skvRequest(
     supabase,
@@ -200,6 +240,7 @@ export async function agiAvbrytUnderlag(
     companyId,
     'DELETE',
     `/underlag/${inlamningId}`,
+    { endpoint: 'agi/avbryt', ...scope },
     undefined,
     { baseUrl: getInlamningBaseUrl() },
   )
@@ -232,6 +273,7 @@ export async function agiTaBortSparadInlamning(
     companyId,
     'DELETE',
     `${periodPath(arbetsgivare, period)}/inlamningar/${inlamningId}`,
+    { endpoint: 'agi/sparad/ta-bort', ...periodScope(arbetsgivare, period) },
     undefined,
     { baseUrl: getInlamningBaseUrl() },
   )
@@ -267,6 +309,16 @@ export async function agiSkapaGranskningsunderlag(
     companyId,
     'POST',
     `${periodPath(arbetsgivare, period)}/skapaGranskningsunderlag${qs}`,
+    {
+      endpoint: 'agi/granskningsunderlag',
+      ...periodScope(arbetsgivare, period),
+      // 409 INCORRECT_DATA is an answer, not a failure (handled as data below).
+      okStatuses: [409],
+      skvStatusOf: (body) => {
+        const tillstand = (body as { tillstand?: unknown } | null)?.tillstand
+        return typeof tillstand === 'string' ? tillstand : null
+      },
+    },
     undefined,
     { baseUrl: getInlamningBaseUrl() },
   )
@@ -297,17 +349,20 @@ export async function agiSkapaGranskningsunderlag(
  *
  * Takes SkvAuth (not supabase+userId): kvittens polling is a background
  * read, so the crons can run it on system credentials when the company has
- * granted the lasombud behorighet.
+ * granted the lasombud behorighet. `actor` is who the audit row names: the
+ * user who asked, or null for a system call no user started.
  */
 export async function agiGetKvittenser(
   auth: SkvAuth,
   arbetsgivare: string,
   period: string,
+  actor: SkvAuditActor,
 ): Promise<Result<SkatteverketAGIKvittenserResponse>> {
   const response = await skvRequestWithAuth(
     auth,
     'GET',
     `${periodPath(arbetsgivare, period)}/kvittenser`,
+    { endpoint: 'kvittenser', ...actor, ...periodScope(arbetsgivare, period) },
     undefined,
     { baseUrl: getHanteraBaseUrl() },
   )
@@ -339,6 +394,7 @@ export async function agiLasPeriod(
     companyId,
     'POST',
     `${periodPath(arbetsgivare, period)}/las`,
+    { endpoint: 'agi/las', ...periodScope(arbetsgivare, period) },
     undefined,
     { baseUrl: getHanteraBaseUrl() },
   )
@@ -364,6 +420,7 @@ export async function agiLasUppPeriod(
     companyId,
     'POST',
     `${periodPath(arbetsgivare, period)}/lasUpp`,
+    { endpoint: 'agi/lasUpp', ...periodScope(arbetsgivare, period) },
     undefined,
     { baseUrl: getHanteraBaseUrl() },
   )
@@ -397,6 +454,7 @@ export async function agiKontrolleraHU(
     companyId,
     'POST',
     '/underlag/huvuduppgift/kontrollera',
+    { endpoint: 'agi.kontrollera.hu', ...kontrolleraScope(hu), skvStatusOf: statusField },
     hu,
     { baseUrl: getInlamningBaseUrl() },
   )
@@ -428,6 +486,7 @@ export async function agiKontrolleraIU(
     companyId,
     'POST',
     '/underlag/individuppgift/kontrollera',
+    { endpoint: 'agi.kontrollera.iu', ...kontrolleraScope(iu), skvStatusOf: statusField },
     iu,
     { baseUrl: getInlamningBaseUrl() },
   )

@@ -109,7 +109,9 @@ export async function GET(request: Request) {
 
   let grants: Map<string, HuvudmanGrantSummary>
   try {
-    grants = summarizeGrants(await listOmbudGrants({}, { emptyOn404: true }), today)
+    // The whole register: Accounted's own call as ombud, no company to audit
+    // it against (logged by the transport instead).
+    grants = summarizeGrants(await listOmbudGrants({}, 'ombud_register', { emptyOn404: true }), today)
   } catch (error) {
     console.error('[ombud-sync-cron] ombudsregister lookup failed', {
       message: error instanceof Error ? error.message : String(error),
