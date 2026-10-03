@@ -404,6 +404,12 @@ describe('previewOpeningBalanceSplit', () => {
     expect(preview.blocked?.message_sv).toMatch(/Lås upp året först/)
   })
 
+  it('fails instead of reporting no lock date when the company settings cannot be read', async () => {
+    const { ctx } = setup({ company_settings: { error: { message: 'permission denied for table company_settings' } } })
+    const outcome = await previewOpeningBalanceSplit(ctx, { fiscal_period_id: PERIOD })
+    expect(outcome).toMatchObject({ ok: false, code: 'OB_SPLIT_FAILED' })
+  })
+
   it('answers 404 for a year that is not the company\'s', async () => {
     const { ctx } = setup({ fiscal_periods: { data: null } })
     expect(await previewOpeningBalanceSplit(ctx, { fiscal_period_id: PERIOD })).toEqual({ ok: false, code: 'OB_PERIOD_NOT_FOUND' })

@@ -814,11 +814,14 @@ async function loadSplitState(ctx: OperationContext, fiscalPeriodId: string): Pr
   preview.fingerprint = splitFingerprint(entry.id, accounts)
 
   // What would block the apply, in the order the user has to fix it.
-  const { data: settings } = await supabase
+  const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
     .select('bookkeeping_locked_through')
     .eq('company_id', companyId)
     .maybeSingle()
+  // A failed read must not look like "no lock date": the preview would offer
+  // a split the RPC then refuses.
+  if (settingsError) throw new Error(`Failed to read the company lock date: ${settingsError.message}`)
   const lockDate = ((settings as { bookkeeping_locked_through?: string | null } | null)?.bookkeeping_locked_through ?? null) as string | null
   const { count: yearEndCount, error: yearEndError } = await supabase
     .from('journal_entries')
