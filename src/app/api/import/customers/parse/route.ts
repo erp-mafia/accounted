@@ -83,7 +83,9 @@ export const POST = withRouteContext(
 
       let duplicateCount = 0
       const annotated: AnnotatedCustomerRow[] = parsed.rows.map((r) => {
-        const orgKey = normalizeOrgNumber(r.org_number)
+        // An individual's number is its personnummer, which the import
+        // stores encrypted: it is matched by email only, as execute does.
+        const orgKey = r.customer_type === 'individual' ? null : normalizeOrgNumber(r.org_number)
         const emailKey = normalizeEmail(r.email)
         let match: AnnotatedCustomerRow['duplicate_match'] = null
         if (orgKey && byOrg.has(orgKey)) {

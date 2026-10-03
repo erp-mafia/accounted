@@ -518,7 +518,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           ({ from, to }) =>
             supabase
               .from('customers')
-              .select('id, org_number, name, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses')
+              .select('id, org_number, name, customer_type, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses')
               .eq('company_id', companyId)
               // Stable order: .range() pages past 1 000 rows are only
               // reliable with a total order.

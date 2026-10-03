@@ -299,6 +299,7 @@ registerEndpoint({
     'A personnummer-shaped org_number on customer_type=individual is treated as the personnummer submitted in the wrong field: it is stored encrypted as personal_number, returned masked (********-1234), and org_number is left empty. Prefer passing it as personal_number. Next to a different personal_number in the same body it is a 400.',
     'An org_number shaped like a Swedish personnummer is accepted on customer_type=swedish_business: a sole trader (enskild firma) has no separate org number, so its owner\'s personnummer is the firm\'s identifier, and the list endpoint masks it. It is rejected for eu_business and non_eu_business, which cannot have one.',
     'personal_number is accepted only for customer_type=individual, stored encrypted, and returned in the masked form ********-1234.',
+    'An individual has no org number: an org_number on customer_type=individual that is not a personnummer is a 400. Leave it empty, or use customer_type=swedish_business for a business.',
     'If default_payment_terms is omitted, it defaults to the company setting invoice_default_days, falling back to 30.',
     'VIES validation runs only on commit. Dry-run skips the external call and leaves vat_number_validated=false in the preview.',
   ],

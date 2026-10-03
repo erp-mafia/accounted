@@ -820,15 +820,26 @@ describe('CreateCustomerSchema: personnummer placement', () => {
     }
   })
 
-  it('leaves a legal-entity organisationsnummer alone on every customer_type', () => {
-    for (const customer_type of ['individual', 'swedish_business'] as const) {
-      const result = CreateCustomerSchema.safeParse({ name: 'X', customer_type, org_number: '556677-8899' })
-      expect(result.success).toBe(true)
-      if (result.success) {
-        expect(result.data.org_number).toBe('556677-8899')
-        expect(result.data.personal_number).toBeUndefined()
-      }
+  it('leaves a legal-entity organisationsnummer alone on a business', () => {
+    const result = CreateCustomerSchema.safeParse({ name: 'X', customer_type: 'swedish_business', org_number: '556677-8899' })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.org_number).toBe('556677-8899')
+      expect(result.data.personal_number).toBeUndefined()
     }
+  })
+
+  it('refuses a legal-entity organisationsnummer on an individual, which has no org number', () => {
+    const result = CreateCustomerSchema.safeParse({ name: 'X', customer_type: 'individual', org_number: '556677-8899' })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].path).toEqual(['org_number'])
+    }
+  })
+
+  it('accepts an empty org_number on an individual', () => {
+    const result = CreateCustomerSchema.safeParse({ name: 'X', customer_type: 'individual', org_number: '' })
+    expect(result.success).toBe(true)
   })
 })
 
