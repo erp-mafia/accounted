@@ -76,6 +76,7 @@ import {
   applyVatTreatmentReviewAll,
   enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
+  needsVatTreatmentReview,
 } from '@/lib/import/account-vat-treatment'
 import {
   applySourceChartCsv,
@@ -741,9 +742,7 @@ function SIEImportWizard({
 
   // Skip the mapping step when all accounts are already mapped
   const hasUnmapped = mappings.some((m) => !m.targetAccount)
-  const needsVatReview = mappings.some((m) =>
-    m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
-  )
+  const needsVatReview = mappings.some(needsVatTreatmentReview)
   const showMappingStep = hasUnmapped || needsVatReview
   const sieSteps: ImportWizardStep[] = showMappingStep
     ? ['upload', 'preview', 'mapping', 'review', 'result']
@@ -998,9 +997,7 @@ function SIEImportWizard({
   }, [])
 
   const confirmVatReview = useCallback(() => {
-    if (mappings.some((mapping) =>
-      mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
-    )) {
+    if (mappings.some(needsVatTreatmentReview)) {
       setError('Granska momshanteringen för alla markerade konton innan du fortsätter.')
       return
     }
