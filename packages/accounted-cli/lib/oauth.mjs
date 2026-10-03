@@ -70,7 +70,8 @@ export function createPkce(randomBytes) {
  * the consent page then pre-ticks every permission the user's role allows
  * except Approve, pending_operations:approve (founder decisions 2026-08-26
  * and 2026-10-03), and the user can untick rows, choose read only or tick
- * Approve there. Without Approve, writes stay staged for approval.
+ * Approve there. Writes always stage as proposals; only with Approve can the
+ * agent approve them itself.
  *
  * @param {{ authorizationEndpoint: string, redirectUri: string, state: string, challenge: string, resource: string }} p
  */
