@@ -9,10 +9,14 @@ import {
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
 import { readBestSheet } from '../shared/workbook-reader'
+import { isOrgNumberRefusedOnIndividual } from '@/lib/customers/personal-number-shape'
 import type {
   DetectedCustomerColumns,
   ParsedCustomerRow,
 } from './types'
+
+const INDIVIDUAL_ORG_NUMBER_ERROR =
+  'En privatperson har inget organisationsnummer: ange personnumret eller välj ett företag som kundtyp'
 
 const VALID_CUSTOMER_TYPES: CustomerType[] = [
   'individual',
@@ -180,6 +184,11 @@ export function parseCustomersFile(
     }
     if (orgNumber && !/^[\d\s\-]{6,20}$/.test(orgNumber)) {
       validationErrors.push('Ogiltigt org-/personnummer')
+    }
+    // A privatperson's personnummer is stored as its personnummer; any other
+    // number means the row is a business or the number is wrong.
+    if (isOrgNumberRefusedOnIndividual(customerType, orgNumber)) {
+      validationErrors.push(INDIVIDUAL_ORG_NUMBER_ERROR)
     }
 
     rows.push({

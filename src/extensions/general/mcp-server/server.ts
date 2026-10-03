@@ -176,6 +176,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { expandParty } from '@/lib/parties/party-api'
 import { listForCompany as listCashAccountsForCompany } from '@/lib/cash-accounts/service'
 import {
+  isOrgNumberRefusedOnIndividual,
   isPersonalNumberOrgNumberDisallowed,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
@@ -8189,6 +8190,12 @@ export const tools: McpTool[] = [
           + 'the number passed as personal_number for a private person.',
         )
       }
+      if (isOrgNumberRefusedOnIndividual(customerType, orgNumberArg)) {
+        throw new Error(
+          'An individual customer has no org number: org_number must be empty or the person\'s personnummer. '
+          + 'Use customer_type "swedish_business" for a business.',
+        )
+      }
       if (personalNumberArg && customerType !== 'individual') {
         throw new Error('personal_number is only allowed for customer_type "individual".')
       }
@@ -8409,6 +8416,35 @@ export const tools: McpTool[] = [
       const effectiveCustomerType = (parsed.data.changes.customer_type ?? current.customer_type) as string
       if (personalNumber && effectiveCustomerType !== 'individual') {
         throw new Error('personal_number is only allowed for customer_type "individual".')
+      }
+
+      // An individual has no org number, same rules as the REST PATCH route:
+      // judged on the org number the row will END UP with, only when
+      // org_number or customer_type is in the update. A personnummer there is
+      // moved into personal_number; anything else is refused.
+      const individualOrgNumber =
+        parsed.data.changes.org_number !== undefined || parsed.data.changes.customer_type !== undefined
+          ? (parsed.data.changes.org_number ?? current.org_number)
+          : undefined
+      if (isOrgNumberRefusedOnIndividual(effectiveCustomerType, individualOrgNumber)) {
+        throw new Error(
+          'An individual customer has no org number: org_number must be empty or the person\'s personnummer. '
+          + 'Send org_number "" to clear it, or use customer_type "swedish_business" for a business.',
+        )
+      }
+      if (orgNumberHoldsPersonalNumber(effectiveCustomerType, individualOrgNumber)) {
+        const rerouted = normalizeReroutedPersonalNumber(individualOrgNumber!)
+        if (personalNumber && personalNumberDigits(personalNumber) !== personalNumberDigits(rerouted)) {
+          throw new Error(
+            'org_number looks like a personnummer and differs from personal_number. An individual customer keeps '
+            + 'its personnummer in personal_number; leave org_number empty.',
+          )
+        }
+        if (!personalNumber) {
+          personalNumber = rerouted
+          parsed.data.changes.personal_number_encrypted = encryptCustomerPersonalNumber(rerouted)
+        }
+        parsed.data.changes.org_number = ''
       }
 
       // Country vs type vs VAT prefix, judged on the row as it will END UP:

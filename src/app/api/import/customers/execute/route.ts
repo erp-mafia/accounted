@@ -10,6 +10,11 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
 import type { CustomerImportExecuteResult } from '@/lib/import/customers/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import {
+  normalizeReroutedPersonalNumber,
+  orgNumberHoldsPersonalNumber,
+} from '@/lib/customers/personal-number-shape'
 
 ensureInitialized()
 
@@ -17,6 +22,8 @@ interface ExistingCustomer {
   id: string
   name: string
   org_number: string | null
+  /** Ciphertext; read only to know whether one is stored. */
+  personal_number: string | null
   email: string | null
   phone: string | null
   address_line1: string | null
@@ -36,6 +43,11 @@ interface ExistingCustomer {
  * Imports validated customer rows. Duplicates (matched by org_number or email)
  * are either updated (merge: only non-empty file fields overwrite) or skipped
  * based on `update_duplicates`.
+ *
+ * An individual's personnummer arrives in the org number column; the schema
+ * moves it into personal_number and this route stores it encrypted, with
+ * org_number empty. An individual is therefore matched by email only: the
+ * stored ciphertext cannot be compared.
  */
 export const POST = withRouteContext(
   'register_import.customers.execute',
@@ -62,7 +74,7 @@ export const POST = withRouteContext(
           .select(
             'id, name, org_number, email, phone, address_line1, address_line2, ' +
               'postal_code, city, country, vat_number, default_payment_terms, notes, ' +
-              'customer_type',
+              'customer_type, personal_number',
           )
           .eq('company_id', companyId)
           .range(from, to),
@@ -101,7 +113,20 @@ export const POST = withRouteContext(
           const merged: Record<string, unknown> = {}
           if (row.name) merged.name = row.name
           if (row.customer_type) merged.customer_type = row.customer_type
-          if (row.org_number) merged.org_number = row.org_number
+          if (row.customer_type === 'individual') {
+            // An individual has no org number, so whatever the matched row
+            // carried there goes. A personnummer an earlier import stored
+            // there is kept, encrypted in personal_number, unless the file
+            // brings one or the row already holds one.
+            if (match.org_number?.trim()) merged.org_number = null
+            const personalNumber = row.personal_number
+              ?? (!match.personal_number && orgNumberHoldsPersonalNumber('individual', match.org_number)
+                ? normalizeReroutedPersonalNumber(match.org_number!)
+                : null)
+            if (personalNumber) merged.personal_number = encryptCustomerPersonalNumber(personalNumber)
+          } else if (row.org_number) {
+            merged.org_number = row.org_number
+          }
           if (row.email) merged.email = row.email
           if (row.phone) merged.phone = row.phone
           if (row.address_line1) merged.address_line1 = row.address_line1
@@ -150,6 +175,8 @@ export const POST = withRouteContext(
             city: row.city,
             country: row.country || 'SE',
             org_number: row.org_number,
+            // Stored as ciphertext (customers_personal_number_check).
+            personal_number: encryptCustomerPersonalNumber(row.personal_number),
             vat_number: row.vat_number,
             default_payment_terms: row.default_payment_terms || 30,
             notes: row.notes,
@@ -178,10 +205,12 @@ export const POST = withRouteContext(
       }
 
       // Emit events for downstream listeners (non-blocking).
+      // Masked like POST /api/customers: the row carries personal_number
+      // ciphertext, which no listener needs.
       for (const c of created) {
         await eventBus.emit({
           type: 'customer.created',
-          payload: { customer: c, companyId: companyId!, userId: user.id },
+          payload: { customer: maskCustomerRow(c), companyId: companyId!, userId: user.id },
         })
       }
 
