@@ -88,6 +88,11 @@ export function preparePeppolParticipant(settings: ParticipantSettings): PeppolP
     return { ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' }
   }
   const digits = (settings.org_number ?? '').replace(/\D/g, '')
+  // Twelve digits: an organisation number carries the 16 prefix, a
+  // personnummer its century (19/20) followed by the birth month.
+  if (digits.length === 12 && /^(19|20)/.test(digits) && Number(digits[4]) < 2) {
+    return { ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' }
+  }
   const orgNumber = digits.length === 12 && digits.startsWith('16') ? digits.slice(2) : digits
   if (orgNumber.length !== 10) return { ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' }
   // Same rule as the BIS Billing generator: an organisation number has its
