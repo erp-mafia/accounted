@@ -188,6 +188,19 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
 ]
 
 /**
+ * A row claimed by the page (nav-row-claim.ts) overrides the URL: the
+ * claimed row is active, and any other row the pathname would match by
+ * prefix is not. Undefined when the claim says nothing about `href`, so
+ * the URL rules decide.
+ */
+export function claimedRowActive(href: string, pathname: string, claimedHref: string | null): boolean | undefined {
+  if (!claimedHref) return undefined
+  if (href === claimedHref) return true
+  if (href !== '/' && pathname.startsWith(href)) return false
+  return undefined
+}
+
+/**
  * Longest matching sub-item wins, so /invoices/recurring lights up
  * Återkommande and not Kundfakturor as well.
  */

@@ -53,6 +53,19 @@ describe('settings operations: field split', () => {
     expect(field.description).toMatch(/superseded by invoice_qr_mode/i)
   })
 
+  it('tells an MCP or API caller that the company-name switch and placement are superseded by the fixed layout', () => {
+    // Accepted for compatibility (no UI writes them any more): the tool's
+    // input schema says so instead of offering a placement that does nothing.
+    const shape = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape
+    const show = shape.invoice_show_company_name as z.ZodType
+    const position = shape.invoice_company_name_position as z.ZodType
+    expect(show.safeParse(false).success).toBe(true)
+    expect(position.safeParse('footer').success).toBe(true)
+    expect(show.description).toMatch(/superseded by the fixed invoice layout/i)
+    expect(position.description).toMatch(/superseded by the fixed invoice layout/i)
+    expect(position.description).toMatch(/no longer changes the PDF/i)
+  })
+
   it('lets the API and MCP read and write the invoice QR mode, and refuses a value that is not a mode', () => {
     expect(keys(settingsUpdate.input)).toContain('invoice_qr_mode')
     expect(toSettingsResource('c1', { invoice_qr_mode: 'bank_app' } as never).invoice_qr_mode).toBe('bank_app')

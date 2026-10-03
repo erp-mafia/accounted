@@ -6,6 +6,7 @@ import {
   generatePaymentConfirmationEmailHtml,
   generatePaymentConfirmationEmailSubject,
   generatePaymentConfirmationEmailText,
+  invoiceEmailEditableTexts,
 } from '../invoice-templates'
 import { makeCustomer, makeInvoice, makeCompanySettings } from '@/tests/helpers'
 
@@ -372,6 +373,111 @@ describe('invoice email templates', () => {
       expect(html).not.toContain('H\u00e4r kommer m\u00e5nadens faktura.')
       expect(generateInvoiceEmailSubject({ invoice: quote, customer: svCustomer, company: fullOverrides }))
         .toBe('Offert OF-001 fr\u00e5n Acme AB')
+    })
+  })
+
+  // The editor's "Redigera text för den här fakturan": one send's own
+  // subject and message (SendInvoiceSchema email_subject / email_body).
+  describe('this send\'s own subject and message (overrides)', () => {
+    const svCustomer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
+    const companyTexts = makeCompanySettings({
+      company_name: 'Acme AB',
+      invoice_email_texts: {
+        sv: { subject: 'Er faktura {fakturanummer}', greeting: 'Hejsan {förnamn}!', body: 'Månadens faktura.', signoff: 'Allt gott,' },
+      },
+    })
+    const overrides = { subject: 'Faktura {fakturanummer} för maj', body: 'Hej igen!\nHär är majfakturan, {belopp}.' }
+
+    it('wins over the company texts in the subject, HTML and text variants', () => {
+      const data = { invoice, customer: svCustomer, company: companyTexts, overrides }
+      expect(generateInvoiceEmailSubject(data)).toBe('Faktura 1042 för maj')
+      const html = generateInvoiceEmailHtml(data)
+      expect(html).toMatch(/Hej igen!<br>Här är majfakturan, 12[\s\u00a0]500,00 SEK\./)
+      expect(html).not.toContain('Månadens faktura.')
+      // Only the subject and the message are replaced.
+      expect(html).toContain('Hejsan Erik!')
+      expect(html).toContain('Allt gott,')
+      const text = generateInvoiceEmailText(data)
+      expect(text).toMatch(/Hej igen!\nHär är majfakturan, 12[\s\u00a0]500,00 SEK\./)
+    })
+
+    it('replaces the stock texts when the company has none', () => {
+      const data = { invoice, customer: svCustomer, company, overrides }
+      expect(generateInvoiceEmailSubject(data)).toBe('Faktura 1042 för maj')
+      expect(generateInvoiceEmailHtml(data)).not.toContain('Tack för ditt förtroende')
+    })
+
+    it('applies to every document type: the user wrote it for this one', () => {
+      const creditInvoice = makeInvoice({ invoice_number: '1043', total: -5000, credited_invoice_id: 'inv-orig' })
+      const data = { invoice: creditInvoice, customer: svCustomer, company: companyTexts, overrides }
+      expect(generateInvoiceEmailSubject(data)).toBe('Faktura 1043 för maj')
+      expect(generateInvoiceEmailHtml(data)).toContain('Hej igen!')
+    })
+
+    it('treats empty, whitespace-only and null overrides as none', () => {
+      for (const blank of ['', '   ', null]) {
+        const data = { invoice, customer: svCustomer, company: companyTexts, overrides: { subject: blank, body: blank } }
+        expect(generateInvoiceEmailSubject(data)).toBe('Er faktura 1042')
+        expect(generateInvoiceEmailHtml(data)).toContain('Månadens faktura.')
+      }
+    })
+
+    it('escapes the message in HTML and keeps the subject on one line', () => {
+      const data = {
+        invoice,
+        customer: svCustomer,
+        company,
+        overrides: { subject: 'Faktura\r\nBcc: x@example.test', body: '<b>Hej</b>' },
+      }
+      expect(generateInvoiceEmailSubject(data)).toBe('Faktura Bcc: x@example.test')
+      const html = generateInvoiceEmailHtml(data)
+      expect(html).toContain('&lt;b&gt;Hej&lt;/b&gt;')
+      expect(html).not.toContain('<b>Hej</b>')
+    })
+  })
+
+  // What "Redigera text för den här fakturan" starts from: the texts with
+  // their placeholders, so the edited subject gets the number the send
+  // allocates rather than the preview's predicted one.
+  describe('invoiceEmailEditableTexts', () => {
+    const svCustomer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
+    const enCustomer = makeCustomer({ name: 'Jane Doe', customer_type: 'individual', email: 'jane@example.com', language: 'en' })
+
+    it('is the stock subject and message with the placeholders left in', () => {
+      expect(invoiceEmailEditableTexts({ invoice, customer: svCustomer, company })).toEqual({
+        subject: 'Faktura {fakturanummer} från {företag}',
+        body: 'Tack för ditt förtroende! Bifogat hittar du din faktura.',
+      })
+      expect(invoiceEmailEditableTexts({ invoice, customer: enCustomer, company })).toEqual({
+        subject: 'Invoice {fakturanummer} from {företag}',
+        body: 'Thank you for your business. Attached you will find your invoice.',
+      })
+    })
+
+    it('is the company text, unsubstituted, when one is set', () => {
+      const companyTexts = makeCompanySettings({
+        company_name: 'Acme AB',
+        invoice_email_texts: { sv: { subject: 'Er faktura {fakturanummer}', body: 'Månadens faktura, {belopp}.' } },
+      })
+      expect(invoiceEmailEditableTexts({ invoice, customer: svCustomer, company: companyTexts })).toEqual({
+        subject: 'Er faktura {fakturanummer}',
+        body: 'Månadens faktura, {belopp}.',
+      })
+    })
+
+    it('is this send\'s own text when given', () => {
+      const data = { invoice, customer: svCustomer, company, overrides: { subject: ' Hej {förnamn} ', body: null } }
+      expect(invoiceEmailEditableTexts(data)).toEqual({
+        subject: 'Hej {förnamn}',
+        body: 'Tack för ditt förtroende! Bifogat hittar du din faktura.',
+      })
+    })
+
+    it('names the document type: a quote keeps its own stock message', () => {
+      const quote = makeInvoice({ invoice_number: 'OF-001', due_date: '2026-10-02', valid_until: '2026-10-02', document_type: 'quote' })
+      const texts = invoiceEmailEditableTexts({ invoice: quote, customer: svCustomer, company })
+      expect(texts.subject).toBe('Offert {fakturanummer} från {företag}')
+      expect(texts.body).toContain('Offerten är giltig till 2026-10-02')
     })
   })
 

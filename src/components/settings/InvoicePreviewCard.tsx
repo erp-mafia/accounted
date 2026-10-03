@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { readPdfPreviewMeta } from '@/lib/invoices/editor/preview-request'
 import type { CompanySettings } from '@/types'
 
 interface InvoicePreviewCardProps {
@@ -28,6 +29,9 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The preview renders without payment details (X-Invoice-Missing: payee)
+  // instead of refusing: say what a real invoice would lack above the PDF.
+  const [payeeNotice, setPayeeNotice] = useState<string | null>(null)
   const currentUrlRef = useRef<string | null>(null)
 
   const sampleItemDescription = t('sample_item_description')
@@ -97,7 +101,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         if (!response.ok) {
           // The route answers with the structured envelope ({ error: { code,
           // message, details } }); the mapper reads it whole and says exactly
-          // what is missing (e.g. no bankgiro for a SEK invoice). Wrapping
+          // what is wrong. Wrapping
           // `body.error` in `new Error()` stringified the object and left only
           // the generic "Kunde inte hantera fakturan" fallback.
           const body: unknown = await response.json().catch(() => null)
@@ -113,8 +117,14 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           return
         }
 
+        const { missing } = readPdfPreviewMeta(response.headers)
         const blob = await response.blob()
         if (cancelled) return
+        setPayeeNotice(
+          missing.includes('payee')
+            ? getErrorMessage({ error: { code: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING' } }, { locale, context: 'invoice' })
+            : null,
+        )
 
         const url = URL.createObjectURL(blob)
         if (currentUrlRef.current) URL.revokeObjectURL(currentUrlRef.current)
@@ -176,12 +186,20 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           </div>
         )}
 
+        {!isLoading && !error && blobUrl && payeeNotice && (
+          <p className="text-xs text-muted-foreground">{payeeNotice}</p>
+        )}
+
         {!isLoading && !error && blobUrl && (
           // <object> + type="application/pdf" invokes Chrome's PDF plugin
           // directly. <iframe> went through Chrome's frame pipeline first
           // and intermittently surfaced "Det här innehållet har blockerats"
           // even with a permissive CSP. See AttachmentPreviewSheet.tsx for
           // the same workaround on journal entry attachments.
+          // The fallback child is safe here only because this <object> is
+          // created with it and unmounted for every new render (isLoading).
+          // Chrome blanks a loaded PDF when a child is inserted later; see
+          // EditorPreviewPane before reusing one node across renders.
           <object
             data={blobUrl}
             type="application/pdf"

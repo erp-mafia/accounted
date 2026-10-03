@@ -38,7 +38,12 @@ export const UNIT_CODES: Record<string, string> = {
   'månad': 'MON',
   km: 'KMT',
   kg: 'KGM',
+  m: 'MTR',
+  kvm: 'MTK',
+  'år': 'ANN',
   l: 'LTR',
+  m3: 'MTQ',
+  vecka: 'WEE',
 }
 
 export interface PeppolValidationIssue {

@@ -1,4 +1,4 @@
-import type { Invoice, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
+import type { Invoice, Customer, CompanySettings, InvoiceDocumentType, InvoiceEmailTextOverrides } from '@/types'
 import { formatDate, getCompanyDisplayName } from '@/lib/utils'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
@@ -173,6 +173,13 @@ export interface InvoiceEmailData {
   // one the "Svara direkt på detta mejl" line is left out: a reply would
   // land in the platform noreply sender.
   replyTo?: string | null
+  /**
+   * This send's own subject and message (SendInvoiceSchema email_subject /
+   * email_body), typed for this document: they win over the company texts
+   * and apply to every document type. Same placeholders; empty or
+   * whitespace-only = none.
+   */
+  overrides?: { subject?: string | null; body?: string | null }
 }
 
 function buildPlaceholderValues(data: InvoiceEmailData, lang: EmailLang): Record<string, string> {
@@ -195,24 +202,59 @@ interface ResolvedCustomTexts {
   signoff?: string
 }
 
-// Resolves the company's custom email texts for one language. Per-field
-// fallback: missing / non-string / whitespace-only values return undefined
-// and the caller uses the stock text. Returns RAW substituted strings:
-// escaping is the caller's job per output variant (HTML vs text vs subject).
-// Defensive typeof checks: rows can be written outside Zod (scripts, SQL).
+// Resolves the custom email texts for one language: this send's own
+// subject and body first (data.overrides), then the company's texts.
+// Per-field fallback: missing / non-string / whitespace-only values return
+// undefined and the caller uses the stock text. Returns RAW substituted
+// strings: escaping is the caller's job per output variant (HTML vs text vs
+// subject). Defensive typeof checks: rows can be written outside Zod
+// (scripts, SQL).
 function resolveCustomTexts(data: InvoiceEmailData, lang: EmailLang): ResolvedCustomTexts {
-  if (!isStandardInvoice(data.invoice)) return {}
-  const texts = data.company.invoice_email_texts
-  const langTexts = texts && typeof texts === 'object' ? texts[lang] : undefined
-  if (!langTexts || typeof langTexts !== 'object') return {}
   const values = buildPlaceholderValues(data, lang)
   const pick = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim() !== '' ? applyPlaceholders(v.trim(), values) : undefined
+  const texts = isStandardInvoice(data.invoice) ? data.company.invoice_email_texts : undefined
+  const langTexts = texts && typeof texts === 'object' ? texts[lang] : undefined
+  const companyTexts: InvoiceEmailTextOverrides =
+    langTexts && typeof langTexts === 'object' ? langTexts : {}
   return {
-    subject: pick(langTexts.subject),
-    greeting: pick(langTexts.greeting),
-    body: pick(langTexts.body),
-    signoff: pick(langTexts.signoff),
+    subject: pick(data.overrides?.subject) ?? pick(companyTexts.subject),
+    greeting: pick(companyTexts.greeting),
+    body: pick(data.overrides?.body) ?? pick(companyTexts.body),
+    signoff: pick(companyTexts.signoff),
+  }
+}
+
+/**
+ * The subject and message this email would use, as text a person edits:
+ * this send's own text, else the company's text (a standard faktura only),
+ * else the stock text, with the placeholders ({fakturanummer}, {belopp}, ...)
+ * left in. The invoice editor's "Redigera text för den här fakturan" starts
+ * from these, so an edited subject still gets the number the send
+ * allocates, not the number the preview predicted.
+ */
+export function invoiceEmailEditableTexts(data: InvoiceEmailData): { subject: string; body: string } {
+  const { invoice, customer } = data
+  const lang = resolveLang(customer)
+  const L = LABELS[lang]
+  const raw = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined
+  const texts = isStandardInvoice(invoice) ? data.company.invoice_email_texts : undefined
+  const langTexts = texts && typeof texts === 'object' ? texts[lang] : undefined
+  const companyTexts: InvoiceEmailTextOverrides =
+    langTexts && typeof langTexts === 'object' ? langTexts : {}
+  const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
+  const stockBody = invoice.credited_invoice_id
+    ? L.bodyCreditNote
+    : docType === 'quote'
+      ? L.bodyQuote(quoteValidUntil(invoice))
+      : L.bodyInvoice
+  return {
+    subject:
+      raw(data.overrides?.subject)
+      ?? raw(companyTexts.subject)
+      ?? L.subjectFrom(getDocumentLabel(invoice, lang), '{fakturanummer}', '{företag}'),
+    body: raw(data.overrides?.body) ?? raw(companyTexts.body) ?? stockBody,
   }
 }
 

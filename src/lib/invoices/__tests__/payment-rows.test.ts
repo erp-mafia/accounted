@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   INVOICE_PAYMENT_ROW_LIMIT,
   buildInvoicePaymentRows,
+  printsPayableRow,
   type InvoicePaymentRowsCompany,
   type InvoicePaymentRowsInvoice,
 } from '@/lib/invoices/payment-rows'
@@ -173,5 +174,25 @@ describe('payment row display formatting', () => {
     expect(formatSwishForDisplay(null)).toBe(null)
     expect(formatIbanForDisplay('SE4550000000058398257466')).toBe('SE45 5000 0000 0583 9825 7466')
     expect(formatIbanForDisplay('se45 5000 0000 0583 9825 7466')).toBe('SE45 5000 0000 0583 9825 7466')
+  })
+})
+
+describe('printsPayableRow', () => {
+  it('takes an account, a number or the payment link as a way to pay', () => {
+    expect(printsPayableRow(rows({ bankgiro: '5050-1055' }))).toBe(true)
+    expect(printsPayableRow(rows({ iban: 'SE4550000000058398257466' }, { currency: 'EUR' }))).toBe(true)
+    // A hidden bankgiro with a link: the link alone is payable.
+    expect(
+      printsPayableRow(
+        rows({ bankgiro: '5050-1055', invoice_show_bankgiro: false }, { payment_link_url: 'https://pay.example.test/x' }),
+      ),
+    ).toBe(true)
+  })
+
+  it('never takes a BIC, a routing row or the reference as one', () => {
+    const list = rows({ bic: 'ESSESESS', bankgiro: '5050-1055', invoice_show_bankgiro: false })
+    expect(keys(list)).toEqual(['bic', 'message'])
+    expect(printsPayableRow(list)).toBe(false)
+    expect(printsPayableRow([{ key: 'routing_number' }, { key: 'ocr' }, { key: 'message' }])).toBe(false)
   })
 })

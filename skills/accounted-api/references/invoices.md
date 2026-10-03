@@ -1075,6 +1075,7 @@ The full send pipeline: preflight PDF render → allocate F-series number atomic
 - additional_cc and additional_bcc require the API key user to be an owner or admin of the company.
 - The deprecated cc response field contains only the first address. Use cc_addresses for the complete CC list.
 - BCC recipients are retained only in the restricted delivery archive and are omitted from normal and dry-run responses.
+- email_subject and email_body replace the subject and the message of this one email (the greeting and sign-off stay) and take the same placeholders as the company email texts; they are not stored on the invoice. Empty or whitespace-only means the company or stock text.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1084,7 +1085,12 @@ The full send pipeline: preflight PDF render → allocate F-series number atomic
 
 Request body:
 ```ts
-{ additional_cc?: string[], additional_bcc?: string[] }
+{
+  additional_cc?: string[],
+  additional_bcc?: string[],
+  email_subject?: string | null,
+  email_body?: string | null
+}
 ```
 
 Example request:

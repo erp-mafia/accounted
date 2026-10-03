@@ -8,11 +8,9 @@ import { useToast } from '@/components/ui/use-toast'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
   SettingsGroup,
-  SettingsReveal,
   SettingsRow,
   SettingsRowEnd,
   SettingsRowNote,
-  SettingsSeg,
   SettingsSelect,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
@@ -33,7 +31,6 @@ type PdfToggleField =
   | 'invoice_show_plusgiro'
   | 'invoice_show_swish'
   | 'invoice_show_logo'
-  | 'invoice_show_company_name'
 
 /** Compact switch row for the show/hide grid: small label, "?", Switch. */
 function PdfToggleRow({
@@ -65,18 +62,21 @@ function PdfToggleRow({
 /**
  * The one QR code invoices print (lib/invoices/payment-qr.ts): a radio list
  * with a short hint under each choice. It fills the control column like the
- * other settings controls.
+ * other settings controls. Also the invoice editor's "Betalning och
+ * utseende" panel, where the per-invoice list adds "as all invoices".
  */
-function QrModeRadioGroup({
+export function QrModeRadioGroup<T extends string = InvoiceQrMode>({
   value,
   onChange,
   options,
   label,
+  disabled,
 }: {
-  value: InvoiceQrMode
-  onChange: (mode: InvoiceQrMode) => void
-  options: Array<{ value: InvoiceQrMode; label: string; hint: string }>
+  value: T
+  onChange: (mode: T) => void
+  options: Array<{ value: T; label: string; hint: string }>
   label: string
+  disabled?: boolean
 }) {
   return (
     <div role="radiogroup" aria-label={label} className="flex w-full flex-col gap-1">
@@ -88,9 +88,10 @@ function QrModeRadioGroup({
             type="button"
             role="radio"
             aria-checked={checked}
+            disabled={disabled}
             onClick={() => onChange(option.value)}
             data-ph-unmask=""
-            className="flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            className="flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span
               aria-hidden
@@ -131,20 +132,6 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
       })
       if (!response.ok) throw new Error()
       onUpdate({ [field]: value } as Partial<CompanySettings>)
-    } catch {
-      toast({ title: t('toast_save_failed'), variant: 'destructive' })
-    }
-  }, [onUpdate, toast, t])
-
-  const savePosition = useCallback(async (value: 'header' | 'footer') => {
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoice_company_name_position: value }),
-      })
-      if (!response.ok) throw new Error()
-      onUpdate({ invoice_company_name_position: value })
     } catch {
       toast({ title: t('toast_save_failed'), variant: 'destructive' })
     }
@@ -263,7 +250,9 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
     { field: 'invoice_show_plusgiro', label: t('show_plusgiro_label'), help: t('show_plusgiro_help'), defaultOn: true },
     { field: 'invoice_show_swish', label: t('show_swish_label'), help: t('show_swish_help'), defaultOn: false },
     { field: 'invoice_show_logo', label: t('show_logo_label'), help: t('show_logo_help'), defaultOn: true },
-    { field: 'invoice_show_company_name', label: t('show_company_name_label'), help: t('show_company_name_help'), defaultOn: true },
+    // No company-name switch or placement: the fixed layout always prints the
+    // legal name in Från and the footer (and in the logo slot without a
+    // logo). The columns stay for API compatibility (DECISIONS 2026-10-02).
   ]
 
   const qrModeOptions = INVOICE_QR_MODES.map((mode) => ({
@@ -357,21 +346,6 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
           />
         ))}
       </div>
-
-      {/* Placement only applies while the company name is shown. */}
-      <SettingsReveal open={settings.invoice_show_company_name ?? true}>
-        <SettingsRow label={t('placement_label')} borderless>
-          <SettingsSeg
-            value={settings.invoice_company_name_position ?? 'header'}
-            onChange={(pos) => void savePosition(pos)}
-            options={[
-              { value: 'header', label: t('placement_header') },
-              { value: 'footer', label: t('placement_footer') },
-            ]}
-            aria-label={t('placement_aria_label')}
-          />
-        </SettingsRow>
-      </SettingsReveal>
 
       <SettingsRow label={t('qr_mode_label')} help={t('qr_mode_help')} align="baseline">
         <QrModeRadioGroup

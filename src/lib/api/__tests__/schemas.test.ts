@@ -27,6 +27,9 @@ import {
   CreateInvoiceSchema,
   UpdateInvoiceSchema,
   CreateCreditNoteSchema,
+  InvoicePreviewSchema,
+  InvoiceEmailPreviewSchema,
+  SendInvoiceSchema,
   MarkInvoicePaidSchema,
   CreateRecurringScheduleSchema,
   // Customer schemas
@@ -332,6 +335,71 @@ describe('invoice QR mode (one QR code per invoice)', () => {
     expect(UpdateSettingsSchema.safeParse({ invoice_qr_mode: null }).success).toBe(false)
     expect(UpdateSettingsSchema.safeParse({ invoice_qr_mode: 'qr' }).success).toBe(false)
     expect(UpdateSettingsSchema.safeParse({ invoice_show_payment_qr: true }).success).toBe(true)
+  })
+})
+
+// The editor's live preview renders a form that is still being filled in.
+describe('InvoicePreviewSchema', () => {
+  it('accepts a draft with no customer, no rows and empty dates yet', () => {
+    const parsed = InvoicePreviewSchema.safeParse({ customer_id: '', invoice_date: '', qr_mode: '', payment_cash_account_id: '' })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data).toMatchObject({
+      customer_id: null,
+      invoice_date: null,
+      qr_mode: null,
+      payment_cash_account_id: null,
+      items: [],
+    })
+  })
+
+  it('accepts a row being typed: empty description, cleared number fields', () => {
+    const parsed = InvoicePreviewSchema.safeParse({
+      items: [{ description: '', quantity: null, unit: null, unit_price: null, vat_rate: null }],
+    })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data?.items[0]).toMatchObject({ description: '', quantity: 0, unit: '', unit_price: 0 })
+  })
+
+  it('takes every field the write path uses', () => {
+    const parsed = InvoicePreviewSchema.safeParse({
+      delivery_date: '2026-07-01',
+      ore_rounding: false,
+      vat_treatment: 'export',
+      delivery_country: 'no',
+      deduction_apartment_number: '1102',
+      deduction_brf_org_number: '769600-1234',
+      qr_mode: 'swish',
+      payment_cash_account_id: '6f1c2a3e-0000-4000-8000-000000000003',
+      credited_invoice_id: '6f1c2a3e-0000-4000-8000-000000000002',
+    })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data).toMatchObject({ delivery_country: 'NO', vat_treatment: 'export', ore_rounding: false })
+  })
+
+  it.each([
+    ['a string quantity', { items: [{ description: 'x', quantity: '1', unit: 'st', unit_price: 1 }] }],
+    ['an impossible date', { invoice_date: '2026-02-30' }],
+    ['an unknown QR mode', { qr_mode: 'all' }],
+    ['a customer id that is not a uuid', { customer_id: 'customer-1' }],
+    ['a delivery country that is no country', { delivery_country: 'XX' }],
+  ])('refuses %s', (_label, input) => {
+    expect(InvoicePreviewSchema.safeParse(input).success).toBe(false)
+  })
+})
+
+describe('per-send email texts', () => {
+  it('lets a send replace the subject and the message, within limits', () => {
+    expect(SendInvoiceSchema.safeParse({ email_subject: 'Faktura {fakturanummer}', email_body: 'Hej!' }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_subject: null, email_body: null }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_subject: 'x'.repeat(200) }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_subject: 'x'.repeat(201) }).success).toBe(false)
+    expect(SendInvoiceSchema.safeParse({ email_body: 'x'.repeat(5000) }).success).toBe(true)
+    expect(SendInvoiceSchema.safeParse({ email_body: 'x'.repeat(5001) }).success).toBe(false)
+  })
+
+  it('previews the same texts with the draft', () => {
+    expect(InvoiceEmailPreviewSchema.safeParse({ email_subject: 'Hej', items: [] }).success).toBe(true)
+    expect(InvoiceEmailPreviewSchema.safeParse({ email_subject: 'x'.repeat(201) }).success).toBe(false)
   })
 })
 

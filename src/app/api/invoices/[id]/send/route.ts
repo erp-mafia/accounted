@@ -379,6 +379,9 @@ export const POST = withRouteContext(
       customer,
       company: company as CompanySettings,
       replyTo,
+      // This send's own subject and message, if the user edited them; not
+      // stored on the invoice (the delivery history keeps the sent email).
+      overrides: { subject: bodyResult.data.email_subject, body: bodyResult.data.email_body },
     }
 
     const filename = invoicePdfFilename({

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, use } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
@@ -101,6 +101,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { remindersActiveFor } from '@/lib/invoices/reminders-enabled'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { newEditorHref } from '@/lib/invoices/editor/new-editor-params'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
 interface PeppolDeliveryView {
@@ -292,6 +293,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     void downloadPDF()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadQueued, invoice])
+  // ?download=1: the invoice editor's "Markera som skickad och ladda ner"
+  // lands here after mark-sent. The issued PDF goes through the same queue,
+  // so it is the archived copy the customer is to get, and the flag leaves
+  // the URL so a reload does not download it again.
+  const searchParams = useSearchParams()
+  const downloadOnArrival = searchParams.get('download') === '1'
+  useEffect(() => {
+    if (!downloadOnArrival) return
+    setDownloadQueued(id)
+    router.replace(`/invoices/${id}`, { scroll: false })
+  }, [downloadOnArrival, id, router])
   const [isConverting, setIsConverting] = useState(false)
   const [isCreatingOrder, setIsCreatingOrder] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -2025,7 +2037,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 )}
                 {isCopyable && canWrite && (
                   <DropdownMenuItem asChild>
-                    <Link href={`/invoices?copy=${invoice.id}`}>
+                    <Link href={newEditorHref({ copyFromId: invoice.id })}>
                       <Copy className="h-4 w-4" />
                       {t('copy_invoice')}
                     </Link>

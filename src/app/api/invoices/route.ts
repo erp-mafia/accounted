@@ -8,6 +8,11 @@ import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
+import {
+  buildCreditNoteFields,
+  creditNoteNumber,
+  creditNoteOriginalReference,
+} from '@/lib/invoices/build-credit-note'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Logger } from '@/lib/logger'
@@ -370,13 +375,11 @@ async function createCreditNote(
     })
   }
 
-  // Self-billed originals have invoice_number null by design (the DB
-  // constraint invoices_self_billed_numbering enforces it); their number
-  // lives in external_invoice_number. Without this fallback the credit note
-  // would be numbered the literal string 'KR-null' (issue #1820). Both null
-  // is impossible for an issued invoice, but refuse defensively rather than
-  // mint a garbage number.
-  const originalRef = originalInvoice.invoice_number ?? originalInvoice.external_invoice_number
+  // Self-billed originals carry their number in external_invoice_number;
+  // without that fallback the credit note would be numbered the literal
+  // string 'KR-null' (issue #1820). Both null is impossible for an issued
+  // invoice, but refuse defensively rather than mint a garbage number.
+  const originalRef = creditNoteOriginalReference(originalInvoice)
   if (!originalRef) {
     return errorResponseFromCode('INVOICE_CREDIT_NO_NUMBER', log, { requestId })
   }
@@ -434,55 +437,17 @@ async function createCreditNote(
     return NextResponse.json({ data: maskEmbeddedCustomer(existingCreditNote) })
   }
 
-  const creditNoteNumber = `KR-${originalRef}`
-
   const { data: creditNote, error: creditNoteError } = await supabase
     .from('invoices')
     .insert({
       user_id: userId,
       company_id: companyId,
-      customer_id: originalInvoice.customer_id,
-      invoice_number: creditNoteNumber,
-      invoice_date: new Date().toISOString().split('T')[0],
-      due_date: new Date().toISOString().split('T')[0],
-      delivery_date: originalInvoice.delivery_date ?? null,
-      currency: originalInvoice.currency,
-      exchange_rate: originalInvoice.exchange_rate,
-      exchange_rate_date: originalInvoice.exchange_rate_date,
-      subtotal: -Math.abs(originalInvoice.subtotal),
-      subtotal_sek: originalInvoice.subtotal_sek ? -Math.abs(originalInvoice.subtotal_sek) : null,
-      vat_amount: -Math.abs(originalInvoice.vat_amount),
-      vat_amount_sek: originalInvoice.vat_amount_sek ? -Math.abs(originalInvoice.vat_amount_sek) : null,
-      total: -Math.abs(originalInvoice.total),
-      total_sek: originalInvoice.total_sek ? -Math.abs(originalInvoice.total_sek) : null,
-      vat_treatment: originalInvoice.vat_treatment,
-      vat_rate: originalInvoice.vat_rate,
-      moms_ruta: originalInvoice.moms_ruta,
-      reverse_charge_text: originalInvoice.reverse_charge_text,
-      // The same supply (#2906): goods delivered abroad reverse on 3105 / 3108.
-      vat_treatment_override: originalInvoice.vat_treatment_override ?? null,
-      delivery_country: originalInvoice.delivery_country ?? null,
-      your_reference: originalInvoice.your_reference,
-      our_reference: originalInvoice.our_reference,
-      // Same buyer routing on the kreditfaktura as the original.
-      invoice_marking: originalInvoice.invoice_marking ?? null,
-      // Same payee as the original: the credit note refers to the account
-      // the customer paid (or was asked to pay) to.
-      payment_cash_account_id: originalInvoice.payment_cash_account_id ?? null,
-      payment_details: originalInvoice.payment_details ?? null,
-      // Positive magnitude, unlike the negated amounts above: the DB has
-      // CHECK (deduction_total >= 0), and every reader either recomputes the
-      // ROT/RUT amount from the items or skips credit notes entirely.
-      deduction_total: originalInvoice.deduction_total
-        ? Math.abs(originalInvoice.deduction_total)
-        : 0,
-      deduction_personnummer_encrypted: originalInvoice.deduction_personnummer_encrypted ?? null,
-      deduction_personnummer_last4: originalInvoice.deduction_personnummer_last4 ?? null,
-      notes: input.reason || `Krediterar faktura ${originalRef}`,
-      credited_invoice_id: input.credited_invoice_id,
-      // Copy the original's dimension bag so the credit-note verifikat nets
-      // against the same dimension cells in reports (dimensions PR7).
-      default_dimensions: originalInvoice.default_dimensions ?? {},
+      invoice_number: creditNoteNumber(originalRef),
+      ...buildCreditNoteFields(originalInvoice, {
+        originalReference: originalRef,
+        reason: input.reason,
+        today: new Date().toISOString().split('T')[0],
+      }),
       status: 'draft',
       creation_complete: false,
     })

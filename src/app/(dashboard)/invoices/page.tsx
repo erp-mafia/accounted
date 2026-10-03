@@ -16,7 +16,6 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { RowStatus, type RowStatusDescriptor } from '@/components/ui/row-status'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Dialog, DialogContent, DialogTitle, DialogVeil } from '@/components/ui/dialog'
 import { DataListEmpty } from '@/components/ui/data-list'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useRangeSelect } from '@/lib/hooks/use-range-select'
@@ -27,6 +26,7 @@ import { useUiState } from '@/lib/hooks/use-ui-state'
 import { resolveInitialMode } from '@/lib/ui-state/client'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { legacyListEditorHref, newEditorHref } from '@/lib/invoices/editor/new-editor-params'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
@@ -94,32 +94,6 @@ import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FiscalPeriod, Invoice } from '@/types'
-
-function NewInvoiceDialogLoading() {
-  const t = useTranslations('invoices')
-  // Non-modal + veil, matching NewInvoiceDialog: a modal fallback would lock
-  // the whole route (body pointer-events: none, no close path) if this chunk
-  // ever hangs or 404s on a stale deploy, and would dead-click the agent
-  // sheet meanwhile.
-  return (
-    <Dialog open modal={false}>
-      <DialogVeil />
-      <DialogContent className="sm:max-w-3xl">
-        <DialogTitle>{t('new_invoice')}</DialogTitle>
-        <div className="space-y-4 py-4" role="status">
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-24 w-full" />
-          <Skeleton className="h-10 w-40" />
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-const NewInvoiceDialog = dynamic(
-  () => import('@/components/invoices/NewInvoiceDialog'),
-  { loading: NewInvoiceDialogLoading },
-)
 
 const RotRutPayoutDialog = dynamic(
   () => import('@/components/invoices/RotRutPayoutDialog'),
@@ -360,21 +334,14 @@ export default function InvoicesPage() {
   const tStart = useTranslations('start_cards')
   const { uiState, loaded: uiStateLoaded } = useUiState()
 
-  // The "Ny faktura" modal is driven by the URL (?new=1) so every entry point
-  // (the header button, empty states, the command palette, and the legacy
-  // /invoices/new redirect) opens the same dialog, and the browser back
-  // button closes it. No canWrite gate here: like the old /invoices/new page,
-  // the editor itself disables submission for viewers. ?self=1 preselects the
-  // självfaktura tab (split-button entry).
-  const copyFromId = searchParams.get('copy')
-  const showNewInvoice = searchParams.has('new') || copyFromId !== null
-  const openSelfBilled = searchParams.has('self')
-  // ?quote=1 preselects the offert document type ("Ny offert" split entry);
-  // ?proforma=1 the proforma type ("Ny proformafaktura" split entry, #2217:
-  // proforma existed but only behind the collapsed Förval panel inside the
-  // editor, so a user coming from Fortnox concluded it did not exist).
-  const openQuote = searchParams.has('quote')
-  const openProforma = searchParams.has('proforma')
+  // "Ny faktura" (and offert, proforma, självfaktura, copy) is its own page,
+  // the one-screen editor at /invoices/new. Old links that opened the list's
+  // dialog (?new=1, ?quote=1, ?copy=<id>: bookmarks, agent intents) are
+  // rewritten to it.
+  const legacyEditorHref = legacyListEditorHref(searchParams)
+  useEffect(() => {
+    if (legacyEditorHref) router.replace(legacyEditorHref)
+  }, [legacyEditorHref, router])
   const showRotRutPayout = searchParams.has('rot-rut')
   // Open/close handlers rewrite only their own keys: a hardcoded '/invoices'
   // would destroy the ?status= view write-back (and any other params) every
@@ -385,43 +352,10 @@ export default function InvoicesPage() {
     const qs = params.toString()
     return qs ? `${listPath}?${qs}` : listPath
   }
-  const closeNewInvoice = () =>
-    router.replace(
-      invoicesUrl((p) => {
-        p.delete('new')
-        p.delete('self')
-        p.delete('quote')
-        p.delete('proforma')
-        p.delete('copy')
-      }),
-      { scroll: false },
-    )
-  const openNewInvoice = () =>
-    router.push(invoicesUrl((p) => p.set('new', '1')), { scroll: false })
-  const openNewSelfBilled = () =>
-    router.push(
-      invoicesUrl((p) => {
-        p.set('new', '1')
-        p.set('self', '1')
-      }),
-      { scroll: false },
-    )
-  const openNewQuote = () =>
-    router.push(
-      invoicesUrl((p) => {
-        p.set('new', '1')
-        p.set('quote', '1')
-      }),
-      { scroll: false },
-    )
-  const openNewProforma = () =>
-    router.push(
-      invoicesUrl((p) => {
-        p.set('new', '1')
-        p.set('proforma', '1')
-      }),
-      { scroll: false },
-    )
+  const openNewInvoice = () => router.push(newEditorHref())
+  const openNewSelfBilled = () => router.push(newEditorHref({ type: 'self_billed' }))
+  const openNewQuote = () => router.push(newEditorHref({ type: 'quote' }))
+  const openNewProforma = () => router.push(newEditorHref({ type: 'proforma' }))
   const closeRotRutPayout = () =>
     router.replace(invoicesUrl((p) => p.delete('rot-rut')), { scroll: false })
 
@@ -1336,17 +1270,6 @@ export default function InvoicesPage() {
         </div>
       )}
 
-      {showNewInvoice && (
-        <NewInvoiceDialog
-          open
-          copyFromId={copyFromId}
-          selfBilled={openSelfBilled}
-          documentType={openQuote ? 'quote' : openProforma ? 'proforma' : undefined}
-          onOpenChange={(open) => {
-            if (!open) closeNewInvoice()
-          }}
-        />
-      )}
       {showRotRutPayout && (
         <RotRutPayoutDialog
           open

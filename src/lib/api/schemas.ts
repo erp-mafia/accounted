@@ -828,6 +828,76 @@ export const CreateCreditNoteSchema = z.object({
   reason: z.string().optional(),
 })
 
+// A date field of a form being filled in: empty means "not set yet"; an
+// impossible date is refused (the preview renders and fetches a rate for it).
+const previewDate = saneIsoDate.or(z.literal('')).nullish().transform((v) => v || null)
+
+/**
+ * One row of the invoice editor's live preview: the write path's line
+ * (CreateInvoiceItemSchema) without its completeness rules. A row being
+ * typed has no description or price yet, and a cleared number field
+ * arrives as null. Wrong types are still refused.
+ */
+const PreviewInvoiceItemSchema = z.object({
+  line_type: z.enum(['product', 'text']).optional(),
+  description: z.string().max(2000).nullish().transform((v) => v ?? ''),
+  quantity: z.number().nullish().transform((v) => v ?? 0),
+  unit: z.string().max(64).nullish().transform((v) => v ?? ''),
+  unit_price: z.number().nullish().transform((v) => v ?? 0),
+  discount_percent: z.number().min(0).max(100).nullish(),
+  vat_rate: z.number().min(0).max(100).nullish(),
+  deduction_type: z.enum(DEDUCTION_TYPES).nullish(),
+  labor_hours: z.number().nonnegative().nullish(),
+  work_type: z.string().max(64).nullish(),
+  housing_designation: z.string().max(128).nullish(),
+  apartment_number: z.string().max(32).nullish(),
+  brf_org_number: z.string().max(32).nullish(),
+})
+
+/**
+ * POST /api/invoices/preview-pdf (and preview-email): the editor's draft as
+ * it is now, rendered without being saved, from the fields the write path
+ * uses (CreateInvoiceBaseSchema). A live preview renders a half-filled
+ * form: no customer yet, no rows yet and empty dates render with
+ * placeholders (lib/invoices/preview-draft.ts) instead of a 400. A
+ * malformed value (a string quantity, an unknown qr_mode, an impossible
+ * date) is still a 400.
+ *
+ * credited_invoice_id previews the kreditfaktura of that invoice: its rows
+ * and amounts come from the original, as POST /api/invoices creates it, and
+ * notes is the reason printed on it.
+ */
+export const InvoicePreviewSchema = z.object({
+  customer_id: z.union([uuid, z.literal('')]).nullish().transform((v) => v || null),
+  credited_invoice_id: uuid.nullish(),
+  document_type: InvoiceDocumentTypeSchema.optional(),
+  // The predicted number the editor shows ("får nummer N när den skickas").
+  invoice_number: z.string().max(64).nullish(),
+  invoice_date: previewDate,
+  due_date: previewDate,
+  delivery_date: previewDate,
+  valid_until: previewDate,
+  currency: CurrencySchema.optional(),
+  your_reference: z.string().max(500).nullish(),
+  our_reference: z.string().max(500).nullish(),
+  invoice_marking: z.string().max(200).nullish(),
+  notes: z.string().max(10000).nullish(),
+  // Printed only when it is an https address, the shape the write path accepts.
+  payment_link_url: z.string().max(2048).nullish(),
+  payment_cash_account_id: z.union([uuid, z.literal('')]).nullish().transform((v) => v || null),
+  // Empty or null = inherit the company's invoice_qr_mode.
+  qr_mode: z.union([InvoiceQrModeSchema, z.literal('')]).nullish().transform((v) => v || null),
+  ore_rounding: z.boolean().nullish(),
+  ...InvoiceVatOverrideShape,
+  deduction_personnummer: z.string().max(20).nullish(),
+  deduction_housing_designation: z.string().max(128).nullish(),
+  deduction_apartment_number: z.string().max(25).nullish(),
+  deduction_brf_org_number: z.string().max(32).nullish(),
+  items: z.array(PreviewInvoiceItemSchema).max(1000).optional().transform((v) => v ?? []),
+})
+
+export type InvoicePreviewInput = z.infer<typeof InvoicePreviewSchema>
+
 // ============================================================
 // Rot/rut begäran om utbetalning (Skatteverkets husavdragstjänst)
 // ============================================================
@@ -1197,9 +1267,37 @@ export const InvoicesBulkBookSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(200),
 })
 
+export const INVOICE_EMAIL_SUBJECT_MAX_LENGTH = 200
+export const INVOICE_EMAIL_BODY_MAX_LENGTH = 5000
+
+/**
+ * This send's own email subject and message, in place of the company's
+ * texts (Inställningar > Utskick) or the stock texts. For this send only:
+ * never stored on the invoice, though the delivery history keeps the email
+ * as it was sent. Same placeholders as the company texts. Empty or
+ * whitespace-only = no override.
+ */
+export const InvoiceEmailOverrideShape = {
+  email_subject: z
+    .string()
+    .max(INVOICE_EMAIL_SUBJECT_MAX_LENGTH)
+    .nullish()
+    .describe(
+      'This send only: the email subject instead of the company text. Placeholders {fakturanummer}, {kundnamn}, {förnamn}, {företag}, {förfallodatum}, {belopp}. Not stored on the invoice.',
+    ),
+  email_body: z
+    .string()
+    .max(INVOICE_EMAIL_BODY_MAX_LENGTH)
+    .nullish()
+    .describe(
+      'This send only: the message of the email instead of the company text (the greeting and sign-off stay). Same placeholders as email_subject. Not stored on the invoice.',
+    ),
+}
+
 export const SendInvoiceSchema = MarkInvoiceSentSchema.extend({
   additional_cc: invoiceEmailAddressList.optional(),
   additional_bcc: invoiceEmailAddressList.optional(),
+  ...InvoiceEmailOverrideShape,
 }).refine(
   (data) => (
     (data.additional_cc?.length ?? 0) + (data.additional_bcc?.length ?? 0)
@@ -1210,6 +1308,11 @@ export const SendInvoiceSchema = MarkInvoiceSentSchema.extend({
     path: ['additional_cc'],
   },
 )
+
+/** POST /api/invoices/preview-email: the preview draft plus this send's own texts. */
+export const InvoiceEmailPreviewSchema = InvoicePreviewSchema.extend(InvoiceEmailOverrideShape)
+
+export type InvoiceEmailPreviewInput = z.infer<typeof InvoiceEmailPreviewSchema>
 
 // ============================================================
 // Customer schemas
@@ -2881,8 +2984,20 @@ export const UpdateSettingsSchema = z.object({
   // The one payment QR code invoices print (lib/invoices/payment-qr.ts).
   invoice_qr_mode: InvoiceQrModeSchema.optional(),
   invoice_show_logo: z.boolean().optional(),
-  invoice_show_company_name: z.boolean().optional(),
-  invoice_company_name_position: z.enum(['header', 'footer']).optional(),
+  // Superseded by the fixed invoice layout (company name in Från and the
+  // footer on every invoice): still accepted and stored so existing callers
+  // keep working, but no settings UI writes them any more. The describe
+  // reaches the MCP settings tool and the API skill.
+  invoice_show_company_name: z
+    .boolean()
+    .optional()
+    .describe(
+      'Superseded by the fixed invoice layout, which always prints the company name in Från and the footer: accepted for compatibility.',
+    ),
+  invoice_company_name_position: z
+    .enum(['header', 'footer'])
+    .optional()
+    .describe('Superseded by the fixed invoice layout: accepted for compatibility, no longer changes the PDF.'),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
   // Opt-in for the invoice payment-link feature (editor field + automatic
