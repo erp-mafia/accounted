@@ -109,6 +109,20 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
   }
 })
 
+// Already-booked guard: passes by default so the wiring tests keep their query
+// queue; the guard cases switch to the real implementation (useRealGuard).
+const mockAssertBookable = vi.fn()
+vi.mock('@/lib/transactions/is-booked', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/is-booked')>()),
+  assertTransactionBookable: (...args: unknown[]) => mockAssertBookable(...args),
+}))
+async function useRealGuard() {
+  const actual = await vi.importActual<typeof import('@/lib/transactions/is-booked')>(
+    '@/lib/transactions/is-booked',
+  )
+  mockAssertBookable.mockImplementation(actual.assertTransactionBookable)
+}
+
 import { POST } from '../route'
 
 describe('POST /api/transactions/[id]/categorize', () => {
@@ -140,6 +154,53 @@ describe('POST /api/transactions/[id]/categorize', () => {
     mockReverseOrphanedJournalEntry.mockResolvedValue(undefined)
     // Default: no covering period at all. The closed-period test overrides this.
     mockCheckPeriodLock.mockResolvedValue({ locked: false, reason: 'no_fiscal_period' })
+    mockAssertBookable.mockResolvedValue({ ok: true })
+  })
+
+  it('returns 409 and books nothing for a row anchored only by a bank_line link (bulk-book, NULL pointer)', async () => {
+    await useRealGuard()
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+    enqueue({ data: [{ journal_entry_id: 'je-samling', role: 'bank_line' }] }) // transaction_voucher_links
+    enqueue({ data: [{ id: 'je-samling', status: 'posted' }] }) // journal_entries
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TRANSACTION_ALREADY_CATEGORIZED')
+    expect(body.error.details).toEqual({ journal_entry_id: 'je-samling', via: 'link' })
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('books a row whose only link names a reversed verifikat (storno released it)', async () => {
+    await useRealGuard()
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: [{ journal_entry_id: 'je-old', role: 'bank_line' }] }) // transaction_voucher_links
+    enqueue({ data: [{ id: 'je-old', status: 'reversed' }] }) // journal_entries
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-new' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(response)
+
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(body.journal_entry_id).toBe('je-new')
   })
 
   it('delegates the CAS-race orphan to engine-backed storno compensation', async () => {
