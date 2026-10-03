@@ -716,6 +716,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [entryOpen, setEntryOpen] = useState(false)
   const [entryActiveIdx, setEntryActiveIdx] = useState(-1)
   const [settleIndex, setSettleIndex] = useState<number | null>(null)
+  // The row the ghost "st" just birthed: its unit picker mounts open, so the
+  // ghost's chevron opens the list on one click instead of only landing on a
+  // closed picker. Cleared once the row has mounted.
+  const [unitPickerOpenRow, setUnitPickerOpenRow] = useState<number | null>(null)
   const entryInputRef = useRef<HTMLInputElement>(null)
   // The entry row and its suggestion popover share this wrapper: the blur
   // handler asks it whether focus is still inside before closing, so a tap on
@@ -1263,7 +1267,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // the click births the row (description as typed, possibly empty) and
   // lands in the same cell. The inputs mount on the next commit, hence the
   // timeout; the VAT Select trigger is not a registered field, so it is
-  // reached through the data-cell anchor instead of setFocus.
+  // reached through the data-cell anchor instead of setFocus. The unit cell
+  // mounts with its picker open (the ghost shows a chevron): the open list
+  // holds focus, and closing it returns focus to the picker's trigger.
   function commitEntryToCell(text: string, cell: EntryGhostCell) {
     const index = fields.length
     appendProductRow(text)
@@ -1271,8 +1277,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     setEntryOpen(false)
     setEntryActiveIdx(-1)
     markRowSettled(index)
+    if (cell === 'unit') setUnitPickerOpenRow(index)
     window.setTimeout(() => {
-      if (cell === 'quantity' || cell === 'unit_price' || cell === 'unit') {
+      if (cell === 'unit') {
+        setUnitPickerOpenRow(null)
+        return
+      }
+      if (cell === 'quantity' || cell === 'unit_price') {
         setFocus(`items.${index}.${cell}`, { shouldSelect: true })
         return
       }
@@ -3856,6 +3867,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                         followQuantity(index)
                                       }}
                                       onBlur={unitField.onBlur}
+                                      defaultOpen={unitPickerOpenRow === index}
                                       data-cell="unit"
                                       aria-label={t('unit_label')}
                                       invalid={Boolean(rowErrors?.unit)}

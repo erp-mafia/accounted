@@ -39,6 +39,11 @@ export interface UnitPickerProps
   /** `cell` sits inside a table cell (beside Antal); `field` is a boxed form field. */
   variant?: 'cell' | 'field'
   invalid?: boolean
+  /**
+   * Mount with the list open: the editor's ghost "st" births its row with the
+   * picker already open, so the chevron it shows opens the list on one click.
+   */
+  defaultOpen?: boolean
 }
 
 /**
@@ -59,12 +64,21 @@ export interface UnitPickerProps
  * The ref lands on the trigger, so react-hook-form's setFocus reaches it.
  */
 const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitPicker(
-  { value, onChange, variant = 'cell', invalid, className, ...triggerProps },
+  {
+    value,
+    onChange,
+    variant = 'cell',
+    invalid,
+    defaultOpen = false,
+    className,
+    'aria-label': ariaLabel,
+    ...triggerProps
+  },
   ref,
 ) {
   const t = useTranslations('unit_picker')
   const locale = useLocale()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const [draft, setDraft] = useState('')
   const contentRef = useRef<HTMLDivElement>(null)
   const customRef = useRef<HTMLInputElement>(null)
@@ -123,6 +137,12 @@ const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitP
           // field's error text says what is wrong, this only colors it.
           data-invalid={invalid ? true : undefined}
           {...triggerProps}
+          // The label alone ("Enhet") would hide the value the button shows:
+          // unlike the input it replaced, a menu button announces no value of
+          // its own, so the name carries it ("Enhet: st").
+          aria-label={
+            ariaLabel && current !== '' ? t('trigger_aria', { label: ariaLabel, unit: current }) : ariaLabel
+          }
           className={cn(variant === 'cell' ? CELL_TRIGGER_CLASS : FIELD_TRIGGER_CLASS, className)}
         >
           <span className={cn('truncate', current === '' && 'text-muted-foreground/60')}>

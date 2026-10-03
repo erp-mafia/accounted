@@ -4485,7 +4485,8 @@
   "unit_picker": {
     "empty": "Unit",
     "custom_placeholder": "Other unit",
-    "custom_label": "Other unit, confirm with Enter"
+    "custom_label": "Other unit, confirm with Enter",
+    "trigger_aria": "{label}: {unit}"
   },
   "invoice_editor": {
     "amount_label": "Amount",

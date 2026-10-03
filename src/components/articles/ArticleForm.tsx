@@ -334,6 +334,9 @@ export default function ArticleForm({
               <UnitPicker
                 ref={field.ref}
                 id="article-unit"
+                // Names the button with its value ("Enhet: st"); the row's
+                // label alone would hide the current unit from a screen reader.
+                aria-label={t('unit_label')}
                 name={field.name}
                 value={field.value}
                 onChange={field.onChange}

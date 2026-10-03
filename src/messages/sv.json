@@ -4485,7 +4485,8 @@
   "unit_picker": {
     "empty": "Enhet",
     "custom_placeholder": "Annan enhet",
-    "custom_label": "Annan enhet, bekräfta med Enter"
+    "custom_label": "Annan enhet, bekräfta med Enter",
+    "trigger_aria": "{label}: {unit}"
   },
   "invoice_editor": {
     "amount_label": "Belopp",
