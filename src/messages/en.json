@@ -12108,6 +12108,7 @@
     "col_proposed": "After split",
     "untagged": "No project",
     "archived": "archived",
+    "skipped_existing_split": "Skipped: the account is already split per project with other amounts",
     "skipped_foreign_currency": "Skipped: the account has a foreign-currency line",
     "skipped_line_document": "Skipped: a line has a linked document",
     "unchanged_count": "{count, plural, one {# account is already split} other {# accounts are already split}}",

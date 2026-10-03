@@ -32,7 +32,10 @@
  *   - nothing runs on its own: the preview writes nothing, the apply is an
  *     explicit user (or approved staged) action;
  *   - idempotent: an account whose lines already net to the proposed split
- *     per bag is unchanged, so a second run is a no-op;
+ *     per bag is unchanged, so a second run is a no-op. An account whose IB
+ *     already carries a project split that differs from the proposal (an IB
+ *     imported with SIE #OIB, or split by hand) is skipped, never
+ *     overwritten: correct it line by line if it is wrong;
  *   - every bag is validated against the registry app-side before the RPC
  *     (which inserts bags unchecked, #3257): an accumulating dimension and an
  *     existing value. Archived values are kept, like the year-end carry: a
@@ -40,8 +43,11 @@
  *   - the RPC takes at most 100 new lines: accounts are packed into calls of
  *     at most 100, and an account with more objects is split over several
  *     calls through an interim untagged remainder. Every call nets each
- *     account to its total, so a failure midway leaves consistent books and
- *     a rerun finishes the job;
+ *     account to its total, so a failure midway leaves consistent books; a
+ *     rerun keeps the project lines already in place and continues from the
+ *     interim remainder. A failure after a call committed is reported with
+ *     what was applied (partialPostedIds: a staged approval lands in
+ *     failed_partial, #842);
  *   - the caller may pin the preview's fingerprint: if the IB or the
  *     previous year changed in between, the apply refuses instead of booking
  *     a different split than the one approved.
@@ -95,11 +101,12 @@ export interface SplitLineView {
 export type SplitAccountStatus = 'change' | 'unchanged' | 'skipped'
 
 /**
- * Why an account that would change is left alone: the inline rättelse can
- * strike neither a foreign-currency line (its conversion data cannot be
- * reproduced) nor a line with its own underlag link.
+ * Why an account that would change is left alone: its IB already carries a
+ * project split that differs from the proposal (never overwritten), or the
+ * inline rättelse can strike neither a foreign-currency line (its conversion
+ * data cannot be reproduced) nor a line with its own underlag link.
  */
-export type SplitSkipReason = 'foreign_currency' | 'line_document'
+export type SplitSkipReason = 'existing_split' | 'foreign_currency' | 'line_document'
 
 export interface SplitAccountPlan {
   account_number: string
@@ -143,6 +150,12 @@ export interface OpeningBalanceSplitPreview {
   accounts_to_change: number
   accounts_unchanged: number
   accounts_skipped: number
+  /**
+   * What the split moves, in SEK: the largest side (debit or credit) of the
+   * lines struck or added over the changing accounts. Read by the
+   * unattended-commit ceiling, like correct_entry_lines_inline's.
+   */
+  changed_amount_sek: number
   /** True when there is something to split and nothing blocks it. */
   can_apply: boolean
   /** Why the split cannot run now (the code the apply answers), or null. */
@@ -229,20 +242,54 @@ function view(line: { debit_amount: number; credit_amount: number; dimensions?: 
 }
 
 /**
+ * True when the account's current IB already carries a split on the
+ * accumulating dimensions that the proposal would change: a carried bag whose
+ * net the proposal does not hold. A split the proposal agrees with (an IB
+ * split the same way, or the project lines an interrupted run already
+ * booked) is not one; a tag on a resetting dimension never counts, it is
+ * not carried at all.
+ */
+function hasConflictingSplit(
+  current: readonly CurrentIbLine[],
+  proposed: readonly SplitLineView[],
+  accumulating: ReadonlySet<string>,
+): boolean {
+  const carried = netsByBag(
+    current.map((line) => ({
+      ...line,
+      dimensions: Object.fromEntries(Object.entries(line.dimensions).filter(([dimNo]) => accumulating.has(dimNo))),
+    })),
+  )
+  carried.delete(dimensionBagKey({}))
+  const target = netsByBag(proposed)
+  for (const [key, net] of carried) {
+    const other = target.get(key)
+    if (other === undefined || Math.abs(other - net) >= ORE_TOLERANCE) return true
+  }
+  return false
+}
+
+/**
  * The split per account, from the IB's current lines and the previous year's
  * tagged closing balances. Only accounts with a nonzero tagged balance are
  * planned (the rest stay untouched); each keeps its current total exactly,
- * which is asserted.
+ * which is asserted. `accumulatingDimensions` (default: the dimensions the
+ * object balances carry) decides which current tags count as an existing
+ * split.
  */
 export function planOpeningBalanceSplit(input: {
   currentLines: readonly CurrentIbLine[]
   objectBalances: ReadonlyMap<string, readonly ObjectBalanceSplit[]>
   accountNames?: ReadonlyMap<string, string>
   lineIdsWithDocuments?: ReadonlySet<string>
+  accumulatingDimensions?: ReadonlySet<string>
 }): SplitAccountPlan[] {
   const { currentLines, objectBalances } = input
   const plans: SplitAccountPlan[] = []
   const accounts = [...objectBalances.keys()].filter((account) => carriesObjectBalances(account)).sort()
+  const accumulating =
+    input.accumulatingDimensions ??
+    new Set([...objectBalances.values()].flatMap((parts) => parts.flatMap((part) => Object.keys(part.dimensions))))
 
   for (const accountNumber of accounts) {
     const parts = (objectBalances.get(accountNumber) ?? [])
@@ -269,7 +316,11 @@ export function planOpeningBalanceSplit(input: {
     let status: SplitAccountStatus = sameNets(netsByBag(current), netsByBag(proposed)) ? 'unchanged' : 'change'
     let skipReason: SplitSkipReason | null = null
     if (status === 'change') {
-      if (current.some((line) => line.currency !== null && line.currency !== 'SEK')) {
+      // An IB already split per project is left alone: only an untagged IB,
+      // or one the proposal agrees with, is split.
+      if (hasConflictingSplit(current, proposed, accumulating)) {
+        skipReason = 'existing_split'
+      } else if (current.some((line) => line.currency !== null && line.currency !== 'SEK')) {
         skipReason = 'foreign_currency'
       } else if (current.some((line) => input.lineIdsWithDocuments?.has(line.id))) {
         skipReason = 'line_document'
@@ -299,11 +350,40 @@ export interface RattelseStep {
 }
 
 /**
+ * The tagged proposed lines a large account already holds, when that is all
+ * its tagged lines hold: what an interrupted run booked before it stopped.
+ * Each such line carries exactly a proposed bag (one line per bag) at exactly
+ * the proposed amount. Null when any tagged line does not fit (the account
+ * then starts over with an 'initial' step).
+ */
+function bookedProposedBags(account: SplitAccountPlan): Set<string> | null {
+  const target = new Map(
+    account.proposed_lines.filter((line) => !isUntagged(line.dimensions)).map((line) => [dimensionBagKey(line.dimensions), line.amount]),
+  )
+  const tagged = account.current_lines.filter((line) => !isUntagged(line.dimensions))
+  if (tagged.length === 0) return null
+  const booked = new Set<string>()
+  for (const line of tagged) {
+    const key = dimensionBagKey(line.dimensions)
+    const amount = target.get(key)
+    if (amount === undefined || booked.has(key) || Math.abs(amount - line.amount) >= ORE_TOLERANCE) return null
+    booked.add(key)
+  }
+  return booked
+}
+
+/**
  * Pack the changing accounts into inline rättelse calls of at most `max` new
  * lines. An account that needs more is split over several calls: each adds
  * up to `max - 1` object lines and an untagged remainder that nets the
  * account back to its total, which the next call strikes again. A call never
  * holds two steps of one account (the second needs the first's line ids).
+ *
+ * A large account an interrupted run left half split (its tagged lines are
+ * exactly proposed lines) resumes: the lines in place stay, and the first
+ * step is a 'continue' that strikes only the interim remainder. Replanning
+ * it from the start would strike and re-add the same lines, which the RPC
+ * refuses as a rättelse that changes nothing.
  */
 export function planRattelseCalls(accounts: readonly SplitAccountPlan[], max = MAX_NEW_LINES_PER_RATTELSE): RattelseStep[][] {
   const calls: RattelseStep[][] = []
@@ -329,9 +409,14 @@ export function planRattelseCalls(accounts: readonly SplitAccountPlan[], max = M
   if (open.length > 0) calls.push(open)
 
   for (const account of large) {
-    const tagged = account.proposed_lines.filter((line) => !isUntagged(line.dimensions))
+    const booked = bookedProposedBags(account)
+    const tagged = account.proposed_lines.filter(
+      (line) => !isUntagged(line.dimensions) && !booked?.has(dimensionBagKey(line.dimensions)),
+    )
     const description = account.proposed_lines[0]?.line_description ?? null
-    let carried = 0
+    let carried = booked
+      ? roundOre(account.current_lines.filter((line) => !isUntagged(line.dimensions)).reduce((sum, line) => sum + line.amount, 0))
+      : 0
     for (let start = 0; start < tagged.length; start += max - 1) {
       const group = tagged.slice(start, start + max - 1)
       carried = roundOre(carried + group.reduce((sum, line) => sum + line.amount, 0))
@@ -347,10 +432,32 @@ export function planRattelseCalls(accounts: readonly SplitAccountPlan[], max = M
           }),
         )
       }
-      calls.push([{ account_number: account.account_number, kind: start === 0 ? 'initial' : 'continue', add }])
+      calls.push([{ account_number: account.account_number, kind: start === 0 && !booked ? 'initial' : 'continue', add }])
     }
   }
   return calls
+}
+
+/**
+ * The SEK the split moves: the largest side of what it strikes or adds. Both
+ * sides count, because splitting a credit account (2440) strikes and adds
+ * credits only; a debit-only sum would price that at zero.
+ */
+export function changedAmount(accounts: readonly SplitAccountPlan[]): number {
+  const side = (lines: readonly SplitLineView[], key: 'debit_amount' | 'credit_amount') =>
+    roundOre(lines.reduce((sum, line) => sum + line[key], 0))
+  let struckDebit = 0
+  let struckCredit = 0
+  let addedDebit = 0
+  let addedCredit = 0
+  for (const account of accounts) {
+    if (account.status !== 'change') continue
+    struckDebit = roundOre(struckDebit + side(account.current_lines, 'debit_amount'))
+    struckCredit = roundOre(struckCredit + side(account.current_lines, 'credit_amount'))
+    addedDebit = roundOre(addedDebit + side(account.proposed_lines, 'debit_amount'))
+    addedCredit = roundOre(addedCredit + side(account.proposed_lines, 'credit_amount'))
+  }
+  return Math.max(struckDebit, struckCredit, addedDebit, addedCredit)
 }
 
 /** Identifies the split: the IB entry, what is struck and what is added. */
@@ -625,6 +732,7 @@ async function loadSplitState(ctx: OperationContext, fiscalPeriodId: string): Pr
     accounts_to_change: 0,
     accounts_unchanged: 0,
     accounts_skipped: 0,
+    changed_amount_sek: 0,
     can_apply: false,
     blocked: null,
     unresolved_dimensions: [],
@@ -678,7 +786,13 @@ async function loadSplitState(ctx: OperationContext, fiscalPeriodId: string): Pr
     readLinesWithDocuments(supabase, candidateLineIds),
   ])
 
-  const accounts = planOpeningBalanceSplit({ currentLines, objectBalances, accountNames, lineIdsWithDocuments })
+  const accounts = planOpeningBalanceSplit({
+    currentLines,
+    objectBalances,
+    accountNames,
+    lineIdsWithDocuments,
+    accumulatingDimensions: accumulating,
+  })
   const changing = accounts.filter((account) => account.status === 'change')
   const { unresolved, values } = await resolveBags(supabase, companyId, registry, accounts)
 
@@ -686,6 +800,7 @@ async function loadSplitState(ctx: OperationContext, fiscalPeriodId: string): Pr
   preview.accounts_to_change = changing.length
   preview.accounts_unchanged = accounts.filter((account) => account.status === 'unchanged').length
   preview.accounts_skipped = accounts.filter((account) => account.status === 'skipped').length
+  preview.changed_amount_sek = changedAmount(changing)
   preview.unresolved_dimensions = unresolved
   preview.dimension_values = values
   preview.fingerprint = splitFingerprint(entry.id, accounts)
@@ -749,26 +864,59 @@ export async function previewOpeningBalanceSplit(
   }
 }
 
+interface AppliedSoFar {
+  entryId: string
+  accounts: string[]
+  logIds: string[]
+}
+
+/**
+ * What earlier calls of this run already applied, for a failure after one of
+ * them committed: in the details (accounts_changed, rattelse_log_ids) and as
+ * partialPostedIds, so a staged approval lands in failed_partial with the
+ * rättelser it made instead of reading as a clean rejection (#842). The books
+ * are consistent either way: every call keeps each account at its total, and
+ * a rerun continues from where this one stopped.
+ */
+function appliedSoFar(done: AppliedSoFar): Pick<Failure, 'details' | 'partialPostedIds'> {
+  if (done.logIds.length === 0 && done.accounts.length === 0) return {}
+  return {
+    details: { accounts_changed: [...done.accounts], rattelse_log_ids: [...done.logIds] },
+    partialPostedIds: {
+      journal_entry_id: done.entryId,
+      ...(done.logIds.length ? { rattelse_log_ids: done.logIds.join(',') } : {}),
+      accounts_changed: done.accounts.join(','),
+    },
+  }
+}
+
 /** A refusal from correct_entry_lines_inline, mapped to the code the pre-flight would answer. */
-function rpcFailure(error: { code?: string; message?: string }, done: { accounts: string[]; logIds: string[] }): Failure {
-  const details = done.accounts.length > 0 ? { accounts_changed: done.accounts, rattelse_log_ids: done.logIds } : undefined
+function rpcFailure(error: { code?: string; message?: string }, done: AppliedSoFar): Failure {
+  const partial = appliedSoFar(done)
   const message = error.message ?? ''
-  if (error.code === '42501') return { ok: false, code: 'FORBIDDEN', details }
+  if (error.code === '42501') return { ok: false, code: 'FORBIDDEN', ...partial }
   if (error.code === 'P0001') {
     // The RPC points at storno for a locked year; for a split that is the
     // wrong advice (storno carries no bags), so answer this action's own codes.
-    if (/stängd eller låst/i.test(message)) return { ok: false, code: 'OB_SPLIT_PERIOD_LOCKED', details }
-    if (/Bokföringen är låst/i.test(message)) return { ok: false, code: 'OB_COMPANY_LOCK_DATE', details }
-    if (/bokslut/i.test(message)) return { ok: false, code: 'OB_CORRECT_YEAR_END_EXISTS', details }
-    return { ok: false, code: 'OB_SPLIT_REFUSED', details, messageSv: getUserErrorMessage(error, { locale: 'sv' }) }
+    if (/stängd eller låst/i.test(message)) return { ok: false, code: 'OB_SPLIT_PERIOD_LOCKED', ...partial }
+    if (/Bokföringen är låst/i.test(message)) return { ok: false, code: 'OB_COMPANY_LOCK_DATE', ...partial }
+    if (/bokslut/i.test(message)) return { ok: false, code: 'OB_CORRECT_YEAR_END_EXISTS', ...partial }
+    return { ok: false, code: 'OB_SPLIT_REFUSED', ...partial, messageSv: getUserErrorMessage(error, { locale: 'sv' }) }
   }
-  return { ok: false, code: 'OB_SPLIT_FAILED', details: { ...(details ?? {}), reason: getUserErrorMessage(error) } }
+  return {
+    ok: false,
+    code: 'OB_SPLIT_FAILED',
+    ...partial,
+    details: { ...(partial.details ?? {}), reason: getUserErrorMessage(error) },
+  }
 }
 
 /**
  * Split the year's IB verifikat per project through inline rättelse. With
  * dryRun it answers the preview and writes nothing (also the MCP staging
- * preview). A split that is already in place answers applied: false.
+ * preview). A split that is already in place answers applied: false; its dry
+ * run answers OB_SPLIT_NOTHING_TO_DO, so nobody stages (and has to approve)
+ * an operation that would write nothing.
  */
 export async function splitOpeningBalancesPerProject(
   ctx: OperationContext,
@@ -809,7 +957,16 @@ export async function splitOpeningBalancesPerProject(
     }
   }
 
-  if (options.dryRun) return { ok: true, dryRun: true, preview: preview as unknown as Record<string, unknown> }
+  if (options.dryRun) {
+    if (nothingToDo) {
+      return {
+        ok: false,
+        code: 'OB_SPLIT_NOTHING_TO_DO',
+        details: { accounts_unchanged: preview.accounts_unchanged, accounts_skipped: skipped },
+      }
+    }
+    return { ok: true, dryRun: true, preview: preview as unknown as Record<string, unknown> }
+  }
 
   const entryId = preview.journal_entry_id!
   if (nothingToDo) {
@@ -833,7 +990,8 @@ export async function splitOpeningBalancesPerProject(
     changing.map((account) => [account.account_number, account.current_lines.map((line) => line.journal_entry_line_id)]),
   )
   const calls = planRattelseCalls(changing)
-  const done = { accounts: [] as string[], logIds: [] as string[] }
+  const done: AppliedSoFar = { entryId, accounts: [], logIds: [] }
+  const started = new Set<string>()
   let linesStruck = 0
   let linesAdded = 0
 
@@ -844,22 +1002,27 @@ export async function splitOpeningBalancesPerProject(
       const strike: string[] = []
       for (const step of call) {
         const accountLines = lines.filter((line) => line.account_number === step.account_number)
-        if (step.kind === 'initial') {
-          // The lines the plan saw must still be the account's lines: a
-          // concurrent edit means the split is no longer the one previewed.
+        if (!started.has(step.account_number)) {
+          // An account's first step: the lines the plan saw must still be the
+          // account's lines. A concurrent edit means the split is no longer
+          // the one previewed.
+          started.add(step.account_number)
           const planned = new Set(plannedStrikes.get(step.account_number) ?? [])
           const ids = accountLines.map((line) => line.id)
           if (ids.length !== planned.size || ids.some((id) => !planned.has(id))) {
+            const partial = appliedSoFar(done)
             return {
               ok: false,
               code: 'OB_SPLIT_PROPOSAL_CHANGED',
-              details: { fingerprint: preview.fingerprint, ...(done.accounts.length ? { accounts_changed: done.accounts } : {}) },
+              ...partial,
+              details: { ...(partial.details ?? {}), fingerprint: preview.fingerprint },
             }
           }
-          strike.push(...ids)
-        } else {
-          strike.push(...accountLines.filter((line) => isUntagged(line.dimensions)).map((line) => line.id))
         }
+        // initial: every line of the account; continue: the interim untagged
+        // remainder (the project lines already in place stay).
+        const struck = step.kind === 'initial' ? accountLines : accountLines.filter((line) => isUntagged(line.dimensions))
+        strike.push(...struck.map((line) => line.id))
       }
       const newLines = call.flatMap((step) =>
         step.add.map((line) => ({
@@ -894,7 +1057,8 @@ export async function splitOpeningBalancesPerProject(
     }
   } catch (err) {
     const failure = unexpected(ctx, err, 'opening balance split failed')
-    return done.accounts.length ? { ...failure, details: { ...failure.details, accounts_changed: done.accounts } } : failure
+    const partial = appliedSoFar(done)
+    return { ...failure, ...partial, details: { ...(partial.details ?? {}), ...failure.details } }
   }
 
   // Post-check: every account still nets to its IB. The RPC keeps the entry

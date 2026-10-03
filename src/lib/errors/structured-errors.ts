@@ -3648,6 +3648,17 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
         'details.unresolved lists each dimension number and code. Create the missing values (POST /dimensions/{id}/values), then retry.',
     },
   },
+  OB_SPLIT_NOTHING_TO_DO: {
+    httpStatus: 409,
+    message_sv:
+      'Det finns ingenting att dela upp: ingående balanserna är redan uppdelade per projekt, eller så hoppas de berörda kontona över.',
+    message_en:
+      'There is nothing to split: the opening balances are already split per project, or the accounts concerned are skipped.',
+    remediation: {
+      description:
+        'Nothing to stage or approve. GET /fiscal-periods/{id}/opening-balances/split-per-project shows each account\'s status (unchanged, or skipped with skip_reason).',
+    },
+  },
   OB_SPLIT_PROPOSAL_CHANGED: {
     httpStatus: 409,
     message_sv:

@@ -195,9 +195,11 @@ export default function SplitOpeningBalanceDialog({ fiscalPeriodId, open, onOpen
                             <span className="ml-2 font-normal tabular-nums">{formatCurrency(account.total)}</span>
                             {account.skip_reason && (
                               <span className="ml-2 font-normal">
-                                {account.skip_reason === 'foreign_currency'
-                                  ? t('skipped_foreign_currency')
-                                  : t('skipped_line_document')}
+                                {account.skip_reason === 'existing_split'
+                                  ? t('skipped_existing_split')
+                                  : account.skip_reason === 'foreign_currency'
+                                    ? t('skipped_foreign_currency')
+                                    : t('skipped_line_document')}
                               </span>
                             )}
                           </TableCell>

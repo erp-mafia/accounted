@@ -33,7 +33,11 @@ import type { Logger } from '@/lib/logger'
  *      500, untagged 1100), totals unchanged, the period link unchanged, a
  *      rättelse log row; a second run is a no-op;
  *   2. locked year: the service refuses before writing, and the RPC itself
- *      refuses the same split lines.
+ *      refuses the same split lines;
+ *   3. 120 projects on one account (121 new lines, over the RPC's 100 per
+ *      call): two inline rättelser, each accepted by the real RPC and each
+ *      keeping the account at its IB. With call 2 failing, the first run
+ *      reports what call 1 applied and a rerun continues from there.
  */
 
 const log: Logger = { info: () => {}, warn: () => {}, error: () => {}, child: () => log }
@@ -218,6 +222,54 @@ async function seedBooks() {
   return { userId, companyId, fy2025, fy2026, ib2026 }
 }
 
+const MANY = 120
+
+/** 2025: MANY projects booked 10 each on 1470; 2026's IB untagged (1470 5000). */
+async function seedManyProjects() {
+  const userId = await insertAuthUser()
+  const companyId = await insertCompany({ createdBy: userId })
+  await insertCompanyMember({ companyId, userId, role: 'owner' })
+  await getPool().query('SELECT public.ensure_company_dimensions($1)', [companyId])
+  await getPool().query(
+    `INSERT INTO public.dimension_values (company_id, dimension_id, code, name)
+     SELECT $1, d.id, 'P' || lpad(g::text, 3, '0'), 'Projekt ' || g
+       FROM public.dimensions d, generate_series(1, $2) g
+      WHERE d.company_id = $1 AND d.sie_dim_no = 6`,
+    [companyId, MANY],
+  )
+  for (const [number, name] of [['1470', 'Pågående arbeten'], ['1930', 'Företagskonto'], ['2081', 'Aktiekapital']]) {
+    await insertAccount(companyId, userId, number, name)
+  }
+  const fy2025 = await insertFiscalPeriod({ userId, companyId, periodStart: '2025-01-01', periodEnd: '2025-12-31', name: '2025' })
+  const fy2026 = await insertFiscalPeriod({ userId, companyId, periodStart: '2026-01-01', periodEnd: '2026-12-31', name: '2026' })
+  await getPool().query('UPDATE public.fiscal_periods SET previous_period_id = $1 WHERE id = $2', [fy2025, fy2026])
+  await insertPostedJournalEntry({
+    userId, companyId, fiscalPeriodId: fy2025, entryDate: '2025-03-01', voucherNumber: 1,
+    lines: [
+      ...Array.from({ length: MANY }, (_, i) => ({
+        accountNumber: '1470',
+        debitAmount: 10,
+        creditAmount: 0,
+        dimensions: { '6': `P${String(i + 1).padStart(3, '0')}` },
+      })),
+      { accountNumber: '1930', debitAmount: 0, creditAmount: MANY * 10 },
+    ],
+  })
+  await getPool().query('UPDATE public.fiscal_periods SET is_closed = true, closed_at = now() WHERE id = $1', [fy2025])
+  const ib2026 = await insertPostedJournalEntry({
+    userId, companyId, fiscalPeriodId: fy2026, entryDate: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1,
+    lines: [
+      { accountNumber: '1470', debitAmount: 5000, creditAmount: 0, lineDescription: 'IB 1470' },
+      { accountNumber: '2081', debitAmount: 0, creditAmount: 5000, lineDescription: 'IB 2081' },
+    ],
+  })
+  await getPool().query(
+    'UPDATE public.fiscal_periods SET opening_balance_entry_id = $1, opening_balances_set = true WHERE id = $2',
+    [ib2026, fy2026],
+  )
+  return { userId, companyId, fy2026, ib2026 }
+}
+
 type LineRow = { account_number: string; debit_amount: string; credit_amount: string; dimensions: Record<string, string> }
 
 const netsOf = (rows: LineRow[], account: string) => {
@@ -333,5 +385,63 @@ describe('split IB per project (issue #3313)', () => {
       [ib2026],
     )
     expect(netsOf(rows, '1470')).toEqual({ '': 1900 })
+  })
+  it('splits 120 projects over two inline rättelser, and a rerun after a failed second call finishes it', async () => {
+    const { userId, companyId, fy2026, ib2026 } = await seedManyProjects()
+
+    await withUserContext(userId, async (client) => {
+      const real = pgSupabase(client)
+      // The second inline rättelse fails (a statement timeout): call 1 has
+      // already committed through the real RPC.
+      let rattelseCalls = 0
+      const failing = {
+        from: (table: string) => real.from(table),
+        rpc: (name: string, args: Record<string, unknown>) => {
+          if (name === 'correct_entry_lines_inline' && ++rattelseCalls === 2) {
+            return Promise.resolve({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+          }
+          return real.rpc(name, args)
+        },
+      } as unknown as SupabaseClient
+
+      const first = await splitOpeningBalancesPerProject({ supabase: failing, companyId, userId, log }, { fiscal_period_id: fy2026 })
+      expect(first).toMatchObject({
+        ok: false,
+        code: 'OB_SPLIT_FAILED',
+        details: { accounts_changed: ['1470'] },
+        partialPostedIds: { journal_entry_id: ib2026, accounts_changed: '1470' },
+      })
+
+      const lines1470 = async () =>
+        (
+          await client.query<LineRow>(
+            `SELECT account_number, debit_amount, credit_amount, dimensions FROM public.journal_entry_lines
+              WHERE journal_entry_id = $1 AND account_number = '1470'`,
+            [ib2026],
+          )
+        ).rows
+      // In between: 99 project lines plus an interim remainder, still 5000 in total.
+      const between = await lines1470()
+      expect(between).toHaveLength(100)
+      expect(Object.values(netsOf(between, '1470')).reduce((a, b) => Math.round((a + b) * 100) / 100, 0)).toBe(5000)
+
+      // The rerun keeps those 99 lines and continues from the remainder.
+      const rerun = await splitOpeningBalancesPerProject({ supabase: real, companyId, userId, log }, { fiscal_period_id: fy2026 })
+      expect(rerun).toMatchObject({ ok: true, data: { applied: true, lines_struck: 1, lines_added: 22 } })
+
+      const expected = {
+        ...Object.fromEntries(Array.from({ length: MANY }, (_, i) => [`P${String(i + 1).padStart(3, '0')}`, 10])),
+        '': 3800,
+      }
+      expect(netsOf(await lines1470(), '1470')).toEqual(expected)
+      const { rows: logRows } = await client.query(
+        'SELECT jsonb_array_length(added_lines) AS added FROM public.journal_entry_rattelse_log WHERE journal_entry_id = $1 ORDER BY 1',
+        [ib2026],
+      )
+      expect(logRows.map((row) => row.added)).toEqual([22, 100])
+
+      const again = await splitOpeningBalancesPerProject({ supabase: real, companyId, userId, log }, { fiscal_period_id: fy2026 })
+      expect(again).toMatchObject({ ok: true, data: { applied: false } })
+    })
   })
 })

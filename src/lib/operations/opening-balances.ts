@@ -313,6 +313,9 @@ const SplitPreviewOutput = z.object({
   accounts_to_change: z.number(),
   accounts_unchanged: z.number(),
   accounts_skipped: z.number(),
+  changed_amount_sek: z
+    .number()
+    .describe('What the split moves in SEK: the largest side (debit or credit) of the lines struck or added. Priced by an API key\'s unattended-commit ceiling.'),
   can_apply: z.boolean(),
   blocked: SplitBlocked.describe('Why the split cannot run now: the code the apply answers, with the Swedish message.'),
   unresolved_dimensions: z.array(
@@ -330,7 +333,10 @@ const SplitPreviewOutput = z.object({
       account_name: z.string().nullable(),
       total: z.number().describe('The account\'s IB, unchanged by the split.'),
       status: z.enum(['change', 'unchanged', 'skipped']),
-      skip_reason: z.enum(['foreign_currency', 'line_document']).nullable(),
+      skip_reason: z
+        .enum(['existing_split', 'foreign_currency', 'line_document'])
+        .nullable()
+        .describe('existing_split: the IB already carries a different project split (e.g. from SIE #OIB) and is left alone.'),
       current_lines: z.array(SplitLine.extend({ journal_entry_line_id: z.string().uuid() })),
       proposed_lines: z.array(SplitLine),
     }),
@@ -352,6 +358,7 @@ const SPLIT_PREVIEW_EXAMPLE = {
   accounts_to_change: 1,
   accounts_unchanged: 0,
   accounts_skipped: 0,
+  changed_amount_sek: 1800,
   can_apply: true,
   blocked: null,
   unresolved_dimensions: [],
@@ -405,6 +412,7 @@ export const openingBalancesSplitPreview = defineOperation({
     pitfalls: [
       'The basis is the previous year in Accounted as it stands: if that year is still open (source_period_closed false), later bookings there change the split.',
       'A previous year whose own IB was untagged only carries the projects\' movements of that year.',
+      'An account whose IB already carries a different project split (an IB imported with SIE #OIB, or split by hand) is skipped with skip_reason existing_split, never overwritten.',
       'unresolved_dimensions lists codes missing from the registry: the apply refuses until they exist.',
     ],
     example: { response: { data: SPLIT_PREVIEW_EXAMPLE, meta: META } },
@@ -441,7 +449,9 @@ export const openingBalancesSplitPerProject = defineOperation({
       'Pass expected_fingerprint from the preview: if the IB or the previous year changed since, 409 OB_SPLIT_PROPOSAL_CHANGED instead of a different split.',
       'A closed year answers 409 OB_SPLIT_PERIOD_CLOSED, a locked one 409 OB_SPLIT_PERIOD_LOCKED, a lock date covering the IB 409 OB_COMPANY_LOCK_DATE, a posted bokslut 409 OB_CORRECT_YEAR_END_EXISTS.',
       'Project codes missing from the registry answer 409 OB_SPLIT_DIMENSION_UNRESOLVED with details.unresolved.',
-      'An account with a foreign-currency IB line or a line-level underlag link is skipped (accounts_skipped), never forced.',
+      'An account with a foreign-currency IB line or a line-level underlag link, or whose IB already carries a different project split, is skipped (accounts_skipped), never forced.',
+      'With nothing to change the apply answers 200 applied=false, but a dry run (and MCP staging) answers 409 OB_SPLIT_NOTHING_TO_DO: there is nothing to approve.',
+      'Over 100 new lines run as several inline rättelser. A failure after one committed answers the error with details.accounts_changed and details.rattelse_log_ids; the books stay consistent and a rerun continues from there.',
     ],
     example: {
       request: { expected_fingerprint: '3f9a…' },
@@ -475,13 +485,15 @@ export const openingBalancesSplitPerProject = defineOperation({
     journal_entry_id: z.string().uuid().describe('The IB verifikat, corrected in place (same id).'),
     applied: z.boolean().describe('False when the IB already matched the split: nothing was written.'),
     accounts_changed: z.array(z.string()),
-    accounts_skipped: z.array(z.object({ account_number: z.string(), reason: z.enum(['foreign_currency', 'line_document']) })),
+    accounts_skipped: z.array(
+      z.object({ account_number: z.string(), reason: z.enum(['existing_split', 'foreign_currency', 'line_document']) }),
+    ),
     lines_struck: z.number(),
     lines_added: z.number(),
     rattelse_log_ids: z.array(z.string().uuid()),
     fingerprint: z.string(),
   }),
-  errorCodes: [...SPLIT_ERRORS, 'OB_SPLIT_PROPOSAL_CHANGED', 'OB_SPLIT_REFUSED', 'OB_SPLIT_FAILED'],
+  errorCodes: [...SPLIT_ERRORS, 'OB_SPLIT_NOTHING_TO_DO', 'OB_SPLIT_PROPOSAL_CHANGED', 'OB_SPLIT_REFUSED', 'OB_SPLIT_FAILED'],
   http: { method: 'POST', path: SPLIT_PATH, pathParams: { id: 'fiscal_period_id' } },
   mcp: {
     name: 'gnubok_split_opening_balances_per_project',

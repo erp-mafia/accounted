@@ -115,12 +115,13 @@ describe('planOpeningBalanceSplit', () => {
     })
     expect(already.status).toBe('unchanged')
 
-    // A different allocation is a change, even with the same total.
+    // A different project allocation with the same total is not this split,
+    // and it is never overwritten.
     const [moved] = planOpeningBalanceSplit({
       currentLines: [line('1470', 1800, { dimensions: { '6': 'P1' } }), line('1470', 300)],
       objectBalances,
     })
-    expect(moved.status).toBe('change')
+    expect(moved).toMatchObject({ status: 'skipped', skip_reason: 'existing_split' })
   })
 
   it('leaves accounts whose previous-year tagged balance is zero, and the VAT accounts, untouched', () => {
@@ -142,6 +143,42 @@ describe('planOpeningBalanceSplit', () => {
     })
     expect(plan.status).toBe('change')
     expect(plan.proposed_lines.map((l) => l.dimensions)).toEqual([{ '6': 'P1' }])
+  })
+
+  it('never overwrites an IB already split per project from another source (SIE #OIB) with other amounts', () => {
+    // The IB was imported with #OIB: P1 carries the old system's cumulative
+    // 5000, while last year's tagged closing in Accounted only holds 300.
+    const [plan] = planOpeningBalanceSplit({
+      currentLines: [line('1470', 5000, { dimensions: { '6': 'P1' } }), line('1470', 1000)],
+      objectBalances: new Map([['1470', [P('P1', 300)]]]),
+      accumulatingDimensions: new Set(['6']),
+    })
+    expect(plan).toMatchObject({ status: 'skipped', skip_reason: 'existing_split', total: 6000 })
+
+    // A project the proposal does not carry at all is an existing split too.
+    const [other] = planOpeningBalanceSplit({
+      currentLines: [line('1470', 700, { dimensions: { '6': 'P9' } }), line('1470', 300)],
+      objectBalances: new Map([['1470', [P('P1', 300)]]]),
+    })
+    expect(other).toMatchObject({ status: 'skipped', skip_reason: 'existing_split' })
+  })
+
+  it('splits an IB whose project lines the proposal agrees with (a partial split, or tags on a resetting dimension only)', () => {
+    const [partial] = planOpeningBalanceSplit({
+      currentLines: [line('1470', 1300, { dimensions: { '6': 'P1' } }), line('1470', 800)],
+      objectBalances: new Map([['1470', [P('P1', 1300), P('P2', 500)]]]),
+      accumulatingDimensions: new Set(['6']),
+    })
+    expect(partial.status).toBe('change')
+    expect(nets(partial.proposed_lines)).toEqual({ P1: 1300, P2: 500, '': 300 })
+
+    // Dimension 1 resets annually: its tag is not a carried split.
+    const [resetting] = planOpeningBalanceSplit({
+      currentLines: [line('1470', 1000, { dimensions: { '1': 'K1' } })],
+      objectBalances: new Map([['1470', [P('P1', 1000)]]]),
+      accumulatingDimensions: new Set(['6']),
+    })
+    expect(resetting.status).toBe('change')
   })
 
   it('skips an account the inline rättelse cannot strike: a foreign-currency line, or a line with its own underlag', () => {
@@ -189,6 +226,44 @@ describe('planRattelseCalls', () => {
     for (const [step] of calls) {
       expect(step.add.length).toBeLessThanOrEqual(MAX_NEW_LINES_PER_RATTELSE)
       state = step.kind === 'initial' ? [...step.add] : [...state.filter((l) => Object.keys(l.dimensions).length > 0), ...step.add]
+      expect(sum(state)).toBe(3000)
+    }
+    expect(nets(state)).toEqual(nets(plan.proposed_lines))
+  })
+
+  it('resumes a large account an interrupted run left half split, instead of replaying its first call', () => {
+    const plan = planFor('1510', 250, 3000)
+    const [first] = planRattelseCalls([plan])
+    expect(first[0].kind).toBe('initial')
+
+    // Call 1 committed, call 2 failed: the account holds call 1's lines.
+    let seq = 0
+    const afterFirst = first[0].add.map((l) => ({ ...l, journal_entry_line_id: `after-${++seq}` }))
+    const [replanned] = planOpeningBalanceSplit({
+      currentLines: afterFirst.map((l) => ({
+        id: l.journal_entry_line_id,
+        account_number: '1510',
+        debit_amount: l.debit_amount,
+        credit_amount: l.credit_amount,
+        line_description: l.line_description,
+        dimensions: l.dimensions,
+        currency: 'SEK',
+      })),
+      objectBalances: new Map([['1510', Array.from({ length: 250 }, (_, i) => P(`P${i + 1}`, 10))]]),
+    })
+    expect(replanned.status).toBe('change')
+    const resumed = planRattelseCalls([replanned])
+    // Two calls left, both continuing from the interim remainder; the lines
+    // call 1 booked are never struck and re-added (the RPC refuses that).
+    expect(resumed.map((call) => call[0].kind)).toEqual(['continue', 'continue'])
+    const bookedBags = new Set(first[0].add.filter((l) => Object.keys(l.dimensions).length).map((l) => l.dimensions['6']))
+    for (const [step] of resumed) {
+      expect(step.add.some((l) => bookedBags.has(l.dimensions['6']))).toBe(false)
+    }
+
+    let state: SplitLineView[] = [...first[0].add]
+    for (const [step] of resumed) {
+      state = [...state.filter((l) => Object.keys(l.dimensions).length > 0), ...step.add]
       expect(sum(state)).toBe(3000)
     }
     expect(nets(state)).toEqual(nets(plan.proposed_lines))
@@ -487,6 +562,253 @@ describe('splitOpeningBalancesPerProject', () => {
       ok: false,
       code: 'OB_SPLIT_REFUSED',
       messageSv: 'Kontot 1470 finns inte i kontoplanen.',
+    })
+  })
+})
+
+describe('splitOpeningBalancesPerProject: no-ops, pricing, existing splits', () => {
+  it('answers OB_SPLIT_NOTHING_TO_DO on a dry run when nothing would change, so nothing gets staged', async () => {
+    const { ctx, findCalls } = setup({
+      journal_entry_lines: {
+        data: [
+          { id: 'l1', account_number: '1470', debit_amount: 1300, credit_amount: 0, line_description: null, dimensions: { '6': 'P1' }, currency: 'SEK' },
+          { id: 'l2', account_number: '1470', debit_amount: 500, credit_amount: 0, line_description: null, dimensions: { '6': 'P2' }, currency: 'SEK' },
+          { id: 'l3', account_number: '1470', debit_amount: 300, credit_amount: 0, line_description: null, dimensions: {}, currency: 'SEK' },
+          { id: 'l4', account_number: '2081', debit_amount: 0, credit_amount: 2100, line_description: null, dimensions: {}, currency: 'SEK' },
+        ],
+      },
+    })
+    const outcome = await splitOpeningBalancesPerProject(ctx, { fiscal_period_id: PERIOD }, { dryRun: true })
+    expect(outcome).toMatchObject({ ok: false, code: 'OB_SPLIT_NOTHING_TO_DO', details: { accounts_unchanged: 1 } })
+    expect(findCalls('rpc:correct_entry_lines_inline', 'rpc')).toHaveLength(0)
+  })
+
+  it('prices the split for the unattended-commit ceiling: the largest side struck or added', async () => {
+    const preview = await previewOpeningBalanceSplit(setup().ctx, { fiscal_period_id: PERIOD })
+    // 1470: 2100 debit struck, 1300 + 500 + 300 debit added.
+    expect((preview as { data: OpeningBalanceSplitPreview }).data.changed_amount_sek).toBe(2100)
+
+    // A credit account is priced on its credit side, never at zero.
+    const credit = await previewOpeningBalanceSplit(
+      setup({
+        journal_entry_lines: {
+          data: [
+            { id: L1470, account_number: '1930', debit_amount: 4000, credit_amount: 0, line_description: null, dimensions: {}, currency: 'SEK' },
+            { id: L2081, account_number: '2440', debit_amount: 0, credit_amount: 4000, line_description: null, dimensions: {}, currency: 'SEK' },
+          ],
+        },
+        'rpc:compute_object_closing_balances': { data: [{ account_number: '2440', dimensions: { '6': 'P1' }, net: -2500 }] },
+      }).ctx,
+      { fiscal_period_id: PERIOD },
+    )
+    expect((credit as { data: OpeningBalanceSplitPreview }).data.changed_amount_sek).toBe(4000)
+  })
+
+  it('leaves an IB already split per project with other amounts alone: applied=false, reported as skipped', async () => {
+    const { ctx, findCalls } = setup({
+      journal_entry_lines: {
+        data: [
+          { id: 'l1', account_number: '1470', debit_amount: 1800, credit_amount: 0, line_description: null, dimensions: { '6': 'P1' }, currency: 'SEK' },
+          { id: 'l2', account_number: '1470', debit_amount: 300, credit_amount: 0, line_description: null, dimensions: {}, currency: 'SEK' },
+          { id: 'l3', account_number: '2081', debit_amount: 0, credit_amount: 2100, line_description: null, dimensions: {}, currency: 'SEK' },
+        ],
+      },
+    })
+    const outcome = await splitOpeningBalancesPerProject(ctx, { fiscal_period_id: PERIOD })
+    expect(outcome).toMatchObject({
+      ok: true,
+      data: { applied: false, accounts_changed: [], accounts_skipped: [{ account_number: '1470', reason: 'existing_split' }] },
+    })
+    expect(findCalls('rpc:correct_entry_lines_inline', 'rpc')).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// More than 100 new lines: several inline rättelser against a stateful IB
+// ---------------------------------------------------------------------------
+
+interface SimLine {
+  id: string
+  account_number: string
+  debit_amount: number
+  credit_amount: number
+  line_description: string | null
+  dimensions: Record<string, string>
+  currency: string
+}
+
+interface World {
+  lines: SimLine[]
+  rpcCalls: number
+  /** The 1-based call that fails, with this error. */
+  failOn?: { call: number; error: { code: string; message: string } }
+  /** 1470's total after each committed call. */
+  totals: number[]
+}
+
+const PROJECTS = 150
+
+function lineKey(l: { account_number: string; debit_amount: number; credit_amount: number; line_description: string | null; dimensions: Record<string, string> }) {
+  const dims = JSON.stringify(Object.fromEntries(Object.entries(l.dimensions).sort()))
+  return `${l.account_number}|${Number(l.debit_amount).toFixed(2)}|${Number(l.credit_amount).toFixed(2)}|${(l.line_description ?? '').trim()}|${dims}`
+}
+
+/** correct_entry_lines_inline as the database runs it, for the guards this path can hit. */
+function simulateRattelse(world: World, args: { p_strike_line_ids: string[]; p_new_lines: Array<Omit<SimLine, 'id' | 'currency'>> }) {
+  world.rpcCalls += 1
+  if (world.failOn?.call === world.rpcCalls) return { data: null, error: world.failOn.error }
+  if (args.p_new_lines.length > 100) return { data: null, error: { code: 'P0001', message: 'Högst 100 nya rader per rättelse.' } }
+  const strike = new Set(args.p_strike_line_ids)
+  if ([...strike].some((id) => !world.lines.some((l) => l.id === id))) {
+    return { data: null, error: { code: 'P0001', message: 'En eller flera rader som ska strykas hör inte till verifikationen.' } }
+  }
+  const struckKeys = world.lines.filter((l) => strike.has(l.id)).map(lineKey).sort()
+  const addedKeys = args.p_new_lines.map(lineKey).sort()
+  if (JSON.stringify(struckKeys) === JSON.stringify(addedKeys)) {
+    return { data: null, error: { code: 'P0001', message: 'Rättelsen ändrar ingenting.' } }
+  }
+  const next = [
+    ...world.lines.filter((l) => !strike.has(l.id)),
+    ...args.p_new_lines.map((l, i) => ({ ...l, id: `new-${world.rpcCalls}-${i}`, currency: 'SEK' })),
+  ]
+  const debit = Math.round(next.reduce((s, l) => s + l.debit_amount, 0) * 100) / 100
+  const credit = Math.round(next.reduce((s, l) => s + l.credit_amount, 0) * 100) / 100
+  if (debit !== credit) return { data: null, error: { code: 'P0001', message: 'Verifikationen balanserar inte efter rättelsen.' } }
+  world.lines = next
+  world.totals.push(
+    Math.round(next.filter((l) => l.account_number === '1470').reduce((s, l) => s + l.debit_amount - l.credit_amount, 0) * 100) / 100,
+  )
+  return { data: { log_id: `log-${world.rpcCalls}` }, error: null }
+}
+
+function liveChain(resolveWith: () => unknown, record: (method: string, args: unknown[]) => void): unknown {
+  return new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        if (prop === 'then') return (resolve: (v: unknown) => void) => resolve(resolveWith())
+        return (...args: unknown[]) => {
+          record(String(prop), args)
+          return liveChain(resolveWith, record)
+        }
+      },
+    },
+  )
+}
+
+/** A fresh table mock per run over shared IB state: lines read live, the RPC applied to them. */
+function statefulSetup(world: World) {
+  const codes = Array.from({ length: PROJECTS }, (_, i) => `P${String(i + 1).padStart(3, '0')}`)
+  const mock = createTableMockSupabase(
+    rows({
+      'rpc:compute_object_closing_balances': {
+        data: codes.map((code) => ({ account_number: '1470', dimensions: { '6': code }, net: 100 })),
+      },
+      dimension_values: { data: codes.map((code) => ({ dimension_id: DIM6, code, name: `Projekt ${code}`, is_active: true })) },
+    }),
+  )
+  const rpcArgs: Array<{ p_strike_line_ids: string[]; p_new_lines: Array<Record<string, unknown>> }> = []
+  const tableFrom = mock.supabase.from.getMockImplementation()!
+  const tableRpc = mock.supabase.rpc.getMockImplementation()!
+  mock.supabase.from.mockImplementation((table: string) =>
+    table === 'journal_entry_lines'
+      ? (liveChain(() => ({ data: world.lines.map((l) => ({ ...l })), error: null }), () => {}) as never)
+      : tableFrom(table),
+  )
+  mock.supabase.rpc.mockImplementation((name: string, args?: unknown) => {
+    if (name !== 'correct_entry_lines_inline') return tableRpc(name, args)
+    const typed = args as { p_strike_line_ids: string[]; p_new_lines: Array<Omit<SimLine, 'id' | 'currency'>> }
+    rpcArgs.push(JSON.parse(JSON.stringify(typed)))
+    const result = simulateRattelse(world, typed)
+    return liveChain(() => result, () => {}) as never
+  })
+  const ctx = { supabase: mock.supabase as never, companyId: COMPANY, userId: USER, log }
+  return { ctx, rpcArgs }
+}
+
+function unsplitWorld(): World {
+  return {
+    lines: [
+      { id: L1470, account_number: '1470', debit_amount: 20000, credit_amount: 0, line_description: 'IB 1470', dimensions: {}, currency: 'SEK' },
+      { id: L2081, account_number: '2081', debit_amount: 0, credit_amount: 20000, line_description: 'IB 2081', dimensions: {}, currency: 'SEK' },
+    ],
+    rpcCalls: 0,
+    totals: [],
+  }
+}
+
+function worldNets(world: World): Record<string, number> {
+  return nets(world.lines.filter((l) => l.account_number === '1470').map((l) => ({ amount: l.debit_amount - l.credit_amount, dimensions: l.dimensions })))
+}
+
+const EXPECTED_SPLIT = {
+  ...Object.fromEntries(Array.from({ length: PROJECTS }, (_, i) => [`P${String(i + 1).padStart(3, '0')}`, 100])),
+  '': 5000,
+}
+
+describe('splitOpeningBalancesPerProject over several inline rättelser (more than 100 new lines)', () => {
+  it('splits a 150-project account in two calls; the second strikes only the interim remainder', async () => {
+    const world = unsplitWorld()
+    const { ctx, rpcArgs } = statefulSetup(world)
+    const outcome = await splitOpeningBalancesPerProject(ctx, { fiscal_period_id: PERIOD })
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      data: { applied: true, accounts_changed: ['1470'], lines_struck: 2, lines_added: 152, rattelse_log_ids: ['log-1', 'log-2'] },
+    })
+    expect(rpcArgs).toHaveLength(2)
+    expect(rpcArgs[0].p_strike_line_ids).toEqual([L1470])
+    expect(rpcArgs[0].p_new_lines).toHaveLength(100)
+    // Call 2 re-reads the IB and strikes call 1's untagged remainder only.
+    const interim = rpcArgs[0].p_new_lines.findIndex((l) => Object.keys(l.dimensions as object).length === 0)
+    expect(rpcArgs[1].p_strike_line_ids).toEqual([`new-1-${interim}`])
+    expect(rpcArgs[1].p_new_lines).toHaveLength(52)
+    // Every call kept the account at its IB; the end state is the split.
+    expect(world.totals).toEqual([20000, 20000])
+    expect(worldNets(world)).toEqual(EXPECTED_SPLIT)
+
+    // And a third run is a no-op.
+    const again = await splitOpeningBalancesPerProject(statefulSetup(world).ctx, { fiscal_period_id: PERIOD })
+    expect(again).toMatchObject({ ok: true, data: { applied: false } })
+    expect(world.rpcCalls).toBe(2)
+  })
+
+  it('reports what call 1 applied when call 2 fails, and a rerun finishes the split', async () => {
+    const world = unsplitWorld()
+    world.failOn = { call: 2, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+    const first = await splitOpeningBalancesPerProject(statefulSetup(world).ctx, { fiscal_period_id: PERIOD })
+
+    expect(first).toMatchObject({
+      ok: false,
+      code: 'OB_SPLIT_FAILED',
+      details: { accounts_changed: ['1470'], rattelse_log_ids: ['log-1'] },
+      partialPostedIds: { journal_entry_id: IB, rattelse_log_ids: 'log-1', accounts_changed: '1470' },
+    })
+    // Consistent in between: the account still nets to its IB.
+    expect(world.totals).toEqual([20000])
+    expect(world.lines.filter((l) => l.account_number === '1470')).toHaveLength(100)
+
+    // The rerun keeps the 99 project lines in place and continues.
+    world.failOn = undefined
+    const preview = await previewOpeningBalanceSplit(statefulSetup(world).ctx, { fiscal_period_id: PERIOD })
+    expect((preview as { data: OpeningBalanceSplitPreview }).data.accounts[0]).toMatchObject({ status: 'change', skip_reason: null })
+    const { ctx, rpcArgs } = statefulSetup(world)
+    const rerun = await splitOpeningBalancesPerProject(ctx, { fiscal_period_id: PERIOD })
+    expect(rerun).toMatchObject({ ok: true, data: { applied: true, lines_struck: 1, lines_added: 52 } })
+    expect(rpcArgs).toHaveLength(1)
+    expect(rpcArgs[0].p_strike_line_ids).toHaveLength(1)
+    expect(world.totals).toEqual([20000, 20000])
+    expect(worldNets(world)).toEqual(EXPECTED_SPLIT)
+  })
+
+  it('reports partial progress on a refusal mid-run too (the year was locked between calls)', async () => {
+    const world = unsplitWorld()
+    world.failOn = { call: 2, error: { code: 'P0001', message: 'Perioden är stängd eller låst: använd rättelseverifikat (storno).' } }
+    const outcome = await splitOpeningBalancesPerProject(statefulSetup(world).ctx, { fiscal_period_id: PERIOD })
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'OB_SPLIT_PERIOD_LOCKED',
+      partialPostedIds: { journal_entry_id: IB, rattelse_log_ids: 'log-1' },
     })
   })
 })

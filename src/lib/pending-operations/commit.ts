@@ -438,11 +438,14 @@ async function commitRegisteredOperation(
   if (!outcome.ok) {
     if (outcome.error) throw outcome.error
     const entry = getErrorEntry(outcome.code)
+    const partial = outcome.partialPostedIds && Object.keys(outcome.partialPostedIds).length > 0
     return {
       // Never an empty string: an empty error reads as success downstream.
       error: outcome.messageSv || entry?.message_en || outcome.code,
       errorCode: outcome.code,
       status: entry?.httpStatus ?? 400,
+      // A failure after an irreversible step: failed_partial, not rejected.
+      ...(partial ? { partialPostedIds: outcome.partialPostedIds } : {}),
     }
   }
   if (outcome.dryRun) return { data: outcome.preview }

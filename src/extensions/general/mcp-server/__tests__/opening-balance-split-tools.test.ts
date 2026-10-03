@@ -29,6 +29,32 @@ const DIM6 = 'dddd0000-0000-4000-8000-000000000006'
 interface World {
   locked: boolean
   ibLines: Array<Record<string, unknown>>
+  /** Project codes with a 1470 balance last year (default: P1 1300). */
+  projects?: string[]
+  /** The 1-based inline rättelse call that fails; the others are applied to ibLines. */
+  failRattelseCall?: number
+  rattelseCalls?: number
+}
+
+const ALREADY_SPLIT = () => [
+  { id: 'aaaa0000-0000-4000-8000-000000000001', account_number: '1470', debit_amount: 1300, credit_amount: 0, line_description: null, dimensions: { '6': 'P1' }, currency: 'SEK' },
+  { id: 'aaaa0000-0000-4000-8000-000000000002', account_number: '1470', debit_amount: 800, credit_amount: 0, line_description: null, dimensions: {}, currency: 'SEK' },
+  { id: 'aaaa0000-0000-4000-8000-000000002081', account_number: '2081', debit_amount: 0, credit_amount: 2100, line_description: null, dimensions: {}, currency: 'SEK' },
+]
+
+/** correct_entry_lines_inline applied to the world's IB lines (no guards: the service's input is checked elsewhere). */
+function applyRattelse(world: World, args: { p_strike_line_ids: string[]; p_new_lines: Array<Record<string, unknown>> }) {
+  world.rattelseCalls = (world.rattelseCalls ?? 0) + 1
+  const n = world.rattelseCalls
+  if (world.failRattelseCall === n) {
+    return { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+  }
+  const strike = new Set(args.p_strike_line_ids)
+  world.ibLines = [
+    ...world.ibLines.filter((line) => !strike.has(line.id as string)),
+    ...args.p_new_lines.map((line, i) => ({ ...line, id: `cccc0000-0000-4000-8000-${String(n * 1000 + i).padStart(12, '0')}`, currency: 'SEK' })),
+  ]
+  return { data: { log_id: `bbbb0000-0000-4000-8000-${String(n).padStart(12, '0')}` }, error: null }
 }
 
 const UNSPLIT = () => [
@@ -41,6 +67,7 @@ function makeClient(world: World) {
   const calls: Array<{ table: string; method: string; args: unknown[] }> = []
   let periodReads = 0
   let entryReads = 0
+  let lastRattelse: unknown = null
   const answer = (table: string): unknown => {
     switch (table) {
       case 'fiscal_periods':
@@ -71,15 +98,20 @@ function makeClient(world: World) {
       case 'dimensions':
         return { data: [{ id: DIM6, sie_dim_no: 6, resets_annually: false }], error: null }
       case 'rpc:compute_object_closing_balances':
-        return { data: [{ account_number: '1470', dimensions: { '6': 'P1' }, net: 1300 }], error: null }
+        return world.projects
+          ? { data: world.projects.map((code) => ({ account_number: '1470', dimensions: { '6': code }, net: 10 })), error: null }
+          : { data: [{ account_number: '1470', dimensions: { '6': 'P1' }, net: 1300 }], error: null }
       case 'chart_of_accounts':
         return { data: [{ account_number: '1470', account_name: 'Pågående arbeten' }], error: null }
       case 'dimension_values':
-        return { data: [{ dimension_id: DIM6, code: 'P1', name: 'Kv. Eken', is_active: true }], error: null }
+        return {
+          data: (world.projects ?? ['P1']).map((code) => ({ dimension_id: DIM6, code, name: `Projekt ${code}`, is_active: true })),
+          error: null,
+        }
       case 'company_settings':
         return { data: { bookkeeping_locked_through: null }, error: null }
       case 'rpc:correct_entry_lines_inline':
-        return { data: { log_id: 'bbbb0000-0000-4000-8000-000000000001' }, error: null }
+        return lastRattelse ?? { data: { log_id: 'bbbb0000-0000-4000-8000-000000000001' }, error: null }
       case 'pending_operations':
         return { data: { id: 'op-1' }, error: null }
       default:
@@ -101,6 +133,9 @@ function makeClient(world: World) {
     )
   const rpc = vi.fn((name: string, args?: unknown) => {
     calls.push({ table: `rpc:${name}`, method: 'rpc', args: [args] })
+    if (name === 'correct_entry_lines_inline' && world.projects) {
+      lastRattelse = applyRattelse(world, args as { p_strike_line_ids: string[]; p_new_lines: Array<Record<string, unknown>> })
+    }
     return chain(`rpc:${name}`)
   })
   return { calls, rpc, from: vi.fn((table: string) => chain(table)) }
@@ -210,6 +245,62 @@ describe('MCP tools for the IB split per project', () => {
 
   it('refuses to stage for a locked year, with the code the commit would answer', async () => {
     await expect(stage({ locked: true, ibLines: UNSPLIT() })).rejects.toMatchObject({ code: 'OB_SPLIT_PERIOD_LOCKED' })
+  })
+
+  it('refuses to stage a split that would change nothing: no no-op lands in /pending', async () => {
+    let staged = false
+    const [tool] = createOperationTools([openingBalancesSplitPerProject], {
+      readOnly: {},
+      stagedWrite: {},
+      stagedSchema: {},
+      stagingArgs: {},
+      stagePendingOperation: async () => {
+        staged = true
+        return { staged: true }
+      },
+    } as never)
+    // Already split, even in a locked year: nothing to stage, not "locked".
+    for (const locked of [false, true]) {
+      const client = makeClient({ locked, ibLines: ALREADY_SPLIT() })
+      await expect(
+        tool.execute({ fiscal_period_id: PERIOD }, COMPANY_ID, 'user-1', client as never, { type: 'api_key', id: 'key-1' } as never),
+      ).rejects.toMatchObject({ code: 'OB_SPLIT_NOTHING_TO_DO' })
+      expect(writes(client)).toHaveLength(0)
+    }
+    expect(staged).toBe(false)
+  })
+
+  it('stages the amount the unattended-commit ceiling prices', async () => {
+    const { staged } = await stage({ locked: false, ibLines: UNSPLIT() })
+    expect(staged.preview!.changed_amount_sek).toBe(2100)
+  })
+
+  it('an approval that fails after an inline rättelse committed lands in failed_partial with what was applied', async () => {
+    const projects = Array.from({ length: 120 }, (_, i) => `P${String(i + 1).padStart(3, '0')}`)
+    const world: World = { locked: false, ibLines: UNSPLIT(), projects }
+    const { staged } = await stage(world)
+    world.failRattelseCall = 2
+    world.rattelseCalls = 0
+    const client = makeClient(world)
+    const result = await commitPendingOperation(client as never, 'user-1', COMPANY_ID, pendingOp(staged.params!))
+
+    expect(writes(client)).toHaveLength(2)
+    expect(result).toMatchObject({
+      status: 'failed',
+      code: 'partial_commit',
+      operation_status: 'failed_partial',
+      data: {
+        posted_ids: {
+          journal_entry_id: IB,
+          rattelse_log_ids: 'bbbb0000-0000-4000-8000-000000000001',
+          accounts_changed: '1470',
+        },
+      },
+    })
+    const update = client.calls.find(
+      (c) => c.table === 'pending_operations' && c.method === 'update' && (c.args[0] as { status?: string }).status === 'failed_partial',
+    )
+    expect(update).toBeDefined()
   })
 
   it('approval applies exactly the staged split through the inline rättelse', async () => {

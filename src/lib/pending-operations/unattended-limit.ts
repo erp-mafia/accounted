@@ -82,6 +82,9 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   send_invoice_peppol: ['invoice.total'],
   set_opening_balances_manual: ['journal_entry.total_debit'],
   correct_opening_balances: ['journal_entry.total_debit'],
+  // The IB split per project (#3313) is the same inline rättelse as
+  // correct_entry_lines_inline, priced on the same basis (both sides counted).
+  split_opening_balances_per_project: ['changed_amount_sek'],
 }
 
 /**

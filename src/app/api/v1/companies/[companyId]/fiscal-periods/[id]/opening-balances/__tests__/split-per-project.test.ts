@@ -189,11 +189,27 @@ describe('POST .../opening-balances/split-per-project', () => {
     expect(JSON.stringify(await res.json())).toContain('"accounts_to_change":1')
   })
 
-  it('409 OB_SPLIT_PERIOD_LOCKED for a locked year, with the remediation', async () => {
+  it('404 OB_PERIOD_NOT_FOUND for a year outside the company', async () => {
+    splitMock.mockResolvedValue({ ok: false, code: 'OB_PERIOD_NOT_FOUND' })
+    const res = await POST(request('POST', '', {}), params())
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('OB_PERIOD_NOT_FOUND')
+  })
+
+  it('409 OB_SPLIT_PERIOD_LOCKED for a locked year, saying to unlock it first', async () => {
     splitMock.mockResolvedValue({ ok: false, code: 'OB_SPLIT_PERIOD_LOCKED' })
     const res = await POST(request('POST', '', {}), params())
     expect(res.status).toBe(409)
     const { error } = await res.json()
     expect(error.code).toBe('OB_SPLIT_PERIOD_LOCKED')
+    expect(error.message).toMatch(/Lås upp året först/)
+    expect(JSON.stringify(error)).toContain('/unlock')
+  })
+
+  it('409 OB_SPLIT_NOTHING_TO_DO for a dry run of a split already in place', async () => {
+    splitMock.mockResolvedValue({ ok: false, code: 'OB_SPLIT_NOTHING_TO_DO', details: { accounts_unchanged: 1, accounts_skipped: [] } })
+    const res = await POST(request('POST', '?dry_run=true', {}), params())
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('OB_SPLIT_NOTHING_TO_DO')
   })
 })

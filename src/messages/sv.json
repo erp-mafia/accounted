@@ -12108,6 +12108,7 @@
     "col_proposed": "Efter uppdelning",
     "untagged": "Utan projekt",
     "archived": "arkiverat",
+    "skipped_existing_split": "Hoppas över: kontot är redan uppdelat per projekt med andra belopp",
     "skipped_foreign_currency": "Hoppas över: kontot har en rad i utländsk valuta",
     "skipped_line_document": "Hoppas över: en rad har ett kopplat underlag",
     "unchanged_count": "{count, plural, one {# konto är redan uppdelat} other {# konton är redan uppdelade}}",

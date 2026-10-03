@@ -3081,6 +3081,7 @@ For the year's IB verifikat, computes the per-project split of each balance shee
 **Pitfalls:**
 - The basis is the previous year in Accounted as it stands: if that year is still open (source_period_closed false), later bookings there change the split.
 - A previous year whose own IB was untagged only carries the projects' movements of that year.
+- An account whose IB already carries a different project split (an IB imported with SIE #OIB, or split by hand) is skipped with skip_reason existing_split, never overwritten.
 - unresolved_dimensions lists codes missing from the registry: the apply refuses until they exist.
 
 | Parameter | In | Type | Required | Notes |
@@ -3105,11 +3106,12 @@ Response `200`:
     accounts_to_change: number,
     accounts_unchanged: number,
     accounts_skipped: number,
+    changed_amount_sek: number,
     can_apply: boolean,
     blocked: { code: string, message_sv: string, message_en: string, details?: Record<string, unknown> } | null,
     unresolved_dimensions: { sie_dim_no: string, code: string, reason: "unknown_dimension" | "resetting_dimension" | "unknown_value", accounts: string[] }[],
     dimension_values: { sie_dim_no: string, code: string, name: string, is_active: boolean }[],
-    accounts: { account_number: string, account_name: string | null, total: number, status: "change" | "unchanged" | "skipped", skip_reason: "foreign_currency" | "line_document" | null, current_lines: { debit_amount: number, credit_amount: number, amount: number, dimensions: Record<string, string>, line_description: string | null, journal_entry_line_id: string }[], proposed_lines: { debit_amount: number, credit_amount: number, amount: number, dimensions: Record<string, string>, line_description: string | null }[] }[],
+    accounts: { account_number: string, account_name: string | null, total: number, status: "change" | "unchanged" | "skipped", skip_reason: "existing_split" | "foreign_currency" | "line_document" | null, current_lines: { debit_amount: number, credit_amount: number, amount: number, dimensions: Record<string, string>, line_description: string | null, journal_entry_line_id: string }[], proposed_lines: { debit_amount: number, credit_amount: number, amount: number, dimensions: Record<string, string>, line_description: string | null }[] }[],
     fingerprint: string
   },
   meta: {
@@ -3143,6 +3145,7 @@ Example response `200`:
     "accounts_to_change": 1,
     "accounts_unchanged": 0,
     "accounts_skipped": 0,
+    "changed_amount_sek": 1800,
     "can_apply": true,
     "blocked": null,
     "unresolved_dimensions": [],
@@ -3216,7 +3219,9 @@ Applies the split GET /fiscal-periods/{id}/opening-balances/split-per-project pr
 - Pass expected_fingerprint from the preview: if the IB or the previous year changed since, 409 OB_SPLIT_PROPOSAL_CHANGED instead of a different split.
 - A closed year answers 409 OB_SPLIT_PERIOD_CLOSED, a locked one 409 OB_SPLIT_PERIOD_LOCKED, a lock date covering the IB 409 OB_COMPANY_LOCK_DATE, a posted bokslut 409 OB_CORRECT_YEAR_END_EXISTS.
 - Project codes missing from the registry answer 409 OB_SPLIT_DIMENSION_UNRESOLVED with details.unresolved.
-- An account with a foreign-currency IB line or a line-level underlag link is skipped (accounts_skipped), never forced.
+- An account with a foreign-currency IB line or a line-level underlag link, or whose IB already carries a different project split, is skipped (accounts_skipped), never forced.
+- With nothing to change the apply answers 200 applied=false, but a dry run (and MCP staging) answers 409 OB_SPLIT_NOTHING_TO_DO: there is nothing to approve.
+- Over 100 new lines run as several inline rättelser. A failure after one committed answers the error with details.accounts_changed and details.rattelse_log_ids; the books stay consistent and a rerun continues from there.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -3244,7 +3249,7 @@ Response `200`:
     journal_entry_id: string,
     applied: boolean,
     accounts_changed: string[],
-    accounts_skipped: { account_number: string, reason: "foreign_currency" | "line_document" }[],
+    accounts_skipped: { account_number: string, reason: "existing_split" | "foreign_currency" | "line_document" }[],
     lines_struck: number,
     lines_added: number,
     rattelse_log_ids: string[],
