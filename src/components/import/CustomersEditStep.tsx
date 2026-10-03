@@ -128,6 +128,7 @@ export default function CustomersEditStep({
           <table className="w-full text-sm">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b">
+                <th className="px-3 py-2 text-left w-24">Kundnr</th>
                 <th className="px-3 py-2 text-left">Namn</th>
                 <th className="px-3 py-2 text-left w-44">Kundtyp</th>
                 <th className="px-3 py-2 text-left w-36">Orgnr</th>
@@ -145,6 +146,9 @@ export default function CustomersEditStep({
                     !row.is_valid && 'bg-destructive/5',
                   )}
                 >
+                  <td className="px-3 py-1.5 text-muted-foreground tabular-nums">
+                    {row.customer_number || '-'}
+                  </td>
                   <td className="px-3 py-1.5">
                     <Input
                       value={row.name}

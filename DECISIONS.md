@@ -1194,3 +1194,4 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-10-03] Without previous_period_id, the IB split uses only the fiscal year ending the day before as its basis, never an earlier year across a gap (#3313)
 [2026-10-03] A re-uploaded SIE #OIB 0 as a second split source is deferred: the parser exists, but getting the file through the dashboard, v1 and MCP does not (#3313)
 [2026-10-03] Dry run is both a read operation (GET, gnubok_preview_opening_balance_split) and the write operation's dry run; the staged MCP write pins the preview fingerprint via pinParams, like book_vat_settlement (#3313)
+[2026-10-03] Customer register import carries kundnummer but does not dedup on it: customers.customer_number is free text without a unique constraint, so matching stays on orgnr/e-post and a re-import in update mode fills numbers on existing customers.

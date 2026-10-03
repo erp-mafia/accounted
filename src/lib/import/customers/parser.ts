@@ -23,6 +23,9 @@ const VALID_CUSTOMER_TYPES: CustomerType[] = [
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+/** Same cap as the customer form and the MCP tools. */
+const CUSTOMER_NUMBER_MAX_LENGTH = 32
+
 function normalizeCustomerType(value: string | null): CustomerType | null {
   if (!value) return null
   const lower = value.toLowerCase().trim()
@@ -69,6 +72,7 @@ export function parseCustomersFile(
   if (rawData.length < 2) {
     const fallbackColumns: DetectedCustomerColumns = columnOverrides ?? {
       name_col: 0,
+      customer_number_col: null,
       org_number_col: null,
       customer_type_col: null,
       email_col: null,
@@ -113,6 +117,11 @@ export function parseCustomersFile(
     const name = cellOrNull(row[nameCol])
     if (!name) continue // skip empty rows silently
 
+    // Loose check: column_overrides from a wizard opened before this field
+    // existed has no customer_number_col key at all.
+    const customerNumber = columns.customer_number_col != null
+      ? cellOrNull(row[columns.customer_number_col])
+      : null
     const orgNumber = columns.org_number_col !== null
       ? cellOrNull(row[columns.org_number_col])
       : null
@@ -178,6 +187,9 @@ export function parseCustomersFile(
       const countryIssue = checkCountryConsistency({ partyType: customerType, country, vatNumber })
       if (countryIssue) validationErrors.push(COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv)
     }
+    if (customerNumber && customerNumber.length > CUSTOMER_NUMBER_MAX_LENGTH) {
+      validationErrors.push(`Kundnumret får vara högst ${CUSTOMER_NUMBER_MAX_LENGTH} tecken`)
+    }
     if (orgNumber && !/^[\d\s\-]{6,20}$/.test(orgNumber)) {
       validationErrors.push('Ogiltigt org-/personnummer')
     }
@@ -186,6 +198,7 @@ export function parseCustomersFile(
       row_index: i + 2, // 1-based + header
       name,
       customer_type: customerType,
+      customer_number: customerNumber,
       org_number: orgNumber,
       email,
       phone,
