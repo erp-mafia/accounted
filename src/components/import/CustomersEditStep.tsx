@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -46,6 +47,7 @@ export default function CustomersEditStep({
   error,
   notices = [],
 }: CustomersEditStepProps) {
+  const tCustomers = useTranslations('customers')
   const [rows, setRows] = useState<EditableCustomerRow[]>(() =>
     initialRows.map((r) => ({ ...r, id: newId() })),
   )
@@ -128,7 +130,7 @@ export default function CustomersEditStep({
           <table className="w-full text-sm">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b">
-                <th className="px-3 py-2 text-left w-24">Kundnr</th>
+                <th className="px-3 py-2 text-left w-24">{tCustomers('col_customer_number')}</th>
                 <th className="px-3 py-2 text-left">Namn</th>
                 <th className="px-3 py-2 text-left w-44">Kundtyp</th>
                 <th className="px-3 py-2 text-left w-36">Orgnr</th>
