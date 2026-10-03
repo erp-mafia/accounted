@@ -802,7 +802,7 @@ export const skatteverketExtension: Extension = {
 
           return respondWithSuccess(successPath)
         } catch (err) {
-          console.error('[skatteverket] Token exchange failed:', err)
+          log.error('token exchange failed', err)
           // BankID auth codes expire after 5 minutes. Surface timeouts distinctly
           // so the user retries quickly instead of exhausting the code window.
           const message = err instanceof TimeoutError
@@ -1121,12 +1121,6 @@ export const skatteverketExtension: Extension = {
           const { redovisare, redovisningsperiod, momsuppgift } =
             await parseDeclarationRequest(request, ctx)
 
-          console.log('[skatteverket] Validating:', {
-            redovisare,
-            redovisningsperiod,
-            momsuppgift: JSON.stringify(momsuppgift),
-          })
-
           const response = await skvRequest(
             ctx.supabase,
             ctx.userId,
@@ -1139,7 +1133,7 @@ export const skatteverketExtension: Extension = {
 
           if (!response.ok) {
             const text = await response.text()
-            console.error('[skatteverket] Validate error:', response.status, text)
+            ctx.log.error('VAT validate refused', { redovisningsperiod, status: response.status })
             return NextResponse.json(
               { error: `Skatteverket svarade med ${response.status}: ${text}` },
               { status: response.status }
@@ -1171,12 +1165,6 @@ export const skatteverketExtension: Extension = {
           const { redovisare, redovisningsperiod, momsuppgift } =
             await parseDeclarationRequest(request, ctx)
 
-          console.log('[skatteverket] Sending draft:', {
-            redovisare,
-            redovisningsperiod,
-            momsuppgift: JSON.stringify(momsuppgift),
-          })
-
           const response = await skvRequest(
             ctx.supabase,
             ctx.userId,
@@ -1189,7 +1177,7 @@ export const skatteverketExtension: Extension = {
 
           if (!response.ok) {
             const text = await response.text()
-            console.error('[skatteverket] Draft error:', response.status, text)
+            ctx.log.error('VAT draft refused', { redovisningsperiod, status: response.status })
             return NextResponse.json(
               { error: `Skatteverket svarade med ${response.status}: ${text}` },
               { status: response.status }
@@ -1613,8 +1601,6 @@ export const skatteverketExtension: Extension = {
         try {
           const { arbetsgivare, period, salaryRunId, xml } = await loadAGIXml(request, ctx)
 
-          console.log('[skatteverket] AGI submitting underlag:', { arbetsgivare, period })
-
           // 'agi/submit' with outcome 'ok' is read by the migration-reset
           // guard; the transport writes the row.
           const result = await agiPostUnderlag(ctx.supabase, ctx.userId, ctx.companyId, xml, {
@@ -1622,7 +1608,7 @@ export const skatteverketExtension: Extension = {
             redovisningsperiod: period,
           })
           if (!result.ok) {
-            console.error('[skatteverket] AGI underlag error:', result.status, result.error)
+            ctx.log.error('AGI underlag refused', { period, status: result.status, kod: result.body?.kod })
             return NextResponse.json(
               { error: result.error, code: result.body?.kod },
               { status: result.status },
@@ -2100,7 +2086,7 @@ export const skatteverketExtension: Extension = {
                 },
               )
               if (outcome.status === 'error') {
-                console.warn('[skatteverket] kvittens observed but the declaration was not updated', {
+                ctx.log.warn('kvittens observed but the declaration was not updated', {
                   companyId: ctx.companyId, period, message: outcome.error,
                 })
               }
@@ -2128,7 +2114,7 @@ export const skatteverketExtension: Extension = {
               // historik (BFNAR 2013:2 kap 8 / BFL 5 kap 6§).
               const submittedAt = kvittens.signeradTid || new Date().toISOString()
               if (!kvittens.signeradTid) {
-                console.warn('[skatteverket] kvittens missing signeradTid; using reconciliation time', {
+                ctx.log.warn('kvittens missing signeradTid; using reconciliation time', {
                   companyId: ctx.companyId, period, uuidKvittens: kvittens.uuidKvittens,
                 })
               }
@@ -3107,7 +3093,7 @@ function handleSkvError(err: unknown): NextResponse {
     )
   }
 
-  console.error('[skatteverket] API error:', err)
+  log.error('API error', err)
   return NextResponse.json(
     { error: err instanceof Error ? err.message : 'Okänt fel' },
     { status: 500 }
