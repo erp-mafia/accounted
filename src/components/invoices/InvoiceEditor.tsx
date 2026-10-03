@@ -135,6 +135,7 @@ import {
   type EditorIntent,
 } from '@/lib/invoices/editor/primary-action'
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
+import { resolveTopBarMeta } from '@/lib/invoices/editor/top-bar-meta'
 import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
 import { proposeDraftSendLines } from '@/lib/invoices/editor/voucher-preview'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
@@ -3156,18 +3157,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           { value: 'delivery_note', label: t('doctype_delivery_note') },
         ]
   const updatedAt = initial?.updated_at ? new Date(initial.updated_at) : null
-  const metaText = isSelfBilled
-    ? ''
-    : isCopyMode && copyInitial
-      ? tShell('meta_copy', { number: copyInitial.source_invoice_number })
-      : isEditMode && updatedAt && !Number.isNaN(updatedAt.getTime())
-        ? tShell('meta_saved', {
-            time:
-              format(updatedAt, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
-                ? format(updatedAt, 'HH:mm')
-                : format(updatedAt, 'yyyy-MM-dd HH:mm'),
-          })
-        : tShell('meta_draft')
+  // "Utkast · får nummer 004 när den skickas": the number the document will
+  // get sits with its state in the top bar (lib/invoices/editor/top-bar-meta).
+  const metaText = resolveTopBarMeta({
+    selfBilled: isSelfBilled,
+    copyOf: isCopyMode && copyInitial ? copyInitial.source_invoice_number : null,
+    savedAt:
+      isEditMode && updatedAt && !Number.isNaN(updatedAt.getTime())
+        ? format(updatedAt, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
+          ? format(updatedAt, 'HH:mm')
+          : format(updatedAt, 'yyyy-MM-dd HH:mm')
+        : null,
+    documentType: watchDocumentType,
+    preliminaryNumber,
+  })
+    .map((part) => ('values' in part ? tShell(part.key, part.values) : tShell(part.key)))
+    .join(' · ')
   const menuEntries: { channels: TopBarMenuEntry[]; actions: TopBarMenuEntry[] } | null = editorMenu
     ? {
         channels: editorMenu.channels.map((entry) => ({
@@ -3231,7 +3236,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           <EditorPreviewPane
             documentLabel={docTypeLabel}
             pdf={pdf}
-            preliminaryNumber={preliminaryNumber}
             statusLine={renderStatusLine()}
             emailDisabledReason={emailDisabledReason}
             renderEmail={() => (

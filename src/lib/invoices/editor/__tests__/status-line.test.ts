@@ -80,6 +80,20 @@ describe('resolveEditorStatusLine', () => {
     })
   })
 
+  it('is the only place the page count shows, so a split always says so', () => {
+    // The pane's "1 sida" chip is gone: one page says nothing, more pages
+    // say the count here even when no cause is visible, on every type.
+    expect(resolveEditorStatusLine(input({ pageCount: 1 }))).toEqual({ kind: 'none' })
+    expect(resolveEditorStatusLine(input({ pageCount: 2 }))).toEqual({ kind: 'split', pages: 2, cause: null })
+    for (const documentType of ['quote', 'proforma', 'delivery_note'] as const) {
+      expect(resolveEditorStatusLine(input({ documentType, pageCount: 2 }))).toEqual({
+        kind: 'split',
+        pages: 2,
+        cause: null,
+      })
+    }
+  })
+
   it('is quiet before the first render', () => {
     expect(resolveEditorStatusLine(input({ pageCount: null }))).toEqual({ kind: 'none' })
   })

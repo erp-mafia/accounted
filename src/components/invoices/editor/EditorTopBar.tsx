@@ -127,7 +127,14 @@ export function EditorTopBar({
       </nav>
       <HelpPopover>{help}</HelpPopover>
       {meta && (
-        <p className="page-header-meta hidden text-muted-foreground sm:block" data-ph-mask="">
+        // flex-1 from a zero basis: a long meta ("Utkast · får nummer 004 när
+        // den skickas") truncates with an ellipsis instead of wrapping the
+        // 48px bar onto a second row; the title keeps it readable.
+        <p
+          className="page-header-meta hidden min-w-0 flex-1 basis-0 text-muted-foreground sm:block"
+          title={meta}
+          data-ph-mask=""
+        >
           {meta}
         </p>
       )}

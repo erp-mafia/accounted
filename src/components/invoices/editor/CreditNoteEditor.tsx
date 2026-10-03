@@ -467,7 +467,6 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
           <EditorPreviewPane
             documentLabel={t('doc_label')}
             pdf={pdf}
-            preliminaryNumber={null}
             statusLine={renderStatusLine()}
             emailDisabledReason={emailDisabledReason}
             renderEmail={() => (

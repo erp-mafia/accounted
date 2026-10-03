@@ -871,7 +871,7 @@ export const InvoicePreviewSchema = z.object({
   customer_id: z.union([uuid, z.literal('')]).nullish().transform((v) => v || null),
   credited_invoice_id: uuid.nullish(),
   document_type: InvoiceDocumentTypeSchema.optional(),
-  // The predicted number the editor shows ("Nummer N preliminärt").
+  // The predicted number the editor shows ("får nummer N när den skickas").
   invoice_number: z.string().max(64).nullish(),
   invoice_date: previewDate,
   due_date: previewDate,

@@ -3,7 +3,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
 import { ChevronDown, ExternalLink } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -24,8 +23,6 @@ interface EditorPreviewPaneProps {
   /** "Faktura", "Offert", ...: the first tab names the document. */
   documentLabel: string
   pdf: PdfPreviewState
-  /** The predicted number ("Nummer N preliminärt"); null when the document has its own. */
-  preliminaryNumber: string | null
   /** The Mejl tab's content (EditorEmailPreview), mounted only while the tab is open. */
   renderEmail: () => ReactNode
   /**
@@ -60,14 +57,15 @@ function zoomOf(url: string): Zoom {
 }
 
 /**
- * The right pane: Faktura | Mejl tabs, the page and preliminary-number
- * chips, the live PDF fitted to the pane's height so the payment area is
- * always in view, and the status line under it.
+ * The right pane: Faktura | Mejl tabs, the live PDF fitted to the pane's
+ * height so the payment area is always in view, and the status line under
+ * it. No chips beside the tabs: the number the document will get is in the
+ * top bar's meta line, and the status line says when the PDF runs to more
+ * than one page, and why.
  */
 export function EditorPreviewPane({
   documentLabel,
   pdf,
-  preliminaryNumber,
   renderEmail,
   emailDisabledReason,
   statusLine,
@@ -107,16 +105,6 @@ export function EditorPreviewPane({
             { value: 'email', label: t('tab_email'), disabledReason: emailDisabledReason ?? undefined },
           ]}
         />
-        {tab === 'document' && pdf.pageCount !== null && (
-          <Badge variant="secondary" className="tabular-nums">
-            {t('pages', { count: pdf.pageCount })}
-          </Badge>
-        )}
-        {preliminaryNumber && (
-          <Badge variant="secondary" className="tabular-nums" data-ph-mask="">
-            {t('number_preliminary', { number: preliminaryNumber })}
-          </Badge>
-        )}
         {tab === 'document' && (
           <div className="ml-auto flex items-center gap-1">
             {visible && (
