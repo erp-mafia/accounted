@@ -222,6 +222,7 @@ import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/arsredovisning/ix
 import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/arsredovisning/ixbrl/validate/route'
 import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/opening-balances/manual/route'
 import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/opening-balances/correct/route'
+import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/opening-balances/split-per-project/route'
 import '@/app/api/v1/companies/[companyId]/imports/skattekonto-file/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/uncredit/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/bank-entered/route'

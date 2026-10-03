@@ -29,15 +29,18 @@ import { isValidRegistryCode } from '@/lib/import/sie-object-balances'
  * onto the company's accumulating dimensions), from
  * compute_object_closing_balances: the same basis as the trial balance (the
  * year's IB entry, or the prior-history fallback after a continuation import,
- * plus the year's lines). Empty when no dimension accumulates.
+ * plus the year's lines). Empty when no dimension accumulates. A caller that
+ * already read the registry passes its accumulating dimensions; otherwise
+ * they are read here.
  */
 export async function fetchObjectClosingBalances(
   supabase: SupabaseClient,
   companyId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
+  accumulatingDimensions?: ReadonlySet<string>
 ): Promise<Map<string, ObjectBalanceSplit[]>> {
   const out = new Map<string, ObjectBalanceSplit[]>()
-  const accumulating = await fetchAccumulatingDimensions(supabase, companyId)
+  const accumulating = accumulatingDimensions ?? (await fetchAccumulatingDimensions(supabase, companyId))
   if (accumulating.size === 0) return out
 
   const { data, error } = await supabase.rpc('compute_object_closing_balances', {

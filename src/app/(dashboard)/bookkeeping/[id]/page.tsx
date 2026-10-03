@@ -21,6 +21,7 @@ import {
   MoreHorizontal,
   Trash2,
   Users,
+  Split,
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -42,6 +43,7 @@ import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryT
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import CorrectOpeningBalanceDialog from '@/components/bookkeeping/CorrectOpeningBalanceDialog'
+import SplitOpeningBalanceDialog from '@/components/bookkeeping/SplitOpeningBalanceDialog'
 import StrikeLinesDialog from '@/components/bookkeeping/StrikeLinesDialog'
 import CorrectMetadataDialog from '@/components/bookkeeping/CorrectMetadataDialog'
 import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
@@ -144,6 +146,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [error, setError] = useState<string | null>(null)
   const [showCorrection, setShowCorrection] = useState(false)
   const [showCorrectIB, setShowCorrectIB] = useState(false)
+  const [showSplitIB, setShowSplitIB] = useState(false)
   const [showStrikeLines, setShowStrikeLines] = useState(false)
   const [showCorrectMetadata, setShowCorrectMetadata] = useState(false)
   const [rattelseLog, setRattelseLog] = useState<RattelseLogRow[]>([])
@@ -661,6 +664,18 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                       {t('copy_entry')}
                     </Link>
                   </DropdownMenuItem>
+                  {/* "Dela upp IB per projekt" (#3313): the IB verifikat's
+                      own inline rättelse; the dialog previews first and the
+                      server refuses a year that does not allow it. */}
+                  {canCorrect && isOpeningBalance && entry.fiscal_period_id && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => setShowSplitIB(true)} disabled={!canWrite}>
+                        <Split className="h-4 w-4" />
+                        {t('split_opening_balance_per_project')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
                   {showRattelseGroup && (
                     <>
                       <DropdownMenuSeparator />
@@ -1198,6 +1213,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           onOpenChange={setShowCorrectIB}
           onCorrected={() => {
             setShowCorrectIB(false)
+            fetchData()
+          }}
+        />
+      )}
+
+      {/* Split the IB per project: inline rättelse of the same verifikat */}
+      {showSplitIB && entry?.fiscal_period_id && (
+        <SplitOpeningBalanceDialog
+          fiscalPeriodId={entry.fiscal_period_id}
+          open={showSplitIB}
+          onOpenChange={setShowSplitIB}
+          onApplied={() => {
+            setShowSplitIB(false)
             fetchData()
           }}
         />

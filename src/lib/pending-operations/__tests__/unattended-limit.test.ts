@@ -157,4 +157,17 @@ describe('priceOperation: operation-registry writes that move money', () => {
   it('stays unpriced (not enforced) when the nested path is missing', () => {
     expect(priceOperation('book_invoice', { journal_entry: null })).toBeNull()
   })
+
+  it('prices the IB split per project like the inline rättelse it is (#3313)', () => {
+    expect(priceOperation('split_opening_balances_per_project', { changed_amount_sek: 182500 })).toBe(182500)
+    expect(priceOperation('correct_entry_lines_inline', { changed_amount_sek: 182500 })).toBe(182500)
+    expect(
+      exceedsUnattendedLimit({
+        actorType: 'api_key',
+        limit: 10000,
+        operationType: 'split_opening_balances_per_project',
+        previewData: { changed_amount_sek: 182500 },
+      }),
+    ).toEqual({ exceeded: true, attempted: 182500, limit: 10000 })
+  })
 })

@@ -2705,6 +2705,7 @@ export type PendingOperationType =
   | 'add_arsredovisning_signature'
   | 'set_opening_balances_manual'
   | 'correct_opening_balances'
+  | 'split_opening_balances_per_project'
   | 'delete_supplier_invoice'
   | 'uncredit_supplier_invoice'
   | 'update_supplier_invoice_item_account'
