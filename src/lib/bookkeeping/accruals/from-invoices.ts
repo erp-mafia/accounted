@@ -4,7 +4,7 @@
  * schedule (+ synchronous catch-up posting for months that already began).
  *
  * Idempotent per line: lines already covered by a schedule are skipped, so
- * event replays (supplier_invoice.confirmed) can never double-schedule.
+ * a retried call can never double-schedule.
  * Failures are logged and counted, never thrown: the origin entry is already
  * committed and must not be rolled back by a schedule hiccup; the caller
  * surfaces a warning instead.
