@@ -1127,3 +1127,49 @@ describe('POST batch-categorize double-booking guards (parity with :categorize a
     expect(createTxJE).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('POST batch-categorize already-booked guard', () => {
+  it('refuses a link-only item with TRANSACTION_ALREADY_CATEGORIZED and creates no verifikat', async () => {
+    // A bulk-booked samlingsverifikat (N>1) anchors the row through a bank_line
+    // voucher link only: journal_entry_id stays NULL.
+    const { supabase, updates } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: {
+          id: TX_A,
+          company_id: COMPANY_ID,
+          date: '2026-05-12',
+          amount: -349.5,
+          currency: 'SEK',
+          merchant_name: 'ICA',
+          cash_account_id: null,
+          journal_entry_id: null,
+        },
+        error: null,
+      },
+      transaction_voucher_links: { data: [{ journal_entry_id: 'je-samling', role: 'bank_line' }], error: null },
+      journal_entries: { data: [{ id: 'je-samling', status: 'posted' }], error: null },
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`, {
+        items: [{ transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } }],
+      }),
+      batchParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+    expect(body.data.results[0].error).toEqual(
+      expect.objectContaining({
+        code: 'TRANSACTION_ALREADY_CATEGORIZED',
+        details: { journal_entry_id: 'je-samling', via: 'link' },
+      }),
+    )
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(updates.transactions).toBeUndefined()
+  })
+})

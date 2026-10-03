@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { isTransactionBooked, getPrimaryJournalEntryId, getLinkedJournalEntryIds, embeddedVoucherLabel } from '../is-booked'
+import { createQueuedMockSupabase } from '@/tests/helpers'
+import {
+  isTransactionBooked,
+  getPrimaryJournalEntryId,
+  getLinkedJournalEntryIds,
+  embeddedVoucherLabel,
+  assertTransactionBookable,
+} from '../is-booked'
 
 describe('isTransactionBooked', () => {
   it('returns false for a tx with no journal entry, payments, or voucher links', () => {
@@ -114,5 +121,106 @@ describe('embeddedVoucherLabel', () => {
     expect(embeddedVoucherLabel({ journal_entry_id: 'x', journal_entry: { voucher_series: null, voucher_number: 7 } })).toBe('7')
     expect(embeddedVoucherLabel({ journal_entry_id: 'x' })).toBeNull()
     expect(embeddedVoucherLabel({ journal_entry_id: 'x', journal_entry: { voucher_series: 'A', voucher_number: null } })).toBeNull()
+  })
+})
+
+describe('assertTransactionBookable', () => {
+  const TX = { id: 'tx-1', journal_entry_id: null as string | null }
+
+  it('lets an unanchored row through after one links read (no pointer, no links)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // transaction_voucher_links
+    expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toEqual({ ok: true })
+    expect(findCalls('transaction_voucher_links', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['transaction_id', 'tx-1'],
+    ])
+    expect(findCalls('journal_entries', 'select')).toEqual([])
+  })
+
+  it('refuses a row anchored only by a bank_line link to a posted verifikat (bulk-book N>1, split)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ journal_entry_id: 'je-samling', role: 'bank_line' }] })
+    enqueue({ data: [{ id: 'je-samling', status: 'posted' }] })
+    expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toEqual({
+      ok: false,
+      code: 'TRANSACTION_ALREADY_CATEGORIZED',
+      journalEntryId: 'je-samling',
+      via: 'link',
+    })
+  })
+
+  it('refuses a row whose pointer names a posted verifikat', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'je-1', status: 'posted' }] })
+    expect(
+      await assertTransactionBookable(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: 'je-1' }),
+    ).toEqual({ ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: 'je-1', via: 'pointer' })
+  })
+
+  it('reports bulk-book N=1 (pointer and link name the same verifikat) as one pointer booking', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ journal_entry_id: 'je-1', role: 'bank_line' }] })
+    enqueue({ data: [{ id: 'je-1', status: 'posted' }] })
+    expect(
+      await assertTransactionBookable(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: 'je-1' }),
+    ).toEqual({ ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: 'je-1', via: 'pointer' })
+    expect(findCalls('journal_entries', 'in')).toEqual([['id', ['je-1']]])
+  })
+
+  it('refuses a row a correction re-pointed onto the live correction verifikat', async () => {
+    // relinkTransactionsToEntry moves the link from the reversed original to
+    // the posted correction: the row is booked against the correction.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ journal_entry_id: 'je-correction', role: 'bank_line' }] })
+    enqueue({ data: [{ id: 'je-correction', status: 'posted' }] })
+    const verdict = await assertTransactionBookable(supabase as never, 'company-1', TX)
+    expect(verdict).toMatchObject({ ok: false, journalEntryId: 'je-correction', via: 'link' })
+  })
+
+  it('lets a row through when its pointer and link name a reversed verifikat (uncategorize, then rebook)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ journal_entry_id: 'je-old', role: 'bank_line' }] })
+    enqueue({ data: [{ id: 'je-old', status: 'reversed' }] })
+    expect(
+      await assertTransactionBookable(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: 'je-old' }),
+    ).toEqual({ ok: true })
+  })
+
+  it('ignores supplementary roles and never reads their verifikat', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ journal_entry_id: 'je-residual', role: 'other' }, { journal_entry_id: 'je-c', role: 'clearing' }] })
+    expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toEqual({ ok: true })
+    expect(findCalls('journal_entries', 'select')).toEqual([])
+  })
+
+  it('uses embedded links instead of re-reading them', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'je-split', status: 'posted' }] })
+    const verdict = await assertTransactionBookable(supabase as never, 'company-1', {
+      ...TX,
+      transaction_voucher_links: [{ journal_entry_id: 'je-split', role: null }],
+    })
+    expect(verdict).toMatchObject({ ok: false, journalEntryId: 'je-split', via: 'link' })
+    expect(findCalls('transaction_voucher_links', 'select')).toEqual([])
+  })
+
+  it('fails closed when a read fails', async () => {
+    const linksDown = createQueuedMockSupabase()
+    linksDown.enqueue({ error: { message: 'timeout' } })
+    expect(await assertTransactionBookable(linksDown.supabase as never, 'company-1', TX)).toMatchObject({
+      ok: false,
+      journalEntryId: null,
+      via: 'read_error',
+    })
+
+    const entriesDown = createQueuedMockSupabase()
+    entriesDown.enqueue({ data: [{ journal_entry_id: 'je-1', role: 'bank_line' }] })
+    entriesDown.enqueue({ error: { message: 'timeout' } })
+    expect(await assertTransactionBookable(entriesDown.supabase as never, 'company-1', TX)).toMatchObject({
+      ok: false,
+      via: 'read_error',
+    })
   })
 })

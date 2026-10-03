@@ -12,6 +12,7 @@ import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-e
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { runBookingDuplicateGuard } from '@/lib/transactions/booking-duplicate-guard'
+import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { findInvoiceMatchSuggestion } from '@/lib/transactions/invoice-match-suggestion'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -160,6 +161,17 @@ export const POST = withRouteContext(
         journal_entry_error: null,
         category: finalCat,
         already_had_journal_entry: true,
+      })
+    }
+
+    // A NULL pointer is not "unbooked": a row bulk-booked into a
+    // samlingsverifikat, split 1:N, or re-pointed by a correction is anchored
+    // only through a bank_line voucher link. Shared with every booking door.
+    const bookable = await assertTransactionBookable(supabase, companyId, transaction)
+    if (!bookable.ok) {
+      return errorResponseFromCode(bookable.code, txLog, {
+        requestId,
+        details: { journal_entry_id: bookable.journalEntryId, via: bookable.via },
       })
     }
 

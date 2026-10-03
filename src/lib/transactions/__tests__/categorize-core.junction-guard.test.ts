@@ -31,9 +31,6 @@ vi.mock('@/lib/transactions/inbox-underlag', () => ({
 vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
   upsertCounterpartyTemplate: vi.fn(),
 }))
-vi.mock('@/lib/transactions/link-journal-entry', () => ({
-  hasLiveJournalEntryLink: vi.fn().mockResolvedValue(false),
-}))
 vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
 }))
@@ -76,6 +73,12 @@ describe('categorizeMatchedTransaction: transaction_voucher_links guard (#1553)'
         { journal_entry_id: 'je-utlagg-2', role: 'bank_line' },
       ]),
     })
+    enqueue({
+      data: [
+        { id: 'je-utlagg-1', status: 'posted' },
+        { id: 'je-utlagg-2', status: 'posted' },
+      ],
+    }) // journal_entries status
 
     const result = await categorizeMatchedTransaction(supabase as never, 'user-1', 'company-1', TX_ID, {
       category: 'expense_other',
@@ -85,8 +88,28 @@ describe('categorizeMatchedTransaction: transaction_voucher_links guard (#1553)'
     expect(result.error).toMatch(/already has a journal entry/)
     expect(findCalls('transactions', 'update')).toEqual([])
     expect(mockCreateJE).not.toHaveBeenCalled()
-    // The read carried the junction rows along: no second query was needed.
-    expect(supabase.from).toHaveBeenCalledTimes(1)
+    // The read carried the junction rows along: the links were not re-read,
+    // only their verifikat statuses.
+    expect(findCalls('transaction_voucher_links', 'select')).toEqual([])
+  })
+
+  it('lets a row whose bank_line link names a reversed verifikat past the guard', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: txRow([{ journal_entry_id: 'je-reversed', role: 'bank_line' }]) })
+    enqueue({ data: [{ id: 'je-reversed', status: 'reversed' }] }) // journal_entries status
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // company_settings
+    enqueue({ data: [] }) // resolveSettlementAccount
+    enqueue({ data: [] }) // ensureFiscalPeriod: no open period
+    enqueue({ data: [{ period_start: '2026-01-01' }] })
+    enqueue({ data: null })
+    mockCheckPeriodLock.mockResolvedValue({ locked: true, reason: 'period_is_closed', fiscal_period_id: 'fp-2026' })
+
+    const result = await categorizeMatchedTransaction(supabase as never, 'user-1', 'company-1', TX_ID, {
+      category: 'expense_other',
+    })
+
+    expect(result.status).not.toBe(409)
+    expect(mockCreateJE).toHaveBeenCalled()
   })
 
   it('lets a row carrying only a residual "other" row past the guard', async () => {

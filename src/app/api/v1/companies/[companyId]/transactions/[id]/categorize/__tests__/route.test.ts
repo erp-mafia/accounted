@@ -1072,3 +1072,57 @@ describe('POST /api/v1/.../transactions/{id}/categorize invoice-match intercept 
     expect(createTxJE).not.toHaveBeenCalled()
   })
 })
+
+describe('POST /api/v1/.../transactions/{id}/categorize already-booked guard', () => {
+  // A bulk-booked samlingsverifikat (N>1) or a 1:N split anchors the bank row
+  // through a bank_line voucher link only: journal_entry_id stays NULL.
+  function linkOnlySupabase(linkedStatus: 'posted' | 'reversed') {
+    return makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_ID,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            cash_account_id: null,
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [{ id: TX_ID }], error: null },
+      ],
+      transaction_voucher_links: { data: [{ journal_entry_id: 'je-samling', role: 'bank_line' }], error: null },
+      journal_entries: { data: [{ id: 'je-samling', status: linkedStatus }], error: null },
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+  }
+
+  it('refuses a link-only row with 409 TRANSACTION_ALREADY_CATEGORIZED and creates no verifikat', async () => {
+    const { supabase, updates } = linkOnlySupabase('posted')
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(makeRequest({ is_business: true, category: 'expense_office' }), routeParams())
+
+    const body = await res.json()
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('TRANSACTION_ALREADY_CATEGORIZED')
+    expect(body.error.details).toEqual({ journal_entry_id: 'je-samling', via: 'link' })
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(updates.transactions).toBeUndefined()
+  })
+
+  it('books a row whose only link names a reversed verifikat', async () => {
+    mockServiceClient.mockReturnValue(linkOnlySupabase('reversed').supabase)
+
+    const res = await POST(makeRequest({ is_business: true, category: 'expense_office' }), routeParams())
+
+    const body = await res.json()
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body.data.journal_entry_id).toBe('je-fresh')
+  })
+})

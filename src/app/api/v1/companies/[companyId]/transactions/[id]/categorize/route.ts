@@ -63,6 +63,7 @@ import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { runBookingDuplicateGuard } from '@/lib/transactions/booking-duplicate-guard'
+import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { findInvoiceMatchSuggestion } from '@/lib/transactions/invoice-match-suggestion'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
@@ -198,6 +199,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // behandlingshistorik (live call only). Runs before any categorization
     // work, like the dashboard route.
     if (wouldBook) {
+      // A NULL pointer is not "unbooked": a bulk-booked, split or
+      // correction-relinked row is anchored only through a bank_line voucher
+      // link (assertTransactionBookable, shared with every booking door).
+      // Read-only, so a dry-run previews the refusal too.
+      const bookable = await assertTransactionBookable(ctx.supabase, ctx.companyId!, transaction)
+      if (!bookable.ok) {
+        return v1ErrorResponseFromCode(bookable.code, txLog, {
+          requestId: ctx.requestId,
+          details: { journal_entry_id: bookable.journalEntryId, via: bookable.via },
+        })
+      }
+
       const duplicateVerdict = await runBookingDuplicateGuard(
         ctx.supabase,
         ctx.companyId!,

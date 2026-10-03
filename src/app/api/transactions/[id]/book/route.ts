@@ -12,6 +12,7 @@ import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -42,12 +43,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
     }
 
-    // Reject if already booked
-    if (transaction.journal_entry_id) {
-      return NextResponse.json(
-        { error: 'Transaction already has a journal entry' },
-        { status: 409 }
-      )
+    // Reject if already booked: the pointer OR a bank_line voucher link names a
+    // posted verifikat (a bulk-booked, split or correction-relinked row has a
+    // NULL pointer). A stale pointer at a reversed verifikat does not block;
+    // the locked UPDATE below replaces exactly that observed value.
+    const bookable = await assertTransactionBookable(supabase, companyId, transaction)
+    if (!bookable.ok) {
+      return errorResponseFromCode(bookable.code, log, {
+        requestId,
+        details: { journal_entry_id: bookable.journalEntryId, via: bookable.via },
+      })
     }
 
     // Booking-time duplicate guard: if another transaction with the same
@@ -230,8 +235,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     }
 
-    // Link transaction to the journal entry
-    const { data: updateResult, error: updateError } = await supabase
+    // Link transaction to the journal entry. CAS on the pointer value read
+    // above (NULL, or a stale pointer at a reversed verifikat), like the
+    // categorize core: a concurrent booking that changed it wins.
+    const linkQuery = supabase
       .from('transactions')
       .update({
         journal_entry_id: journalEntry.id,
@@ -242,8 +249,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
       .eq('id', id)
       .eq('company_id', companyId)
-      .is('journal_entry_id', null)
-      .select('*')
+    const { data: updateResult, error: updateError } = await (transaction.journal_entry_id
+      ? linkQuery.eq('journal_entry_id', transaction.journal_entry_id)
+      : linkQuery.is('journal_entry_id', null)
+    ).select('*')
 
     if (updateError) {
       await reverseOrphanedJournalEntry(
