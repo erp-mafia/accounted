@@ -484,8 +484,8 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler: no duplicate call needed here.
-import { CURRENCIES } from '@/types'
-import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, VatRevenueAccountWithoutRuta, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
+import { CURRENCIES, INVOICE_QR_MODES } from '@/types'
+import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, InvoiceQrMode, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, VatRevenueAccountWithoutRuta, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -1286,6 +1286,19 @@ const AUTO_PERIOD_DATE_KEYS = [
 ] as const
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * A tool's qr_mode argument: one of INVOICE_QR_MODES, or null/omitted for
+ * the company default (invoice_qr_mode). Anything else is refused the way
+ * InvoiceQrModeSchema refuses it on the web API.
+ */
+function parseQrModeArg(value: unknown): InvoiceQrMode | null {
+  if (value === undefined || value === null) return null
+  if (typeof value === 'string' && (INVOICE_QR_MODES as readonly string[]).includes(value)) {
+    return value as InvoiceQrMode
+  }
+  throw codedError('VALIDATION_ERROR', `qr_mode must be one of ${INVOICE_QR_MODES.join(', ')}, or null.`)
+}
 
 /**
  * `reason` is capped at 500 characters (inputSchema maxLength). Hosts do not
@@ -9045,6 +9058,7 @@ export const tools: McpTool[] = [
           type: 'string',
           description: 'Optional https pay link for THIS invoice (e.g. Stripe); rendered in the invoice email and PDF.',
         },
+        qr_mode: { type: 'string', enum: [...INVOICE_QR_MODES], description: 'PDF payment QR' },
       },
       required: ['customer_id', 'items'],
     },
@@ -9080,6 +9094,9 @@ export const tools: McpTool[] = [
       } else if (validUntil !== undefined) {
         throw codedError('VALIDATION_ERROR', 'valid_until applies to quotes only: set document_type "quote".')
       }
+      // Same closed set as the web API (InvoiceQrModeSchema); null and an
+      // omitted value both inherit the company's invoice_qr_mode.
+      const qrMode = parseQrModeArg(args.qr_mode)
 
       // Fetch customer (full row for VAT rules) BEFORE the article prefill:
       // an article's stored rate may only be adopted against this customer's
@@ -9238,6 +9255,7 @@ export const tools: McpTool[] = [
           invoice_marking: (args.invoice_marking as string) || null,
           notes: (args.notes as string) || null,
           payment_link_url: paymentLinkUrl,
+          ...(qrMode ? { qr_mode: qrMode } : {}),
         },
         {
           customer_name: customer.name,
@@ -21743,6 +21761,7 @@ export const tools: McpTool[] = [
         your_reference: { type: 'string' },
         our_reference: { type: 'string' },
         invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking), separate from your_reference.' },
+        qr_mode: { type: ['string', 'null'], enum: [...INVOICE_QR_MODES, null], description: 'null = company default' },
         items: {
           type: 'array',
           items: {
@@ -21830,6 +21849,9 @@ export const tools: McpTool[] = [
       for (const key of ['notes', 'invoice_date', 'due_date', 'delivery_date', 'your_reference', 'our_reference', 'invoice_marking']) {
         if (args[key] !== undefined) headerChanges[key] = args[key]
       }
+      // null is a real change here (back to the company default), so only an
+      // omitted qr_mode leaves it alone.
+      if (args.qr_mode !== undefined) headerChanges.qr_mode = parseQrModeArg(args.qr_mode)
       if (rawItems === undefined && args.default_dimensions === undefined && Object.keys(headerChanges).length === 0) {
         throw new Error('Invalid invoice update: at least one invoice field must be supplied')
       }

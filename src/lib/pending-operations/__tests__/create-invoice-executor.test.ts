@@ -158,6 +158,27 @@ describe('commitPendingOperation: create_invoice', () => {
     })
   })
 
+  it('writes the staged QR mode, and inherits (null) when it is absent or not a mode', async () => {
+    const run = async (qrMode: unknown) => {
+      const { supabase, inserts } = createCapturingSupabase(queueFor({ vat_registered: true }))
+      const op = makePendingOp({
+        params: {
+          customer_id: 'cust-1',
+          items: [{ description: 'Konsulttimmar', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+          ...(qrMode === undefined ? {} : { qr_mode: qrMode }),
+        },
+      })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+      expect(result.status).toBe('committed')
+      return (inserts['invoices'][0] as Record<string, unknown>).qr_mode
+    }
+
+    expect(await run('payment_link')).toBe('payment_link')
+    expect(await run(undefined)).toBeNull()
+    // A hand-crafted row never reaches the CHECK constraint with a stray value.
+    expect(await run('all_three')).toBeNull()
+  })
+
   it('excludes text rows from totals and mixed-rate detection', async () => {
     const { supabase, inserts } = createCapturingSupabase(queueFor({ vat_registered: true }))
 

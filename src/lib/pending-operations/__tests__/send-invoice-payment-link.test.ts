@@ -24,7 +24,6 @@ vi.mock('@react-pdf/renderer', () => ({
 
 const mocks = vi.hoisted(() => ({
   InvoicePDF: vi.fn().mockReturnValue({}),
-  buildPaymentLinkQrDataUrl: vi.fn(),
   generateInvoiceEmailHtml: vi.fn().mockReturnValue('<html />'),
   sendTrackedInvoiceEmail: vi.fn(),
   createInvoiceJournalEntry: vi.fn(),
@@ -35,13 +34,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: mocks.InvoicePDF,
   brandingFromCompanySettings: vi.fn().mockReturnValue({}),
-  SHOW_SWISH_ON_INVOICE: false,
 }))
 
+// A company with no giro and no Swish: the one QR (lib/invoices/payment-qr)
+// can only be the payment link, so the PDF carries a code exactly when the
+// invoice carries a link.
 vi.mock('@/lib/invoices/pdf-render-helpers', () => ({
   prepareInvoicePdfRender: vi.fn().mockResolvedValue({ branding: {}, company: {} }),
-  buildSwishQrDataUrl: vi.fn().mockResolvedValue(null),
-  buildPaymentLinkQrDataUrl: mocks.buildPaymentLinkQrDataUrl,
 }))
 
 vi.mock('@/lib/email/service', () => ({
@@ -147,6 +146,12 @@ function registerProvider() {
   })
 }
 
+/** The payment-link code the render entry point hands the template. */
+const LINK_QR = expect.objectContaining({
+  kind: 'payment_link',
+  imageDataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+})
+
 /** The invoice the final PDF render received. */
 function renderedInvoice(): Invoice {
   const call = mocks.InvoicePDF.mock.calls.at(-1)
@@ -160,9 +165,6 @@ beforeEach(() => {
     inv.invoice_number = 'F-2026007'
     return 'F-2026007'
   })
-  mocks.buildPaymentLinkQrDataUrl.mockImplementation(async (inv: Invoice) =>
-    inv.payment_link_url ? 'data:image/png;base64,QR' : null,
-  )
   mocks.sendTrackedInvoiceEmail.mockResolvedValue({
     success: true,
     messageId: 'msg-1',
@@ -197,7 +199,7 @@ describe('commitPendingOperation: send_invoice payment link parity', () => {
     expect(findCalls('company_settings', 'select')).toEqual([['*']])
     expect(findCalls('invoices', 'update')).toEqual([[{ status: 'sent' }], [{ journal_entry_id: 'je-1' }]])
     expect(mocks.InvoicePDF).toHaveBeenLastCalledWith(
-      expect.objectContaining({ paymentLinkQrDataUrl: null }),
+      expect.objectContaining({ paymentQr: null }),
     )
     expect(renderedInvoice().payment_link_url).toBeNull()
   })
@@ -242,7 +244,7 @@ describe('commitPendingOperation: send_invoice payment link parity', () => {
 
     // PDF QR and email button both carry the link.
     expect(mocks.InvoicePDF).toHaveBeenLastCalledWith(
-      expect.objectContaining({ paymentLinkQrDataUrl: 'data:image/png;base64,QR' }),
+      expect.objectContaining({ paymentQr: LINK_QR }),
     )
     expect(renderedInvoice().payment_link_url).toBe(LINK_URL)
     expect(mocks.generateInvoiceEmailHtml).toHaveBeenCalledWith(
@@ -275,7 +277,7 @@ describe('commitPendingOperation: send_invoice payment link parity', () => {
     expect(findCalls('invoices', 'update')).toEqual([[{ status: 'sent' }], [{ journal_entry_id: 'je-1' }]])
     expect(renderedInvoice().payment_link_url).toBeNull()
     expect(mocks.InvoicePDF).toHaveBeenLastCalledWith(
-      expect.objectContaining({ paymentLinkQrDataUrl: null }),
+      expect.objectContaining({ paymentQr: null }),
     )
   })
 
@@ -315,7 +317,7 @@ describe('commitPendingOperation: send_invoice payment link parity', () => {
     expect(createLink).not.toHaveBeenCalled()
     expect(findCalls('invoices', 'update')).toEqual([[{ status: 'sent' }], [{ journal_entry_id: 'je-1' }]])
     expect(mocks.InvoicePDF).toHaveBeenLastCalledWith(
-      expect.objectContaining({ paymentLinkQrDataUrl: 'data:image/png;base64,QR' }),
+      expect.objectContaining({ paymentQr: LINK_QR }),
     )
     expect(renderedInvoice().payment_link_url).toBe(manual)
   })

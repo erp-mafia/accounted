@@ -51,14 +51,12 @@
  */
 
 import { z } from 'zod'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
@@ -457,20 +455,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const isFreshAllocation = !typed.invoice_number
     if (isFreshAllocation) {
       try {
-        const preflight = await prepareInvoicePdfRender(settings, typed.currency, {
+        await renderInvoicePdfBuffer({
+          invoice: { ...(typed as Invoice), invoice_number: 'F-PREVIEW' },
+          customer,
+          items,
+          company: settings,
+          originalInvoiceNumber,
           paymentAccountRequired,
-          payee: typed.payment_details ?? null,
         })
-        await renderToBuffer(
-          InvoicePDF({
-            invoice: { ...(typed as Invoice), invoice_number: 'F-PREVIEW' },
-            customer,
-            items,
-            company: preflight.company,
-            originalInvoiceNumber,
-            branding: preflight.branding,
-          }),
-        )
       } catch (err) {
         ctx.log.error('invoices.send: preflight PDF render failed', err as Error, {
           invoiceId,
@@ -592,25 +584,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     let pdfBuffer: Buffer
     try {
-      const { branding, company: renderCompany } = await prepareInvoicePdfRender(
-        settings,
-        renderableInvoice.currency,
-        { paymentAccountRequired, payee: typed.payment_details ?? null },
-      )
-      const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
-      const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice, renderCompany)
-      pdfBuffer = await renderToBuffer(
-        InvoicePDF({
+      pdfBuffer = (
+        await renderInvoicePdfBuffer({
           invoice: renderableInvoice,
           customer,
           items,
-          company: renderCompany,
+          company: settings,
           originalInvoiceNumber,
-          branding,
-          swishQrDataUrl,
-          paymentLinkQrDataUrl,
-        }),
-      )
+          paymentAccountRequired,
+          payee: typed.payment_details ?? null,
+        })
+      ).buffer
     } catch (err) {
       // F-series number IS consumed at this point (orphan window).
       ctx.log.error('invoices.send: final PDF render failed AFTER number allocation', err as Error, {

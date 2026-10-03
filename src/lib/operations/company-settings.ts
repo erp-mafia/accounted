@@ -41,6 +41,7 @@ import { defineOperation, type OperationContext, type OperationOutcome, type Ope
 import { filedVatPeriodsReopenedBy } from '@/lib/vat/filed-periods-reopened'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import { INVOICE_QR_MODES } from '@/types'
 
 const S = UpdateSettingsSchema.shape
 
@@ -82,6 +83,7 @@ export const GENERAL_SETTINGS_FIELDS = [
   'invoice_show_plusgiro',
   'invoice_show_swish',
   'invoice_show_payment_qr',
+  'invoice_qr_mode',
   'invoice_show_logo',
   'invoice_show_company_name',
   'invoice_company_name_position',
@@ -212,6 +214,10 @@ const SettingsResource = z.object({
   org_number: nullableString.describe('The company org number. For an enskild firma it is the owner\'s personnummer and the last four digits are masked.'),
   onboarding_complete: nullableBoolean,
   contact_person: nullableString.describe('Default "Vår referens" on new invoices (column default_our_reference).'),
+  invoice_qr_mode: z
+    .enum(INVOICE_QR_MODES)
+    .nullable()
+    .describe('The one payment QR code invoice PDFs print (auto, bank_app, swish, payment_link, none). invoice_show_payment_qr is superseded by it.'),
   ...Object.fromEntries(
     [
       'company_name', 'address_line1', 'address_line2', 'postal_code', 'city', 'country', 'phone', 'email',

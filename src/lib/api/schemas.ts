@@ -54,6 +54,7 @@ import {
 } from '@/lib/customers/personal-number-shape'
 import {
   CURRENCIES,
+  INVOICE_QR_MODES,
   type AuditAction,
   type Currency,
   type InvoiceDocumentType,
@@ -639,6 +640,17 @@ function refineRotRutLineCompleteness(
 }
 
 /**
+ * Which payment QR code an invoice PDF prints (migration 20261003090000):
+ * auto (Swish to a private customer when usable, else the bank-app QR, else
+ * Swish, else the payment link), bank_app, swish, payment_link or none.
+ */
+export const InvoiceQrModeSchema = z
+  .enum(INVOICE_QR_MODES)
+  .describe(
+    'Payment QR code on the invoice PDF: auto (Swish to private customers when usable, else bank app, else Swish, else the payment link), bank_app, swish, payment_link or none. An explicit mode that cannot be printed prints no QR.',
+  )
+
+/**
  * Per-invoice VAT treatment (#2906). Omitted = the customer decides (create)
  * or the draft keeps what it has (edit); null clears. The two travel as a
  * pair: sending either replaces both. The rules live in
@@ -708,6 +720,10 @@ const CreateInvoiceBaseSchema = z.object({
   // Per-invoice opt-out for the automatic Stripe payment link on send.
   // Omitted → true (create) / kept as sent by the form (edit).
   payment_link_auto: z.boolean().optional(),
+  // The one payment QR code this invoice prints, overriding the company's
+  // invoice_qr_mode. null = inherit the company default; omitted = null on
+  // create and unchanged on a draft edit.
+  qr_mode: InvoiceQrModeSchema.nullable().optional(),
   // Skattereduktion claim info (ROT/RUT, grön teknik). The personnummer is
   // plaintext on the wire and gets encrypted server-side before it ever hits
   // the DB (see encryptPersonnummer in lib/salary/personnummer.ts).
@@ -2854,7 +2870,16 @@ export const UpdateSettingsSchema = z.object({
   invoice_show_bankgiro: z.boolean().optional(),
   invoice_show_plusgiro: z.boolean().optional(),
   invoice_show_swish: z.boolean().optional(),
-  invoice_show_payment_qr: z.boolean().optional(),
+  // Superseded by invoice_qr_mode: still accepted (and stored) so existing
+  // API callers keep working, but no longer read when rendering an invoice.
+  // The describe reaches the MCP settings tool and the API skill, so a caller
+  // learns that setting it changes nothing.
+  invoice_show_payment_qr: z
+    .boolean()
+    .optional()
+    .describe('Superseded by invoice_qr_mode: accepted for compatibility, no longer changes the PDF.'),
+  // The one payment QR code invoices print (lib/invoices/payment-qr.ts).
+  invoice_qr_mode: InvoiceQrModeSchema.optional(),
   invoice_show_logo: z.boolean().optional(),
   invoice_show_company_name: z.boolean().optional(),
   invoice_company_name_position: z.enum(['header', 'footer']).optional(),

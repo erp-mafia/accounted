@@ -317,6 +317,33 @@ describe('gnubok_update_invoice: validation and staging', () => {
     expect(result.preview.current_items).toBeUndefined()
   })
 
+  it('stages a QR mode change, and null as the way back to the company default', async () => {
+    for (const qrMode of ['bank_app', null]) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: draftInvoice() })
+      enqueue({ data: { id: 'op-invoice-1' } })
+
+      const result = (await tool().execute(
+        { invoice_id: INVOICE_ID, qr_mode: qrMode },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )) as { staged: boolean; preview: { changes?: Record<string, unknown> } }
+
+      expect(result.staged, String(qrMode)).toBe(true)
+      expect(result.preview.changes).toEqual({ qr_mode: qrMode })
+    }
+  })
+
+  it('refuses a QR mode that is not a mode before querying', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute({ invoice_id: INVOICE_ID, qr_mode: 'all_three' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/qr_mode/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
   it('stages a full item replace with the effective booking and the lines being replaced', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueueItemsEdit(enqueue, CUSTOMER, null)

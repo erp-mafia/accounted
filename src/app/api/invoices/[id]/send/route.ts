@@ -2,9 +2,7 @@ import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
-import { renderToBuffer } from '@react-pdf/renderer'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
@@ -308,21 +306,14 @@ export const POST = withRouteContext(
     const isFreshAllocation = !invoice.invoice_number
     if (isFreshAllocation) {
       try {
-        const preflight = await prepareInvoicePdfRender(
-          company as CompanySettings,
-          (invoice as Invoice).currency,
-          { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
-        )
-        await renderToBuffer(
-          InvoicePDF({
-            invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
-            customer,
-            items,
-            company: preflight.company,
-            originalInvoiceNumber,
-            branding: preflight.branding,
-          }),
-        )
+        await renderInvoicePdfBuffer({
+          invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
+          customer,
+          items,
+          company: company as CompanySettings,
+          originalInvoiceNumber,
+          paymentAccountRequired,
+        })
       } catch (err) {
         opLog.error('preflight PDF render failed before invoice number assignment', err as Error)
         return errorResponseFromCode('INVOICE_SEND_PDF_RENDER_FAILED', opLog, { requestId })
@@ -373,25 +364,14 @@ export const POST = withRouteContext(
     // right before the email, but if we render with the stale 'draft' status
     // the customer receives a PDF stamped "UTKAST".
     const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
-    const { branding, company: renderCompany } = await prepareInvoicePdfRender(
-      company as CompanySettings,
-      renderableInvoice.currency,
-      { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
-    )
-    const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
-    const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice, renderCompany)
-    const pdfBuffer = await renderToBuffer(
-      InvoicePDF({
-        invoice: renderableInvoice,
-        customer,
-        items,
-        company: renderCompany,
-        originalInvoiceNumber,
-        branding,
-        swishQrDataUrl,
-        paymentLinkQrDataUrl,
-      }),
-    )
+    const { buffer: pdfBuffer } = await renderInvoicePdfBuffer({
+      invoice: renderableInvoice,
+      customer,
+      items,
+      company: company as CompanySettings,
+      originalInvoiceNumber,
+      paymentAccountRequired,
+    })
 
     const replyTo = resolveInvoiceReplyTo(company as CompanySettings, user.email)
     const emailData = {

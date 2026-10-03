@@ -23,13 +23,10 @@ vi.mock('@react-pdf/renderer', () => ({
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: vi.fn().mockReturnValue({}),
   brandingFromCompanySettings: vi.fn().mockReturnValue({}),
-  SHOW_SWISH_ON_INVOICE: false,
 }))
 
 vi.mock('@/lib/invoices/pdf-render-helpers', () => ({
   prepareInvoicePdfRender: vi.fn().mockResolvedValue({ branding: {}, company: {} }),
-  buildSwishQrDataUrl: vi.fn().mockResolvedValue(null),
-  buildPaymentLinkQrDataUrl: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock('@/lib/email/service', () => ({

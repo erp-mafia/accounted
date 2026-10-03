@@ -13,14 +13,9 @@ import {
   Rect,
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
-import { generateOcrReference } from '@/lib/bankgiro/luhn'
-import {
-  invoicePrintsBankgiro,
-  invoicePrintsPlusgiro,
-  invoiceShowsOcrReference,
-} from '@/lib/invoices/ocr-reference'
-import { invoiceAmountDue, partlyPaidRemainder } from '@/lib/invoices/amount-due'
-import { bankPaymentQrSymbol, buildBankPaymentQrPayload } from '@/lib/invoices/bank-payment-qr'
+import { partlyPaidRemainder } from '@/lib/invoices/amount-due'
+import { buildInvoicePaymentRows } from '@/lib/invoices/payment-rows'
+import type { InvoicePdfPaymentQr } from '@/lib/invoices/payment-qr'
 import {
   BUNDLED_INVOICE_FONT_FAMILIES,
   INVOICE_LOGO_MAX_HEIGHT_PT,
@@ -335,25 +330,10 @@ const LABELS = {
     exportNotice: EXPORT_NOTICE_SV,
     notVatRegisteredNotice: 'Företaget är inte momsregistrerat. Mervärdesskatt redovisas ej.',
     // Payment
+    // The payment rows and the QR caption are shared with the invoice email:
+    // lib/invoices/payment-rows.ts and lib/invoices/payment-qr.ts.
     paymentHeading: 'Betalningsinformation',
-    bank: 'Bank:',
-    account: 'Kontonummer:',
-    bankgiro: 'Bankgiro:',
-    plusgiro: 'Plusgiro:',
-    swish: 'Swish:',
-    iban: 'IBAN:',
-    bic: 'BIC/SWIFT:',
-    routingNumber: 'Routing number (ABA):',
-    sortCode: 'Sort code:',
-    bankCode: 'Bankkod:',
-    foreignAccount: 'Kontonummer:',
-    ocr: 'OCR/Referens:',
     paymentReference: 'Betalningsreferens:',
-    invoiceNumber: 'Fakturanummer:',
-    swishQrCaption: 'Skanna för att betala med Swish',
-    bankPaymentQrCaption: 'Skanna med din bankapp',
-    payOnline: 'Betala online:',
-    paymentLinkQrCaption: 'Skanna för att betala online',
     // Footer
     orgNoLong: 'Org.nr:',
     vatRegNo: 'Momsreg.nr:',
@@ -427,24 +407,7 @@ const LABELS = {
     exportNotice: 'Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).',
     notVatRegisteredNotice: 'The seller is not VAT-registered. No VAT is charged on this invoice.',
     paymentHeading: 'Payment information',
-    bank: 'Bank:',
-    account: 'Account number:',
-    bankgiro: 'Bankgiro:',
-    plusgiro: 'Plusgiro:',
-    swish: 'Swish:',
-    iban: 'IBAN:',
-    bic: 'BIC/SWIFT:',
-    routingNumber: 'Routing number (ABA):',
-    sortCode: 'Sort code:',
-    bankCode: 'Bank code:',
-    foreignAccount: 'Account number:',
-    ocr: 'Reference:',
     paymentReference: 'Payment reference:',
-    invoiceNumber: 'Invoice number:',
-    swishQrCaption: 'Scan to pay with Swish',
-    bankPaymentQrCaption: 'Scan with your banking app',
-    payOnline: 'Pay online:',
-    paymentLinkQrCaption: 'Scan to pay online',
     orgNoLong: 'Reg. no.:',
     vatRegNo: 'VAT reg. no.:',
     // The F-skatt approval must be stated on the invoice, but ML sets no
@@ -458,25 +421,15 @@ const LABELS = {
   },
 } as const
 
-// Swish on invoices (the number row + the payment QR). When true, the Swish row
-// and QR render on the invoice PDF and the settings "Visa Swish" toggle is live.
-export const SHOW_SWISH_ON_INVOICE = true
-
-// QR codes in the payment box sit in a row from its top-right corner, just
-// below "Att betala": the Swish QR first, then the payment-link QR, then the
-// bank-app QR (crm#249), each 96pt wide with a 14pt gap. A third code would
-// leave the payment rows too narrow, so the bank-app QR then starts a second
-// row under the Swish QR.
+// The invoice's ONE payment QR code (lib/invoices/payment-qr.ts) sits in the
+// payment box's top-right corner: 96pt square with its caption under it.
 export const PAYMENT_QR_PT = 96
-export const PAYMENT_QR_STEP_PT = 110
-// One QR row: the symbol, a two-line caption (room for the tallest bundled
-// font) and a 10pt gap.
-export const PAYMENT_QR_ROW_STEP_PT = 134
-// The corner QRs are absolutely positioned, so they do not stretch the box.
-// With the bank-app QR the box is at least this tall (15pt padding, one QR
-// row, the bottom padding), plus one row step when it sits on the second
-// row, so the symbol never spills over the block below.
+// The code is absolutely positioned, so it does not stretch the box: with a
+// code the box is at least this tall (15pt padding, the symbol, a two-line
+// caption, the bottom padding), so the code never spills over the block
+// below, and the rows end 14pt before the code's column.
 export const PAYMENT_QR_SECTION_MIN_HEIGHT_PT = 160
+export const PAYMENT_QR_SECTION_PADDING_RIGHT_PT = 15 + PAYMENT_QR_PT + 14
 
 /**
  * Render a stored VAT notice in the document language.
@@ -1054,15 +1007,15 @@ interface InvoicePDFProps {
    * suite and for callers that haven't yet been migrated to forward branding.
    */
   branding?: InvoiceBranding
-  /** Pre-rendered Swish payment QR (PNG data URL). Built offline in
-   *  pdf-render-helpers; null/omitted renders no QR. */
-  swishQrDataUrl?: string | null
-  /** Pre-rendered payment-link QR (PNG data URL) for invoice.payment_link_url.
-   *  Built offline in pdf-render-helpers; null/omitted renders no QR. */
-  paymentLinkQrDataUrl?: string | null
+  /**
+   * The invoice's one payment QR code, resolved and drawn by the render entry
+   * point (lib/invoices/render-invoice-pdf.ts): a PNG (Swish, payment link)
+   * or a vector path (bank app), with its caption. null/omitted prints none.
+   */
+  paymentQr?: InvoicePdfPaymentQr | null
 }
 
-export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, swishQrDataUrl, paymentLinkQrDataUrl }: InvoicePDFProps) {
+export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, paymentQr }: InvoicePDFProps) {
   const lang: PdfLang = language ?? customer.language ?? 'sv'
   const L = LABELS[lang]
   // Build the stylesheet per-render so each invoice picks up its company's
@@ -1139,8 +1092,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   const isDeliveryNote = docType === 'delivery_note'
   const isProforma = docType === 'proforma'
   // A quote (offert) is never a payment request: no payment box, no OCR,
-  // no Swish/QR, no payment link (pdf-render-helpers gates the QR builders
-  // on docType === 'invoice'). Its expiry replaces the due date.
+  // no QR code (lib/invoices/payment-qr resolves none for anything but a
+  // payable faktura), no payment link. Its expiry replaces the due date.
   const isQuote = docType === 'quote'
 
   // Shared with the invoice email (lib/email/invoice-templates.ts) so the
@@ -1154,27 +1107,18 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // recomputation of the deduction-aware total; the fallback to the amount to
   // pay covers legacy rows marked paid before paid_amount was recorded.
   const paidState = resolvePdfPaidState(invoice, docType, isCreditNote, amountToPay.toPay)
-  // Bank-app payment QR (UsingQR, crm#249), built from the very figures this
-  // page prints: "Att betala" (the remainder on a partly paid invoice), the
-  // printed giro, and the OCR reference when the OCR row is printed. Drawn as
-  // vector paths, so every render path gets it without a pre-rendered image.
-  // The amount is invoiceAmountDue, the same figure the Swish QR encodes.
-  const bankPaymentQrPayload = buildBankPaymentQrPayload({
-    company,
-    invoice,
-    amountDue: invoiceAmountDue(invoice, company),
-    lang,
-  })
-  const bankPaymentQr = bankPaymentQrPayload ? bankPaymentQrSymbol(bankPaymentQrPayload) : null
-  // Where the bank-app QR goes, and the room the payment rows leave for the
-  // QR column (they wrap before it instead of running under the white square).
-  const otherCornerQrs = (swishQrDataUrl ? 1 : 0) + (paymentLinkQrDataUrl ? 1 : 0)
-  const bankPaymentQrSlot = otherCornerQrs < 2 ? otherCornerQrs : 0
-  const bankPaymentQrRow = otherCornerQrs < 2 ? 0 : 1
-  const bankPaymentQrSectionStyle = {
-    minHeight: PAYMENT_QR_SECTION_MIN_HEIGHT_PT + bankPaymentQrRow * PAYMENT_QR_ROW_STEP_PT,
-    // At most two QR columns: the rows end 14pt before the leftmost one.
-    paddingRight: 15 + PAYMENT_QR_STEP_PT * Math.min(otherCornerQrs + 1, 2),
+  // The payment rows, shared with the invoice email (lib/invoices/payment-rows):
+  // the payment methods, then the one reference row, printed after the due date.
+  const paymentRows = buildInvoicePaymentRows({ company, invoice, lang })
+  const isReferenceRow = (key: string) => key === 'ocr' || key === 'message'
+  const paymentMethodRows = paymentRows.filter((row) => !isReferenceRow(row.key))
+  const paymentReferenceRow = paymentRows.find((row) => isReferenceRow(row.key)) ?? null
+  // With a QR code the box reserves its corner: the rows wrap before the code
+  // instead of running under its white square, and the box is tall enough to
+  // hold it.
+  const paymentQrSectionStyle = {
+    minHeight: PAYMENT_QR_SECTION_MIN_HEIGHT_PT,
+    paddingRight: PAYMENT_QR_SECTION_PADDING_RIGHT_PT,
   }
   // Draft watermark (#2437): genuine drafts, plus the corrupt-state case of a
   // non-cancelled invoice that somehow lacks a number. Cancelled wins (the
@@ -1712,135 +1656,62 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         {/* Payment information - not shown for credit notes, proformas, quotes, or delivery notes */}
         {!isCreditNote && !isProforma && !isQuote && !isDeliveryNote && (
           <View
-            style={bankPaymentQr ? [styles.paymentSection, bankPaymentQrSectionStyle] : styles.paymentSection}
+            style={paymentQr ? [styles.paymentSection, paymentQrSectionStyle] : styles.paymentSection}
             wrap={false}
           >
             <Text style={styles.paymentTitle}>{L.paymentHeading}</Text>
-            {invoice.payment_link_url && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.payOnline}</Text>
-                <Link src={invoice.payment_link_url} style={styles.paymentValue}>
-                  {invoice.payment_link_url.length > 60
-                    ? `${invoice.payment_link_url.slice(0, 57)}...`
-                    : invoice.payment_link_url}
-                </Link>
+            {paymentMethodRows.map((row) => (
+              <View key={row.key} style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>{row.label}</Text>
+                {row.key === 'payment_link' ? (
+                  <Link src={row.value} style={styles.paymentValue}>
+                    {row.value.length > 60 ? `${row.value.slice(0, 57)}...` : row.value}
+                  </Link>
+                ) : (
+                  <Text style={styles.paymentValue}>{row.value}</Text>
+                )}
               </View>
-            )}
-            {company.bank_name && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.bank}</Text>
-                <Text style={styles.paymentValue}>{company.bank_name}</Text>
-              </View>
-            )}
-            {(company.clearing_number || company.account_number) && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.account}</Text>
-                <Text style={styles.paymentValue}>
-                  {company.clearing_number}-{company.account_number}
-                </Text>
-              </View>
-            )}
-            {invoicePrintsBankgiro(company) && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.bankgiro}</Text>
-                <Text style={styles.paymentValue}>{company.bankgiro}</Text>
-              </View>
-            )}
-            {invoicePrintsPlusgiro(company) && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.plusgiro}</Text>
-                <Text style={styles.paymentValue}>{company.plusgiro}</Text>
-              </View>
-            )}
-            {SHOW_SWISH_ON_INVOICE && company.swish && (company.invoice_show_swish ?? false) && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.swish}</Text>
-                <Text style={styles.paymentValue}>{company.swish}</Text>
-              </View>
-            )}
-            {/* Non-IBAN foreign routing (USD ABA / GBP sort code): the label
-                names the identifier the customer's bank asks for. */}
-            {company.bank_code && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>
-                  {invoice.currency === 'USD'
-                    ? L.routingNumber
-                    : invoice.currency === 'GBP'
-                      ? L.sortCode
-                      : L.bankCode}
-                </Text>
-                <Text style={styles.paymentValue}>{company.bank_code}</Text>
-              </View>
-            )}
-            {company.foreign_account_number && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.foreignAccount}</Text>
-                <Text style={styles.paymentValue}>{company.foreign_account_number}</Text>
-              </View>
-            )}
-            {company.iban && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.iban}</Text>
-                <Text style={styles.paymentValue}>{company.iban}</Text>
-              </View>
-            )}
-            {company.bic && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.bic}</Text>
-                <Text style={styles.paymentValue}>{company.bic}</Text>
-              </View>
-            )}
+            ))}
             <View style={[styles.paymentRow, { marginTop: 8 }]}>
               <Text style={styles.paymentLabel}>{L.dueDate}</Text>
               <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{formatDate(invoice.due_date)}</Text>
             </View>
-            {invoice.invoice_number && (
+            {paymentReferenceRow && (
               <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.invoiceNumber}</Text>
-                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number}</Text>
+                <Text style={styles.paymentLabel}>{paymentReferenceRow.label}</Text>
+                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{paymentReferenceRow.value}</Text>
               </View>
             )}
-            {invoiceShowsOcrReference(company, lang) && (
-              <View style={styles.paymentRow}>
-                <Text style={styles.paymentLabel}>{L.ocr}</Text>
-                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number ? generateOcrReference(invoice.invoice_number) : '-'}</Text>
-              </View>
-            )}
-            {swishQrDataUrl && (
-              <View style={{ position: 'absolute', top: 15, right: 15, width: 96, alignItems: 'center' }}>
-                <Image src={swishQrDataUrl} style={{ width: 96, height: 96 }} />
-                <Text style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}>{L.swishQrCaption}</Text>
-              </View>
-            )}
-            {/* Payment-link QR: shifts left when the Swish QR occupies the corner. */}
-            {paymentLinkQrDataUrl && (
-              <View style={{ position: 'absolute', top: 15, right: swishQrDataUrl ? 125 : 15, width: 96, alignItems: 'center' }}>
-                <Image src={paymentLinkQrDataUrl} style={{ width: 96, height: 96 }} />
-                <Text style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}>{L.paymentLinkQrCaption}</Text>
-              </View>
-            )}
-            {/* Bank-app QR: next free slot in the row, or the second row
-                when two codes already sit there. White behind the symbol and
-                its quiet zone, as the format asks; nothing drawn over it. */}
-            {bankPaymentQr && (
+            {/* The one payment QR code, in the corner. The bank-app code is a
+                vector path on a white square that includes its quiet zone, as
+                the format asks; nothing is drawn over it. */}
+            {paymentQr && (
               <View
                 style={{
                   position: 'absolute',
-                  top: 15 + bankPaymentQrRow * PAYMENT_QR_ROW_STEP_PT,
-                  right: 15 + PAYMENT_QR_STEP_PT * bankPaymentQrSlot,
+                  top: 15,
+                  right: 15,
                   width: PAYMENT_QR_PT,
                   alignItems: 'center',
                 }}
               >
-                <Svg width={PAYMENT_QR_PT} height={PAYMENT_QR_PT} viewBox={`0 0 ${bankPaymentQr.size} ${bankPaymentQr.size}`}>
-                  <Rect x={0} y={0} width={bankPaymentQr.size} height={bankPaymentQr.size} fill="#ffffff" />
-                  <Path d={bankPaymentQr.path} fill="#000000" />
-                </Svg>
+                {paymentQr.vector ? (
+                  <Svg
+                    width={PAYMENT_QR_PT}
+                    height={PAYMENT_QR_PT}
+                    viewBox={`0 0 ${paymentQr.vector.size} ${paymentQr.vector.size}`}
+                  >
+                    <Rect x={0} y={0} width={paymentQr.vector.size} height={paymentQr.vector.size} fill="#ffffff" />
+                    <Path d={paymentQr.vector.path} fill="#000000" />
+                  </Svg>
+                ) : paymentQr.imageDataUrl ? (
+                  <Image src={paymentQr.imageDataUrl} style={{ width: PAYMENT_QR_PT, height: PAYMENT_QR_PT }} />
+                ) : null}
                 <Text
                   style={[styles.paymentLabel, { width: 'auto', marginTop: 2, textAlign: 'center' }]}
                   hyphenationCallback={wrapDescriptionWords}
                 >
-                  {L.bankPaymentQrCaption}
+                  {paymentQr.caption}
                 </Text>
               </View>
             )}

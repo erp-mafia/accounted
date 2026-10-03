@@ -59,8 +59,7 @@ function renderText(invoice: InvoicePdfInvoice, language: 'sv' | 'en' = 'sv'): s
     customer: makeCustomer({ language }),
     items,
     company,
-    paymentLinkQrDataUrl: null,
-    swishQrDataUrl: null,
+    paymentQr: null,
   })
   return textLeaves(tree).join('\n')
 }

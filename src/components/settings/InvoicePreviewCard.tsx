@@ -75,6 +75,11 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           signal: controller.signal,
           body: JSON.stringify({
             customer_id: customer?.id,
+            // Sample number, the placeholder the route uses for its mock
+            // customer. Without one the bank-app QR (and the Swish message)
+            // cannot be built, so the preview beside "QR-kod på fakturan"
+            // would never show the code a real invoice carries.
+            invoice_number: '1',
             currency: 'SEK',
             document_type: 'invoice',
             items: [

@@ -176,9 +176,7 @@ import {
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { renderToBuffer } from '@react-pdf/renderer'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { resolveInvoicePayeeChoice, resolveInvoiceSettlementAccount, snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import {
   describeMissingInvoicePaymentAccount,
@@ -274,7 +272,9 @@ import type {
   CreateJournalEntryLineInput,
   JournalEntrySourceType,
   FiscalPeriod,
+  InvoiceQrMode,
 } from '@/types'
+import { INVOICE_QR_MODES } from '@/types'
 
 const log = createLogger('pending-operations/commit')
 
@@ -2008,6 +2008,13 @@ async function commitCreateTransaction(
   return { data: { transaction_id: data.id } }
 }
 
+/** A staged qr_mode param: a known mode, else null (the company default). */
+function stagedQrMode(value: unknown): InvoiceQrMode | null {
+  return typeof value === 'string' && (INVOICE_QR_MODES as readonly string[]).includes(value)
+    ? (value as InvoiceQrMode)
+    : null
+}
+
 async function commitCreateInvoice(
   supabase: SupabaseClient,
   userId: string,
@@ -2285,6 +2292,9 @@ async function commitCreateInvoice(
       invoice_marking: (params.invoice_marking as string) || null,
       notes: (params.notes as string) || null,
       payment_link_url: paymentLinkUrl,
+      // Re-checked against the closed set (a hand-crafted row can't smuggle a
+      // value past the CHECK into a 500); invalid or absent inherits.
+      qr_mode: stagedQrMode(params.qr_mode),
       default_dimensions: defaultDimensions ?? {},
       payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
       payment_details: payeeChoice.fields.payment_details,
@@ -2509,6 +2519,8 @@ async function commitUpdateInvoice(
     payment_link_url: existing.payment_link_url ?? undefined,
     payment_link_auto: existing.payment_link_auto ?? undefined,
     ore_rounding: existing.ore_rounding ?? undefined,
+    // Omitted = the builder leaves the column alone; null clears it.
+    qr_mode: changes.qr_mode,
     deduction_housing_designation: firstDeduction?.housing_designation ?? undefined,
     deduction_apartment_number: firstDeduction?.apartment_number ?? undefined,
     deduction_brf_org_number: firstDeduction?.brf_org_number ?? undefined,
@@ -3047,21 +3059,14 @@ async function commitSendInvoice(
   const isFreshAllocation = !invoice.invoice_number
   if (isFreshAllocation) {
     try {
-      const preflight = await prepareInvoicePdfRender(
-        company as CompanySettings,
-        (invoice as Invoice).currency,
-        { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
-      )
-      await renderToBuffer(
-        InvoicePDF({
-          invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
-          customer,
-          items,
-          company: preflight.company,
-          originalInvoiceNumber,
-          branding: preflight.branding,
-        })
-      )
+      await renderInvoicePdfBuffer({
+        invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
+        customer,
+        items,
+        company: company as CompanySettings,
+        originalInvoiceNumber,
+        paymentAccountRequired,
+      })
     } catch (err) {
       log.error('preflight PDF render failed before invoice number assignment (agent send)', err as Error, {
         companyId,
@@ -3120,25 +3125,14 @@ async function commitSendInvoice(
   // when the invoice is issued, right before the email; rendering with the
   // stale 'draft' status would stamp the customer's PDF with "UTKAST".
   const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
-  const { branding, company: renderCompany } = await prepareInvoicePdfRender(
-    company as CompanySettings,
-    renderableInvoice.currency,
-    { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
-  )
-  const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
-  const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice, renderCompany)
-  const pdfBuffer = await renderToBuffer(
-    InvoicePDF({
-      invoice: renderableInvoice,
-      customer,
-      items,
-      company: renderCompany,
-      originalInvoiceNumber,
-      branding,
-      swishQrDataUrl,
-      paymentLinkQrDataUrl,
-    })
-  )
+  const { buffer: pdfBuffer } = await renderInvoicePdfBuffer({
+    invoice: renderableInvoice,
+    customer,
+    items,
+    company: company as CompanySettings,
+    originalInvoiceNumber,
+    paymentAccountRequired,
+  })
 
   const isCreditNote = !!invoice.credited_invoice_id
   const filename = invoicePdfFilename({

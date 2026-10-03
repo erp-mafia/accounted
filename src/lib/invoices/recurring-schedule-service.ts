@@ -31,13 +31,7 @@ import {
   markInvoiceSentAndBook,
   restoreUnbookedDraft,
 } from '@/lib/invoices/issue-and-book-invoice'
-import { renderToBuffer } from '@react-pdf/renderer'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import {
-  prepareInvoicePdfRender,
-  buildSwishQrDataUrl,
-  buildPaymentLinkQrDataUrl,
-} from '@/lib/invoices/pdf-render-helpers'
+import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
@@ -689,24 +683,14 @@ async function sendInvoiceFromSchedule(
   // Render PDF with status overridden to 'sent' so the customer doesn't
   // receive a "UTKAST" stamp.
   const renderableInvoice = { ...invoice, status: 'sent' as const }
-  const { branding, company: renderCompany } = await prepareInvoicePdfRender(
+  const { buffer: pdfBuffer } = await renderInvoicePdfBuffer({
+    invoice: renderableInvoice,
+    customer: invoice.customer,
+    items,
     company,
-    renderableInvoice.currency,
-    { payee: renderableInvoice.payment_details ?? null },
-  )
-  const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
-  const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice, renderCompany)
-  const pdfBuffer = await renderToBuffer(
-    InvoicePDF({
-      invoice: renderableInvoice,
-      customer: invoice.customer,
-      items,
-      company: renderCompany,
-      branding,
-      swishQrDataUrl,
-      paymentLinkQrDataUrl,
-    }),
-  )
+    // A recurring run only ever produces real invoices: always a payee.
+    paymentAccountRequired: true,
+  })
 
   // Issue before the email leaves: status sent + the verifikat, fail closed.
   // Everything that could stop the send without issuing (settings, payee,

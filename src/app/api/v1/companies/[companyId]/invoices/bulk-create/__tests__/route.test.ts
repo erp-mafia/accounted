@@ -37,7 +37,10 @@ const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
 type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
+function makeFlexibleSupabase(
+  byTable: Record<string, MockResult | MockResult[]>,
+  inserts?: Array<{ table: string; payload: unknown }>,
+) {
   const queues = new Map<string, MockResult[]>()
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
@@ -45,6 +48,12 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
+        if (prop === 'insert' && inserts) {
+          return (payload: unknown) => {
+            inserts.push({ table, payload })
+            return buildChain(table)
+          }
+        }
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) => {
             const q = queues.get(table)
@@ -148,6 +157,39 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
     expect(body.data.results[0].ok).toBe(true)
     expect(body.data.results[0].request_index).toBe(0)
     expect(body.data.results[1].ok).toBe(true)
+  })
+
+  it('writes each invoice\'s own QR mode, null when it is not given', async () => {
+    const inserts: Array<{ table: string; payload: unknown }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          customers: { data: VALID_CUSTOMER, error: null },
+          invoices: { data: { id: 'inv-1', invoice_number: null, status: 'draft', total: 1250 }, error: null },
+          invoice_items: { data: null, error: null },
+        },
+        inserts,
+      ),
+    )
+    const base = { customer_id: CUSTOMER_ID, invoice_date: '2026-05-12', due_date: '2026-06-11', currency: 'SEK' }
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create`, {
+        invoices: [
+          { ...base, qr_mode: 'swish', items: [SAMPLE_ITEM('A')] },
+          { ...base, items: [SAMPLE_ITEM('B')] },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const invoiceInserts = inserts.filter((i) => i.table === 'invoices').map((i) => i.payload)
+    expect(invoiceInserts).toEqual([
+      expect.objectContaining({ qr_mode: 'swish' }),
+      expect.objectContaining({ qr_mode: null }),
+    ])
   })
 
   it('returns per-item failure when customer not found', async () => {

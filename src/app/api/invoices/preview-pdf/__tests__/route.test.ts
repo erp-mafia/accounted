@@ -32,8 +32,6 @@ vi.mock('@/lib/invoices/pdf-template', () => ({
 
 vi.mock('@/lib/invoices/pdf-render-helpers', () => ({
   prepareInvoicePdfRender: vi.fn(async (company: unknown) => ({ branding: {}, company })),
-  buildSwishQrDataUrl: vi.fn().mockResolvedValue(null),
-  buildPaymentLinkQrDataUrl: vi.fn().mockResolvedValue(null),
 }))
 
 import { POST } from '../route'
@@ -390,6 +388,81 @@ describe('POST /api/invoices/preview-pdf', () => {
       expect(items[0].vat_rate).toBe(0)
       expect(items[0].deduction_amount).toBe(1000)
       expect(invoice.deduction_total).toBe(1000)
+    })
+  })
+
+  describe('payment QR code (one per invoice)', () => {
+    // A bankgiro with a valid check digit and an org number: auto prints the
+    // bank-app code to a business customer.
+    const qrCompany = makeCompanySettings({
+      company_name: 'Oppy Sverige',
+      org_number: '5566778899',
+      bankgiro: '5050-1055',
+    })
+
+    async function preview(body: Record<string, unknown>) {
+      enqueue({ data: qrCompany, error: null })
+      enqueue({ data: customer, error: null })
+      return POST(
+        createMockRequest('/api/invoices/preview-pdf', { method: 'POST', body }),
+        createMockRouteParams({}),
+      )
+    }
+
+    it('renders through the one entry point and names the resolved code in X-Invoice-Qr', async () => {
+      const response = await preview(validBody)
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('X-Invoice-Qr')).toBe('bank_app')
+      const props = invoicePdfMock.mock.calls.at(-1)?.[0] as { paymentQr: { kind: string; vector?: unknown } }
+      expect(props.paymentQr).toMatchObject({ kind: 'bank_app', vector: expect.any(Object) })
+    })
+
+    it('applies the draft\'s qr_mode and reports why it prints none', async () => {
+      const response = await preview({ ...validBody, qr_mode: 'swish' })
+
+      expect(response.status).toBe(200)
+      // The company has no Swish number: an explicit swish never falls back.
+      expect(response.headers.get('X-Invoice-Qr')).toBe('none:no_swish')
+      expect(lastRenderProps().invoice.qr_mode).toBe('swish')
+      expect((invoicePdfMock.mock.calls.at(-1)?.[0] as { paymentQr: unknown }).paymentQr).toBeNull()
+    })
+
+    it('inherits the company default when qr_mode is null or empty', async () => {
+      for (const qrMode of [null, '']) {
+        const response = await preview({ ...validBody, qr_mode: qrMode })
+        expect(response.headers.get('X-Invoice-Qr')).toBe('bank_app')
+        expect(lastRenderProps().invoice.qr_mode).toBeNull()
+      }
+    })
+
+    // The settings preview (InvoicePreviewCard) renders for a real customer
+    // and must send a sample number: without one the bank-app code has no
+    // reference and the preview beside "QR-kod på fakturan" shows none.
+    it('builds the bank-app code for a real customer only when a number is sent', async () => {
+      const withoutNumber = { ...validBody, invoice_number: undefined }
+
+      const unnumbered = await preview(withoutNumber)
+      expect(unnumbered.headers.get('X-Invoice-Qr')).toBe('none:no_invoice_number')
+      expect(lastRenderProps().invoice.invoice_number).toBeNull()
+
+      const sampled = await preview({ ...withoutNumber, invoice_number: '1' })
+      expect(sampled.headers.get('X-Invoice-Qr')).toBe('bank_app')
+      expect(lastRenderProps().invoice.invoice_number).toBe('1')
+    })
+
+    it('returns 400 for a qr_mode that is not a mode, before rendering', async () => {
+      const response = await POST(
+        createMockRequest('/api/invoices/preview-pdf', {
+          method: 'POST',
+          body: { ...validBody, qr_mode: 'all_three' },
+        }),
+        createMockRouteParams({}),
+      )
+
+      expect(response.status).toBe(400)
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+      expect(renderToBufferMock).not.toHaveBeenCalled()
     })
   })
 

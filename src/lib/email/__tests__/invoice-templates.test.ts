@@ -573,13 +573,14 @@ describe('invoice email templates', () => {
       const html = generateInvoiceEmailHtml(data)
       const text = generateInvoiceEmailText(data)
 
+      // An IBAN payee prints IBAN and BIC; the bank name only rides along
+      // with a domestic account number (the merged Bankkonto row).
       for (const rendered of [html, text]) {
-        expect(rendered).toContain('Mock ASPSP')
-        expect(rendered).toContain('SE4550000000058398257466')
+        expect(rendered).toContain('SE45 5000 0000 0583 9825 7466')
         expect(rendered).toContain('ESSESESS')
         expect(rendered).not.toContain('Legacy SEK Bank')
         expect(rendered).not.toContain('5037-1231231')
-        expect(rendered).not.toContain('SE0011111111111111111111')
+        expect(rendered).not.toContain('SE00 1111 1111 1111 1111 1111')
         expect(rendered).not.toContain('NDEASESS')
       }
     })
@@ -833,5 +834,31 @@ describe('greeting names are HTML-escaped', () => {
   it('escapes the greeting in the payment confirmation', () => {
     const html = generatePaymentConfirmationEmailHtml({ invoice, customer: hostileCustomer, company })
     expect(html).not.toContain('<b>Evil</b>')
+  })
+})
+
+describe('payment rows are the PDF payment box rows (lib/invoices/payment-rows)', () => {
+  const customer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
+
+  it('prints the bank and the account as one Bankkonto row', () => {
+    const text = generateInvoiceEmailText({ invoice, customer, company })
+    expect(text).toContain('Bankkonto: SEB, 5000-1234567')
+    expect(text).not.toContain('Kontonummer:')
+    expect(text).not.toContain('Bank: SEB')
+  })
+
+  it('prints no half account: clearing without account number is no row, like on the PDF', () => {
+    const half = makeCompanySettings({ ...company, account_number: null, bankgiro: '123-4567' })
+    const text = generateInvoiceEmailText({ invoice, customer, company: half })
+    expect(text).not.toContain('Bankkonto:')
+    expect(text).not.toContain('5000-')
+  })
+
+  it('keeps the payment link out of the rows: the email has its own button and line', () => {
+    const linked = makeInvoice({ ...invoice, payment_link_url: 'https://pay.example.test/x' })
+    const html = generateInvoiceEmailHtml({ invoice: linked, customer, company })
+    expect(html.match(/Betala online/g)).toHaveLength(1)
+    const text = generateInvoiceEmailText({ invoice: linked, customer, company })
+    expect(text.match(/Betala online/g)).toHaveLength(1)
   })
 })

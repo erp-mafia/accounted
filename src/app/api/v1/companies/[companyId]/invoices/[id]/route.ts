@@ -32,7 +32,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
-import { CreateInvoiceItemSchema, InvoiceVatOverrideShape } from '@/lib/api/schemas'
+import { CreateInvoiceItemSchema, InvoiceQrModeSchema, InvoiceVatOverrideShape } from '@/lib/api/schemas'
 import { buildInvoiceWriteData, type InvoiceWriteItemInput } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
@@ -63,6 +63,9 @@ const V1PatchDraftInvoiceSchema = z.object({
   // pay to. null = back to the per-currency default. Must be one of the
   // company's payee accounts, usable for the invoice currency.
   payment_cash_account_id: z.union([z.string().uuid(), z.null()]).optional(),
+  // The one payment QR code this invoice prints, overriding the company's
+  // invoice_qr_mode; null = back to the company default.
+  qr_mode: InvoiceQrModeSchema.nullable().optional(),
   // Per-invoice VAT treatment (#2906), same fields and rules as POST
   // /invoices. A pair: sending either replaces both; omitting both keeps the
   // draft's. Changing it re-decides the VAT of the current lines (rebuilt
@@ -300,6 +303,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       'our_reference',
       'notes',
       'default_dimensions',
+      'qr_mode',
     ] as const) {
       if (body[key] !== undefined) updateData[key] = body[key]
     }

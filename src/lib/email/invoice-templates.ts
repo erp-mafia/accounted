@@ -3,12 +3,7 @@ import { formatDate, getCompanyDisplayName } from '@/lib/utils'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { customerGreetingName } from '@/lib/invoices/customer-greeting-name'
-import {
-  invoicePrintsBankgiro,
-  invoicePrintsPlusgiro,
-  invoiceShowsOcrReference,
-} from '@/lib/invoices/ocr-reference'
-import { generateOcrReference } from '@/lib/bankgiro/luhn'
+import { buildInvoicePaymentRows } from '@/lib/invoices/payment-rows'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from './user-text'
 
 type EmailLang = 'sv' | 'en'
@@ -39,22 +34,9 @@ const LABELS = {
     // A quote is not a payment request, so its grand total is a neutral sum.
     totalQuote: 'Summa:',
     payOnline: 'Betala online',
+    // The payment rows carry their own labels, shared with the PDF
+    // (lib/invoices/payment-rows.ts).
     paymentHeading: 'Betalningsinformation',
-    bank: 'Bank:',
-    account: 'Kontonummer:',
-    iban: 'IBAN:',
-    bic: 'BIC/SWIFT:',
-    bankgiro: 'Bankgiro:',
-    plusgiro: 'Plusgiro:',
-    swish: 'Swish:',
-    routingNumber: 'Routing number (ABA):',
-    sortCode: 'Sort code:',
-    bankCode: 'Bankkod:',
-    foreignAccount: 'Kontonummer:',
-    // Same label as the PDF payment box. The value is the OCR reference
-    // (invoice number + Luhn check digit), never the bare invoice number.
-    ocr: 'OCR/Referens:',
-    message: 'Meddelande:',
     questions: 'Har du frågor om fakturan? Svara direkt på detta mejl så hjälper vi dig.',
     sincerely: 'Med vänliga hälsningar,',
     orgNo: 'Org.nr:',
@@ -91,19 +73,6 @@ const LABELS = {
     totalQuote: 'Total:',
     payOnline: 'Pay online',
     paymentHeading: 'Payment information',
-    bank: 'Bank:',
-    account: 'Account number:',
-    iban: 'IBAN:',
-    bic: 'BIC/SWIFT:',
-    bankgiro: 'Bankgiro:',
-    plusgiro: 'Plusgiro:',
-    swish: 'Swish:',
-    routingNumber: 'Routing number (ABA):',
-    sortCode: 'Sort code:',
-    bankCode: 'Bank code:',
-    foreignAccount: 'Account number:',
-    ocr: 'Reference:',
-    message: 'Reference:',
     questions: 'Questions about the invoice? Reply directly to this email and we will help you.',
     sincerely: 'Kind regards,',
     orgNo: 'Reg. no.:',
@@ -262,51 +231,22 @@ export interface InvoiceEmailPaymentRow {
 }
 
 /**
- * The payment rows, in the same order and under the same conditions as the
- * PDF payment box (lib/invoices/pdf-template.tsx), so the customer never sees
- * one instruction in the email and another on the faktura. The last row is
- * the reference the customer copies into the bank: the OCR reference (with
- * its Luhn check digit) exactly when the PDF prints one, else the invoice
- * number as a plain message. Shared with the reminder email.
+ * The payment rows of the invoice email and the reminder email: the PDF
+ * payment box's rows (lib/invoices/payment-rows.ts, same order, same budget,
+ * same labels), so the customer never sees one instruction in the email and
+ * another on the faktura. The last row is the reference the customer copies
+ * into the bank: the OCR reference exactly when the PDF prints one, else the
+ * invoice number as a plain message. The payment link is left out here: the
+ * invoice email shows it as its own "Betala online" button and line.
  */
 export function invoiceEmailPaymentRows(
   company: CompanySettings,
   invoice: Invoice,
   lang: EmailLang,
 ): InvoiceEmailPaymentRow[] {
-  const L = LABELS[lang]
-  const rows: InvoiceEmailPaymentRow[] = []
-  if (company.bank_name) rows.push({ label: L.bank, value: company.bank_name })
-  if (company.clearing_number && company.account_number) {
-    rows.push({ label: L.account, value: `${company.clearing_number}-${company.account_number}` })
-  }
-  if (company.bankgiro && invoicePrintsBankgiro(company)) {
-    rows.push({ label: L.bankgiro, value: company.bankgiro })
-  }
-  if (company.plusgiro && invoicePrintsPlusgiro(company)) {
-    rows.push({ label: L.plusgiro, value: company.plusgiro })
-  }
-  if (company.swish && (company.invoice_show_swish ?? false)) {
-    rows.push({ label: L.swish, value: company.swish })
-  }
-  if (company.bank_code) {
-    rows.push({
-      label: invoice.currency === 'USD' ? L.routingNumber : invoice.currency === 'GBP' ? L.sortCode : L.bankCode,
-      value: company.bank_code,
-    })
-  }
-  if (company.foreign_account_number) {
-    rows.push({ label: L.foreignAccount, value: company.foreign_account_number })
-  }
-  if (company.iban) rows.push({ label: L.iban, value: company.iban })
-  if (company.bic) rows.push({ label: L.bic, value: company.bic })
-  const invoiceNumber = invoice.invoice_number ?? ''
-  rows.push(
-    invoiceShowsOcrReference(company, lang)
-      ? { label: L.ocr, value: generateOcrReference(invoiceNumber), emphasis: true }
-      : { label: L.message, value: invoiceNumber, emphasis: true },
-  )
-  return rows
+  return buildInvoicePaymentRows({ company, invoice, lang })
+    .filter((row) => row.key !== 'payment_link')
+    .map(({ label, value, emphasis }) => (emphasis ? { label, value, emphasis } : { label, value }))
 }
 
 /**

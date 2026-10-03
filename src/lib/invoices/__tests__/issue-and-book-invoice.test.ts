@@ -28,7 +28,6 @@ vi.mock('@react-pdf/renderer', () => ({
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: vi.fn().mockReturnValue('mock-pdf-element'),
   brandingFromCompanySettings: vi.fn().mockReturnValue({}),
-  SHOW_SWISH_ON_INVOICE: false,
 }))
 
 const mockCreateInvoiceJournalEntry = vi.fn()
@@ -305,6 +304,8 @@ describe('archiveIssuedInvoicePdf', () => {
   }
 
   it('archives the payment-link QR with the "Markera som skickad" PDF, like the send route', async () => {
+    // The fixture's bankgiro has a wrong check digit and there is no Swish,
+    // so auto reaches the payment link.
     const result = await archive(makeDraft({ payment_link_url: 'https://pay.example.test/inv-1' }))
 
     expect(result).toBeNull()
@@ -313,15 +314,18 @@ describe('archiveIssuedInvoicePdf', () => {
       expect.objectContaining({
         // Rendered as sent (the stale draft row would stamp UTKAST).
         invoice: expect.objectContaining({ status: 'sent' }),
-        paymentLinkQrDataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+        paymentQr: expect.objectContaining({
+          kind: 'payment_link',
+          imageDataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+        }),
       }),
     )
     expect(mockUploadDocument).toHaveBeenCalledTimes(1)
   })
 
-  it('passes no link QR when the invoice has no payment link', async () => {
+  it('passes no QR when nothing on the invoice can carry one', async () => {
     await archive(makeDraft())
 
-    expect(InvoicePDF).toHaveBeenCalledWith(expect.objectContaining({ paymentLinkQrDataUrl: null }))
+    expect(InvoicePDF).toHaveBeenCalledWith(expect.objectContaining({ paymentQr: null }))
   })
 })

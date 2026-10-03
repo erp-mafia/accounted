@@ -173,6 +173,42 @@ describe('commitPendingOperation: update_invoice', () => {
     })
   })
 
+  it('writes a staged QR mode, and leaves the stored one alone when the edit does not mention it', async () => {
+    const CURRENT_ROW = {
+      line_type: 'product',
+      description: 'Befintlig rad',
+      quantity: 1,
+      unit: 'st',
+      unit_price: 100,
+      vat_rate: 25,
+    }
+    const run = async (changes: Record<string, unknown>) => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-invoice-1' } }) // claim
+      enqueue({ data: existingDraft() }) // invoices: existing draft
+      enqueue({ data: makeCustomer({ id: CUSTOMER_ID }) }) // customers
+      enqueue({ data: [CURRENT_ROW] }) // invoice_items: current rows
+      enqueue({ data: { vat_registered: true } }) // company_settings
+      enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update
+      enqueue({ data: [] }) // invoice_items snapshot
+      enqueue({ data: null }) // invoice_items delete
+      enqueue({ data: null }) // invoice_items insert
+      enqueue({ data: null }) // final status update
+      const result = await commitPendingOperation(
+        supabase as never,
+        'user-1',
+        'company-1',
+        makePendingOp({ invoice_id: INVOICE_ID, changes }),
+      )
+      expect(result.status).toBe('committed')
+      return findCalls('invoices', 'update')[0][0] as Record<string, unknown>
+    }
+
+    expect(await run({ qr_mode: 'swish' })).toMatchObject({ qr_mode: 'swish' })
+    expect(await run({ qr_mode: null })).toMatchObject({ qr_mode: null })
+    expect(await run({ notes: 'Uppdaterad anteckning' })).not.toHaveProperty('qr_mode')
+  })
+
   it('re-checks the editable-draft gate at commit time (sent between staging and approval)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-invoice-1' } }) // claim

@@ -33,6 +33,17 @@ describe('v1 invoice projections feed the render amount path', () => {
     expect(parse(INVOICE_PDF_COLUMNS)).toContain('delivery_date')
   })
 
+  // The one payment QR (lib/invoices/payment-qr.ts) reads the invoice's own
+  // QR choice and its payment link: without them the v1 render would print
+  // another code than the dashboard download and the sent file.
+  it.each(['qr_mode', 'payment_link_url'])('INVOICE_PDF_COLUMNS carries %s for the payment QR', (column) => {
+    expect(parse(INVOICE_PDF_COLUMNS)).toContain(column)
+  })
+
+  it.each(['qr_mode', 'payment_link_url'])('INVOICE_FULL_COLUMNS carries %s (v1 send renders from it)', (column) => {
+    expect(parse(INVOICE_FULL_COLUMNS)).toContain(column)
+  })
+
   it('never selects the encrypted personnummer blob', () => {
     expect(INVOICE_FULL_COLUMNS).not.toContain('deduction_personnummer_encrypted')
     expect(INVOICE_PDF_COLUMNS).not.toContain('deduction_personnummer_encrypted')
