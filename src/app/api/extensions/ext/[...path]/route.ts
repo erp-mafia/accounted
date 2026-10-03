@@ -32,6 +32,22 @@ async function decorateResponse(response: Response, requestId: string): Promise<
     response.headers.set('X-Request-Id', requestId)
   }
 
+  // Say the encoding out loud. The bytes are already correct UTF-8, and JSON
+  // is UTF-8 by definition (RFC 8259), but a client that falls back to
+  // Latin-1 when no charset is declared renders "är" as "Ã¤r" and the report
+  // that follows blames the app. Declaring it costs nothing and removes the
+  // ambiguity. JSON only on purpose: text/event-stream is the MCP transport,
+  // whose content-type is matched by clients we do not control, and binary
+  // bodies (PDFs, betalfiler, exports) have no charset to declare.
+  const contentType = response.headers.get('content-type')
+  if (
+    contentType &&
+    contentType.startsWith('application/json') &&
+    !contentType.toLowerCase().includes('charset=')
+  ) {
+    response.headers.set('content-type', `${contentType}; charset=utf-8`)
+  }
+
   if (!response.ok) {
     const contentType = response.headers.get('content-type') || ''
     if (contentType.includes('application/json')) {
