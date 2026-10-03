@@ -45,8 +45,11 @@ const EXPORT_CUSTOMER = {
   default_payment_terms: 30,
 }
 
+// A real UUID: staging validates the lines with the web API's line schema.
+const ARTICLE_ID = '0b9c1a2e-5d4f-4e6a-9b8c-7d6e5f4a3b21'
+
 const ARTICLE = {
-  id: 'art-1',
+  id: ARTICLE_ID,
   name: 'Konsulttimme',
   unit: 'tim',
   price_excl_vat: 1200,
@@ -60,7 +63,11 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-/** Queue order: customers → articles → period layers ×2 → pending_operations insert. */
+/**
+ * Queue order: customers → articles (prefill) → the builder's dry run
+ * (company_settings → chart_of_accounts for the article's revenue account →
+ * articles tenancy check) → period layers ×2 → pending_operations insert.
+ */
 function enqueueHappyPath(
   enqueue: (r: { data: unknown; error: unknown }) => void,
   customer: Record<string, unknown>,
@@ -68,6 +75,9 @@ function enqueueHappyPath(
 ) {
   enqueue({ data: customer, error: null })
   enqueue({ data: articleRows, error: null })
+  enqueue({ data: { vat_registered: true }, error: null })
+  enqueue({ data: [{ account_number: '3041' }], error: null })
+  enqueue({ data: articleRows.map((row) => ({ id: row.id })), error: null })
   enqueue({ data: null, error: null })
   enqueue({ data: null, error: null })
   enqueue({ data: { id: 'op-1' }, error: null })
@@ -82,7 +92,7 @@ describe('gnubok_create_invoice: article_id on items', () => {
       {
         customer_id: 'cust-1',
         invoice_date: '2026-05-12',
-        items: [{ article_id: 'art-1', quantity: 3 }],
+        items: [{ article_id: ARTICLE_ID, quantity: 3 }],
       },
       'company-1',
       'user-1',
@@ -91,7 +101,7 @@ describe('gnubok_create_invoice: article_id on items', () => {
 
     expect(result.staged).toBe(true)
     expect(result.preview.items[0]).toMatchObject({
-      article_id: 'art-1',
+      article_id: ARTICLE_ID,
       description: 'Konsulttimme',
       unit: 'tim',
       unit_price: 1200,
@@ -110,7 +120,7 @@ describe('gnubok_create_invoice: article_id on items', () => {
       {
         customer_id: 'cust-1',
         invoice_date: '2026-05-12',
-        items: [{ article_id: 'art-1', quantity: 1, description: 'Rabatterad timme', unit_price: 800 }],
+        items: [{ article_id: ARTICLE_ID, quantity: 1, description: 'Rabatterad timme', unit_price: 800 }],
       },
       'company-1',
       'user-1',
@@ -140,7 +150,7 @@ describe('gnubok_create_invoice: article_id on items', () => {
       {
         customer_id: 'cust-eu',
         invoice_date: '2026-05-12',
-        items: [{ article_id: 'art-1', quantity: 10 }],
+        items: [{ article_id: ARTICLE_ID, quantity: 10 }],
       },
       'company-1',
       'user-1',
@@ -165,7 +175,7 @@ describe('gnubok_create_invoice: article_id on items', () => {
       {
         customer_id: 'cust-export',
         invoice_date: '2026-05-12',
-        items: [{ article_id: 'art-1', quantity: 2 }],
+        items: [{ article_id: ARTICLE_ID, quantity: 2 }],
       },
       'company-1',
       'user-1',
@@ -188,7 +198,7 @@ describe('gnubok_create_invoice: article_id on items', () => {
       {
         customer_id: 'cust-eu',
         invoice_date: '2026-05-12',
-        items: [{ article_id: 'art-1', quantity: 2, vat_rate: 12 }],
+        items: [{ article_id: ARTICLE_ID, quantity: 2, vat_rate: 12 }],
       },
       'company-1',
       'user-1',
@@ -226,7 +236,7 @@ describe('gnubok_create_invoice: article_id on items', () => {
       createInvoice.execute(
         {
           customer_id: 'cust-1',
-          items: [{ article_id: 'art-1', quantity: 1 }],
+          items: [{ article_id: ARTICLE_ID, quantity: 1 }],
         },
         'company-1',
         'user-1',
@@ -244,7 +254,7 @@ describe('gnubok_create_invoice: article_id on items', () => {
       createInvoice.execute(
         {
           customer_id: 'cust-1',
-          items: [{ article_id: 'art-1', quantity: 1 }],
+          items: [{ article_id: ARTICLE_ID, quantity: 1 }],
         },
         'company-1',
         'user-1',
@@ -261,7 +271,7 @@ describe('gnubok_create_invoice: article_id on items', () => {
       {
         customer_id: 'cust-1',
         invoice_date: '2026-05-12',
-        items: [{ article_id: 'art-1', quantity: 1, unit_price: 950 }],
+        items: [{ article_id: ARTICLE_ID, quantity: 1, unit_price: 950 }],
       },
       'company-1',
       'user-1',
@@ -301,8 +311,10 @@ describe('gnubok_create_invoice: free-text rows (issue #1642 follow-up)', () => 
 
   it('accepts a text spacer row without amounts and keeps it out of the totals', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    // No article on any line: customers, period layers x2, pending_operations.
+    // No article on any line: customers, the builder's company_settings,
+    // period layers x2, pending_operations.
     enqueue({ data: CUSTOMER, error: null })
+    enqueue({ data: { vat_registered: true }, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: { id: 'op-text-1' }, error: null })
@@ -323,7 +335,7 @@ describe('gnubok_create_invoice: free-text rows (issue #1642 follow-up)', () => 
 
     expect(result.staged).toBe(true)
     // The text row is normalized to the zeroed stored shape and contributes
-    // nothing to the totals (commitCreateInvoice billableItems parity).
+    // nothing to the totals (the builder's text-row rule, same as the commit).
     expect(result.preview.items[0]).toMatchObject({ line_type: 'text', quantity: 0, unit_price: 0, line_total: 0 })
     expect(result.preview.subtotal).toBe(2000)
     expect(result.preview.vat_amount).toBe(500)

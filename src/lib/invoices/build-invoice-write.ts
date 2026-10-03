@@ -425,9 +425,9 @@ export async function buildInvoiceWriteData(params: {
   // on the service-role client with no RLS at all, so a body carrying another
   // company's article UUID would otherwise persist a cross-tenant reference.
   // Every invoice write path converges here (cookie POST/PATCH, v1 POST/PATCH,
-  // webshop, sales-order conversion, MCP update), so one scoped select covers
-  // them all. The MCP executors keep their own pre-check as the tamper gate
-  // for staged rows. Text rows never persist an article (mapped to null below).
+  // webshop, sales-order conversion, MCP create and update), so one scoped
+  // select covers them all. The MCP update executor keeps its own pre-check
+  // as well. Text rows never persist an article (mapped to null below).
   const articleIds = Array.from(
     new Set(
       items

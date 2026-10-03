@@ -484,6 +484,7 @@ import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import { buildStagedInvoice, describeInvoiceBuildRefusal } from '@/lib/pending-operations/build-staged-invoice'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
@@ -520,6 +521,55 @@ type StagedInvoiceLineInput = {
   accrual_balance_account?: string | null
   dimensions?: unknown
 }
+
+/**
+ * gnubok_create_invoice's line schema. The staging refusal of unknown line
+ * keys reads its property list plus the deduction and periodisering fields:
+ * the top-level arg guard never sees inside items, so a misnamed or
+ * unsupported line field used to be staged and then dropped at approval
+ * without a word. Those fields are accepted but not repeated here, where
+ * every property costs tools/list budget; gnubok_update_invoice declares
+ * them and the refusal names them all.
+ */
+const CREATE_INVOICE_ITEM_SCHEMA = {
+  type: 'object',
+  properties: {
+    description: { type: 'string' },
+    quantity: { type: 'number' },
+    unit: { type: 'string', description: 'st, tim, dag, mån' },
+    unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
+    discount_percent: { type: 'number', description: 'Line discount 0-100 (rabatt); line total and VAT computed net of it' },
+    vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
+    article_id: {
+      type: 'string',
+      description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, revenue account and, only when compatible with the customer VAT rules, vat_rate. Values set on the line win.',
+    },
+    line_type: { type: 'string', enum: ['product', 'text'], description: 'text = free-text row: no amounts, never books.' },
+    revenue_account: { type: ['string', 'null'], description: 'BAS class 1-3 posting-account override; class 1-2 only on a 0 % line.' },
+    dimensions: {
+      type: 'object',
+      additionalProperties: { type: 'string' },
+      description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
+    },
+  },
+  required: ['quantity'],
+}
+
+const CREATE_INVOICE_ITEM_KEYS: ReadonlySet<string> = new Set([
+  ...Object.keys(CREATE_INVOICE_ITEM_SCHEMA.properties),
+  // ROT/RUT/grön teknik claim fields; the personnummer comes from the
+  // customer card and never crosses MCP.
+  'deduction_type',
+  'labor_hours',
+  'work_type',
+  'housing_designation',
+  'apartment_number',
+  'brf_org_number',
+  // Periodisering (förutbetald intäkt).
+  'accrual_period_start',
+  'accrual_period_end',
+  'accrual_balance_account',
+])
 
 type ResolvedInvoiceLine = StagedInvoiceLineInput & {
   description: string
@@ -9008,30 +9058,8 @@ export const tools: McpTool[] = [
         valid_until: { type: 'string', description: 'YYYY-MM-DD, quotes only' },
         items: {
           type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              description: { type: 'string' },
-              quantity: { type: 'number' },
-              unit: { type: 'string', description: 'st, tim, dag, mån' },
-              unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
-              discount_percent: { type: 'number', description: 'Line discount 0-100 (rabatt); line total and VAT computed net of it' },
-              vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
-              article_id: {
-                type: 'string',
-                description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, revenue account and, only when compatible with the customer VAT rules, vat_rate. Values set on the line win.',
-              },
-              line_type: { type: 'string', enum: ['product', 'text'], description: 'text = free-text row: no amounts, never books.' },
-              revenue_account: { type: ['string', 'null'], description: 'BAS class 1-3 posting-account override.' },
-              dimensions: {
-                type: 'object',
-                additionalProperties: { type: 'string' },
-                description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
-              },
-            },
-            required: ['quantity'],
-          },
-          description: 'Invoice line items',
+          items: CREATE_INVOICE_ITEM_SCHEMA,
+          description: 'Invoice line items. ROT/RUT and periodisering fields as on gnubok_update_invoice lines.',
         },
         default_dimensions: {
           type: 'object',
@@ -9059,6 +9087,26 @@ export const tools: McpTool[] = [
 
       if (!customerId) throw new Error('customer_id is required. Use gnubok_list_customers to find IDs.')
       if (!rawItems?.length) throw new Error('At least one item is required.')
+
+      // Line keys the tool does not know are refused, never staged: they were
+      // silently dropped at approval, so a field the agent believed it set
+      // (a deduction, a periodisering) was simply missing from the invoice.
+      const unknownLineKeys = rawItems.flatMap((item, i) =>
+        item && typeof item === 'object'
+          ? Object.keys(item).filter((key) => !CREATE_INVOICE_ITEM_KEYS.has(key)).map((key) => ({ i, key }))
+          : [],
+      )
+      if (unknownLineKeys.length > 0) {
+        const validKeys = Array.from(CREATE_INVOICE_ITEM_KEYS).join(', ')
+        throw fieldValidationError(
+          'Unknown invoice line field',
+          unknownLineKeys.map(({ i, key }) => ({
+            field: `items.${i}.${key}`,
+            en: `not a line field of gnubok_create_invoice. Valid line fields: ${validKeys}`,
+            sv: `okänt fält på fakturaraden. Giltiga fält: ${validKeys}`,
+          })),
+        )
+      }
 
       const today = new Date().toISOString().split('T')[0]
       const currency = ((args.currency as string) || 'SEK') as Currency
@@ -9099,13 +9147,11 @@ export const tools: McpTool[] = [
         throw new Error('Customer not found. Use gnubok_list_customers to find valid IDs.')
       }
 
-      // VAT rules from customer type (same logic as web UI)
-      const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
       // The DEFAULT set governs article-rate adoption (web parity: the picker
       // only adopts a rate the customer could have picked themselves); a
       // customer locked to a single rate (foreign business 0%) adopts nothing.
-      // Gating below stays on the PERMITTED set: adoption and validation are
-      // deliberately different sets.
+      // The builder below gates on the PERMITTED set: adoption and validation
+      // are deliberately different sets.
       const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
 
       // Article prefill (web line picker parity): the line's own values win,
@@ -9166,52 +9212,6 @@ export const tools: McpTool[] = [
         }
       }
 
-      // Gate on the PERMITTED set, not the picker default, exactly like
-      // buildInvoiceWriteData and commitCreateInvoice: huvudregeln (ML 6 kap.
-      // 34 §) taxes a B2B service where the buyer is established, so 0% is the
-      // default for a foreign business; but the ML 6 kap. supplies taxed where
-      // they are performed (hotel/restaurang 12%, persontransport and event
-      // admission 6%, fastighetstjänst and korttidsuthyrning 25%) carry Swedish
-      // VAT even to a German or a US company. Gating on the default made a
-      // Stockholm hotel night impossible to invoice through this tool at all.
-      // The default is still 0% (vatRules.rate is the fallback below), so a
-      // Swedish rate only reaches the staged operation when the agent set it on
-      // that line explicitly.
-      const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
-      const allowedRates = new Set(permittedRates.map((r) => r.rate))
-
-      // Calculate per-item VAT (line totals net of any per-line discount)
-      const subtotal = items.reduce(
-        (s, item) => s + computeLineNet(item.quantity, item.unit_price, item.discount_percent),
-        0,
-      )
-      let vatAmount = 0
-      for (const item of items) {
-        const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-        if (!allowedRates.has(itemRate)) {
-          throw new Error(
-            `VAT rate ${itemRate}% is not allowed for customer type "${customer.customer_type}". ` +
-            `Allowed rates: ${permittedRates.map((r) => r.rate + '%').join(', ')}`
-          )
-        }
-        const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
-        vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
-      }
-      const total = subtotal + vatAmount
-
-      // Why the treatment is what it is (#2749, #2558): the gate above is
-      // silent about WHICH reverse-charge condition failed, so an eu_business
-      // customer whose number was never VIES-validated got 25 % with no
-      // explanation. Same helper every surface renders. Staged structured
-      // (preview.vat_warnings, for the approval card and the agent) and
-      // folded into the tool message as a WARNING through complianceNote.
-      const vatWarnings = explainVatTreatment(
-        customer,
-        items
-          .filter((item) => item.line_type !== 'text')
-          .map((item) => (item.vat_rate !== undefined ? item.vat_rate : vatRules.rate)),
-      )
-
       // Due date from payment terms if not provided. A quote has no payment
       // due date: due_date mirrors valid_until (build-invoice-write parity).
       let dueDate = args.due_date as string | undefined
@@ -9223,39 +9223,64 @@ export const tools: McpTool[] = [
         dueDate = d.toISOString().split('T')[0]
       }
 
+      const stagedParams = {
+        customer_id: customerId,
+        document_type: documentType,
+        ...(isQuote ? { valid_until: validUntil } : {}),
+        items: stagedItems,
+        ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
+          ? { default_dimensions: resolvedDefaultDimensions }
+          : {}),
+        invoice_date: invoiceDate,
+        due_date: dueDate,
+        currency,
+        our_reference: (args.our_reference as string) || null,
+        your_reference: (args.your_reference as string) || null,
+        invoice_marking: (args.invoice_marking as string) || null,
+        notes: (args.notes as string) || null,
+        payment_link_url: paymentLinkUrl,
+      }
+
+      // A dry run of the approval: commitCreateInvoice runs this same build
+      // on these same params, so the preview cannot show other totals, VAT or
+      // treatment than the invoice gets. Every rule of the shared builder
+      // refuses HERE, where the agent can fix it: the permitted VAT rates,
+      // a class 1-2 account on a VAT line, ROT/RUT, periodisering, articles.
+      const staged = await buildStagedInvoice({ supabase, companyId, customer, params: stagedParams })
+      if (!staged.ok) {
+        if ('validation' in staged) {
+          throw fieldValidationError('Invalid invoice', zodFieldIssues(staged.validation, stagedParams))
+        }
+        if ('dbError' in staged) throw dbError(staged.dbError)
+        throw codedRefusal(staged.code, describeInvoiceBuildRefusal(staged.code, staged.details))
+      }
+      const { invoiceFields, items: builtItems } = staged.build
+      // Why the treatment is what it is (#2749, #2558): the builder's
+      // explanation, staged structured (preview.vat_warnings, for the approval
+      // card and the agent) and folded into the tool message as a WARNING
+      // through complianceNote.
+      const vatWarnings = staged.build.warnings
+
       // Stage for user approval instead of creating directly
       return stagePendingOperation(supabase, companyId, userId, 'create_invoice',
-        `${isQuote ? 'Ny offert' : 'Ny faktura'}: ${customer.name} ${roundOre(total)} ${currency}`,
-        {
-          customer_id: customerId,
-          document_type: documentType,
-          ...(isQuote ? { valid_until: validUntil } : {}),
-          items: stagedItems,
-          ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
-            ? { default_dimensions: resolvedDefaultDimensions }
-            : {}),
-          invoice_date: invoiceDate,
-          due_date: dueDate,
-          currency,
-          our_reference: (args.our_reference as string) || null,
-          your_reference: (args.your_reference as string) || null,
-          invoice_marking: (args.invoice_marking as string) || null,
-          notes: (args.notes as string) || null,
-          payment_link_url: paymentLinkUrl,
-        },
+        `${isQuote ? 'Ny offert' : 'Ny faktura'}: ${customer.name} ${roundOre(invoiceFields.total)} ${currency}`,
+        stagedParams,
         {
           customer_name: customer.name,
           customer_type: customer.customer_type,
-          items: stagedItems.map(item => ({
+          items: stagedItems.map((item, i) => ({
             ...item,
-            line_total: computeLineNet(item.quantity, item.unit_price, item.discount_percent),
-            vat_rate: item.vat_rate ?? vatRules.rate,
+            line_total: builtItems[i].line_total,
+            vat_rate: builtItems[i].vat_rate,
+            vat_amount: builtItems[i].vat_amount,
+            ...(builtItems[i].deduction_amount > 0 ? { deduction_amount: builtItems[i].deduction_amount } : {}),
           })),
-          subtotal: Math.round(subtotal * 100) / 100,
-          vat_amount: Math.round(vatAmount * 100) / 100,
-          total: Math.round(total * 100) / 100,
+          subtotal: roundOre(invoiceFields.subtotal),
+          vat_amount: roundOre(invoiceFields.vat_amount),
+          total: roundOre(invoiceFields.total),
+          ...(invoiceFields.deduction_total > 0 ? { deduction_total: roundOre(invoiceFields.deduction_total) } : {}),
           currency,
-          vat_treatment: vatRules.treatment,
+          vat_treatment: invoiceFields.vat_treatment,
           invoice_date: invoiceDate,
           due_date: dueDate,
           document_type: documentType,
