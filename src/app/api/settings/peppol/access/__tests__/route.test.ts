@@ -44,6 +44,7 @@ vi.mock('@/lib/logger', () => {
 import { POST } from '../route'
 
 const user = { id: 'user-1', email: 'owner@example.test' }
+const companySettings = { company_name: 'Kund AB', org_number: '556677-8899', entity_type: 'aktiebolag' }
 const requestedRow = {
   company_id: 'company-1',
   status: 'requested',
@@ -99,7 +100,7 @@ describe('POST /api/settings/peppol/access', () => {
     enqueue({ data: { is_sandbox: false }, error: null })                         // sandbox check
     service.enqueue({ data: null, error: null })                                  // no access row
     service.enqueue({ data: requestedRow, error: null })                          // upsert
-    enqueue({ data: { company_name: 'Kund AB', org_number: '556677-8899' }, error: null }) // company settings
+    enqueue({ data: companySettings, error: null })                               // company settings
     service.enqueue({ data: requestedRow, error: null })                          // summary read
 
     const response = await post({ note: 'Vi fakturerar Region Skåne', wants_receiving: true })
@@ -119,28 +120,50 @@ describe('POST /api/settings/peppol/access', () => {
     expect(upsert.request_note).toBe('[vill ta emot e-fakturor] Vi fakturerar Region Skåne')
   })
 
-  it('still records the request and mails the operators when the settings read fails, with the eligibility unknown', async () => {
+  it('refuses a sole trader identified by personnummer: nothing recorded, nobody mailed', async () => {
     enqueue({ data: { is_sandbox: false }, error: null })                         // sandbox check
-    service.enqueue({ data: null, error: null })                                  // no access row
-    service.enqueue({ data: requestedRow, error: null })                          // upsert
-    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }) // company settings
-    service.enqueue({ data: requestedRow, error: null })                          // summary read
+    enqueue({ data: { company_name: 'Firma', org_number: '800101-1234', entity_type: 'enskild_firma' }, error: null })
 
     const response = await post({ wants_receiving: true })
-    expect(response.status).toBe(201)
-    expect(sendEmailMock).toHaveBeenCalledTimes(1)
-    const mail = sendEmailMock.mock.calls[0][0] as { text: string; html: string }
-    expect(mail.text).toContain('Kan registreras för mottagning: okänd (bolagsinställningarna kunde inte läsas)')
-    expect(mail.html).toContain('okänd (bolagsinställningarna kunde inte läsas)')
-    expect(mail.text).not.toContain('nej (')
-    expect(logErrorMock).toHaveBeenCalledWith(
-      'peppol access request: company settings read failed',
-      expect.objectContaining({ companyId: 'company-1', reason: 'canceling statement due to statement timeout' }),
-    )
+    expect(response.status).toBe(422)
+    expect((await response.json()).error.code).toBe('PEPPOL_REGISTRATION_PERSONAL_NUMBER')
+    expect(service.calls.some((c) => c.method === 'upsert')).toBe(false)
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses an enskild firma by its legal form even when the stored number is not personnummer-shaped', async () => {
+    enqueue({ data: { is_sandbox: false }, error: null })
+    enqueue({ data: { company_name: 'Firma', org_number: '198001011234', entity_type: 'enskild_firma' }, error: null })
+
+    const response = await post()
+    expect(response.status).toBe(422)
+    expect((await response.json()).error.code).toBe('PEPPOL_REGISTRATION_PERSONAL_NUMBER')
+    expect(service.calls.some((c) => c.method === 'upsert')).toBe(false)
+  })
+
+  it('refuses a company without settings as missing an organisation number', async () => {
+    enqueue({ data: { is_sandbox: false }, error: null })
+    enqueue({ data: null, error: null })
+
+    const response = await post()
+    expect(response.status).toBe(422)
+    expect((await response.json()).error.code).toBe('PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED')
+    expect(service.calls.some((c) => c.method === 'upsert')).toBe(false)
+  })
+
+  it('answers a failed settings read as a server error and records nothing', async () => {
+    enqueue({ data: { is_sandbox: false }, error: null })
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+
+    const response = await post({ wants_receiving: true })
+    expect(response.status).toBe(500)
+    expect(service.calls.some((c) => c.method === 'upsert')).toBe(false)
+    expect(sendEmailMock).not.toHaveBeenCalled()
   })
 
   it('is idempotent for a repeated request (no second e-mail) and 409 when already enabled', async () => {
     enqueue({ data: { is_sandbox: false }, error: null })
+    enqueue({ data: companySettings, error: null })
     service.enqueue({ data: requestedRow, error: null })
     service.enqueue({ data: requestedRow, error: null })
     const again = await post()
@@ -149,6 +172,7 @@ describe('POST /api/settings/peppol/access', () => {
 
     reset(); service.reset()
     enqueue({ data: { is_sandbox: false }, error: null })
+    enqueue({ data: companySettings, error: null })
     service.enqueue({ data: { ...requestedRow, status: 'enabled', enabled_at: '2026-08-21T16:00:00.000Z' }, error: null })
     const enabled = await post()
     expect(enabled.status).toBe(409)

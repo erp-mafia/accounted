@@ -47,7 +47,7 @@ import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { getSupportRecipientEmail } from '@/lib/support'
 import type { CompanySettings } from '@/types'
 
-type ParticipantSettings = Pick<CompanySettings, 'org_number' | 'company_name' | 'vat_number' | 'city' | 'country'>
+type ParticipantSettings = Pick<CompanySettings, 'org_number' | 'company_name' | 'vat_number' | 'city' | 'country' | 'entity_type'>
 
 /** See PeppolDoorOptions in peppol-send-service.ts: the dashboard passes a service-role client. */
 interface DoorOptions {
@@ -86,12 +86,12 @@ export async function getPeppolRegistrationStatus(
     const registration = resolved
       ? await getPeppolRegistration({ supabase, companyId, provider: resolved.provider })
       : null
-    // Eligibility is answered up front so a company that cannot be
-    // registered (personnummer, missing org number) sees why before it
-    // asks the operators for a receiving slot.
+    // Eligibility is answered up front so a company that cannot be a
+    // participant (personnummer, missing org number) sees why instead of
+    // an access request it could never use.
     const { data: settings, error: settingsError } = await supabase
       .from('company_settings')
-      .select('org_number, company_name, vat_number, city, country')
+      .select('org_number, company_name, vat_number, city, country, entity_type')
       .eq('company_id', companyId)
       .maybeSingle()
     // A failed read is a server error, never "no organisation number":
@@ -157,7 +157,7 @@ export async function registerPeppolParticipant(
 
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
-    .select('org_number, company_name, vat_number, city, country')
+    .select('org_number, company_name, vat_number, city, country, entity_type')
     .eq('company_id', companyId)
     .single()
   if (settingsError || !settings) return { ok: false, code: 'INVOICE_SEND_COMPANY_SETTINGS_MISSING' }
@@ -252,6 +252,11 @@ function escapeHtml(value: string): string {
  * operators by e-mail. The e-mail is best-effort: the row is the source of
  * truth and the operators' script lists open requests. `requesterEmail` is
  * the reply-to address when the door knows it (the dashboard session).
+ *
+ * Sending and receiving both identify the company by its 0007 participant
+ * id, so a company that cannot be one (a personnummer, no org number, no
+ * name) is refused with the eligibility code instead of a request nobody
+ * could grant.
  */
 export async function requestPeppolAccessForCompany(
   ctx: OperationContext,
@@ -271,6 +276,18 @@ export async function requestPeppolAccessForCompany(
   if (await isSandboxCompany(supabase, companyId)) return { ok: false, code: 'PEPPOL_SANDBOX_NOT_ALLOWED' }
 
   try {
+    const { data: settings, error: settingsError } = await supabase
+      .from('company_settings')
+      .select('org_number, company_name, vat_number, city, country, entity_type')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    // A failed read is a server error, never "no organisation number".
+    if (settingsError) throw new Error(`Failed to read company settings: ${settingsError.message}`)
+    if (!settings) return { ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' }
+    const company = settings as unknown as ParticipantSettings
+    const eligibility = describePeppolParticipantEligibility(company)
+    if (!eligibility.ok) return { ok: false, code: eligibility.code }
+
     if (options.dryRun) {
       const existing = await getPeppolAccess(service, companyId)
       if (existing?.status === 'enabled') return { ok: false, code: 'PEPPOL_ACCESS_ALREADY_ENABLED' }
@@ -290,7 +307,7 @@ export async function requestPeppolAccessForCompany(
 
     const result = await requestPeppolAccess({ service, companyId, userId, note })
     if (!result.ok) return { ok: false, code: result.code }
-    if (result.created) await notifyOperators(ctx, { note, wantsReceiving, requesterEmail: options.requesterEmail ?? null })
+    if (result.created) await notifyOperators(ctx, { company, note, wantsReceiving, requesterEmail: options.requesterEmail ?? null })
 
     const summary = await getPeppolAccessSummary({ supabase: service, service, companyId })
     return { ok: true, created: result.created, data: { access: summary, created: result.created } }
@@ -301,35 +318,17 @@ export async function requestPeppolAccessForCompany(
 
 async function notifyOperators(
   ctx: OperationContext,
-  args: { note: string | null; wantsReceiving: boolean; requesterEmail: string | null },
+  args: { company: ParticipantSettings; note: string | null; wantsReceiving: boolean; requesterEmail: string | null },
 ): Promise<void> {
-  const { supabase, companyId, userId, log } = ctx
-  const { note, wantsReceiving, requesterEmail } = args
-  const { data: company, error: companyError } = await supabase
-    .from('company_settings')
-    .select('company_name, org_number, vat_number, city, country')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  // The request is already recorded; a failed settings read must not
-  // masquerade as "no organisation number" in the operator mail.
-  if (companyError) log.error('peppol access request: company settings read failed', { companyId, reason: companyError.message })
+  const { companyId, userId, log } = ctx
+  const { company, note, wantsReceiving, requesterEmail } = args
   const emailService = getEmailService()
   if (!emailService.isConfigured()) {
     log.warn('peppol access request: e-mail service not configured, request recorded only', { companyId })
     return
   }
-  const companyName = (company as { company_name?: string | null } | null)?.company_name ?? 'okänt bolag'
-  const orgNumber = (company as { org_number?: string | null } | null)?.org_number ?? 'saknas'
-  // Whether a receiving grant could be used at all (#2483): a
-  // personnummer-based company cannot publish a Peppol id.
-  const eligibility = companyError
-    ? null
-    : company
-      ? describePeppolParticipantEligibility(company as unknown as ParticipantSettings)
-      : { ok: false as const, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' as const }
-  const eligibilityLine = eligibility === null
-    ? 'okänd (bolagsinställningarna kunde inte läsas)'
-    : eligibility.ok ? 'ja' : `nej (${eligibility.code})`
+  const companyName = company.company_name ?? 'okänt bolag'
+  const orgNumber = company.org_number ?? 'saknas'
   const requester = requesterEmail ?? ''
   const enableCommand = `npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 10${wantsReceiving ? ' --receive' : ''}`
   const sent = await emailService.sendEmail({
@@ -340,11 +339,10 @@ async function notifyOperators(
       `<p><strong>Bolag:</strong> ${escapeHtml(companyName)} (${escapeHtml(orgNumber)})</p>`,
       `<p><strong>Company ID:</strong> ${companyId}</p>`,
       `<p><strong>Begärd av:</strong> ${escapeHtml(requester)} (${userId})</p>`,
-      `<p><strong>Kan registreras för mottagning:</strong> ${escapeHtml(eligibilityLine)}</p>`,
       note ? `<hr /><p>${escapeHtml(note).replace(/\n/g, '<br />')}</p>` : '',
       `<hr /><p>Aktivera: <code>${enableCommand}</code></p>`,
     ].join('\n'),
-    text: `Bolag: ${companyName} (${orgNumber})\nCompany ID: ${companyId}\nBegärd av: ${requester} (${userId})\nKan registreras för mottagning: ${eligibilityLine}\n\n${note ?? ''}\n\nAktivera: ${enableCommand}`,
+    text: `Bolag: ${companyName} (${orgNumber})\nCompany ID: ${companyId}\nBegärd av: ${requester} (${userId})\n\n${note ?? ''}\n\nAktivera: ${enableCommand}`,
   })
   if (!sent.success) log.warn('peppol access request e-mail failed', { companyId, reason: sent.error })
 }

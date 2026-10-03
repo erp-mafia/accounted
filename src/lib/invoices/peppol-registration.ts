@@ -7,6 +7,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { getErrorEntry, hasErrorEntry } from '@/lib/errors/structured-errors'
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
@@ -71,15 +72,21 @@ export type PeppolParticipantPreparation =
 type ParticipantSettings = Pick<
   CompanySettings,
   'org_number' | 'company_name' | 'vat_number' | 'city' | 'country'
->
+> & Partial<Pick<CompanySettings, 'entity_type'>>
 
 /**
  * Derive the participant (scheme 0007 + organisation number) and the Peppol
  * Directory business card from the company settings. Personnummer-based
  * identifiers are refused: publishing one would put personal identity data in
- * a public directory; they need a separately configured 0088 GLN.
+ * a public directory; they need a separately configured 0088 GLN. A form
+ * whose org number is the owner's personnummer is refused whatever the stored
+ * number looks like, the same rule the BIS Billing sender gate applies; an
+ * unknown or missing form falls through to the number-shape check.
  */
 export function preparePeppolParticipant(settings: ParticipantSettings): PeppolParticipantPreparation {
+  if (isEntityType(settings.entity_type) && usesPersonnummerAsOrgNumber(settings.entity_type)) {
+    return { ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' }
+  }
   const digits = (settings.org_number ?? '').replace(/\D/g, '')
   const orgNumber = digits.length === 12 && digits.startsWith('16') ? digits.slice(2) : digits
   if (orgNumber.length !== 10) return { ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' }
@@ -107,10 +114,10 @@ export type PeppolParticipantEligibility =
   | { ok: false; code: Extract<PeppolParticipantPreparation, { ok: false }>['code'] }
 
 /**
- * Read-side view of preparePeppolParticipant: can this company be registered
- * at all, and if not, why. The settings page asks before it offers receiving,
- * so a personnummer-based company learns the answer up front instead of after
- * the operators granted a slot.
+ * Read-side view of preparePeppolParticipant: can this company be a Peppol
+ * participant at all, and if not, why. Sending and receiving both identify
+ * the company by this participant id, so the access request refuses a company
+ * that is not eligible and the settings page says why before offering it.
  */
 export function describePeppolParticipantEligibility(settings: ParticipantSettings): PeppolParticipantEligibility {
   const prepared = preparePeppolParticipant(settings)

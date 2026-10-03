@@ -2314,8 +2314,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED: {
     httpStatus: 422,
-    message_sv: 'Bolaget behöver ett giltigt organisationsnummer i företagsinställningarna innan det kan ta emot e-fakturor via Peppol.',
-    message_en: 'The company needs a valid organisation number in company settings before it can receive e-invoices via Peppol.',
+    message_sv: 'Bolaget behöver ett giltigt organisationsnummer i företagsinställningarna innan det kan använda e-faktura via Peppol.',
+    message_en: 'The company needs a valid organisation number in company settings before it can use e-invoicing via Peppol.',
   },
   PEPPOL_REGISTRATION_PERSONAL_NUMBER: {
     httpStatus: 422,

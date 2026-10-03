@@ -386,6 +386,22 @@ describe('POST /api/v1/companies/:companyId/peppol/access-request', () => {
     }
   })
 
+  it('422 PEPPOL_REGISTRATION_PERSONAL_NUMBER for a sole trader, on the dry run too, recording nothing', async () => {
+    for (const query of ['', '?dry_run=true']) {
+      const client = makeClient({
+        company_members: role('member'),
+        company_settings: { data: { org_number: '800101-1234', company_name: 'Firma', country: 'SE', entity_type: 'enskild_firma', is_sandbox: false }, error: null },
+        peppol_access: { data: null, error: null },
+      })
+      mockServiceClient.mockReturnValue(client)
+      const res = await post({ wants_receiving: true }, query)
+      expect(res.status).toBe(422)
+      expect((await res.json()).error.code).toBe('PEPPOL_REGISTRATION_PERSONAL_NUMBER')
+      expect(wrote(client)).toBe(false)
+      expect(sendEmailMock).not.toHaveBeenCalled()
+    }
+  })
+
   it('a dry run records nothing and mails nobody', async () => {
     const client = makeClient({
       company_members: role('member'),
