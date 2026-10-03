@@ -1,3 +1,5 @@
+import { ORE_TOLERANCE } from '@/lib/money'
+
 /**
  * #967 "Registrera men bokför inte": whether issuing an invoice (registering
  * a supplier invoice, sending a customer invoice) books it inline.
@@ -58,9 +60,14 @@ export function invoiceBookingMoment(
  *   second time on the settlement account.
  *
  * Callers reject with INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED (customer) or
- * SI_CASH_PARTIAL_UNSUPPORTED (supplier) until per-installment recognition
- * exists. Invoices already booked at issue are never affected: their payment
- * is a plain clearing entry against 1510/2440, which handles partials fine.
+ * SI_CASH_PARTIAL_UNSUPPORTED (supplier). The one exception is the customer
+ * settlement service (settleInvoicePayment): for the shapes
+ * cashProRataUnsupportedReason accepts, it books the payment with the
+ * pro-rata builder (buildInvoiceCashPartialLines) instead of refusing. Every
+ * other door still refuses, so a non-null result here never means "book the
+ * full cash entry". Invoices already booked at issue are never affected:
+ * their payment is a plain clearing entry against 1510/2440, which handles
+ * partials fine.
  */
 export function cashPartialBlockReason(opts: {
   invoiceAlreadyBooked: boolean
@@ -72,6 +79,36 @@ export function cashPartialBlockReason(opts: {
   if ((opts.accountingMethod || 'accrual') !== 'cash') return null
   if (!opts.paysRemainingInFull) return 'partial_payment'
   if (Math.round((opts.priorPaidAmount ?? 0) * 100) !== 0) return 'previously_partially_paid'
+  return null
+}
+
+/**
+ * Why the pro-rata kontantmetoden builder cannot split a payment of this
+ * never-booked customer invoice, or null when it can.
+ *
+ * - 'foreign_currency': the cash entry converts at the invoice's booking rate
+ *   while each installment arrives at its own rate; splitting a foreign
+ *   invoice needs a per-installment kursdiff rule the builder does not have.
+ * - 'tax_deduction': on a ROT/RUT or grön teknik invoice the customer pays
+ *   only their share and Skatteverket pays the deduction later (1513). When
+ *   the 1513 leg and its revenue belong to a customer installment is a
+ *   question for the accountant, so these stay whole-payment only.
+ *
+ * The builder itself also refuses an invoice whose revenue and moms lines do
+ * not add up to its total, and settleInvoicePayment refuses when the earlier
+ * installments in the ledger are not the pro-rata ones (both are reasons the
+ * caller sees in the details of INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED).
+ */
+export type CashProRataUnsupportedReason = 'foreign_currency' | 'tax_deduction'
+
+export function cashProRataUnsupportedReason(invoice: {
+  currency?: string | null
+  deduction_total?: number | null
+  items?: ReadonlyArray<{ deduction_type?: string | null }> | null
+}): CashProRataUnsupportedReason | null {
+  if ((invoice.currency || 'SEK') !== 'SEK') return 'foreign_currency'
+  if (Math.abs(invoice.deduction_total ?? 0) > ORE_TOLERANCE) return 'tax_deduction'
+  if ((invoice.items ?? []).some((item) => !!item.deduction_type)) return 'tax_deduction'
   return null
 }
 

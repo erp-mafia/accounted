@@ -2,7 +2,7 @@ import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { createLogger } from '@/lib/logger'
-import { roundOre } from '@/lib/money'
+import { equalOre, roundOre, sumOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -33,7 +33,7 @@ import {
   headerToSekOrThrow,
   invoiceCashBankSek,
 } from './invoice-lines'
-export { buildInvoiceCashLines } from './invoice-lines'
+export { buildInvoiceCashLines, buildInvoiceCashPartialLines } from './invoice-lines'
 
 /**
  * Create journal entry when an invoice is created (status != draft)
@@ -404,3 +404,130 @@ export async function createInvoiceCashEntry(
   return createJournalEntry(supabase, companyId, userId, input)
 }
 
+
+/**
+ * Book one pro-rata kontantmetoden installment: the lines
+ * buildInvoiceCashPartialLines produced, booked as they are in the open
+ * period of the payment date. The caller builds them first (and checks the
+ * earlier installments with checkPriorCashRecognition), so what was checked
+ * is what gets booked. Returns null when no open period covers the date.
+ */
+export async function createInvoiceCashPartialEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  invoiceId: string,
+  installment: { description: string; lines: CreateJournalEntryLineInput[] },
+  paymentDate: string,
+): Promise<JournalEntry | null> {
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
+  if (!fiscalPeriodId) {
+    log.warn('No open fiscal period found for payment date:', paymentDate)
+    return null
+  }
+
+  return createJournalEntry(supabase, companyId, userId, {
+    fiscal_period_id: fiscalPeriodId,
+    entry_date: paymentDate,
+    description: installment.description,
+    source_type: 'invoice_cash_payment',
+    source_id: invoiceId,
+    lines: installment.lines,
+  })
+}
+
+export type PriorCashRecognitionRefusal =
+  /** A read failed: unknown is never "matches". */
+  | 'prior_payments_unreadable'
+  /** The payment rows do not add up to paid_amount, or one has no posted voucher. */
+  | 'prior_payments_untraceable'
+  /** The vouchers recognised other revenue or moms than the pro-rata rule. */
+  | 'prior_payments_not_pro_rata'
+
+export type PriorCashRecognitionResult =
+  | { ok: true }
+  | { ok: false; reason: PriorCashRecognitionRefusal; details?: Record<string, unknown> }
+
+/**
+ * Whether the ledger holds exactly what the earlier installments of a
+ * never-booked kontantmetoden invoice should have recognised, before the next
+ * installment books on top of them.
+ *
+ * The pro-rata builder computes an installment from paid_amount alone, which
+ * is only right when every earlier payment was booked by the same rule. Some
+ * were not: an import that set paid_amount without vouchers, a voucher linked
+ * by hand, a batch voucher shared with other invoices, or a payment from
+ * before the whole-payment guard existed that booked the whole invoice on its
+ * first installment. Booking the next installment on top of those would count
+ * revenue and moms twice, or never. So: the invoice's payment rows must add
+ * up to paid_amount, each must point at a posted voucher, and those vouchers
+ * must carry, per revenue and moms account, exactly `recognisedBefore` (net
+ * credit). Struck lines of an inline rättelse are gone from the line table,
+ * so the sum is the voucher as it stands.
+ */
+export async function checkPriorCashRecognition(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoiceId: string,
+  priorPaid: number,
+  recognisedBefore: Record<string, number>,
+): Promise<PriorCashRecognitionResult> {
+  const { data: rows, error: rowsError } = await supabase
+    .from('invoice_payments')
+    .select('amount, journal_entry_id')
+    .eq('company_id', companyId)
+    .eq('invoice_id', invoiceId)
+  if (rowsError) return { ok: false, reason: 'prior_payments_unreadable' }
+
+  const paymentRows = (rows ?? []) as Array<{ amount: number | string | null; journal_entry_id: string | null }>
+  const rowTotal = sumOre(paymentRows.map((row) => Number(row.amount ?? 0)))
+  if (!equalOre(rowTotal, priorPaid) || paymentRows.some((row) => !row.journal_entry_id)) {
+    return {
+      ok: false,
+      reason: 'prior_payments_untraceable',
+      details: { payment_rows_total: rowTotal, paid_amount: roundOre(priorPaid) },
+    }
+  }
+
+  const entryIds = Array.from(new Set(paymentRows.map((row) => row.journal_entry_id as string)))
+  const { data: entries, error: entriesError } = await supabase
+    .from('journal_entries')
+    .select('id, status')
+    .eq('company_id', companyId)
+    .in('id', entryIds)
+  if (entriesError) return { ok: false, reason: 'prior_payments_unreadable' }
+  const postedIds = new Set(
+    ((entries ?? []) as Array<{ id: string; status: string }>)
+      .filter((entry) => entry.status === 'posted')
+      .map((entry) => entry.id),
+  )
+  if (entryIds.some((id) => !postedIds.has(id))) {
+    return { ok: false, reason: 'prior_payments_untraceable' }
+  }
+
+  const { data: lines, error: linesError } = await supabase
+    .from('journal_entry_lines')
+    .select('journal_entry_id, account_number, debit_amount, credit_amount')
+    .in('journal_entry_id', entryIds)
+  if (linesError) return { ok: false, reason: 'prior_payments_unreadable' }
+
+  const booked: Record<string, number> = {}
+  for (const line of (lines ?? []) as Array<{
+    account_number: string
+    debit_amount: number | string | null
+    credit_amount: number | string | null
+  }>) {
+    if (!(line.account_number in recognisedBefore)) continue
+    booked[line.account_number] = roundOre(
+      (booked[line.account_number] ?? 0) + Number(line.credit_amount ?? 0) - Number(line.debit_amount ?? 0),
+    )
+  }
+
+  const mismatches = Object.entries(recognisedBefore)
+    .filter(([account, expected]) => !equalOre(booked[account] ?? 0, expected))
+    .map(([account, expected]) => ({ account, expected, booked: booked[account] ?? 0 }))
+  if (mismatches.length > 0) {
+    return { ok: false, reason: 'prior_payments_not_pro_rata', details: { accounts: mismatches } }
+  }
+  return { ok: true }
+}

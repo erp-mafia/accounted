@@ -3,6 +3,7 @@ import {
   booksInvoicesOnIssue,
   invoiceBookingMoment,
   cashPartialBlockReason,
+  cashProRataUnsupportedReason,
   creditNoteNeedsJournalEntry,
   supplierCreditNoteNeedsJournalEntry,
 } from '../booking-mode'
@@ -87,6 +88,32 @@ describe('cashPartialBlockReason', () => {
     expect(cashPartialBlockReason({ ...base, priorPaidAmount: 0.004 })).toBeNull()
     expect(cashPartialBlockReason({ ...base, priorPaidAmount: null })).toBeNull()
     expect(cashPartialBlockReason({ ...base, priorPaidAmount: undefined })).toBeNull()
+  })
+})
+
+describe('cashProRataUnsupportedReason', () => {
+  it('accepts a SEK invoice without a tax deduction', () => {
+    expect(cashProRataUnsupportedReason({ currency: 'SEK', deduction_total: 0, items: [{ deduction_type: null }] })).toBeNull()
+    expect(cashProRataUnsupportedReason({ currency: 'SEK' })).toBeNull()
+  })
+
+  it('treats a missing currency as SEK', () => {
+    expect(cashProRataUnsupportedReason({ currency: null })).toBeNull()
+  })
+
+  it('refuses a foreign-currency invoice', () => {
+    expect(cashProRataUnsupportedReason({ currency: 'EUR' })).toBe('foreign_currency')
+  })
+
+  it('refuses a deduction on the header or on any item', () => {
+    expect(cashProRataUnsupportedReason({ currency: 'SEK', deduction_total: 7500 })).toBe('tax_deduction')
+    expect(
+      cashProRataUnsupportedReason({ currency: 'SEK', items: [{ deduction_type: null }, { deduction_type: 'rut' }] }),
+    ).toBe('tax_deduction')
+  })
+
+  it('ignores float noise below half an öre on the header deduction', () => {
+    expect(cashProRataUnsupportedReason({ currency: 'SEK', deduction_total: 0.001 })).toBeNull()
   })
 })
 

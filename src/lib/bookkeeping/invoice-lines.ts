@@ -2,8 +2,9 @@
  * The pure line builders of the customer-invoice verifikat: per-rate revenue
  * and moms lines, the skattereduktion (1513) lines, the whole registration
  * and credit-note entries (buildInvoiceRegistrationLines,
- * buildCreditNoteLines) and the whole kontantmetoden payment entry
- * (buildInvoiceCashLines).
+ * buildCreditNoteLines), the whole kontantmetoden payment entry
+ * (buildInvoiceCashLines) and one pro-rata installment of it
+ * (buildInvoiceCashPartialLines).
  *
  * No engine, Supabase or logger import, so the browser can run them: the
  * payment dialog proposes the kontantmetoden entry with buildInvoiceCashLines
@@ -26,7 +27,8 @@ import { computeDeduction, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
 import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
-import { roundOre } from '@/lib/money'
+import { equalOre, roundOre, sumOre } from '@/lib/money'
+import { cashProRataUnsupportedReason, type CashProRataUnsupportedReason } from './booking-mode'
 import type {
   CreateJournalEntryLineInput,
   EntityType,
@@ -621,6 +623,12 @@ export interface InvoiceCashLinesSource {
   total_sek?: number | null
   items?: InvoiceItem[]
   default_dimensions?: Record<string, string> | null
+  /**
+   * ROT/RUT or grön teknik deduction, invoice currency. Read only by the
+   * pro-rata builder, which refuses such invoices; the whole-payment entry
+   * derives the 1513 legs from the items.
+   */
+  deduction_total?: number | null
 }
 
 /**
@@ -635,6 +643,57 @@ export function invoiceCashBankSek(
 ): number | undefined {
   if (!bankTransaction || bankTransaction.currency !== 'SEK') return undefined
   return roundOre(Math.abs(bankTransaction.amount))
+}
+
+/**
+ * The revenue and moms lines of the kontantmetoden entry: everything but the
+ * settlement leg, the 1513 legs and the öresavrundning line. Per-rate lines
+ * from the items, or the invoice-level fallback when no items are loaded.
+ * One builder for the whole-payment entry and the pro-rata installments, so
+ * the installments of a split payment add up to exactly what one payment of
+ * the whole invoice books.
+ */
+function cashRecognitionLines(
+  invoice: InvoiceCashLinesSource,
+  entityType: EntityType,
+  tag: string,
+  defaultDimensions: LineDimensions | undefined,
+): CreateJournalEntryLineInput[] {
+  if (invoice.items && invoice.items.length > 0) {
+    return generatePerRateLines(
+      invoice.items, invoice.vat_treatment, entityType, tag,
+      invoice.currency, invoice.exchange_rate,
+      { defaultDimensions, goodsDeliveryCountry: invoice.delivery_country }
+    )
+  }
+
+  // Fallback: invoice-level amounts. Strict conversion, same rationale as
+  // the createInvoiceJournalEntry fallback above.
+  const creditLines: CreateJournalEntryLineInput[] = []
+  const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
+  const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
+
+  creditLines.push({
+    account_number: revenueAccount,
+    debit_amount: 0,
+    credit_amount: subtotalSek,
+    line_description: `Försäljning faktura ${tag}`,
+    dimensions: defaultDimensions,
+  })
+
+  if (invoice.vat_amount > 0) {
+    const vatSek = headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
+    const vatAccount = getOutputVatAccount(invoice.vat_treatment)
+    creditLines.push({
+      account_number: vatAccount,
+      debit_amount: 0,
+      credit_amount: vatSek,
+      line_description: `Utgående moms faktura ${tag}`,
+      dimensions: defaultDimensions,
+    })
+  }
+
+  return creditLines
 }
 
 /**
@@ -674,40 +733,7 @@ export function buildInvoiceCashLines(
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
 
   // Credit lines: revenue + VAT per rate group (compute first to guarantee balance)
-  const creditLines: CreateJournalEntryLineInput[] = []
-
-  if (invoice.items && invoice.items.length > 0) {
-    creditLines.push(...generatePerRateLines(
-      invoice.items, invoice.vat_treatment, entityType, tag,
-      invoice.currency, invoice.exchange_rate,
-      { defaultDimensions, goodsDeliveryCountry: invoice.delivery_country }
-    ))
-  } else {
-    // Fallback: invoice-level amounts. Strict conversion, same rationale as
-    // the createInvoiceJournalEntry fallback above.
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
-    const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
-
-    creditLines.push({
-      account_number: revenueAccount,
-      debit_amount: 0,
-      credit_amount: subtotalSek,
-      line_description: `Försäljning faktura ${tag}`,
-      dimensions: defaultDimensions,
-    })
-
-    if (invoice.vat_amount > 0) {
-      const vatSek = headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
-      const vatAccount = getOutputVatAccount(invoice.vat_treatment)
-      creditLines.push({
-        account_number: vatAccount,
-        debit_amount: 0,
-        credit_amount: vatSek,
-        line_description: `Utgående moms faktura ${tag}`,
-        dimensions: defaultDimensions,
-      })
-    }
-  }
+  const creditLines = cashRecognitionLines(invoice, entityType, tag, defaultDimensions)
 
   // ROT/RUT-avdrag debit lines (1513 Skatteverket). On cash method the
   // bank account (1930) receives only the post-deduction amount in real
@@ -747,4 +773,171 @@ export function buildInvoiceCashLines(
     description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),
     lines,
   }
+}
+
+/** One installment of a split kontantmetoden payment, in SEK. */
+export interface InvoiceCashInstallment {
+  /** paid_amount before this payment. */
+  priorPaid: number
+  /** This payment. */
+  amount: number
+}
+
+export type InvoiceCashPartialRefusal =
+  | CashProRataUnsupportedReason
+  /** The revenue and moms lines do not add up to the invoice total. */
+  | 'lines_do_not_match_total'
+  /** Not a positive payment inside what is still owed. */
+  | 'invalid_amount'
+
+export type InvoiceCashPartialLines =
+  | {
+      ok: true
+      description: string
+      lines: CreateJournalEntryLineInput[]
+      /** paid_amount after this payment; exactly the total when it settles the invoice. */
+      paidAfter: number
+      /** True when this payment settles what is left of the invoice. */
+      settles: boolean
+      /**
+       * Net credit (credit minus debit) per revenue and moms account that the
+       * installments before this one recognised under this rule: what the
+       * ledger must already hold for the invoice before this entry may book.
+       */
+      recognisedBefore: Record<string, number>
+    }
+  | { ok: false; reason: InvoiceCashPartialRefusal }
+
+/** Output VAT accounts (26xx) never absorb the rounding residual. */
+function isOutputVatLine(line: CreateJournalEntryLineInput): boolean {
+  return line.account_number.startsWith('26')
+}
+
+/**
+ * The line that absorbs the öre residual of a cumulative split: the largest
+ * revenue line (first on a tie), so every moms line stays the plain rounded
+ * share of its rate. Falls back to the largest line of any kind.
+ */
+function residualAnchor(lines: CreateJournalEntryLineInput[], amounts: number[]): number {
+  let anchor = -1
+  amounts.forEach((amount, i) => {
+    if (isOutputVatLine(lines[i])) return
+    if (anchor === -1 || Math.abs(amount) > Math.abs(amounts[anchor])) anchor = i
+  })
+  if (anchor !== -1) return anchor
+  amounts.forEach((amount, i) => {
+    if (anchor === -1 || Math.abs(amount) > Math.abs(amounts[anchor])) anchor = i
+  })
+  return anchor
+}
+
+/**
+ * What the installments up to a cumulative `paid` have recognised on each
+ * line: each line's pro-rata share, rounded to the öre, with the residual
+ * that makes the shares add up to `paid` on the anchor line. A deterministic
+ * function of `paid` alone, so the share of one installment is the
+ * difference of two calls, the installments telescope, and the last one
+ * (paid equal to the total) lands every line on its full amount exactly.
+ */
+function cumulativeCashRecognition(
+  amounts: number[],
+  total: number,
+  paid: number,
+  anchor: number,
+): number[] {
+  if (paid <= 0) return amounts.map(() => 0)
+  if (paid >= total) return [...amounts]
+  const shares = amounts.map((amount) => roundOre((amount * paid) / total))
+  const residual = roundOre(paid - sumOre(shares))
+  shares[anchor] = roundOre(shares[anchor] + residual)
+  return shares
+}
+
+/**
+ * The kontantmetoden verifikat for ONE installment of a never-booked
+ * customer invoice, pure: revenue and utgående moms per rate (and per
+ * revenue account and dimension bag, as on the whole-payment entry) in
+ * proportion to the amount received.
+ *
+ *   Debit  1930 Företagskonto       [the installment]
+ *   Credit 30xx Försäljning         [the installment's share per rate/account]
+ *   Credit 26xx Utgående moms       [the installment's share per rate]
+ *
+ * Bokslutsmetoden reports moms when payment is received, so each installment
+ * carries the moms it contains and nothing more; the whole-payment entry
+ * (buildInvoiceCashLines) would declare the whole invoice's moms on the first
+ * installment. The shares are cumulative (see cumulativeCashRecognition), so
+ * however the invoice is split, the installments together book exactly the
+ * lines one payment of the whole invoice would, per account and to the öre,
+ * and a later credit note (buildCreditNoteLines) reverses them exactly. Each
+ * moms line of an installment is within one öre of the exact pro-rata share.
+ *
+ * Refuses foreign-currency and ROT/RUT/grön teknik invoices
+ * (cashProRataUnsupportedReason), an invoice whose lines do not add up to its
+ * total, and an amount that is not positive or exceeds what is still owed.
+ * Assumes the earlier installments were booked by this builder: the caller
+ * verifies that against the ledger with `recognisedBefore` before booking.
+ */
+export function buildInvoiceCashPartialLines(
+  invoice: InvoiceCashLinesSource,
+  entityType: EntityType,
+  installment: InvoiceCashInstallment,
+  customerName?: string,
+  settlementAccountNumber: string = '1930',
+): InvoiceCashPartialLines {
+  const unsupported = cashProRataUnsupportedReason(invoice)
+  if (unsupported) return { ok: false, reason: unsupported }
+
+  const total = roundOre(invoice.total)
+  const priorPaid = roundOre(installment.priorPaid)
+  const amount = roundOre(installment.amount)
+  if (!(total > 0) || !(amount > 0) || priorPaid < 0 || !(priorPaid < total)) {
+    return { ok: false, reason: 'invalid_amount' }
+  }
+  const paidAfterRaw = roundOre(priorPaid + amount)
+  if (paidAfterRaw > total && !equalOre(paidAfterRaw, total)) {
+    return { ok: false, reason: 'invalid_amount' }
+  }
+  const settles = equalOre(paidAfterRaw, total)
+  const paidAfter = settles ? total : paidAfterRaw
+
+  const tag = invoiceTag(invoice)
+  const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
+  const recognition = cashRecognitionLines(invoice, entityType, tag, defaultDimensions)
+  const amounts = recognition.map((line) => roundOre(line.credit_amount - line.debit_amount))
+  if (recognition.length === 0 || !equalOre(sumOre(amounts), total)) {
+    return { ok: false, reason: 'lines_do_not_match_total' }
+  }
+
+  const anchor = residualAnchor(recognition, amounts)
+  const before = cumulativeCashRecognition(amounts, total, priorPaid, anchor)
+  const after = cumulativeCashRecognition(amounts, total, paidAfter, anchor)
+
+  const description = buildInvoiceDescription(
+    settles ? 'Kontant slutbetalning kundfaktura' : 'Kontant delbetalning kundfaktura',
+    invoice.invoice_number,
+    customerName,
+    invoice.id,
+  )
+  const lines: CreateJournalEntryLineInput[] = [
+    {
+      account_number: settlementAccountNumber,
+      debit_amount: roundOre(paidAfter - priorPaid),
+      credit_amount: 0,
+      line_description: description,
+      dimensions: defaultDimensions,
+    },
+  ]
+  recognition.forEach((line, i) => {
+    const share = roundOre(after[i] - before[i])
+    if (share === 0) return
+    lines.push({ ...line, ...creditNatural(share) })
+  })
+
+  const recognisedBefore: Record<string, number> = {}
+  recognition.forEach((line, i) => {
+    recognisedBefore[line.account_number] = roundOre((recognisedBefore[line.account_number] ?? 0) + before[i])
+  })
+
+  return { ok: true, description, lines, paidAfter, settles, recognisedBefore }
 }
