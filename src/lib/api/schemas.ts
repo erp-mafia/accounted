@@ -3409,6 +3409,8 @@ const ImportedCustomerRowSchema = z.object({
   row_index: z.number().int(),
   name: z.string().min(1),
   customer_type: CustomerTypeSchema,
+  // Defaulted so a wizard opened before the field existed can still submit.
+  customer_number: z.string().trim().max(32).nullable().default(null),
   org_number: z.string().nullable(),
   email: z.string().nullable(),
   phone: z.string().nullable(),

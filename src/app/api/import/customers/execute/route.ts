@@ -101,6 +101,7 @@ export const POST = withRouteContext(
           const merged: Record<string, unknown> = {}
           if (row.name) merged.name = row.name
           if (row.customer_type) merged.customer_type = row.customer_type
+          if (row.customer_number) merged.customer_number = row.customer_number
           if (row.org_number) merged.org_number = row.org_number
           if (row.email) merged.email = row.email
           if (row.phone) merged.phone = row.phone
@@ -142,6 +143,7 @@ export const POST = withRouteContext(
             company_id: companyId,
             name: row.name,
             customer_type: row.customer_type,
+            customer_number: row.customer_number || null,
             email: row.email,
             phone: row.phone,
             address_line1: row.address_line1,

@@ -1492,6 +1492,7 @@ const REGISTER_STEP_LABELS: Record<RegisterStep, string> = {
 
 const CUSTOMER_COLUMN_SPECS: RegisterColumnSpec<keyof DetectedCustomerColumns>[] = [
   { key: 'name_col', label: 'Namn', required: true },
+  { key: 'customer_number_col', label: 'Kundnummer', required: false },
   { key: 'org_number_col', label: 'Org-/personnummer', required: false },
   { key: 'customer_type_col', label: 'Kundtyp', required: false },
   { key: 'email_col', label: 'E-post', required: false },
@@ -1586,6 +1587,7 @@ function CustomersFlow() {
     try {
       const overrides: DetectedCustomerColumns = {
         name_col: mapping.name_col ?? 0,
+        customer_number_col: mapping.customer_number_col,
         org_number_col: mapping.org_number_col,
         customer_type_col: mapping.customer_type_col,
         email_col: mapping.email_col,
