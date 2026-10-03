@@ -6,17 +6,18 @@ import type { JournalEntry } from '@/types'
 
 const log = createLogger('payment-sync')
 
-export const PAYMENT_SOURCE_TYPES = [
-  'invoice_paid',
-  'invoice_cash_payment',
-  'supplier_invoice_paid',
-  'supplier_invoice_cash_payment',
-] as const
+// The list itself lives in lib/bookkeeping/payment-source-types.ts, because the
+// unlink control in the supplier-invoice page needs it client-side and must not
+// pull this file's Supabase server imports along.
+//
+// isPaymentSourceType is imported rather than re-exported with a bare
+// `export ... from`, which would not bind the name in this module's scope:
+// syncInvoiceStatusFromPaymentEntry below calls it. The re-export is for
+// engine.ts, which has always taken it from here. PAYMENT_SOURCE_TYPES itself
+// is NOT re-exported: every consumer of the array reads the owning module.
+import { isPaymentSourceType } from './payment-source-types'
 
-export function isPaymentSourceType(sourceType: string | null | undefined): boolean {
-  if (!sourceType) return false
-  return (PAYMENT_SOURCE_TYPES as readonly string[]).includes(sourceType)
-}
+export { isPaymentSourceType }
 
 /**
  * Customer-side payment vouchers only. The DELETE voucher route syncs these in

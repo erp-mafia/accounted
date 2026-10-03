@@ -385,6 +385,13 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/supplier-invoices/:id/credit': covered([`POST ${V}/supplier-invoices/:id/credit`, 'gnubok_credit_supplier_invoice']),
   'POST /api/supplier-invoices/:id/uncredit': covered([`POST ${V}/supplier-invoices/:id/uncredit`, 'gnubok_uncredit_supplier_invoice']),
   'POST /api/supplier-invoices/:id/link-to-voucher': covered(['gnubok_link_supplier_invoice_to_voucher']),
+  'DELETE /api/supplier-invoices/:id/payments/:paymentId': gap(
+    'P2',
+    'Undoes a link made by link-to-voucher. The link IS exposed to agents ' +
+      '(gnubok_link_supplier_invoice_to_voucher), so an agent can create a wrong ' +
+      'link and cannot undo it: the same asymmetry #2673 was about, one layer up. ' +
+      'Closing it is an MCP tool over unlink_supplier_invoice_from_voucher.',
+  ),
   'POST /api/supplier-invoices/:id/bank-entered': covered([`POST ${V}/supplier-invoices/:id/bank-entered`]),
   'PATCH /api/supplier-invoices/:id/items/:itemId': covered([`PATCH ${V}/supplier-invoices/:id/items/:itemId`, 'gnubok_update_supplier_invoice_item_account']),
   'POST /api/supplier-invoices/payment-batches': covered([`POST ${V}/supplier-payment-batches`, 'gnubok_create_supplier_payment_batch']),
@@ -681,4 +688,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 133
+export const GAP_CEILING = 134

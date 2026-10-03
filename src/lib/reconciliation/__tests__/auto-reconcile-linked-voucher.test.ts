@@ -103,12 +103,101 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     expect(result).toEqual({ linkedTransactionId: 'tx-1' })
   })
 
-  it('does nothing when a transaction is already reconciled to the voucher', async () => {
+  it('never attaches a second bank line to a voucher that already has one', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [{ id: 'tx-existing' }] }) // voucher already has a bank line
+    // Already reconciled AND already tagged: nothing is owed, and the existing
+    // tag is not overwritten (a voucher settling two payables can only name one).
+    enqueue({ data: [{ id: 'tx-existing', invoice_id: 'inv-other', supplier_invoice_id: null }] })
 
     const result = await autoReconcileTransactionForLinkedVoucher(
       supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
+    )
+
+    expect(result).toBeNull()
+    // One read, no write: the queue still holds nothing but the function never
+    // reached the voucher load either.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('never gives a row that already names a customer invoice a supplier one too', async () => {
+    // One bank movement settles one document: money in against a customer
+    // invoice, money out against a supplier one. Claiming both on one row is a
+    // contradiction no reconciliation can be right about, and guarding only the
+    // column being written left that door open.
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [{ id: 'tx-existing', invoice_id: 'inv-other', supplier_invoice_id: null }] })
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { supplierInvoiceId: 'si-1' },
+    )
+
+    expect(result).toBeNull()
+    // The read, and nothing else: no write was attempted.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports no tag when a concurrent link already claimed the pointer', async () => {
+    // The link RPCs lock the invoice row, not this transaction, so two calls can
+    // read the same null pointer. The compare-and-set makes the loser write
+    // nothing; without the returned-row check it would still claim the tag and
+    // both callers would believe they owned the bank line.
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [{ id: 'tx-existing', invoice_id: null, supplier_invoice_id: null }] })
+    enqueue({ data: [] }) // CAS matched nothing: the other writer got there first
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
+    )
+
+    expect(result).toBeNull()
+  })
+
+  it('tags the bank line already on the voucher when it carries no invoice yet', async () => {
+    // The state an undone link leaves behind: unlink clears
+    // supplier_invoice_id and deliberately keeps journal_entry_id, because the
+    // bank line genuinely paid the voucher. Re-linking to the right payable
+    // must restore the tag, or the correction leaves the row untied to any
+    // payable (worse traceability after the fix than before it, #2673).
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [{ id: 'tx-existing', invoice_id: null, supplier_invoice_id: null }] })
+    // The tag update is a compare-and-set that re-asserts the null pointer and
+    // selects the row back, so a concurrent link cannot win silently: it has to
+    // return the row for the tag to count as taken.
+    enqueue({ data: [{ id: 'tx-existing' }] })
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { supplierInvoiceId: 'si-9' },
+    )
+
+    // Reconciled it is not: it already was. Tagged it now is.
+    expect(result).toEqual({ linkedTransactionId: 'tx-existing' })
+    // Read + update only: manualLink is never reached, so no second bank line
+    // is attached and no journal entry is touched.
+    expect(supabase.from).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves the ambiguous N:1 case alone even when neither row is tagged', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [
+      { id: 'tx-a', invoice_id: null, supplier_invoice_id: null },
+      { id: 'tx-b', invoice_id: null, supplier_invoice_id: null },
+    ] })
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { supplierInvoiceId: 'si-9' },
+    )
+
+    expect(result).toBeNull()
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports nothing tagged when the tag update fails', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [{ id: 'tx-existing', invoice_id: null, supplier_invoice_id: null }] })
+    enqueue({ error: { message: 'permission denied' } })
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { supplierInvoiceId: 'si-9' },
     )
 
     expect(result).toBeNull()
