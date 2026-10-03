@@ -36,8 +36,9 @@ describe('invoice VAT-rate gates agree with buildInvoiceWriteData', () => {
     it(`${relative} gates on getPermittedVatRates`, () => {
       // The builder reaches it through resolveInvoiceVatRules (#2906), which
       // returns getPermittedVatRates() whenever the customer decides; pinned
-      // below.
-      expect(source).toMatch(/getPermittedVatRates\(|resolveInvoiceVatRules\(/)
+      // below. The MCP create_invoice commit builds through buildStagedInvoice,
+      // which is the builder.
+      expect(source).toMatch(/getPermittedVatRates\(|resolveInvoiceVatRules\(|buildStagedInvoice\(/)
     })
 
     it(`${relative} does not gate on the picker default`, () => {

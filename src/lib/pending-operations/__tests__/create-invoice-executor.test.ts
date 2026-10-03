@@ -23,7 +23,6 @@ function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
     operation_type: 'create_invoice',
     status: 'pending',
     title: 'test',
-    params: {},
     preview_data: {},
     result_data: null,
     actor_type: 'user',
@@ -34,8 +33,14 @@ function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
     resolved_at: null,
     updated_at: '2026-05-03T00:00:00Z',
     ...overrides,
+    // gnubok_create_invoice always stages both dates; the commit validates
+    // them (CreateInvoiceParamsSchema), so every fixture carries them.
+    params: { invoice_date: '2026-06-01', due_date: '2026-07-01', ...(overrides.params ?? {}) },
   } as PendingOperation
 }
+
+const ARTICLE_ID = '0b9c1a2e-5d4f-4e6a-9b8c-7d6e5f4a3b21'
+const FOREIGN_ARTICLE_ID = '6f1e2d3c-4b5a-4968-8776-655443322110'
 
 /**
  * Queue-based supabase mock that also records `.insert()` payloads per table,
@@ -263,7 +268,7 @@ describe('commitPendingOperation: create_invoice: VAT rates for a foreign busine
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('failed')
-    expect(result.error).toMatch(/10%/)
+    expect(result.code).toBe('INVOICE_CREATE_VAT_RULE_VIOLATION')
   })
 })
 
@@ -275,7 +280,7 @@ describe('commitPendingOperation: create_invoice: staged article references', ()
       { data: { id: 'op-1' } },
       { data: customer },
       { data: { vat_registered: true } },
-      { data: [{ id: 'art-1' }] },
+      { data: [{ id: ARTICLE_ID }] },
       { data: { id: 'inv-1', invoice_number: null } },
       { data: null },
       { data: { id: 'inv-1' } },
@@ -292,7 +297,7 @@ describe('commitPendingOperation: create_invoice: staged article references', ()
             unit: 'tim',
             unit_price: 1200,
             vat_rate: 25,
-            article_id: 'art-1',
+            article_id: ARTICLE_ID,
           },
         ],
       },
@@ -302,7 +307,7 @@ describe('commitPendingOperation: create_invoice: staged article references', ()
 
     expect(result.status).toBe('committed')
     const itemRows = inserts['invoice_items'][0] as Array<Record<string, unknown>>
-    expect(itemRows[0]).toMatchObject({ article_id: 'art-1', line_total: 2400 })
+    expect(itemRows[0]).toMatchObject({ article_id: ARTICLE_ID, line_total: 2400 })
   })
 
   it('fails when a staged article_id belongs to another company (drift/tamper gate)', async () => {
@@ -326,7 +331,7 @@ describe('commitPendingOperation: create_invoice: staged article references', ()
             unit: 'tim',
             unit_price: 1200,
             vat_rate: 25,
-            article_id: 'art-foreign',
+            article_id: FOREIGN_ARTICLE_ID,
           },
         ],
       },
@@ -335,7 +340,7 @@ describe('commitPendingOperation: create_invoice: staged article references', ()
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('failed')
-    expect(result.error).toMatch(/Artikel art-foreign finns inte i företaget/)
+    expect(result.code).toBe('INVOICE_CREATE_ARTICLE_INVALID')
     expect(inserts['invoices']).toBeUndefined()
   })
 })
@@ -511,5 +516,32 @@ describe('commitPendingOperation: create_invoice as a quote (offert)', () => {
 
     expect(result.status).not.toBe('committed')
     expect(base.inserts['invoices']).toBeUndefined()
+  })
+})
+
+describe('commitPendingOperation: create_invoice: the shared builder rules apply at approval', () => {
+  it('refuses a staged balance-sheet account (1660) on a 25 % line, inserting nothing', async () => {
+    // An operation staged before staging ran the builder can still carry one:
+    // booked, the base lands on 1660 and is missing from ruta 05 while the
+    // output VAT still reaches ruta 10.
+    const { supabase, inserts } = createCapturingSupabase([
+      { data: { id: 'op-1' } },
+      { data: customer },
+      { data: { vat_registered: true } },
+      { data: null },
+    ])
+
+    const op = makePendingOp({
+      params: {
+        customer_id: 'cust-1',
+        items: [{ description: 'Konsultarvode', quantity: 1, unit: 'st', unit_price: 105000, vat_rate: 25, revenue_account: '1660' }],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.code).toBe('INVOICE_CREATE_POSTING_ACCOUNT_VAT_CONFLICT')
+    expect(inserts['invoices']).toBeUndefined()
   })
 })

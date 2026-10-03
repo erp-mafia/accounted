@@ -65,6 +65,7 @@ describe('gnubok_create_invoice: quotes', () => {
   it('stages a quote with due_date mirroring valid_until and no F-series preview', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: CUSTOMER, error: null }) // customers fetch
+    enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
     enqueue({ data: { id: 'op-quote' }, error: null }) // pending_operations insert

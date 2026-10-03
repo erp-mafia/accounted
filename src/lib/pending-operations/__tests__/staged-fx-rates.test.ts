@@ -327,6 +327,7 @@ describe('commitPendingOperation: create_invoice FX', () => {
           customer_id: 'cust-1',
           currency: 'EUR',
           invoice_date: '2026-02-01',
+          due_date: '2026-03-03',
           items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
         },
       }),
@@ -370,6 +371,7 @@ describe('commitPendingOperation: create_invoice FX', () => {
           customer_id: 'cust-1',
           currency: 'EUR',
           invoice_date: '2026-02-01',
+          due_date: '2026-03-03',
           items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
         },
       }),
@@ -394,6 +396,7 @@ describe('commitPendingOperation: create_invoice FX', () => {
         params: {
           customer_id: 'cust-1',
           invoice_date: '2026-02-01',
+          due_date: '2026-03-03',
           items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
         },
       }),

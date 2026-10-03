@@ -21,7 +21,6 @@ import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { enforceBulkBookDimensionPolicy } from '@/lib/transactions/bulk-book'
-import { explainVatTreatment, getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
@@ -78,7 +77,6 @@ import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/s
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
-import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { foldSellerVatIntoCost, sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
 import { isReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
@@ -240,12 +238,12 @@ import {
 } from '@/lib/invoices/recurring-schedule-service'
 import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
+import { buildStagedInvoice } from '@/lib/pending-operations/build-staged-invoice'
 import {
   buildInvoiceWriteData,
   type InvoiceWriteInput,
   type InvoiceWriteItemInput,
 } from '@/lib/invoices/build-invoice-write'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
@@ -2019,32 +2017,7 @@ async function commitCreateInvoice(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  const customerId = params.customer_id as string
-  // Offert (quote): own OF-series allocated at insert, never an F-number,
-  // never books, never emits invoice.created. Only 'quote' is honoured here;
-  // anything else stays an ordinary invoice (staged params are caller JSON).
-  const isQuote = params.document_type === 'quote'
-  const validUntil = typeof params.valid_until === 'string' ? params.valid_until : null
-  if (isQuote && (!validUntil || !ISO_DATE_RE.test(validUntil))) {
-    return { error: 'Giltig till (valid_until) krävs för en offert.', status: 400 }
-  }
-  const items = params.items as Array<{
-    description: string; quantity: number; unit: string; unit_price: number; vat_rate?: number
-    discount_percent?: number | null
-    article_id?: string | null; revenue_account?: string | null
-    line_type?: 'product' | 'text'
-    dimensions?: Record<string, string>
-  }>
-  // Dimensions PR7: bags were resolved against the registry at staging time
-  // (resolveDimensionBags in the MCP tool); coerce is the drift/tamper gate.
-  const defaultDimensions = coerceDimensionsBag(params.default_dimensions)
-
-  // Free-text rows carry no amounts and never book. The MCP staging tool
-  // accepts line_type 'text' (normalized to zeroed amounts at staging), and
-  // the totals math must stay identical to app/api/invoices/route.ts, which
-  // excludes text rows from subtotal, VAT, and the mixed-rate detection.
-  const billableItems = items.filter((item) => item.line_type !== 'text')
-
+  const customerId = typeof params.customer_id === 'string' ? params.customer_id : ''
   const { data: customer, error: customerError } = await supabase
     .from('customers').select('*').eq('id', customerId).eq('company_id', companyId).single()
 
@@ -2052,170 +2025,51 @@ async function commitCreateInvoice(
     return { error: 'Customer not found: they may have been deleted.', status: 404 }
   }
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
-  // Gate on the PERMITTED set, not the picker default, exactly like
-  // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
-  // (hotel/restaurang 12%, persontransport and event admission 6%,
-  // fastighetstjänst and korttidsuthyrning 25%) carry Swedish VAT even to a
-  // foreign business customer. The default is still 0% (vatRules.rate is the
-  // fallback below), so a Swedish rate only lands here when staged explicitly.
-  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
-  const allowedRates = new Set(permittedRates.map((r) => r.rate))
-
-  // VAT registration gate (mirrors app/api/invoices/route.ts). A
-  // non-momsregistrerad company books no output VAT: force every line to 0%
-  // (momsfri → treatment 'exempt'). 0% is allowed for every customer type, so
-  // the allowedRates guard below still passes.
-  const { data: vatSettings } = await supabase
-    .from('company_settings')
-    .select('vat_registered')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  const notVatRegistered = vatSettings?.vat_registered === false
-  if (notVatRegistered) for (const item of items) item.vat_rate = 0
-
-  // Line totals net of any per-line discount, same math as the web path
-  // (lib/invoices/line-amounts.ts).
-  const subtotal = billableItems.reduce(
-    (sum, item) => sum + computeLineNet(item.quantity, item.unit_price, item.discount_percent),
-    0,
-  )
-
-  let vatAmount = 0
-  for (const item of billableItems) {
-    const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-    if (!allowedRates.has(itemRate)) {
-      return { error: `Momssats ${itemRate}% är inte tillåten för denna kundtyp`, status: 400 }
-    }
-    // Strict typeof: staged params are JSON a tampered client could shape;
-    // a string would coerce past a bare range check but be ignored by the
-    // number-typed totals math, then land in the NUMERIC column anyway.
-    const discountPercent = item.discount_percent ?? 0
-    if (typeof discountPercent !== 'number' || !(discountPercent >= 0 && discountPercent <= 100)) {
-      return { error: 'Rabatten per rad måste vara mellan 0 och 100 procent', status: 400 }
-    }
-    const lineTotal = computeLineNet(item.quantity, item.unit_price, discountPercent)
-    vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
-  }
-
-  // Why the treatment is what it is (#2749, #2558): echoed on the commit
-  // result so an agent that auto-approved still sees it. The staging tool
-  // put the same list in preview.vat_warnings for the approval card.
-  const vatWarnings = notVatRegistered
-    ? []
-    : explainVatTreatment(
-        customer,
-        billableItems.map((item) => (item.vat_rate !== undefined ? item.vat_rate : vatRules.rate)),
-      )
-
-  // Validate any per-line posting-account override (defense in depth: the legacy field
-  // is frozen onto invoice_items and flows to generatePerRateLines()).
-  const overrideAccounts = Array.from(
-    new Set(billableItems.map((i) => i.revenue_account).filter((a): a is string => !!a)),
-  )
-  for (const acct of overrideAccounts) {
-    if (!(await isValidRevenueAccount(supabase, companyId, acct))) {
-      return { error: `Bokföringskonto ${acct} är inte ett aktivt balans- eller intäktskonto (klass 1-3)`, status: 400 }
-    }
-  }
-
-  // Drift/tamper gate for staged article references: the FK on
-  // invoice_items.article_id only proves the article exists, not that it
-  // belongs to THIS company, so scope-check here like revenue_account above.
-  const stagedArticleIds = Array.from(
-    new Set(items.map((i) => i.article_id).filter((a): a is string => !!a)),
-  )
-  if (stagedArticleIds.length > 0) {
-    const { data: articleRows, error: articleError } = await supabase
-      .from('articles')
-      .select('id')
-      .eq('company_id', companyId)
-      .in('id', stagedArticleIds)
-    if (articleError) return { error: articleError.message, status: 500 }
-    const foundArticleIds = new Set((articleRows ?? []).map((a: { id: string }) => a.id))
-    const missingArticleId = stagedArticleIds.find((a) => !foundArticleIds.has(a))
-    if (missingArticleId) {
-      return { error: `Artikel ${missingArticleId} finns inte i företaget`, status: 400 }
-    }
-  }
-
-  const total = subtotal + vatAmount
-  const currency = ((params.currency as string) || 'SEK') as Currency
-  const invoiceDate = (params.invoice_date as string) || new Date().toISOString().split('T')[0]
-
-  // Sales-side twin of the supplier-invoice currency policy
-  // (lib/currency/supplier-invoice-rate.ts). Three defects lived here:
-  //
-  //  1. `fetchExchangeRate(currency)` passed NO date, so a back-dated invoice
-  //     was translated at TODAY'S kurs. ML 8 kap 21-23 § anchors the
-  //     beskattningsunderlag on the taxable event, and the registration
-  //     verifikat is posted on invoice_date, so the money and the verifikat
-  //     must be anchored on the same day. The staged params carry no
-  //     delivery_date, so invoice_date IS that event here (the web path,
-  //     lib/invoices/build-invoice-write.ts, prefers delivery_date when the
-  //     form supplied one).
-  //  2. No supabase client, so the shared `exchange_rates` cache was neither
-  //     read nor used as the last-cached-observation fallback when Riksbanken
-  //     rate-limits. One transient 429 left the invoice permanently unconverted.
-  //  3. A null result fell through in silence and stored exchange_rate = NULL,
-  //     which resolveSekAmount() then books 1:1: 1000 EUR posts 1000 kr to 3001
-  //     and 250 kr to 2611 instead of 11 500 and 2 875, understating ruta 05
-  //     and ruta 10 by the whole FX difference.
-  let exchangeRate: number | null = null
-  let exchangeRateDate: string | null = null
-  // Multiplier to SEK. 1 for a SEK invoice, so the *_sek columns equal their
-  // invoice-currency counterparts instead of staying NULL: an ordinary Swedish
-  // invoice legitimately has no exchange_rate, and the old
-  // `if (currency !== 'SEK')` guard therefore left total_sek NULL on every one
-  // of them. Same fix, same reason, as supplierInvoiceSekAmounts().
-  let sekRate = 1
-
-  if (currency !== 'SEK') {
-    const rateDate = new Date(invoiceDate)
-    let rateData: Awaited<ReturnType<typeof fetchExchangeRate>> = null
-    if (!Number.isNaN(rateDate.getTime())) {
-      try {
-        rateData = await fetchExchangeRate(currency, rateDate, supabase)
-      } catch {
-        rateData = null
-      }
-    }
-    if (!rateData || !Number.isFinite(rateData.rate) || rateData.rate <= 0) {
-      // Refuse at the approval boundary. Storing NULL only relocates the
-      // failure: createInvoiceJournalEntry() already refuses such an invoice
-      // with INVOICE_FX_RATE_MISSING, by which point the invoice row (and its
-      // F-series number, once sent) exists and the approver has moved on.
+  // The same build the staging preview ran (buildStagedInvoice): the shared
+  // buildInvoiceWriteData with every rule the web and v1 doors apply (VAT
+  // gate, balance-sheet account on a VAT line, ROT/RUT, accrual, articles,
+  // currency), so what the approver saw is what gets written.
+  const staged = await buildStagedInvoice({ supabase, companyId, customer: customer as Customer, params })
+  if (!staged.ok) {
+    if ('validation' in staged) {
+      const issue = staged.validation.issues[0]
       return {
-        error:
-          getErrorEntry('INVOICE_FX_RATE_MISSING')?.message_sv ??
-          'Fakturan är i utländsk valuta men saknar växelkurs. Ange fakturans växelkurs innan den bokförs.',
+        error: `Invalid ${issue?.path?.join('.') || 'params'}: ${issue?.message ?? 'validation failed'}`,
         status: 400,
       }
     }
-    exchangeRate = rateData.rate
-    exchangeRateDate = rateData.date ?? null
-    sekRate = rateData.rate
-  }
-
-  const subtotalSek = roundOre(subtotal * sekRate)
-  const vatAmountSek = roundOre(vatAmount * sekRate)
-  const totalSek = roundOre(total * sekRate)
-
-  const uniqueRates = new Set(billableItems.map((item) => item.vat_rate ?? vatRules.rate))
-  const isMixedRate = uniqueRates.size > 1
-
-  // Validated https-only at staging time (gnubok_create_invoice); re-checked
-  // here so a hand-crafted pending-operation row can't smuggle a non-https
-  // link into customer-facing emails/PDFs. Invalid → dropped, never blocks.
-  const paymentLinkUrl = (() => {
-    const raw = typeof params.payment_link_url === 'string' ? params.payment_link_url.trim() : ''
-    if (!raw || raw.length > 2048) return null
-    try {
-      return new URL(raw).protocol === 'https:' ? raw : null
-    } catch {
-      return null
+    if ('dbError' in staged) {
+      const message = (staged.dbError as { message?: string } | null)?.message
+      return { error: message ?? 'Database error', status: 500 }
     }
-  })()
+    const entry = getErrorEntry(staged.code)
+    return {
+      error: entry?.message_sv ?? staged.code,
+      errorCode: staged.code,
+      status: entry?.httpStatus ?? 400,
+      data: staged.details as Record<string, unknown> | undefined,
+    }
+  }
+  const { isQuote, build } = staged
+  const { invoiceFields } = build
+
+  // Refuse at the approval boundary rather than store exchange_rate NULL:
+  // createInvoiceJournalEntry() refuses such an invoice with
+  // INVOICE_FX_RATE_MISSING anyway, by which point the invoice row (and its
+  // F-series number, once sent) exists and the approver has moved on. A NULL
+  // rate is booked 1:1 otherwise: 1000 EUR to 3001 as 1000 kr, understating
+  // ruta 05 and ruta 10 by the whole FX difference.
+  if (
+    invoiceFields.currency !== 'SEK' &&
+    !(typeof invoiceFields.exchange_rate === 'number' && Number.isFinite(invoiceFields.exchange_rate) && invoiceFields.exchange_rate > 0)
+  ) {
+    return {
+      error:
+        getErrorEntry('INVOICE_FX_RATE_MISSING')?.message_sv ??
+        'Fakturan är i utländsk valuta men saknar växelkurs. Ange fakturans växelkurs innan den bokförs.',
+      status: 400,
+    }
+  }
 
   // Quotes are numbered at insert from their own OF-series (see
   // generate_quote_number); ensureInvoiceNumber must never run on one.
@@ -2241,8 +2095,8 @@ async function commitCreateInvoice(
   const payeeChoice = await resolveInvoicePayeeChoice(
     supabase,
     companyId,
-    currency as Currency,
-    typeof params.payment_cash_account_id === 'string' ? params.payment_cash_account_id : null,
+    invoiceFields.currency,
+    staged.params.payment_cash_account_id ?? null,
   )
   if (!payeeChoice.ok) {
     const entry = getErrorEntry(payeeChoice.code)
@@ -2254,43 +2108,16 @@ async function commitCreateInvoice(
     .insert({
       user_id: userId,
       company_id: companyId,
-      customer_id: customerId,
       invoice_number: quoteNumber,
-      invoice_date: invoiceDate,
-      // A quote has no payment due date: due_date mirrors valid_until
-      // (build-invoice-write parity).
-      due_date: isQuote ? validUntil : (params.due_date as string) || null,
+      ...invoiceFields,
+      // This door has always stored the SEK twins rounded to whole öre.
+      subtotal_sek: invoiceFields.subtotal_sek === null ? null : roundOre(invoiceFields.subtotal_sek),
+      vat_amount_sek: invoiceFields.vat_amount_sek === null ? null : roundOre(invoiceFields.vat_amount_sek),
+      total_sek: invoiceFields.total_sek === null ? null : roundOre(invoiceFields.total_sek),
       // Explicit keys, not a conditional spread: the phantom-column guard
-      // only reads literal payloads. NULLs on non-quotes satisfy the pairing CHECK.
-      document_type: isQuote ? 'quote' : 'invoice',
-      valid_until: isQuote ? validUntil : null,
+      // only reads literal payloads. NULL on non-quotes satisfies the pairing CHECK.
       quote_status: isQuote ? 'open' : null,
-      currency,
-      exchange_rate: exchangeRate,
-      exchange_rate_date: exchangeRateDate,
-      subtotal,
-      subtotal_sek: subtotalSek,
-      vat_amount: vatAmount,
-      vat_amount_sek: vatAmountSek,
-      total,
-      total_sek: totalSek,
-      // A quote is an offer, not a claim: nothing is owed on it (parity with
-      // build-invoice-write). Otherwise a fresh unpaid receivable:
-      // remaining_amount is what every payment
-      // surface reads as the open balance; leaving the NOT NULL DEFAULT 0
-      // made every agent-created invoice look settled.
-      remaining_amount: isQuote ? 0 : total,
       paid_amount: 0,
-      vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
-      vat_rate: isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate),
-      moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
-      reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
-      our_reference: (params.our_reference as string) || null,
-      your_reference: (params.your_reference as string) || null,
-      invoice_marking: (params.invoice_marking as string) || null,
-      notes: (params.notes as string) || null,
-      payment_link_url: paymentLinkUrl,
-      default_dimensions: defaultDimensions ?? {},
       payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
       payment_details: payeeChoice.fields.payment_details,
     })
@@ -2299,53 +2126,9 @@ async function commitCreateInvoice(
 
   if (invoiceError) return { error: invoiceError.message, status: 500 }
 
-  const invoiceItems = items.map((item, index) => {
-    // Text rows store the description only and zero everything else. Keys must
-    // match the product branch exactly: PostgREST rejects a bulk insert whose
-    // objects have differing key sets.
-    if (item.line_type === 'text') {
-      return {
-        invoice_id: invoice.id,
-        sort_order: index,
-        line_type: 'text',
-        description: item.description ?? '',
-        quantity: 0,
-        unit: '',
-        unit_price: 0,
-        discount_percent: 0,
-        line_total: 0,
-        vat_rate: 0,
-        vat_amount: 0,
-        article_id: null,
-        revenue_account: null,
-        dimensions: {},
-      }
-    }
-    const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-    const discountPercent = item.discount_percent ?? 0
-    const lineTotal = computeLineNet(item.quantity, item.unit_price, discountPercent)
-    const itemVat = Math.round(lineTotal * itemRate / 100 * 100) / 100
-    return {
-      invoice_id: invoice.id,
-      sort_order: index,
-      line_type: 'product',
-      description: item.description,
-      quantity: item.quantity,
-      unit: item.unit,
-      unit_price: item.unit_price,
-      discount_percent: discountPercent,
-      line_total: lineTotal,
-      vat_rate: itemRate,
-      vat_amount: itemVat,
-      // Frozen per-line override so generatePerRateLines() books to the article's
-      // account; null falls back to the VAT-treatment-derived account.
-      article_id: item.article_id ?? null,
-      revenue_account: item.revenue_account ?? null,
-      dimensions: coerceDimensionsBag(item.dimensions) ?? {},
-    }
-  })
-
-  const { error: itemsError } = await supabase.from('invoice_items').insert(invoiceItems)
+  const { error: itemsError } = await supabase
+    .from('invoice_items')
+    .insert(build.items.map((row) => ({ ...row, invoice_id: invoice.id })))
 
   if (itemsError) {
     await supabase.from('invoices').delete().eq('id', invoice.id)
@@ -2373,7 +2156,9 @@ async function commitCreateInvoice(
     data: {
       invoice_id: invoice.id,
       invoice_number: invoice.invoice_number ?? quoteNumber,
-      ...(vatWarnings.length > 0 ? { vat_warnings: vatWarnings } : {}),
+      // Why the treatment is what it is (#2749, #2558): echoed so an agent
+      // that auto-approved still sees what preview.vat_warnings said.
+      ...(build.warnings.length > 0 ? { vat_warnings: build.warnings } : {}),
     },
   }
 }
@@ -2450,10 +2235,10 @@ async function commitUpdateInvoice(
     return { error: 'Customer not found: they may have been deleted.', status: 404 }
   }
 
-  // Drift/tamper gate for staged article references, same as
-  // commitCreateInvoice: the FK on invoice_items.article_id proves the article
-  // exists, not that it belongs to THIS company, and the top-level arg guard
-  // never sees a nested items[].article_id.
+  // Drift/tamper gate for staged article references: the FK on
+  // invoice_items.article_id proves the article exists, not that it belongs
+  // to THIS company, and the top-level arg guard never sees a nested
+  // items[].article_id.
   if (changes.items) {
     const stagedArticleIds = Array.from(
       new Set(changes.items.map((item) => item.article_id).filter((a): a is string => !!a)),

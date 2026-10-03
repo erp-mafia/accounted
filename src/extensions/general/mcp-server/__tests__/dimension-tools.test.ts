@@ -774,6 +774,8 @@ describe('gnubok_create_invoice: dimensions bag', () => {
     enqueue({ data: null, error: null })
     enqueue({ data: REGISTRY_ROWS, error: null })
     enqueue({ data: VALUE_ROWS, error: null })
+    // buildStagedInvoice (the dry run of the commit): company_settings
+    enqueue({ data: { vat_registered: true }, error: null })
     // resolvePeriodStatusForDate (auto-extracted from invoice_date): 2 layers
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
@@ -834,6 +836,7 @@ describe('gnubok_create_invoice: dimensions bag', () => {
       data: { id: 'cust-1', name: 'Acme AB', customer_type: 'swedish_business', vat_number_validated: false, default_payment_terms: 30 },
       error: null,
     })
+    enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
     enqueue({ data: null, error: null }) // period status layer 1
     enqueue({ data: null, error: null }) // period status layer 2
     enqueue({ data: { id: 'op-inv-plain' }, error: null })
