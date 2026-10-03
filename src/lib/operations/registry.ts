@@ -48,6 +48,8 @@ import {
 import {
   openingBalancesCorrect,
   openingBalancesSetManual,
+  openingBalancesSplitPerProject,
+  openingBalancesSplitPreview,
 } from './opening-balances'
 import {
   salaryRunsAttachExpenseClaims,
@@ -236,6 +238,8 @@ export const OPERATIONS: readonly AnyOperation[] = [
   // opening-balances
   openingBalancesSetManual,
   openingBalancesCorrect,
+  openingBalancesSplitPreview,
+  openingBalancesSplitPerProject,
   // salary-run-lifecycle
   salaryRunsSendPayslips,
   salaryRunsRevert,

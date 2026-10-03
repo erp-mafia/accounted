@@ -329,6 +329,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/import/opening-balance/execute': covered([`POST ${V}/fiscal-periods/:id/opening-balances/manual`, 'gnubok_set_opening_balances_manual'], 'the spreadsheet parse stays UI-only; the API takes lines'),
   'POST /api/import/opening-balance/correct': covered([`POST ${V}/fiscal-periods/:id/opening-balances/correct`, 'gnubok_correct_opening_balances']),
   'POST /api/import/opening-balance/correct-inline': covered([`POST ${V}/journal-entries/:id/strike-lines`, 'gnubok_correct_entry_lines'], 'no cascade to later years'),
+  'POST /api/import/opening-balance/split-per-project': covered([`POST ${V}/fiscal-periods/:id/opening-balances/split-per-project`, 'gnubok_split_opening_balances_per_project']),
 
   // ── Customers, articles, sales ─────────────────────────────────────
   'POST /api/customers': covered([`POST ${V}/customers`, 'gnubok_create_customer']),

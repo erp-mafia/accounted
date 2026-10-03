@@ -315,6 +315,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_validate_arsredovisning_ixbrl: 'reports:read',
   gnubok_set_opening_balances_manual: 'bookkeeping:write',
   gnubok_correct_opening_balances: 'bookkeeping:write',
+  gnubok_preview_opening_balance_split: 'reports:read',
+  gnubok_split_opening_balances_per_project: 'bookkeeping:write',
   gnubok_delete_supplier_invoice: 'suppliers:write',
   gnubok_uncredit_supplier_invoice: 'suppliers:write',
   gnubok_update_supplier_invoice_item_account: 'suppliers:write',

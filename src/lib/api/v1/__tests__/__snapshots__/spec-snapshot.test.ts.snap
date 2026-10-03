@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `292`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `294`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -64,6 +64,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/ixbrl/validate",
   "GET /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/pdf",
   "GET /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/signatures",
+  "GET /api/v1/companies/:companyId/fiscal-periods/:id/opening-balances/split-per-project",
   "GET /api/v1/companies/:companyId/inbox-items",
   "GET /api/v1/companies/:companyId/inbox-items/:id",
   "GET /api/v1/companies/:companyId/invoices",
@@ -196,6 +197,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/opening-balances",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/opening-balances/correct",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/opening-balances/manual",
+  "POST /api/v1/companies/:companyId/fiscal-periods/:id/opening-balances/split-per-project",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/reopen-external",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/unlock",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/year-end",

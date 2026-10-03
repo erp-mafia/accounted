@@ -2365,6 +2365,7 @@ const TOOL_PREFLIGHT_MAP: Record<string, string> = {
   gnubok_reconcile_match: 'gnubok_get_reconciliation_status',
   gnubok_reconcile_signoff: 'gnubok_get_reconciliation_status',
   gnubok_reconcile_residual: 'gnubok_get_reconciliation_status',
+  gnubok_split_opening_balances_per_project: 'gnubok_preview_opening_balance_split',
 }
 
 /**

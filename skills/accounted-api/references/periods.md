@@ -3068,6 +3068,227 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/fiscal-periods/{id}/opening-balances/split-per-project`
+
+**Preview splitting a year's ingående balanser per project from the previous year's tagged closing balances.**
+`scope:reports:read · risk:low · idempotent`
+
+For the year's IB verifikat, computes the per-project split of each balance sheet account from the previous fiscal year's closing balances per object of the dimensions that carry across years (registry resets_annually = false: projekt, dimension 6). Each such account becomes one line per project plus one untagged remainder (the current IB minus the projects, any sign); the account total never changes. Accounts without a project balance last year, and the VAT accounts (26xx), stay untouched. Answers current and proposed lines per account, which accounts change, unresolved project codes, and blocked (code and Swedish message) when the year is closed, locked, behind the lock date or has a bokslut. Read-only.
+
+**Use when:** A project-filtered ledger opens at zero for a year whose IB was booked before project balances were carried (an IB imported or closed earlier), and the user asks how project balances carry into the new year.
+**Do not use for:** Changing amounts in the IB (POST /fiscal-periods/{id}/opening-balances/correct) or a year closed after project balances were carried: the year-end already splits the IB per project.
+
+**Pitfalls:**
+- The basis is the previous year in Accounted as it stands: if that year is still open (source_period_closed false), later bookings there change the split.
+- A previous year whose own IB was untagged only carries the projects' movements of that year.
+- unresolved_dimensions lists codes missing from the registry: the apply refuses until they exist.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    fiscal_period_id: string,
+    fiscal_period_name: string | null,
+    journal_entry_id: string | null,
+    voucher: string | null,
+    source: "previous_year",
+    source_fiscal_period_id: string | null,
+    source_fiscal_period_name: string | null,
+    source_period_closed: boolean | null,
+    accumulating_dimensions: string[],
+    method: "inline_rattelse",
+    accounts_to_change: number,
+    accounts_unchanged: number,
+    accounts_skipped: number,
+    can_apply: boolean,
+    blocked: { code: string, message_sv: string, message_en: string, details?: Record<string, unknown> } | null,
+    unresolved_dimensions: { sie_dim_no: string, code: string, reason: "unknown_dimension" | "resetting_dimension" | "unknown_value", accounts: string[] }[],
+    dimension_values: { sie_dim_no: string, code: string, name: string, is_active: boolean }[],
+    accounts: { account_number: string, account_name: string | null, total: number, status: "change" | "unchanged" | "skipped", skip_reason: "foreign_currency" | "line_document" | null, current_lines: { debit_amount: number, credit_amount: number, amount: number, dimensions: Record<string, string>, line_description: string | null, journal_entry_line_id: string }[], proposed_lines: { debit_amount: number, credit_amount: number, amount: number, dimensions: Record<string, string>, line_description: string | null }[] }[],
+    fingerprint: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "fiscal_period_id": "7b3a…",
+    "fiscal_period_name": "2026",
+    "journal_entry_id": "4d2a…",
+    "voucher": "A1",
+    "source": "previous_year",
+    "source_fiscal_period_id": "5e91…",
+    "source_fiscal_period_name": "2025",
+    "source_period_closed": true,
+    "accumulating_dimensions": [
+      "6"
+    ],
+    "method": "inline_rattelse",
+    "accounts_to_change": 1,
+    "accounts_unchanged": 0,
+    "accounts_skipped": 0,
+    "can_apply": true,
+    "blocked": null,
+    "unresolved_dimensions": [],
+    "dimension_values": [
+      {
+        "sie_dim_no": "6",
+        "code": "P1",
+        "name": "Kv. Eken",
+        "is_active": true
+      }
+    ],
+    "accounts": [
+      {
+        "account_number": "1470",
+        "account_name": "Pågående arbeten",
+        "total": 1800,
+        "status": "change",
+        "skip_reason": null,
+        "current_lines": [
+          {
+            "journal_entry_line_id": "9c0f…",
+            "debit_amount": 1800,
+            "credit_amount": 0,
+            "amount": 1800,
+            "dimensions": {},
+            "line_description": "IB 1470"
+          }
+        ],
+        "proposed_lines": [
+          {
+            "debit_amount": 1300,
+            "credit_amount": 0,
+            "amount": 1300,
+            "dimensions": {
+              "6": "P1"
+            },
+            "line_description": "Ingående balans: Pågående arbeten"
+          },
+          {
+            "debit_amount": 500,
+            "credit_amount": 0,
+            "amount": 500,
+            "dimensions": {},
+            "line_description": "Ingående balans: Pågående arbeten"
+          }
+        ]
+      }
+    ],
+    "fingerprint": "3f9a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/opening-balances/split-per-project`
+
+**Split a year's ingående balanser per project, inside the same IB verifikat (inline rättelse).**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Applies the split GET /fiscal-periods/{id}/opening-balances/split-per-project previews: for each changing account the IB verifikat's lines are struck and replaced by one line per project plus an untagged remainder, inside the same verifikat through the inline rättelse (BFL 5 kap 5 §; the struck lines are kept in the rättelse log with who and when). Account totals never change. Every project code is checked against the dimension registry first; archived projects are kept. Only for an open, unlocked year after the lock date and without a bokslut; there is no storno fallback, because a storno-corrected IB carries no project tags. A split already in place answers applied=false and writes nothing. Idempotent. Dry-runnable: the dry run answers the preview.
+
+**Use when:** The user wants project balances carried into a year whose IB was booked as one line per account, after reviewing the preview.
+**Do not use for:** Changing IB amounts (POST /fiscal-periods/{id}/opening-balances/correct), or a locked or closed year: open it first.
+
+**Pitfalls:**
+- Pass expected_fingerprint from the preview: if the IB or the previous year changed since, 409 OB_SPLIT_PROPOSAL_CHANGED instead of a different split.
+- A closed year answers 409 OB_SPLIT_PERIOD_CLOSED, a locked one 409 OB_SPLIT_PERIOD_LOCKED, a lock date covering the IB 409 OB_COMPANY_LOCK_DATE, a posted bokslut 409 OB_CORRECT_YEAR_END_EXISTS.
+- Project codes missing from the registry answer 409 OB_SPLIT_DIMENSION_UNRESOLVED with details.unresolved.
+- An account with a foreign-currency IB line or a line-level underlag link is skipped (accounts_skipped), never forced.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ expected_fingerprint?: string }
+```
+
+Example request:
+```json
+{
+  "expected_fingerprint": "3f9a…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    fiscal_period_id: string,
+    journal_entry_id: string,
+    applied: boolean,
+    accounts_changed: string[],
+    accounts_skipped: { account_number: string, reason: "foreign_currency" | "line_document" }[],
+    lines_struck: number,
+    lines_added: number,
+    rattelse_log_ids: string[],
+    fingerprint: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "fiscal_period_id": "7b3a…",
+    "journal_entry_id": "4d2a…",
+    "applied": true,
+    "accounts_changed": [
+      "1470"
+    ],
+    "accounts_skipped": [],
+    "lines_struck": 1,
+    "lines_added": 2,
+    "rattelse_log_ids": [
+      "b7d2…"
+    ],
+    "fingerprint": "3f9a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/reopen-external`
 
 **Undo klarmarkera: reopen a year marked closed in the previous system.**

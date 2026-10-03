@@ -3605,6 +3605,70 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ingående balanser får bara bokas på balanskonton (klass 1 och 2).',
     message_en: 'Opening balances may only use balance sheet accounts (class 1 and 2).',
   },
+  // "Dela upp IB per projekt" (#3313): lib/import/opening-balance/split-per-project.ts.
+  // The split runs as an inline rättelse of the IB verifikat, which BFL 5 kap
+  // 5 § only allows in an open, unlocked year: these say what to open first.
+  OB_SPLIT_PERIOD_CLOSED: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsåret är stängt, så dess ingående balanser kan inte delas upp per projekt. Är året markerat som avslutat i ett tidigare program kan du öppna det igen (Inställningar › Bokföring › Räkenskapsår › Öppna igen) och försöka på nytt.',
+    message_en:
+      'The fiscal year is closed, so its opening balances cannot be split per project. If the year was marked as closed in a previous program, reopen it (Settings › Bookkeeping › Fiscal years › Reopen) and try again.',
+    remediation: {
+      description:
+        'A year closed in Accounted (year-end posted) cannot be reopened: split the following year\'s opening balances instead. A year only marked closed externally is reopened with POST /fiscal-periods/{id}/reopen-external.',
+    },
+  },
+  OB_SPLIT_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsåret är låst, så dess ingående balanser kan inte delas upp per projekt. Lås upp året först (Inställningar › Bokföring › Räkenskapsår › Lås upp) och försök sedan igen.',
+    message_en:
+      'The fiscal year is locked, so its opening balances cannot be split per project. Unlock the year first (Settings › Bookkeeping › Fiscal years › Unlock) and try again.',
+    remediation: {
+      description: 'Unlock the fiscal year (POST /fiscal-periods/{id}/unlock), then retry the split.',
+    },
+  },
+  OB_SPLIT_NO_PREVIOUS_YEAR: {
+    httpStatus: 409,
+    message_sv:
+      'Det finns inget tidigare räkenskapsår i Accounted att hämta projektsaldon från. Ingående balanser från en SIE-import delas upp per projekt när filen innehåller #OIB-rader.',
+    message_en:
+      'There is no earlier fiscal year in Accounted to take project balances from. Opening balances from an SIE import are split per project when the file carries #OIB records.',
+  },
+  OB_SPLIT_DIMENSION_UNRESOLVED: {
+    httpStatus: 409,
+    message_sv:
+      'Ett eller flera projekt med saldo finns inte i dimensionsregistret. Lägg upp dem under Dimensioner och försök igen.',
+    message_en:
+      'One or more projects carrying a balance are missing from the dimension registry. Add them under Dimensions and try again.',
+    thrown_message_sv: true,
+    remediation: {
+      description:
+        'details.unresolved lists each dimension number and code. Create the missing values (POST /dimensions/{id}/values), then retry.',
+    },
+  },
+  OB_SPLIT_PROPOSAL_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Ingående balanserna eller projektsaldona har ändrats sedan förhandsgranskningen. Förhandsgranska uppdelningen igen.',
+    message_en:
+      'The opening balances or the project balances changed since the preview. Preview the split again.',
+    remediation: {
+      description: 'Run the preview (GET or ?dry_run=true) again and pass its fingerprint as expected_fingerprint.',
+    },
+  },
+  OB_SPLIT_REFUSED: {
+    httpStatus: 409,
+    message_sv: 'Uppdelningen nekades av reglerna för rättelse av verifikat.',
+    message_en: 'The split was refused by the correction rules for posted entries.',
+    thrown_message_sv: true,
+  },
+  OB_SPLIT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Uppdelningen av ingående balanser per projekt misslyckades.',
+    message_en: 'Splitting the opening balances per project failed.',
+  },
   SKATTEKONTO_FILE_ORG_NUMBER_MISMATCH: {
     httpStatus: 409,
     message_sv:
