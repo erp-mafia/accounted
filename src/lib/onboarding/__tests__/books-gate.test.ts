@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decideBooksGate, BOOKS_PATH } from '../books-gate'
+import { decideBooksGate, shouldArmBooksGate, BOOKS_PATH } from '../books-gate'
 
 const base = { cookieCompanyId: 'c1', activeCompanyId: 'c1', enabled: true, search: '' }
 
@@ -36,5 +36,28 @@ describe('decideBooksGate', () => {
       action: 'redirect',
       to: `${BOOKS_PATH}?migration=error&reason=x&station=books`,
     })
+  })
+})
+
+describe('shouldArmBooksGate', () => {
+  it("arms for the user's first company", () => {
+    expect(shouldArmBooksGate({ teamKind: 'personal', hasLiveCompany: false, enabled: true })).toBe(true)
+    expect(shouldArmBooksGate({ teamKind: null, hasLiveCompany: false, enabled: true })).toBe(true)
+  })
+
+  it('never arms for a user who already has a live company', () => {
+    expect(shouldArmBooksGate({ teamKind: 'personal', hasLiveCompany: true, enabled: true })).toBe(false)
+  })
+
+  it('never arms for a client company created under a byrå team', () => {
+    expect(shouldArmBooksGate({ teamKind: 'byra', hasLiveCompany: false, enabled: true })).toBe(false)
+  })
+
+  it('does not arm when the membership state is unknown', () => {
+    expect(shouldArmBooksGate({ teamKind: 'personal', hasLiveCompany: null, enabled: true })).toBe(false)
+  })
+
+  it('does not arm when the feature is switched off', () => {
+    expect(shouldArmBooksGate({ teamKind: 'personal', hasLiveCompany: false, enabled: false })).toBe(false)
   })
 })

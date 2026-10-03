@@ -28,7 +28,11 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   })),
 }))
 
-import { computeVatCloseCheck, RC_BASIS_MISSING_HINT } from '../server'
+import {
+  computeVatCloseCheck,
+  RC_BASIS_MISSING_HINT,
+  REVENUE_ACCOUNT_WITHOUT_RUTA_HINT,
+} from '../server'
 
 interface MockLine {
   entry?: string
@@ -492,5 +496,64 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     expect(blocker.severity).toBe('medium')
     expect(blocker.hint).not.toBe(RC_BASIS_MISSING_HINT)
     expect((result.rutor as Record<string, number>).ruta21).toBe(5000)
+  })
+
+  // #3387: sales on a class 3 account with no momskod and no momssats reach no
+  // ruta while their moms reaches ruta 10. The close check derives the account
+  // list from its own totals and dynamic resolution, the same core helper the
+  // declaration uses, and reports it without blocking the close.
+  it('warns about revenue that reaches no ruta, naming the account, without blocking', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '3001', credit_amount: 10000 },
+          { entry: 'e1', account_number: '3543', credit_amount: 1250 },
+          { entry: 'e1', account_number: '2611', credit_amount: 2812.5 },
+          { entry: 'e1', account_number: '1510', debit_amount: 14062.5 },
+        ],
+        [{
+          account_number: '3543',
+          account_name: 'Faktureringsavgift',
+          account_class: 3,
+          default_vat_rate: null,
+          default_vat_treatment: null,
+        }],
+      ),
+    )
+
+    expect(result.rutor.ruta05).toBe(10000)
+    const finding = result.declaration_checks.find((f) => f.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA')!
+    expect(finding.status).toBe('WARNING')
+    expect(finding.message).toMatch(/3543 Faktureringsavgift/)
+    const blocker = result.blockers.find((b) => b.check_code === 'REVENUE_ACCOUNT_WITHOUT_RUTA')!
+    expect(blocker.severity).toBe('medium')
+    expect(blocker.hint).toBe(REVENUE_ACCOUNT_WITHOUT_RUTA_HINT)
+    expect(result.ready_to_close).toBe(true)
+  })
+
+  it('stays silent once the account has a momskod', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '3543', credit_amount: 1250 },
+          { entry: 'e1', account_number: '2611', credit_amount: 312.5 },
+          { entry: 'e1', account_number: '1510', debit_amount: 1562.5 },
+        ],
+        [{
+          account_number: '3543',
+          account_name: 'Faktureringsavgift',
+          account_class: 3,
+          default_vat_rate: null,
+          default_vat_treatment: 'standard_25',
+        }],
+      ),
+    )
+
+    expect(result.rutor.ruta05).toBe(1250)
+    expect(result.declaration_checks).toEqual([])
   })
 })

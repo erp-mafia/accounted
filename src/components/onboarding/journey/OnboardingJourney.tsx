@@ -532,7 +532,6 @@ export default function OnboardingJourney({
         name: periodResult.periodName,
       },
       ticLookup: s.ticLookup,
-      booksGate: mode === 'first',
     })
       .then((result) => {
         timers.forEach((id) => window.clearTimeout(id))

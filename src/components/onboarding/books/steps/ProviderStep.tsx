@@ -322,7 +322,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
             void invalidateReferenceData(['ref:accounts', 'ref:fiscal-periods'])
           }
           return result
-        }, (err) => (err instanceof SIEJobFailedError ? formatImportFailure(err.failure) : getErrorMessage(err, { locale })))
+        }, (err) => (err instanceof SIEJobFailedError ? formatImportFailure(err.failure) : getErrorMessage(err, { locale })), ctx.isLeaving)
         // Registers, the insight and the door onward wait until every
         // selected year is in the books.
         if (!providerYearsComplete(outcome)) {

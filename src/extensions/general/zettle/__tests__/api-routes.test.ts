@@ -5,15 +5,6 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   return { ...actual, requireCapability: vi.fn().mockResolvedValue(null) }
 })
 
-vi.mock('../lib/oauth', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../lib/oauth')>()
-  return {
-    ...actual,
-    refreshAccessToken: vi.fn(),
-    disconnectApplication: vi.fn().mockResolvedValue(undefined),
-  }
-})
-
 vi.mock('../lib/order-sync', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/order-sync')>()
   return { ...actual, syncZettlePurchases: vi.fn() }
@@ -372,9 +363,12 @@ describe('zettle extension routes', () => {
         data: [{ id: 'c1', status: 'active', organization_uuid: 'org-1', refresh_token_encrypted: 'enc' }],
       })
       enqueue({ data: null }) // local revoke (session client)
+      vi.mocked(refreshAccessToken).mockResolvedValueOnce({ access_token: 'access-1' } as never)
       const ctx = makeContext(supabase)
       const res = await findRoute('DELETE', '/disconnect').handler(makeRequest('DELETE', {}), ctx)
       expect(res.status).toBe(200)
+      // The route swallows a remote-revoke failure; the happy path must not hit it.
+      expect(ctx.log.warn).not.toHaveBeenCalled()
       // Lookup: service role, pinned to the caller's company.
       expect(service.findCall('zettle_connections', 'select')?.[0]).toContain('refresh_token_encrypted')
       expect(service.findCall('zettle_connections', 'eq')).toEqual(['company_id', 'company-1'])

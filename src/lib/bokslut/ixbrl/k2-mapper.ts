@@ -15,7 +15,9 @@
  */
 
 import type { ConceptAmount, ConceptAmounts } from './types'
+import type { EntityType } from '@/types'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
+import { supportsMemberCapital } from '@/lib/company/entity-type'
 import {
   SIGN_RECLASSIFICATION_RULES,
   type SignReclassificationId,
@@ -391,6 +393,184 @@ export const K2_BR_MAPPINGS: PostMapping[] = [
   },
 ]
 
+/**
+ * The BR posts each subtotal adds up, in uppställningsform order. This is the
+ * one definition of which post belongs under which heading: computeTotals
+ * sums exactly these lists for the årsredovisning, and the Balansrapport
+ * groups its accounts by them (k2BrSectionForAccount), so the two reports
+ * cannot place an account differently. Both equity tables share it: the
+ * förening posts (Medlemsinsatser, Forlagsinsatser) sit in bundet eget
+ * kapital next to the aktiebolag ones.
+ */
+const BR_SECTION_CONCEPTS = {
+  tecknatEjInbetaltKapital: ['TecknatEjInbetaltKapital'],
+  immateriellaAnlaggningstillgangar: [
+    'KoncessionerPatentLicenserVarumarkenLiknandeRattigheter',
+    'HyresratterLiknandeRattigheter',
+    'Goodwill',
+    'ForskottImmateriellaAnlaggningstillgangar',
+  ],
+  materiellaAnlaggningstillgangar: [
+    'ByggnaderMark',
+    'MaskinerAndraTekniskaAnlaggningar',
+    'InventarierVerktygInstallationer',
+    'ForbattringsutgifterAnnansFastighet',
+    'OvrigaMateriellaAnlaggningstillgangar',
+    'PagaendeNyanlaggningarForskottMateriellaAnlaggningstillgangar',
+  ],
+  finansiellaAnlaggningstillgangar: [
+    'AndelarKoncernforetag',
+    'FordringarKoncernforetagLangfristiga',
+    'AndelarIntresseforetagGemensamtStyrdaForetag',
+    'FordringarIntresseforetagGemensamtStyrdaForetagLangfristiga',
+    'AgarintressenOvrigaForetag',
+    'FordringarOvrigaForetagAgarintresseLangfristiga',
+    'AndraLangfristigaVardepappersinnehav',
+    'LanDelagareNarstaende',
+    'AndraLangfristigaFordringar',
+  ],
+  varulager: [
+    'LagerRavarorFornodenheter',
+    'LagerVarorUnderTillverkning',
+    'LagerFardigaVarorHandelsvaror',
+    'PagaendeArbetenAnnansRakningOmsattningstillgangar',
+    'ForskottTillLeverantorer',
+    'OvrigaLagertillgangar',
+  ],
+  kortfristigaFordringar: [
+    'Kundfordringar',
+    'FordringarKoncernforetagKortfristiga',
+    'FordringarIntresseforetagGemensamtStyrdaForetagKortfristiga',
+    'FordringarOvrigaforetagAgarintresseKortfristiga',
+    'OvrigaFordringarKortfristiga',
+    'UpparbetadEjFaktureradIntakt',
+    'ForutbetaldaKostnaderUpplupnaIntakter',
+  ],
+  kortfristigaPlaceringar: ['AndelarKoncernforetagKortfristiga', 'OvrigaKortfristigaPlaceringar'],
+  kassaBank: ['KassaBankExklRedovisningsmedel', 'Redovisningsmedel'],
+  bundetEgetKapital: [
+    'Aktiekapital',
+    'EjRegistreratAktiekapital',
+    'Medlemsinsatser',
+    'Forlagsinsatser',
+    'OverkursfondBunden',
+    'Uppskrivningsfond',
+    'Reservfond',
+  ],
+  frittEgetKapital: ['Overkursfond', 'BalanseratResultat', 'AretsResultatEgetKapital'],
+  obeskattadeReserver: [
+    'Periodiseringsfonder',
+    'AckumuleradeOveravskrivningar',
+    'OvrigaObeskattadeReserver',
+  ],
+  avsattningar: [
+    'AvsattningarPensionerLiknandeForpliktelserEnligtLag',
+    'OvrigaAvsattningarPensionerLiknandeForpliktelser',
+    'OvrigaAvsattningar',
+  ],
+  langfristigaSkulder: [
+    'Obligationslan',
+    'CheckrakningskreditLangfristig',
+    'OvrigaLangfristigaSkulderKreditinstitut',
+    'SkulderKoncernforetagLangfristiga',
+    'SkulderIntresseforetagGemensamtStyrdaForetagLangfristiga',
+    'SkulderOvrigaForetagAgarintresseLangfristiga',
+    'OvrigaLangfristigaSkulder',
+  ],
+  kortfristigaSkulder: [
+    'ForskottFranKunder',
+    'CheckrakningskreditKortfristig',
+    'OvrigaKortfristigaSkulderKreditinstitut',
+    'PagaendeArbetenAnnansRakningKortfristigaSkulder',
+    'FaktureradEjUpparbetadIntakt',
+    'Leverantorsskulder',
+    'Vaxelskulder',
+    'SkulderKoncernforetagKortfristiga',
+    'SkulderIntresseforetagGemensamtStyrdaForetagKortfristiga',
+    'SkulderOvrigaForetagAgarintresseKortfristiga',
+    'Skatteskulder',
+    'OvrigaKortfristigaSkulder',
+    'UpplupnaKostnaderForutbetaldaIntakter',
+  ],
+} as const satisfies Record<string, readonly string[]>
+
+/** A BR section that holds posts, and so accounts, directly. */
+export type K2BrSectionKey = keyof typeof BR_SECTION_CONCEPTS
+
+export interface K2BrSection {
+  key: K2BrSectionKey
+  label: string
+  concepts: readonly string[]
+}
+
+/** A heading whose total is the sum of its sections (Anläggningstillgångar, Eget kapital). */
+export interface K2BrHeading {
+  key: 'anlaggningstillgangar' | 'omsattningstillgangar' | 'egetKapital'
+  label: string
+  sections: readonly K2BrSection[]
+}
+
+const section = (key: K2BrSectionKey, label: string): K2BrSection => ({
+  key,
+  label,
+  concepts: BR_SECTION_CONCEPTS[key],
+})
+
+/**
+ * The BR headings (ÅRL bilaga 1, K2 risbs) over the sections above, in
+ * uppställningsform order. The labels are the headings the årsredovisning
+ * prints (buildBrRows in lib/bokslut/arsredovisning/statement-rows.ts, pinned
+ * by a test); "Tecknat men ej inbetalt kapital" is a post of its own above
+ * Anläggningstillgångar.
+ */
+export const K2_BR_LAYOUT: {
+  assets: ReadonlyArray<K2BrSection | K2BrHeading>
+  equityLiabilities: ReadonlyArray<K2BrSection | K2BrHeading>
+} = {
+  assets: [
+    section('tecknatEjInbetaltKapital', 'Tecknat men ej inbetalt kapital'),
+    {
+      key: 'anlaggningstillgangar',
+      label: 'Anläggningstillgångar',
+      sections: [
+        section('immateriellaAnlaggningstillgangar', 'Immateriella anläggningstillgångar'),
+        section('materiellaAnlaggningstillgangar', 'Materiella anläggningstillgångar'),
+        section('finansiellaAnlaggningstillgangar', 'Finansiella anläggningstillgångar'),
+      ],
+    },
+    {
+      key: 'omsattningstillgangar',
+      label: 'Omsättningstillgångar',
+      sections: [
+        section('varulager', 'Varulager m.m.'),
+        section('kortfristigaFordringar', 'Kortfristiga fordringar'),
+        section('kortfristigaPlaceringar', 'Kortfristiga placeringar'),
+        section('kassaBank', 'Kassa och bank'),
+      ],
+    },
+  ],
+  equityLiabilities: [
+    {
+      key: 'egetKapital',
+      label: 'Eget kapital',
+      sections: [
+        section('bundetEgetKapital', 'Bundet eget kapital'),
+        section('frittEgetKapital', 'Fritt eget kapital'),
+      ],
+    },
+    section('obeskattadeReserver', 'Obeskattade reserver'),
+    section('avsattningar', 'Avsättningar'),
+    section('langfristigaSkulder', 'Långfristiga skulder'),
+    section('kortfristigaSkulder', 'Kortfristiga skulder'),
+  ],
+}
+
+const BR_SECTION_BY_CONCEPT: ReadonlyMap<string, K2BrSectionKey> = new Map(
+  (Object.keys(BR_SECTION_CONCEPTS) as K2BrSectionKey[]).flatMap((key) =>
+    BR_SECTION_CONCEPTS[key].map((concept) => [concept, key] as const),
+  ),
+)
+
 /** Accounts that map to a "nearest" post and deserve a manual-review nudge. */
 const RECLASSIFIED_ACCOUNTS: Record<string, string> = {
   '2083': 'Medlemsinsatser (2083) redovisas under Reservfond: granska klassificeringen.',
@@ -466,6 +646,34 @@ export const K2_BR_MAPPINGS_EKONOMISK_FORENING: PostMapping[] = K2_BR_MAPPINGS.f
 
 function brMappingsFor(legalForm: K2LegalForm): PostMapping[] {
   return legalForm === 'ekonomisk_forening' ? K2_BR_MAPPINGS_EKONOMISK_FORENING : K2_BR_MAPPINGS
+}
+
+/**
+ * The equity table a company's årsredovisning is mapped with: member capital
+ * (medlemsinsatser, förlagsinsatser) or share capital. A form that prepares
+ * no årsredovisning gets the share-capital table, whose asset and liability
+ * posts every table shares.
+ */
+export function k2LegalFormFor(entityType: EntityType): K2LegalForm {
+  return supportsMemberCapital(entityType) ? 'ekonomisk_forening' : 'aktiebolag'
+}
+
+/**
+ * The BR section an account's balance is reported under in the
+ * årsredovisning, read from the same ranges and subtotal lists that drive
+ * mapTrialBalancesToK2. Null when no post covers the account: the mapper
+ * reports such a balance as missing from the årsredovisning.
+ *
+ * By BAS range only. The statutory sign reclassifications (a credit 1630 to
+ * Skatteskulder) are a presentation of the post's total, not of the account,
+ * and an account-oriented report keeps the account where it was booked.
+ */
+export function k2BrSectionForAccount(
+  accountNumber: string,
+  legalForm: K2LegalForm,
+): K2BrSectionKey | null {
+  const mapping = brMappingsFor(legalForm).find((m) => inRanges(accountNumber, m.ranges))
+  return mapping ? (BR_SECTION_BY_CONCEPT.get(mapping.concept) ?? null) : null
 }
 
 const RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING: Record<string, string> = {
@@ -614,7 +822,11 @@ function add(a: ConceptAmount, b: ConceptAmount, sign = 1): ConceptAmount {
 
 const ZERO: ConceptAmount = { current: 0, previous: null }
 
-function sumConcepts(amounts: ConceptAmounts, concepts: string[], signs?: number[]): ConceptAmount {
+function sumConcepts(
+  amounts: ConceptAmounts,
+  concepts: readonly string[],
+  signs?: number[],
+): ConceptAmount {
   let total: ConceptAmount = { current: 0, previous: null }
   concepts.forEach((concept, index) => {
     total = add(total, amounts[concept] ?? ZERO, signs?.[index] ?? 1)
@@ -928,54 +1140,16 @@ function computeTotals(rr: ConceptAmounts, br: ConceptAmounts): K2MappingResult[
   const aretsResultat = add(resultatForeSkatt, skatter, -1)
 
   // ---- BR totals ----
-  const immateriella = sumConcepts(br, [
-    'KoncessionerPatentLicenserVarumarkenLiknandeRattigheter',
-    'HyresratterLiknandeRattigheter',
-    'Goodwill',
-    'ForskottImmateriellaAnlaggningstillgangar',
-  ])
-  const materiella = sumConcepts(br, [
-    'ByggnaderMark',
-    'MaskinerAndraTekniskaAnlaggningar',
-    'InventarierVerktygInstallationer',
-    'ForbattringsutgifterAnnansFastighet',
-    'OvrigaMateriellaAnlaggningstillgangar',
-    'PagaendeNyanlaggningarForskottMateriellaAnlaggningstillgangar',
-  ])
-  const finansiella = sumConcepts(br, [
-    'AndelarKoncernforetag',
-    'FordringarKoncernforetagLangfristiga',
-    'AndelarIntresseforetagGemensamtStyrdaForetag',
-    'FordringarIntresseforetagGemensamtStyrdaForetagLangfristiga',
-    'AgarintressenOvrigaForetag',
-    'FordringarOvrigaForetagAgarintresseLangfristiga',
-    'AndraLangfristigaVardepappersinnehav',
-    'LanDelagareNarstaende',
-    'AndraLangfristigaFordringar',
-  ])
+  // The post lists are BR_SECTION_CONCEPTS: the Balansrapport groups accounts
+  // by the same lists, so a post moved between subtotals moves in both.
+  const immateriella = sumConcepts(br, BR_SECTION_CONCEPTS.immateriellaAnlaggningstillgangar)
+  const materiella = sumConcepts(br, BR_SECTION_CONCEPTS.materiellaAnlaggningstillgangar)
+  const finansiella = sumConcepts(br, BR_SECTION_CONCEPTS.finansiellaAnlaggningstillgangar)
   const anlaggningstillgangar = add(add(immateriella, materiella), finansiella)
-  const varulager = sumConcepts(br, [
-    'LagerRavarorFornodenheter',
-    'LagerVarorUnderTillverkning',
-    'LagerFardigaVarorHandelsvaror',
-    'PagaendeArbetenAnnansRakningOmsattningstillgangar',
-    'ForskottTillLeverantorer',
-    'OvrigaLagertillgangar',
-  ])
-  const kortfristigaFordringar = sumConcepts(br, [
-    'Kundfordringar',
-    'FordringarKoncernforetagKortfristiga',
-    'FordringarIntresseforetagGemensamtStyrdaForetagKortfristiga',
-    'FordringarOvrigaforetagAgarintresseKortfristiga',
-    'OvrigaFordringarKortfristiga',
-    'UpparbetadEjFaktureradIntakt',
-    'ForutbetaldaKostnaderUpplupnaIntakter',
-  ])
-  const kortfristigaPlaceringar = sumConcepts(br, [
-    'AndelarKoncernforetagKortfristiga',
-    'OvrigaKortfristigaPlaceringar',
-  ])
-  const kassaBank = sumConcepts(br, ['KassaBankExklRedovisningsmedel', 'Redovisningsmedel'])
+  const varulager = sumConcepts(br, BR_SECTION_CONCEPTS.varulager)
+  const kortfristigaFordringar = sumConcepts(br, BR_SECTION_CONCEPTS.kortfristigaFordringar)
+  const kortfristigaPlaceringar = sumConcepts(br, BR_SECTION_CONCEPTS.kortfristigaPlaceringar)
+  const kassaBank = sumConcepts(br, BR_SECTION_CONCEPTS.kassaBank)
   const omsattningstillgangar = add(
     add(varulager, kortfristigaFordringar),
     add(kortfristigaPlaceringar, kassaBank),
@@ -985,55 +1159,13 @@ function computeTotals(rr: ConceptAmounts, br: ConceptAmounts): K2MappingResult[
     omsattningstillgangar,
   )
 
-  const bundetEgetKapital = sumConcepts(br, [
-    'Aktiekapital',
-    'EjRegistreratAktiekapital',
-    'Medlemsinsatser',
-    'Forlagsinsatser',
-    'OverkursfondBunden',
-    'Uppskrivningsfond',
-    'Reservfond',
-  ])
-  const frittEgetKapital = sumConcepts(br, [
-    'Overkursfond',
-    'BalanseratResultat',
-    'AretsResultatEgetKapital',
-  ])
+  const bundetEgetKapital = sumConcepts(br, BR_SECTION_CONCEPTS.bundetEgetKapital)
+  const frittEgetKapital = sumConcepts(br, BR_SECTION_CONCEPTS.frittEgetKapital)
   const egetKapital = add(bundetEgetKapital, frittEgetKapital)
-  const obeskattadeReserver = sumConcepts(br, [
-    'Periodiseringsfonder',
-    'AckumuleradeOveravskrivningar',
-    'OvrigaObeskattadeReserver',
-  ])
-  const avsattningar = sumConcepts(br, [
-    'AvsattningarPensionerLiknandeForpliktelserEnligtLag',
-    'OvrigaAvsattningarPensionerLiknandeForpliktelser',
-    'OvrigaAvsattningar',
-  ])
-  const langfristigaSkulder = sumConcepts(br, [
-    'Obligationslan',
-    'CheckrakningskreditLangfristig',
-    'OvrigaLangfristigaSkulderKreditinstitut',
-    'SkulderKoncernforetagLangfristiga',
-    'SkulderIntresseforetagGemensamtStyrdaForetagLangfristiga',
-    'SkulderOvrigaForetagAgarintresseLangfristiga',
-    'OvrigaLangfristigaSkulder',
-  ])
-  const kortfristigaSkulder = sumConcepts(br, [
-    'ForskottFranKunder',
-    'CheckrakningskreditKortfristig',
-    'OvrigaKortfristigaSkulderKreditinstitut',
-    'PagaendeArbetenAnnansRakningKortfristigaSkulder',
-    'FaktureradEjUpparbetadIntakt',
-    'Leverantorsskulder',
-    'Vaxelskulder',
-    'SkulderKoncernforetagKortfristiga',
-    'SkulderIntresseforetagGemensamtStyrdaForetagKortfristiga',
-    'SkulderOvrigaForetagAgarintresseKortfristiga',
-    'Skatteskulder',
-    'OvrigaKortfristigaSkulder',
-    'UpplupnaKostnaderForutbetaldaIntakter',
-  ])
+  const obeskattadeReserver = sumConcepts(br, BR_SECTION_CONCEPTS.obeskattadeReserver)
+  const avsattningar = sumConcepts(br, BR_SECTION_CONCEPTS.avsattningar)
+  const langfristigaSkulder = sumConcepts(br, BR_SECTION_CONCEPTS.langfristigaSkulder)
+  const kortfristigaSkulder = sumConcepts(br, BR_SECTION_CONCEPTS.kortfristigaSkulder)
   const egetKapitalSkulder = add(
     add(add(egetKapital, obeskattadeReserver), add(avsattningar, langfristigaSkulder)),
     kortfristigaSkulder,

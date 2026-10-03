@@ -92,6 +92,7 @@ import type {
   BalanceSheetReport,
   ResultatrapportReport,
   BalansrapportReport,
+  BalansrapportSection,
   DimensionPnlReport,
   VatDeclaration,
   VatPeriodType,
@@ -925,31 +926,21 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
                         {group.class_label}
                       </td>
                     </tr>
-                    {group.rows.map((row) => (
-                      <tr
-                        key={row.account_number}
-                        className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
-                        onClick={() => onNavigateToAccount(row.account_number)}
-                      >
-                        <td className="px-4 py-1.5">
-                          <AccountNumber number={row.account_number} name={row.account_name} />
-                        </td>
-                        <td className="px-4 py-1.5">{row.account_name}</td>
-                        <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.ib)}</td>
-                        <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.period_change)}</td>
-                        <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.ub)}</td>
-                      </tr>
+                    {group.sections.map((section) => (
+                      <BalansrapportSectionRows
+                        key={section.key}
+                        section={section}
+                        depth={0}
+                        onNavigateToAccount={onNavigateToAccount}
+                      />
                     ))}
-                    <tr className="border-b font-medium">
-                      <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">
-                        Summa
-                      </td>
-                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(group.subtotal_ib)}</td>
-                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
-                        {formatAmount(group.subtotal_ub - group.subtotal_ib)}
-                      </td>
-                      <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(group.subtotal_ub)}</td>
-                    </tr>
+                    <BalansrapportTotalRow
+                      label={`Summa ${group.class_label}`}
+                      ib={group.subtotal_ib}
+                      change={group.subtotal_change}
+                      ub={group.subtotal_ub}
+                      className="border-b font-semibold"
+                    />
                   </React.Fragment>
                 ))}
               </tbody>
@@ -995,6 +986,92 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+/**
+ * One ÅRL heading of the Balansrapport: its label, then either its account
+ * rows or its subsections (one level, e.g. Anläggningstillgångar), then its
+ * "Summa" line.
+ */
+function BalansrapportSectionRows({
+  section,
+  depth,
+  onNavigateToAccount,
+}: {
+  section: BalansrapportSection
+  depth: 0 | 1
+  onNavigateToAccount: (account: string) => void
+}) {
+  return (
+    <>
+      <tr>
+        <td
+          colSpan={5}
+          className={cn(
+            'pt-3 pb-1 text-[13px] font-medium',
+            depth === 0 ? 'px-4' : 'pl-8 pr-4 text-muted-foreground',
+          )}
+        >
+          {section.label}
+        </td>
+      </tr>
+      {section.sections.map((child) => (
+        <BalansrapportSectionRows
+          key={child.key}
+          section={child}
+          depth={1}
+          onNavigateToAccount={onNavigateToAccount}
+        />
+      ))}
+      {section.rows.map((row) => (
+        <tr
+          key={row.account_number}
+          className="border-b cursor-pointer hover:bg-secondary/35 transition-colors"
+          onClick={() => onNavigateToAccount(row.account_number)}
+        >
+          <td className="px-4 py-1.5">
+            <AccountNumber number={row.account_number} name={row.account_name} />
+          </td>
+          <td className="px-4 py-1.5">{row.account_name}</td>
+          <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.ib)}</td>
+          <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.period_change)}</td>
+          <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.ub)}</td>
+        </tr>
+      ))}
+      <BalansrapportTotalRow
+        label={section.total_label}
+        ib={section.subtotal_ib}
+        change={section.subtotal_change}
+        ub={section.subtotal_ub}
+        className={cn('font-medium', depth === 0 && 'border-b')}
+      />
+    </>
+  )
+}
+
+function BalansrapportTotalRow({
+  label,
+  ib,
+  change,
+  ub,
+  className,
+}: {
+  label: string
+  ib: number
+  change: number
+  ub: number
+  className?: string
+}) {
+  return (
+    <tr className={className}>
+      <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">
+        {label}
+      </td>
+      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(ib)}</td>
+      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(change)}</td>
+      <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(ub)}</td>
+    </tr>
   )
 }
 
@@ -1809,9 +1886,14 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // The gap-downgrade evidence (per-momssats 44xx/45xx balances) travels on
   // the declaration payload. Absent on responses from an older deploy: then
   // the gaps keep their blocking ERROR tier rather than guessing.
+  // The class 3 accounts that reach no ruta travel on the payload too
+  // (REVENUE_ACCOUNT_WITHOUT_RUTA, #3387); absent on an older response, which
+  // keeps that warning silent.
   const checks = data
     ? withRcBasisGapFindings(
-        runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data)),
+        runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data), {
+          revenueAccountsWithoutRuta: data.revenueAccountsWithoutRuta,
+        }),
         rcBasisScan,
         data.rcBasisByRate
           ? { rutor: data.rutor, rcBasisByRate: data.rcBasisByRate }

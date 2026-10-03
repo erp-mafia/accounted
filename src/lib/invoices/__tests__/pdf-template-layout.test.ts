@@ -494,6 +494,52 @@ describe('oversize free text', () => {
     expect(pages.map(textOf).join('')).toContain('Städning vecka 40')
   })
 
+  it('a ROT box with every row set stays whole and ends inside the page wherever it lands', async () => {
+    // #3385: a ROT invoice now also prints the förening orgnr (bostadsrätt),
+    // the total incl. moms and the seller payout notice. At the line cap the
+    // box is still kept together; pushed towards the page bottom by the rows
+    // above it, it moves to the next page rather than running past the edge.
+    const rotItem = (i: number) =>
+      makeItem({
+        sort_order: 100 + i,
+        id: `rot-${i}`,
+        description: `Elarbete ${i + 1}`,
+        deduction_type: 'rot',
+        deduction_amount: 250,
+        work_type: 'EL',
+        apartment_number: '1201',
+        brf_org_number: '799900-0040',
+      } as Partial<InvoiceItem>)
+    const rotItems = Array.from({ length: MAX_KEEP_TOGETHER_LINES }, (_, i) => rotItem(i))
+    const invoice = { ...sentInvoice(), deduction_total: 3000, deduction_personnummer_masked: '19900101-XXXX' }
+    const box = elements(InvoicePDF({ invoice, customer, items: rotItems, company })).find(
+      (el) => el.props.wrap !== undefined && containsText(el, 'Underlag för skattereduktion'),
+    )
+    expect(box?.props.wrap).toBe(false)
+
+    const landedOn = new Set<number>()
+    // The fixed layout keeps totals, the box and the payment area together,
+    // so it takes more filler rows to move the box to a later page.
+    for (const fillers of [0, 4, 8, 12, 16, 24, 32, 40]) {
+      const filler = Array.from({ length: fillers }, (_, i) => makeItem({ sort_order: i, id: `fill-${i}`, description: `Rad ${i + 1}` }))
+      const pages = await layOut(InvoicePDF({ invoice, customer, items: [...filler, ...rotItems], company }))
+      expectNothingPastThePageEdge(pages)
+      const texts = pages.map(textOf)
+      const all = texts.join('')
+      expect(all).toContain('Totalt inkl. moms')
+      expect(all).toContain('799900-0040')
+      // The box is whole: its heading and its last row (the payout notice)
+      // are on the same page.
+      const headingPage = texts.findIndex((t) => t.includes('Underlag för skattereduktion'))
+      const noticePage = texts.findIndex((t) => t.includes('Säljaren begär utbetalningen från Skatteverket'))
+      expect(headingPage).toBeGreaterThanOrEqual(0)
+      expect(noticePage).toBe(headingPage)
+      landedOn.add(headingPage)
+    }
+    // The filler rows push the box across a page break at least once.
+    expect(landedOn.size).toBeGreaterThan(1)
+  })
+
   it('a 3000-character description without line breaks is not clipped', async () => {
     const description = Array.from({ length: 400 }, (_, i) => `ord${i + 1}`).join(' ')
     const pages = await layOut(InvoicePDF({ invoice: sentInvoice(), customer, items: [makeItem({ description })], company }))
