@@ -22445,19 +22445,23 @@ export const tools: McpTool[] = [
       const validation = validateSIEFile(parsed)
 
       // Wrong-company tripwire: importing another company's bookkeeping is
-      // the worst silent failure this flow can have. Digits-only comparison;
+      // the worst silent failure this flow can have. The comparison the
+      // submit gate uses, so 10- and 12-digit forms of one number match;
       // missing on either side reports unverified instead of ok.
       const { data: companyRow } = await supabase
         .from('companies')
         .select('org_number')
         .eq('id', companyId)
         .maybeSingle()
-      const companyOrg = ((companyRow as { org_number?: string | null } | null)?.org_number ?? '').replace(/\D/g, '')
-      const fileOrg = (parsed.header.orgNumber ?? '').replace(/\D/g, '')
+      const { compareSIEOrgNumber } = await import('@/lib/import/sie-org-number')
+      const orgCheck = compareSIEOrgNumber(
+        parsed.header.orgNumber,
+        (companyRow as { org_number?: string | null } | null)?.org_number,
+      )
       const orgMatch =
-        companyOrg && fileOrg
-          ? { verified: true, match: companyOrg === fileOrg, company_org_number: companyOrg, file_org_number: fileOrg }
-          : { verified: false, match: null, company_org_number: companyOrg || null, file_org_number: fileOrg || null }
+        orgCheck.companyOrgNumber && orgCheck.fileOrgNumber
+          ? { verified: true, match: !orgCheck.mismatch, company_org_number: orgCheck.companyOrgNumber, file_org_number: orgCheck.fileOrgNumber }
+          : { verified: false, match: null, company_org_number: orgCheck.companyOrgNumber, file_org_number: orgCheck.fileOrgNumber }
 
       const duplicateFile = await checkDuplicateImport(supabase, companyId, content)
       let duplicatePeriod = null
@@ -22547,7 +22551,7 @@ export const tools: McpTool[] = [
             : verdict === 'duplicate'
               ? 'This file or fiscal year has import history. Read gnubok_sie_import_status for the import before proposing replacement. Legacy imports need outcome review; do not retry or undo them automatically.'
               : orgMatch.match === false
-                ? 'STOP: the file belongs to a different organisation than this company. Confirm with the user before any import.'
+                ? 'STOP: the file belongs to a different organisation than this company. Ask the user whether it belongs here (an ombildning or a company registered under the wrong number can be legitimate). Only on their yes, call gnubok_import_sie with confirm_org_number_mismatch=true; without it the import is refused.'
                 : 'Summarize the scan for the user (source system, fiscal year, voucher count, balance status, any warnings). On their go-ahead call gnubok_import_sie with this same file and the returned mappings; the import stages for approval.',
       }
     },
@@ -22578,6 +22582,7 @@ export const tools: McpTool[] = [
         voucher_series: { type: 'string', description: 'Override voucher series for imported vouchers' },
         opening_balance_series: { type: 'string', description: 'Series for the IB voucher; default avoids series used by the file' },
         update_account_names: { type: 'boolean', description: 'Use #KONTO names from the file for created and existing accounts (default true). Set false to keep BAS default names.' },
+        confirm_org_number_mismatch: { type: 'boolean', description: 'True only after the user confirmed a file whose #ORGNR is not this company\'s' },
       },
       required: ['filename', 'mappings'],
     },
@@ -22648,6 +22653,19 @@ export const tools: McpTool[] = [
         )
       }
 
+      // Another organisation's file is refused before the approver sees it,
+      // unless the user confirmed it belongs here. submitSIEJob checks again
+      // at approval, by the same comparison.
+      const { checkSIEOrgNumber } = await import('@/lib/import/sie-org-number')
+      const orgCheck = await checkSIEOrgNumber(supabase, companyId, parsed.header.orgNumber)
+      if (orgCheck.mismatch && args.confirm_org_number_mismatch !== true) {
+        throw codedRefusal(
+          'SIE_IMPORT_ORG_NUMBER_MISMATCH',
+          `The file's #ORGNR ${orgCheck.fileOrgNumber} is not this company's organisation number (${orgCheck.companyOrgNumber}). ` +
+            'Ask the user whether the file belongs in this company; only on their yes, call again with confirm_org_number_mismatch=true.',
+        )
+      }
+
       return stagePendingOperation(supabase, companyId, userId, 'import_sie',
         `SIE-import: ${filename}`,
         {
@@ -22667,6 +22685,8 @@ export const tools: McpTool[] = [
           // Default true: Boolean(undefined) would silently flip it off.
           update_account_names:
             args.update_account_names === undefined ? true : Boolean(args.update_account_names),
+          // Confirms only the mismatch seen here; absent when there was none.
+          ...(orgCheck.mismatch ? { confirm_org_number_mismatch: true } : {}),
         },
         {
           filename,
@@ -22676,6 +22696,8 @@ export const tools: McpTool[] = [
           would_skip_all_vouchers: wouldSkipAllVouchers,
           company_name: parsed.header.companyName,
           org_number: parsed.header.orgNumber,
+          org_number_mismatch: orgCheck.mismatch,
+          ...(orgCheck.mismatch ? { company_org_number: orgCheck.companyOrgNumber } : {}),
           fiscal_year: { start: parsed.stats.fiscalYearStart, end: parsed.stats.fiscalYearEnd },
           account_count: parsed.stats.totalAccounts,
           voucher_count: parsed.stats.totalVouchers,

@@ -85,7 +85,7 @@ type ParseResponse = {
   success: boolean
   parsed: { issues: ParseIssue[] }
   validation: { valid: boolean; warnings: string[] }
-  preview: Pick<ImportPreview, 'chart' | 'fiscalYear' | 'mappingStatus'>
+  preview: Pick<ImportPreview, 'chart' | 'fiscalYear' | 'mappingStatus' | 'orgNumberMismatch' | 'companyOrgNumber'>
 }
 
 describe('POST /api/import/sie/parse', () => {
@@ -245,6 +245,39 @@ describe('POST /api/import/sie/parse', () => {
       expect(body.preview.fiscalYear.existingPeriod.id).toBe('seeded-2024')
       expect(body.preview.fiscalYear.message).toMatch(/2024-01-01 till 2024-12-31/)
       expect(body.preview.fiscalYear.message).toMatch(/Inställningar → Företag/)
+    })
+  })
+
+  // Queue order after the stored-mappings select: chart_of_accounts page,
+  // companies (only when the file has #ORGNR), fiscal_periods containing.
+  describe('the file\'s #ORGNR against the company', () => {
+    const withOrgnr = (orgnr: string) => CLEAN_SIE.replace('#RAR', `#ORGNR ${orgnr}\n#RAR`)
+
+    it.each([
+      ['556677-8899', '5599887766', true],
+      ['16556677-8899', '5566778899', false],
+    ])('file %s into company %s: mismatch %s', async (fileOrg, companyOrg, mismatch) => {
+      enqueue({ data: [] })
+      enqueue({ data: { org_number: companyOrg } })
+      enqueue({ data: { id: 'p-2024' } })
+
+      const response = await POST(fileRequest(withOrgnr(fileOrg)), emptyParams)
+      const body = (await response.json()) as ParseResponse
+
+      expect(response.status).toBe(200)
+      expect(body.preview.orgNumberMismatch).toBe(mismatch)
+      expect(body.preview.companyOrgNumber).toBe(companyOrg)
+    })
+
+    it('reports no mismatch for a file without #ORGNR', async () => {
+      enqueue({ data: [] })
+      enqueue({ data: { id: 'p-2024' } })
+
+      const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
+      const body = (await response.json()) as ParseResponse
+
+      expect(body.preview.orgNumberMismatch).toBe(false)
+      expect(body.preview.fiscalYear).toEqual({ verdict: 'match', periodId: 'p-2024' })
     })
   })
 })

@@ -12,7 +12,7 @@ import {
   detectEncoding,
   decodeBuffer,
 } from '@/lib/import/sie-parser'
-import { submitSIEJob } from '@/lib/import/sie-jobs'
+import { submitSIEJob, SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import { suggestSIEMappings } from '@/lib/import/sie-preview-mappings'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
@@ -45,6 +45,7 @@ registerEndpoint({
     'Body content-type must be multipart/form-data with either a `file` field carrying the .se / .sie / .si file, or `storagePath` and `filename` fields from the signed-upload endpoint.',
     'Files up to 50 MB use POST /imports/sie/upload, then upload bytes to Storage and submit storagePath + filename. Inline multipart is limited by the hosting gateway.',
     'An identical retry returns the same execution. Deliberate replacement requires options.onExistingPeriod=replace and options.supersedesImportId naming the reviewed predecessor, and uses a new batch after storno.',
+    'A file whose #ORGNR is not the company\'s organisation number answers 409 SIE_IMPORT_ORG_NUMBER_MISMATCH with both numbers in details. Check with the user, then resend with options.confirmOrgNumberMismatch=true to import it anyway. A file without #ORGNR is not checked.',
     'The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
     'Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.',
     'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides), by the same rules as the dashboard upload: a class 9 account carrying amounts is mapped to 2999 OBS-konto, also over a stored class 9 mapping. By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.',
@@ -131,6 +132,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         updateAccountNames: z.boolean().optional().default(true),
         onExistingPeriod:z.enum(['block','replace']).default('block'),
         supersedesImportId:z.string().uuid().optional(),
+        // The file's #ORGNR is not the company's and the user confirmed it.
+        confirmOrgNumberMismatch:z.boolean().optional(),
       })
       // OWASP V4.5: reject unknown keys so a future schema-extension
       // (or a careless edit) doesn't silently pass mass-assigned fields
@@ -207,13 +210,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    const job = await submitSIEJob(ctx.supabase,ctx.companyId!,ctx.userId,content,mappings,{
-      filename:file.name,createFiscalPeriod:options.createFiscalPeriod,
-      importOpeningBalances:options.importOpeningBalances,importTransactions:options.importTransactions,
-      voucherSeries:options.voucherSeries,openingBalanceSeries:options.openingBalanceSeries,
-      updateAccountNames:options.updateAccountNames,onExistingPeriod:options.onExistingPeriod,
-      supersedesImportId:options.supersedesImportId,
-    },file)
+    let job
+    try {
+      job = await submitSIEJob(ctx.supabase,ctx.companyId!,ctx.userId,content,mappings,{
+        filename:file.name,createFiscalPeriod:options.createFiscalPeriod,
+        importOpeningBalances:options.importOpeningBalances,importTransactions:options.importTransactions,
+        voucherSeries:options.voucherSeries,openingBalanceSeries:options.openingBalanceSeries,
+        updateAccountNames:options.updateAccountNames,onExistingPeriod:options.onExistingPeriod,
+        supersedesImportId:options.supersedesImportId,confirmOrgNumberMismatch:options.confirmOrgNumberMismatch,
+      },file)
+    } catch (err) {
+      // Both numbers travel in details so the caller can show them; every
+      // other refusal keeps the wrapper's mapping.
+      if (err instanceof SIEJobValidationError && err.code === 'SIE_IMPORT_ORG_NUMBER_MISMATCH') {
+        return v1ErrorResponseFromCode(err.code, ctx.log, { requestId: ctx.requestId, details: err.details })
+      }
+      throw err
+    }
     after(async () => { await runSIEWorker({importId:job.id}) })
     return accepted(job.id, 'import.sie', { requestId: ctx.requestId })
   },

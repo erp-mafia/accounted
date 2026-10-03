@@ -11164,6 +11164,7 @@
     "sie_untransferred_result": "{period}: årets resultat på {amount} är inte omfört till eget kapital. Senare års balansräkning visar en differens tills omföringen bokförs (konto 8999 mot t.ex. 2099).",
     "sie_encoding_artifacts": "{count, plural, one {# textfält ser felkodat ut} other {# textfält ser felkodade ut}} (tecken som ” eller „ i stället för å, ä, ö). Granska kontonamn och verifikationstexter.",
     "sie_org_mismatch": "Filen tillhör organisationsnummer {fileOrg}, inte det här företaget ({companyOrg}).",
+    "sie_org_mismatch_confirm": "Jag har kontrollerat att filen hör till det här företaget",
     "articles_price_incl_vat": "Priskolumnen \"{header}\" verkar vara inklusive moms, men priser importeras exklusive moms. Kontrollera värdena.",
     "articles_vat_rounded": "{count, plural, one {# rad} other {# rader}} hade en momssats som avrundades till närmaste giltiga (0, 6, 12 eller 25 %).",
     "articles_account_dropped": "{count, plural, one {# rad} other {# rader}} hade ett ogiltigt bokföringskonto (måste vara klass 1-3) som ignorerades.",

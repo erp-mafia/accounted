@@ -138,6 +138,16 @@ describe('gnubok_sie_preflight', () => {
     expect(result.verdict).toBe('ok_with_warnings')
     expect((result.org_number_match as Record<string, unknown>).match).toBe(false)
     expect(result.instructions).toContain('STOP')
+    expect(result.instructions).toContain('confirm_org_number_mismatch=true')
+  })
+
+  // The digits-only comparison counted the two forms of one number as a
+  // mismatch; the shared key (orgNumberKey) makes them one.
+  it('matches the 12-digit form of the company\'s own number', async () => {
+    const result = await run({ file_content: VALID_SIE.replace('#ORGNR 556000-0001', '#ORGNR 16556000-0001') })
+
+    expect(result.verdict).toBe('ok')
+    expect(result.org_number_match).toMatchObject({ verified: true, match: true })
   })
 
   it('reports unverified instead of ok when the company has no org number', async () => {
