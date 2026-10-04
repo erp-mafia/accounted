@@ -33,6 +33,7 @@ import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-en
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { eventBus } from '@/lib/events'
+import { ORE_TOLERANCE } from '@/lib/money'
 
 function payableInvoice(overrides: Partial<Invoice> = {}) {
   return {
@@ -123,6 +124,10 @@ describe('settleInvoicePayment', () => {
         ...overrides,
       } as Partial<Invoice>)
     const CASH = { ...BASE_PARAMS, accountingMethod: 'cash' }
+    // The CAS filter of a cash entry computed from paid_amount 0.
+    const UNPAID_CAS = [
+      `paid_amount.is.null,and(paid_amount.gt.${-ORE_TOLERANCE},paid_amount.lt.${ORE_TOLERANCE})`,
+    ]
 
     function expectNothingBooked() {
       expect(vi.mocked(createInvoiceCashPartialEntry)).not.toHaveBeenCalled()
@@ -170,7 +175,7 @@ describe('settleInvoicePayment', () => {
       })
       // The share was computed from paid_amount 0: the update only lands if
       // no other payment got there first.
-      expect(findCalls('invoices', 'or')).toEqual([['paid_amount.is.null,paid_amount.eq.0']])
+      expect(findCalls('invoices', 'or')).toEqual([UNPAID_CAS])
     })
 
     it('loses the race when another payment moved paid_amount, cancelling its voucher', async () => {
@@ -191,7 +196,9 @@ describe('settleInvoicePayment', () => {
       )
 
       expect(result).toEqual({ ok: false, code: 'INVOICE_PAID_RACE' })
-      expect(findCalls('invoices', 'eq')).toContainEqual(['paid_amount', 500])
+      // paid_amount still 500, within the half-öre band.
+      expect(findCalls('invoices', 'gt')).toEqual([['paid_amount', 500 - ORE_TOLERANCE]])
+      expect(findCalls('invoices', 'lt')).toEqual([['paid_amount', 500 + ORE_TOLERANCE]])
       expect(findCalls('invoice_payments', 'delete')).toHaveLength(1)
       expect(vi.mocked(cancelOrphanedPaymentEntry)).toHaveBeenCalledWith(
         expect.anything(),
@@ -202,19 +209,48 @@ describe('settleInvoicePayment', () => {
       )
     })
 
-    it('leaves the CAS of a whole payment as it was', async () => {
+    it('guards a whole cash payment on an unpaid invoice the same way', async () => {
+      // The whole-payment entry assumes nothing was paid. An installment that
+      // landed between the read and this update has already recognised part
+      // of the invoice, so the whole entry must lose the race, not book the
+      // same revenue and moms a second time.
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'ip-1' } }) // invoice_payments insert
+      enqueue({ data: [] }) // CAS update matched nothing: paid_amount moved
+      enqueue({ data: null }) // invoice_payments delete
+
+      const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+        ...CASH,
+        invoice: cashInvoice(),
+      })
+
+      expect(vi.mocked(createInvoiceCashEntry)).toHaveBeenCalled()
+      expect(findCalls('invoices', 'or')).toEqual([UNPAID_CAS])
+      expect(result).toEqual({ ok: false, code: 'INVOICE_PAID_RACE' })
+      expect(vi.mocked(cancelOrphanedPaymentEntry)).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'user-1',
+        'je-2',
+        expect.any(String),
+      )
+    })
+
+    it('leaves the CAS of a payment that clears a booked fordran as it was', async () => {
       const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
       enqueue({ data: { id: 'ip-1' } })
       enqueue({ data: [{ id: 'inv-1' }] })
 
       await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
         ...CASH,
-        invoice: cashInvoice(),
+        invoice: cashInvoice({ journal_entry_id: 'je-sale' } as Partial<Invoice>),
+        paymentAmountInInvoiceCurrency: 500,
       })
 
-      expect(vi.mocked(createInvoiceCashEntry)).toHaveBeenCalled()
+      expect(vi.mocked(createInvoicePaymentJournalEntry)).toHaveBeenCalled()
       expect(findCalls('invoices', 'or')).toEqual([])
-      expect(findCalls('invoices', 'eq')).not.toContainEqual(['paid_amount', expect.anything()])
+      expect(findCalls('invoices', 'gt')).toEqual([])
+      expect(findCalls('invoices', 'lt')).toEqual([])
     })
 
     it('completes a part-paid invoice with the rest once the ledger shows the earlier installment', async () => {

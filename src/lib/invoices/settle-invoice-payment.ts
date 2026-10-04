@@ -8,7 +8,7 @@ import {
 import { buildInvoiceCashPartialLines } from '@/lib/bookkeeping/invoice-lines'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
-import { equalOre, isZeroOre, roundOre } from '@/lib/money'
+import { ORE_TOLERANCE, equalOre, isZeroOre, roundOre } from '@/lib/money'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
@@ -384,15 +384,22 @@ export async function settleInvoicePayment(
     .eq('id', invoice.id)
     .eq('company_id', companyId)
     .in('status', ['sent', 'overdue', 'partially_paid'])
-  if (cashInstallment) {
-    // A pro-rata installment is computed from paid_amount: when another
-    // payment landed in between, its share is stale and the installments
-    // would no longer add up to the invoice. Lose the race instead.
+  if (isRealInvoice && useCashEntry) {
+    // Every kontantmetoden entry here is computed from the paid_amount read
+    // above: an installment takes its share from it, and the whole-payment
+    // entry (or custom lines) assumes nothing was paid. When another payment
+    // moved paid_amount in between, the entry no longer fits the invoice: two
+    // installments would overlap, or a whole payment would book again the
+    // revenue and moms of an installment that landed first. Lose the race
+    // instead. The band is the half öre the read-side checks allow, so a
+    // stored value that is not exactly two decimals never blocks a payment.
     const priorPaid = roundOre(invoice.paid_amount ?? 0)
+    const above = priorPaid - ORE_TOLERANCE
+    const below = priorPaid + ORE_TOLERANCE
     casUpdate =
       priorPaid === 0
-        ? casUpdate.or('paid_amount.is.null,paid_amount.eq.0')
-        : casUpdate.eq('paid_amount', priorPaid)
+        ? casUpdate.or(`paid_amount.is.null,and(paid_amount.gt.${above},paid_amount.lt.${below})`)
+        : casUpdate.gt('paid_amount', above).lt('paid_amount', below)
   }
   const { data: updateResult, error: updateError } = await casUpdate.select('id')
 
