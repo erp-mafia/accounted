@@ -68,7 +68,8 @@ These hold for the catalogue, collections and delivery families.
 - **Personal data.** Personal identity numbers, birth dates and debtor contact
   details travel in requests only. The service stores none of them and strips
   them from every `raw` payload it returns; neither side logs them. A delivery
-  method lookup carries identifiers only.
+  method lookup carries identifiers only, and a delivery by post never needs a
+  private person's identity number.
 - **Change feed.** The installation polls `changes` with an overlap and
   dedupes. A change names its company and the installation's own case or
   delivery id; a settlement change carries the provider's settlement handle.

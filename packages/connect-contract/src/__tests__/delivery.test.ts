@@ -68,6 +68,12 @@ describe('send', () => {
     expect(send({ method: 'post', debtor: abroad({ ...privateDebtor, personalNumber: null }) }).success).toBe(true)
   })
 
+  it('never needs a private person identity number for post, but still the org number of a Swedish business', () => {
+    expect(send({ method: 'post', debtor: { ...privateDebtor, personalNumber: null } }).success).toBe(true)
+    expect(send({ method: 'post', debtor: { ...businessDebtor, orgNumber: null } }).success).toBe(false)
+    expect(send({ method: 'post', debtor: abroad({ ...businessDebtor, orgNumber: null }) }).success).toBe(true)
+  })
+
   it('needs the identifier a digital channel delivers to, wherever the debtor lives', () => {
     expect(send({ method: 'kivra', debtor: abroad({ ...privateDebtor, personalNumber: null }) }).success).toBe(false)
     expect(send({ method: 'einvoice_bank', debtor: abroad({ ...businessDebtor, orgNumber: null }) }).success).toBe(false)

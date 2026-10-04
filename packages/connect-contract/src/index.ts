@@ -694,7 +694,7 @@ export const collectionsDebtorSchema = z.object({
   name: z.string().trim().min(1).max(200),
   /** Required for a business debtor in SE. */
   orgNumber: orgNumberSchema.nullable(),
-  /** Required for a private debtor in SE. In transit only, never logged. */
+  /** Required for a private debtor in SE, except on a delivery by post. In transit only, never logged. */
   personalNumber: personalNumberSchema.nullable(),
   vatNumber: z.string().max(20).nullable(),
   customerNumber: z.string().max(50).nullable(),
@@ -1393,8 +1393,15 @@ export const deliverySendRequestSchema = z
   })
   .superRefine((req, ctx) => {
     checkInvoice(req.invoice, ctx, ['invoice'])
-    checkDebtorIdentity(req.debtor, ctx, ['debtor'])
-    if (req.method === 'post') return
+    if (req.method === 'post') {
+      // Post needs a name and a full address. A Swedish business still sends
+      // its org number, but a private person's identity number is not needed
+      // for a letter, so it is never required here (data minimisation).
+      if (req.debtor.address?.countryCode === 'SE' && req.debtor.kind === 'business' && req.debtor.orgNumber === null) {
+        ctx.addIssue({ code: 'custom', message: 'a business debtor in SE needs orgNumber', path: ['debtor', 'orgNumber'] })
+      }
+      return
+    }
     if (req.debtor.kind === 'business' && req.debtor.orgNumber === null) {
       ctx.addIssue({ code: 'custom', message: `${req.method} needs the debtor's orgNumber`, path: ['debtor', 'orgNumber'] })
     }
