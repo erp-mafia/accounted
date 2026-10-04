@@ -6,8 +6,9 @@ export const EXPANSIONSFOND_TAX_RATE = 0.206
 export const EXPANSIONSFOND_MAX_OF_KAPITALUNDERLAG = 1.2594
 
 export interface ExpansionsfondInput {
-  /** Kapitalunderlag vid årets slut (samma underlag som för positiv
-   *  räntefördelning, IL 34 kap 6 §). */
+  /** Kapitalunderlag för expansionsfond vid beskattningsårets utgång
+   *  (IL 34 kap 7 §). Not the räntefördelning underlag, which is the
+   *  previous year's closing balance (IL 33 kap 8 §). */
   kapitalunderlag: number
   /** Tidigare kvarstående avsättning till expansionsfond: utgör utgångsläget
    *  för årets bedömning. */
@@ -57,6 +58,9 @@ export function calculateExpansionsfondChange(
     actualChange = -Math.min(Math.abs(desiredChange), existingBalance)
   }
   const newBalance = existingBalance + actualChange
+  // The direction is what was asked for: an avsättning capped to 0 is still
+  // an avsättning (R36), not a återföring.
+  const isIncrease = desiredChange > 0
   const taxOnChange = Math.round(actualChange * EXPANSIONSFOND_TAX_RATE)
 
   const warnings: string[] = []
@@ -82,17 +86,14 @@ export function calculateExpansionsfondChange(
   }
 
   return {
-    kind: actualChange > 0 ? 'expansionsfond_avsattning' : 'expansionsfond_ateforing',
-    label:
-      actualChange > 0
-        ? 'Expansionsfond: avsättning'
-        : 'Expansionsfond: återföring',
+    kind: isIncrease ? 'expansionsfond_avsattning' : 'expansionsfond_ateforing',
+    label: isIncrease ? 'Expansionsfond: avsättning' : 'Expansionsfond: återföring',
     description:
-      actualChange > 0
+      isIncrease
         ? `Avsättning ${actualChange} kr. Skatt 20,6 % (${Math.abs(taxOnChange)} kr) betalas i år.`
         : `Återföring ${Math.abs(actualChange)} kr. Tidigare betald skatt (${Math.abs(taxOnChange)} kr) tillgodoräknas.`,
     amount: Math.abs(actualChange),
-    ne_ruta: actualChange > 0 ? 'R34' : 'R33',
+    ne_ruta: isIncrease ? 'R36' : 'R37',
     computation: computation as unknown as Record<string, unknown>,
     warnings,
   }

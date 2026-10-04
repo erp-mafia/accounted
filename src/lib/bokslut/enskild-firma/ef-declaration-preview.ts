@@ -10,7 +10,13 @@ import type { EfDeclarationItem } from './types'
 
 export interface EfDeclarationPreviewInput {
   category?: EgenavgiftCategory
+  /** Kapitalunderlag för räntefördelning: the previous year's closing
+   *  balance (IL 33 kap 8 §). */
   kapitalunderlag?: number
+  /** Kapitalunderlag för expansionsfond: this year's closing balance
+   *  (IL 34 kap 7 §). A different date from the räntefördelning one, so it
+   *  is never derived from it. */
+  expansionsfondKapitalunderlag?: number
   priorYearSchablonavdrag?: number
   priorYearActualCharged?: number
   pfondDesiredAmount?: number
@@ -99,9 +105,15 @@ export async function computeEfDeclarationPreview(
   const r = calculateRantefordelning({ kapitalunderlag: input.kapitalunderlag ?? 0 })
   if (r) items.push(r)
 
-  const surplusAfterEg = bookedSurplus - eg.amount
+  // NE R33, the för periodiseringsfond justerade resultatet (IL 30 kap 6 §):
+  // the result after räntefördelning (R30 deducted, R31 added) and before
+  // any avdrag för egenavgifter, which comes later on the form (R40-R43) and
+  // which 6 § adds back. R11 stands in for R29 because the NE engine has no
+  // R12-R28 adjustments; no återföring (R32) is entered here.
+  const rantefordelning = !r ? 0 : r.kind === 'rantefordelning_positive' ? -r.amount : r.amount
+  const pfondBase = bookedSurplus + rantefordelning
   const pfond = proposeEfPfondAvsattning({
-    surplus: surplusAfterEg,
+    surplus: pfondBase,
     fiscalYear,
     desiredAmount: input.pfondDesiredAmount,
   })
@@ -109,7 +121,7 @@ export async function computeEfDeclarationPreview(
 
   if (input.expansionsfondDesiredChange && input.expansionsfondDesiredChange !== 0) {
     const exp = calculateExpansionsfondChange({
-      kapitalunderlag: input.kapitalunderlag ?? 0,
+      kapitalunderlag: input.expansionsfondKapitalunderlag ?? 0,
       existingBalance: input.expansionsfondExistingBalance,
       desiredChange: input.expansionsfondDesiredChange,
     })

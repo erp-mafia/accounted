@@ -15,6 +15,14 @@ const KAPITALUNDERLAG_MISSING =
   'Kapitalunderlag saknas: räntefördelning beräknas inte. Fyll i kapitalunderlaget vid årets ingång, även om det är 0 eller negativt.'
 
 /**
+ * The expansionsfond cap is 125,94 % of the kapitalunderlag at this year's
+ * utgång (IL 34 kap 6-7 §), a different figure from the räntefördelning one.
+ * Without it an avsättning is capped to 0, so the owner is told why.
+ */
+const EXPANSIONSFOND_KAPITALUNDERLAG_MISSING =
+  'Kapitalunderlag för expansionsfond saknas: avsättningen begränsas till 0 kr. Fyll i kapitalunderlaget vid årets utgång.'
+
+/**
  * The year-end wizard's NE-bilaga step (EfDeclarationSection). Read-only:
  * egenavgifter, räntefördelning, periodiseringsfond and expansionsfond are
  * declaration-only and never booked. Same computation as the MCP tool
@@ -58,7 +66,13 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       data: {
         ...preview,
         postedEntryCount: count ?? 0,
-        inputWarnings: query.data.kapitalunderlag === undefined ? [KAPITALUNDERLAG_MISSING] : [],
+        inputWarnings: [
+          ...(query.data.kapitalunderlag === undefined ? [KAPITALUNDERLAG_MISSING] : []),
+          ...((query.data.expansionsfondDesiredChange ?? 0) > 0 &&
+          query.data.expansionsfondKapitalunderlag === undefined
+            ? [EXPANSIONSFOND_KAPITALUNDERLAG_MISSING]
+            : []),
+        ],
       },
     })
   },

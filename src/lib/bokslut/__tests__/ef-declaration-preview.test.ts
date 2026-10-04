@@ -165,3 +165,87 @@ describe('computeEfDeclarationPreview: base is NE R11', () => {
     expect(egenavgifter?.computation).toMatchObject({ surplusBeforeEgenavgifter: 130_000 })
   })
 })
+
+describe('computeEfDeclarationPreview: periodiseringsfond base is NE R33 (IL 30 kap 6 §)', () => {
+  // NE R11 = 120 000 (one sale). The engine has no R12-R28 adjustments, so
+  // R29 = R11. R33 = R29 - R30 (positiv räntefördelning) + R31 (negativ).
+  // Egenavgifter (R40-R43) come after R34 on the form: IL 30 kap 6 § adds
+  // the avdrag back, so it never reduces the base.
+  const pfondOf = (items: Array<{ kind: string }>) =>
+    items.find((i) => i.kind === 'periodiseringsfond_avsattning') as
+      | { amount: number; ne_ruta: string; computation: Record<string, unknown> }
+      | undefined
+
+  it('does not deduct egenavgifter from the base', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1')
+
+    // 30 % of 120 000, not 30 % of (120 000 - 30 000 schablonavdrag).
+    expect(pfondOf(preview.items)?.amount).toBe(36_000)
+    expect(pfondOf(preview.items)?.computation).toMatchObject({ surplus: 120_000 })
+    expect(pfondOf(preview.items)?.ne_ruta).toBe('R34')
+  })
+
+  it('deducts positiv räntefördelning (R30) before the 30 % cap', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    // 1 000 000 x 8,55 % = 85 500 in R30; R33 = 120 000 - 85 500 = 34 500.
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      kapitalunderlag: 1_000_000,
+    })
+
+    expect(pfondOf(preview.items)?.computation).toMatchObject({ surplus: 34_500 })
+    expect(pfondOf(preview.items)?.amount).toBe(10_350)
+  })
+
+  it('adds negativ räntefördelning (R31) before the 30 % cap', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    // 600 000 x 3,55 % = 21 300 in R31; R33 = 120 000 + 21 300 = 141 300.
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      kapitalunderlag: -600_000,
+    })
+
+    expect(pfondOf(preview.items)?.computation).toMatchObject({ surplus: 141_300 })
+    expect(pfondOf(preview.items)?.amount).toBe(42_390)
+  })
+})
+
+describe('computeEfDeclarationPreview: expansionsfond uses the closing kapitalunderlag (IL 34 kap 7 §)', () => {
+  const expansionsfondOf = (items: Array<{ kind: string }>) =>
+    items.find((i) => i.kind.startsWith('expansionsfond_')) as
+      | { kind: string; amount: number; ne_ruta: string; computation: Record<string, unknown> }
+      | undefined
+
+  it('caps the fund at 125,94 % of the closing kapitalunderlag, not the opening one', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      // Opening, for räntefördelning (IL 33 kap 8 §): cap would be 125 940.
+      kapitalunderlag: 100_000,
+      // Closing, for expansionsfond: cap is 503 760.
+      expansionsfondKapitalunderlag: 400_000,
+      expansionsfondDesiredChange: 300_000,
+    })
+
+    const exp = expansionsfondOf(preview.items)
+    expect(exp?.computation).toMatchObject({ kapitalunderlag: 400_000, maxTotalBalance: 503_760 })
+    expect(exp?.amount).toBe(300_000)
+    expect(exp?.ne_ruta).toBe('R36')
+  })
+
+  it('never borrows the opening kapitalunderlag when the closing one is missing', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      kapitalunderlag: 1_000_000,
+      expansionsfondDesiredChange: 50_000,
+    })
+
+    const exp = expansionsfondOf(preview.items)
+    expect(exp?.kind).toBe('expansionsfond_avsattning')
+    expect(exp?.computation).toMatchObject({ kapitalunderlag: 0, actualChange: 0 })
+    expect(exp?.amount).toBe(0)
+  })
+})

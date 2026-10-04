@@ -3350,6 +3350,7 @@ export const BehandlingshistorikQuerySchema = z.object({
 export const EfDeclarationPreviewQuerySchema = z.object({
   category: z.enum(['full', 'pensioner', 'passive']).optional(),
   kapitalunderlag: z.coerce.number().optional(),
+  expansionsfondKapitalunderlag: z.coerce.number().optional(),
   priorYearSchablonavdrag: z.coerce.number().nonnegative().optional(),
   priorYearActualCharged: z.coerce.number().nonnegative().optional(),
   pfondDesiredAmount: z.coerce.number().nonnegative().optional(),

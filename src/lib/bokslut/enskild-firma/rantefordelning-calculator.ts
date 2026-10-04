@@ -91,7 +91,7 @@ export function calculateRantefordelning(
     label: 'Negativ räntefördelning (obligatorisk)',
     description: `${(negativeRate * 100).toFixed(2)} % på kapitalunderskott. Tillägg till resultat i näringsverksamhet eftersom verksamheten lånat av privata medel.`,
     amount: computation.negativeAmount,
-    ne_ruta: 'R30 (tillägg till resultat)',
+    ne_ruta: 'R31 (tillägg till resultat)',
     computation: computation as unknown as Record<string, unknown>,
     warnings: [
       'Negativ räntefördelning är obligatorisk när kapitalunderlaget är mer negativt än -500 000 kr.',
