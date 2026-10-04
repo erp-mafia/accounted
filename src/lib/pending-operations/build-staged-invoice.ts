@@ -121,7 +121,8 @@ export async function buildStagedInvoice(args: {
     invoice_marking: staged.invoice_marking ?? undefined,
     notes: staged.notes ?? undefined,
     payment_link_url: httpsLinkOrUndefined(staged.payment_link_url),
-    qr_mode: staged.qr_mode,
+    // A new invoice has no stored choice to leave alone: absent inherits.
+    qr_mode: staged.qr_mode ?? null,
     deduction_housing_designation: firstDeduction?.housing_designation ?? undefined,
     deduction_apartment_number: firstDeduction?.apartment_number ?? undefined,
     deduction_brf_org_number: firstDeduction?.brf_org_number ?? undefined,

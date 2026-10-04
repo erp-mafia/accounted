@@ -27,6 +27,7 @@ beforeEach(() => {
 async function stage(args: Record<string, unknown>) {
   const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
   enqueue({ data: CUSTOMER, error: null }) // customers fetch
+  enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
   enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
   enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
   enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
