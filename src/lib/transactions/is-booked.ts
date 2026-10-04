@@ -29,6 +29,7 @@
  * (migration 20260529120000_transaction_voucher_links.sql): same
  * predicate, three storage locations, in SQL.
  */
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 interface TxLike {
   id: string
@@ -105,6 +106,94 @@ export function hasBankLineJunctionRow(
 ): boolean {
   if (!Array.isArray(rows)) return false
   return rows.some((row) => (row.role ?? 'bank_line') === 'bank_line')
+}
+
+export type TransactionBookableVerdict =
+  | { ok: true }
+  | {
+      ok: false
+      code: 'TRANSACTION_ALREADY_CATEGORIZED'
+      /** The posted verifikat that already books the row; null when a read failed. */
+      journalEntryId: string | null
+      /** Which anchor names it: the 1:1 pointer or a bank_line junction row. */
+      via: 'pointer' | 'link' | 'read_error'
+    }
+
+/**
+ * The booking doors' single answer to "may this bank row get a NEW
+ * verifikat?" (categorize, v1 categorize, batch-categorize, the manual book
+ * route, and the shared categorize core). A row is already booked when
+ *
+ *   - its pointer (transactions.journal_entry_id) names a posted verifikat, or
+ *   - a 'bank_line' transaction_voucher_links row names a posted verifikat
+ *     (a bulk-book samlingsverifikat, a 1:N split, or a correction that
+ *     re-pointed the link, see relinkTransactionsToEntry).
+ *
+ * A pointer or link to a verifikat that is no longer posted (reversed by a
+ * storno, the uncategorize path) does not count: the row reads as unbooked in
+ * the UI and must be bookable again (issue #988). Bulk-book with N=1 writes the
+ * pointer AND a link to the same verifikat; that is one booking, reported once.
+ * Supplementary roles ('other', 'clearing') never count, see
+ * hasBankLineJunctionRow.
+ *
+ * Checking only the pointer misses every link-only row, which is how a
+ * bulk-booked row got a second verifikat. A failed read fails closed (refuses
+ * the booking), like hasLiveJournalEntryLink: a retry is cheap, a second
+ * verifikat is a storno.
+ *
+ * Pass `tx.transaction_voucher_links` when the caller already embedded them on
+ * its transactions read; otherwise they are read here.
+ */
+export async function assertTransactionBookable(
+  supabase: SupabaseClient,
+  companyId: string,
+  tx: {
+    id: string
+    journal_entry_id: string | null
+    transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null
+  },
+): Promise<TransactionBookableVerdict> {
+  let links = tx.transaction_voucher_links
+  if (!Array.isArray(links)) {
+    const { data, error } = await supabase
+      .from('transaction_voucher_links')
+      .select('journal_entry_id, role')
+      .eq('company_id', companyId)
+      .eq('transaction_id', tx.id)
+    if (error) {
+      return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: null, via: 'read_error' }
+    }
+    links = (data ?? []) as Array<{ journal_entry_id: string; role?: string | null }>
+  }
+
+  const linkIds = links
+    .filter((row) => (row.role ?? 'bank_line') === 'bank_line')
+    .map((row) => row.journal_entry_id)
+  const ids = [...new Set([tx.journal_entry_id, ...linkIds].filter((id): id is string => !!id))]
+  if (ids.length === 0) return { ok: true }
+
+  const { data: entries, error: entriesError } = await supabase
+    .from('journal_entries')
+    .select('id, status')
+    .eq('company_id', companyId)
+    .in('id', ids)
+  if (entriesError) {
+    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: null, via: 'read_error' }
+  }
+
+  const posted = new Set(
+    ((entries ?? []) as Array<{ id: string; status: string }>)
+      .filter((entry) => entry.status === 'posted')
+      .map((entry) => entry.id),
+  )
+  if (tx.journal_entry_id && posted.has(tx.journal_entry_id)) {
+    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: tx.journal_entry_id, via: 'pointer' }
+  }
+  const linked = linkIds.find((id) => posted.has(id))
+  if (linked) {
+    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: linked, via: 'link' }
+  }
+  return { ok: true }
 }
 
 /**

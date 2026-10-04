@@ -39,6 +39,7 @@ import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/e
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { runBookingDuplicateGuard } from '@/lib/transactions/booking-duplicate-guard'
+import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import type { BookingDuplicateExclusions } from '@/lib/transactions/booking-duplicate-detection'
 import { findInvoiceMatchSuggestion } from '@/lib/transactions/invoice-match-suggestion'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -199,6 +200,20 @@ async function categorizeOne(
   // takes the flag-only path below, so neither double-booking guard applies.
   const wouldBook = !transaction.journal_entry_id
   const itemLog = log.child({ transactionId, request_index: index })
+
+  // A NULL pointer is not "unbooked": a bulk-booked, split or
+  // correction-relinked row is anchored only through a bank_line voucher link
+  // (assertTransactionBookable, shared with every booking door). Read-only,
+  // so a dry-run previews the refusal too.
+  if (wouldBook) {
+    const bookable = await assertTransactionBookable(supabase, companyId, transaction)
+    if (!bookable.ok) {
+      return guardRefusal(index, transactionId, bookable.code, {
+        journal_entry_id: bookable.journalEntryId,
+        via: bookable.via,
+      })
+    }
+  }
 
   // Booking-time duplicate guard: same helper, code and bound force override
   // as :categorize and the dashboard route. The dismissal of an honoured
