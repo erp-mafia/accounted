@@ -100,7 +100,14 @@ const nextConfig: NextConfig = {
   // runtime, never bundled. unpdf (pdf.js, pure JavaScript) is kept external
   // too, so the hosted function runs the same files Node runs in the tests
   // rather than a re-bundled copy of pdf.js.
-  serverExternalPackages: ['@firecrawl/anydoc', 'unpdf', 'heic-convert', 'heic-decode', 'libheif-js'],
+  //
+  // The Bedrock SDK (lib/ai/provider) is external as well: bundling it splits
+  // its AWS SDK / @smithy dependency tree across server chunks, and on
+  // 2026-10-04 Turbopack named two different splits the same chunk
+  // ("Two or more assets with different content were emitted to the same
+  // output path"), which failed every production build from main. Loaded
+  // from node_modules at runtime, the AWS SDK never enters the bundle.
+  serverExternalPackages: ['@firecrawl/anydoc', 'unpdf', 'heic-convert', 'heic-decode', 'libheif-js', '@anthropic-ai/bedrock-sdk'],
   experimental: {
     optimizePackageImports: ['recharts', 'date-fns', 'framer-motion'],
     // Client router cache for dynamic routes: a page visited in the last
