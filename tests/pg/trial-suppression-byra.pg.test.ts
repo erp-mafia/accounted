@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
 import { insertAuthUser } from '@/tests/pg/fixtures'
-import { PAID_CAPABILITIES } from '@/lib/entitlements/keys'
+import { TRIAL_CAPABILITIES } from '@/lib/entitlements/keys'
 
 // Tests for 20260826130300_suppress_trial_for_byra_companies.sql (WL-10):
 // the company-creation trial trigger (trg_seed_trial_capability_grants /
@@ -13,10 +13,11 @@ import { PAID_CAPABILITIES } from '@/lib/entitlements/keys'
 // The trigger is AFTER INSERT ON companies and reads NEW.team_id, so plain
 // inserts through the pool exercise it on every creation path.
 
-// Full PAID set (20260818170000); must stay in step with
-// lib/entitlements/keys.ts PAID_CAPABILITIES. Sorted: trialGrantKeys()
+// Full trial set (20260909100300); must stay in step with
+// lib/entitlements/keys.ts TRIAL_CAPABILITIES (PAID_CAPABILITIES minus the
+// paid-plan-only keys, which a trial never includes). Sorted: trialGrantKeys()
 // orders by capability_key.
-const TRIAL_KEYS = [...PAID_CAPABILITIES].sort()
+const TRIAL_KEYS = [...TRIAL_CAPABILITIES].sort()
 
 async function insertTeam(params: {
   createdBy: string
@@ -61,11 +62,12 @@ async function trialGrantKeys(companyId: string): Promise<string[]> {
 }
 
 describe('trial suppression for byrå-team companies', () => {
-  it('the trial seed covers the full nine-key PAID set', () => {
+  it('the trial seed covers the full nine-key trial set', () => {
     // Guard against the seed list drifting from lib/entitlements/keys.ts:
-    // if PAID_CAPABILITIES grows, the migration VALUES list (and this test)
+    // if TRIAL_CAPABILITIES grows, the migration VALUES list (and this test)
     // must grow with it. multi_user joined at 20260901081417; zettle_sync
-    // at 20260909100300.
+    // at 20260909100300. collections (20261004002300) is paid-plan only and
+    // never joins it.
     expect(TRIAL_KEYS).toEqual(
       [
         'ai',
