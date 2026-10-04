@@ -185,6 +185,16 @@ const RETAINED = new Set([
   'team_invitations.invited_by',
   'teams.created_by',
   // Company integrations: the company's accounts, not the person's
+  // Collections connection: who consented to the provider's terms, accepted
+  // them, chose the reminder batch, ended it or last changed its rules. The
+  // company's record of its agreement with the provider and of its posting
+  // rules (behandlingshistorik).
+  'collection_connection_events.actor_user_id',
+  'collection_connections.consented_by',
+  'collection_connections.ended_by',
+  'collection_connections.ladder_enabled_by',
+  'collection_connections.terms_accepted_by',
+  'collection_connections.user_id',
   'shopify_connections.user_id',
   'skatteverket_company_connections.created_by',
   'stripe_connections.user_id',

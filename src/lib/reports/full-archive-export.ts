@@ -1194,6 +1194,12 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Which bank account customer invoices pay to, per currency; the payee
   // fields themselves are columns on cash_accounts one file up.
   { name: 'invoice_payee_defaults', file: 'invoice_payee_defaults.json' },
+  // Collections through a provider the company activated: the rules applied
+  // when invoices are handed over and when collected payments and payouts
+  // are booked (behandlingsregler, audited in behandlingshistorik), and the
+  // connection's own state trail.
+  { name: 'collection_connections', file: 'collection_connections.json', orderBy: 'created_at' },
+  { name: 'collection_connection_events', file: 'collection_connection_events.json', orderBy: 'created_at' },
   { name: 'mapping_rules', file: 'mapping_rules.json' },
   { name: 'categorization_templates', file: 'categorization_templates.json' },
   { name: 'booking_template_library', file: 'booking_template_library.json' },
