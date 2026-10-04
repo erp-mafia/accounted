@@ -775,3 +775,143 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     })
   })
 })
+
+describe('commitPendingOperation: match_transaction_invoice with overpayment_account (crm#253)', () => {
+  function enqueueCommit(
+    enqueue: (r: { data?: unknown; error?: unknown }) => void,
+    tx: Record<string, unknown>,
+    invoice: Record<string, unknown>,
+    accountingMethod: 'accrual' | 'cash',
+  ) {
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', currency: 'SEK', date: '2026-09-30', invoice_id: null, journal_entry_id: null, cash_account_id: null, ...tx },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: 'F-2026001', status: 'sent', paid_amount: 0, currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' }, ...invoice },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: accountingMethod, entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // transactions update (link)
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+  }
+
+  const rows = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
+    lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  it('kontantmetod RUT invoice paid 340 on 337,50: 1930 takes the bank row, 3740 the 2,50', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/bookkeeping/invoice-entries')>(
+      '@/lib/bookkeeping/invoice-entries',
+    )
+    mockCreateCashEntry.mockImplementationOnce(actual.createInvoiceCashEntry)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    // 540 + 135 moms = 675; RUT 50 % = 337,50 from Skatteverket, 337,50 from the customer.
+    enqueueCommit(enqueue, { amount: 340 }, {
+      total: 675,
+      subtotal: 540,
+      vat_amount: 135,
+      vat_treatment: 'standard_25',
+      remaining_amount: 337.5,
+      items: [{
+        id: 'item-1', invoice_id: 'inv-1', description: 'Städning', quantity: 1, unit: 'tim',
+        unit_price: 540, line_total: 540, vat_rate: 25, vat_amount: 135, sort_order: 0,
+        deduction_type: 'rut', work_type: 'STAD',
+      }],
+    }, 'cash')
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', overpayment_account: '3740', overpayment_amount: 2.5 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    const booked = rows(input.lines)
+    expect(booked).toContainEqual(['1930', 340, 0])
+    expect(booked).toContainEqual(['1513', 337.5, 0])
+    expect(booked).toContainEqual(['2611', 0, 135])
+    expect(booked).toContainEqual(['3740', 0, 2.5])
+    const debit = input.lines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = input.lines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.round((debit - credit) * 100)).toBe(0)
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 337.5,
+      remaining_amount: 0,
+    })
+  })
+
+  it('faktureringsmetod: 1510 is credited the remaining and 2420 the excess', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueCommit(enqueue, { amount: 1312.4 }, { total: 812.4, remaining_amount: 812.4, journal_entry_id: 'je-sent' }, 'accrual')
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', overpayment_account: '2420', overpayment_amount: 500 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(rows(input.lines)).toEqual([
+      ['1930', 1312.4, 0],
+      ['1510', 0, 812.4],
+      ['2420', 0, 500],
+    ])
+  })
+
+  it('refuses when the excess differs from the one staged, before anything is posted', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', amount: 1312.4, currency: 'SEK', date: '2026-09-30', invoice_id: null, journal_entry_id: 'je-categorized', cash_account_id: null },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: 'F-2026001', status: 'partially_paid', total: 812.4, paid_amount: 312.4, remaining_amount: 500, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-sent', customer: { name: 'Test AB' } },
+      error: null,
+    }) // invoice fetch: a payment landed after staging
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', overpayment_account: '2420', overpayment_amount: 500 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.code).toBe('MATCH_OVERPAYMENT_CHANGED')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    const rejected = findCalls('pending_operations', 'update').at(-1)?.[0] as { result_data: Record<string, unknown> }
+    expect(rejected.result_data).toMatchObject({ details: { staged_excess: 500, current_excess: 812.4 } })
+  })
+
+  it('refuses 3740 for an excess at or above the cap at approval too', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', amount: 822.4, currency: 'SEK', date: '2026-09-30', invoice_id: null, journal_entry_id: null, cash_account_id: null },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: 'F-2026001', status: 'sent', total: 812.4, paid_amount: 0, remaining_amount: 812.4, currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' } },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', overpayment_account: '3740', overpayment_amount: 10 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.code).toBe('MATCH_OVERPAYMENT_ROUNDING_CAP')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+})

@@ -604,3 +604,38 @@ describe('buildInvoicePaymentClearingLines', () => {
     })
   })
 })
+
+describe('buildInvoicePaymentClearingLines: overpaymentAccount (crm#253)', () => {
+  const tx = (amount: number) => ({ amount, amount_sek: null, currency: 'SEK', exchange_rate: null })
+  const invoice = { currency: 'SEK', exchange_rate: null, remaining_amount: 337.5, total: 337.5, paid_amount: 0 }
+  const rows = (r: ReturnType<typeof buildInvoicePaymentClearingLines>) =>
+    r.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  it('3740 under the cap: 1930 the bank, 1510 the remaining, 3740 the kronutjämning', () => {
+    const r = buildInvoicePaymentClearingLines(tx(340), invoice, 'Inbetalning', undefined, '1930', '3740')
+    expect(rows(r)).toEqual([
+      ['1930', 340, 0],
+      ['1510', 0, 337.5],
+      ['3740', 0, 2.5],
+    ])
+    expect(r.overpaymentSek).toBe(2.5)
+    expect(r.lines[2].line_description).toBe('Kronutjämning')
+  })
+
+  it('2420 takes any excess as an advance from the customer', () => {
+    const r = buildInvoicePaymentClearingLines(tx(1337.5), invoice, 'Inbetalning', undefined, '1930', '2420')
+    expect(rows(r)).toEqual([
+      ['1930', 1337.5, 0],
+      ['1510', 0, 337.5],
+      ['2420', 0, 1000],
+    ])
+  })
+
+  it('books no excess line for 3740 at the cap, without an account, or under a krona', () => {
+    expect(buildInvoicePaymentClearingLines(tx(347.5), invoice, 'x', undefined, '1930', '3740').overpaymentSek).toBe(0)
+    expect(buildInvoicePaymentClearingLines(tx(340), invoice, 'x').overpaymentSek).toBe(0)
+    const ore = buildInvoicePaymentClearingLines(tx(338), invoice, 'x', undefined, '1930', '2420')
+    expect(ore.overpaymentSek).toBe(0)
+    expect(ore.oreRoundingSek).toBe(-0.5)
+  })
+})
