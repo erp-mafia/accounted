@@ -20,7 +20,7 @@ const RunId = z.string().uuid()
  *
  * Undo a customer, supplier or article import: deletes the rows it created
  * that nothing uses yet and reports the rows it kept, with the reason. Rules
- * in the undo_register_import RPC (migration 20261003201500); any writer may
+ * in the undo_register_import RPC (migration 20261004163415); any writer may
  * undo, as any writer may run the import.
  */
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(

@@ -6,7 +6,7 @@ import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
 
 /**
  * register_import_runs + undo_register_import (migration
- * 20261003201500_register_import_runs.sql).
+ * 20261004163415_register_import_runs.sql).
  *
  * The undo deletes the rows an import created unless a foreign key points at
  * them, read from the catalog: these tests reference rows through three
