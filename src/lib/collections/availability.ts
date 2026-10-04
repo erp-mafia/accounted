@@ -4,11 +4,11 @@ import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { getCollectionsProvider, type CatalogueDeps, type CatalogueCapabilityEntry } from './catalogue'
+import { connectionFacts, loadCollectionObligations, loadLiveConnection } from './connection'
 import {
   collectionsStartState,
   hasCollectionObligations,
   isPilotCompany,
-  NO_COLLECTION_OBLIGATIONS,
   readCollectionsEnv,
   type CollectionsConnectionFacts,
   type CollectionsEnv,
@@ -104,14 +104,17 @@ export function buildCollectionsAvailability(input: BuildAvailabilityInput): Col
 }
 
 /**
- * The company's collections facts. The connection row and the obligation
- * counts come from tables later PRs of this series add (collection_connections,
- * collection_cases, the settlement tables); until then no company has a
- * connection or an obligation, so this reads only the capability.
+ * The company's collections facts: the paid capability, the live connection
+ * row and the work open at the provider (collection_obligation_counts, the
+ * same function the database's disconnect guard reads).
  */
 export async function loadCollectionsGateFacts(supabase: SupabaseClient, companyId: string): Promise<CollectionsGateFacts> {
-  const capability = await hasCapability(supabase, companyId, CAPABILITY.collections)
-  return { companyId, capability, connection: null, obligations: NO_COLLECTION_OBLIGATIONS }
+  const [capability, connection, obligations] = await Promise.all([
+    hasCapability(supabase, companyId, CAPABILITY.collections),
+    loadLiveConnection(supabase, companyId),
+    loadCollectionObligations(supabase, companyId),
+  ])
+  return { companyId, capability, connection: connection ? connectionFacts(connection) : null, obligations }
 }
 
 export interface AvailabilityDeps extends CatalogueDeps {

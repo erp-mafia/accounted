@@ -93,6 +93,15 @@ describe('collectionsGate: start paths', () => {
     expect(collectionsGate('daily_batch', facts({ connection: connection({ ladderMode: 'off' }) }), env())).toMatchObject({ code: 'COLLECTIONS_NOT_ACTIVE' })
     expect(collectionsGate('ladder_settings', facts({ connection: connection({ ladderMode: null }) }), env())).toEqual({ allowed: true })
   })
+
+  it('lets an active company turn delivery on before it has opted in, only with the delivery flag', () => {
+    const optedOut = facts({ connection: connection({ distributionEnabled: false }) })
+    expect(collectionsGate('delivery_settings', optedOut, env())).toEqual({ allowed: true })
+    expect(collectionsGate('delivery_settings', optedOut, env({ deliveryEnabled: false }))).toMatchObject({ code: 'COLLECTIONS_DISABLED' })
+    expect(collectionsGate('delivery_settings', facts({ connection: connection({ state: 'connecting', subStatus: 'in_review' }) }), env())).toMatchObject({
+      code: 'COLLECTIONS_NOT_ACTIVE',
+    })
+  })
 })
 
 describe('collectionsGate: the flags matrix', () => {
@@ -152,6 +161,7 @@ describe('collectionsGate: the flags matrix', () => {
                     inPilot &&
                     capability &&
                     (!['daily_batch', 'ladder_settings'].includes(path) || ladderEnabled) &&
+                    (path !== 'delivery_settings' || deliveryEnabled) &&
                     (!['delivery_send', 'delivery_methods'].includes(path) || (deliveryEnabled && active && conn?.distributionEnabled === true)) &&
                     (path !== 'daily_batch' || (active && conn?.ladderMode === 'staged')) &&
                     (['activation', 'tool_discovery'].includes(path) || active)

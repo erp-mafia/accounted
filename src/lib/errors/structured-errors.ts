@@ -6859,6 +6859,53 @@ const COLLECTIONS: Record<string, StructuredErrorEntry> = {
     message_en: 'The collection agency answered with an error. Try again shortly.',
     thrown_message_sv: true,
   },
+  COLLECTIONS_CONNECTION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Företaget har ingen koppling för påminnelser och inkasso.',
+    message_en: 'The company has no connection for reminders and debt collection.',
+  },
+  COLLECTIONS_CONNECTION_EXISTS: {
+    httpStatus: 409,
+    message_sv: 'Företaget har redan en koppling för påminnelser och inkasso.',
+    message_en: 'The company already has a connection for reminders and debt collection.',
+  },
+  COLLECTIONS_CONNECTION_STEP: {
+    httpStatus: 409,
+    message_sv: 'Aktiveringen är inte i det steget längre. Ladda om sidan.',
+    message_en: 'The activation is no longer at that step. Reload the page.',
+  },
+  COLLECTIONS_DISCONNECT_BLOCKED: {
+    httpStatus: 409,
+    message_sv: 'Kopplingen kan inte avslutas medan det finns öppna ärenden eller obokförda inbetalningar och avräkningar.',
+    message_en: 'The connection cannot be ended while there are open cases or unbooked payments and settlements.',
+  },
+  COLLECTIONS_PROVIDER_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Villkoren för inkasso kunde inte hämtas just nu. Försök igen om en stund.',
+    message_en: 'The terms for debt collection could not be fetched right now. Try again shortly.',
+    retryable: true,
+  },
+  COLLECTIONS_TERMS_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Inkassobolaget har en nyare version av villkoren. Läs och godkänn den för att fortsätta.',
+    message_en: 'The collection agency has a newer version of its terms. Read and accept it to continue.',
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_PAYOUT_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Välj ett bankkonto med bankgiro, plusgiro eller kontonummer för utbetalningarna.',
+    message_en: 'Choose a bank account with a bankgiro, plusgiro or account number for the payouts.',
+  },
+  COLLECTIONS_ORG_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Lägg till företagets organisationsnummer under Företag först.',
+    message_en: 'Add the company\'s organisation number under Company first.',
+  },
+  COLLECTIONS_OWNER_NUMBER_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Ägarens personnummer ska vara det som den enskilda firman är registrerad på.',
+    message_en: 'The owner\'s personal identity number must be the one the sole trader is registered under.',
+  },
   CONNECTOR_UPSTREAM_DISABLED: {
     httpStatus: 503,
     message_sv: 'Tjänsten är tillfälligt avstängd.',

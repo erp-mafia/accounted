@@ -52,6 +52,25 @@ export const COLLECTIONS_UNAVAILABLE = 'COLLECTIONS_UNAVAILABLE'
 /** The fake adapter has no such case, delivery or settlement. */
 export const COLLECTIONS_NOT_FOUND = 'COLLECTIONS_NOT_FOUND'
 
+/** The company has no live connection (none yet, or the last one has ended). */
+export const COLLECTIONS_CONNECTION_NOT_FOUND = 'COLLECTIONS_CONNECTION_NOT_FOUND'
+/** A live connection exists already: one per company. */
+export const COLLECTIONS_CONNECTION_EXISTS = 'COLLECTIONS_CONNECTION_EXISTS'
+/** The connection is not at the activation step the request is for. */
+export const COLLECTIONS_CONNECTION_STEP = 'COLLECTIONS_CONNECTION_STEP'
+/** Open cases, unbooked collected payments or unbooked settlements keep the connection alive. */
+export const COLLECTIONS_DISCONNECT_BLOCKED = 'COLLECTIONS_DISCONNECT_BLOCKED'
+/** The catalogue cannot be read, or does not offer the capability, so there are no terms to consent to. */
+export const COLLECTIONS_PROVIDER_UNAVAILABLE = 'COLLECTIONS_PROVIDER_UNAVAILABLE'
+/** The terms the admin read are not the version the provider presents now. */
+export const COLLECTIONS_TERMS_CHANGED = 'COLLECTIONS_TERMS_CHANGED'
+/** The payout account is not one of the company's bank accounts with the chosen kind of number. */
+export const COLLECTIONS_PAYOUT_ACCOUNT_INVALID = 'COLLECTIONS_PAYOUT_ACCOUNT_INVALID'
+/** The company has no valid organisation number to apply with. */
+export const COLLECTIONS_ORG_NUMBER_MISSING = 'COLLECTIONS_ORG_NUMBER_MISSING'
+/** A sole trader's personnummer must be the one the firm is registered under. */
+export const COLLECTIONS_OWNER_NUMBER_MISMATCH = 'COLLECTIONS_OWNER_NUMBER_MISMATCH'
+
 /** The neutral word used when neither the catalogue nor the connection row names the provider. */
 export const PROVIDER_FALLBACK_NAME = { sv: 'inkassobolaget', en: 'the collection agency' } as const
 
@@ -119,6 +138,42 @@ export const COLLECTIONS_ERROR_MESSAGES: Readonly<Record<string, { sv: string; e
   COLLECTIONS_CONNECTOR_ERROR: {
     sv: '{provider} svarade med ett fel. Försök igen om en stund.',
     en: '{provider} answered with an error. Try again shortly.',
+  },
+  COLLECTIONS_CONNECTION_NOT_FOUND: {
+    sv: 'Företaget har ingen koppling för påminnelser och inkasso.',
+    en: 'The company has no connection for reminders and debt collection.',
+  },
+  COLLECTIONS_CONNECTION_EXISTS: {
+    sv: 'Företaget har redan en koppling för påminnelser och inkasso.',
+    en: 'The company already has a connection for reminders and debt collection.',
+  },
+  COLLECTIONS_CONNECTION_STEP: {
+    sv: 'Aktiveringen är inte i det steget längre. Ladda om sidan.',
+    en: 'The activation is no longer at that step. Reload the page.',
+  },
+  COLLECTIONS_DISCONNECT_BLOCKED: {
+    sv: 'Kopplingen kan inte avslutas medan det finns öppna ärenden eller obokförda inbetalningar och avräkningar.',
+    en: 'The connection cannot be ended while there are open cases or unbooked payments and settlements.',
+  },
+  COLLECTIONS_PROVIDER_UNAVAILABLE: {
+    sv: 'Villkoren för inkasso kunde inte hämtas just nu. Försök igen om en stund.',
+    en: 'The terms for debt collection could not be fetched right now. Try again shortly.',
+  },
+  COLLECTIONS_TERMS_CHANGED: {
+    sv: '{provider} har en nyare version av villkoren. Läs och godkänn den för att fortsätta.',
+    en: '{provider} has a newer version of its terms. Read and accept it to continue.',
+  },
+  COLLECTIONS_PAYOUT_ACCOUNT_INVALID: {
+    sv: 'Välj ett bankkonto med bankgiro, plusgiro eller kontonummer för utbetalningarna.',
+    en: 'Choose a bank account with a bankgiro, plusgiro or account number for the payouts.',
+  },
+  COLLECTIONS_ORG_NUMBER_MISSING: {
+    sv: 'Lägg till företagets organisationsnummer under Företag först.',
+    en: 'Add the company\'s organisation number under Company first.',
+  },
+  COLLECTIONS_OWNER_NUMBER_MISMATCH: {
+    sv: 'Ägarens personnummer ska vara det som den enskilda firman är registrerad på.',
+    en: 'The owner\'s personal identity number must be the one the sole trader is registered under.',
   },
   CONNECTOR_UPSTREAM_DISABLED: {
     sv: 'Tjänsten är tillfälligt avstängd.',

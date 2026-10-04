@@ -149,6 +149,8 @@ export const COLLECTIONS_START_PATHS = [
   'daily_batch',
   /** The ladder settings (batch on/off, days after due). */
   'ladder_settings',
+  /** Turn delivery through the provider on in the company's settings. */
+  'delivery_settings',
   /** Send an invoice by post, digital mailbox or e-invoice. */
   'delivery_send',
   /** Look up whether a debtor is reachable by a delivery method. */
@@ -205,6 +207,9 @@ const CAPABILITY_REQUIRED: CollectionsGateDecision = { allowed: false, code: 'CA
 const NOT_ACTIVE: CollectionsGateDecision = { allowed: false, code: COLLECTIONS_NOT_ACTIVE, status: 409 }
 
 const LADDER_PATHS: ReadonlySet<CollectionsStartPath> = new Set(['daily_batch', 'ladder_settings'])
+/** Paths behind COLLECTIONS_DELIVERY_ENABLED. */
+const DELIVERY_FLAG_PATHS: ReadonlySet<CollectionsStartPath> = new Set(['delivery_settings', 'delivery_send', 'delivery_methods'])
+/** Paths that also need the company's own delivery opt-in (distribution_enabled). */
 const DELIVERY_PATHS: ReadonlySet<CollectionsStartPath> = new Set(['delivery_send', 'delivery_methods'])
 /** Start paths that may run before the connection is active: activation itself and tool discovery. */
 const BEFORE_ACTIVATION: ReadonlySet<CollectionsStartPath> = new Set(['activation', 'tool_discovery'])
@@ -214,15 +219,15 @@ const BEFORE_ACTIVATION: ReadonlySet<CollectionsStartPath> = new Set(['activatio
  * pilot list (503 COLLECTIONS_DISABLED), the ladder or delivery flag for
  * their paths (503), the paid capability (403, before any Connect call), and
  * the company's activation (409 COLLECTIONS_NOT_ACTIVE: an active connection,
- * plus the company's delivery opt-in for delivery and a staged ladder for
- * the daily batch). Obligation paths are always allowed.
+ * plus the company's delivery opt-in for sending and the methods lookup, and
+ * a staged ladder for the daily batch). Obligation paths are always allowed.
  */
 export function collectionsGate(path: CollectionsPath, facts: CollectionsGateFacts, env: CollectionsEnv): CollectionsGateDecision {
   if (!isCollectionsStartPath(path)) return ALLOWED
 
   if (!isCollectionsEnabledFor(env, facts.companyId)) return DISABLED
   if (LADDER_PATHS.has(path) && !env.ladderEnabled) return DISABLED
-  if (DELIVERY_PATHS.has(path) && !env.deliveryEnabled) return DISABLED
+  if (DELIVERY_FLAG_PATHS.has(path) && !env.deliveryEnabled) return DISABLED
   if (!facts.capability) return CAPABILITY_REQUIRED
   if (BEFORE_ACTIVATION.has(path)) return ALLOWED
 

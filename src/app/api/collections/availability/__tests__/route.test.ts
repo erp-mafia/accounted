@@ -4,7 +4,7 @@
  * provider read from the catalogue once the company may start work.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { parseJsonResponse } from '@/tests/helpers'
+import { createTableMockSupabase, parseJsonResponse } from '@/tests/helpers'
 import { catalogueResponse } from '../../../../../../packages/connect-contract/src/__tests__/fixtures'
 import { __resetCatalogueCacheForTests } from '@/lib/collections/catalogue'
 
@@ -31,13 +31,18 @@ const ENV = [
 ] as const
 
 const fetchMock = vi.fn()
+const db = createTableMockSupabase()
+const NO_OBLIGATIONS = { data: [{ open_cases: 0, unbooked_collected_payments: 0, unbooked_settlements: 0 }] }
 
 beforeEach(() => {
   vi.clearAllMocks()
   __resetCatalogueCacheForTests()
   for (const k of ENV) vi.stubEnv(k, '')
   vi.stubGlobal('fetch', fetchMock)
-  requireAuthMock.mockResolvedValue({ user: { id: 'user-1', is_anonymous: false }, supabase: {}, error: null })
+  db.reset()
+  db.setTable('collection_connections', { data: null })
+  db.setTable('rpc:collection_obligation_counts', NO_OBLIGATIONS)
+  requireAuthMock.mockResolvedValue({ user: { id: 'user-1', is_anonymous: false }, supabase: db.supabase, error: null })
   hasCapabilityMock.mockResolvedValue(false)
   isSandboxMock.mockResolvedValue(false)
 })
@@ -105,5 +110,28 @@ describe('GET /api/collections/availability', () => {
     const { status, body } = await parseJsonResponse<Body>(await call())
     expect(status).toBe(200)
     expect(body.data).toMatchObject({ capability: true, start: 'activate', provider: null, displayName: null })
+  })
+
+  it('keeps showing the connection and its open work with every start gate closed', async () => {
+    db.setTable('collection_connections', {
+      data: {
+        route: 'connect',
+        state: 'active',
+        sub_status: null,
+        health: 'ok',
+        distribution_enabled: false,
+        ladder_mode: 'off',
+        display_name: 'Persisted Name',
+        minimum_amount: 100,
+        late_interest_percent: null,
+        ladder_days_after_due: 10,
+        failures_in_row: 0,
+      },
+    })
+    db.setTable('rpc:collection_obligation_counts', { data: [{ open_cases: 1, unbooked_collected_payments: 0, unbooked_settlements: 0 }] })
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'))
+    const { body } = await parseJsonResponse<Body & { data: { obligations: boolean; connection: { state: string } } }>(await call())
+    expect(body.data).toMatchObject({ start: 'hidden', obligations: true, connection: { state: 'active' }, displayName: 'Persisted Name' })
+    expect(db.findCall('rpc:collection_obligation_counts', 'rpc')).toEqual([{ p_company_id: COMPANY }])
   })
 })

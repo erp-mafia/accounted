@@ -72,6 +72,7 @@ const WEBHOOK = 'machine endpoint: inbound webhook'
 const CONNECTOR = 'machine endpoint: self-hosted connector proxy, authenticated by a connector key'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
+const COLLECTIONS_AGREEMENT = "entering or ending the company's agreement with a collection provider: a person consents, accepts and signs"
 
 export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Auth, account, user preferences ────────────────────────────────
@@ -158,6 +159,17 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/settings/peppol': covered([`POST ${V}/peppol/registration`, 'gnubok_register_peppol_participant']),
   'DELETE /api/settings/peppol': gap('P3', 'Peppol deregistration'),
   'POST /api/settings/peppol/access': covered([`POST ${V}/peppol/access-request`, 'gnubok_request_peppol_access']),
+  // Påminnelser och inkasso: the company's agreement with a third-party
+  // provider is entered and ended by a person, never by an agent (build spec
+  // rule 4: approvals that carry a human attestation are web-only).
+  'POST /api/settings/collections/consent': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/onboarding': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/terms': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/signature': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/cancel': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/disconnect': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/refresh': uiOnly('status refresh button; the sync cron polls the same status every ten minutes'),
+  'PATCH /api/settings/collections': gap('P3', 'the rules for handing invoices over to collection'),
   'PATCH /api/extensions/:sector/:slug/settings': uiOnly('extension toggle and per-extension UI settings'),
   'POST /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
   'DELETE /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
@@ -682,4 +694,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 133
+export const GAP_CEILING = 134
