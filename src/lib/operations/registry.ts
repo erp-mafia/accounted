@@ -197,6 +197,17 @@ import {
   skatteverketAgiValidateHuvuduppgift,
   skatteverketAgiValidateIndividuppgift,
 } from './skatteverket-helpers'
+import {
+  posSalesConnect,
+  posSalesConnectionsList,
+  posSalesDayBook,
+  posSalesDayGet,
+  posSalesDaysList,
+  posSalesDisconnect,
+  posSalesFetch,
+  posSalesUpdateSettings,
+  posSalesVenuesList,
+} from './pos-sales'
 import type { AnyOperation } from './types'
 
 export const OPERATIONS: readonly AnyOperation[] = [
@@ -367,6 +378,16 @@ export const OPERATIONS: readonly AnyOperation[] = [
   skatteverketAgiValidateHuvuduppgift,
   skatteverketAgiValidateIndividuppgift,
   skattekontoSync,
+  // pos-sales (kassasystem via Accounted Connect; the fetch is v1 only)
+  posSalesConnectionsList,
+  posSalesVenuesList,
+  posSalesConnect,
+  posSalesDisconnect,
+  posSalesUpdateSettings,
+  posSalesDaysList,
+  posSalesDayGet,
+  posSalesDayBook,
+  posSalesFetch,
 ]
 
 const byPendingType = new Map<string, AnyOperation>()

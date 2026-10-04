@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `294`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `303`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -76,6 +76,10 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/journal-entries/:id",
   "GET /api/v1/companies/:companyId/journal-entries/:id/rattelse-log",
   "GET /api/v1/companies/:companyId/peppol/registration",
+  "GET /api/v1/companies/:companyId/pos-sales/connections",
+  "GET /api/v1/companies/:companyId/pos-sales/days",
+  "GET /api/v1/companies/:companyId/pos-sales/days/:dayId",
+  "GET /api/v1/companies/:companyId/pos-sales/venues",
   "GET /api/v1/companies/:companyId/reconciliation/accounts",
   "GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey",
   "GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/items",
@@ -152,6 +156,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PATCH /api/v1/companies/:companyId/invoices/:id",
   "PATCH /api/v1/companies/:companyId/journal-entries/:id",
   "PATCH /api/v1/companies/:companyId/journal-entries/:id/notes",
+  "PATCH /api/v1/companies/:companyId/pos-sales/connections/:connectionId/settings",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
@@ -235,6 +240,10 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/journal-entries/no-document-required",
   "POST /api/v1/companies/:companyId/peppol/access-request",
   "POST /api/v1/companies/:companyId/peppol/registration",
+  "POST /api/v1/companies/:companyId/pos-sales/connections",
+  "POST /api/v1/companies/:companyId/pos-sales/connections/:connectionId/disconnect",
+  "POST /api/v1/companies/:companyId/pos-sales/days/:dayId/book",
+  "POST /api/v1/companies/:companyId/pos-sales/fetch",
   "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/items/:itemId/ignore",
   "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links",
   "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/residual",

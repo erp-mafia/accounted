@@ -281,6 +281,7 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   accrual: 'Periodisering',
   currency_revaluation: 'Valutaomvärdering',
   webshop_order: 'Webshop',
+  pos_daily_sales: 'Dagskassa',
   stripe_payout: 'Stripe-utbetalning',
 }
 

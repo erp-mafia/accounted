@@ -389,6 +389,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'expense_claim',
   'expense_payout',
   'rot_rut_reclaim',
+  'pos_daily_sales',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
