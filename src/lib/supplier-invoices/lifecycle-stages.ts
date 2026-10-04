@@ -1,11 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { deriveStage, type InvoiceLifecycle } from './stages'
+import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from '@/lib/payments/orders/status'
 
 /**
  * Derive the lifecycle stage of every supplier invoice of a company (or a
  * subset) from what the ledger already knows: status and approved_at on the
- * invoice, membership in an open payment batch, the bank row that paid it,
- * and the account sign-off that covers that row. One read wave, no writes.
+ * invoice, membership in an open payment batch or an open bank payment order,
+ * the bank row that paid it, and the account sign-off that covers that row.
+ * One read wave, no writes.
  */
 
 interface InvoiceRow {
@@ -23,6 +25,14 @@ interface BatchRow {
 interface BatchItemRow {
   batch_id: string
   supplier_invoice_id: string
+}
+
+interface OrderRow {
+  id: string
+  supplier_invoice_id: string
+  status: string
+  created_at: string
+  supplier_invoice_payment_id: string | null
 }
 
 interface TxRow {
@@ -89,6 +99,26 @@ export async function computeSupplierInvoiceLifecycle(
     }
   }
 
+  // Open bank payment orders: the other evidence for "in payment". An
+  // executed order counts until its debit is matched to the invoice.
+  const orderByInvoice = new Map<string, OrderRow>()
+  const unpaidIds = invoices.filter((i) => i.status !== 'paid').map((i) => i.id)
+  if (unpaidIds.length > 0) {
+    const orders = await inChunks(unpaidIds, async (chunk) => {
+      const { data, error } = await supabase
+        .from('payment_orders')
+        .select('id, supplier_invoice_id, status, created_at, supplier_invoice_payment_id')
+        .eq('company_id', companyId)
+        .in('supplier_invoice_id', chunk)
+        .in('status', OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES)
+      if (error) throw error
+      return (data ?? []) as OrderRow[]
+    })
+    for (const order of orders) {
+      if (isOpenPaymentOrder(order)) orderByInvoice.set(order.supplier_invoice_id, order)
+    }
+  }
+
   // Paying bank rows, then the sign-offs that cover them.
   const paidIds = invoices.filter((i) => i.status === 'paid').map((i) => i.id)
   const txByInvoice = new Map<string, TxRow[]>()
@@ -125,6 +155,7 @@ export async function computeSupplierInvoiceLifecycle(
   const result: Record<string, InvoiceLifecycle> = {}
   for (const inv of invoices) {
     const batch = batchByInvoice.get(inv.id) ?? null
+    const order = orderByInvoice.get(inv.id) ?? null
     const txs = txByInvoice.get(inv.id) ?? []
     // Latest paying row decides the paid date; every row must be signed off
     // for the invoice to count as reconciled.
@@ -145,11 +176,12 @@ export async function computeSupplierInvoiceLifecycle(
         status: inv.status,
         approved_at: inv.approved_at,
         is_credit_note: inv.is_credit_note,
-        in_open_batch: batch !== null,
+        in_open_batch: batch !== null || order !== null,
         reconciled: reconciledThrough !== null,
       }),
       approved_at: inv.approved_at,
       batch: batch ? { id: batch.id, created_at: batch.created_at } : null,
+      payment_order: order ? { id: order.id, status: order.status, created_at: order.created_at } : null,
       paid: latest ? { transaction_id: latest.id, date: latest.date } : null,
       reconciled_through: reconciledThrough,
     }

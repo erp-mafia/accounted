@@ -37,6 +37,12 @@ const REFUSED_ON_PURPOSE: Record<string, string> = {
     'links a reset source to its replacement company; unwinding that is an operator decision',
   'company_migration_resets.source_company_id':
     'links a reset source to its replacement company; unwinding that is an operator decision',
+  'payment_orders.batch_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.cash_account_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.supplier_invoice_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
   'peppol_deliveries.company_id':
     'Peppol send is refused for sandbox companies (isSandboxCompany in peppol-send-service); a row means the network saw it',
   'peppol_deliveries.invoice_id':

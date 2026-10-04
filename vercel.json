@@ -147,6 +147,10 @@
       "schedule": "5,20,35,50 * * * *"
     },
     {
+      "path": "/api/payments/orders/status/cron",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/parties/resolver/cron",
       "schedule": "45 5 * * *"
     },

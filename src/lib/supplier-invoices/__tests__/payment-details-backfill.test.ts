@@ -6,6 +6,7 @@ import {
   isValidBic,
   isValidIban,
   planSupplierPaymentBackfill,
+  statedPayeeColumns,
 } from '../payment-details-backfill'
 
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
@@ -46,6 +47,34 @@ describe('planSupplierPaymentBackfill', () => {
       iban: 'DE89370400440532013000',
     })
     expect(planSupplierPaymentBackfill({ bankgiro: '', plusgiro: '', iban: '', bic: '' }, { bankgiro: '5050-1055' })).toEqual({ bankgiro: '5050-1055' })
+  })
+})
+
+describe('statedPayeeColumns', () => {
+  it('keeps what the document states even when the supplier card differs, validated', () => {
+    // Unlike the backfill, the invoice's own giro is kept whatever the supplier
+    // card says: the payment compares the two.
+    expect(statedPayeeColumns({ bankgiro: '5050-1055', iban: 'SE45 5000 0000 0583 9825 7466', bic: 'essesess' })).toEqual({
+      payee_bankgiro: '5050-1055',
+      payee_plusgiro: null,
+      payee_iban: 'SE4550000000058398257466',
+      payee_bic: 'ESSESESS',
+    })
+  })
+
+  it('stores nothing invalid and nothing when the document stated no payee', () => {
+    expect(statedPayeeColumns({ bankgiro: '12', plusgiro: '123-4' })).toEqual({
+      payee_bankgiro: null,
+      payee_plusgiro: null,
+      payee_iban: null,
+      payee_bic: null,
+    })
+    expect(statedPayeeColumns(undefined)).toEqual({
+      payee_bankgiro: null,
+      payee_plusgiro: null,
+      payee_iban: null,
+      payee_bic: null,
+    })
   })
 })
 
