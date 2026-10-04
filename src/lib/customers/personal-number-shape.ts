@@ -127,6 +127,29 @@ export function orgNumberHoldsPersonalNumber(
 }
 
 /**
+ * True when an org_number must be refused because the row is an individual
+ * and the value is not a personnummer.
+ *
+ * A privatperson has no organisationsnummer: a personnummer-shaped value is
+ * moved into personal_number (orgNumberHoldsPersonalNumber above), and
+ * anything else on an individual is a business filed under the wrong type or
+ * a typo. Storing it would leave an individual with an org number, so every
+ * write path asks this first and answers with a clear 400. An empty value is
+ * no org number at all and passes.
+ */
+export function isOrgNumberRefusedOnIndividual(
+  customerType: string | null | undefined,
+  orgNumber: string | null | undefined,
+): boolean {
+  return (
+    customerType === 'individual'
+    && typeof orgNumber === 'string'
+    && orgNumber.trim() !== ''
+    && !looksLikeSwedishPersonalNumber(orgNumber)
+  )
+}
+
+/**
  * The personnummer as it should be stored once it has been lifted out of
  * org_number: separators are kept (the encrypt path accepts any of the four
  * input forms) but whitespace is dropped, because "19900101 1234" passes the

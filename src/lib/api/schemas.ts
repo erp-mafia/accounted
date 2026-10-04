@@ -47,6 +47,7 @@ import {
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
 import {
+  isOrgNumberRefusedOnIndividual,
   isPersonalNumberOrgNumberDisallowed,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
@@ -1341,6 +1342,10 @@ const countryCode = z.string().transform((value, ctx) => {
 })
 export const CountryCodeSchema = emptyStringAsUndefined(countryCode)
 
+const INDIVIDUAL_ORG_NUMBER_MESSAGE =
+  'An individual customer has no org number: org_number must be empty or the person\'s personnummer '
+  + '(which is stored as personal_number). Use customer_type "swedish_business" for a business.'
+
 export const CreateCustomerSchema = z.object({
   name: z.string().min(1, 'Customer name is required'),
   customer_type: CustomerTypeSchema,
@@ -1441,6 +1446,15 @@ export const CreateCustomerSchema = z.object({
       message:
         'org_number looks like a Swedish personal identity number (personnummer) and differs from '
         + 'personal_number. An individual customer keeps its personnummer in personal_number; leave org_number empty.',
+    })
+  }
+  // A privatperson has no org number. Anything on an individual that is not
+  // its personnummer (rerouted above) is refused here rather than stored.
+  if (isOrgNumberRefusedOnIndividual(customer.customer_type, customer.org_number)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['org_number'],
+      message: INDIVIDUAL_ORG_NUMBER_MESSAGE,
     })
   }
   if (
@@ -3590,6 +3604,24 @@ const ImportedCustomerRowSchema = z.object({
   })
   if (countryIssue) {
     ctx.addIssue({ code: 'custom', path: ['country'], message: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en })
+  }
+  // Same: the preview flags an individual with an org number that is not a
+  // personnummer, and a hand-built request is refused here.
+  if (isOrgNumberRefusedOnIndividual(row.customer_type, row.org_number)) {
+    ctx.addIssue({ code: 'custom', path: ['org_number'], message: INDIVIDUAL_ORG_NUMBER_MESSAGE })
+  }
+}).transform((row) => {
+  // An individual's personnummer arrives in the file's org number column
+  // (the classifier types a row as individual BECAUSE that column holds a
+  // personnummer). It is moved into personal_number, which the route
+  // encrypts, and org_number is left empty, same as CreateCustomerSchema.
+  if (!orgNumberHoldsPersonalNumber(row.customer_type, row.org_number)) {
+    return { ...row, personal_number: null as string | null }
+  }
+  return {
+    ...row,
+    org_number: null,
+    personal_number: normalizeReroutedPersonalNumber(row.org_number!) as string | null,
   }
 })
 

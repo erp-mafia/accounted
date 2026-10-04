@@ -25,7 +25,10 @@ import {
   UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
   isMaskedPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
-import { isPersonalNumberOrgNumberDisallowed } from '@/lib/customers/personal-number-shape'
+import {
+  isOrgNumberRefusedOnIndividual,
+  isPersonalNumberOrgNumberDisallowed,
+} from '@/lib/customers/personal-number-shape'
 import { registryFormFill, type RegistryFormField } from '@/lib/parties/registry-form-fill'
 import { useRegistryAutofill } from '@/components/parties/use-registry-autofill'
 import { RegistryAutofillNote } from '@/components/parties/RegistryAutofillNote'
@@ -329,6 +332,13 @@ export default function CustomerForm({
     // legible in the request body.
     if (isMaskedPersonalNumber(data.personal_number)) {
       delete payload.personal_number
+    }
+    // The org number field is hidden for a privatperson, so a value left over
+    // from a business type is not the user's input and is cleared, not sent
+    // to be refused. A personnummer there is sent: the API moves it into
+    // personal_number.
+    if (isOrgNumberRefusedOnIndividual(data.customer_type, data.org_number)) {
+      payload.org_number = ''
     }
     onSubmit(payload)
   }

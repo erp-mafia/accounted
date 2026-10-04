@@ -40,6 +40,7 @@ import { bookResidualAndLink, ReconciliationResidualError } from '@/lib/reconcil
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { validateVatNumber, vatValidationColumns } from '@/lib/vat/vies-client'
 import {
+  isOrgNumberRefusedOnIndividual,
   isPersonalNumberOrgNumberDisallowed,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
@@ -650,6 +651,10 @@ async function commitCategorizeTransaction(
   })
 }
 
+const INDIVIDUAL_ORG_NUMBER_ERROR_SV =
+  'En privatperson har inget organisationsnummer: org_number ska vara tomt eller personens personnummer. '
+  + 'Välj kundtypen svenskt företag (customer_type=swedish_business) för ett företag.'
+
 async function commitCreateCustomer(
   supabase: SupabaseClient,
   userId: string,
@@ -675,6 +680,10 @@ async function commitCreateCustomer(
         + 'eller privatperson (customer_type=individual) och skicka numret som personal_number.',
       status: 400,
     }
+  }
+  // Staging refuses this too; repeated here as the tamper gate.
+  if (isOrgNumberRefusedOnIndividual(params.customer_type as string, orgNumber)) {
+    return { error: INDIVIDUAL_ORG_NUMBER_ERROR_SV, status: 400 }
   }
 
   // The personnummer arrives from staging already encrypted
@@ -789,7 +798,7 @@ async function commitUpdateCustomer(
   const { customer_id: customerId, changes } = validated
   const { data: current, error: currentError } = await supabase
     .from('customers')
-    .select('customer_type, country, vat_number')
+    .select('customer_type, country, vat_number, org_number')
     .eq('id', customerId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -840,6 +849,22 @@ async function commitUpdateCustomer(
   }
   if (changes.customer_type !== undefined && effectiveType !== 'individual') {
     updateData.personal_number = null
+  }
+  // An individual has no org number (same rule as staging, repeated as the
+  // tamper gate). An operation staged before staging moved a personnummer
+  // out of org_number gets it moved here, as commitCreateCustomer does.
+  const individualOrgNumber =
+    changes.org_number !== undefined || changes.customer_type !== undefined
+      ? (changes.org_number ?? current.org_number)
+      : undefined
+  if (isOrgNumberRefusedOnIndividual(effectiveType, individualOrgNumber)) {
+    return { error: INDIVIDUAL_ORG_NUMBER_ERROR_SV, status: 400 }
+  }
+  if (orgNumberHoldsPersonalNumber(effectiveType, individualOrgNumber)) {
+    updateData.org_number = null
+    if (!personalNumberEncrypted) {
+      updateData.personal_number = encryptCustomerPersonalNumber(normalizeReroutedPersonalNumber(individualOrgNumber!))
+    }
   }
 
   if (changes.vat_number !== undefined) {
