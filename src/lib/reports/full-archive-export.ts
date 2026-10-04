@@ -1383,6 +1383,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   payment_match_log: 'derived matching log',
   pending_operations: 'staged-operation workflow state',
   processing_history: 'internal processing log; behandlingshistorik exports from audit_log',
+  register_import_runs:
+    'undo record of customer/supplier/article imports (created ids, overwritten fields); the registers are dumped and the undo itself is in audit_log',
   provider_consents: 'consent tokens, not portable',
   salary_payslip_deliveries: 'delivery log',
   skattekonto_file_imports:
