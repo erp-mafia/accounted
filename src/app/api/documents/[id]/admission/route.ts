@@ -56,4 +56,4 @@ export const POST = withRouteContext('document.admission', async (request, ctx, 
   await enqueueDocumentJob(service, ctx.companyId, id, 'extract')
   ctx.log.info('held document admitted', { doc: id, type: docType })
   return NextResponse.json({ data: { document_id: id, decision: 'admit', doc_type: docType } })
-})
+}, { requireWrite: true })

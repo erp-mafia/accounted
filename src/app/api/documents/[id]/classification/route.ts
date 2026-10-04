@@ -51,4 +51,4 @@ export const POST = withRouteContext('document.classification', async (request, 
   if (isArkivBrainEnabled(ctx.companyId)) await enqueueDocumentJob(service, ctx.companyId, id, 'extract')
   ctx.log.info('document type set by person', { doc: id, type: parsed.data.doc_type, withdrawn: withdrawn.status === 'withdrawn' ? withdrawn.agreementId : null })
   return NextResponse.json({ data: { document_id: id, doc_type: parsed.data.doc_type } })
-})
+}, { requireWrite: true })

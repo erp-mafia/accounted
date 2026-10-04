@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import { parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
+vi.mock('@/lib/auth/require-write', () => ({ requireWritePermission: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn(() => ({ tag: 'service' })) }))
 vi.mock('@/lib/documents/classify/classify', () => ({ recordHumanClassification: vi.fn() }))
@@ -12,6 +14,7 @@ vi.mock('@/lib/arkiv/agreements/store', () => ({ withdrawDerivedAgreement: vi.fn
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { requireWritePermission } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { recordHumanClassification } from '@/lib/documents/classify/classify'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
@@ -29,6 +32,7 @@ beforeEach(() => {
   process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
+  vi.mocked(requireWritePermission).mockResolvedValue({ ok: true })
 })
 
 describe('POST /api/documents/[id]/classification', () => {
@@ -79,5 +83,12 @@ describe('POST /api/documents/[id]/classification', () => {
     expect((await parseJsonResponse(await call({ doc_type: 'receipt' }))).status).toBe(404)
     expect(recordHumanClassification).not.toHaveBeenCalled()
     expect(enqueueDocumentJob).not.toHaveBeenCalled()
+  })
+
+  it('returns 403 for a read-only member and records nothing', async () => {
+    // A person's type reaches the open Underlag item (route-from-arkiv), so only a member who may write can give it.
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: false, response: NextResponse.json({ error: 'Du har endast läsbehörighet i detta företag.' }, { status: 403 }) })
+    expect((await parseJsonResponse(await call({ doc_type: 'receipt' }))).status).toBe(403)
+    expect(recordHumanClassification).not.toHaveBeenCalled()
   })
 })

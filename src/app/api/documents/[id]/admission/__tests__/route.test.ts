@@ -5,6 +5,7 @@ import { parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
+vi.mock('@/lib/auth/require-write', () => ({ requireWritePermission: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn(() => ({ tag: 'service' })) }))
 vi.mock('@/lib/core/documents/document-service', () => ({ deleteDocument: vi.fn() }))
@@ -13,6 +14,7 @@ vi.mock('@/lib/documents/jobs/queue', () => ({ enqueueDocumentJob: vi.fn() }))
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { requireWritePermission } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { deleteDocument } from '@/lib/core/documents/document-service'
 import { recordHumanClassification } from '@/lib/documents/classify/classify'
@@ -30,6 +32,7 @@ beforeEach(() => {
   process.env.ARKIV_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
+  vi.mocked(requireWritePermission).mockResolvedValue({ ok: true })
 })
 
 describe('POST /api/documents/[id]/admission', () => {
@@ -67,5 +70,12 @@ describe('POST /api/documents/[id]/admission', () => {
     expect(deleteDocument).toHaveBeenCalledWith({ tag: 'service' }, 'company-1', DOC)
     expect(recordHumanClassification).not.toHaveBeenCalled()
     expect(enqueueDocumentJob).not.toHaveBeenCalled()
+  })
+
+  it('returns 403 for a read-only member and records nothing', async () => {
+    // A person's type reaches the open Underlag item (route-from-arkiv), so only a member who may write can give it.
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: false, response: NextResponse.json({ error: 'Du har endast läsbehörighet i detta företag.' }, { status: 403 }) })
+    expect((await parseJsonResponse(await call({ decision: 'admit' }))).status).toBe(403)
+    expect(recordHumanClassification).not.toHaveBeenCalled()
   })
 })
