@@ -116,10 +116,25 @@ export function parseDiff(diffText) {
   // File headers (---, +++, rename) only appear between `diff --git` and the
   // first hunk; inside a hunk a line "+++ x" is an added line "++ x".
   let inHeader = false
+  // A binary file's header has no ---/+++ lines ("Binary files ... differ"),
+  // so its paths come from the `diff --git` line instead.
+  let gitLinePaths = null
+  let headerNamedPaths = false
+  const flushGitLinePaths = () => {
+    if (gitLinePaths && !headerNamedPaths) {
+      for (const p of gitLinePaths) out.push({ file: p, line: 0, text: p })
+    }
+    gitLinePaths = null
+  }
   for (const raw of diffText.split('\n')) {
     if (raw.startsWith('diff --git ')) {
+      flushGitLinePaths()
       file = null
       inHeader = true
+      headerNamedPaths = false
+      const rest = raw.slice('diff --git '.length)
+      const m = /^a\/(.+) b\/(.+)$/.exec(rest)
+      gitLinePaths = m ? [...new Set([m[1], m[2]])] : [rest]
       continue
     }
     if (inHeader) {
@@ -128,6 +143,7 @@ export function parseDiff(diffText) {
         if (target !== '/dev/null') {
           file = target.replace(/^b\//, '')
           out.push({ file, line: 0, text: file })
+          headerNamedPaths = true
         }
         continue
       }
@@ -136,6 +152,7 @@ export function parseDiff(diffText) {
         if (source !== '/dev/null') {
           file = source.replace(/^a\//, '')
           out.push({ file, line: 0, text: file })
+          headerNamedPaths = true
         }
         continue
       }
@@ -143,11 +160,13 @@ export function parseDiff(diffText) {
         const p = raw.replace(/^rename (from|to) /, '')
         if (raw.startsWith('rename to ')) file = p
         out.push({ file: p, line: 0, text: p })
+        headerNamedPaths = true
         continue
       }
     }
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw)
     if (hunk) {
+      flushGitLinePaths()
       inHeader = false
       newLine = Number(hunk[1])
       continue
@@ -160,6 +179,7 @@ export function parseDiff(diffText) {
       newLine++
     }
   }
+  flushGitLinePaths()
   return out
 }
 

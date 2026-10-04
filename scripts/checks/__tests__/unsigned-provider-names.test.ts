@@ -123,6 +123,28 @@ describe('unsigned-provider-names: diffs', () => {
     const added = ['diff --git a/x.md b/x.md', '--- /dev/null', '+++ b/x.md', '@@ -0,0 +1,2 @@', '+hello', '+Zyxquab AB'].join('\n')
     expect(scanDiff(added, { names: NAMES, allowlist: [] })).toEqual([{ where: 'x.md', line: 2, column: 1, length: 7 }])
   })
+
+  it('reads the path of a binary file, whose header has no ---/+++ lines', () => {
+    const binary = [
+      'diff --git a/public/zyxquab-logo.png b/public/zyxquab-logo.png',
+      'new file mode 100644',
+      'index 0000000..3333333',
+      'Binary files /dev/null and b/public/zyxquab-logo.png differ',
+      'diff --git a/src/b.ts b/src/b.ts',
+      '--- a/src/b.ts',
+      '+++ b/src/b.ts',
+      '@@ -1,0 +2,1 @@',
+      '+const ok = 1',
+    ].join('\n')
+    expect(parseDiff(binary).filter((e: { line: number }) => e.line === 0).map((e: { text: string }) => e.text)).toEqual([
+      'public/zyxquab-logo.png',
+      'src/b.ts',
+      'src/b.ts',
+    ])
+    expect(scanDiff(binary, { names: NAMES, allowlist: [] })).toEqual([
+      { where: 'public/zyxquab-logo.png (path)', line: 0, column: 8, length: 7 },
+    ])
+  })
 })
 
 describe('unsigned-provider-names: PR text', () => {
