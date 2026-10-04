@@ -36,6 +36,7 @@ const UNBALANCED_SIE = VALID_SIE.replace('#TRANS 3001 {} -1000.00', '#TRANS 3001
 type MockConfig = {
   storedMappings?: unknown[]
   companyOrg?: string | null
+  settingsOrg?: string | null
   duplicateFile?: { id: string; imported_at: string } | null
   duplicatePeriod?: Record<string, unknown> | null
 }
@@ -56,6 +57,8 @@ function mockSupabase(config: MockConfig = {}) {
                   },
                   error: null,
                 })
+              } else if (table === 'company_settings') {
+                resolve({ data: { org_number: config.settingsOrg ?? null }, error: null })
               } else if (table === 'sie_imports') {
                 if (called.includes('single')) {
                   resolve({ data: config.duplicateFile ?? null, error: null })
@@ -138,6 +141,16 @@ describe('gnubok_sie_preflight', () => {
     expect(result.verdict).toBe('ok_with_warnings')
     expect((result.org_number_match as Record<string, unknown>).match).toBe(false)
     expect(result.instructions).toContain('STOP')
+    expect(result.instructions).toContain('confirm_org_number_mismatch=true')
+  })
+
+  // The digits-only comparison counted the two forms of one number as a
+  // mismatch; the shared key (orgNumberKey) makes them one.
+  it('matches the 12-digit form of the company\'s own number', async () => {
+    const result = await run({ file_content: VALID_SIE.replace('#ORGNR 556000-0001', '#ORGNR 16556000-0001') })
+
+    expect(result.verdict).toBe('ok')
+    expect(result.org_number_match).toMatchObject({ verified: true, match: true })
   })
 
   it('reports unverified instead of ok when the company has no org number', async () => {
@@ -145,6 +158,12 @@ describe('gnubok_sie_preflight', () => {
     const match = result.org_number_match as Record<string, unknown>
     expect(match.verified).toBe(false)
     expect(match.match).toBeNull()
+  })
+
+  it('compares against company_settings when companies has no org number', async () => {
+    const result = await run({ file_content: VALID_SIE }, { companyOrg: null, settingsOrg: '5560000001' })
+
+    expect(result.org_number_match).toMatchObject({ verified: true, match: true, company_org_number: '5560000001' })
   })
 
   it('returns verdict invalid with the balance error for an unbalanced voucher', async () => {
