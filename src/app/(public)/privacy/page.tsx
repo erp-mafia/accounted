@@ -52,7 +52,7 @@ export default function PrivacyPolicyPage() {
               <li><strong>Bankdata:</strong> Kontosaldon och transaktioner (via PSD2-koppling)</li>
               <li><strong>Dokument:</strong> Uppladdade kvitton, fakturor och andra bokföringsunderlag</li>
               <li><strong>Fakturaleverans:</strong> Mottagaradress (e-post, eller postadress vid utskick via ett inkasso- och utskicksföretag), leveransstatus, tidpunkt och innehållet i skickade fakturamejl</li>
-              <li><strong>Inkasso och utskick (om du aktiverar det):</strong> Utbetalningskonto, svar på frågor om kundkännedom (även om ägare och ledning), firmatecknarens kontaktuppgifter för signering, för en enskild firma ägarens personnummer, samt status och händelser i de ärenden du har lämnat över</li>
+              <li><strong>Inkasso och utskick (om du aktiverar det):</strong> Utbetalningskonto, svar på frågor om kundkännedom (även om ägare och ledning), vem som godkände villkoren och när, firmatecknarens kontaktuppgifter för signering, för en enskild firma ägarens personnummer, samt status och händelser i de ärenden du har lämnat över</li>
               <li><strong>Tekniska uppgifter:</strong> IP-adress, enhetstyp, användningsstatistik</li>
             </ul>
           </CardContent>
@@ -226,22 +226,25 @@ export default function PrivacyPolicyPage() {
               personuppgiftsansvarig eller som ditt personuppgiftsbiträde.
               Företagets namn och villkor, och dess information om hur det
               behandlar personuppgifter när sådan finns, visas innan du godkänner.
-              Inget skickas innan en ägare eller administratör har aktiverat
-              kopplingen, och sedan bara följande:
+              Inget skickas innan en ägare eller administratör har godkänt
+              företagets villkor och skickat in ansökan, och sedan bara följande:
             </p>
             <ul>
               <li>
-                Vid aktiveringen: företagets uppgifter, kontaktuppgifter,
-                utbetalningskonto och svar på frågor om kundkännedom, för en
-                enskild firma även ägarens personnummer.
+                När ansökan skickas in, villkoren godkänns och avtalet signeras:
+                företagets uppgifter, kontaktuppgifter, utbetalningskonto och
+                svar på frågor om kundkännedom, namnet på den som godkänner
+                villkoren och firmatecknarens e-post om signeringslänken ska
+                skickas dit, för en enskild firma även ägarens personnummer.
               </li>
               <li>
                 När du skickar en faktura via företaget, lämnar över den till
                 påminnelse eller inkasso, ställer in ett återkommande
                 fakturaschema att skicka via företaget eller godkänner en
-                sammanställd omgång: fakturan och uppgifter om kunden (namn,
-                postadress och organisationsnummer eller, för privatpersoner,
-                personnummer).
+                sammanställd omgång: fakturan med de betalningar och
+                krediteringar som redan finns på den, och uppgifter om kunden
+                (namn, postadress, e-post och telefonnummer när de finns, samt
+                organisationsnummer eller, för privatpersoner, personnummer).
               </li>
               <li>
                 När du väljer en utskickskanal för en kund: kundens
@@ -250,13 +253,18 @@ export default function PrivacyPolicyPage() {
               </li>
               <li>
                 Så länge företaget har ett öppet ärende för en faktura:
-                betalningar och kreditfakturor på fakturan. Ärendets status,
-                händelser och avräkningar hämtas tillbaka till tjänsten.
+                betalningar och kreditfakturor på fakturan, och dina åtgärder i
+                ärendet, till exempel paus, återkallelse eller bestridande, med
+                eventuellt meddelande från dig. Om en rapporterad betalning
+                senare tas bort eller ändras meddelas det också, även efter att
+                ärendet har avslutats. Ärendets status, händelser och
+                avräkningar hämtas tillbaka till tjänsten.
               </li>
             </ul>
             <p>
-              Dina egna uppgifter lämnar vi för att fullgöra tjänsten du har bett
-              om (art. 6.1b). För dina kunders uppgifter är du
+              Uppgifter om dig själv lämnar vi för att fullgöra tjänsten du har
+              bett om (art. 6.1b). För uppgifter om dina kunder och om andra
+              personer i företaget, som ägare, ledning och firmatecknare, är du
               personuppgiftsansvarig och vi ditt biträde, se{' '}
               <Link href="/dpa" className="text-primary underline underline-offset-4">
                 personuppgiftsbiträdesavtalet

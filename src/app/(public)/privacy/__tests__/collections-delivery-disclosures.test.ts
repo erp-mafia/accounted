@@ -55,12 +55,35 @@ describe('invoice delivery and collection recipients (provider-neutral)', () => 
     expect(table).not.toContain('utskick')
   })
 
-  it('ties every transfer to an instruction and nothing to the time before activation', () => {
+  it('ties every transfer to an instruction and nothing to the time before the application', () => {
+    // Data leaves at "Skicka ansökan", before the provider approves; "Aktiverat"
+    // in the app means approved, so the pages name the user's own steps instead.
     expect(DPA).toContain('utgör dokumenterade instruktioner enligt punkt 2')
-    expect(DPA).toContain('Inga uppgifter lämnas till företaget innan den Ansvarige har aktiverat kopplingen.')
-    expect(PRIVACY).toContain(
-      'Inget skickas innan en ägare eller administratör har aktiverat kopplingen, och sedan bara följande:',
+    expect(DPA).toContain(
+      'Inga uppgifter lämnas till företaget innan den Ansvarige har godkänt företagets villkor och skickat in ansökan om aktivering.',
     )
+    expect(PRIVACY).toContain(
+      'Inget skickas innan en ägare eller administratör har godkänt företagets villkor och skickat in ansökan, och sedan bara följande:',
+    )
+  })
+
+  it('lists every customer field and case input the transfers carry, on both pages', () => {
+    // The lists are exhaustive ("bara följande"), so they must cover the whole
+    // debtor block a handover or delivery sends (contact details included), the
+    // payments and credits sent with a handover, case actions with their
+    // message, and reverts sent after a case has closed.
+    for (const page of [DPA, PRIVACY]) {
+      expect(page).toContain(
+        'namn, postadress, e-post och telefonnummer när de finns, samt organisationsnummer eller, för privatpersoner, personnummer',
+      )
+      expect(page).toContain('fakturan med de betalningar och krediteringar som redan finns på den')
+      expect(page).toContain('till exempel paus, återkallelse eller bestridande, med eventuellt meddelande från')
+      expect(page).toContain(
+        'Om en rapporterad betalning senare tas bort eller ändras meddelas det också, även efter att ärendet har avslutats.',
+      )
+      expect(page).toContain('namnet på den som godkänner villkoren')
+      expect(page).toContain('firmatecknarens e-post om signeringslänken ska skickas dit')
+    }
   })
 
   it('claims customer personnummer is stored encrypted only while the ciphertext CHECK stands', () => {

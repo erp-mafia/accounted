@@ -166,16 +166,19 @@ export default function DPAPage() {
             </p>
             <ul>
               <li>
-                Vid aktiveringen: den Ansvariges företagsuppgifter, kontaktuppgifter och
-                utbetalningskonto, svar på frågor om kundkännedom och, för en enskild firma,
-                ägarens personnummer.
+                När den Ansvarige skickar in ansökan, godkänner villkoren och låter avtalet
+                signeras: den Ansvariges företagsuppgifter, kontaktuppgifter och
+                utbetalningskonto, svar på frågor om kundkännedom, namnet på den som godkänner
+                villkoren, firmatecknarens e-post om signeringslänken ska skickas dit och, för en
+                enskild firma, ägarens personnummer.
               </li>
               <li>
                 När den Ansvarige skickar en faktura via företaget, lämnar över den till
                 påminnelse eller inkasso, ställer in ett återkommande fakturaschema att skicka via
-                företaget eller godkänner en sammanställd omgång: fakturan och uppgifter om
-                kunden (namn, postadress och organisationsnummer eller, för privatpersoner,
-                personnummer).
+                företaget eller godkänner en sammanställd omgång: fakturan med de betalningar och
+                krediteringar som redan finns på den, och uppgifter om kunden (namn, postadress,
+                e-post och telefonnummer när de finns, samt organisationsnummer eller, för
+                privatpersoner, personnummer).
               </li>
               <li>
                 När den Ansvarige väljer en utskickskanal för en kund: kundens
@@ -184,12 +187,16 @@ export default function DPAPage() {
               </li>
               <li>
                 Så länge företaget har ett öppet ärende för en faktura: betalningar och
-                kreditfakturor som avser fakturan. Ärendets status, händelser och avräkningar
-                hämtas tillbaka till tjänsten.
+                kreditfakturor som avser fakturan, och den Ansvariges åtgärder i ärendet, till
+                exempel paus, återkallelse eller bestridande, med eventuellt meddelande från den
+                Ansvarige. Om en rapporterad betalning senare tas bort eller ändras meddelas det
+                också, även efter att ärendet har avslutats. Ärendets status, händelser och
+                avräkningar hämtas tillbaka till tjänsten.
               </li>
             </ul>
             <p>
-              Inga uppgifter lämnas till företaget innan den Ansvarige har aktiverat kopplingen.
+              Inga uppgifter lämnas till företaget innan den Ansvarige har godkänt företagets
+              villkor och skickat in ansökan om aktivering.
             </p>
           </CardContent>
         </Card>
