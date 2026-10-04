@@ -640,7 +640,7 @@ function refineRotRutLineCompleteness(
 }
 
 /**
- * Which payment QR code an invoice PDF prints (migration 20261003090000):
+ * Which payment QR code an invoice PDF prints (migration 20261004004343):
  * auto (Swish to a private customer when usable, else the bank-app QR, else
  * Swish, else the payment link), bank_app, swish, payment_link or none.
  */

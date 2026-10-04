@@ -41,6 +41,6 @@ COMMENT ON COLUMN public.invoices.qr_mode IS
 -- The old bank-app switch stays for API compatibility but no longer decides
 -- what the PDF prints.
 COMMENT ON COLUMN public.company_settings.invoice_show_payment_qr IS
-  'Superseded by invoice_qr_mode (migration 20261003090000): still accepted by the settings APIs, no longer read when rendering an invoice.';
+  'Superseded by invoice_qr_mode (migration 20261004004343): still accepted by the settings APIs, no longer read when rendering an invoice.';
 
 NOTIFY pgrst, 'reload schema';

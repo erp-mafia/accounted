@@ -80,6 +80,7 @@ export function proposeDraftSendLines(input: DraftVoucherInput): FormLine[] {
   const vatAmount = roundOre(priced.reduce((sum, item) => sum + item.vat_amount, 0))
   return proposeSendLines({
     invoice: {
+      id: 'draft',
       invoice_number: input.invoiceNumber,
       total: roundOre(subtotal + vatAmount),
       subtotal,
@@ -115,6 +116,7 @@ export function proposeCreditNoteSendLines(
   try {
     return proposeSendLines({
       invoice: {
+        id: 'credit-preview',
         invoice_number: creditNoteNumber(reference),
         total: fields.total,
         total_sek: fields.total_sek,

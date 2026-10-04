@@ -1,5 +1,5 @@
 /**
- * Shape of migration 20261003090000_invoice_qr_mode.sql: the two QR mode
+ * Shape of migration 20261004004343_invoice_qr_mode.sql: the two QR mode
  * columns carry exactly the modes the code knows (INVOICE_QR_MODES), the
  * company default is auto, the per-invoice override is nullable, and the
  * migration writes no rows (an UPDATE on company_settings would trip
@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { INVOICE_QR_MODES } from '@/types'
 
 const SQL = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20261003090000_invoice_qr_mode.sql'),
+  join(process.cwd(), 'supabase/migrations/20261004004343_invoice_qr_mode.sql'),
   'utf8',
 )
 /** The statements, without comment lines. */
@@ -25,7 +25,7 @@ function checkValues(constraint: string): string[] {
   return match![1].split(',').map((value) => value.trim().replace(/^'|'$/g, ''))
 }
 
-describe('migration 20261003090000_invoice_qr_mode', () => {
+describe('migration 20261004004343_invoice_qr_mode', () => {
   it('adds the company default as NOT NULL DEFAULT auto', () => {
     expect(CODE).toMatch(
       /ALTER TABLE public\.company_settings\s+ADD COLUMN IF NOT EXISTS invoice_qr_mode text NOT NULL DEFAULT 'auto'/,

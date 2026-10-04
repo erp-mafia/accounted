@@ -324,7 +324,7 @@ export type Currency = (typeof CURRENCIES)[number]
 export const FOREIGN_CURRENCIES: readonly Currency[] = CURRENCIES.filter((c) => c !== 'SEK')
 
 /**
- * The one payment QR code an invoice PDF prints (migration 20261003090000).
+ * The one payment QR code an invoice PDF prints (migration 20261004004343).
  * company_settings.invoice_qr_mode is the company default; invoices.qr_mode
  * overrides it per invoice (null inherits). auto = Swish to a private
  * customer when usable, else the bank-app QR, else Swish, else the payment
@@ -1474,7 +1474,7 @@ export interface Invoice {
   // company default when it is null.
   payment_cash_account_id?: string | null
   payment_details?: InvoicePaymentAccount | null
-  // Per-invoice QR code choice (migration 20261003090000); null inherits
+  // Per-invoice QR code choice (migration 20261004004343); null inherits
   // company_settings.invoice_qr_mode. Optional in TS for pre-migration fixtures.
   qr_mode?: InvoiceQrMode | null
 
