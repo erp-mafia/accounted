@@ -51,8 +51,11 @@ import type { CollectionsAdapter, CollectionsCallContext } from '../port'
  * Connection: before onboarding (no handle) the connection is
  * connecting/not_started; onboard answers awaiting_terms with a handle,
  * acceptTerms awaiting_signature, and once a signature was started every read
- * of the connection answers active. The ledger's own row is the record of
- * where activation stands; the fake only has to walk the steps.
+ * of the connection answers active. Reads of the connection follow the same
+ * steps (kept in the store by handle), so a status poll never skips the terms
+ * or the signature; a handle this process has not seen reads as active, the
+ * same fallback cases have. The ledger's own row is the record of where
+ * activation stands; the fake only has to walk the steps.
  */
 
 const FAKE_TERMS_VERSION = 'fake-2026-10'
@@ -99,19 +102,23 @@ type FakeStep = 'reminder' | 'collection' | 'invoice'
 
 type OverlayEntry =
   | { kind: 'action'; key: string; at: number; action: CollectionsAction; step: 'reminder' | 'collection' | null }
-  | { kind: 'payment'; key: string; at: number; paymentRef: string; amount: number; date: string }
+  | { kind: 'payment'; key: string; at: number; paymentRef: string; amount: number; ignoredAmount: number; date: string }
   | { kind: 'revert'; key: string; at: number; paymentRef: string }
   | { kind: 'credit'; key: string; at: number; creditRef: string; amount: number; date: string }
 
-/** What was done to fake cases, keyed by case handle. */
+/** Where an onboarded fake connection stands. */
+type FakeConnectionStep = 'awaiting_terms' | 'awaiting_signature' | 'active' | 'disconnected'
+
+/** What was done to fake cases (keyed by case handle) and connections (keyed by connection handle). */
 export interface FakeCollectionsStore {
   cases: Map<string, OverlayEntry[]>
   /** openCase replays: idempotency key -> case handle. */
   opened: Map<string, string>
+  connections: Map<string, FakeConnectionStep>
 }
 
 export function createFakeCollectionsStore(): FakeCollectionsStore {
-  return { cases: new Map(), opened: new Map() }
+  return { cases: new Map(), opened: new Map(), connections: new Map() }
 }
 
 const processStore = createFakeCollectionsStore()
@@ -445,22 +452,59 @@ export function createFakeCollectionsAdapter(options: FakeCollectionsOptions = {
   const minuteMs = options.minuteMs ?? 60_000
   const store = options.store ?? processStore
 
+  /** The connection as its stored step says (active for a handle this process has not seen), then the patch. */
   function connectionState(
     ctx: CollectionsCallContext,
     patch: Partial<CollectionsConnection> = {},
   ): CollectionsConnection {
-    const onboarded = ctx.connectionHandle !== null
+    const step = ctx.connectionHandle === null ? null : (store.connections.get(ctx.connectionHandle) ?? 'active')
+    const base: Pick<CollectionsConnection, 'state' | 'subStatus' | 'providerStatus' | 'terms'> =
+      step === null
+        ? { state: 'connecting', subStatus: 'not_started', providerStatus: null, terms: null }
+        : step === 'awaiting_terms'
+          ? {
+              state: 'connecting',
+              subStatus: 'awaiting_terms',
+              providerStatus: 'fake_awaiting_terms',
+              terms: { version: FAKE_TERMS_VERSION, url: null, accepted: false },
+            }
+          : step === 'awaiting_signature'
+            ? {
+                state: 'connecting',
+                subStatus: 'awaiting_signature',
+                providerStatus: 'fake_awaiting_signature',
+                terms: { version: FAKE_TERMS_VERSION, url: null, accepted: true },
+              }
+            : step === 'disconnected'
+              ? { state: 'disconnected', subStatus: null, providerStatus: 'fake_disconnected', terms: null }
+              : {
+                  state: 'active',
+                  subStatus: null,
+                  providerStatus: 'fake_active',
+                  terms: { version: FAKE_TERMS_VERSION, url: null, accepted: true },
+                }
     return {
-      state: onboarded ? 'active' : 'connecting',
-      subStatus: onboarded ? null : 'not_started',
-      providerStatus: onboarded ? 'fake_active' : null,
+      ...base,
       connectionHandle: ctx.connectionHandle,
-      terms: onboarded ? { version: FAKE_TERMS_VERSION, url: null, accepted: true } : null,
       signers: [],
       settings: null,
       updatedAt: new Date(now()).toISOString(),
       ...patch,
     }
+  }
+
+  /** Move a connection's stored step forward; a replay of an earlier step never moves it back. */
+  function advanceConnection(handle: string, to: FakeConnectionStep): void {
+    const order: FakeConnectionStep[] = ['awaiting_terms', 'awaiting_signature', 'active']
+    const current = store.connections.get(handle)
+    // A cancelled or ended connection starts over at onboarding (a new activation reuses the handle).
+    if (to === 'awaiting_terms' && current === 'disconnected') {
+      store.connections.set(handle, to)
+      return
+    }
+    if (current === 'disconnected' && to !== 'disconnected') return
+    if (current && to !== 'disconnected' && order.indexOf(current) >= order.indexOf(to)) return
+    store.connections.set(handle, to)
   }
 
   function caseHandle(caseRef: string): CaseHandle {
@@ -489,21 +533,25 @@ export function createFakeCollectionsAdapter(options: FakeCollectionsOptions = {
     },
     async onboard(ctx, input) {
       validateFakeRequest('onboard', input)
+      const handle = ctx.connectionHandle ?? fakeHandleFor(ctx.companyId)
+      advanceConnection(handle, 'awaiting_terms')
       return connectionState(ctx, {
         state: 'connecting',
         subStatus: 'awaiting_terms',
         providerStatus: 'fake_awaiting_terms',
-        connectionHandle: ctx.connectionHandle ?? fakeHandleFor(ctx.companyId),
+        connectionHandle: handle,
         terms: { version: FAKE_TERMS_VERSION, url: null, accepted: false },
         settings: { ...input.settings },
       })
     },
     async cancelOnboarding(ctx, input) {
       validateFakeRequest('cancelOnboarding', input)
+      if (ctx.connectionHandle) advanceConnection(ctx.connectionHandle, 'disconnected')
       return connectionState(ctx, { state: 'disconnected', subStatus: null, providerStatus: 'fake_cancelled' })
     },
     async acceptTerms(ctx, input) {
       validateFakeRequest('acceptTerms', input)
+      if (ctx.connectionHandle) advanceConnection(ctx.connectionHandle, 'awaiting_signature')
       return connectionState(ctx, {
         state: 'connecting',
         subStatus: 'awaiting_signature',
@@ -511,9 +559,12 @@ export function createFakeCollectionsAdapter(options: FakeCollectionsOptions = {
         terms: { version: input.termsVersion, url: null, accepted: true },
       })
     },
-    async startSignature(_ctx, input) {
+    async startSignature(ctx, input) {
       validateFakeRequest('startSignature', input)
-      // Nothing to sign: the next read of the connection answers active.
+      // Nothing to sign: once the terms are accepted, the next read of the connection answers active.
+      if (ctx.connectionHandle && store.connections.get(ctx.connectionHandle) === 'awaiting_signature') {
+        advanceConnection(ctx.connectionHandle, 'active')
+      }
       return { signUrl: null, signers: [] }
     },
     async updateSettings(ctx, input) {
@@ -523,6 +574,7 @@ export function createFakeCollectionsAdapter(options: FakeCollectionsOptions = {
     },
     async disconnect(ctx, input) {
       validateFakeRequest('disconnect', input)
+      if (ctx.connectionHandle) advanceConnection(ctx.connectionHandle, 'disconnected')
       return connectionState(ctx, { state: 'disconnected', subStatus: null, providerStatus: 'fake_disconnected' })
     },
 
@@ -567,6 +619,13 @@ export function createFakeCollectionsAdapter(options: FakeCollectionsOptions = {
 
     async registerPayment(_ctx, input) {
       validateFakeRequest('registerPayment', input)
+      // A replay answers the first receipt, as Connect does. Recomputing it
+      // after the payment was applied would report the whole amount as
+      // ignored once the first call had paid the case off.
+      const recorded = (store.cases.get(input.caseRef) ?? []).find((e) => e.key === input.idempotencyKey)
+      if (recorded?.kind === 'payment') {
+        return { accepted: true, providerRef: `fake-payment-${recorded.paymentRef}`, ignoredAmount: recorded.ignoredAmount }
+      }
       const before = readCase(input.caseRef)
       const ignoredAmount = roundOre(Math.max(0, input.amount - before.outstandingPrincipal))
       append(input.caseRef, {
@@ -575,6 +634,7 @@ export function createFakeCollectionsAdapter(options: FakeCollectionsOptions = {
         at: now(),
         paymentRef: input.paymentRef,
         amount: roundOre(input.amount - ignoredAmount),
+        ignoredAmount,
         date: input.date,
       })
       return { accepted: true, providerRef: `fake-payment-${input.paymentRef}`, ignoredAmount }

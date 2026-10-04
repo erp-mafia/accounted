@@ -164,6 +164,20 @@ describe('fake collections adapter: money reported to the provider', () => {
     await adapter.registerCreditNote(CTX, { ...note, idempotencyKey: 'c-2', creditRef: 'credit-2' })
     expect(await adapter.getCase(CTX, opened)).toMatchObject({ stage: 'closed_other', closeReason: 'credited' })
   })
+
+  it('answers a replayed payment with its first receipt, even after it paid the case off', async () => {
+    const { adapter, clock } = setup()
+    const { case: opened } = await adapter.openCase(CTX, OPEN)
+    clock.now = OPENED + 2 * MINUTE
+    const payment = { idempotencyKey: 'f-1', caseRef: opened.caseRef, paymentRef: 'pay-1', date: '2026-10-04', amount: 1000, description: null }
+    const first = await adapter.registerPayment(CTX, payment)
+    expect(first).toEqual({ accepted: true, providerRef: 'fake-payment-pay-1', ignoredAmount: 0 })
+    expect(await adapter.getCase(CTX, opened)).toMatchObject({ stage: 'closed_paid', isOpen: false })
+
+    clock.now += 1000
+    expect(await adapter.registerPayment(CTX, payment)).toEqual(first)
+    expect((await adapter.getCase(CTX, opened)).reportedPayments).toHaveLength(1)
+  })
 })
 
 describe('fake collections adapter: connection', () => {
@@ -180,5 +194,39 @@ describe('fake collections adapter: connection', () => {
     expect(await adapter.startSignature(ctx, COLLECTIONS_FIXTURES.startSignature.request as CollectionsSignatureStartRequest)).toEqual({ signUrl: null, signers: [] })
     expect(await adapter.connection(ctx)).toMatchObject({ state: 'active', subStatus: null })
     expect(await adapter.disconnect(ctx, COLLECTIONS_FIXTURES.disconnect.request)).toMatchObject({ state: 'disconnected' })
+    expect(await adapter.connection(ctx)).toMatchObject({ state: 'disconnected' })
+  })
+
+  it('never lets a status read skip the terms or the signature', async () => {
+    const { adapter } = setup()
+    const onboarded = await adapter.onboard({ companyId: 'company-1', connectionHandle: null }, COLLECTIONS_FIXTURES.onboard.request)
+    const ctx = { companyId: 'company-1', connectionHandle: onboarded.connectionHandle }
+    expect(await adapter.connection(ctx)).toMatchObject({ state: 'connecting', subStatus: 'awaiting_terms', terms: { accepted: false } })
+
+    // A signature started before the terms were accepted activates nothing.
+    await adapter.startSignature(ctx, COLLECTIONS_FIXTURES.startSignature.request as CollectionsSignatureStartRequest)
+    expect(await adapter.connection(ctx)).toMatchObject({ state: 'connecting', subStatus: 'awaiting_terms' })
+
+    await adapter.acceptTerms(ctx, COLLECTIONS_FIXTURES.acceptTerms.request)
+    expect(await adapter.connection(ctx)).toMatchObject({ state: 'connecting', subStatus: 'awaiting_signature' })
+
+    // A replayed onboard does not move the connection back.
+    await adapter.onboard(ctx, COLLECTIONS_FIXTURES.onboard.request)
+    expect(await adapter.connection(ctx)).toMatchObject({ subStatus: 'awaiting_signature' })
+  })
+
+  it('starts over at the terms when a cancelled activation is onboarded again', async () => {
+    const { adapter } = setup()
+    const onboarded = await adapter.onboard({ companyId: 'company-1', connectionHandle: null }, COLLECTIONS_FIXTURES.onboard.request)
+    const ctx = { companyId: 'company-1', connectionHandle: onboarded.connectionHandle }
+    await adapter.cancelOnboarding(ctx, COLLECTIONS_FIXTURES.cancelOnboarding.request)
+    expect(await adapter.connection(ctx)).toMatchObject({ state: 'disconnected' })
+    await adapter.onboard({ companyId: 'company-1', connectionHandle: null }, COLLECTIONS_FIXTURES.onboard.request)
+    expect(await adapter.connection(ctx)).toMatchObject({ state: 'connecting', subStatus: 'awaiting_terms' })
+  })
+
+  it('reads a handle this process has not seen as active (another server instance onboarded it)', async () => {
+    const { adapter } = setup()
+    expect(await adapter.connection({ companyId: 'company-1', connectionHandle: 'fake-connection-elsewhere' })).toMatchObject({ state: 'active' })
   })
 })
