@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { CONTRACT_VERSION, DELIVERY_OPERATIONS, type DeliveryOperation } from '@accounted/connect-contract'
+import { CONTRACT_VERSION, DELIVERY_OPERATIONS, type DeliveryMethodsRequest, type DeliveryOperation } from '@accounted/connect-contract'
 import { DELIVERY_FIXTURES, TEST_ORG_NUMBER } from '../../../../../packages/connect-contract/src/__tests__/fixtures'
 import { createFakeCollectionsAdapter, createFakeCollectionsStore } from '@/lib/collections/adapters/fake'
 import { deliveryAdapterFor } from '../adapters'
@@ -53,7 +53,7 @@ describe('fake delivery adapter', () => {
 
   it('finds a debtor reachable unless its identifier ends in 0', async () => {
     const { adapter } = setup()
-    expect(await adapter.methods(CTX, DELIVERY_FIXTURES.methods.request)).toMatchObject({ method: 'kivra', reachable: true, reasonCode: null })
+    expect(await adapter.methods(CTX, DELIVERY_FIXTURES.methods.request as DeliveryMethodsRequest)).toMatchObject({ method: 'kivra', reachable: true, reasonCode: null })
     const unreachable = await adapter.methods(CTX, { method: 'einvoice_bank', debtor: { kind: 'business', orgNumber: '5561234560', personalNumber: null } })
     expect(unreachable).toMatchObject({ reachable: false, reasonCode: 'not_registered' })
     expect((await adapter.methods(CTX, { method: 'einvoice_bank', debtor: { kind: 'business', orgNumber: TEST_ORG_NUMBER, personalNumber: null } })).reachable).toBe(true)

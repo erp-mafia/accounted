@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { COLLECTIONS_OPERATIONS } from '@accounted/connect-contract'
+import { COLLECTIONS_OPERATIONS, type CollectionsSignatureStartRequest } from '@accounted/connect-contract'
 import { COLLECTIONS_FIXTURES } from '../../../../packages/connect-contract/src/__tests__/fixtures'
 import {
   createFakeCollectionsAdapter,
@@ -177,7 +177,7 @@ describe('fake collections adapter: connection', () => {
 
     const ctx = { companyId: 'company-1', connectionHandle: onboarded.connectionHandle }
     expect(await adapter.acceptTerms(ctx, COLLECTIONS_FIXTURES.acceptTerms.request)).toMatchObject({ subStatus: 'awaiting_signature', terms: { accepted: true } })
-    expect(await adapter.startSignature(ctx, COLLECTIONS_FIXTURES.startSignature.request)).toEqual({ signUrl: null, signers: [] })
+    expect(await adapter.startSignature(ctx, COLLECTIONS_FIXTURES.startSignature.request as CollectionsSignatureStartRequest)).toEqual({ signUrl: null, signers: [] })
     expect(await adapter.connection(ctx)).toMatchObject({ state: 'active', subStatus: null })
     expect(await adapter.disconnect(ctx, COLLECTIONS_FIXTURES.disconnect.request)).toMatchObject({ state: 'disconnected' })
   })
