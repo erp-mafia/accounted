@@ -173,6 +173,10 @@
     {
       "path": "/api/community/sync/cron",
       "schedule": "23 * * * *"
+    },
+    {
+      "path": "/api/collections/sync/cron",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
