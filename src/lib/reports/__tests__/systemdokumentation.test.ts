@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildSystemdokumentation, loadSystemdokumentationFacts, type SystemdokumentationFacts } from '../systemdokumentation'
-import { SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
+import { CASH_PARTIAL_PAYMENT_RULE, SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
 
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appName: 'Accounted', appUrl: 'https://app.accounted.se' }),
@@ -135,6 +135,21 @@ describe('buildSystemdokumentation', () => {
     const t2 = Object.fromEntries(withAutoLock.behandlingsregler.map((x) => [x.rubrik, x.text]))
     expect(t2['Öresavrundning på kundfakturor']).toContain('3740')
     expect(t2['Automatisk låsning']).toContain('45 dagar')
+  })
+
+  it('describes the kontantmetoden part-payment rule only for a cash-method company', () => {
+    const accrual = buildSystemdokumentation(facts())
+    expect(accrual.behandlingsregler.find((x) => x.rubrik === 'Delbetalningar, kontantmetoden')).toBeUndefined()
+
+    const cash = buildSystemdokumentation(facts({ settings: { ...facts().settings!, accounting_method: 'cash' } }))
+    const rule = cash.behandlingsregler.find((x) => x.rubrik === 'Delbetalningar, kontantmetoden')
+    expect(rule?.text).toBe(CASH_PARTIAL_PAYMENT_RULE)
+    expect(rule?.text).toContain('i proportion till det inbetalda beloppet')
+    // The exclusions match what the code refuses (cashProRataUnsupportedReason
+    // and the doors that still refuse every partial).
+    expect(rule?.text).toContain('utländsk valuta')
+    expect(rule?.text).toContain('skattereduktion för grön teknik')
+    expect(rule?.text).toContain('bankmatchning eller med API-nyckel')
   })
 
   it('lists members by role with labels and API keys with scope labels and the numeric cap', () => {

@@ -27,6 +27,7 @@ import { API_KEY_SCOPES } from '@/lib/auth/scope-catalog'
 import {
   ARCHIVE_RULES,
   BEHANDLINGSHISTORIK_RULES,
+  CASH_PARTIAL_PAYMENT_RULE,
   CORRECTION_AND_LOCK_RULES,
   SIE_IMPORT_RULES,
   SUPPLIER_INVOICE_ROUNDING_RULES,
@@ -247,6 +248,9 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     { rubrik: 'Valutor', text: 'Belopp i utländsk valuta räknas om med Riksbankens kurs; valutaomvärdering bokförs som egen verifikation.' },
     { rubrik: 'SIE-import', text: SIE_IMPORT_RULES },
   ]
+  if (s?.accounting_method === 'cash') {
+    behandlingsregler.push({ rubrik: 'Delbetalningar, kontantmetoden', text: CASH_PARTIAL_PAYMENT_RULE })
+  }
   if (s?.auto_lock_period_days != null) {
     behandlingsregler.push({ rubrik: 'Automatisk låsning', text: `Låsdatumet flyttas fram automatiskt ${s.auto_lock_period_days} dagar efter varje momsperiods slut.` })
   }

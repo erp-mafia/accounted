@@ -30,6 +30,15 @@ export const SUPPLIER_INVOICE_ROUNDING_RULES = {
 } as const
 
 /**
+ * Kontantmetoden: a part payment of a customer invoice that never reached the
+ * ledger as a fordran (lib/bookkeeping/invoice-lines.ts
+ * buildInvoiceCashPartialLines, checked against the earlier installments by
+ * checkPriorCashRecognition). Listed for cash-method companies only.
+ */
+export const CASH_PARTIAL_PAYMENT_RULE =
+  'En delbetalning av en kundfaktura som inte bokförts som fordran bokförs vid betalningen med intäkt och utgående moms per momssats i proportion till det inbetalda beloppet. Andelarna räknas på det sammanlagt inbetalda beloppet, så att delbetalningarna tillsammans ger exakt fakturans belopp per konto och varje delbetalnings moms per momssats avviker högst 1 öre från den exakta andelen. Regeln gäller inte fakturor i utländsk valuta, fakturor med ROT/RUT-avdrag eller skattereduktion för grön teknik, betalningar med egna konteringsrader, betalningar som registreras genom bankmatchning eller med API-nyckel, eller fakturor vars tidigare delbetalningar är bokförda på annat sätt. Då avvisas den automatiska bokföringen och betalningen bokförs manuellt. Programversion och driftsättning framgår av behandlingshistoriken.'
+
+/**
  * How a verifikation lands in a series, in resolution order, plus the
  * exceptions. The concrete mappings live in the data tables named here.
  */
