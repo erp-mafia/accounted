@@ -55,12 +55,14 @@ These hold for the catalogue, collections and delivery families.
 
 - **Idempotency.** Every write carries `idempotencyKey`, a row id from the
   installation's own database (the case row, the delivery row, the forwarded
-  payment row, the connection row plus `:onboard`). The service answers a
-  retry with the first result and resolves a timeout by looking up at the
-  provider, never by sending again. A second call while the first still runs
-  gets `CONNECTOR_IDEMPOTENCY_IN_FLIGHT` (retryable); another body under the
-  same key gets `CONNECTOR_IDEMPOTENCY_MISMATCH`. An installation that times
-  out keeps its row pending and retries with the same key.
+  payment row, the connection row plus `:onboard`). A key is scoped to the
+  calling key, company and operation, so a revert carries its own key, never
+  the key of the payment report it undoes. The service answers a retry with
+  the first result and resolves a timeout by looking up at the provider, never
+  by sending again. A second call while the first still runs gets
+  `CONNECTOR_IDEMPOTENCY_IN_FLIGHT` (retryable); another body under the same
+  key gets `CONNECTOR_IDEMPOTENCY_MISMATCH`. An installation that times out
+  keeps its row pending and retries with the same key.
 - **Amounts and dates.** Amounts are numbers in the invoice currency (SEK only
   in this version). Amounts the installation sends are rounded to two decimals
   first, and the schemas refuse anything else. Calendar dates are

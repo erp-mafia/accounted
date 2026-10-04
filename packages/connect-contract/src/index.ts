@@ -662,11 +662,13 @@ export type CatalogueOperation = keyof typeof CATALOGUE_OPERATIONS
  *   What the installation sends is rounded to two decimals first.
  * - Calendar dates are `YYYY-MM-DD`. Timestamps the installation sends are
  *   ISO 8601 with an offset; timestamps the service returns are ISO strings.
- * - Every write carries `idempotencyKey`. The service answers a retry with
- *   the first result and resolves a timeout by looking up at the provider,
- *   never by sending again: CONNECTOR_IDEMPOTENCY_IN_FLIGHT while the first
- *   call still runs, CONNECTOR_IDEMPOTENCY_MISMATCH for another body under
- *   the same key.
+ * - Every write carries `idempotencyKey`, scoped to the calling key, company
+ *   and operation: the same value on another operation is another request,
+ *   and a revert carries its own key, never the key of the payment report it
+ *   undoes. The service answers a retry with the first result and resolves a
+ *   timeout by looking up at the provider, never by sending again:
+ *   CONNECTOR_IDEMPOTENCY_IN_FLIGHT while the first call still runs,
+ *   CONNECTOR_IDEMPOTENCY_MISMATCH for another body under the same key.
  * - Company calls carry X-Connector-Company and, once onboarded,
  *   X-Connector-Connection.
  * - Personal identity numbers, birth dates and debtor contact details travel
@@ -1158,7 +1160,7 @@ export const collectionsDirectPaymentRequestSchema = z.object({
 })
 export type CollectionsDirectPaymentRequest = z.infer<typeof collectionsDirectPaymentRequestSchema>
 
-/** Undo a reported payment (the installation removed or unmatched it). Same shape and paymentRef as the report. */
+/** Undo a reported payment (the installation removed or unmatched it). Same shape and paymentRef as the report, under its own idempotencyKey. */
 export const collectionsRevertPaymentRequestSchema = collectionsDirectPaymentRequestSchema
 export type CollectionsRevertPaymentRequest = z.infer<typeof collectionsRevertPaymentRequestSchema>
 
