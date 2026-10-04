@@ -131,6 +131,7 @@ const ImportReviewStep = dynamic(() => import('@/components/import/ImportReviewS
 const ImportResultStep = dynamic(() => import('@/components/import/ImportResultStep'), { loading: ImportStepLoading })
 const SIEImportHistory = dynamic(() => import('@/components/import/SIEImportHistory'), { loading: ImportStepLoading })
 const BankFileImportHistory = dynamic(() => import('@/components/import/BankFileImportHistory'), { loading: ImportStepLoading })
+const RegisterImportHistory = dynamic(() => import('@/components/import/RegisterImportHistory'), { loading: ImportStepLoading })
 const UnderlagImportWizard = dynamic(() => import('@/components/import/UnderlagImportWizard'), { loading: ImportStepLoading })
 
 // ============================================================
@@ -2373,6 +2374,7 @@ export default function ImportPage() {
   const [cloudOpen, setCloudOpen] = useState(false)
   const [sieHistoryOpen, setSieHistoryOpen] = useState(false)
   const [bankFileHistoryOpen, setBankFileHistoryOpen] = useState(false)
+  const [registerHistoryOpen, setRegisterHistoryOpen] = useState(false)
   const [userId, setUserId] = useState('')
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
   const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
@@ -2618,6 +2620,12 @@ export default function ImportPage() {
                   expanded={bankFileHistoryOpen}
                   onClick={() => setBankFileHistoryOpen((v) => !v)}
                 />
+                <ImportRow
+                  title={t('register_history_title')}
+                  sub={t('register_history_description')}
+                  expanded={registerHistoryOpen}
+                  onClick={() => setRegisterHistoryOpen((v) => !v)}
+                />
               </div>
               {sieHistoryOpen && (
                 <div className="mt-6" id="sie-import-history">
@@ -2627,6 +2635,11 @@ export default function ImportPage() {
               {bankFileHistoryOpen && (
                 <div className="mt-6">
                   <BankFileImportHistory />
+                </div>
+              )}
+              {registerHistoryOpen && (
+                <div className="mt-6">
+                  <RegisterImportHistory />
                 </div>
               )}
             </div>

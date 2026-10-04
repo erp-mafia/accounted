@@ -6,6 +6,7 @@ import { validateBody } from '@/lib/api/validate'
 import { ArticleImportExecuteSchema } from '@/lib/api/schemas'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { recordRegisterImportRun } from '@/lib/import/register-runs'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { checkRevenueAccount, type RevenueAccountStatus } from '@/lib/articles/validate-revenue-account'
@@ -240,6 +241,8 @@ export const POST = withRouteContext(
           payload: { article: a, companyId: companyId!, userId: user.id },
         })
       }
+
+      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'articles', created }, opLog)
 
       const response: ArticleImportExecuteResult = {
         success: errors.length === 0,

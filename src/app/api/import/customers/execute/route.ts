@@ -7,6 +7,7 @@ import { normalizeOrgNumber } from '@/lib/import/shared/column-utils'
 import { createRegisterMatcher } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { recordRegisterImportRun } from '@/lib/import/register-runs'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
 import type { CustomerImportExecuteResult } from '@/lib/import/customers/types'
@@ -176,6 +177,8 @@ export const POST = withRouteContext(
           payload: { customer: c, companyId: companyId!, userId: user.id },
         })
       }
+
+      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created }, opLog)
 
       const response: CustomerImportExecuteResult = {
         success: errors.length === 0,

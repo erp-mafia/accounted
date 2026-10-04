@@ -5,7 +5,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
@@ -106,6 +106,10 @@ describe('POST /api/import/articles/execute', () => {
     expect(mockEmit).toHaveBeenCalledTimes(2)
     // The numberless row gets auto-numbered; the one with A-200 does not.
     expect(mockEnsureArticleNumber).toHaveBeenCalledTimes(1)
+    // The run is recorded so the import can be undone from the history.
+    expect(findCall('register_import_runs', 'insert')).toEqual([
+      { company_id: 'company-1', user_id: 'user-1', kind: 'articles', created_ids: ['a1', 'a2'] },
+    ])
   })
 
   it('skips a duplicate matched by article number when update_duplicates is false', async () => {

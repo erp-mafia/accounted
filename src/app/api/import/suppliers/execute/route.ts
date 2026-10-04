@@ -7,6 +7,7 @@ import { orgNumberKey } from '@/lib/invariants/org-number'
 import { createRegisterMatcher, supplierOrgKey } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { recordRegisterImportRun } from '@/lib/import/register-runs'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Supplier } from '@/types'
 import type { SupplierImportExecuteResult } from '@/lib/import/suppliers/types'
@@ -161,6 +162,8 @@ export const POST = withRouteContext(
           payload: { supplier: s, companyId, userId: user.id },
         })
       }
+
+      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'suppliers', created }, opLog)
 
       const response: SupplierImportExecuteResult = {
         success: errors.length === 0,

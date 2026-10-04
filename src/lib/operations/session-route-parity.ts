@@ -323,6 +323,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/import/suppliers/execute': covered([`POST ${V}/suppliers/bulk-create`]),
   'POST /api/import/articles/parse': uiOnly(PREVIEW),
   'POST /api/import/articles/execute': covered(['gnubok_create_article'], 'one article per call, no bulk'),
+  'DELETE /api/import/registers/:id/undo': gap('P3', 'undo a dashboard customer/supplier/article import; v1 bulk-create records no run to undo'),
   'POST /api/import/documents/preview': uiOnly(PREVIEW),
   'POST /api/import/documents/attach': covered(['gnubok_upload_document', 'gnubok_link_documents_to_vouchers']),
   'POST /api/import/opening-balance/parse': uiOnly(PREVIEW),
@@ -683,4 +684,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 133
+export const GAP_CEILING = 134

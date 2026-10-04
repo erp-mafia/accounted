@@ -3734,6 +3734,42 @@ const REGISTER_IMPORT: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Undo of a customer/supplier/article import (lib/import/register-runs.ts).
+const REGISTER_IMPORT_UNDO: Record<string, StructuredErrorEntry> = {
+  REG_IMPORT_UNDO_INVALID_ID: {
+    httpStatus: 400,
+    message_sv: 'Ogiltigt import-id.',
+    message_en: 'Invalid import run id.',
+  },
+  REG_IMPORT_UNDO_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Importen kunde inte hittas.',
+    message_en: 'Register import run not found.',
+  },
+  REG_IMPORT_UNDO_ALREADY_UNDONE: {
+    httpStatus: 409,
+    message_sv: 'Importen är redan ångrad.',
+    message_en: 'This register import has already been undone.',
+  },
+  REG_IMPORT_UNDO_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att ångra importer i det här företaget.',
+    message_en: 'You do not have write access to undo imports in this company.',
+  },
+  REG_IMPORT_UNDO_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Importen kunde inte ångras. Försök igen.',
+    message_en: 'Failed to undo the register import.',
+    retryable: true,
+  },
+  REG_IMPORT_LIST_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte hämta importhistoriken.',
+    message_en: 'Failed to list register imports.',
+    retryable: true,
+  },
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Wave 3 tail: provider migration extension codes
 // ─────────────────────────────────────────────────────────────────
@@ -6829,6 +6865,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...SKATTEKONTO_FILE,
   ...OPENING_BALANCE_IMPORT,
   ...REGISTER_IMPORT,
+  ...REGISTER_IMPORT_UNDO,
   ...PROVIDER_MIGRATION,
   ...DOCUMENT,
   ...INBOX_UPLOAD,

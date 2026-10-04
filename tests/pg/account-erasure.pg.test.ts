@@ -96,6 +96,8 @@ const RETAINED = new Set([
   'sie_imports.user_id',
   'sie_imports.execution_actor_id',
   'migration_jobs.user_id', // Company import provenance and recovery.
+  'register_import_runs.user_id', // Who ran a customer/supplier/article import.
+  'register_import_runs.undone_by', // Who undid it.
   'invoice_completion_work.user_id', // Company invoice recovery, no personal payloads.
   'bokio_supplier_completion_work.user_id', // Company supplier recovery and attribution.
   'migration_source_records.user_id', // Stable provider identities.
