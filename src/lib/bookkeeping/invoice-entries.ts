@@ -364,7 +364,8 @@ export async function createCreditNoteJournalEntry(
  *
  * With a matched bank row, the bank leg is what arrived on it
  * (invoiceCashBankSek) and a sub-krona gap goes to 3740; the mark-paid doors
- * pass no row and book the customer share.
+ * pass no row and book the customer share. `overpaymentAccount` books an
+ * excess of a krona or more on that row (buildInvoiceCashLines).
  */
 export async function createInvoiceCashEntry(
   supabase: SupabaseClient,
@@ -375,7 +376,8 @@ export async function createInvoiceCashEntry(
   entityType: EntityType = 'enskild_firma',
   customerName?: string,
   settlementAccountNumber: string = '1930',
-  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
+  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>,
+  overpaymentAccount?: string,
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -389,6 +391,7 @@ export async function createInvoiceCashEntry(
     customerName,
     settlementAccountNumber,
     invoiceCashBankSek(bankTransaction),
+    overpaymentAccount,
   )
 
   const input: CreateJournalEntryInput = {

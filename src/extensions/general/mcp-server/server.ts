@@ -435,6 +435,11 @@ import {
   type MatchTransactionAmounts,
 } from '@/lib/invoices/match-payment-plan'
 import {
+  CUSTOMER_ADVANCE_ACCOUNT,
+  OVERPAYMENT_ROUNDING_MAX,
+  isOverpaymentAccount,
+} from '@/lib/bookkeeping/overpayment'
+import {
   buildBatchAllocationPreview,
   type BatchAllocationPreviewInvoice,
 } from '@/lib/invoices/batch-allocation-preview'
@@ -914,7 +919,10 @@ const AGENT_AMOUNT_FORMAT = new Intl.NumberFormat('en-US', {
  * of Swedish letters: a message that reads as Swedish (isSwedishUserMessage)
  * would replace the registry's message_sv instead of riding message_en.
  *
- * The settle-and-book-the-excess route depends on the invoice: a sent or
+ * A pure-SEK match books the excess in the same verifikat once the user names
+ * the account (overpayment_account: 2420 any amount, 3740 under its cap).
+ * A cross-currency match cannot, so it settles the invoice and books the excess
+ * separately. That route depends on the invoice: a sent or
  * overdue invoice can be marked paid for exactly its remaining amount (any
  * accounting method), with the excess as its own two-line verifikat and the
  * bank row split across both; a partially paid one cannot, so it takes one
@@ -931,8 +939,15 @@ function overpaymentRefusal(
   const band = outcome.absorbsOre
     ? `only a difference under ${amount(ORE_ROUNDING_SETTLEMENT_MAX)} is settled automatically as a rounding difference on 3740`
     : 'a cross-currency match cannot settle more than the remaining amount'
-  const separately =
-    ctx.invoiceStatus === 'partially_paid'
+  const roundingFits = excess < OVERPAYMENT_ROUNDING_MAX
+  const separately = outcome.absorbsOre
+    ? `call gnubok_match_transaction_to_invoice with overpayment_account: "${CUSTOMER_ADVANCE_ACCOUNT}" books the excess as an advance from the customer ` +
+      '(a liability to refund or offset against a later invoice)' +
+      (roundingFits
+        ? `, "3740" as a rounding difference (only under ${amount(OVERPAYMENT_ROUNDING_MAX)}, when the customer rounded the payment up)`
+        : '') +
+      `; the invoice then settles for exactly ${amount(remaining)} in the same verifikat`
+    : ctx.invoiceStatus === 'partially_paid'
       ? `book one verifikat with gnubok_create_voucher (debit the bank account ${amount(paid)}, credit 1510 ${amount(remaining)}, ` +
         `credit the account the user chose ${amount(excess)}), settle the invoice from it with gnubok_link_invoice_to_voucher ` +
         `(faktureringsmetoden only), and link the bank row to it with gnubok_reconcile_match`
@@ -943,12 +958,32 @@ function overpaymentRefusal(
     'MATCH_AMOUNT_EXCEEDS_REMAINING',
     `Not staged: the transaction (${amount(paid)}) exceeds the invoice's remaining amount (${amount(remaining)}) by ${amount(excess)}. ` +
       `A match settles at most the remaining amount and ${band}, so approval would reject this match. ` +
-      'Ask the user where the excess belongs (another open invoice, or a liability to the customer to refund or offset), then: ' +
+      'Ask the user where the excess belongs (another open invoice, a liability to the customer to refund or offset, or a rounding difference), then: ' +
       `if it pays other open invoices from the same customer, allocate the transaction across them with gnubok_match_batch_allocate ` +
       `(allocations summing to ${amount(paid)}); otherwise ${separately}.`,
     {
       description:
-        'Do not retry this match unchanged: it fails until the amounts change. Ask the user where the excess belongs, then use a route the message names: gnubok_match_batch_allocate when it pays other invoices, otherwise settle the invoice and book the excess as its own verifikat.',
+        'Do not retry this match unchanged: it fails until the amounts change. Ask the user where the excess belongs, then use a route the message names: gnubok_match_batch_allocate when it pays other invoices, otherwise (SEK) the same match with overpayment_account, or settle the invoice and book the excess as its own verifikat.',
+    },
+  )
+}
+
+/**
+ * overpayment_account "3740" named for an excess at or above
+ * OVERPAYMENT_ROUNDING_MAX: that is the customer's money, not rounding, so
+ * only 2420 (or another route) can take it.
+ */
+function roundingCapRefusal(
+  outcome: Extract<MatchPaymentPlanResult, { code: 'MATCH_OVERPAYMENT_ROUNDING_CAP' }>,
+): Error {
+  const amount = (n: number) => `${AGENT_AMOUNT_FORMAT.format(n)} ${outcome.currency}`
+  return codedRefusal(
+    'MATCH_OVERPAYMENT_ROUNDING_CAP',
+    `Not staged: the excess (${amount(outcome.details.excess)}) is ${amount(OVERPAYMENT_ROUNDING_MAX)} or more, and 3740 takes only a rounding difference under that. ` +
+      `Ask the user, then call gnubok_match_transaction_to_invoice again with overpayment_account: "${CUSTOMER_ADVANCE_ACCOUNT}" (an advance from the customer, to refund or offset against a later invoice), ` +
+      'or allocate the transaction across other open invoices with gnubok_match_batch_allocate.',
+    {
+      description: `Do not retry with 3740: call again with overpayment_account "${CUSTOMER_ADVANCE_ACCOUNT}" once the user agrees, or use gnubok_match_batch_allocate.`,
     },
   )
 }
@@ -960,19 +995,31 @@ function overpaymentRefusal(
  * partial payments), throwing the refusal the approval would answer with, so
  * no doomed op is staged (crm#253). The executor re-runs the plan as the hard
  * gate. A rate that is not available yet fails open: it can be published
- * before approval.
+ * before approval. Returns the excess the verifikat will book on the named
+ * overpayment account, or null.
  */
 async function refuseUnpayableMatch(
   supabase: SupabaseClient,
   transaction: MatchTransactionAmounts,
   invoice: MatchInvoiceAmounts & { status: string },
-): Promise<void> {
-  const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice)
-  if (matchPlan.ok || matchPlan.code === 'MATCH_INVOICE_FX_RATE_UNAVAILABLE') return
+  overpaymentAccount?: string,
+): Promise<{ account: string; amount: number } | null> {
+  const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice, { overpaymentAccount })
+  if (matchPlan.ok) return matchPlan.overpayment
+  if (matchPlan.code === 'MATCH_INVOICE_FX_RATE_UNAVAILABLE') return null
   if (matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING') {
     throw overpaymentRefusal(matchPlan, { invoiceStatus: invoice.status, transactionDate: transaction.date })
   }
+  if (matchPlan.code === 'MATCH_OVERPAYMENT_ROUNDING_CAP') throw roundingCapRefusal(matchPlan)
   throw registryError(matchPlan.code)
+}
+
+/** The approval-card line naming where an overpayment is booked. */
+function overpaymentStageNote(overpayment: { account: string; amount: number }): string {
+  const amount = `${overpayment.amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr`
+  return overpayment.account === CUSTOMER_ADVANCE_ACCOUNT
+    ? `Överskottet ${amount} bokförs på 2420 Förskott från kunder, en skuld till kunden som återbetalas eller kvittas mot en senare faktura.`
+    : `Överskottet ${amount} bokförs som kronutjämning på 3740.`
 }
 
 export interface McpTool {
@@ -12803,13 +12850,16 @@ export const tools: McpTool[] = [
     name: 'gnubok_match_transaction_to_invoice',
     keywords: ['matcha betalning', 'kundfaktura', 'inbetalning'],
     title: 'Match Transaction to Invoice',
-    description: 'Match 1 bank tx (income, amount>0) to a customer invoice. Confirm tx date/amount and invoice number first. Partial payments and auto-storno of a prior categorization supported. Stages.',
+    description: 'Match 1 bank tx (amount>0) to a customer invoice. Confirm tx date/amount and invoice number first. Partial payments and auto-storno of a prior booking supported. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         transaction_id: { type: 'string' },
         invoice_id: { type: 'string' },
+        // No description: the tools/list budget has no headroom, and the
+        // MATCH_AMOUNT_EXCEEDS_REMAINING refusal teaches when to pass it.
+        overpayment_account: { type: 'string', enum: ['2420', '3740'] },
         force: { type: 'boolean', description: 'Override a MATCH_INVOICE_POSSIBLE_DUPLICATE refusal.' },
         expected_journal_entry_id: { type: 'string', description: 'With force: the id the refusal named.' },
       },
@@ -12835,6 +12885,10 @@ export const tools: McpTool[] = [
       if (force && !expectedJournalEntryId) {
         throw codedError('VALIDATION_ERROR', 'expected_journal_entry_id is required when force=true')
       }
+      if (args.overpayment_account !== undefined && !isOverpaymentAccount(args.overpayment_account)) {
+        throw codedError('VALIDATION_ERROR', 'overpayment_account must be "2420" or "3740"')
+      }
+      const overpaymentAccount = args.overpayment_account as string | undefined
 
       // Validate both exist and are matchable. amount_sek / exchange_rate feed
       // the duplicate guard: it compares this bank line against SEK ledger legs.
@@ -12895,10 +12949,20 @@ export const tools: McpTool[] = [
 
       // Overpayment guard at stage time (crm#253): a match the approval would
       // reject is refused here, with the amounts and the routes that do book
-      // it, instead of being staged and failing at approval.
-      await refuseUnpayableMatch(supabase, transaction, invoice)
+      // it, instead of being staged and failing at approval. With
+      // overpayment_account the excess is booked in the same verifikat.
+      const overpayment = await refuseUnpayableMatch(supabase, transaction, invoice, overpaymentAccount)
 
       const txDesc = transaction.merchant_name || transaction.description || transactionId
+      const duplicateNote =
+        duplicate.status === 'overridden'
+          ? `Bokförs trots att verifikat ${duplicate.candidate.voucher_label} (${duplicate.candidate.entry_date}) redan ser ut att bokföra betalningen (force=true).`
+          : duplicateCheckFailed
+            ? DUPLICATE_CHECK_FAILED_NOTE
+            : null
+      const complianceNote = [duplicateNote, overpayment ? overpaymentStageNote(overpayment) : null]
+        .filter((note): note is string => note !== null)
+        .join(' ')
 
       return stagePendingOperation(supabase, companyId, userId, 'match_transaction_invoice',
         `Matcha: ${txDesc} → ${invoice.invoice_number}`,
@@ -12908,6 +12972,11 @@ export const tools: McpTool[] = [
           // The binding travels with the op so the commit executor can
           // re-validate it against the candidate detected at commit time.
           ...(force ? { force: true, expected_journal_entry_id: expectedJournalEntryId } : {}),
+          // Only when this match books an excess, with the amount shown to the
+          // approver: the executor books that excess or refuses.
+          ...(overpayment
+            ? { overpayment_account: overpayment.account, overpayment_amount: overpayment.amount }
+            : {}),
         },
         {
           transaction_description: txDesc,
@@ -12922,6 +12991,9 @@ export const tools: McpTool[] = [
           invoice_currency: invoice.currency,
           invoice_date: invoice.invoice_date,
           customer_name: (invoice.customer as Record<string, unknown>)?.name as string,
+          ...(overpayment
+            ? { overpayment_amount: overpayment.amount, overpayment_account: overpayment.account }
+            : {}),
         },
         actor,
         {
@@ -12931,15 +13003,10 @@ export const tools: McpTool[] = [
         {
           dateForPeriodCheck: transaction.date,
           // Never silent: an honoured override names the voucher it books
-          // over, and a check that could not run says so, on the approval
-          // card and to the agent alike.
-          ...(duplicate.status === 'overridden'
-            ? {
-                complianceNote: `Bokförs trots att verifikat ${duplicate.candidate.voucher_label} (${duplicate.candidate.entry_date}) redan ser ut att bokföra betalningen (force=true).`,
-              }
-            : duplicateCheckFailed
-              ? { complianceNote: DUPLICATE_CHECK_FAILED_NOTE }
-              : {}),
+          // over, a check that could not run says so, and an overpayment
+          // names the account it lands on, on the approval card and to the
+          // agent alike.
+          ...(complianceNote ? { complianceNote } : {}),
         },
       )
     },
