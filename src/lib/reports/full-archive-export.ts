@@ -1190,6 +1190,11 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'webshop_store_settings', file: 'webshop_store_settings.json' },
   { name: 'transaction_voucher_links', file: 'transaction_voucher_links.json' },
   { name: 'bank_file_imports', file: 'bank_file_imports.json', orderBy: 'created_at' },
+  // Customer/supplier/article imports and their undo: what each import
+  // created and the field values it overwrote. Customers carry no per-row
+  // audit trigger, so this is the only record of what an import changed on
+  // a counterparty's details; it travels with the registers it describes.
+  { name: 'register_import_runs', file: 'register_import_runs.json', orderBy: 'created_at' },
   { name: 'cash_accounts', file: 'cash_accounts.json' },
   // Which bank account customer invoices pay to, per currency; the payee
   // fields themselves are columns on cash_accounts one file up.
@@ -1383,8 +1388,6 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   payment_match_log: 'derived matching log',
   pending_operations: 'staged-operation workflow state',
   processing_history: 'internal processing log; behandlingshistorik exports from audit_log',
-  register_import_runs:
-    'undo record of customer/supplier/article imports (created ids, overwritten fields); the registers are dumped and the undo itself is in audit_log',
   provider_consents: 'consent tokens, not portable',
   salary_payslip_deliveries: 'delivery log',
   skattekonto_file_imports:
