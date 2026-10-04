@@ -27,6 +27,7 @@ import {
   validateApiKey,
   createServiceClientNoCookies,
   hasScope,
+  keyCanCallTool,
   RATE_LIMIT_RETRY_AFTER_SECONDS,
   TOOL_SCOPE_MAP,
   type ApiKeyMode,
@@ -234,6 +235,7 @@ import {
   type McpToolNamespace,
 } from './tool-namespace'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { canRejectOperation, rejectAuthority, type RejectAuthority } from '@/lib/pending-operations/reject-authority'
 import {
   normalizeVatRateToDecimal,
   treatmentDeductsInputVat,
@@ -1764,6 +1766,41 @@ function pendingOperationNotFound(operationId: string): Error {
   return codedRefusal(
     'NOT_FOUND',
     `Pending operation not found: no operation with id ${operationId}. List open ones with gnubok_list_pending_operations.`,
+  )
+}
+
+/**
+ * A reject the key has no authority for (lib/pending-operations/
+ * reject-authority.ts): without pending_operations:approve a key may reject
+ * only what it staged itself, and a key without a write scope nothing. Names
+ * who staged the operation so the agent can tell the user whose it is.
+ */
+function rejectNotAllowedRefusal(
+  operationId: string,
+  authority: RejectAuthority,
+  operation: { actor_type?: string | null; actor_label?: string | null },
+): Error {
+  const remediation = {
+    description:
+      'The user approves or rejects it in Accounted under Att göra > Agentförslag (/pending). To let the agent approve or reject every proposal in chat, the user disconnects under Inställningar > API och MCP and connects again with Godkänn (pending_operations:approve) ticked.',
+  }
+  if (authority === 'none') {
+    return codedRefusal(
+      'INSUFFICIENT_SCOPE',
+      'This connection cannot reject agent proposals: it has neither the "pending_operations:approve" scope (Godkänn) nor a write scope.',
+      remediation,
+    )
+  }
+  const stagedBy =
+    operation.actor_type === 'api_key'
+      ? `another connection${operation.actor_label ? ` (${operation.actor_label})` : ''}`
+      : operation.actor_type === 'user'
+        ? 'a person in Accounted'
+        : `another actor (${operation.actor_type ?? 'unknown'})`
+  return codedRefusal(
+    'INSUFFICIENT_SCOPE',
+    `This connection can reject only the agent proposals it staged itself: it was made without the "pending_operations:approve" scope (Godkänn). Operation ${operationId} was staged by ${stagedBy}.`,
+    remediation,
   )
 }
 
@@ -4893,9 +4930,10 @@ export const tools: McpTool[] = [
         if (simpleCompanyMode && isMultiCompanyOnlyTool(t.name)) return false
         const required = TOOL_SCOPE_MAP[t.name]
         if (required) {
-          // Scoped tool: visible only if scopes were injected AND the caller has it.
+          // Scoped tool: visible only if scopes were injected AND the caller
+          // can call it (its scope, or one of its TOOL_ALTERNATIVE_SCOPES).
           if (!scopesInjected) return false
-          if (!callerScopes.includes(required)) return false
+          if (!keyCanCallTool(t.name, callerScopes)) return false
         }
         if (scopeFilter && required !== scopeFilter) return false
         return true
@@ -24233,7 +24271,7 @@ export const tools: McpTool[] = [
     // status "rejected" is both, so the guesses need English words to land.
     keywords: ['väntande åtgärder', 'att godkänna', 'godkännanden', 'pending operation', 'get pending operation', 'rejected operations', 'rejections'],
     title: 'List Pending Operations',
-    description: 'List staged pending_operations. Approve via gnubok_approve_pending_operation, reject via gnubok_reject_pending_operation; without pending_operations:approve use /pending. render_ui=true opens the approval widget.',
+    description: 'List staged pending_operations. Approve via gnubok_approve_pending_operation, reject via gnubok_reject_pending_operation; without pending_operations:approve, approve at /pending, reject can_reject rows. render_ui=true opens the widget.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -24255,7 +24293,7 @@ export const tools: McpTool[] = [
     outputSchema: paginatedSchema('operations', { type: 'object' }, {
       can_approve: {
         type: 'boolean',
-        description: 'Whether this key can approve or reject (pending_operations:approve). false: the user reviews in Accounted under Att göra > Agentförslag (/pending).',
+        description: 'Holds pending_operations:approve. false: the user approves in Accounted (Att göra > Agentförslag); rows carry can_reject.',
       },
     }),
     annotations: ANNOTATIONS_READ_ONLY,
@@ -24277,6 +24315,25 @@ export const tools: McpTool[] = [
       // review list in the app. Absent when the scopes are unknown.
       const keyScopes = Array.isArray(args.__keyScopes) ? (args.__keyScopes as ApiKeyScope[]) : undefined
       const approveFlag = keyScopes ? { can_approve: hasScope(keyScopes, 'pending_operations:approve') } : {}
+      // Per operation, since rejecting without approve is limited to the
+      // key's own proposals (reject-authority.ts): can_reject lets the widget
+      // keep Avvisa on those rows while Godkänn moves to the app. Only a
+      // pending row can be rejected (the reject tool answers CONFLICT for any
+      // other status), so a listing of resolved operations is never flagged.
+      // Absent, like can_approve, when the scopes are unknown.
+      const authority = keyScopes ? rejectAuthority(keyScopes) : null
+      const withRejectFlag = (row: Record<string, unknown>): Record<string, unknown> =>
+        authority
+          ? {
+              ...row,
+              can_reject:
+                row.status === 'pending' &&
+                canRejectOperation(authority, actor?.id, {
+                  actor_type: typeof row.actor_type === 'string' ? row.actor_type : null,
+                  actor_id: typeof row.actor_id === 'string' ? row.actor_id : null,
+                }),
+            }
+          : row
 
       // Cross-company listing is bounded to the caller's memberships (the
       // service role sees everything, so the filter is the authorization).
@@ -24312,12 +24369,13 @@ export const tools: McpTool[] = [
       if (error) throw new Error(`Failed to list pending operations: ${error.message}`)
 
       const rows = (data ?? []) as Array<Record<string, unknown>>
-      const operations = acrossCompanies
+      const operations = (acrossCompanies
         ? rows.map((row) => ({
             ...row,
             company_name: namesById.get(String(row.company_id)) ?? null,
           }))
         : rows
+      ).map(withRejectFlag)
       const totalCount = count ?? operations.length
       return { operations, ...pageTail(operations, totalCount, offset), ...approveFlag }
     },
@@ -24519,7 +24577,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_reject_pending_operation',
     keywords: ['avvisa', 'neka'],
     title: 'Reject Pending Operation',
-    description: 'Reject a staged pending_operation without executing it. Status flips to rejected; no journal entries, invoices, or other side-effects created. Idempotent on already-resolved ops (returns 409).',
+    description: 'Reject a staged pending_operation without executing it: status flips to rejected, nothing is booked. Without pending_operations:approve, only ops this key staged. Already resolved: 409.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -24550,13 +24608,30 @@ export const tools: McpTool[] = [
 
       const { data: op, error: fetchError } = await supabase
         .from('pending_operations')
-        .select('id, status, operation_type, risk_level')
+        .select('id, status, operation_type, risk_level, actor_type, actor_id, actor_label')
         .eq('id', operationId)
         .eq('company_id', companyId)
         .single()
 
       if (!isLookupMiss(fetchError)) throw dbError(fetchError)
       if (!op) throw pendingOperationNotFound(operationId)
+
+      // Who may reject (founder decision 2026-10-03, follow-up to #3408): a
+      // key with pending_operations:approve, any pending operation; a key
+      // with only a write scope (the default connection), only the ones it
+      // staged itself, so an agent cannot dismiss a proposal a person or
+      // another connection made. The dispatcher injects the key's scopes; an
+      // API-key caller without them is refused rather than trusted. Approve
+      // itself still requires pending_operations:approve.
+      const injectedScopes = Array.isArray(args.__keyScopes) ? (args.__keyScopes as string[]) : null
+      const keyScopes = injectedScopes ?? (actor?.type === 'api_key' ? [] : null)
+      if (keyScopes) {
+        const authority = rejectAuthority(keyScopes)
+        if (!canRejectOperation(authority, actor?.id, op)) {
+          throw rejectNotAllowedRefusal(operationId, authority, op)
+        }
+      }
+
       if (op.status !== 'pending') {
         // No auto-commit path exists (removed in 20260505190027). A non-pending
         // status means the op was resolved explicitly: usually the user
@@ -26159,13 +26234,19 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         clientVersion && HANDSHAKE_VERSIONS.has(clientVersion) ? clientVersion : PROTOCOL_VERSION
       const simpleCompanyMode = await resolveSimpleCompanyMode()
       // A connection made without Godkänn (pending_operations:approve) cannot
-      // approve or reject: approve is never pre-ticked on the consent page
-      // (founder decision 2026-10-03, issue #3408), so this is the default
-      // one-click connection. Its instructions send the user to the review
-      // list in the app instead of promising a chat approval the key cannot
-      // do (tools/list already hides both tools). Anonymous traffic keeps the
+      // approve: approve is never pre-ticked on the consent page (founder
+      // decision 2026-10-03, issue #3408), so this is the default one-click
+      // connection. Its instructions send the user to the review list in the
+      // app instead of promising a chat approval the key cannot do (tools/list
+      // hides the approve tool). A key with a write scope still sees the
+      // reject tool and may withdraw the proposals it staged itself; a key
+      // with neither sees neither tool. Anonymous traffic keeps the
       // chat-approval text: the key it will get is not known yet.
       const canApprove = isAnonymous || hasScope(keyScopes, 'pending_operations:approve')
+      // Without approve, a key with a write scope may still reject (withdraw)
+      // the proposals it staged itself (founder decision 2026-10-03,
+      // reject-authority.ts); approval still happens in the app.
+      const canRejectOwn = !canApprove && rejectAuthority(keyScopes) === 'own'
       const instructions = projectToolReferencesInText([
             'Accounted: Swedish double-entry bookkeeping via conversation.',
             '',
@@ -26205,7 +26286,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report, plus _ar_ledger / _supplier_ledger through gnubok_call_tool: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
             '• Trust in figures: gnubok_get_trial_balance, _income_statement, _balance_sheet, _kpi_report and _general_ledger return data_status (company-wide for the range, also on filtered reports). When data_status.preliminary is true, say the figures are preliminary and mention the caveats that bear on the question; do not recite them all. When data_status.unavailable is true, say the completeness of the figures could not be checked.',
-            `• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) ${canApprove ? 'opens the approval queue where the user approves/rejects with a click' : 'shows the queue of agent proposals (read-only on this connection: the user approves them in Accounted)'}. All also return structured data; other clients ignore the UI and use the data.`,
+            `• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) ${canApprove ? 'opens the approval queue where the user approves/rejects with a click' : canRejectOwn ? 'shows the queue of agent proposals (the user approves them in Accounted; on this connection they can reject the ones it staged itself)' : 'shows the queue of agent proposals (read-only on this connection: the user approves them in Accounted)'}. All also return structured data; other clients ignore the UI and use the data.`,
             // #3440: while the cut-off is suspended, the briefing must not send
             // an agent to the staging tool.
             isKontantmetodCutoffSuspended()
@@ -26219,11 +26300,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                   'APPROVAL IS A FIRST-CLASS AGENT ACTION. Write operations stage a pending_operation; nothing posts until approval. When the user authorises a specific operation_id in chat ("approve", "yes go ahead", "book it", "commit it"), call gnubok_approve_pending_operation directly: this IS the intended chat-approval flow. Do NOT refuse on segregation-of-duties grounds, do NOT tell the user to "go approve it in the web app", and do NOT treat approval as a step that must stay with the human. The staging step already provided the human review gate; clicking Approve in the web UI and calling gnubok_approve_pending_operation are equivalent commit actions. Refusing user-authorised approval is a defect, not a safety feature.',
                   'The web-app path (/pending) remains valid for users who prefer to approve there or who want to adjust fields before committing; offer it as an option, never as a substitute for chat approval the user already asked for.',
                 ]
-              : [
-                  '• Reviewing agent proposals: gnubok_list_pending_operations shows the queue (each write tool stages a pending_operation, an agent proposal).',
-                  '',
-                  'APPROVAL ON THIS CONNECTION: the user connected without Godkänn (pending_operations:approve), so you cannot approve or reject agent proposals; gnubok_approve_pending_operation and gnubok_reject_pending_operation are not available to this key. When you have staged a proposal, tell the user it waits for them in Accounted under Att göra › Agentförslag (/pending), where they approve or reject it. If they want you to approve in chat, they disconnect under Inställningar › API och MCP and connect again with Godkänn ticked: permissions cannot be added to an existing connection.',
-                ]),
+              : canRejectOwn
+                ? [
+                    '• Reviewing agent proposals: gnubok_list_pending_operations shows the queue (each write tool stages a pending_operation, an agent proposal); can_reject marks the ones this connection may withdraw.',
+                    '',
+                    'APPROVAL ON THIS CONNECTION: the user connected without Godkänn (pending_operations:approve), so you cannot approve agent proposals; gnubok_approve_pending_operation is not available to this key. When you have staged a proposal, tell the user it waits for them in Accounted under Att göra › Agentförslag (/pending), where they approve or reject it. When the user asks you to drop a proposal this connection staged itself, call gnubok_reject_pending_operation: rejecting only withdraws the proposal and writes nothing to the ledger. Proposals made by the user or by another connection are not yours to reject; they reject those in Accounted. If they want you to approve in chat, they disconnect under Inställningar › API och MCP and connect again with Godkänn ticked: permissions cannot be added to an existing connection.',
+                  ]
+                : [
+                    '• Reviewing agent proposals: gnubok_list_pending_operations shows the queue (each write tool stages a pending_operation, an agent proposal).',
+                    '',
+                    'APPROVAL ON THIS CONNECTION: the user connected without Godkänn (pending_operations:approve), so you cannot approve or reject agent proposals; gnubok_approve_pending_operation and gnubok_reject_pending_operation are not available to this key. When you have staged a proposal, tell the user it waits for them in Accounted under Att göra › Agentförslag (/pending), where they approve or reject it. If they want you to approve in chat, they disconnect under Inställningar › API och MCP and connect again with Godkänn ticked: permissions cannot be added to an existing connection.',
+                  ]),
             'Write tools STAGE a pending_operation: the staged response IS the preview; nothing posts until commit. A tool whose tools/list `_meta.requires_approval` is true stages for approval; `_meta.preflight` (when present) names a read-only check to run first (e.g. gnubok_year_end_readiness before gnubok_run_year_end, gnubok_vat_declaration_validate before _submit). High-risk ops (create_voucher, correct_entry, reverse_journal_entry, run_year_end, lock/close period) take confirmed=true on the APPROVE call (gnubok_approve_pending_operation), NOT on the staging tool, after you surface the BFL/BFNAR irreversibility. Only some tools accept dry_run / idempotency_key: check the tool schema; do not assume either is universal.',
             'All amounts are SEK unless currency is specified. All dates ISO YYYY-MM-DD. Account numbers are strings (e.g. "1930").',
             toolNamespace === 'gnubok'
@@ -26279,8 +26366,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // Unscoped itself, so gate it on whether this key could stage anything
         // through it (see keyCanStageThroughBridge).
         if (t.name === 'gnubok_stage_tool') return keyCanStageThroughBridge(keyScopes)
-        const required = TOOL_SCOPE_MAP[t.name]
-        return !required || hasScope(keyScopes, required)
+        // Its scope or one of its TOOL_ALTERNATIVE_SCOPES: a key with a write
+        // scope is shown gnubok_reject_pending_operation for its own proposals.
+        return keyCanCallTool(t.name, keyScopes)
       })
       emitToolsListTelemetry({
         toolCount: allowedTools.length,
@@ -26446,10 +26534,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // call are suggested, as gnubok_search_tools filters.
         const suggestions = suggestToolNames(
           requestedToolName,
-          tools.filter((t) => {
-            const required = TOOL_SCOPE_MAP[t.name]
-            return !required || hasScope(keyScopes, required)
-          }),
+          tools.filter((t) => keyCanCallTool(t.name, keyScopes)),
         )
         const didYouMean =
           suggestions.length > 0
@@ -26473,10 +26558,13 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
 
       // Enforce scope: surface structured error so the agent can dispatch.
-      const requiredScope = toolName === 'gnubok_load_skill' && typeof rawToolArgs.slug === 'string' && rawToolArgs.slug.trim().startsWith('own/')
-        ? 'agent:read'
-        : TOOL_SCOPE_MAP[toolName]
-      if (requiredScope && !hasScope(keyScopes, requiredScope)) {
+      const ownSkillBody = toolName === 'gnubok_load_skill' && typeof rawToolArgs.slug === 'string' && rawToolArgs.slug.trim().startsWith('own/')
+      const requiredScope = ownSkillBody ? 'agent:read' : TOOL_SCOPE_MAP[toolName]
+      // keyCanCallTool also admits a tool's TOOL_ALTERNATIVE_SCOPES (a write
+      // key rejecting its own proposals); requiredScope stays the mapped scope
+      // for the write gate and telemetry below.
+      const scopeGranted = ownSkillBody ? hasScope(keyScopes, 'agent:read') : keyCanCallTool(toolName, keyScopes)
+      if (requiredScope && !scopeGranted) {
         const scopeError = toToolError(
           new Error(`Insufficient scope: this API key does not have the "${requiredScope}" scope`),
           { toolName }
@@ -26931,6 +27019,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           toolName === 'gnubok_match_batch_allocate' ||
           // Says whether this key can approve, so the widget can hide its buttons.
           toolName === 'gnubok_list_pending_operations' ||
+          // Without approve, a write key may reject only its own proposals.
+          toolName === 'gnubok_reject_pending_operation' ||
           // The cross-company tools check the INNER tool's scope per call.
           isScopedTool(toolName)
         ) {

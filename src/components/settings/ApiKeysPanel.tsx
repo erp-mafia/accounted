@@ -30,6 +30,7 @@ import { Plus, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   ALL_SCOPES,
+  PRE_TICKED_KEY_SCOPES,
   SCOPE_GROUPS,
   STAGING_SCOPES,
   TOOL_COUNT_BY_SCOPE,
@@ -127,7 +128,10 @@ export function ApiKeysPanel({
   // is a key for the user's real company. 'test' is an explicit opt-in: a
   // simulation-only key that forces dry-run on every write (nothing is saved).
   const [newKeyMode, setNewKeyMode] = useState<'live' | 'test'>('live')
-  const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(new Set(ALL_SCOPES))
+  // Everything except Godkänn (pending_operations:approve) starts ticked:
+  // founder decision 2026-10-03, issue #3408 option B, as on the MCP consent
+  // page. A default key's proposals wait for a human under Att göra.
+  const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(() => new Set(PRE_TICKED_KEY_SCOPES))
   const [newKeyValue, setNewKeyValue] = useState('')
 
   // Company allowlist and per-company access. The picker only appears for a
@@ -139,6 +143,9 @@ export function ApiKeysPanel({
   const [newKeyReadOnly, setNewKeyReadOnly] = useState<Set<string>>(new Set())
   const hasCompanyPicker = companies.length >= 2
   function openCreateDialog() {
+    // Every open starts from the option B default, so ticking Godkänn and
+    // cancelling does not carry approve (and the SoD warning) into the next key.
+    setNewKeyScopes(new Set(PRE_TICKED_KEY_SCOPES))
     setNewKeyCompanies(new Set(companies.map((company) => company.company_id)))
     setNewKeyReadOnly(new Set())
     setShowCreateDialog(true)
@@ -149,7 +156,8 @@ export function ApiKeysPanel({
   // lets an automated agent commit financial postings with no human in the
   // loop. We warn inline and require an explicit confirm before submitting
   // with acknowledge_sod: the route returns 409 API_KEY_SOD_CONFLICT
-  // otherwise (default create ticks all scopes, so this path is the norm).
+  // otherwise. The default leaves approve unticked, so this only happens
+  // once the user ticks Godkänn next to a write scope.
   const sodConflictScope = STAGING_SCOPES.find((s) => newKeyScopes.has(s)) ?? null
   const hasSodConflict =
     newKeyScopes.has('pending_operations:approve') && sodConflictScope !== null
@@ -226,7 +234,7 @@ export function ApiKeysPanel({
       setShowKeyDialog(true)
       setNewKeyName('')
       setNewKeyMode('live')
-      setNewKeyScopes(new Set(ALL_SCOPES))
+      setNewKeyScopes(new Set(PRE_TICKED_KEY_SCOPES))
       onCreated()
     } catch {
       toast({ title: t('toast_create_failed'), variant: 'destructive' })

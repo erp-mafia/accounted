@@ -44,6 +44,7 @@ vi.mock('@/lib/company/company-picker', async (importOriginal) => {
 })
 
 import { GET, POST } from '../route'
+import { DEFAULT_SCOPES, PRE_TICKED_KEY_SCOPES } from '@/lib/auth/scope-catalog'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 // Static route: withRouteContext still types the second handler argument.
@@ -284,6 +285,43 @@ describe('POST /api/settings/api-keys', () => {
     // The stored hash is what the RPC received, and the key it returned matches it.
     expect(typeof payload.p_key_hash).toBe('string')
     expect(body.data.key.startsWith(payload.p_key_prefix as string)).toBe(true)
+  })
+
+  // Issue #3408 option B: the dialog pre-ticks everything except approve, so
+  // its default create is not a stage+approve combination and needs no
+  // segregation-of-duties acknowledgement.
+  it('creates a key from the dialog default (all but approve) without an SoD acknowledgement', async () => {
+    setupCreate({ row: { ...storedRow, scopes: [...PRE_TICKED_KEY_SCOPES] } })
+    const res = await POST(
+      createMockRequest('/api/settings/api-keys', {
+        method: 'POST',
+        body: { name: 'k', scopes: [...PRE_TICKED_KEY_SCOPES] },
+      }),
+      noParams,
+    )
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(200)
+    const payload = createArgs()
+    expect(payload.p_scopes).toEqual([...PRE_TICKED_KEY_SCOPES])
+    expect(payload.p_scopes).not.toContain('pending_operations:approve')
+    expect(payload.p_sod_acknowledged_at).toBeNull()
+    expect(payload.p_sod_acknowledged_by).toBeNull()
+  })
+
+  // The REST wire default for a create without scopes stays the read-only
+  // DEFAULT_SCOPES: it never granted approve, so option B leaves it as is.
+  it('grants the read-only default scopes, never approve, when the body names no scopes', async () => {
+    setupCreate()
+    const res = await POST(
+      createMockRequest('/api/settings/api-keys', { method: 'POST', body: { name: 'k' } }),
+      noParams,
+    )
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(200)
+    const payload = createArgs()
+    expect(payload.p_scopes).toEqual(DEFAULT_SCOPES)
+    expect(payload.p_scopes).not.toContain('pending_operations:approve')
+    expect(payload.p_sod_acknowledged_at).toBeNull()
   })
 
   it('creates a test key bound to the active company with mode=test', async () => {

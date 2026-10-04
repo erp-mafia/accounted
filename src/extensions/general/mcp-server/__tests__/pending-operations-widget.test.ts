@@ -4,9 +4,11 @@
  * approve/reject semantics (covered by pending-operations-tools tests);
  * only the widget plumbing.
  */
+import vm from 'node:vm'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
 import { uiWidgets, findUiWidget } from '../widgets'
+import { PENDING_OPERATIONS_HTML } from '../widgets/pending-operations'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -80,6 +82,49 @@ function mcpRequest(method: string, params?: Record<string, unknown>, namespace?
 async function parseResult(response: Response) {
   const json = await response.json()
   return json.result
+}
+
+/**
+ * Runs the widget's inline script against a minimal DOM and returns a
+ * function that delivers a list result (the host's tool-result notification)
+ * and answers with the rendered table HTML.
+ */
+function renderWidget(): (structuredContent: Record<string, unknown>) => string {
+  const script = PENDING_OPERATIONS_HTML.slice(
+    PENDING_OPERATIONS_HTML.indexOf('<script>') + '<script>'.length,
+    PENDING_OPERATIONS_HTML.indexOf('</script>'),
+  )
+  const content = { innerHTML: '' }
+  const counter = { textContent: '' }
+  let onMessage: ((event: { data: unknown }) => void) | null = null
+  const window = {
+    addEventListener: (type: string, fn: (event: { data: unknown }) => void) => {
+      if (type === 'message') onMessage = fn
+    },
+    parent: { postMessage: () => {} },
+  }
+  const document = {
+    getElementById: (id: string) => (id === 'content' ? content : id === 'counter' ? counter : null),
+    querySelectorAll: () => [],
+    createElement: () => {
+      let text = ''
+      return {
+        set textContent(value: string) {
+          text = value
+        },
+        get innerHTML() {
+          return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        },
+      }
+    },
+    documentElement: { classList: { add: () => {}, remove: () => {} } },
+  }
+  vm.runInNewContext(script, { window, document, setTimeout: () => 0, clearTimeout: () => {} })
+  return (structuredContent) => {
+    expect(onMessage).not.toBeNull()
+    onMessage!({ data: { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent } } })
+    return content.innerHTML
+  }
 }
 
 describe('Pending operations widget', () => {
@@ -161,8 +206,10 @@ describe('Pending operations widget', () => {
   })
 
   // Issue #3408, founder decision 2026-10-03: approve is never pre-ticked on
-  // the consent page, so the default one-click connection cannot approve or
-  // reject. Neither the widget nor the instructions may promise it can.
+  // the consent page, so the default one-click connection cannot approve.
+  // Neither the widget nor the instructions may promise it can. Its write
+  // scopes still let it reject the proposals it staged itself (second
+  // decision of 2026-10-03); a read-only key can do neither.
   describe('a key without pending_operations:approve', () => {
     const withApprove = {
       userId: 'user-1',
@@ -193,16 +240,124 @@ describe('Pending operations widget', () => {
       expect(approver.result.structuredContent).toMatchObject({ can_approve: true })
     })
 
+    const op = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      title: `Förslag ${id}`,
+      operation_type: 'categorize_transaction',
+      risk_level: 'low',
+      created_at: '2026-10-03T10:00:00Z',
+      ...extra,
+    })
+
     it('the widget swaps Godkänn and Avvisa for a pointer to the app when can_approve is false', () => {
-      const html = findUiWidget('ui://pending-operations/app.html')!.html
-      expect(html).toContain('canApprove = sc.can_approve !== false')
-      expect(html).toContain(`if (!canApprove) return '<span class="status-note">I Accounted</span>'`)
-      expect(html).toContain('Att g\\u00f6ra \\u203a Agentf\\u00f6rslag')
+      const html = renderWidget()({ can_approve: false, operations: [op('a'), op('b')] })
+      expect(html).not.toContain('data-approve=')
+      expect(html).not.toContain('data-reject=')
+      expect(html).toContain('I Accounted')
+      expect(html).toContain('kan inte godkänna eller avvisa')
+      expect(html).toContain('Att göra › Agentförslag')
+    })
+
+    // Founder decision 2026-10-03: the key may still withdraw its own proposals.
+    it('keeps Avvisa, without Godkänn, on the rows this key may reject', () => {
+      const html = renderWidget()({
+        can_approve: false,
+        operations: [op('own', { can_reject: true }), op('theirs', { can_reject: false })],
+      })
+      expect(html).toContain('data-reject="0"')
+      expect(html).not.toContain('data-reject="1"')
+      expect(html).not.toContain('data-approve=')
+      expect(html).toContain('Godkänns i Accounted')
+      expect(html).toContain('I Accounted')
+      expect(html).toContain('Förslag som anslutningen själv har skapat kan du avvisa här')
+      expect(html).not.toContain('kan inte godkänna eller avvisa')
+    })
+
+    it('a key with approve gets both buttons on every row', () => {
+      const html = renderWidget()({
+        can_approve: true,
+        operations: [op('a', { can_reject: true }), op('b', { can_reject: true })],
+      })
+      for (const i of [0, 1]) {
+        expect(html).toContain(`data-approve="${i}"`)
+        expect(html).toContain(`data-reject="${i}"`)
+      }
+      expect(html).not.toContain('readonly-note')
+    })
+
+    it('tools/list shows reject, not approve, to a write key without approve', async () => {
+      const listed = async (scopes: string[]) => {
+        vi.mocked(validateApiKey).mockResolvedValueOnce({ ...withApprove, scopes } as never)
+        const result = await parseResult(await handleMcpRequest(mcpRequest('tools/list')))
+        return (result.tools as Array<{ name: string }>).map((t) => t.name)
+      }
+      const writeKey = await listed(['pending_operations:read', 'transactions:write'])
+      expect(writeKey).toContain('gnubok_reject_pending_operation')
+      expect(writeKey).not.toContain('gnubok_approve_pending_operation')
+
+      const readKey = await listed(['pending_operations:read'])
+      expect(readKey).not.toContain('gnubok_reject_pending_operation')
+      expect(readKey).not.toContain('gnubok_approve_pending_operation')
+
+      const approver = await listed(withApprove.scopes)
+      expect(approver).toContain('gnubok_reject_pending_operation')
+      expect(approver).toContain('gnubok_approve_pending_operation')
+    })
+
+    it('approve stays refused for a write key without approve', async () => {
+      vi.mocked(validateApiKey).mockResolvedValueOnce({
+        ...withApprove,
+        scopes: ['pending_operations:read', 'transactions:write'],
+      } as never)
+      const res = await (
+        await handleMcpRequest(
+          mcpRequest('tools/call', {
+            name: 'gnubok_approve_pending_operation',
+            arguments: { operation_id: '0e5f0000-0000-4000-8000-000000000001' },
+          }),
+        )
+      ).json()
+      expect(res.result.isError).toBe(true)
+      const error = JSON.parse(res.result.content[0].text).error
+      expect(error.code).toBe('INSUFFICIENT_SCOPE')
+      expect(error.remediation.description).toContain('cannot approve agent proposals')
+    })
+
+    it('reject is refused at the scope gate for a key with neither approve nor a write scope', async () => {
+      const res = await (
+        await handleMcpRequest(
+          mcpRequest('tools/call', {
+            name: 'gnubok_reject_pending_operation',
+            arguments: { operation_id: '0e5f0000-0000-4000-8000-000000000001' },
+          }),
+        )
+      ).json()
+      expect(res.result.isError).toBe(true)
+      const error = JSON.parse(res.result.content[0].text).error
+      expect(error.code).toBe('INSUFFICIENT_SCOPE')
+      expect(error.remediation.description).toContain('nor a write scope')
+    })
+
+    it('the instructions let a write key withdraw its own proposals, and still send approval to the app', async () => {
+      vi.mocked(validateApiKey).mockResolvedValueOnce({
+        ...withApprove,
+        scopes: ['pending_operations:read', 'transactions:write'],
+      } as never)
+      const text = await instructions()
+      expect(text).toContain('APPROVAL ON THIS CONNECTION')
+      expect(text).toContain('you cannot approve agent proposals')
+      expect(text).toContain('drop a proposal this connection staged itself, call gnubok_reject_pending_operation')
+      expect(text).toContain('not yours to reject')
+      expect(text).toContain('Att göra › Agentförslag')
+      expect(text).not.toContain('APPROVAL IS A FIRST-CLASS AGENT ACTION')
+      expect(text).not.toContain('cannot approve or reject agent proposals')
     })
 
     it('the instructions send the user to Att göra › Agentförslag instead of promising chat approval', async () => {
+      // The mocked key is read-only: it can neither approve nor reject.
       const text = await instructions()
       expect(text).toContain('APPROVAL ON THIS CONNECTION')
+      expect(text).toContain('cannot approve or reject agent proposals')
       expect(text).toContain('Att göra › Agentförslag')
       expect(text).toContain('connect again with Godkänn ticked')
       expect(text).not.toContain('APPROVAL IS A FIRST-CLASS AGENT ACTION')

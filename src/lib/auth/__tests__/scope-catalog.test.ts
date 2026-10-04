@@ -2,9 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   ALL_SCOPES,
   API_KEY_SCOPES,
+  PRE_TICKED_KEY_SCOPES,
+  REJECT_OWN_SCOPES,
   SCOPE_GROUPS,
+  STAGING_SCOPES,
+  TOOL_ALTERNATIVE_SCOPES,
   TOOL_COUNT_BY_SCOPE,
   TOOL_SCOPE_MAP,
+  findStageApproveConflict,
+  keyCanCallTool,
   scopeKind,
   type ApiKeyScope,
 } from '../scope-catalog'
@@ -134,6 +140,71 @@ describe('pending_operations labels (issue #3408)', () => {
     ]) {
       expect(text).not.toMatch(/stag|pending_operations/i)
     }
+  })
+})
+
+describe('PRE_TICKED_KEY_SCOPES (API key dialog default, issue #3408 option B)', () => {
+  it('ticks every scope except pending_operations:approve', () => {
+    expect(PRE_TICKED_KEY_SCOPES).not.toContain('pending_operations:approve')
+    expect([...PRE_TICKED_KEY_SCOPES].sort()).toEqual(
+      ALL_SCOPES.filter((s) => s !== 'pending_operations:approve').sort(),
+    )
+  })
+
+  it('keeps every write scope, so a default key can stage proposals', () => {
+    for (const scope of STAGING_SCOPES) expect(PRE_TICKED_KEY_SCOPES, scope).toContain(scope)
+    expect(PRE_TICKED_KEY_SCOPES).toContain('pending_operations:read')
+  })
+
+  it('is no segregation-of-duties conflict, so the default needs no acknowledgement', () => {
+    expect(findStageApproveConflict([...PRE_TICKED_KEY_SCOPES])).toBeNull()
+  })
+
+  it('tells the user in the dialog that Godkänn is not preselected', () => {
+    expect(sv.settings_api_keys.permissions_help).toMatch(/Godkänn är inte förvalt/)
+    expect(sv.settings_api_keys.permissions_help).toMatch(/Att göra › Agentförslag/)
+    expect(en.settings_api_keys.permissions_help).toMatch(/Approve is not preselected/)
+  })
+})
+
+describe('keyCanCallTool and TOOL_ALTERNATIVE_SCOPES (reject own proposals, follow-up to #3408)', () => {
+  it('only widens reject, and only with the scopes a tool stages through', () => {
+    expect(Object.keys(TOOL_ALTERNATIVE_SCOPES)).toEqual(['gnubok_reject_pending_operation'])
+    expect(TOOL_ALTERNATIVE_SCOPES.gnubok_reject_pending_operation).toEqual(REJECT_OWN_SCOPES)
+    // The mapped scope is unchanged: write gates and telemetry still read it.
+    expect(TOOL_SCOPE_MAP.gnubok_reject_pending_operation).toBe('pending_operations:approve')
+  })
+
+  it('REJECT_OWN_SCOPES is STAGING_SCOPES plus agent:write, and leaves the SoD list alone', () => {
+    expect([...REJECT_OWN_SCOPES].sort()).toEqual([...STAGING_SCOPES, 'agent:write'].sort())
+    expect(STAGING_SCOPES).not.toContain('agent:write')
+    expect(REJECT_OWN_SCOPES).not.toContain('pending_operations:approve')
+  })
+
+  it('lets a write key call reject but never approve', () => {
+    for (const scope of REJECT_OWN_SCOPES) {
+      expect(keyCanCallTool('gnubok_reject_pending_operation', ['pending_operations:read', scope]), scope).toBe(true)
+      expect(keyCanCallTool('gnubok_approve_pending_operation', ['pending_operations:read', scope]), scope).toBe(false)
+    }
+  })
+
+  it('keeps reject out of reach of a read-only key and of scopes no tool stages through', () => {
+    expect(keyCanCallTool('gnubok_reject_pending_operation', ['pending_operations:read', 'reports:read'])).toBe(false)
+    expect(keyCanCallTool('gnubok_reject_pending_operation', ['reports:read', 'webhooks:manage'])).toBe(false)
+  })
+
+  it('answers exactly like the mapped scope for every other tool', () => {
+    const keys: ApiKeyScope[][] = [[], ['reports:read'], [...REJECT_OWN_SCOPES], [...ALL_SCOPES]]
+    for (const [tool, scope] of Object.entries(TOOL_SCOPE_MAP)) {
+      if (tool === 'gnubok_reject_pending_operation') continue
+      for (const key of keys) expect(keyCanCallTool(tool, key), tool).toBe(key.includes(scope))
+    }
+    // Unscoped tools are open to any key.
+    expect(keyCanCallTool('gnubok_search_tools', [])).toBe(true)
+  })
+
+  it('does not match inherited keys of the alternatives map', () => {
+    expect(keyCanCallTool('constructor', [...ALL_SCOPES])).toBe(false)
   })
 })
 

@@ -23,6 +23,8 @@ export {
   SCOPE_GROUPS,
   scopeKind,
   TOOL_SCOPE_MAP,
+  TOOL_ALTERNATIVE_SCOPES,
+  keyCanCallTool,
   TOOL_COUNT_BY_SCOPE,
 } from './scope-catalog'
 export type { ApiKeyScope } from './scope-catalog'

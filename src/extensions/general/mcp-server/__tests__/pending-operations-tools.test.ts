@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { TOOL_SCOPE_MAP, keyCanCallTool } from '@/lib/auth/api-keys'
 
 const commitSpy = vi.fn()
 
@@ -33,6 +33,15 @@ describe('pending_operations MCP tools: registration', () => {
   it('approve and reject are gated by pending_operations:approve', () => {
     expect(TOOL_SCOPE_MAP['gnubok_approve_pending_operation']).toBe('pending_operations:approve')
     expect(TOOL_SCOPE_MAP['gnubok_reject_pending_operation']).toBe('pending_operations:approve')
+  })
+
+  // Founder decision 2026-10-03: rejecting is not approval. A write key may
+  // reach reject (for its own proposals); approve stays approve-only.
+  it('a write key without approve reaches reject but not approve', () => {
+    const writeKey = ['pending_operations:read', 'transactions:write']
+    expect(keyCanCallTool('gnubok_reject_pending_operation', writeKey)).toBe(true)
+    expect(keyCanCallTool('gnubok_approve_pending_operation', writeKey)).toBe(false)
+    expect(keyCanCallTool('gnubok_reject_pending_operation', ['pending_operations:read'])).toBe(false)
   })
 
   it('input schemas have additionalProperties: false', () => {
@@ -103,6 +112,53 @@ describe('gnubok_list_pending_operations', () => {
     ).toBe(true)
     // Scopes unknown (not injected): no claim either way, the widget keeps its buttons.
     expect(await run({})).not.toHaveProperty('can_approve')
+  })
+})
+
+describe('gnubok_list_pending_operations: can_reject per operation', () => {
+  const KEY = 'a1a1a1a1-0000-4000-8000-000000000001'
+  const rows = [
+    { id: 'own', status: 'pending', actor_type: 'api_key', actor_id: KEY },
+    { id: 'other-connection', status: 'pending', actor_type: 'api_key', actor_id: 'b2b2b2b2-0000-4000-8000-000000000002' },
+    { id: 'person', status: 'pending', actor_type: 'user', actor_id: null },
+    // Already resolved: the reject tool answers CONFLICT, so never rejectable.
+    { id: 'own-committed', status: 'committed', actor_type: 'api_key', actor_id: KEY },
+  ]
+  const run = async (args: Record<string, unknown>) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows, error: null, count: rows.length })
+    return (await listTool.execute(args, 'company-1', 'user-1', supabase as never, { type: 'api_key', id: KEY })) as {
+      can_approve?: boolean
+      operations: Array<{ id: string; can_reject?: boolean }>
+    }
+  }
+  const flags = (result: { operations: Array<{ id: string; can_reject?: boolean }> }) =>
+    Object.fromEntries(result.operations.map((op) => [op.id, op.can_reject]))
+
+  it('a write key without approve may reject only the rows it staged itself', async () => {
+    const result = await run({ __keyScopes: ['pending_operations:read', 'invoices:write'] })
+    expect(result.can_approve).toBe(false)
+    expect(flags(result)).toEqual({ own: true, 'other-connection': false, person: false, 'own-committed': false })
+  })
+
+  it('a key with approve may reject every row', async () => {
+    const result = await run({ __keyScopes: ['pending_operations:read', 'pending_operations:approve'] })
+    expect(result.can_approve).toBe(true)
+    expect(flags(result)).toEqual({ own: true, 'other-connection': true, person: true, 'own-committed': false })
+  })
+
+  it('a read-only key may reject none', async () => {
+    expect(flags(await run({ __keyScopes: ['pending_operations:read'] }))).toEqual({
+      own: false,
+      'other-connection': false,
+      person: false,
+      'own-committed': false,
+    })
+  })
+
+  it('makes no claim when the scopes are unknown', async () => {
+    const result = await run({})
+    for (const op of result.operations) expect(op).not.toHaveProperty('can_reject')
   })
 })
 
@@ -289,5 +345,86 @@ describe('gnubok_reject_pending_operation', () => {
     await expect(
       rejectTool.execute({ operation_id: 'missing' }, 'company-1', 'user-1', supabase as never)
     ).rejects.toThrow(/not found/i)
+  })
+})
+
+// Founder decision 2026-10-03 (follow-up to issue #3408): a key with a write
+// scope may reject (withdraw) pending operations without
+// pending_operations:approve, but only the ones it staged itself.
+describe('gnubok_reject_pending_operation: who may reject', () => {
+  const KEY = 'a1a1a1a1-0000-4000-8000-000000000001'
+  const OTHER_KEY = 'b2b2b2b2-0000-4000-8000-000000000002'
+  const WRITE_KEY = ['pending_operations:read', 'transactions:write']
+  const APPROVE_KEY = ['pending_operations:read', 'pending_operations:approve']
+  const actor = { type: 'api_key' as const, id: KEY, label: 'Claude' }
+
+  async function attempt(
+    keyScopes: string[] | undefined,
+    op: Record<string, unknown>,
+  ): Promise<{ result?: unknown; error?: { code?: string; message: string }; supabase: ReturnType<typeof createQueuedMockSupabase> }> {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: { id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low', ...op }, error: null })
+    mock.enqueue({ data: [{ id: 'op-1' }], error: null }) // CAS update
+    const args: Record<string, unknown> = { operation_id: 'op-1', ...(keyScopes ? { __keyScopes: keyScopes } : {}) }
+    try {
+      const result = await rejectTool.execute(args, 'company-1', 'user-1', mock.supabase as never, actor)
+      return { result, supabase: mock }
+    } catch (err) {
+      return { error: err as { code?: string; message: string }, supabase: mock }
+    }
+  }
+
+  it('a write key without approve rejects a proposal it staged itself', async () => {
+    const { result, error, supabase } = await attempt(WRITE_KEY, { actor_type: 'api_key', actor_id: KEY })
+    expect(error).toBeUndefined()
+    expect(result).toEqual({ status: 'rejected', operation_id: 'op-1' })
+    const update = supabase.findCall('pending_operations', 'update')?.[0] as Record<string, unknown>
+    expect(update).toMatchObject({ status: 'rejected', result_data: { rejected_via: 'api_key', actor_id: KEY } })
+    expect(commitSpy).not.toHaveBeenCalled()
+  })
+
+  it("refuses another connection's proposal and names who staged it", async () => {
+    const { error, supabase } = await attempt(WRITE_KEY, { actor_type: 'api_key', actor_id: OTHER_KEY, actor_label: 'Cursor' })
+    expect(error?.code).toBe('INSUFFICIENT_SCOPE')
+    expect(error?.message).toContain('only the agent proposals it staged itself')
+    expect(error?.message).toContain('another connection (Cursor)')
+    // Refused before any write.
+    expect(supabase.findCall('pending_operations', 'update')).toBeUndefined()
+  })
+
+  it("refuses a person's proposal made in the app", async () => {
+    const { error, supabase } = await attempt(WRITE_KEY, { actor_type: 'user', actor_id: null })
+    expect(error?.code).toBe('INSUFFICIENT_SCOPE')
+    expect(error?.message).toContain('a person in Accounted')
+    expect(supabase.findCall('pending_operations', 'update')).toBeUndefined()
+  })
+
+  it('refuses a key with no write scope, even for a row carrying its id', async () => {
+    const { error, supabase } = await attempt(['pending_operations:read'], { actor_type: 'api_key', actor_id: KEY })
+    expect(error?.code).toBe('INSUFFICIENT_SCOPE')
+    expect(error?.message).toContain('nor a write scope')
+    expect(supabase.findCall('pending_operations', 'update')).toBeUndefined()
+  })
+
+  it('a key with approve still rejects anyone\'s proposal', async () => {
+    for (const op of [
+      { actor_type: 'api_key', actor_id: OTHER_KEY },
+      { actor_type: 'user', actor_id: null },
+    ]) {
+      const { result, error } = await attempt(APPROVE_KEY, op)
+      expect(error).toBeUndefined()
+      expect(result).toEqual({ status: 'rejected', operation_id: 'op-1' })
+    }
+  })
+
+  it('an API-key caller whose scopes were not injected is refused, not trusted', async () => {
+    const { error, supabase } = await attempt(undefined, { actor_type: 'api_key', actor_id: KEY })
+    expect(error?.code).toBe('INSUFFICIENT_SCOPE')
+    expect(supabase.findCall('pending_operations', 'update')).toBeUndefined()
+  })
+
+  it('checks authority before status: a resolved proposal of someone else is refused on authority, not as a conflict', async () => {
+    const { error } = await attempt(WRITE_KEY, { actor_type: 'user', actor_id: null, status: 'committed' })
+    expect(error?.code).toBe('INSUFFICIENT_SCOPE')
   })
 })
