@@ -145,6 +145,11 @@ describe('buildSystemdokumentation', () => {
     const rule = cash.behandlingsregler.find((x) => x.rubrik === 'Delbetalningar, kontantmetoden')
     expect(rule?.text).toBe(CASH_PARTIAL_PAYMENT_RULE)
     expect(rule?.text).toContain('i proportion till det inbetalda beloppet')
+    // The exclusions match what the code refuses (cashProRataUnsupportedReason
+    // and the doors that still refuse every partial).
+    expect(rule?.text).toContain('utländsk valuta')
+    expect(rule?.text).toContain('skattereduktion för grön teknik')
+    expect(rule?.text).toContain('bankmatchning eller med API-nyckel')
   })
 
   it('lists members by role with labels and API keys with scope labels and the numeric cap', () => {
