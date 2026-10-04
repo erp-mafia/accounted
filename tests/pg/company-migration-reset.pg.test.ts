@@ -349,6 +349,39 @@ describe('company migration reset RPCs (pg)', () => {
       count: 1,
     })
 
+    // So is a live POS sales connection (20261004120600), and it adds to the
+    // same blocker; an ended one does not count.
+    await getPool().query(
+      `INSERT INTO public.pos_connections
+         (company_id, provider, provider_name, venue_ref, venue_name, connection_handle, sync_from)
+       VALUES ($1, 'heynow', 'Heynow', 'venue-1', 'Restaurang Test', 'pos_' || repeat('h', 40), '2026-09-30'),
+              ($1, 'heynow', 'Heynow', 'venue-2', 'Restaurang Test', 'pos_' || repeat('i', 40), '2026-09-30')`,
+      [pos.companyId],
+    )
+    await getPool().query(
+      `UPDATE public.pos_connections
+          SET status = 'disconnected', ended_at = now(), connection_handle = NULL
+        WHERE company_id = $1 AND venue_ref = 'venue-2'`,
+      [pos.companyId],
+    )
+    expect((await preview(pos.userId, pos.companyId)).eligibility?.blockers).toContainEqual({
+      code: 'active_integrations_or_schedules',
+      count: 2,
+    })
+    const tills = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.pos_connections
+         (company_id, provider, provider_name, venue_ref, venue_name, connection_handle, sync_from)
+       VALUES ($1, 'heynow', 'Heynow', 'venue-1', 'Restaurang Test', 'pos_' || repeat('h', 40), '2026-09-30')`,
+      [tills.companyId],
+    )
+    const tillsPreview = await preview(tills.userId, tills.companyId)
+    expect(tillsPreview.eligibility?.eligible).toBe(false)
+    expect(tillsPreview.eligibility?.blockers).toContainEqual({
+      code: 'active_integrations_or_schedules',
+      count: 1,
+    })
+
     const busy = await seedCompany()
     await getPool().query(
       `INSERT INTO public.operations (company_id, user_id, operation_type, status)

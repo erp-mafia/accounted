@@ -231,6 +231,237 @@ export const BANK_SYNC_ERROR_CODES = [
 ] as const
 
 // ---------------------------------------------------------------------------
+// POS sales (installation -> service, /api/connect/pos/*)
+// ---------------------------------------------------------------------------
+
+/**
+ * Point-of-sale sales per business day, the input of the daily takings
+ * voucher (gemensam verifikation, BFL 5 kap 6 §). One provider-neutral
+ * family; which providers exist is answered at runtime (`venues` lists them),
+ * never named here. Conventions:
+ *
+ * - The service holds the integrator credential a POS provider issued to
+ *   Accounted. A venue is reachable only when the provider has opened it for
+ *   that credential AND Arcim has granted it to the calling key for the
+ *   organisation the provider named: the installation never types a venue
+ *   id, it picks one of the venues `venues` lists for its company's
+ *   organisation number.
+ * - Every call carries X-Connector-Company. `day` and `disconnect` also carry
+ *   the handle `connect` returned, in POS_CONNECTION_HEADER; the service keeps
+ *   only its hash and refuses a handle bound to another key or company
+ *   (CONNECTOR_CONNECTION_NOT_OWNED).
+ * - Amounts are numbers in `currency`, rounded to two decimals by the
+ *   service. Sums are signed: a refund reduces sales and tenders.
+ * - `day` answers with the service's model of the day plus the provider's
+ *   answer verbatim (`raw`), which the installation archives (BFL 7 kap) and
+ *   never parses. Provider quirks are resolved by the service and, where it
+ *   had to assume something, reported in `issues` for a person to check.
+ * - Reads only: nothing in this family writes at the provider.
+ */
+export const POS_SALES_BASE_PATH = '/api/connect/pos'
+
+/** The connector key scope that opens this family. */
+export const POS_SALES_SCOPE = 'pos_sales'
+
+/** The connection handle header; the same name the provider-capability families use. */
+export const POS_CONNECTION_HEADER = 'X-Connector-Connection'
+
+/** In characters: the provider's answer for one day, verbatim. Response bodies are capped at 4.5 MB. */
+export const POS_MAX_RAW_CHARS = 3_000_000
+
+const posOrgNumberSchema = z.string().regex(/^\d{10}$/, 'ten digits, no dash')
+const posRefSchema = z.string().trim().min(1).max(64)
+const posAmountSchema = z.number().finite()
+const posHttpsUrlSchema = z.url({ protocol: /^https$/, hostname: z.regexes.domain })
+
+/** A POS provider as the installation shows it. Field names follow the catalogue's provider profile. */
+export const posProviderSchema = z.object({
+  /** Stable opaque slug; the installation stores it on its connection. */
+  ref: posRefSchema,
+  displayName: z.string().trim().min(1).max(80),
+  legalName: z.string().trim().min(1).max(200).nullable(),
+  portalUrl: posHttpsUrlSchema.nullable(),
+  supportUrl: posHttpsUrlSchema.nullable(),
+  /**
+   * How the customer asks the provider to open a venue for Accounted, in
+   * Swedish, shown when no venue is listed yet. Null when no request is needed.
+   */
+  accessRequestSv: z.string().max(4000).nullable(),
+})
+export type PosProvider = z.infer<typeof posProviderSchema>
+
+export const posVenueSchema = z.object({
+  provider: posProviderSchema,
+  /** The provider's own, non-secret venue id. */
+  venueRef: posRefSchema,
+  name: z.string().trim().min(1).max(200),
+  /** True when this company holds the venue now. */
+  connected: z.boolean(),
+  /** False when another company on this key holds it. */
+  available: z.boolean(),
+})
+export type PosVenue = z.infer<typeof posVenueSchema>
+
+export const posVenuesRequestSchema = z.object({ orgNumber: posOrgNumberSchema })
+export type PosVenuesRequest = z.infer<typeof posVenuesRequestSchema>
+
+export const posVenuesResponseSchema = z.object({
+  /** Venues granted to this key for the organisation number. */
+  venues: z.array(posVenueSchema),
+  /** Providers this key may use, so the installation can explain how to get a venue opened. */
+  providers: z.array(posProviderSchema),
+  serverTime: z.string(),
+})
+export type PosVenuesResponse = z.infer<typeof posVenuesResponseSchema>
+
+export const posConnectRequestSchema = z.object({
+  provider: posRefSchema,
+  venueRef: posRefSchema,
+  orgNumber: posOrgNumberSchema,
+})
+export type PosConnectRequest = z.infer<typeof posConnectRequestSchema>
+
+export const posConnectionSchema = z.object({
+  /** Opaque and secret-free; the installation stores it and sends it as POS_CONNECTION_HEADER. A new connect rotates it. */
+  connectionHandle: z.string().min(16).max(256),
+  provider: posProviderSchema,
+  venueRef: posRefSchema,
+  venueName: z.string().trim().min(1).max(200),
+  connectedAt: z.string(),
+})
+export type PosConnection = z.infer<typeof posConnectionSchema>
+
+/**
+ * How a payment was made. `method` on a tender keeps the provider's own
+ * word; `kind` is what the installation maps to an account. A provider word
+ * the service does not recognise is `other`, with an issue.
+ */
+export const POS_TENDER_KINDS = ['card', 'swish', 'cash', 'gift_card', 'invoice', 'prepaid', 'other'] as const
+export const posTenderKindSchema = z.enum(POS_TENDER_KINDS)
+export type PosTenderKind = z.infer<typeof posTenderKindSchema>
+
+export const posVatGroupSchema = z.object({
+  /** In percent: 25, 12, 6 or 0 in Sweden today. A list keyed by rate, so a new rate needs no new field. */
+  ratePercent: z.number().min(0).max(100),
+  net: posAmountSchema,
+  vat: posAmountSchema,
+  gross: posAmountSchema,
+})
+export type PosVatGroup = z.infer<typeof posVatGroupSchema>
+
+export const posTenderSchema = z.object({
+  kind: posTenderKindSchema,
+  method: z.string().max(64),
+  /** Money received through this tender, tips included, refunds deducted. */
+  amount: posAmountSchema,
+  /** The tips inside `amount`. */
+  tips: posAmountSchema,
+  receiptCount: z.number().int().min(0),
+})
+export type PosTender = z.infer<typeof posTenderSchema>
+
+export const posReceiptSchema = z.object({
+  /** The receipt number as printed. */
+  number: z.string().max(64),
+  kind: z.enum(['sale', 'refund']),
+  /** As the provider states it; may carry no offset (local time at the venue). */
+  paidAt: z.string().max(64).nullable(),
+  /** The provider's method word, or `mixed` when one receipt used several. */
+  method: z.string().max(64),
+  gross: posAmountSchema,
+  tips: posAmountSchema,
+})
+export type PosReceipt = z.infer<typeof posReceiptSchema>
+
+export const posIssueSchema = z.object({
+  /** Stable, machine readable; the installation decides which codes block booking. */
+  code: z.string().trim().min(1).max(64),
+  message: z.string().max(500),
+})
+export type PosIssue = z.infer<typeof posIssueSchema>
+
+/**
+ * One business day as the provider closed it. Invariants the service
+ * guarantees: `sales.gross` equals the sum of `vatGroups[].gross`, and the
+ * sum of `tenders[].amount` equals `sales.gross + tips`.
+ */
+export const posDaySchema = z.object({
+  businessDate: z.iso.date(),
+  currency: z.string().regex(/^[A-Z]{3}$/, 'ISO 4217, upper case'),
+  /** Sales of the day, tips excluded, refunds and discounts deducted. */
+  sales: z.object({ net: posAmountSchema, vat: posAmountSchema, gross: posAmountSchema }),
+  vatGroups: z.array(posVatGroupSchema).max(20),
+  tenders: z.array(posTenderSchema).max(50),
+  tips: posAmountSchema,
+  /** Discounts granted, VAT included. Already deducted from sales; for the report only. */
+  discounts: posAmountSchema,
+  /** Refunds made, VAT included, as a negative amount. Already deducted from sales; for the report only. */
+  refunds: z.object({ count: z.number().int().min(0), gross: posAmountSchema }),
+  receiptCount: z.number().int().min(0),
+  firstReceiptNumber: z.string().max(64).nullable(),
+  lastReceiptNumber: z.string().max(64).nullable(),
+  firstPaidAt: z.string().max(64).nullable(),
+  lastPaidAt: z.string().max(64).nullable(),
+  /** Sales per the provider's own article grouping, for the report only. */
+  categories: z
+    .array(z.object({ name: z.string().max(120), quantity: z.number().finite(), gross: posAmountSchema, vat: posAmountSchema }))
+    .max(500),
+  receipts: z.array(posReceiptSchema).max(10_000),
+  issues: z.array(posIssueSchema).max(50),
+})
+export type PosDay = z.infer<typeof posDaySchema>
+
+export const posDayRequestSchema = z.object({ businessDate: z.iso.date() })
+export type PosDayRequest = z.infer<typeof posDayRequestSchema>
+
+export const posDayResponseSchema = z.object({
+  provider: posRefSchema,
+  venueRef: posRefSchema,
+  day: posDaySchema,
+  /** The provider's answer verbatim, for the installation's archive. */
+  raw: z.object({
+    contentType: z.string().max(100),
+    body: z.string().max(POS_MAX_RAW_CHARS),
+    /** Lower-case hex sha256 of `body` as UTF-8. */
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  }),
+  fetchedAt: z.string(),
+})
+export type PosDayResponse = z.infer<typeof posDayResponseSchema>
+
+export const posDisconnectResponseSchema = z.object({ disconnected: z.literal(true) })
+
+/**
+ * The operation table, paths under POS_SALES_BASE_PATH. `connection` marks
+ * the operations that carry POS_CONNECTION_HEADER.
+ */
+export const POS_SALES_OPERATIONS = {
+  venues: { method: 'POST', path: '/venues', company: true, connection: false, request: posVenuesRequestSchema, response: posVenuesResponseSchema },
+  connect: { method: 'POST', path: '/connect', company: true, connection: false, request: posConnectRequestSchema, response: posConnectionSchema },
+  day: { method: 'POST', path: '/day', company: true, connection: true, request: posDayRequestSchema, response: posDayResponseSchema },
+  disconnect: { method: 'POST', path: '/disconnect', company: true, connection: true, request: z.object({}), response: posDisconnectResponseSchema },
+} as const
+export type PosSalesOperation = keyof typeof POS_SALES_OPERATIONS
+
+/**
+ * Error codes of this family, in addition to the shared ones.
+ * CONNECTOR_POS_PROVIDER_RATE_LIMITED is the PROVIDER's 429 (answered with its
+ * Retry-After); CONNECTOR_POS_PROVIDER_ACCESS_DENIED means the provider has
+ * not opened the venue or the operation for Accounted's credential, which a
+ * person fixes by asking the provider.
+ */
+export const POS_SALES_ERROR_CODES = [
+  'CONNECTOR_CONNECTION_NOT_OWNED',
+  'CONNECTOR_POS_VENUE_NOT_GRANTED',
+  'CONNECTOR_POS_VENUE_TAKEN',
+  'CONNECTOR_POS_DAY_NOT_CLOSED',
+  'CONNECTOR_POS_PROVIDER_ACCESS_DENIED',
+  'CONNECTOR_POS_PROVIDER_RATE_LIMITED',
+  'CONNECTOR_POS_PROVIDER_ERROR',
+] as const
+export type PosSalesErrorCode = (typeof POS_SALES_ERROR_CODES)[number]
+
+// ---------------------------------------------------------------------------
 // Peppol operations (installation -> service, /api/connect/peppol/*)
 // ---------------------------------------------------------------------------
 

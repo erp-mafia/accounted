@@ -381,6 +381,16 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/reports/dimension-pnl': 'reports:read',
   'GET /api/v1/companies/:companyId/audit-trail': 'reports:read',
   'POST /api/v1/companies/:companyId/vat/settlement': 'bookkeeping:write',
+  // POS sales (kassasystem via Accounted Connect): lib/operations/pos-sales.ts
+  'GET /api/v1/companies/:companyId/pos-sales/connections': 'transactions:read',
+  'POST /api/v1/companies/:companyId/pos-sales/connections': 'companies:write',
+  'POST /api/v1/companies/:companyId/pos-sales/connections/:connectionId/disconnect': 'companies:write',
+  'PATCH /api/v1/companies/:companyId/pos-sales/connections/:connectionId/settings': 'companies:write',
+  'GET /api/v1/companies/:companyId/pos-sales/venues': 'transactions:read',
+  'GET /api/v1/companies/:companyId/pos-sales/days': 'transactions:read',
+  'GET /api/v1/companies/:companyId/pos-sales/days/:dayId': 'transactions:read',
+  'POST /api/v1/companies/:companyId/pos-sales/days/:dayId/book': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/pos-sales/fetch': 'transactions:write',
   // Operation registry, wave 2: deferred booking, supplier payment files,
   // expense claims (utlägg), payroll lifecycle.
   'POST /api/v1/companies/:companyId/salary-runs/:id/send-payslips': 'payroll:write',

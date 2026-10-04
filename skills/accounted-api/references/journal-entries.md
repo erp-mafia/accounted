@@ -105,7 +105,7 @@ Request body:
   fiscal_period_id: string,
   entry_date: string,
   description: string,
-  source_type?: "manual" | "bank_transaction" | "inbox_item" | "invoice_created" | "invoice_paid" | "invoice_cash_payment" | "supplier_invoice_registered" | "supplier_invoice_paid" | "supplier_invoice_cash_payment" | "supplier_invoice_privately_paid" | "salary_payment" | "webshop_order" | "expense_claim" | "reminder_fee" | "import",
+  source_type?: "manual" | "bank_transaction" | "inbox_item" | "invoice_created" | "invoice_paid" | "invoice_cash_payment" | "supplier_invoice_registered" | "supplier_invoice_paid" | "supplier_invoice_cash_payment" | "supplier_invoice_privately_paid" | "salary_payment" | "webshop_order" | "pos_daily_sales" | "expense_claim" | "reminder_fee" | "import",
   source_id?: string,
   bank_booking_context?: { transaction_id: string, cash_account_id: string | null, target_cash_account_id?: string, settlement_account: string, date: string, amount: number, currency: string }[],
   voucher_series?: string,
@@ -1239,7 +1239,7 @@ Bulk-create endpoint mirroring /invoices/bulk-create and /suppliers/bulk-create.
 Request body:
 ```ts
 {
-  journal_entries: { fiscal_period_id: string, entry_date: string, description: string, source_type?: "manual" | "bank_transaction" | "inbox_item" | "invoice_created" | "invoice_paid" | "invoice_cash_payment" | "supplier_invoice_registered" | "supplier_invoice_paid" | "supplier_invoice_cash_payment" | "supplier_invoice_privately_paid" | "salary_payment" | "webshop_order" | "expense_claim" | "reminder_fee" | "import", source_id?: string, bank_booking_context?: { transaction_id: string, cash_account_id: string | null, target_cash_account_id?: string, settlement_account: string, date: string, amount: number, currency: string }[], voucher_series?: string, notes?: string, lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[] }[],
+  journal_entries: { fiscal_period_id: string, entry_date: string, description: string, source_type?: "manual" | "bank_transaction" | "inbox_item" | "invoice_created" | "invoice_paid" | "invoice_cash_payment" | "supplier_invoice_registered" | "supplier_invoice_paid" | "supplier_invoice_cash_payment" | "supplier_invoice_privately_paid" | "salary_payment" | "webshop_order" | "pos_daily_sales" | "expense_claim" | "reminder_fee" | "import", source_id?: string, bank_booking_context?: { transaction_id: string, cash_account_id: string | null, target_cash_account_id?: string, settlement_account: string, date: string, amount: number, currency: string }[], voucher_series?: string, notes?: string, lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[] }[],
   all_or_nothing?: boolean
 }
 ```

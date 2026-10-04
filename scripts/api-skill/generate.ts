@@ -110,11 +110,12 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'banking.md',
     title: 'Banking',
-    members: ['transactions', 'cash-accounts', 'bank-connections', 'reconciliation', 'imports'],
+    members: ['transactions', 'cash-accounts', 'bank-connections', 'reconciliation', 'imports', 'pos-sales'],
     blurb:
       'Bank transactions (ingest, categorize, match against invoices), cash accounts with the ' +
       'bank-reported balance, PSD2 connection health (sync freshness, consent expiry), ' +
-      'bank reconciliation runs, and file imports (SIE, bank statements).',
+      'bank reconciliation runs, file imports (SIE, bank statements), and the point-of-sale ' +
+      'business days a connected POS system delivers, booked as daily takings vouchers.',
   },
   {
     file: 'employees.md',
