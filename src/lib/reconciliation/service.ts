@@ -356,6 +356,8 @@ export async function listReconciliationAccounts(
         status: stateOf(status),
         superseded_by: supersededBy.get(a.id) ?? null,
         signed_off_through: signoffs.get(bankAccountKey(a.id))?.through_date ?? null,
+        balance: a.balance ?? null,
+        balance_at: a.balance_updated_at ?? null,
       }
     }),
   )
@@ -379,6 +381,9 @@ export async function listReconciliationAccounts(
         status: s.skattekonto?.fetched_at ? stateOf(s) : { ...stateOf(s)!, state: 'not_configured' },
         superseded_by: null,
         signed_off_through: signoffs.get(SKATTEKONTO_ACCOUNT_KEY)?.through_date ?? null,
+        // Skatteverket's saldo: the skattekonto has no cash account to read it from.
+        balance: s.external_balance,
+        balance_at: s.skattekonto?.fetched_at ?? null,
       }
     }
   } catch (err) {

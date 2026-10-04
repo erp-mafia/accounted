@@ -202,6 +202,40 @@ describe('listReconciliationAccounts', () => {
     })
   })
 
+  it('carries each account outside balance: the bank-reported balance and the Skatteverket saldo', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        cashAccount(ID_A, { is_primary: true, balance: 36053.97, balance_updated_at: '2026-10-04T06:00:00Z' }),
+        cashAccount(ID_C, { ledger_account: '1931', balance: null, balance_updated_at: null }),
+      ],
+    })
+    enqueue({ data: [] }) // latest sign-offs (none)
+    enqueue({ data: [] }) // bank names for logos
+    enqueue({ data: null })
+    enqueue({ data: null })
+    skattekontoStatusMock.mockResolvedValue({
+      account_key: 'skattekonto',
+      kind: 'skattekonto',
+      account_number: '1630',
+      currency: 'SEK',
+      as_of: '2026-10-04T18:20:00.000Z',
+      stale: false,
+      external_balance: 265,
+      is_reconciled: true,
+      unexplained_difference: 0,
+      counts: { proposed: 0, unmatched_external: 0, unmatched_ledger: 0, matched: 1, ignored: 0 },
+      skattekonto: { saldo_skatteverket: 265, fetched_at: '2026-10-04T18:20:00.000Z' },
+    })
+
+    const accounts = await listReconciliationAccounts(supabase as never, COMPANY, { today: '2026-10-04', withStatus: false })
+    const byKey = Object.fromEntries(accounts.map((a) => [a.account_key, a]))
+    // The skattekonto has no cash account; its balance is Skatteverket's saldo.
+    expect(byKey.skattekonto).toMatchObject({ balance: 265, balance_at: '2026-10-04T18:20:00.000Z' })
+    expect(byKey[bankAccountKey(ID_A)]).toMatchObject({ balance: 36053.97, balance_at: '2026-10-04T06:00:00Z' })
+    expect(byKey[bankAccountKey(ID_C)]).toMatchObject({ balance: null, balance_at: null })
+  })
+
   it('omits the skattekonto when the company has neither snapshot nor rows', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [cashAccount(ID_A, { is_primary: true })] })
