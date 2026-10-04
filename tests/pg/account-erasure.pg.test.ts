@@ -127,6 +127,7 @@ const RETAINED = new Set([
   'supplier_payment_batches.cancelled_by',
   'supplier_payment_batches.user_id',
   'suppliers.user_id',
+  'pos_sales_days.booked_by',
   'webshop_orders.manually_booked_by',
   'webshop_orders.user_id',
   // Payroll, expenses and filings
@@ -187,6 +188,8 @@ const RETAINED = new Set([
   'team_invitations.invited_by',
   'teams.created_by',
   // Company integrations: the company's accounts, not the person's
+  'pos_connections.created_by',
+  'pos_connections.ended_by',
   'shopify_connections.user_id',
   'skatteverket_company_connections.created_by',
   'stripe_connections.user_id',

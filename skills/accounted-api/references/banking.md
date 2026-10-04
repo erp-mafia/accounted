@@ -2,7 +2,7 @@
 
 # Banking endpoints
 
-Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, PSD2 connection health (sync freshness, consent expiry), bank reconciliation runs, and file imports (SIE, bank statements).
+Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, PSD2 connection health (sync freshness, consent expiry), bank reconciliation runs, file imports (SIE, bank statements), and the point-of-sale business days a connected POS system delivers, booked as daily takings vouchers.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -1041,6 +1041,800 @@ Example response `200`:
     "file_hash": "9a1b…",
     "variant": "csv",
     "row_count": 17
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/pos-sales/connections`
+
+**The point-of-sale venues the company has connected, with their health and account mapping.**
+`scope:transactions:read · risk:low · idempotent`
+
+Lists the company's POS connections (kassasystem) through Accounted Connect: the provider and venue, the status (active or disconnected), the health of the daily fetch (ok, degraded, action_required with the error code), the first business day fetched (sync_from) and the last one fetched without a gap (synced_through), and the account mapping each day is booked with (settings, defaults merged in). available is false when this installation has no connector key, so no POS system can be connected. Read-only.
+
+**Use when:** Before reading or booking POS days, to see which venues feed the company and whether the fetch works.
+**Do not use for:** The days themselves (GET /pos-sales/days) or venues not yet connected (GET /pos-sales/venues).
+
+**Pitfalls:**
+- health action_required means fetching stopped until a person acts: health_code says why (for example CONNECTOR_POS_PROVIDER_ACCESS_DENIED: the provider has not opened the venue for Accounted).
+- Disconnected connections stay listed: their days are still the underlag of booked vouchers.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    available: boolean,
+    connections: { connection_id: string, provider: string, provider_name: string, venue_ref: string, venue_name: string, status: "connecting" | "needs_setup" | "active" | "disconnected", health: "ok" | "degraded" | "action_required", health_code: string | null, sync_from: string, synced_through: string | null, last_success_at: string | null, next_run_at: string, settings: { tender_accounts: Record<string, string | null>, revenue_accounts: Record<string, string | null>, vat_accounts: Record<string, string | null>, tips_account: string, rounding_account: string, max_rounding: number }, created_at: string, ended_at: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "available": true,
+    "connections": [
+      {
+        "connection_id": "0b3a…",
+        "provider": "heynow",
+        "provider_name": "Heynow",
+        "venue_ref": "6081523749284167",
+        "venue_name": "Restaurang Exempel",
+        "status": "active",
+        "health": "ok",
+        "health_code": null,
+        "sync_from": "2026-09-30",
+        "synced_through": "2026-10-02",
+        "last_success_at": "2026-10-03T04:15:02Z",
+        "next_run_at": "2026-10-04T04:15:00Z",
+        "settings": {
+          "tender_accounts": {
+            "card": "1686",
+            "swish": "1686",
+            "cash": "1910",
+            "gift_card": "2421",
+            "invoice": null,
+            "prepaid": null,
+            "other": null
+          },
+          "revenue_accounts": {
+            "0": null,
+            "6": "3003",
+            "12": "3002",
+            "25": "3001"
+          },
+          "vat_accounts": {
+            "6": "2631",
+            "12": "2621",
+            "25": "2611"
+          },
+          "tips_account": "2820",
+          "rounding_account": "3740",
+          "max_rounding": 1
+        },
+        "created_at": "2026-10-03T09:00:00Z",
+        "ended_at": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/pos-sales/connections`
+
+**Connect a point-of-sale venue, so its business days are fetched every morning.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+Connects one venue listed by GET /pos-sales/venues to the company through Accounted Connect. From the next run on, every closed business day from sync_from on is fetched (each morning, after the venue closed) and stored with the provider's answer archived verbatim. Nothing is booked: each day waits for POST /pos-sales/days/{dayId}/book. sync_from defaults to yesterday; set it to the venue's first trading day to read earlier days. Dry-runnable.
+
+**Use when:** A venue is listed as available and the company wants its daily sales in the books.
+**Do not use for:** Getting a venue opened at the provider (the venue asks the provider, see accessRequestSv) or booking days.
+
+**Pitfalls:**
+- POS_ALREADY_CONNECTED: the venue is already connected; the connection id is in details.
+- A venue another company holds answers POS_CONNECT_FAILED with details.connect_code CONNECTOR_POS_VENUE_TAKEN.
+- Refused in the sandbox (POS_SANDBOX_BLOCKED).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ provider: string, venue_ref: string, sync_from?: string }
+```
+
+Example request:
+```json
+{
+  "provider": "heynow",
+  "venue_ref": "6081523749284167",
+  "sync_from": "2026-09-30"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { connection_id: string, venue_name: string, provider_name: string, sync_from: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "connection_id": "0b3a…",
+    "venue_name": "Restaurang Exempel",
+    "provider_name": "Heynow",
+    "sync_from": "2026-09-30"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/pos-sales/connections/{connectionId}/disconnect`
+
+**Stop fetching a point-of-sale venue's days.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+Ends a POS connection: no more days are fetched and the venue is released at Accounted Connect. Days already fetched stay, booked or not, with their archived provider answers; a disconnected venue can be connected again later. Idempotent. Dry-runnable.
+
+**Use when:** The company stopped using the POS system or the venue closed.
+**Do not use for:** Pausing a single day (just do not book it) or correcting a booked day (storno).
+
+**Pitfalls:**
+- Days not fetched before the disconnect are not fetched later unless the venue is connected again with an earlier sync_from.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `connectionId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { connection_id: string, status: "disconnected" },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "connection_id": "0b3a…",
+    "status": "disconnected"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/pos-sales/connections/{connectionId}/settings`
+
+**Change the accounts a point-of-sale venue's days are booked to.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+Updates the account mapping of one POS connection: an account per way of paying (tender_accounts: card, swish, cash, gift_card, invoice, prepaid, other; null = a person decides each time), the revenue and output VAT account per VAT rate (keys "25", "12", "6", "0"), the tips account, the rounding account and the largest rounding difference per day. Send only what changes; nested maps merge key by key. Every unbooked day is re-evaluated against the new mapping, so a day that waited on an account may become ready. Booked days never change. Dry-runnable.
+
+**Use when:** A day is needs_review with tender_unmapped or vat_rate_unmapped, or the company books takings to other accounts than the BAS defaults.
+**Do not use for:** Re-booking a booked day (reverse it with storno and book again).
+
+**Pitfalls:**
+- Defaults: card and Swish 1686 (cleared by the payouts, so revenue is never booked twice), cash 1910, redeemed gift cards 2421, tips 2820 (a liability until paid out through payroll), 25/12/6 % to 3001/3002/3003 with 2611/2621/2631, rounding 3740.
+- Sales without VAT have no default account: in a restaurant they are often gift cards sold (2421) rather than exempt sales (3004).
+- An account neither in the chart nor in BAS answers POS_SETTINGS_ACCOUNT_UNKNOWN.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `connectionId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  settings: {
+    tender_accounts?: { card?: string | null, swish?: string | null, cash?: string | null, gift_card?: string | null, invoice?: string | null, prepaid?: string | null, other?: string | null },
+    revenue_accounts?: { 0?: string | null, 6?: string | null, 12?: string | null, 25?: string | null },
+    vat_accounts?: { 6?: string | null, 12?: string | null, 25?: string | null },
+    tips_account?: string,
+    rounding_account?: string,
+    max_rounding?: number
+  }
+}
+```
+
+Example request:
+```json
+{
+  "settings": {
+    "revenue_accounts": {
+      "0": "2421"
+    },
+    "tender_accounts": {
+      "invoice": "1510"
+    }
+  }
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    connection_id: string,
+    settings: { tender_accounts: Record<string, string | null>, revenue_accounts: Record<string, string | null>, vat_accounts: Record<string, string | null>, tips_account: string, rounding_account: string, max_rounding: number },
+    reevaluated_days: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "connection_id": "0b3a…",
+    "reevaluated_days": 3
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/pos-sales/days`
+
+**The business days fetched from the company's point-of-sale venues, newest first.**
+`scope:transactions:read · risk:low · idempotent`
+
+One row per venue and business day: sales (gross, net, VAT), tips, receipts, the payment split (tenders: card, swish, cash, gift_card, invoice, prepaid, other) and the VAT split, the status (ready to book, needs_review with the reasons, empty for a day without sales, booked with the verifikat), the hash of the archived provider answer, and whether a fetch after booking answered differently (changed_after_booking). Filter by date range, status or connection. Read-only.
+
+**Use when:** To find the days to book, or to check which days a venue has delivered.
+**Do not use for:** The receipts and the voucher a day books as (GET /pos-sales/days/{dayId}).
+
+**Pitfalls:**
+- A day is fetched the morning after it ends (from 06:00 Swedish time) and once more the next morning while unbooked.
+- changed_after_booking true: the provider now answers something else than what was booked; compare and correct with storno if needed.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `from` | query | `string` | no | First business date, inclusive. |
+| `to` | query | `string` | no | Last business date, inclusive. |
+| `status` | query | `"ready" \| "needs_review" \| "empty" \| "booked"` | no |  |
+| `connection_id` | query | `string` | no |  |
+| `limit` | query | `number` | no |  |
+| `offset` | query | `number` | no |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    days: { day_id: string, connection_id: string, business_date: string, currency: string, status: "ready" | "needs_review" | "empty" | "booked", review_reasons: { code: string, params: Record<string, {...}>, message?: string }[], gross: number, net: number, vat: number, tips: number, receipt_count: number, tenders: { kind: "card" | "swish" | "cash" | "gift_card" | "invoice" | "prepaid" | "other", method: string, amount: number, tips: number, receiptCount: number }[], vat_groups: { ratePercent: number, net: number, vat: number, gross: number }[], raw_sha256: string, fetched_at: string, changed_after_booking: boolean, journal_entry_id: string | null, booked_at: string | null }[],
+    total: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "days": [
+      {
+        "day_id": "7c1e…",
+        "connection_id": "0b3a…",
+        "business_date": "2026-09-30",
+        "currency": "SEK",
+        "status": "ready",
+        "review_reasons": [],
+        "gross": 39070,
+        "net": 34000,
+        "vat": 5070,
+        "tips": 640,
+        "receipt_count": 212,
+        "tenders": [
+          {
+            "kind": "card",
+            "method": "card",
+            "amount": 28640,
+            "tips": 640,
+            "receiptCount": 160
+          },
+          {
+            "kind": "swish",
+            "method": "swish",
+            "amount": 6000,
+            "tips": 0,
+            "receiptCount": 40
+          },
+          {
+            "kind": "cash",
+            "method": "cash",
+            "amount": 5070,
+            "tips": 0,
+            "receiptCount": 12
+          }
+        ],
+        "vat_groups": [
+          {
+            "ratePercent": 25,
+            "net": 9000,
+            "vat": 2250,
+            "gross": 11250
+          },
+          {
+            "ratePercent": 12,
+            "net": 22000,
+            "vat": 2640,
+            "gross": 24640
+          },
+          {
+            "ratePercent": 6,
+            "net": 3000,
+            "vat": 180,
+            "gross": 3180
+          }
+        ],
+        "raw_sha256": "3f9a…",
+        "fetched_at": "2026-10-01T04:15:00Z",
+        "changed_after_booking": false,
+        "journal_entry_id": null,
+        "booked_at": null
+      }
+    ],
+    "total": 1
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/pos-sales/days/{dayId}`
+
+**One point-of-sale day: its receipts and the voucher it books as.**
+`scope:transactions:read · risk:low · idempotent`
+
+The full day: everything GET /pos-sales/days returns plus the day model (receipts with number, time, payment method and amount; sales per article group; refunds; discounts; the provider's issues) and the voucher the day books as with the current mapping (proposal: the lines, the rounding). reasons lists what needs a person; acknowledgeable is true when every reason is a provider issue, which acknowledge_issues on the booking accepts after review. Read-only.
+
+**Use when:** Before booking a day, to review it and its voucher.
+**Do not use for:** The day report PDF (the dashboard renders it).
+
+**Pitfalls:**
+- proposal.lines is empty while a reason other than a provider issue remains: fix the mapping first.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dayId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    day_id: string,
+    connection_id: string,
+    business_date: string,
+    currency: string,
+    status: "ready" | "needs_review" | "empty" | "booked",
+    review_reasons: { code: string, params: Record<string, string | number>, message?: string }[],
+    gross: number,
+    net: number,
+    vat: number,
+    tips: number,
+    receipt_count: number,
+    tenders: { kind: "card" | "swish" | "cash" | "gift_card" | "invoice" | "prepaid" | "other", method: string, amount: number, tips: number, receiptCount: number }[],
+    vat_groups: { ratePercent: number, net: number, vat: number, gross: number }[],
+    raw_sha256: string,
+    fetched_at: string,
+    changed_after_booking: boolean,
+    journal_entry_id: string | null,
+    booked_at: string | null,
+    description: string,
+    venue_name: string,
+    provider_name: string,
+    proposal: { lines: { account_number: string, debit_amount: number, credit_amount: number, line_description?: string }[], rounding_amount: number },
+    reasons: { code: string, params: Record<string, string | number>, message?: string }[],
+    acknowledgeable: boolean,
+    day: Record<string, unknown>
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "day_id": "7c1e…",
+    "connection_id": "0b3a…",
+    "business_date": "2026-09-30",
+    "currency": "SEK",
+    "status": "ready",
+    "review_reasons": [],
+    "gross": 39070,
+    "net": 34000,
+    "vat": 5070,
+    "tips": 640,
+    "receipt_count": 212,
+    "tenders": [
+      {
+        "kind": "card",
+        "method": "card",
+        "amount": 28640,
+        "tips": 640,
+        "receiptCount": 160
+      },
+      {
+        "kind": "swish",
+        "method": "swish",
+        "amount": 6000,
+        "tips": 0,
+        "receiptCount": 40
+      },
+      {
+        "kind": "cash",
+        "method": "cash",
+        "amount": 5070,
+        "tips": 0,
+        "receiptCount": 12
+      }
+    ],
+    "vat_groups": [
+      {
+        "ratePercent": 25,
+        "net": 9000,
+        "vat": 2250,
+        "gross": 11250
+      },
+      {
+        "ratePercent": 12,
+        "net": 22000,
+        "vat": 2640,
+        "gross": 24640
+      },
+      {
+        "ratePercent": 6,
+        "net": 3000,
+        "vat": 180,
+        "gross": 3180
+      }
+    ],
+    "raw_sha256": "3f9a…",
+    "fetched_at": "2026-10-01T04:15:00Z",
+    "changed_after_booking": false,
+    "journal_entry_id": null,
+    "booked_at": null,
+    "description": "Dagskassa 2026-09-30 Restaurang Exempel (Heynow)",
+    "proposal": {
+      "lines": [
+        {
+          "account_number": "1686",
+          "debit_amount": 28640,
+          "credit_amount": 0,
+          "line_description": "Kortbetalningar"
+        },
+        {
+          "account_number": "3002",
+          "debit_amount": 0,
+          "credit_amount": 22000,
+          "line_description": "Försäljning 12 % moms"
+        }
+      ],
+      "rounding_amount": 0
+    },
+    "reasons": [],
+    "acknowledgeable": false,
+    "day": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/pos-sales/days/{dayId}/book`
+
+**Book a point-of-sale day as its daily takings voucher, with the day report as underlag.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Posts the day as one verifikat (source_type pos_daily_sales, dated the business day) through the bookkeeping engine: each way of paying debited to its account (card and Swish to the 1686 clearing account by default), sales credited per VAT rate with the output VAT, tips credited to the tips account, a rounding difference up to max_rounding on the rounding account. The lines are the server's, from the stored day and the connection's mapping, never the caller's. The day report (sales, payments, receipts, the archived answer's SHA-256) is archived on the verifikat. Refused when the day is booked, empty, needs review, changed since expected_raw_sha256, or the date is locked. Dry-runnable.
+
+**Use when:** A day is ready (or needs_review with only provider issues a person has read) and should be booked.
+**Do not use for:** Payouts from the card acquirer or the bank (book those against 1686 from the bank row) or a corrected day (storno, then book again).
+
+**Pitfalls:**
+- Pass expected_raw_sha256 from the day you reviewed: a newer fetch answers 409 POS_DAY_CHANGED instead of booking different figures.
+- acknowledge_issues books past provider issues only; a missing account (tender_unmapped, vat_rate_unmapped) or an imbalance always stops the day.
+- A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.
+- The card acquirer's payout must clear 1686 when it reaches the bank, never be booked as sales again.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dayId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ acknowledge_issues?: boolean, expected_raw_sha256?: string }
+```
+
+Example request:
+```json
+{
+  "expected_raw_sha256": "3f9a…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    entry_date: string,
+    business_date: string,
+    gross: number,
+    underlag_document_id: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "9a0b…",
+    "voucher_series": "F",
+    "voucher_number": 12,
+    "entry_date": "2026-09-30",
+    "business_date": "2026-09-30",
+    "gross": 39070,
+    "underlag_document_id": "5d2c…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/pos-sales/fetch`
+
+**Fetch point-of-sale days now instead of waiting for the morning run.**
+`scope:transactions:write · risk:low · idempotent · dry-run`
+
+Runs the fetch for the company's active POS connections (or one): with business_dates, exactly those closed days (fetched again if stored); without, the regular plan (days not yet fetched, oldest first, then one more read of the two latest unbooked days). A booked day is never rewritten: a different answer only marks it changed_after_booking. Each day is one call to the provider, whose limit is ten an hour per venue, so the run stops at six. Nothing is booked. Dry-runnable.
+
+**Use when:** A person corrected a day in the POS system, or wants yesterday before the morning run.
+**Do not use for:** Today (a business day is fetched once it has ended) or booking.
+
+**Pitfalls:**
+- A rate-limited run answers with the per-connection result status failed and errorCode CONNECTOR_POS_PROVIDER_RATE_LIMITED; try again later.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ connection_id?: string, business_dates?: string[] }
+```
+
+Example request:
+```json
+{
+  "business_dates": [
+    "2026-10-02"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { results: (Record<string, unknown>)[] },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "results": [
+      {
+        "connectionId": "0b3a…",
+        "status": "synced",
+        "fetched": [
+          "2026-10-02"
+        ],
+        "changed": [
+          "2026-10-02"
+        ],
+        "changedAfterBooking": []
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/pos-sales/venues`
+
+**The point-of-sale venues this company may connect, and how to get one opened.**
+`scope:transactions:read · risk:low · idempotent`
+
+Asks Accounted Connect which POS venues are open to this company's organisation number: a POS provider opens a venue for Accounted when the venue asks it to, and Accounted records which organisation the venue belongs to. Each venue says whether this company already holds it (connected) and whether it is free (available). providers lists the POS providers this installation can use, each with accessRequestSv: what the venue sends the provider to get a venue opened. Read-only; nothing is connected.
+
+**Use when:** To find the venue to connect with POST /pos-sales/connections, or to tell a person how to get their venue opened.
+**Do not use for:** Venues already connected (GET /pos-sales/connections).
+
+**Pitfalls:**
+- An empty venues list means no provider has opened a venue for this organisation yet: follow accessRequestSv.
+- POS_ORG_NUMBER_MISSING: the company has no organisation number to match venues against.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { org_number: string, venues: (Record<string, unknown>)[], providers: (Record<string, unknown>)[] },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "org_number": "5561234567",
+    "venues": [
+      {
+        "provider": {
+          "ref": "heynow",
+          "displayName": "Heynow",
+          "legalName": "Heynow AB",
+          "portalUrl": "https://heynow.ai",
+          "supportUrl": null,
+          "accessRequestSv": "Be Heynow öppna API-åtkomst för Accounted…"
+        },
+        "venueRef": "6081523749284167",
+        "name": "Restaurang Exempel",
+        "connected": false,
+        "available": true
+      }
+    ],
+    "providers": []
   },
   "meta": {
     "request_id": "req_…",

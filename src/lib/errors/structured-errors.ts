@@ -6646,6 +6646,107 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
 // names stay. The thrower's Swedish text is the message (thrown_message_sv):
 // before that, getErrorMessage() fell through to its generic fallback and the
 // user read "Något gick fel. Försök igen." for a refused sign-off.
+// ─────────────────────────────────────────────────────────────────
+// POS sales (kassasystem, daily takings): lib/pos-sales
+// ─────────────────────────────────────────────────────────────────
+
+const POS_SALES: Record<string, StructuredErrorEntry> = {
+  POS_READ_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kassadata kunde inte läsas. Försök igen.',
+    message_en: 'The point-of-sale data could not be read. Try again.',
+    retryable: true,
+  },
+  POS_CONNECTION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kopplingen till kassasystemet hittades inte.',
+    message_en: 'The point-of-sale connection was not found.',
+  },
+  POS_ALREADY_CONNECTED: {
+    httpStatus: 409,
+    message_sv: 'Kassan är redan kopplad till företaget.',
+    message_en: 'This point-of-sale venue is already connected to the company.',
+  },
+  POS_SANDBOX_BLOCKED: {
+    httpStatus: 403,
+    message_sv: 'Kassasystem kan inte kopplas i sandlådan.',
+    message_en: 'Point-of-sale systems cannot be connected in the sandbox.',
+  },
+  POS_ORG_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Företaget saknar organisationsnummer. Lägg in det under Inställningar innan du kopplar kassasystemet.',
+    message_en: 'The company has no organisation number. Add it in Settings before connecting the point-of-sale system.',
+  },
+  POS_SYNC_FROM_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Första dagen att hämta måste ligga före dagens datum.',
+    message_en: 'The first day to fetch must be before today.',
+  },
+  POS_CONNECT_UNCONFIGURED: {
+    httpStatus: 503,
+    message_sv: 'Kassakopplingar är inte tillgängliga på den här installationen (Accounted Connect saknas).',
+    message_en: 'Point-of-sale connections are not available on this installation (Accounted Connect is not configured).',
+  },
+  POS_CONNECT_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Kassasystemet kunde inte nås via Accounted Connect. Försök igen om en stund.',
+    message_en: 'The point-of-sale system could not be reached through Accounted Connect. Try again shortly.',
+    retryable: true,
+  },
+  POS_DISCONNECT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kopplingen kunde inte avslutas. Försök igen.',
+    message_en: 'The connection could not be ended. Try again.',
+    retryable: true,
+  },
+  POS_SETTINGS_ACCOUNT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv: 'Ett eller flera konton finns varken i kontoplanen eller i BAS. Välj ett konto som finns.',
+    message_en: 'One or more accounts are neither in the chart of accounts nor in BAS. Choose an existing account.',
+  },
+  POS_SETTINGS_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kontoinställningarna kunde inte sparas. Försök igen.',
+    message_en: 'The account settings could not be saved. Try again.',
+    retryable: true,
+  },
+  POS_DAY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kassadagen hittades inte.',
+    message_en: 'The point-of-sale day was not found.',
+  },
+  POS_DAY_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Dagen är redan bokförd. Rätta verifikatet med storno om något behöver ändras.',
+    message_en: 'This day is already booked. Correct the journal entry with a reversal if something must change.',
+  },
+  POS_DAY_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Kassasystemet har skickat en ny version av dagen sedan du granskade den. Öppna dagen igen och kontrollera innan du bokför.',
+    message_en: 'The point-of-sale system sent a new version of the day since you reviewed it. Open the day again and check it before booking.',
+  },
+  POS_DAY_EMPTY: {
+    httpStatus: 400,
+    message_sv: 'Ingen försäljning den dagen: inget att bokföra.',
+    message_en: 'No sales that day: nothing to book.',
+  },
+  POS_DAY_NEEDS_REVIEW: {
+    httpStatus: 409,
+    message_sv: 'Dagen behöver granskas innan den kan bokföras. Se vad som saknas på dagen.',
+    message_en: 'The day needs a review before it can be booked. See what is missing on the day.',
+  },
+  POS_DAY_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Det finns inget öppet räkenskapsår för dagen.',
+    message_en: 'There is no open fiscal year for the day.',
+  },
+  POS_DAY_BOOKING_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Dagen kunde inte bokföras. Inget verifikat skapades.',
+    message_en: 'The day could not be booked. No journal entry was created.',
+  },
+}
+
 const RECONCILIATION_SIGNOFF: Record<string, StructuredErrorEntry> = {
   INVALID_DATE: {
     httpStatus: 400,
@@ -6883,6 +6984,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...DIMENSION,
   ...COMPANY_SETTINGS,
   ...WEBSHOP_ORDERS,
+  ...POS_SALES,
   ...RECONCILIATION_SIGNOFF,
   ...NODE_SYSTEM,
 }

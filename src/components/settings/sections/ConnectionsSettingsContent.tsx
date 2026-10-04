@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Landmark } from 'lucide-react'
+import { Landmark, Store } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { GoogleMark } from '@/components/ui/provider-marks'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
@@ -67,6 +67,8 @@ interface Status {
   peppolOn: boolean
   /** Null when the mailboxes could not be read (the row then shows no state). */
   mail: MailboxSummary | null
+  /** The connected POS venue(s); null when none. */
+  pos: { label: string; attention: boolean } | null
 }
 
 /**
@@ -121,7 +123,12 @@ export function ConnectionsSettingsContent() {
       skvCount,
       fetch('/api/settings/peppol').then((res) => (res.ok ? res.json() : null)),
       hasMail ? fetchMailConnections() : Promise.resolve(null),
-    ]).then(([bank, skv, peppol, mail]) => {
+      supabase
+        .from('pos_connections')
+        .select('venue_name, provider_name, health')
+        .eq('company_id', companyId)
+        .eq('status', 'active'),
+    ]).then(([bank, skv, peppol, mail, pos]) => {
       if (cancelled) return
       const banks = bank.status === 'fulfilled' ? ((bank.value.data ?? []) as Array<{ bank_name: string | null }>) : []
       const registration =
@@ -134,6 +141,14 @@ export function ConnectionsSettingsContent() {
         skvConnected: skv.status === 'fulfilled' && skv.value > 0,
         peppolOn: registration?.status === 'registered' || registration?.status === 'pending',
         mail: mail.status === 'fulfilled' && mail.value ? summarizeMailboxes(mail.value) : null,
+        pos: (() => {
+          const venues = pos.status === 'fulfilled' ? ((pos.value.data ?? []) as Array<{ venue_name: string; provider_name: string; health: string }>) : []
+          if (venues.length === 0) return null
+          return {
+            label: venues.length === 1 ? `${venues[0].venue_name} (${venues[0].provider_name})` : venues.map((v) => v.venue_name).join(', '),
+            attention: venues.some((v) => v.health === 'action_required'),
+          }
+        })(),
       })
     })
     return () => {
@@ -257,8 +272,19 @@ export function ConnectionsSettingsContent() {
           })}
       </SettingsGroup>
 
-      {hasStripe || hasShopify || hasWooCommerce || hasZettle ? (
+      {!isSandbox || hasStripe || hasShopify || hasWooCommerce || hasZettle ? (
         <SettingsGroup label={t('group_payments_shop')}>
+          {/* Kassasystem: core, not an extension (provider code lives in Accounted Connect). */}
+          {!isSandbox &&
+            row({
+              logo: <Store className="h-4 w-4 text-muted-foreground" aria-hidden="true" />,
+              name: t('pos'),
+              help: t('pos_help'),
+              state: status?.pos ? (status.pos.attention ? t('pos_state_attention', { venue: status.pos.label }) : status.pos.label) : null,
+              href: '/settings/pos',
+              connected: status ? status.pos !== null : null,
+              attention: status?.pos?.attention ?? false,
+            })}
           {hasStripe &&
             row({
               logo: <ImgLogo src="/logos/banks/stripe.png" />,

@@ -85,6 +85,7 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   // The IB split per project (#3313) is the same inline rättelse as
   // correct_entry_lines_inline, priced on the same basis (both sides counted).
   split_opening_balances_per_project: ['changed_amount_sek'],
+  book_pos_sales_day: ['journal_entry.total_debit'],
 }
 
 /**

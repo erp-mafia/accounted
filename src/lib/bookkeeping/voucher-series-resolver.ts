@@ -164,6 +164,7 @@ export const STANDARD_VOUCHER_SERIES_MAP: Readonly<Record<JournalEntrySourceType
   result_appropriation: 'I',
   salary_payment: 'K',
   webshop_order: 'L',
+  pos_daily_sales: 'F',
   vat_settlement: 'M',
   opening_balance: 'A',
   currency_revaluation: 'A',

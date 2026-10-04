@@ -152,6 +152,7 @@ export const SOURCE_TYPE_LABELS_SV: Readonly<Record<JournalEntrySourceType, stri
   salary_payment: 'Lön',
   accrual: 'Periodisering',
   webshop_order: 'Webbutiksorder',
+  pos_daily_sales: 'Dagskassa från kassasystem',
   stripe_payout: 'Stripe-utbetalning',
   expense_claim: 'Utlägg',
   expense_payout: 'Utbetalning av utlägg',

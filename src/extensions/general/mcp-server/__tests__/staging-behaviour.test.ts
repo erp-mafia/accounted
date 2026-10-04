@@ -843,6 +843,56 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     args: { item_type: 'net_deduction_union', description: 'Fackavgift', amount: -350, valid_from: '2026-01-01' },
   },
   gnubok_update_employee_recurring_line: { args: { description: 'Fackavgift Unionen' } },
+  // POS sales: connecting needs the company's organisation number and no
+  // live connection to the venue yet; the preview reads, Connect is only
+  // called on commit.
+  gnubok_connect_pos_venue: {
+    rows: { company_settings: { is_sandbox: false, org_number: '556677-8899' } },
+    empty: ['pos_connections'],
+  },
+  // A fetched, unbooked day with one card sale at 12 %, its connection with
+  // the default mapping, and an open, unlocked 2026: the preview builds the
+  // voucher and never reaches the engine.
+  gnubok_book_pos_sales_day: {
+    rows: {
+      pos_sales_days: {
+        connection_id: SOME_UUID,
+        business_date: '2026-01-15',
+        currency: 'SEK',
+        journal_entry_id: null,
+        raw_sha256: 'a'.repeat(64),
+        gross: 112,
+        net: 100,
+        vat: 12,
+        tips: 0,
+        receipt_count: 1,
+        review_reasons: [],
+        tenders: [],
+        vat_groups: [],
+        day: {
+          businessDate: '2026-01-15',
+          currency: 'SEK',
+          sales: { net: 100, vat: 12, gross: 112 },
+          vatGroups: [{ ratePercent: 12, net: 100, vat: 12, gross: 112 }],
+          tenders: [{ kind: 'card', method: 'card', amount: 112, tips: 0, receiptCount: 1 }],
+          tips: 0,
+          discounts: 0,
+          refunds: { count: 0, gross: 0 },
+          receiptCount: 1,
+          firstReceiptNumber: '1',
+          lastReceiptNumber: '1',
+          firstPaidAt: null,
+          lastPaidAt: null,
+          categories: [],
+          receipts: [],
+          issues: [],
+        },
+      },
+      pos_connections: { settings: {}, venue_name: 'Restaurang Exempel', provider_name: 'Kassa AB' },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+      company_settings: { bookkeeping_locked_through: null },
+    },
+  },
 }
 
 describe('a tool that declares the staged envelope only stages', () => {
