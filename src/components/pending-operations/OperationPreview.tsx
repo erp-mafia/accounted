@@ -7,7 +7,8 @@
 // keep markup and classNames in lockstep with the design system, not with any
 // one consumer.
 
-import { Fragment, createContext, useContext } from 'react'
+import { Fragment, createContext, useContext, type ReactNode } from 'react'
+import { useTranslations } from 'next-intl'
 import { cn, formatCurrency } from '@/lib/utils'
 import { AttnLine } from '@/components/ui/attn-line'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
@@ -347,7 +348,7 @@ function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
           <Fragment key={key}>
             <span className="text-muted-foreground">{UPDATE_INVOICE_FIELD_LABELS[key] ?? key.replace(/_/g, ' ')}</span>
             {/* null is an explicit clear (delivery_date: null), not a missing value */}
-            <span>{value === null ? 'rensas' : renderPrimitive(value)}</span>
+            <span>{value === null ? 'rensas' : renderValue(value)}</span>
           </Fragment>
         ))}
         {hasDimensionChange && (
@@ -454,7 +455,10 @@ function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency
   )
 }
 
-function VoucherPreview({ data }: { data: Record<string, unknown> }) {
+// showSeries: false for a toEntryPreview payload, which carries no series;
+// the engine picks it per source type at commit, so defaulting to A here
+// would state a series the verifikat may not get.
+function VoucherPreview({ data, showSeries = true }: { data: Record<string, unknown>; showSeries?: boolean }) {
   const lines = (data.lines as VoucherLine[]) || []
   const totalDebit = data.total_debit as number | undefined
   const totalCredit = data.total_credit as number | undefined
@@ -481,8 +485,12 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
         <span className="font-mono">{String(data.entry_date ?? '')}</span>
         <span className="text-muted-foreground">Beskrivning</span>
         <span className="truncate">{String(data.description ?? '')}</span>
-        <span className="text-muted-foreground">Serie</span>
-        <span className="font-mono">{String(data.voucher_series ?? 'A')}</span>
+        {showSeries && (
+          <>
+            <span className="text-muted-foreground">Serie</span>
+            <span className="font-mono">{String(data.voucher_series ?? 'A')}</span>
+          </>
+        )}
       </div>
       {lines.length > 0 && (
         <div>
@@ -623,14 +631,41 @@ function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
   )
 }
 
-// Render a primitive (string/number/bool) or a short summary of an array/object.
-// Used by GenericPreview to avoid the "[object Object]" stringification that
-// occurs when an operation_type has no dedicated preview component.
-function renderPrimitive(value: unknown): string {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+}
+
+// Render a primitive (string/number/bool), a short summary of an array, or a
+// nested object pretty-printed. Used by GenericPreview (an operation_type with
+// no dedicated preview component) and UpdateInvoicePreview's header fields. A
+// one-line JSON.stringify has almost no break opportunities, so it ran out of
+// the dialog instead of wrapping.
+function renderValue(value: unknown): ReactNode {
   if (value == null) return ''
   if (Array.isArray(value)) return `${value.length} rader`
-  if (typeof value === 'object') return JSON.stringify(value)
+  if (isPlainObject(value)) {
+    return (
+      <pre className="whitespace-pre-wrap break-words font-mono text-[12.5px]">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    )
+  }
   return String(value)
+}
+
+// A verifikat preview nested under a key: toEntryPreview's shape, which the
+// deferred "Bokför" operations (supplier and customer invoices, VAT
+// settlement, opening balances) stage as journal_entry. VoucherPreview
+// already renders that shape, so it shows as the verifikat, not as its JSON.
+function isEntryPreview(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value) || !Array.isArray(value.lines) || value.lines.length === 0) return false
+  return value.lines.every(
+    (line) =>
+      isPlainObject(line) &&
+      typeof line.account_number === 'string' &&
+      typeof line.debit_amount === 'number' &&
+      typeof line.credit_amount === 'number',
+  )
 }
 
 // A preview_data value that is a kontering (array of account/debit/credit
@@ -701,10 +736,14 @@ function GenericPreview({ data }: { data: Record<string, unknown> }) {
   // Skip period_status here: it's surfaced in the dedicated banner, not the
   // generic key-value dump (otherwise the approver sees the same fact twice).
   const entries = Object.entries(data).filter(([k, v]) => v != null && v !== '' && k !== 'period_status')
+  const entryPreviews = entries.filter(([, v]) => isEntryPreview(v))
   const konteringEntries = entries.filter(([, v]) => isKonteringLines(v))
-  const rest = entries.filter(([, v]) => !isKonteringLines(v))
+  const rest = entries.filter(([, v]) => !isKonteringLines(v) && !isEntryPreview(v))
   return (
     <div className="space-y-3">
+      {entryPreviews.map(([key, value]) => (
+        <VoucherPreview key={key} data={value as Record<string, unknown>} showSeries={false} />
+      ))}
       {konteringEntries.map(([key, value]) => (
         <PreviewKonteringTable key={key} lines={value as PreviewKonteringLine[]} />
       ))}
@@ -713,13 +752,56 @@ function GenericPreview({ data }: { data: Record<string, unknown> }) {
           {rest.map(([key, value]) => (
             <Fragment key={key}>
               <span className="text-muted-foreground">{key.replace(/_/g, ' ')}</span>
-              <span className={typeof value === 'number' ? 'font-mono tabular-nums' : ''}>
-                {renderPrimitive(value)}
+              <span className={cn('min-w-0 break-words', typeof value === 'number' && 'font-mono tabular-nums')}>
+                {renderValue(value)}
               </span>
             </Fragment>
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// update_account stages { account_number, current, changes }: the stored row
+// and the fields the edit sets. One "before → after" row per changed field,
+// instead of two JSON objects the approver has to diff by eye.
+function UpdateAccountPreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('pending')
+  const tAccounts = useTranslations('chart_of_accounts')
+  const current = isPlainObject(data.current) ? data.current : {}
+  const changes = isPlainObject(data.changes) ? data.changes : {}
+  const label = (field: string) =>
+    t.has(`preview_account_${field}`) ? t(`preview_account_${field}`) : field.replace(/_/g, ' ')
+  const show = (field: string, value: unknown): string => {
+    // null or '' clears the field (back to the BAS default where one exists).
+    if (value == null || value === '') return '-'
+    if (typeof value === 'boolean') return value ? t('preview_yes') : t('preview_no')
+    if (field === 'default_vat_rate' && typeof value === 'number') {
+      return `${Math.round(value * 10000) / 100} %`
+    }
+    if (field === 'default_vat_treatment' && tAccounts.has(`vat_treatment_${value}`)) {
+      return tAccounts(`vat_treatment_${value}`)
+    }
+    return String(value)
+  }
+  return (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+      <span className="text-muted-foreground">{t('preview_account')}</span>
+      <span className="min-w-0 break-words">
+        <span className="font-mono tabular-nums">{String(data.account_number ?? '')}</span>
+        {current.account_name ? ` ${String(current.account_name)}` : null}
+      </span>
+      {Object.entries(changes).map(([field, value]) => (
+        <Fragment key={field}>
+          <span className="text-muted-foreground">{label(field)}</span>
+          <span className="min-w-0 break-words">
+            <span className="text-muted-foreground">{show(field, current[field])}</span>
+            {' → '}
+            {show(field, value)}
+          </span>
+        </Fragment>
+      ))}
     </div>
   )
 }
@@ -743,6 +825,8 @@ export function OperationPreview({ op }: { op: OperationPreviewInput }) {
         return <BulkBookPreview data={op.preview_data} />
       case 'correct_entry':
         return <CorrectEntryPreview data={op.preview_data} />
+      case 'update_account':
+        return <UpdateAccountPreview data={op.preview_data} />
       case 'attach_document_to_transaction':
         return <AttachDocumentPreview data={op.preview_data} params={op.params ?? {}} />
       case 'match_transaction_invoice':

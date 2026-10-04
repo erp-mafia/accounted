@@ -1014,7 +1014,18 @@
     "show_conversation": "Show the conversation",
     "tab_history": "History",
     "empty_history_title": "No history yet",
-    "history_reason": "reason: \"{reason}\""
+    "history_reason": "reason: \"{reason}\"",
+    "preview_account": "Account",
+    "preview_account_account_name": "Account name",
+    "preview_account_description": "Description",
+    "preview_account_default_vat_code": "VAT code",
+    "preview_account_default_vat_rate": "VAT rate",
+    "preview_account_default_vat_treatment": "VAT treatment",
+    "preview_account_vat_box": "VAT return box",
+    "preview_account_sru_code": "SRU code",
+    "preview_account_is_active": "Active",
+    "preview_yes": "Yes",
+    "preview_no": "No"
   },
   "deadlines": {
     "title": "Key dates",

@@ -1014,7 +1014,18 @@
     "show_conversation": "Visa konversationen",
     "tab_history": "Historik",
     "empty_history_title": "Ingen historik ännu",
-    "history_reason": "orsak: \"{reason}\""
+    "history_reason": "orsak: \"{reason}\"",
+    "preview_account": "Konto",
+    "preview_account_account_name": "Kontonamn",
+    "preview_account_description": "Beskrivning",
+    "preview_account_default_vat_code": "Momskod",
+    "preview_account_default_vat_rate": "Momssats",
+    "preview_account_default_vat_treatment": "Momsbehandling",
+    "preview_account_vat_box": "Momsruta",
+    "preview_account_sru_code": "SRU-kod",
+    "preview_account_is_active": "Aktivt",
+    "preview_yes": "Ja",
+    "preview_no": "Nej"
   },
   "deadlines": {
     "title": "Viktiga datum",
