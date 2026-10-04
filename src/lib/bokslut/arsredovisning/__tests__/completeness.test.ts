@@ -157,6 +157,7 @@ describe('validateAnnualReportCompleteness', () => {
     const result = validateAnnualReportCompleteness(value)
     const issue = result.issues.find((item) => item.code === 'AR-COMPANY-REGISTERED-OFFICE')
     expect(issue?.severity).toBe('error')
+    expect(issue?.remediation).toContain('Inställningar → Företag → Allmänt')
     expect(result.ok).toBe(false)
   })
 

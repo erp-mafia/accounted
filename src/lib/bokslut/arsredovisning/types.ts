@@ -103,10 +103,9 @@ export interface ArsredovisningData {
     entity_type: string
     /** Företagets säte: company_settings.registered_office, the municipality
      *  the company is registered in (never the postal town). Null when
-     *  unknown; while the founder default holds, the postal town stands in
-     *  with a warning (registered-office.ts). Printed on the cover, in
-     *  förvaltningsberättelsen and on the underskrifter and
-     *  fastställelseintyg place lines. */
+     *  unknown, which blocks the report (AR-COMPANY-REGISTERED-OFFICE).
+     *  Printed on the cover, in förvaltningsberättelsen and on the
+     *  underskrifter and fastställelseintyg place lines. */
     registered_office: string | null
   }
   fiscal_period: {
