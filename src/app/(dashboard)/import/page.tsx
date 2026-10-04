@@ -2365,6 +2365,10 @@ const ZettlePanel = getSettingsPanel('zettle')
 
 type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'zettle' | 'bank' | 'skattekonto' | 'sie' | 'underlag' | 'csv_data' | 'migration'
 
+// Query params the URL sync effect turns into an open mode (and its
+// preselects). "Tillbaka till val" removes them.
+const DEEP_LINK_MODE_PARAMS = ['mode', 'migration', 'provider', 'entity']
+
 export default function ImportPage() {
   const { isSandbox, role } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
@@ -2751,6 +2755,15 @@ export default function ImportPage() {
             // mode would auto-jump again.
             setInitialProvider(null)
             setInitialCsvEntity(null)
+            // A deep link also left the mode in the URL. Drop it, or the next
+            // URL change (the Exportera tab's router.replace keeps every
+            // param) re-runs the sync effect above and reopens the mode.
+            const params = new URLSearchParams(searchParams.toString())
+            if (DEEP_LINK_MODE_PARAMS.some((key) => params.has(key))) {
+              DEEP_LINK_MODE_PARAMS.forEach((key) => params.delete(key))
+              const qs = params.toString()
+              router.replace(qs ? `/import?${qs}` : '/import', { scroll: false })
+            }
           }}
         >
           <ArrowLeft className="mr-2 h-4 w-4" />
