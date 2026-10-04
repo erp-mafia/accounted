@@ -7,8 +7,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 
-vi.mock('@/lib/reports/income-statement', () => ({
-  generateIncomeStatement: vi.fn(async () => ({ net_result: 120_000 })),
+vi.mock('@/lib/reports/ne-bilaga/ne-engine', () => ({
+  generateNEDeclaration: vi.fn(async () => ({ rutor: { R11: 120_000 } })),
 }))
 
 import { tools } from '../server'
