@@ -95,6 +95,25 @@ export interface SystemdokumentationConnections {
   cloud_backup: boolean
 }
 
+/**
+ * The company's live collections connection (collection_connections), when it
+ * has one: the provider's name as stored at activation and the rules the
+ * system applies through it.
+ */
+export interface SystemdokumentationCollections {
+  display_name: string
+  state: 'connecting' | 'needs_setup' | 'active' | 'disconnected'
+  minimum_amount: number | string
+  default_start_step: 'reminder' | 'collection'
+  reminder_fee_terms_since: string | null
+  late_interest_percent: number | string | null
+  late_interest_agreed_since: string | null
+  clearing_account: string
+  payout_account: string
+  auto_book_collected_payments: boolean
+  auto_book_settlements: boolean
+}
+
 /** Everything the pure builder needs; the loader fills it from the database. */
 export interface SystemdokumentationFacts {
   company: { name: string | null; org_number: string | null; accounting_framework: AccountingFramework | null }
@@ -107,6 +126,8 @@ export interface SystemdokumentationFacts {
   apiKeys: SystemdokumentationApiKeyRow[]
   dimensions: { name: string }[]
   connections: SystemdokumentationConnections
+  /** Reminders and debt collection through a provider; absent or null when the company has no live connection. */
+  collections?: SystemdokumentationCollections | null
   /** user id -> display label (e-mail or name). */
   labels: Map<string, string>
   env: {
@@ -247,6 +268,8 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     { rubrik: 'Valutor', text: 'Belopp i utländsk valuta räknas om med Riksbankens kurs; valutaomvärdering bokförs som egen verifikation.' },
     { rubrik: 'SIE-import', text: SIE_IMPORT_RULES },
   ]
+  const collections = facts.collections ?? null
+  if (collections) behandlingsregler.push({ rubrik: 'Påminnelser och inkasso', text: collectionsRuleText(collections) })
   if (s?.auto_lock_period_days != null) {
     behandlingsregler.push({ rubrik: 'Automatisk låsning', text: `Låsdatumet flyttas fram automatiskt ${s.auto_lock_period_days} dagar efter varje momsperiods slut.` })
   }
@@ -266,6 +289,15 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     { key: 'resend', label: 'Resend', description: 'E-post ut (fakturor, påminnelser) och in (dokumentinkorgens adress)', active: facts.env.hosted },
     { key: 'riksbanken', label: 'Riksbanken', description: 'Valutakurser', active: true },
   ]
+  if (collections) {
+    integrationer.push({
+      key: 'collections',
+      label: `Påminnelser och inkasso (${collections.display_name}, via Accounted Connect)`,
+      description:
+        'Fakturor som en användare väljer att lämna över skickas till inkassobolaget, som sköter påminnelser och inkassokrav; ärendenas status hämtas tillbaka. Inga uppgifter om företaget lämnade appen förrän en administratör hade godkänt inkassobolagets villkor.',
+      active: collections.state === 'active',
+    })
+  }
 
   const apiKeys: SystemdokumentationApiKey[] = facts.apiKeys
     .map((k) => ({
@@ -339,6 +371,27 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
   }
 }
 
+function kronor(value: number | string): string {
+  return `${Number(value).toLocaleString('sv-SE', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} kr`
+}
+
+/** The rules a live collections connection applies, as stored on it. */
+export function collectionsRuleText(c: SystemdokumentationCollections): string {
+  const parts = [
+    `Fakturor lämnas till inkassobolaget först när en användare väljer det för fakturan, från ${kronor(c.minimum_amount)}; första steget är ${c.default_start_step === 'collection' ? 'inkassokrav' : 'påminnelse'}.`,
+    'Inkassobolaget frågar alltid innan ett inkassokrav skickas och innan ett ärende går till Kronofogden.',
+    c.reminder_fee_terms_since
+      ? `Påminnelseavgift begärs bara för fakturor utfärdade från och med ${c.reminder_fee_terms_since}, då företagets villkor anger den.`
+      : 'Ingen påminnelseavgift begärs: företaget har inte angett att den är avtalad.',
+    c.late_interest_percent !== null && c.late_interest_agreed_since
+      ? `Avtalad dröjsmålsränta ${Number(c.late_interest_percent).toLocaleString('sv-SE')} procent för företagskunder på fakturor från och med ${c.late_interest_agreed_since}; annars räntelagens ränta.`
+      : 'Dröjsmålsränta enligt räntelagen.',
+    `Inbetalningar som inkassobolaget tar emot bokförs på konto ${c.clearing_account} och utbetalningar från inkassobolaget på konto ${c.payout_account}, ${c.auto_book_collected_payments || c.auto_book_settlements ? 'delvis automatiskt' : 'efter att en användare har godkänt varje bokföring'}.`,
+    'Ändringar av reglerna registreras i behandlingshistoriken.',
+  ]
+  return parts.join(' ')
+}
+
 type Rows<T> = { data: T[] | null; error: { message: string } | null }
 
 /** A side table that fails is reported as empty, with a warning: never a reason to refuse the document. */
@@ -405,6 +458,19 @@ export async function loadSystemdokumentationFacts(
     optional<{ id: string }>(companyId, 'whatsapp_phone_links', supabase.from('whatsapp_phone_links').select('id').eq('last_company_id', companyId).is('revoked_at', null).limit(1)),
   ])
 
+  // The live collections connection, if any. A failed read is reported and
+  // left out, like the other side tables.
+  const collectionsRows = await optional<SystemdokumentationCollections>(
+    companyId,
+    'collection_connections',
+    supabase
+      .from('collection_connections')
+      .select('display_name, state, minimum_amount, default_start_step, reminder_fee_terms_since, late_interest_percent, late_interest_agreed_since, clearing_account, payout_account, auto_book_collected_payments, auto_book_settlements')
+      .eq('company_id', companyId)
+      .neq('state', 'disconnected')
+      .limit(1),
+  )
+
   const memberIds = members.map((m) => m.user_id)
   let apiKeys: SystemdokumentationApiKeyRow[] = []
   if (options.serviceClient && memberIds.length > 0) {
@@ -448,6 +514,7 @@ export async function loadSystemdokumentationFacts(
       email_inbox: mail.length > 0,
       cloud_backup: cloudBackup.length > 0,
     },
+    collections: collectionsRows[0] ?? null,
     labels,
     env: {
       appName: branding.appName,

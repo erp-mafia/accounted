@@ -227,6 +227,10 @@ export const AUDITED_TABLES = [
   // Which mailboxes the receipt hunt reads underlag from: connected and
   // disconnected, written by hand without tokens (extensions/general/mail).
   'mail_connections',
+  // Reminders and debt collection through a provider (migration
+  // 20261004051856): consent, activation, ending, and the rules applied when
+  // invoices are handed over and collected payments and payouts are booked.
+  'collection_connections',
 ] as const
 
 /**
@@ -254,7 +258,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   manual: 'Manuell',
@@ -1105,6 +1109,97 @@ function mailConnectionAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEve
   }
 }
 
+/**
+ * collection_connections columns that are behandlingsregler: what is handed
+ * over and how, and the accounts and automation used when collected
+ * payments and payouts are booked. The status poll's columns (provider
+ * status, health, run record) are not audited at all.
+ */
+const COLLECTION_CONNECTION_FIELDS: Record<string, string> = {
+  minimum_amount: 'Lägsta belopp att skicka till inkasso',
+  default_start_step: 'Första steget',
+  reminder_fee_terms_since: 'Påminnelseavgift avtalad sedan',
+  late_interest_percent: 'Avtalad dröjsmålsränta (procent)',
+  late_interest_agreed_since: 'Dröjsmålsränta avtalad sedan',
+  distribution_enabled: 'Utskick via inkassobolaget',
+  ladder_mode: 'Förslag på påminnelser i Att göra',
+  ladder_days_after_due: 'Dagar efter förfallodagen',
+  clearing_account: 'Konto för inbetalningar via inkassobolaget',
+  payout_account: 'Konto för utbetalningar från inkassobolaget',
+  auto_book_collected_payments: 'Bokför inbetalningar via inkassobolaget automatiskt',
+  auto_book_settlements: 'Bokför avräkningar automatiskt',
+}
+
+const COLLECTION_CONNECTION_VALUE_LABELS: Record<string, Record<string, string>> = {
+  default_start_step: { reminder: 'Påminnelse', collection: 'Inkassokrav direkt' },
+  ladder_mode: { off: 'Av', staged: 'Varje morgon, godkänns av en administratör' },
+}
+
+const COLLECTION_CONNECTION_STATE_EVENTS: Record<string, { code: string; event: string }> = {
+  active: { code: 'collection_connection.activated', event: 'Påminnelser och inkasso aktiverat' },
+  needs_setup: { code: 'collection_connection.needs_setup', event: 'Påminnelser och inkasso: inkassobolaget godkände inte eller stängde av kopplingen' },
+  disconnected: { code: 'collection_connection.ended', event: 'Påminnelser och inkasso avslutat' },
+  connecting: { code: 'collection_connection.connecting', event: 'Påminnelser och inkasso: aktivering pågår' },
+}
+
+function labelCollectionValues(state: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!state) return state
+  const labelled: Record<string, unknown> = { ...state }
+  for (const [key, labels] of Object.entries(COLLECTION_CONNECTION_VALUE_LABELS)) {
+    const value = state[key]
+    if (typeof value === 'string' && labels[value]) labelled[key] = labels[value]
+  }
+  return labelled
+}
+
+/**
+ * The collections connection: the consent that started it, the provider's
+ * terms accepted, activation and ending, and every change to its rules. A
+ * change the status poll stored carries no person and shows as the system.
+ */
+function collectionConnectionAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.new_state ?? row.old_state
+  const object = str(state?.display_name)
+  switch (row.action) {
+    case 'INSERT': {
+      const details = [`Villkor lästa och godkända i appen: version ${fmtValue(state?.catalogue_terms_version)}`]
+      if (str(state?.dpa_version)) details.push(`Personuppgiftsvillkor: version ${fmtValue(state?.dpa_version)}`)
+      return auditEvent(row, { category: 'atkomst', code: 'collection_connection.consented', event: 'Påminnelser och inkasso: aktivering påbörjad', object, details })
+    }
+    case 'DELETE':
+      return auditEvent(row, { category: 'atkomst', code: 'collection_connection.deleted', event: 'Koppling för påminnelser och inkasso borttagen', object })
+    case 'UPDATE': {
+      const { lines } = diffFields(labelCollectionValues(row.old_state), labelCollectionValues(row.new_state), COLLECTION_CONNECTION_FIELDS)
+      const before = str(row.old_state?.state)
+      const after = str(row.new_state?.state)
+      if (after && before !== after) {
+        const meta = COLLECTION_CONNECTION_STATE_EVENTS[after]
+        if (meta) return auditEvent(row, { category: 'atkomst', code: meta.code, event: meta.event, object, details: lines })
+      }
+      const terms = str(row.new_state?.terms_version)
+      if (terms && terms !== str(row.old_state?.terms_version)) {
+        return auditEvent(row, {
+          category: 'atkomst',
+          code: 'collection_connection.terms_accepted',
+          event: 'Inkassobolagets villkor godkända',
+          object,
+          details: [`Version: ${terms}`, ...lines],
+        })
+      }
+      if (lines.length === 0) return null
+      return auditEvent(row, {
+        category: 'installningar',
+        code: 'collection_connection.updated',
+        event: 'Regler för påminnelser och inkasso ändrade',
+        object,
+        details: lines,
+      })
+    }
+    default:
+      return null
+  }
+}
+
 const MAIL_REVOCATION_LABELS: Record<string, string> = {
   revoked: 'ja',
   already_invalid: 'redan ogiltig',
@@ -1377,6 +1472,8 @@ export function auditRowToEvent(
       return payrollConfigAuditEvent(row)
     case 'mail_connections':
       return mailConnectionAuditEvent(row)
+    case 'collection_connections':
+      return collectionConnectionAuditEvent(row)
     // The import tables emit their own events from the rows themselves; the
     // audit trail only adds what the rows can no longer show: a deletion.
     case 'sie_imports':
@@ -1845,7 +1942,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })

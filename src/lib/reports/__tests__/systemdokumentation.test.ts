@@ -110,6 +110,36 @@ describe('buildSystemdokumentation', () => {
     expect(integrations).toMatchObject({ enable_banking: true, skatteverket: true, stripe: true, peppol: false, shopify: false, ai: true })
   })
 
+  it('documents a collections connection and its rules only when the company has one', () => {
+    const without = buildSystemdokumentation(facts())
+    expect(without.integrationer.find((i) => i.key === 'collections')).toBeUndefined()
+    expect(without.behandlingsregler.find((x) => x.rubrik === 'Påminnelser och inkasso')).toBeUndefined()
+
+    const r = buildSystemdokumentation({
+      ...facts(),
+      collections: {
+        display_name: 'Acme Inkasso',
+        state: 'active',
+        minimum_amount: '250.00',
+        default_start_step: 'reminder',
+        reminder_fee_terms_since: '2025-01-01',
+        late_interest_percent: null,
+        late_interest_agreed_since: null,
+        clearing_account: '1689',
+        payout_account: '1930',
+        auto_book_collected_payments: false,
+        auto_book_settlements: false,
+      },
+    })
+    expect(r.integrationer.find((i) => i.key === 'collections')).toMatchObject({ label: 'Påminnelser och inkasso (Acme Inkasso, via Accounted Connect)', active: true })
+    const rule = r.behandlingsregler.find((x) => x.rubrik === 'Påminnelser och inkasso')!.text
+    expect(rule).toContain('från 250 kr')
+    expect(rule).toContain('från och med 2025-01-01')
+    expect(rule).toContain('Dröjsmålsränta enligt räntelagen.')
+    expect(rule).toContain('konto 1689')
+    expect(rule).toContain('efter att en användare har godkänt varje bokföring')
+  })
+
   it('describes Stripe as a feed the user books, never as automatic booking', () => {
     // The Stripe connection is feed-only (no cron books payments or payouts),
     // so the systemdokumentation must not claim automatic booking.
@@ -220,6 +250,7 @@ describe('loadSystemdokumentationFacts', () => {
     expect(f).not.toBeNull()
     expect(f!.company.accounting_framework).toBe('k3')
     expect(f!.connections).toEqual({ bank: true, skatteverket: false, peppol: false, stripe: true, shopify: false, woocommerce: false, zettle: false, whatsapp: false, email_inbox: false, cloud_backup: true })
+    expect(f!.collections).toBeNull()
     expect(f!.accounts).toHaveLength(1)
     expect(f!.sequences).toEqual([{ voucher_series: 'A', last_number: 3 }])
     expect(f!.apiKeys).toHaveLength(1)

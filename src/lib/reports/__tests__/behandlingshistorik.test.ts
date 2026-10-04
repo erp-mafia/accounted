@@ -879,6 +879,65 @@ describe('auditRowToEvent: mailboxes the receipt hunt reads', () => {
   })
 })
 
+describe('auditRowToEvent: the collections connection', () => {
+  const base = { display_name: 'Acme Inkasso', state: 'connecting', minimum_amount: 100, default_start_step: 'reminder', clearing_account: '1689', terms_version: null }
+
+  it('shows the consent that started an activation, with the terms version read', () => {
+    const event = auditRowToEvent(
+      auditRow({ table_name: 'collection_connections', action: 'INSERT', new_state: { ...base, catalogue_terms_version: 'v3', dpa_version: 'p1' } }),
+    )
+    expect(event).toMatchObject({
+      category: 'atkomst',
+      code: 'collection_connection.consented',
+      object: 'Acme Inkasso',
+      details: ['Villkor lästa och godkända i appen: version v3', 'Personuppgiftsvillkor: version p1'],
+      actor: { type: 'user', user_id: 'user-1' },
+    })
+  })
+
+  it('shows activation by the status poll as the system, and the end with the person', () => {
+    const activated = auditRowToEvent(
+      auditRow({
+        table_name: 'collection_connections',
+        action: 'UPDATE',
+        user_id: null,
+        actor_id: null,
+        actor_type: 'system',
+        old_state: base,
+        new_state: { ...base, state: 'active' },
+      }),
+    )
+    expect(activated).toMatchObject({ code: 'collection_connection.activated', actor: { type: 'system', user_id: null } })
+    const ended = auditRowToEvent(
+      auditRow({ table_name: 'collection_connections', action: 'UPDATE', old_state: { ...base, state: 'active' }, new_state: { ...base, state: 'disconnected' } }),
+    )
+    expect(ended).toMatchObject({ code: 'collection_connection.ended', event: 'Påminnelser och inkasso avslutat' })
+  })
+
+  it('shows accepted terms and diffs the rules with readable values', () => {
+    const terms = auditRowToEvent(
+      auditRow({ table_name: 'collection_connections', action: 'UPDATE', old_state: base, new_state: { ...base, terms_version: 'v4' } }),
+    )
+    expect(terms).toMatchObject({ code: 'collection_connection.terms_accepted', details: ['Version: v4'] })
+    const rules = auditRowToEvent(
+      auditRow({
+        table_name: 'collection_connections',
+        action: 'UPDATE',
+        old_state: base,
+        new_state: { ...base, default_start_step: 'collection', clearing_account: '1688' },
+      }),
+    )
+    expect(rules).toMatchObject({
+      category: 'installningar',
+      code: 'collection_connection.updated',
+      details: ['Första steget: Påminnelse → Inkassokrav direkt', 'Konto för inbetalningar via inkassobolaget: 1689 → 1688'],
+    })
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'collection_connections', action: 'UPDATE', old_state: base, new_state: { ...base, health: 'degraded' } })),
+    ).toBeNull()
+  })
+})
+
 describe('auditRowToEvent: behandlingsregler', () => {
   it('mapping_rules: a rule change names the rule and diffs the accounts', () => {
     const ins = auditRowToEvent(
