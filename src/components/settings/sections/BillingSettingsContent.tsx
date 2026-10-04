@@ -24,8 +24,11 @@ import { useBranding } from '@/lib/branding/brand-context'
 // capability in lib/entitlements/keys.ts (ai, bank_sync, skatteverket,
 // email_send, and stripe_payments + woocommerce_sync + shopify_sync +
 // zettle_sync as one "payments and webshop" item). Keep in step with
-// PAID_CAPABILITIES when a key is added.
+// PAID_CAPABILITIES when a key is added. collections has its own item
+// (UNLOCK_COLLECTIONS_KEY), listed only where the feature is switched on for
+// the viewing company, so merging it shows nothing to anyone.
 const UNLOCK_KEYS = ['unlock_ai', 'unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments_webshop'] as const
+const UNLOCK_COLLECTIONS_KEY = 'unlock_collections'
 
 // What stays without a subscription (the free plan card). Retention is the
 // last item and carries its own gloss.
@@ -175,6 +178,23 @@ function BillingCoreContent() {
   // The receipts panel mounts on first open and then stays mounted, so
   // switching back and forth does not refetch.
   const [receiptsOpened, setReceiptsOpened] = useState(false)
+  // Whether collections is switched on for this company (kill switch and
+  // pilot list): only then does the paid list name it. A failed read keeps it
+  // off, which is the merge-time state anyway.
+  const [collectionsOffered, setCollectionsOffered] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    fetch('/api/collections/availability')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { data?: { enabled?: unknown; pilot?: unknown } } | null) => {
+        if (active) setCollectionsOffered(body?.data?.enabled === true && body.data.pilot === true)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -425,6 +445,9 @@ function BillingCoreContent() {
               {UNLOCK_KEYS.map((key) => (
                 <CheckItem key={key} label={t(key)} gloss={t(`${key}_gloss`)} />
               ))}
+              {collectionsOffered && (
+                <CheckItem label={t(UNLOCK_COLLECTIONS_KEY)} gloss={t(`${UNLOCK_COLLECTIONS_KEY}_gloss`)} />
+              )}
             </>
           }
           footer={paidFooter}

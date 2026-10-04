@@ -2557,6 +2557,8 @@
     "includes_free": "Allt i planen utan abonnemang",
     "unlock_payments_webshop": "Betalningar och webshop",
     "unlock_payments_webshop_gloss": "betallänkar, Stripe, WooCommerce, Shopify och kortläsaren Zettle",
+    "unlock_collections": "Påminnelser och inkasso",
+    "unlock_collections_gloss": "påminnelser, inkassokrav och utskick av fakturor via inkassobolaget",
     "first_charge_on": "Första dragningen sker {date}. Ingen bindningstid.",
     "manage_line": "Byt kort, byt plan eller säg upp.",
     "team_managed_by": "Hanteras av {teamName}.",
