@@ -349,7 +349,7 @@ Set this when you have turned public signup off in GoTrue (`disable_signup`). Th
 
 ### Connector subscription (self-hosted instances)
 
-Everything a self-hosted instance runs itself is free (AGPL). Five capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), Peppol e-invoicing (our contracted access point), company lookup (TIC) and migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and is issued manually by Accounted on request (self-serve later): write to support@accounted.se and we set it up with you.
+Everything a self-hosted instance runs itself is free (AGPL). Six capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), Peppol e-invoicing (our contracted access point), company lookup (TIC), migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway) and reminders, debt collection and invoice delivery (a provider reached only through the connector service, see below). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and is issued manually by Accounted on request (self-serve later): write to support@accounted.se and we set it up with you.
 
 ```bash
 GNUBOK_CONNECTOR_KEY=gnubok_ck_...            # issued by Accounted, shown once
