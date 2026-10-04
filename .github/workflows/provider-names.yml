@@ -1,0 +1,50 @@
+name: Provider names
+
+# A provider whose contract is not signed yet must not be named anywhere in
+# this public repository: not in the change, and not in the PR's own text
+# (title, body, branch name, commit messages), which check:guards cannot see.
+# scripts/checks/unsigned-provider-names.mjs reads the guarded names from the
+# UNSIGNED_PROVIDER_NAMES secret, so neither this workflow nor the script nor
+# its log lines name anything (and no digest a guess could be checked
+# against is published). Without the secret (a fork's PR) the job warns and
+# passes.
+#
+# Runs on the untrusted PR head with a read-only token. The PR text reaches
+# the script through env, never through ${{ }} in the shell body: expression
+# substitution happens before bash parses the script, so a title with shell
+# metacharacters would otherwise be a code-execution sink.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-names-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Provider names
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history so the merge base with the PR base branch exists.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 20
+      - name: Scan the change, the PR text and the commit messages
+        # Node built-ins only: no npm ci, nothing from the PR's dependencies runs.
+        env:
+          UNSIGNED_PROVIDER_NAMES: ${{ secrets.UNSIGNED_PROVIDER_NAMES }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BRANCH: ${{ github.head_ref }}
+        run: node scripts/checks/unsigned-provider-names.mjs --base "origin/$BASE_REF" --pr-text
