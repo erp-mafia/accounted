@@ -3487,17 +3487,18 @@ export const BehandlingshistorikQuerySchema = z.object({
 
 /**
  * GET /api/bookkeeping/fiscal-periods/[id]/ef-declaration: the year-end
- * wizard's NE-bilaga inputs. An absent field means "not entered"; amounts
- * that can only be zero or more are refused when negative.
+ * wizard's NE-bilaga inputs. An absent or empty field means "not entered"
+ * (coercing '' would read it as 0); amounts that can only be zero or more
+ * are refused when negative.
  */
 export const EfDeclarationPreviewQuerySchema = z.object({
   category: z.enum(['full', 'pensioner', 'passive']).optional(),
-  kapitalunderlag: z.coerce.number().optional(),
-  priorYearSchablonavdrag: z.coerce.number().nonnegative().optional(),
-  priorYearActualCharged: z.coerce.number().nonnegative().optional(),
-  pfondDesiredAmount: z.coerce.number().nonnegative().optional(),
-  expansionsfondExistingBalance: z.coerce.number().nonnegative().optional(),
-  expansionsfondDesiredChange: z.coerce.number().optional(),
+  kapitalunderlag: emptyStringAsUndefined(z.coerce.number()),
+  priorYearSchablonavdrag: emptyStringAsUndefined(z.coerce.number().nonnegative()),
+  priorYearActualCharged: emptyStringAsUndefined(z.coerce.number().nonnegative()),
+  pfondDesiredAmount: emptyStringAsUndefined(z.coerce.number().nonnegative()),
+  expansionsfondExistingBalance: emptyStringAsUndefined(z.coerce.number().nonnegative()),
+  expansionsfondDesiredChange: emptyStringAsUndefined(z.coerce.number()),
 })
 
 /** Semesterskuld: as of a fiscal period's end (period_id) or Dec 31 of `year`. */

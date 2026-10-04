@@ -149,4 +149,20 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/ef-declaration', () => {
     expect(body.data.inputWarnings).toHaveLength(1)
     expect(body.data.inputWarnings[0]).toMatch(/^Kapitalunderlag saknas/)
   })
+
+  it('reads an empty amount as not entered, not as 0', async () => {
+    const { enqueue } = signedIn()
+    enqueue({ data: { id: 'period-1' } })
+    enqueue({ count: 4 })
+    vi.mocked(computeEfDeclarationPreview).mockResolvedValue(PREVIEW)
+
+    const res = await GET(mkReq('?category=full&kapitalunderlag=&pfondDesiredAmount=%20'), mkParams())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.inputWarnings).toHaveLength(1)
+    expect(body.data.inputWarnings[0]).toMatch(/^Kapitalunderlag saknas/)
+    expect(computeEfDeclarationPreview).toHaveBeenCalledWith(expect.anything(), 'company-1', 'period-1', {
+      category: 'full',
+    })
+  })
 })
