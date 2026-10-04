@@ -162,6 +162,7 @@ describe('loadNavGateContext', () => {
           mileage_enabled: false,
         },
         companies: { entity_type: 'aktiebolag' },
+        agent_profiles: { verified_at: '2026-09-01T00:00:00Z' },
       }),
       'company-1',
     )
@@ -190,6 +191,15 @@ describe('loadNavGateContext', () => {
 
     const unknown = await loadNavGateContext(supabaseReturning({ company_settings: null, companies: null }), 'company-1')
     expect(unknown).toBeNull()
+  })
+
+  it('hides the Assistent entry until the agent is built, as the sidebar does', async () => {
+    const ctx = await loadNavGateContext(
+      supabaseReturning({ company_settings: { entity_type: 'aktiebolag' }, companies: null, agent_profiles: { verified_at: null } }),
+      'company-1',
+    )
+    expect(ctx?.agentVerified).toBe(false)
+    expect(renderUiGrounding({ ctx: ctx!, labels: SV_LABELS })).not.toContain('(/chat)')
   })
 })
 
