@@ -22,6 +22,7 @@
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
+import { roundOre } from '@/lib/money'
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { normalizeMinusSign } from './generic-csv'
@@ -136,7 +137,7 @@ export const avanzaFormat: BankFileFormat = {
       transactions.push({
         date,
         description: buildDescription(type, text),
-        amount: Math.round(amount * 100) / 100,
+        amount: roundOre(amount),
         currency: currency.toUpperCase(),
         balance: null,
         reference: null,
@@ -166,8 +167,8 @@ export const avanzaFormat: BankFileFormat = {
         total_rows: lines.length - 1,
         parsed_rows: transactions.length,
         skipped_rows: skippedRows,
-        total_income: Math.round(transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0) * 100) / 100,
-        total_expenses: Math.round(transactions.filter((t) => t.amount < 0).reduce((s, t) => s + t.amount, 0) * 100) / 100,
+        total_income: roundOre(transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)),
+        total_expenses: roundOre(transactions.filter((t) => t.amount < 0).reduce((s, t) => s + t.amount, 0)),
       },
     }
   },
