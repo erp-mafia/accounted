@@ -3,16 +3,8 @@ import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { SupplierImportExecuteSchema } from '@/lib/api/schemas'
-import { normalizeEmail } from '@/lib/import/shared/column-utils'
 import { orgNumberKey } from '@/lib/invariants/org-number'
-
-/**
- * Dedup key for an org number: the Swedish 10-digit key when the value is
- * one (so a 12-digit CSV value finds the stored 10-digit row, #2391), else
- * the value as typed, so BE0123456789 and FR0123456789 stay two suppliers.
- */
-const orgDedupKey = (value: string | null): string | null =>
-  orgNumberKey(value) ?? (value?.trim() || null)
+import { createRegisterMatcher, supplierOrgKey } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -57,14 +49,9 @@ export const POST = withRouteContext(
       )
       const existing = existingRaw as unknown as ExistingSupplier[]
 
-      const byOrg = new Map<string, ExistingSupplier>()
-      const byEmail = new Map<string, ExistingSupplier>()
-      for (const s of existing) {
-        const org = orgDedupKey(s.org_number)
-        if (org) byOrg.set(org, s)
-        const email = normalizeEmail(s.email)
-        if (email) byEmail.set(email, s)
-      }
+      // Org number, then e-mail, or a same-name supplier the user confirmed
+      // (lib/import/shared/register-match.ts).
+      const matcher = createRegisterMatcher(existing, { orgKey: supplierOrgKey })
 
       const created: Supplier[] = []
       const updated: Supplier[] = []
@@ -72,12 +59,7 @@ export const POST = withRouteContext(
       const errors: { row_index: number; name: string; reason: string }[] = []
 
       for (const row of rows) {
-        const orgKey = orgDedupKey(row.org_number)
-        const emailKey = normalizeEmail(row.email)
-        const match =
-          (orgKey && byOrg.get(orgKey)) ||
-          (emailKey && byEmail.get(emailKey)) ||
-          null
+        const match = matcher.resolve(row, row.confirmed_duplicate_of)
 
         if (match) {
           if (!update_duplicates) {
@@ -123,7 +105,10 @@ export const POST = withRouteContext(
             errors.push({ row_index: row.row_index, name: row.name, reason: getUserErrorMessage(error) })
             continue
           }
-          if (data) updated.push(data as Supplier)
+          if (data) {
+            updated.push(data as Supplier)
+            matcher.add(data as ExistingSupplier)
+          }
           continue
         }
 
@@ -166,10 +151,7 @@ export const POST = withRouteContext(
         }
         if (data) {
           created.push(data as Supplier)
-          const newOrg = orgDedupKey(data.org_number)
-          if (newOrg) byOrg.set(newOrg, data as ExistingSupplier)
-          const newEmail = normalizeEmail(data.email)
-          if (newEmail) byEmail.set(newEmail, data as ExistingSupplier)
+          matcher.add(data as ExistingSupplier)
         }
       }
 

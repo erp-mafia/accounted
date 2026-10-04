@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { parseCustomersFile } from '@/lib/import/customers/parser'
-import { normalizeOrgNumber, normalizeEmail } from '@/lib/import/shared/column-utils'
+import { normalizeOrgNumber } from '@/lib/import/shared/column-utils'
+import { createRegisterMatcher } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -67,34 +68,26 @@ export const POST = withRouteContext(
       const existing = await fetchAllRows(({ from, to }) =>
         supabase
           .from('customers')
-          .select('id, name, org_number, email')
+          .select('id, name, customer_number, org_number, email')
           .eq('company_id', companyId)
           .range(from, to),
       )
 
-      const byOrg = new Map<string, { id: string; name: string }>()
-      const byEmail = new Map<string, { id: string; name: string }>()
-      for (const c of existing) {
-        const org = normalizeOrgNumber(c.org_number)
-        if (org) byOrg.set(org, { id: c.id, name: c.name })
-        const email = normalizeEmail(c.email)
-        if (email) byEmail.set(email, { id: c.id, name: c.name })
-      }
+      // The same matcher execute uses, so the preview cannot promise a match
+      // the import then misses.
+      const matcher = createRegisterMatcher(existing, { orgKey: normalizeOrgNumber })
 
       let duplicateCount = 0
       const annotated: AnnotatedCustomerRow[] = parsed.rows.map((r) => {
-        const orgKey = normalizeOrgNumber(r.org_number)
-        const emailKey = normalizeEmail(r.email)
-        let match: AnnotatedCustomerRow['duplicate_match'] = null
-        if (orgKey && byOrg.has(orgKey)) {
-          const e = byOrg.get(orgKey)!
-          match = { customer_id: e.id, matched_by: 'org_number', existing_name: e.name }
-        } else if (emailKey && byEmail.has(emailKey)) {
-          const e = byEmail.get(emailKey)!
-          match = { customer_id: e.id, matched_by: 'email', existing_name: e.name }
-        }
+        const found = matcher.find(r)
+        const match: AnnotatedCustomerRow['duplicate_match'] = found && !found.possible
+          ? { customer_id: found.record.id, matched_by: found.matched_by, existing_name: found.record.name }
+          : null
+        const possible: AnnotatedCustomerRow['possible_duplicate'] = found?.possible
+          ? { customer_id: found.record.id, existing_name: found.record.name }
+          : null
         if (match) duplicateCount++
-        return { ...r, duplicate_match: match }
+        return { ...r, duplicate_match: match, possible_duplicate: possible }
       })
 
       const result: CustomerImportParseResult = {

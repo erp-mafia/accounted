@@ -9476,6 +9476,15 @@
     "csv_chip_customers": "Kunder",
     "csv_chip_suppliers": "Leverantörer",
     "csv_chip_articles": "Artiklar",
+    "register_match": {
+      "customers_matched": "<strong>{count, plural, one {# rad} other {# rader}}</strong> matchar befintliga kunder på kundnummer, orgnummer eller e-post, eller för att du har valt Samma kund.",
+      "suppliers_matched": "<strong>{count, plural, one {# rad} other {# rader}}</strong> matchar befintliga leverantörer på orgnummer eller e-post, eller för att du har valt Samma leverantör.",
+      "choice_new": "Ny",
+      "customer_choice_same": "Samma kund",
+      "supplier_choice_same": "Samma leverantör",
+      "customer_possible_title": "Samma namn som den befintliga kunden {name}. Välj om raden är den kunden eller en ny.",
+      "supplier_possible_title": "Samma namn som den befintliga leverantören {name}. Välj om raden är den leverantören eller en ny."
+    },
     "sie_title": "SIE-fil",
     "sie_description": "Bokföring från ett annat system eller från revisorn",
     "underlag_title": "Underlag till importerade verifikat",
@@ -11121,6 +11130,8 @@
     "ob_period_has_ib": "Perioden har redan ingående balanser. Fortsätter du makuleras den befintliga IB-verifikationen och en ny bokförs med beloppen nedan.",
     "ob_editor_unbalanced": "Debet och kredit balanserar inte. Differens: {diff}. Kontrollera beloppen innan du fortsätter.",
     "rows_invalid": "Vissa rader har valideringsfel (markerade i rött). Åtgärda eller ta bort dem innan du fortsätter.",
+    "possible_duplicate_customers": "{count, plural, one {# rad har} other {# rader har}} samma namn som en befintlig kund men inget annat som matchar. Välj Ny eller Samma kund på raden.",
+    "possible_duplicate_suppliers": "{count, plural, one {# rad har} other {# rader har}} samma namn som en befintlig leverantör men inget annat som matchar. Välj Ny eller Samma leverantör på raden.",
     "vat_reinterpreted": "{count, plural, one {# rad} other {# rader}} fick momssatsen omtolkad. Kontrollera de markerade raderna: fel momssats ger fel moms på fakturan.",
     "bank_duplicate_rows": "{count, plural, one {# rad finns redan} other {# rader finns redan}} i bokföringen och hoppas över automatiskt."
   },

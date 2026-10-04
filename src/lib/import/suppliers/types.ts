@@ -1,5 +1,6 @@
 import type { SupplierType } from '@/types'
 import type { ImportNotice } from '@/lib/import/notices'
+import type { RegisterMatchKey } from '@/lib/import/shared/register-match'
 
 /** Result of auto-detecting columns in a supplier register file. */
 export interface DetectedSupplierColumns {
@@ -56,9 +57,22 @@ export interface ParsedSupplierRow {
 export interface AnnotatedSupplierRow extends ParsedSupplierRow {
   duplicate_match: {
     supplier_id: string
-    matched_by: 'org_number' | 'email'
+    /** Never 'customer_number': suppliers have no number column. */
+    matched_by: RegisterMatchKey
     existing_name: string
   } | null
+  /**
+   * Same name as an existing supplier and nothing else matched
+   * (lib/import/shared/register-match.ts). Only a suggestion: the review step
+   * asks the user, who sets `confirmed_duplicate_of`. Absent in a response
+   * from before this field existed.
+   */
+  possible_duplicate?: {
+    supplier_id: string
+    existing_name: string
+  } | null
+  /** Set in the review step when the user says the row is that supplier. */
+  confirmed_duplicate_of?: string | null
 }
 
 /** Full result from parsing a supplier register file. */

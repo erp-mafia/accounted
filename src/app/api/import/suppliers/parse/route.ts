@@ -1,12 +1,6 @@
 import { NextResponse } from 'next/server'
 import { parseSuppliersFile } from '@/lib/import/suppliers/parser'
-import { normalizeEmail } from '@/lib/import/shared/column-utils'
-import { orgNumberKey } from '@/lib/invariants/org-number'
-
-// Same dedup key as the execute route (#2391): the Swedish 10-digit key when
-// the value is one, else the value as typed.
-const orgDedupKey = (value: string | null): string | null =>
-  orgNumberKey(value) ?? (value?.trim() || null)
+import { createRegisterMatcher, supplierOrgKey } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -71,29 +65,21 @@ export const POST = withRouteContext(
           .range(from, to),
       )
 
-      const byOrg = new Map<string, { id: string; name: string }>()
-      const byEmail = new Map<string, { id: string; name: string }>()
-      for (const s of existing) {
-        const org = orgDedupKey(s.org_number)
-        if (org) byOrg.set(org, { id: s.id, name: s.name })
-        const email = normalizeEmail(s.email)
-        if (email) byEmail.set(email, { id: s.id, name: s.name })
-      }
+      // The same matcher execute uses, so the preview cannot promise a match
+      // the import then misses.
+      const matcher = createRegisterMatcher(existing, { orgKey: supplierOrgKey })
 
       let duplicateCount = 0
       const annotated: AnnotatedSupplierRow[] = parsed.rows.map((r) => {
-        const orgKey = orgDedupKey(r.org_number)
-        const emailKey = normalizeEmail(r.email)
-        let match: AnnotatedSupplierRow['duplicate_match'] = null
-        if (orgKey && byOrg.has(orgKey)) {
-          const e = byOrg.get(orgKey)!
-          match = { supplier_id: e.id, matched_by: 'org_number', existing_name: e.name }
-        } else if (emailKey && byEmail.has(emailKey)) {
-          const e = byEmail.get(emailKey)!
-          match = { supplier_id: e.id, matched_by: 'email', existing_name: e.name }
-        }
+        const found = matcher.find(r)
+        const match: AnnotatedSupplierRow['duplicate_match'] = found && !found.possible
+          ? { supplier_id: found.record.id, matched_by: found.matched_by, existing_name: found.record.name }
+          : null
+        const possible: AnnotatedSupplierRow['possible_duplicate'] = found?.possible
+          ? { supplier_id: found.record.id, existing_name: found.record.name }
+          : null
         if (match) duplicateCount++
-        return { ...r, duplicate_match: match }
+        return { ...r, duplicate_match: match, possible_duplicate: possible }
       })
 
       const result: SupplierImportParseResult = {

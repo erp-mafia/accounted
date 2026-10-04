@@ -3576,6 +3576,9 @@ const ImportedCustomerRowSchema = z.object({
   vat_number: z.string().nullable(),
   default_payment_terms: z.number().int().min(0).max(365),
   notes: z.string().nullable(),
+  // The existing customer the user said this row is (same name, nothing else
+  // matched). Defaulted like customer_number for an older wizard.
+  confirmed_duplicate_of: z.string().uuid().nullable().default(null),
 }).superRefine((row, ctx) => {
   // The preview flags these rows and the wizard refuses to continue with
   // them; repeated here so a hand-built request cannot import an EU
@@ -3616,6 +3619,9 @@ const ImportedSupplierRowSchema = z.object({
   default_payment_terms: z.number().int().min(0).max(365),
   default_currency: z.string(),
   notes: z.string().nullable(),
+  // The existing supplier the user said this row is (same name, nothing else
+  // matched). Defaulted so an older wizard can still submit.
+  confirmed_duplicate_of: z.string().uuid().nullable().default(null),
 })
 
 export const SupplierImportExecuteSchema = z.object({

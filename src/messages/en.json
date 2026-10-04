@@ -9476,6 +9476,15 @@
     "csv_chip_customers": "Customers",
     "csv_chip_suppliers": "Suppliers",
     "csv_chip_articles": "Articles",
+    "register_match": {
+      "customers_matched": "<strong>{count, plural, one {# row} other {# rows}}</strong> {count, plural, one {matches} other {match}} existing customers by customer number, org number or email, or because you chose Same customer.",
+      "suppliers_matched": "<strong>{count, plural, one {# row} other {# rows}}</strong> {count, plural, one {matches} other {match}} existing suppliers by org number or email, or because you chose Same supplier.",
+      "choice_new": "New",
+      "customer_choice_same": "Same customer",
+      "supplier_choice_same": "Same supplier",
+      "customer_possible_title": "Same name as the existing customer {name}. Choose whether the row is that customer or a new one.",
+      "supplier_possible_title": "Same name as the existing supplier {name}. Choose whether the row is that supplier or a new one."
+    },
     "sie_title": "SIE file",
     "sie_description": "Bookkeeping from another system or from your accountant",
     "underlag_title": "Receipts for imported vouchers",
@@ -11121,6 +11130,8 @@
     "ob_period_has_ib": "The period already has opening balances. If you continue, the existing opening-balance voucher is reversed and a new one is booked with the amounts below.",
     "ob_editor_unbalanced": "Debit and credit do not balance. Difference: {diff}. Check the amounts before you continue.",
     "rows_invalid": "Some rows have validation errors (marked in red). Fix or remove them before you continue.",
+    "possible_duplicate_customers": "{count, plural, one {# row has} other {# rows have}} the same name as an existing customer but nothing else matches. Choose New or Same customer on the row.",
+    "possible_duplicate_suppliers": "{count, plural, one {# row has} other {# rows have}} the same name as an existing supplier but nothing else matches. Choose New or Same supplier on the row.",
     "vat_reinterpreted": "{count, plural, one {# row} other {# rows}} had its VAT rate reinterpreted. Check the marked rows: a wrong VAT rate gives wrong VAT on the invoice.",
     "bank_duplicate_rows": "{count, plural, one {# row already exists} other {# rows already exist}} in the bookkeeping and will be skipped automatically."
   },
