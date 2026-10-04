@@ -2558,7 +2558,7 @@
     "unlock_payments_webshop": "Payments and webshop",
     "unlock_payments_webshop_gloss": "payment links, Stripe, WooCommerce, Shopify and the Zettle card reader",
     "unlock_collections": "Reminders and debt collection",
-    "unlock_collections_gloss": "reminders, collection notices and invoice delivery through the collection agency",
+    "unlock_collections_gloss": "reminders and collection notices through the collection agency",
     "first_charge_on": "The first charge is on {date}. No lock-in.",
     "manage_line": "Change card, switch plan or cancel.",
     "team_managed_by": "Managed by {teamName}.",
