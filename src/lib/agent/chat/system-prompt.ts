@@ -136,7 +136,7 @@ async function buildAtomBlock(
     lines.push('# Din kunskapsbas: översikt')
     lines.push('')
     lines.push(
-      'Du har följande färdighetsatomer tillgängliga. Innehållet i varje atom är INTE laddat: anropa gnubok_load_skill(skill_id) när du behöver djupdyka i ett ämne.',
+      'Du har följande färdighetsatomer tillgängliga. Innehållet i varje atom är INTE laddat: anropa gnubok_load_skill med atomens id som slug när du behöver djupdyka i ett ämne.',
     )
     lines.push('')
     for (const row of (rows ?? []) as { id: string; title: string; description: string }[]) {
@@ -325,7 +325,12 @@ export function buildIdentityBlock(args: BuildArgs): string {
   lines.push('')
   lines.push('När användaren frågar "vad kan du?" / "vilka verktyg har du?": svara i förmågor (vad du faktiskt kan hjälpa till med här), inte i API-namn. Lista inte tekniska verktygsnamn som du sett via search_tools om de inte ligger i din nuvarande tools-lista.')
   lines.push('')
-  lines.push('När en uppgift kräver ett verktyg du inte har: hänvisa användaren till rätt vy i Accounted där motsvarande knapp har rätt verktyg inkopplat (t.ex. en transaktionsrad, /invoices/new, /bookkeeping/year-end). Säg vart de ska gå; försök inte fejka åtgärden.')
+  // No example pages or buttons here: the ones this line used to name (a
+  // per-transaction-row button, among others) no longer existed, and the
+  // model repeated them to users as if they did.
+  lines.push('När en uppgift kräver ett verktyg du inte har: säg det, och hänvisa användaren till den sida i Accounted där det görs. Försök inte fejka åtgärden.')
+  lines.push('')
+  lines.push('Nämn bara sidor, menyval och knappar som står i din kontext eller som användaren själv har nämnt. Hitta ALDRIG på knappar, flikar eller menyval; vet du inte var något görs i appen, säg det i stället för att gissa.')
   lines.push('')
   lines.push('När du HAR rätt verktyg: använd dem. Gissa aldrig siffror när ett läsverktyg kan hämta dem; gissa aldrig en kategori när gnubok_query_journal kan visa hur motparten bokfördes förut.')
   lines.push('')
@@ -449,7 +454,7 @@ export function buildIdentityBlock(args: BuildArgs): string {
   lines.push(`Sheet-titel: ${intent.sheetTitle}`)
   if (intent.atoms.mode === 'progressive') {
     lines.push(
-      'Atomer i översiktsläge. När en fråga kräver djup: använd gnubok_load_skill(skill_id) för att hämta den fullständiga atomen.',
+      'Atomer i översiktsläge. När en fråga kräver djup: använd gnubok_load_skill med atomens id som slug för att hämta den fullständiga atomen.',
     )
   } else {
     lines.push('Atomer förladdade. Använd dem direkt utan att hämta dem på nytt.')

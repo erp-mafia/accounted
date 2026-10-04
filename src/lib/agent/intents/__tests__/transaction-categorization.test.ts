@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { transactionCategorization } from '../transaction-categorization'
 import type { InboxChannelContext } from '@/types'
+import { svMenuPath } from '../../ask/__tests__/ui-fixture'
 
 // Locks in the prose-drift fix from /Users/jakobwennberg/.claude/plans/.
 // The promptTemplate must instruct the agent to narrate using CATEGORY
@@ -160,22 +161,25 @@ describe('transaction.categorization prompt template', () => {
     expect(out).toMatch(/[Bb]erätta INTE för användaren/)
   })
 
-  it('directs the user to Dokumentinkorgen when underlag is missing', () => {
+  it('directs the user to Underlag when underlag is missing', () => {
     // The chat sheet no longer accepts file uploads. The agent must not
     // tell users to "drop the file in chat" or "click the paperclip":
     // those affordances were removed in v5. Documents go through the
-    // Dokumentinkorgen workspace.
+    // Underlag workspace, which the sidebar shows under Inköp. The old name
+    // (Dokumentinkorgen, "i sidomenyn") sent users looking for a menu item
+    // that does not exist.
     const out = renderPrompt({ hasUnderlag: false })
-    expect(out).toContain('Dokumentinkorgen')
+    expect(out).toContain(svMenuPath('/e/general/invoice-inbox'))
     expect(out).toContain('Matcha mot transaktion')
+    expect(out).not.toContain('Dokumentinkorgen')
     expect(out.toLowerCase()).not.toContain('gem-ikon')
     expect(out.toLowerCase()).not.toContain('släpp filen här i chattfönstret')
     expect(out.toLowerCase()).not.toContain('chattfönstret')
   })
 
-  it('routes post-booking underlag to the verifikation, not back to Dokumentinkorgen', () => {
+  it('routes post-booking underlag to the verifikation, not back to Underlag', () => {
     // After a verifikation has been staged, the user must not be sent back
-    // to Dokumentinkorgen: the doc belongs ON the verifikation (under
+    // to Underlag: the doc belongs ON the verifikation (under
     // Bokföring). Inbox is for unbooked documents only.
     const noUnderlag = renderPrompt({ hasUnderlag: false })
     expect(noUnderlag).toContain('bifogas TILL VERIFIKATIONEN')

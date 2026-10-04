@@ -13838,7 +13838,7 @@ export const tools: McpTool[] = [
         throw new Error(
           `Inga av de ${itemIds.length} valda underlagen kan bokföras: ${notMatched} saknar matchad banktransaktion, ` +
           `${alreadyBooked} är redan bokförda, ${notFound} hittades inte. Matcha underlagen mot en banktransaktion först ` +
-          `(gnubok_match_transaction_to_invoice eller "Matcha mot transaktion" i Dokumentinkorgen).`,
+          `(gnubok_match_transaction_to_invoice eller "Matcha mot transaktion" under Inköp → Underlag).`,
         )
       }
 

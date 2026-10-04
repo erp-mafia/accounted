@@ -67,6 +67,7 @@ import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
 import { offersPayroll } from '@/lib/company/offers-payroll'
+import { gateNavTree, passesNavGates, type NavGateContext } from '@/lib/navigation/nav-gates'
 import { SidebarV2 } from './SidebarV2'
 import { scrubAuthCookies } from '@/lib/auth/browser-session-cookies'
 import { NAV_V2_COMPANY, NAV_V2_TOP, claimedRowActive, type NavGateFlags, type NavV2Item } from './nav-v2'
@@ -327,11 +328,6 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-/** `entityOnly` accepts one form or a list of forms. */
-function entityGateAllows(gate: EntityType | readonly EntityType[], entityType: EntityType): boolean {
-  return Array.isArray(gate) ? gate.includes(entityType) : gate === entityType
-}
-
 export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, arkivEnabled = false, agentsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
@@ -555,56 +551,30 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     return <Icon className={className} />
   }
 
-  // Payroll shows by default for every juridisk person; a form whose org
-  // number is the owner's personnummer opts in through pays_salaries. The
-  // rule is shared with the MCP capabilities resource. #782
-  const isEmployer = offersPayroll(entityType, paysSalaries)
-
   // One gate for both navigations: a surface hides for the same reason in
-  // the sidebar tree (nav-v2.ts) and in the phone menu.
-  const passesGates = (item: NavGateFlags) => {
-    if (item.hidden) return false
-    if (hiddenNavHrefs.has(item.href)) return false
-    // Payroll (employerOnly) is hidden until the company is an employer by
-    // form or has flagged pays_salaries. #782
-    if (item.employerOnly && !isEmployer) return false
-    // Dimension surfaces are hidden until the company opts in via the
-    // bookkeeping settings toggle (company_settings.dimensions_enabled).
-    if (item.requiresDimensions && !dimensionsEnabled) return false
-    if (item.requiresSalesOrders && !salesOrdersEnabled) return false
-    if (item.requiresQuotes && !quotesEnabled) return false
-    // Webshop surfaces are hidden until a store is connected (or order rows
-    // already exist from a since-disconnected store).
-    if (item.requiresWebshop && !hasWebshop) return false
-    // Körjournal is hidden until the company opts in via the bookkeeping
-    // settings toggle (or trips already exist, e.g. created via MCP).
-    if (item.requiresMileage && !hasMileage) return false
-    // Utlägg is hidden until a claim exists (registered from Underlag).
-    if (item.requiresExpenses && !hasExpenseClaims) return false
-    // Arkiv rolls out per company; outside the rollout the pages 404.
-    if (item.requiresArkiv && !arkivEnabled) return false
-    // The Agenter page is hidden in production while it is finished.
-    if (item.requiresAgents && !agentsEnabled) return false
-    // Paywalled surfaces (e.g. the AI-only Dokumentinkorg) are hidden unless
-    // the active company holds the capability. The page + API gates enforce
-    // the paywall; this keeps the sidebar from advertising a dead workspace.
-    if (item.requiredCapability && !capabilities.includes(item.requiredCapability)) return false
-    // Entity-gated statutory surfaces: INK2/ÅR for aktiebolag, NE for
-    // enskild firma; the page for the other form doesn't exist.
-    if (item.entityOnly && !entityGateAllows(item.entityOnly, entityType)) return false
-    // Byrå cockpit: the Klienter entry lives in the lean cockpit sidebar
-    // (cockpitNavItems); in company mode the pinned back-to-clients link
-    // replaces it, and non-byrå users never see it (WL-14).
-    if (item.byraOnly) return false
-    // Hide the Assistent (/chat) tab until the agent is built: mirrors the
-    // floating AgentTrigger and avoids a nav entry that only bounces to the
-    // home checklist (chat/layout redirects unverified users to /).
-    if (item.href === '/chat' && !agentIdentity.isVerified) return false
-    // Granskning stays in the top nav at all times now: the badge
-    // surfaces the count when there are pending ops, but the link is
-    // always present so users can navigate there manually.
-    return true
+  // the sidebar tree (nav-v2.ts) and in the phone menu. The gate itself lives
+  // in lib/navigation/nav-gates.ts so the assistant's UI map applies the same
+  // one. Granskning stays in the top nav at all times: the badge surfaces the
+  // count when there are pending ops, but the link is always present.
+  const gateContext: NavGateContext = {
+    entityType,
+    // Payroll shows by default for every juridisk person; a form whose org
+    // number is the owner's personnummer opts in through pays_salaries. The
+    // rule is shared with the MCP capabilities resource. #782
+    isEmployer: offersPayroll(entityType, paysSalaries),
+    dimensionsEnabled,
+    salesOrdersEnabled,
+    quotesEnabled,
+    hasWebshop,
+    hasMileage,
+    hasExpenseClaims,
+    arkivEnabled,
+    agentsEnabled,
+    capabilities,
+    hiddenNavHrefs,
+    agentVerified: agentIdentity.isVerified,
   }
+  const passesGates = (item: NavGateFlags) => passesNavGates(item, gateContext)
   const filteredItems = (cockpitMode ? cockpitNavItems : navItems).filter(passesGates)
 
   const topItems = filteredItems.filter((i) => i.group === 'top')
@@ -628,12 +598,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
   // Nav tree: the same gates applied to sections and their sub-items.
   // In cockpit mode the lean cockpit list is the whole sidebar.
-  const gateTree = (items: NavV2Item[]): NavV2Item[] =>
-    items.filter(passesGates).map((i) => ({ ...i, sub: i.sub?.filter(passesGates) }))
   const v2Top: NavV2Item[] = cockpitMode
     ? cockpitNavItems.filter(passesGates).map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
-    : gateTree(NAV_V2_TOP)
-  const v2Company = cockpitMode ? [] : gateTree(NAV_V2_COMPANY)
+    : gateNavTree(NAV_V2_TOP, gateContext)
+  const v2Company = cockpitMode ? [] : gateNavTree(NAV_V2_COMPANY, gateContext)
   // Att göra carries the whole queue (unbooked rows + staged operations);
   // Transaktioner and Assistentens förslag keep their own share.
   const v2BadgeFor = (href: string): number | null => {

@@ -102,6 +102,11 @@ export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCapture
 
   capture: async ({ route }) => ({ route: route ?? null }),
 
+  // Reached only when /api/agent/invoke is called with general.help directly.
+  // No UI does that since the single-call console (#1762): every general.help
+  // surface renders AskConsole, which answers through lib/agent/ask/ask-service.ts
+  // with the user's page and the real menu (ui-map.ts). That is where UI
+  // guidance lives; this template names no pages or buttons of its own.
   promptTemplate: ({ captured, profileSummary }) => {
     const lines: string[] = []
     if (profileSummary) {
@@ -124,9 +129,9 @@ export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCapture
     lines.push('')
     lines.push('Du har INGA skrivverktyg härifrån: du kan läsa och resonera, men inte kategorisera, fakturera, attestera eller stage:a bokslut, och du ska INTE låtsas att du kan.')
     lines.push('')
-    lines.push('KATEGORISERING / BOKFÖRING: så här hanterar du det (vanligaste fallet): Om användaren ber dig kategorisera, bokföra eller "gå igenom" okategoriserade transaktioner, ge då INTE per-transaktions-bokföringsförslag (konto/momsbehandling) i löptext, och fråga ALDRIG "godkänner du dessa?". Två skäl: (1) du ser inte det matchade underlaget (kvitto/faktura) per transaktion härifrån, så förslaget vilar på gissningar; (2) du kan inte stagea någon bokning: det blir en analys användaren inte kan agera på. Hänvisa istället tydligt: "Själva kategoriseringen gör vi i Dokumentinkorgen: lägg kvittot/fakturan där (eller vidarebefordra det till företagets inbox-adress), matcha det mot transaktionen och fråga assistenten därifrån: då ser jag underlaget som hör till transaktionen och lägger ett förslag du godkänner direkt i kortet." Du FÅR ge en kort överblick (hur många som väntar, vilka de äldsta är, vilka som ser kluriga ut) för att hjälpa användaren prioritera, men stanna där, gå inte vidare till konto/moms per rad.')
+    lines.push('KATEGORISERING / BOKFÖRING: så här hanterar du det (vanligaste fallet): Om användaren ber dig kategorisera, bokföra eller "gå igenom" okategoriserade transaktioner, ge då INTE per-transaktions-bokföringsförslag (konto/momsbehandling) i löptext, och fråga ALDRIG "godkänner du dessa?". Två skäl: (1) du ser inte det matchade underlaget (kvitto/faktura) per transaktion härifrån, så förslaget vilar på gissningar; (2) du kan inte stagea någon bokning: det blir en analys användaren inte kan agera på. Säg det, och hänvisa till den sida i appen där bokföringen görs. Du FÅR ge en kort överblick (hur många som väntar, vilka de äldsta är, vilka som ser kluriga ut) för att hjälpa användaren prioritera, men stanna där, gå inte vidare till konto/moms per rad.')
     lines.push('')
-    lines.push('Övriga skrivåtgärder hänvisas på samma sätt: fakturering → /invoices/new, leverantörsfaktura → /supplier-invoices/[id], moms → momsrapporten, bokslut → /bookkeeping/year-end. Där finns "Fråga …"-knappen med rätt skrivverktyg OCH rätt underlag inkopplat. Försök ALDRIG fabricera/föreslå att du stagear något härifrån.')
+    lines.push('Övriga skrivåtgärder hänvisas på samma sätt, till sidan där de görs. Hitta aldrig på knappar eller menyval du inte vet finns. Försök ALDRIG fabricera/föreslå att du stagear något härifrån.')
     lines.push('')
     lines.push('Bra rytm för analytiska frågor: (1) anropa rätt läsverktyg, (2) svara med konkreta siffror från resultatet, (3) lägg till en kort förklaring eller nästa-steg-rekommendation om det är meningsfullt. Hellre verkligt svar än "gå till Rapporter och titta själv".')
     lines.push('')

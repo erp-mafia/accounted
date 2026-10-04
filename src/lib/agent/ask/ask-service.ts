@@ -4,7 +4,9 @@ import { createLogger } from '@/lib/logger'
 import { EmptyModelAnswerError } from './errors'
 import { buildLedgerTools } from './ledger-tools'
 import { buildAssistantSnapshot } from './snapshot'
+import { buildUiGrounding } from './ui-map'
 import { FISCAL_YEAR_RULE } from '@/lib/agent/fiscal-years'
+import type { Locale } from '@/i18n/config'
 
 const log = createLogger('agent.ask')
 
@@ -43,6 +45,13 @@ export interface AskRequest {
    * string; the caller decides what is relevant to this page.
    */
   pageContext?: string
+  /**
+   * The app path the user asked from (AskConsole sends usePathname()). Named
+   * in the prompt as the page they are on, resolved against the real menu.
+   */
+  route?: string
+  /** The UI locale, so the menu the model is given uses the labels the user sees. Default 'sv'. */
+  locale?: Locale
   /** 'heavy' for the deep-reasoning surfaces (bokslut, VAT review), else 'assistant'. */
   tier?: AskTier
   maxTokens?: number
@@ -87,6 +96,15 @@ Regler:
 - KontoNUMMER är strängar (t.ex. "1930"), aldrig tal att räkna på.
 - Föreslå aldrig att bokföra eller ändra något direkt; du beskriver och vägleder, användaren beslutar.`
 
+// The model is given the real menu for this company ("Appens meny", built by
+// ui-map.ts from the sidebar's own config and gates) and the page the user is
+// on. Without both it guessed, and named buttons and menus that do not exist.
+const UI_RULES = `
+Appen:
+- Hänvisa bara till sidor och menyval som står i "Appens meny" nedan, med exakt de namnen. Länka gärna till sidan som [Namn](/sökväg) med sökvägen därifrån.
+- Du ser menyn, inte innehållet på sidorna. Hitta ALDRIG på knappar, flikar, fält eller menyval, och beskriv inte vad som finns på en sida utöver det användaren själv berättat eller sidkontexten visar.
+- Vet du inte var något görs i appen: säg det rakt ut i stället för att gissa.`
+
 // With tools: the model can and should fetch the real figures itself.
 const TOOL_RULES = `
 Du har läsverktyg för bolagets faktiska bokföring: resultatrapport, balansrapport, momsrapport, huvudbok, transaktioner (query_journal), kund- och leverantörsreskontra, lönejournal, kontoplan, fakturor, dokumentinkorg med mera. När användaren frågar om siffror, belopp, poster, kategorier eller en period: ANROPA rätt verktyg och svara med de faktiska siffrorna, inte uppskattningar. Verktygen är skrivskyddade; för att bokföra eller ändra något hänvisar du användaren till rätt sida i appen.
@@ -99,7 +117,7 @@ const NO_TOOL_RULES = `
 - Svara utifrån den kontext du får. Om kontexten inte räcker för att svara: säg det och beskriv vad som saknas, gissa inte.`
 
 function systemPrompt(hasTools: boolean): string {
-  return BASE_RULES + (hasTools ? TOOL_RULES : NO_TOOL_RULES)
+  return BASE_RULES + UI_RULES + (hasTools ? TOOL_RULES : NO_TOOL_RULES)
 }
 
 /** Read the company's own basic profile for grounding. Company-scoped: never another tenant's data. */
@@ -129,9 +147,10 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
   const tools: AiToolDef[] = req.userId
     ? buildLedgerTools(req.supabase, req.companyId, req.userId, req.conversationId)
     : []
-  const [profile, snapshot] = await Promise.all([
+  const [profile, snapshot, uiGrounding] = await Promise.all([
     companyProfileLine(req.supabase, req.companyId),
     req.userId ? buildAssistantSnapshot(req.supabase, req.companyId) : Promise.resolve(''),
+    buildUiGrounding(req.supabase, req.companyId, { route: req.route, locale: req.locale }),
   ])
 
   const promptParts: string[] = []
@@ -139,6 +158,10 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
   if (snapshot) {
     promptParts.push('Företagets nuläge (grunddata, inte hela bokföringen):')
     promptParts.push(snapshot)
+    promptParts.push('')
+  }
+  if (uiGrounding) {
+    promptParts.push(uiGrounding)
     promptParts.push('')
   }
   if (pageContext) {
