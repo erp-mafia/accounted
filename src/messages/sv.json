@@ -11151,6 +11151,7 @@
     "days": "{count, plural, one {# dag} other {# dagar}}",
     "assigned_automatically": "Sätts automatiskt",
     "field_name": "Namn",
+    "field_customer_number": "Kundnummer",
     "field_org_number": "Org-/personnummer",
     "field_customer_type": "Kundtyp",
     "field_supplier_type": "Leverantörstyp",

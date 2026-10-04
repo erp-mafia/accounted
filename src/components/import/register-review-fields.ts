@@ -31,6 +31,7 @@ export function useCustomerReviewFields(): ReviewFields<DetectedCustomerColumns,
   return useMemo(
     () => ({
       name_col: { label: t('field_name'), value: (r) => r.name },
+      customer_number_col: { label: t('field_customer_number'), value: (r) => r.customer_number },
       org_number_col: { label: t('field_org_number'), value: (r) => r.org_number },
       customer_type_col: { label: t('field_customer_type'), value: (r) => tType(`type_${r.customer_type}`) },
       email_col: { label: t('field_email'), value: (r) => r.email },

@@ -11151,6 +11151,7 @@
     "days": "{count, plural, one {# day} other {# days}}",
     "assigned_automatically": "Assigned automatically",
     "field_name": "Name",
+    "field_customer_number": "Customer number",
     "field_org_number": "Organisation or personal ID number",
     "field_customer_type": "Customer type",
     "field_supplier_type": "Supplier type",
