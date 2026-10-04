@@ -8,6 +8,12 @@ export interface ExistingCustomerMetadata {
    * maps onto it by name brings the number.
    */
   org_number?: string | null
+  /**
+   * An individual (privatperson) never learns an org number from a provider
+   * record matched to it by name: it has none, and its personnummer lives
+   * encrypted in personal_number.
+   */
+  customer_type?: string | null
 }
 
 /**
@@ -41,6 +47,7 @@ export function buildCustomerMetadataEnrichment(
 
   if (
     existing.org_number === null
+    && existing.customer_type !== 'individual'
     && typeof orgNumber === 'string'
     && orgNumber.trim().length > 0
   ) {

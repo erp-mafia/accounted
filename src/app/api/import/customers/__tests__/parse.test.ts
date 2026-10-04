@@ -92,4 +92,61 @@ describe('POST /api/import/customers/parse', () => {
     // A possible duplicate is not counted as a match.
     expect(body.data.duplicate_count).toBe(1)
   })
+
+  it('never matches an individual on its personnummer, only on customer number, e-mail or name', async () => {
+    // Synthetic personnummer, never real ones.
+    mockFetchAllRows.mockResolvedValue([
+      // A legacy row that still holds the personnummer in org_number.
+      { id: 'legacy', name: 'Bertil', customer_number: null, org_number: '19900101-1234', email: null },
+      { id: 'by-email', name: 'Cecilia B', customer_number: null, org_number: null, email: 'ceci@example.test' },
+      { id: 'by-number', name: 'David B', customer_number: '2001', org_number: null, email: null },
+      { id: 'by-name', name: 'Eva Bengtsson', customer_number: null, org_number: null, email: null },
+    ])
+
+    const res = await post(xlsxFile([
+      ['Kundnummer', 'Namn', 'Orgnr', 'E-post'],
+      ['', 'Bertil Bengtsson', '199001011234', ''],
+      ['', 'Cecilia Bengtsson', '19850505-4321', 'ceci@example.test'],
+      ['2001', 'David Bengtsson', '19800303-3333', ''],
+      ['', 'Eva Bengtsson', '19750404-4444', ''],
+    ]))
+    const { status, body } = await parseJsonResponse<ParseBody>(res)
+
+    expect(status).toBe(200)
+    const [bertil, cecilia, david, eva] = body.data.rows
+    for (const r of body.data.rows) expect(r.customer_type).toBe('individual')
+    // The legacy row holds the same personnummer, which is not a match key.
+    expect(bertil.duplicate_match).toBeNull()
+    expect(bertil.possible_duplicate).toBeNull()
+    expect(cecilia.duplicate_match).toEqual({ customer_id: 'by-email', matched_by: 'email', existing_name: 'Cecilia B' })
+    expect(david.duplicate_match).toEqual({ customer_id: 'by-number', matched_by: 'customer_number', existing_name: 'David B' })
+    expect(eva.duplicate_match).toBeNull()
+    expect(eva.possible_duplicate).toEqual({ customer_id: 'by-name', existing_name: 'Eva Bengtsson' })
+    expect(body.data.duplicate_count).toBe(2)
+  })
+
+  it('never matches an individual and a business with an org number, either way', async () => {
+    mockFetchAllRows.mockResolvedValue([
+      { id: 'firm', name: 'Bengtsson Bygg AB', customer_type: 'swedish_business', customer_number: null, org_number: '5566778899', email: 'firm@example.test' },
+      { id: 'person', name: 'Cecilia Bengtsson', customer_type: 'individual', customer_number: null, org_number: null, email: 'ceci@example.test' },
+    ])
+
+    const res = await post(xlsxFile([
+      ['Namn', 'Orgnr', 'E-post'],
+      // Synthetic personnummer, never a real one.
+      ['Bertil Bengtsson', '19900101-1234', 'firm@example.test'],
+      ['Cecilia Konsult AB', '5560217780', 'ceci@example.test'],
+    ]))
+    const { status, body } = await parseJsonResponse<ParseBody>(res)
+
+    expect(status).toBe(200)
+    const [bertil, ceciliaAb] = body.data.rows
+    expect(bertil.customer_type).toBe('individual')
+    expect(ceciliaAb.customer_type).toBe('swedish_business')
+    for (const r of body.data.rows) {
+      expect(r.duplicate_match).toBeNull()
+      expect(r.possible_duplicate).toBeNull()
+    }
+    expect(body.data.duplicate_count).toBe(0)
+  })
 })

@@ -39,6 +39,7 @@ import {
 } from '@/lib/customers/protect-personal-number'
 import { isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
 import {
+  isOrgNumberRefusedOnIndividual,
   isPersonalNumberOrgNumberDisallowed,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
@@ -269,6 +270,7 @@ registerEndpoint({
     'VIES re-validation is best-effort and runs only on commit. A VIES timeout does not fail the update.',
     'personal_number: a plaintext value is stored encrypted (individual customers only); the masked form a read returned (********-1234) means "leave unchanged" and is never stored; null clears it. Changing customer_type away from individual clears any stored personal_number.',
     'An org_number shaped like a Swedish personnummer is accepted on customer_type=swedish_business: an enskild firma has no separate org number, so it is the firm\'s identifier, and the list endpoint masks it. It is rejected for eu_business and non_eu_business (400 CUSTOMER_ORG_NUMBER_IS_PERSONAL). On an individual it is the personnummer in the wrong field: it is stored encrypted as personal_number and org_number is cleared; next to a different personal_number in the same body it is 400 CUSTOMER_PERSONAL_NUMBER_CONFLICT.',
+    'An individual has no org number: any other non-empty org_number on customer_type=individual, including one the row would keep through a type change, is 400 CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL. Send org_number "" with the type change to clear it.',
   ],
   example: {
     request: { default_payment_terms: 14, notes: 'New payment terms agreed 2026-05-12.' },
@@ -395,13 +397,27 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
+    // An individual has no org number. Judged on the same end state, but
+    // only when org_number or customer_type is in the body: a legacy row must
+    // still be able to change its email.
+    const individualOrgNumber =
+      body.org_number !== undefined || body.customer_type !== undefined ? effectiveOrgNumber : undefined
+    if (isOrgNumberRefusedOnIndividual(effectiveType, individualOrgNumber)) {
+      return v1ErrorResponseFromCode('CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'org_number' },
+      })
+    }
+
     // The mirror image for individuals: a personnummer submitted as
     // org_number is the personnummer in the wrong field. It is stored
     // encrypted in personal_number and org_number is cleared, same as
-    // CreateCustomerSchema does on create. Next to a DIFFERENT plaintext
-    // personal_number in the same body the two conflict.
-    const reroutedPersonalNumber = orgNumberHoldsPersonalNumber(effectiveType, body.org_number)
-      ? normalizeReroutedPersonalNumber(body.org_number!)
+    // CreateCustomerSchema does on create. A type change to individual
+    // moves a stored one the same way (an enskild firma becoming a
+    // privatperson). Next to a DIFFERENT plaintext personal_number in the
+    // same body the two conflict.
+    const reroutedPersonalNumber = orgNumberHoldsPersonalNumber(effectiveType, individualOrgNumber)
+      ? normalizeReroutedPersonalNumber(individualOrgNumber!)
       : null
     if (
       reroutedPersonalNumber
