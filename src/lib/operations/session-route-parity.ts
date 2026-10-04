@@ -70,6 +70,7 @@ const ASSISTANT = 'in-app assistant runtime; external agents are the API custome
 const CRON = 'machine endpoint: cron receiver'
 const WEBHOOK = 'machine endpoint: inbound webhook'
 const CONNECTOR = 'machine endpoint: self-hosted connector proxy, authenticated by a connector key'
+const PAYMENT_SIGNING = 'BankID signing of a bank payment: the account holder signs money out in person, no machine door signs'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
 
@@ -392,6 +393,17 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/supplier-invoices/payment-batches/:id/cancel': covered([`POST ${V}/supplier-payment-batches/:id/cancel`, 'gnubok_cancel_supplier_payment_batch']),
   'POST /api/supplier-invoices/payment-batches/preview': covered([`POST ${V}/supplier-payment-batches/preview`, 'gnubok_preview_supplier_payment_batch']),
 
+  // ── Bank payments (payment initiation, lib/payments/orders) ─────────
+  'POST /api/payments/orders': gap('P1', 'prepare draft bank payments for supplier invoices; an operation (v1 + staged MCP) follows so an agent can prepare, never sign'),
+  'POST /api/payments/orders/approve': gap('P2', 'attest draft bank payments; staged behind a human approval when it gets a machine door'),
+  'POST /api/payments/orders/unapprove': gap('P3'),
+  'POST /api/payments/orders/:id/cancel': gap('P2'),
+  'POST /api/payments/signing': uiOnly(PAYMENT_SIGNING),
+  'POST /api/payments/signing/:id/poll': uiOnly(PAYMENT_SIGNING),
+  'POST /api/payments/signing/:id/restart': uiOnly(PAYMENT_SIGNING),
+  'POST /api/payments/verification': uiOnly('opens the payment provider\'s know-your-customer form for the company, filled in by a person'),
+  'POST /api/payments/orders/status/cron': machine(CRON),
+
   // ── Expenses, mileage, webshop ─────────────────────────────────────
   'POST /api/expense-claims': covered([`POST ${V}/expense-claims`, 'gnubok_create_expense_claim']),
   'DELETE /api/expense-claims/:id': covered([`DELETE ${V}/expense-claims/:id`, 'gnubok_delete_expense_claim']),
@@ -682,4 +694,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 133
+export const GAP_CEILING = 137
