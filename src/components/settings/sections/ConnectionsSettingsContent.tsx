@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Landmark } from 'lucide-react'
+import { HandCoins, Landmark } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { collectionsEntryShown, useCollectionsAvailability } from '@/components/collections/collections-client'
 import { GoogleMark } from '@/components/ui/provider-marks'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import {
@@ -84,6 +85,11 @@ export function ConnectionsSettingsContent() {
   const { company, isSandbox } = useCompany()
   const companyId = company?.id ?? null
   const [status, setStatus] = useState<Status | null>(null)
+  // Påminnelser och inkasso shows only where the installation offers it to
+  // this company, or where a connection already exists.
+  const collections = useCollectionsAvailability()
+  const showCollections = collectionsEntryShown(collections)
+  const collectionsState = collections?.connection?.state ?? null
 
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking') && !isSandbox
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket') && !isSandbox
@@ -257,8 +263,26 @@ export function ConnectionsSettingsContent() {
           })}
       </SettingsGroup>
 
-      {hasStripe || hasShopify || hasWooCommerce || hasZettle ? (
+      {hasStripe || hasShopify || hasWooCommerce || hasZettle || showCollections ? (
         <SettingsGroup label={t('group_payments_shop')}>
+          {showCollections &&
+            row({
+              logo: <HandCoins className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              name: t('collections'),
+              help: t('collections_help'),
+              state:
+                collectionsState === 'active'
+                  ? t('collections_active')
+                  : collectionsState === 'connecting' || collectionsState === 'needs_setup'
+                    ? t('collections_connecting')
+                    : t('not_connected'),
+              href: '/settings/collections',
+              connected: collectionsState === 'active',
+              attention:
+                collectionsState === 'needs_setup' ||
+                collections?.connection?.health === 'degraded' ||
+                collections?.connection?.health === 'action_required',
+            })}
           {hasStripe &&
             row({
               logo: <ImgLogo src="/logos/banks/stripe.png" />,

@@ -1,6 +1,9 @@
 'use client'
 
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
+import { Button } from '@/components/ui/button'
+import { collectionsEntryShown, useCollectionsAvailability } from '@/components/collections/collections-client'
 import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
 import { InvoiceTypesSettings } from '@/components/settings/InvoiceTypesSettings'
 import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePaymentLinkSettings'
@@ -10,14 +13,17 @@ import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
-import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
 
 export function InvoicingSettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const tCollections = useTranslations('settings_collections')
+  const tConnections = useTranslations('settings_connections')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
+  const collections = useCollectionsAvailability()
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
@@ -64,6 +70,20 @@ export function InvoicingSettingsContent() {
 
       {/* PDF settings: saves individually via toggle switches */}
       <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
+
+      {/* Påminnelser och inkasso lives under Kopplingar; linked here only
+          where the installation offers it or a connection exists. */}
+      {collectionsEntryShown(collections) ? (
+        <SettingsGroup>
+          <SettingsRow label={tCollections('title')} help={tConnections('collections_help')}>
+            <SettingsRowEnd>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/settings/collections">{tConnections('open')}</Link>
+              </Button>
+            </SettingsRowEnd>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
     </div>
   )
 }
