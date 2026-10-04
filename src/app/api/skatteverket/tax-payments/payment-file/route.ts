@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createHash } from 'node:crypto'
+import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentsBgLb } from '@/lib/salary/payment/bg-lb-generator'
@@ -32,6 +33,8 @@ const errorResponse = (code: string, message: string, messageEn: string, status:
   NextResponse.json({ error: { code, message, message_en: messageEn } }, { status })
 
 const SWEDBANK_ISO_ONLY_FROM = '2026-09-01'
+
+ensureInitialized()
 
 /**
  * Generate one payment file from selected upcoming Skattekonto debits.

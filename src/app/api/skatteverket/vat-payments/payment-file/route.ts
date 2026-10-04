@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
@@ -17,6 +18,8 @@ import {
 import type { VatPeriodType } from '@/types'
 
 type PaymentFormat = 'bg_lb' | 'pain001'
+
+ensureInitialized()
 
 /**
  * Generate one Skattekonto payment for a VAT due date. The payment includes
