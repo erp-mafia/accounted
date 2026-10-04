@@ -9,7 +9,8 @@ import {
 } from './api-client'
 import { historyWindowDays } from './history-window'
 import { bankSyncResponseSchema, connectorErrorSchema } from '@accounted/connect-contract'
-import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
+import { bankConnectorMode } from '@/lib/connect/instance/upstreams'
+import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { resolveBankIngestRoute } from '@/lib/bank-sync/ingest-route'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
@@ -115,12 +116,7 @@ async function fetchBookedViaConnector(
         method: 'POST',
         signal: controller.signal,
         redirect: 'error',
-        headers: {
-          Authorization: `Bearer ${connector.key}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          [CONNECTOR_COMPANY_HEADER]: args.companyId,
-        },
+        headers: connectorHeaders({ key: connector.key, companyId: args.companyId, json: true }),
         body: JSON.stringify({
           session_id: args.sessionId,
           account_uid: args.account.uid,
