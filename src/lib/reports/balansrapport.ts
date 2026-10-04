@@ -28,9 +28,15 @@ const CLASS_LABELS: Record<number, string> = {
  * Accounts no balance-sheet post covers: a BAS group header such as 1200, or
  * another legal form's equity account (2010 in an aktiebolag). The
  * årsredovisning reports these balances as missing, so they are listed apart
- * rather than folded into a neighbouring heading.
+ * rather than folded into a neighbouring heading. The note tells the user what
+ * to do about them; mapping them by number would misplace some, since a
+ * self-made account number means different things in different companies.
  */
-const UNCLASSIFIED = { key: 'unclassified', label: 'Ej klassificerade konton' }
+const UNCLASSIFIED = {
+  key: 'unclassified',
+  label: 'Ej klassificerade konton',
+  note: 'Kontona kan inte placeras under någon rubrik, oftast för att de inte finns i BAS-kontoplanen. Flytta saldot till ett BAS-konto under rätt rubrik.',
+}
 
 /**
  * BAS kontogrupp 20, Eget kapital. A form that prepares no årsredovisning
@@ -240,7 +246,7 @@ function buildSections(
 }
 
 function section(
-  node: { key: string; label: string },
+  node: { key: string; label: string; note?: string },
   rows: BalansrapportRow[],
   children: BalansrapportSection[],
 ): BalansrapportSection {
@@ -251,6 +257,7 @@ function section(
     key: node.key,
     label: node.label,
     total_label: `Summa ${node.label.charAt(0).toLocaleLowerCase('sv-SE')}${node.label.slice(1)}`,
+    ...(node.note ? { note: node.note } : {}),
     rows,
     sections: children,
     ...subtotals(parts),

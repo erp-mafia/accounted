@@ -199,12 +199,13 @@ export function useSupplierInvoiceSubmit({
       })
       return
     }
-    // Hard block: under faktureringsmetoden (and for privately-paid kvitton) a
-    // verifikation is posted at registration, and BFL 5 kap kräver att
-    // verifikationsnumret ligger i en obruten serie inom ett räkenskapsår. No
-    // räkenskapsår for the invoice date → no compliant voucher can exist, so we
-    // refuse rather than register an unbooked invoice. Kontantmetoden books at
-    // payment, so it is intentionally not blocked here (see showNoPeriodWarning).
+    // Hard block: under faktureringsmetoden without deferred booking (and for
+    // privately-paid kvitton) a verifikation is posted at registration, and BFL
+    // 5 kap kräver att verifikationsnumret ligger i en obruten serie inom ett
+    // räkenskapsår. No räkenskapsår for the invoice date → no compliant voucher
+    // can exist, so we refuse rather than register an unbooked invoice.
+    // Kontantmetoden books at payment and deferred booking at the Bokför step,
+    // so neither is blocked here (see showNoPeriodWarning).
     if (showNoPeriodWarning) {
       toast({
         title: t('warning_title'),

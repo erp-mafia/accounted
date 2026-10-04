@@ -98,6 +98,11 @@ import {
   KontantmetodCutoffPartialError,
   postKontantmetodCutoff,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
+import {
+  isKontantmetodCutoffSuspended,
+  KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
+  kontantmetodCutoffSuspendedMessageSv,
+} from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
 import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
 import {
   AssetCorrectionBlockedError,
@@ -433,11 +438,14 @@ async function commitRegisteredOperation(
   if (!outcome.ok) {
     if (outcome.error) throw outcome.error
     const entry = getErrorEntry(outcome.code)
+    const partial = outcome.partialPostedIds && Object.keys(outcome.partialPostedIds).length > 0
     return {
       // Never an empty string: an empty error reads as success downstream.
       error: outcome.messageSv || entry?.message_en || outcome.code,
       errorCode: outcome.code,
       status: entry?.httpStatus ?? 400,
+      // A failure after an irreversible step: failed_partial, not rejected.
+      ...(partial ? { partialPostedIds: outcome.partialPostedIds } : {}),
     }
   }
   if (outcome.dryRun) return { data: outcome.preview }
@@ -4269,6 +4277,9 @@ async function commitRunYearEnd(
   }
 }
 
+// Unreachable while isKontantmetodCutoffSuspended() is true (#3440): the
+// dispatcher refuses post_kontantmetod_cutoff before the claim, so a refused
+// op stays pending. A refusal in here would run after the claim and consume it.
 async function commitPostKontantmetodCutoff(
   supabase: SupabaseClient,
   userId: string,
@@ -4720,6 +4731,19 @@ async function commitCreateSupplierInvoiceFromInbox(
     return { error: 'exchange_rate must be a finite number when provided', status: 400 }
   }
 
+  // Every item carries its own account, under the rule the create routes
+  // hold (CreateSupplierInvoiceItemSchema: four digits). Staging resolves
+  // and checks it, so a miss here is a stale or tampered op: refuse it
+  // before an ankomstnummer is drawn instead of guessing one.
+  if (rawItems.some((item) => typeof item.account_number !== 'string' || !ACCOUNT_NUMBER_RE.test(item.account_number))) {
+    const entry = getErrorEntry('SI_CREATE_ITEM_ACCOUNT_MISSING')
+    return {
+      error: entry?.message_sv ?? 'En eller flera fakturarader saknar konto.',
+      errorCode: 'SI_CREATE_ITEM_ACCOUNT_MISSING',
+      status: entry?.httpStatus ?? 400,
+    }
+  }
+
   // Särskild löneskatt (SLP): staged params must respect the same rule the
   // create routes enforce; the 7533/2514 pair is only lawful on 741x pension
   // premiums, so a flag on any other account is tampered or mis-staged.
@@ -4866,7 +4890,7 @@ async function commitCreateSupplierInvoiceFromInbox(
       unit: (item.unit as string | undefined) ?? 'st',
       unit_price: typeof item.unit_price === 'number' && Number.isFinite(item.unit_price) ? item.unit_price : 0,
       line_total: typeof item.line_total === 'number' && Number.isFinite(item.line_total) ? item.line_total : 0,
-      account_number: String(item.account_number ?? '4000'),
+      account_number: item.account_number as string,
       vat_code: null,
       vat_rate: vatRate,
       vat_amount: vatAmt,
@@ -7393,6 +7417,25 @@ async function commitPendingOperationInner(
   pendingOp: PendingOperation,
   opts: CommitOptions = {}
 ): Promise<CommitResult> {
+  // ── Kontantmetoden cut-off suspension (#3440). The cut-off as built declares
+  //    unpaid-invoice moms a second time when the invoice is paid next year.
+  //    Refused HERE, before the atomic claim and before any read or write, for
+  //    the same reason as the gates below: a refused op must stay 'pending'
+  //    (not consumed), so it is still there when the fix decides what to do
+  //    with it. The staging door reads the same switch.
+  if (
+    pendingOp.operation_type === 'post_kontantmetod_cutoff' &&
+    isKontantmetodCutoffSuspended()
+  ) {
+    return {
+      status: 'failed',
+      error: kontantmetodCutoffSuspendedMessageSv(),
+      http_status: getErrorEntry(KONTANTMETOD_CUTOFF_SUSPENDED_CODE)?.httpStatus ?? 409,
+      code: KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
+      operation_status: 'pending',
+    }
+  }
+
   // ── Capability gate (commit-time twin of the MCP dispatch gate). The actual
   //    external-service call (email / Skatteverket submit) happens below, so
   //    this is the true paid chokepoint: it also catches an op STAGED during

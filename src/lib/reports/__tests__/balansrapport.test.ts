@@ -620,11 +620,19 @@ describe('generateBalansrapport sections (ÅRL bilaga 1 headings)', () => {
 
     const assetsLast = r.groups[0].sections.at(-1)!
     expect(assetsLast).toMatchObject({ key: 'unclassified', label: 'Ej klassificerade konton', subtotal_ub: 700 })
+    expect(assetsLast.note).toContain('Flytta saldot till ett BAS-konto')
     expect(assetsLast.rows.map((x) => x.account_number)).toEqual(['1200'])
     const equityLast = r.groups[1].sections.at(-1)!
     expect(equityLast.key).toBe('unclassified')
     expect(equityLast.total_label).toBe('Summa ej klassificerade konton')
+    expect(equityLast.note).toBe(assetsLast.note)
     expect(equityLast.rows.map((x) => x.account_number)).toEqual(['2010'])
+    // Only the unclassified section carries the explanation.
+    for (const group of r.groups) {
+      for (const s of allSections(group)) {
+        if (s.key !== 'unclassified') expect(s.note, s.key).toBeUndefined()
+      }
+    }
   })
 
   it('keeps a credit 1630 and a debit 2641 where they were booked (no sign reclassification)', async () => {

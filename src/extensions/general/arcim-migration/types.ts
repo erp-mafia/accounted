@@ -123,6 +123,11 @@ export interface InvoiceStepResult {
    */
   rowsMismatch?: number
   /**
+   * Supplier invoices with a provider row that named no account. They are
+   * imported without rows: no account is guessed for a row.
+   */
+  rowsUnaccounted?: number
+  /**
    * Credit notes imported without a credited_invoice_id: the provider named
    * no credited invoice, or the one it named is not among the company's
    * invoices. The amounts are reversed and the record is complete, but the

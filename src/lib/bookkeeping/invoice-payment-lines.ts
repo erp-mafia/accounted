@@ -56,9 +56,9 @@
  *                     partially_paid.
  */
 import type { CreateJournalEntryLineInput } from '@/types'
-import { ORE_TOLERANCE, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 import { resolveSekAmount } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
+import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 
 const TWO_DP = (n: number): number => Math.round(n * 100) / 100
 
@@ -273,8 +273,8 @@ export function buildInvoicePaymentClearingLines(
     // sub-krona residual. Clear the FULL remaining off 1510 (invoice → paid)
     // and let 3740 absorb the öre; a ≥1 kr short payment stays a real partial.
     const remainingSek = TWO_DP(invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0))
-    const oreDiff = TWO_DP(remainingSek - bankSek)
-    if (oreDiff !== 0 && Math.abs(oreDiff) < ORE_ROUNDING_SETTLEMENT_MAX) {
+    const oreDiff = oreSettlementResidual(remainingSek, bankSek)
+    if (oreDiff !== 0) {
       arSek = remainingSek
       oreRoundingSek = oreDiff
     } else {
@@ -366,22 +366,8 @@ export function buildInvoicePaymentClearingLines(
   // The AR leg above is already the full remaining, so 3740 balances the
   // verifikat: customer paid a sub-krona short → 3740 debit (förlust); over →
   // credit (vinst). Opposite polarity to the supplier side (AP cleared by a Dr).
-  if (Math.abs(oreRoundingSek) >= ORE_TOLERANCE) {
-    if (oreRoundingSek > 0) {
-      lines.push({
-        account_number: '3740',
-        debit_amount: Math.abs(oreRoundingSek),
-        credit_amount: 0,
-        line_description: 'Öresavrundning',
-      })
-    } else {
-      lines.push({
-        account_number: '3740',
-        debit_amount: 0,
-        credit_amount: Math.abs(oreRoundingSek),
-        line_description: 'Öresavrundning',
-      })
-    }
+  if (oreRoundingSek !== 0) {
+    lines.push(oreRoundingLine(oreRoundingSek, 'customer'))
   }
 
   return { bankSek, arSek, fxDiffSek, oreRoundingSek, lines }

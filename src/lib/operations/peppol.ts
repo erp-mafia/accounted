@@ -616,6 +616,7 @@ export const peppolRequestAccess = defineOperation({
     doNotUseFor: 'Registering the participant id once access is granted (POST /peppol/registration).',
     pitfalls: [
       'A company that already has access answers 409 PEPPOL_ACCESS_ALREADY_ENABLED; ask support for a higher cap or a receiving slot instead.',
+      'A company that cannot be a Peppol participant answers 422 with the code GET /peppol/registration reports in participant.code (PEPPOL_REGISTRATION_PERSONAL_NUMBER for a sole trader identified by personnummer); nothing is recorded.',
       'Nothing is enabled immediately: poll GET /peppol/registration for access.status=enabled.',
     ],
     example: {
@@ -634,7 +635,13 @@ export const peppolRequestAccess = defineOperation({
     access: Access,
     created: z.boolean().describe('False when an open request already existed.'),
   }),
-  errorCodes: ['PEPPOL_SANDBOX_NOT_ALLOWED', 'PEPPOL_ACCESS_ALREADY_ENABLED'],
+  errorCodes: [
+    'PEPPOL_SANDBOX_NOT_ALLOWED',
+    'PEPPOL_ACCESS_ALREADY_ENABLED',
+    'PEPPOL_REGISTRATION_PERSONAL_NUMBER',
+    'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED',
+    'PEPPOL_REGISTRATION_COMPANY_NAME_REQUIRED',
+  ],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/peppol/access-request' },
   mcp: {
     name: 'gnubok_request_peppol_access',

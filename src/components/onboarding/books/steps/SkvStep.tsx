@@ -9,6 +9,7 @@ import { fmtKr } from '../engines/cash-draw'
 import { SkvHandshake } from '../ui/SkvHandshake'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
+import { openOmbudDeepLink, verifyOmbudGrant } from '@/components/skatteverket/ombud-appoint'
 
 const RETURN_TO = '/onboarding/books?station=skv'
 const AUTHORIZE_URL = `/api/extensions/ext/skatteverket/authorize?return_to=${encodeURIComponent(RETURN_TO)}`
@@ -21,6 +22,12 @@ const AUTHORIZE_URL = `/api/extensions/ext/skatteverket/authorize?return_to=${en
  * under the stamp with the next deadline beneath it. A blocked tab falls
  * back to the full-page flow: the return mounts straight into the back
  * phase from ?skv_connected=true.
+ *
+ * With system auth on (flags.skvOmbud) the button appoints the app as the
+ * company's ombud instead: Skatteverket's e-service opens with the roles
+ * pre-selected, the company signs there, and nothing calls back, so the
+ * grant is checked against the ombudsregister when the user returns to
+ * this page. One BankID signature then serves every later sync.
  */
 export function SkvStep({ ctx }: { ctx: BooksCtx }) {
   const t = useTranslations('books')
@@ -36,6 +43,9 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
   useEffect(() => {
     phaseRef.current = phase
   }, [phase])
+  const ombudMode = Boolean(flags.skvOmbud)
+  // Set once the ombud deep link is open: the next return to this page checks the register.
+  const awaitingOmbud = useRef(false)
 
   const at = useCallback((ms: number, fn: () => void) => {
     timers.current.push(window.setTimeout(fn, ms))
@@ -113,6 +123,46 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
     return () => window.removeEventListener('message', onMessage)
   }, [arrive, dispatch, stopWatch, t])
 
+  // Back from signing at Skatteverket: one register check per return.
+  useEffect(() => {
+    async function onVisible() {
+      if (document.visibilityState !== 'visible' || !awaitingOmbud.current) return
+      if (phaseRef.current !== 'leaving' && phaseRef.current !== 'away') return
+      awaitingOmbud.current = false
+      const outcome = await verifyOmbudGrant()
+      if (outcome.result === 'granted') {
+        arrive()
+        return
+      }
+      setAttn(
+        outcome.result === 'not_yet'
+          ? t('skv_ombud_not_yet')
+          : outcome.result === 'rate_limited'
+            ? t('skv_ombud_wait')
+            : (outcome.error ?? t('skv_failed')),
+      )
+      dispatch({ type: 'SKV_PHASE', phase: 'open' })
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [arrive, dispatch, t])
+
+  async function appointOmbud() {
+    setAttn(null)
+    dispatch({ type: 'SKV_PHASE', phase: 'leaving' })
+    at(900, () => {
+      if (phaseRef.current === 'leaving') dispatch({ type: 'SKV_PHASE', phase: 'away' })
+    })
+    // Opens the tab inside this click, before its first await (popup blockers).
+    const opened = await openOmbudDeepLink()
+    if (!opened.ok) {
+      setAttn(opened.error ?? t('skv_ombud_link_failed'))
+      dispatch({ type: 'SKV_PHASE', phase: 'open' })
+      return
+    }
+    awaitingOmbud.current = true
+  }
+
   function connect() {
     setAttn(null)
     // The tab must open inside the click, or the browser blocks it.
@@ -152,15 +202,19 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
       </h1>
       {open ? (
         <div className={`skv-body${bodyCls}`}>
-          <p className="jny-qsub">{t('skv_sub')}</p>
+          <p className="jny-qsub">{ombudMode ? t('skv_ombud_sub', { appName }) : t('skv_sub')}</p>
           {attn ? <p className="jny-attn">{attn}</p> : null}
           {flags.hasSkatteverket ? (
-            <button type="button" className={`jny-bankid${phase === 'leaving' ? ' is-fold' : ''}`} onClick={connect}>
+            <button
+              type="button"
+              className={`jny-bankid${phase === 'leaving' ? ' is-fold' : ''}`}
+              onClick={ombudMode ? () => void appointOmbud() : connect}
+            >
               <span className="pmark" aria-hidden="true">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src="/logos/skatteverket.svg" alt="" />
               </span>
-              <span className="jny-bankid-txt">{t('skv_connect')}</span>
+              <span className="jny-bankid-txt">{ombudMode ? t('skv_ombud_connect', { appName }) : t('skv_connect')}</span>
             </button>
           ) : (
             <p className="jny-qsub">{t('skv_unavailable')}</p>
@@ -168,7 +222,12 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
         </div>
       ) : null}
       {phase === 'away' || phase === 'back' || phase === 'done' ? (
-        <SkvHandshake phase={phase} holdText={t('skv_hold')} leftLabel={appName} rightLabel={t('station_skv')} />
+        <SkvHandshake
+          phase={phase}
+          holdText={ombudMode ? t('skv_ombud_hold') : t('skv_hold')}
+          leftLabel={appName}
+          rightLabel={t('station_skv')}
+        />
       ) : null}
       {phase === 'done' ? (
         <SkvSaldo saldo={saldo} ledger={findings?.skv.ledger1630 ?? null} next={findings?.skv.nextDeadlines[0] ?? null} />

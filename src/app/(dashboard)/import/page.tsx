@@ -1490,8 +1490,11 @@ const REGISTER_STEP_LABELS: Record<RegisterStep, string> = {
   result: 'Resultat',
 }
 
-const CUSTOMER_COLUMN_SPECS: RegisterColumnSpec<keyof DetectedCustomerColumns>[] = [
+const getCustomerColumnSpecs = (
+  customerNumberLabel: string,
+): RegisterColumnSpec<keyof DetectedCustomerColumns>[] => [
   { key: 'name_col', label: 'Namn', required: true },
+  { key: 'customer_number_col', label: customerNumberLabel, required: false },
   { key: 'org_number_col', label: 'Org-/personnummer', required: false },
   { key: 'customer_type_col', label: 'Kundtyp', required: false },
   { key: 'email_col', label: 'E-post', required: false },
@@ -1520,6 +1523,8 @@ function columnsToMapping<K extends string>(
 
 function CustomersFlow() {
   const { toast } = useToast()
+  const tCustomerForm = useTranslations('form_customer')
+  const customerColumnSpecs = getCustomerColumnSpecs(tCustomerForm('customer_number_label'))
 
   const [step, setStep] = useState<RegisterStep>('upload')
   const [isLoading, setIsLoading] = useState(false)
@@ -1586,6 +1591,7 @@ function CustomersFlow() {
     try {
       const overrides: DetectedCustomerColumns = {
         name_col: mapping.name_col ?? 0,
+        customer_number_col: mapping.customer_number_col,
         org_number_col: mapping.org_number_col,
         customer_type_col: mapping.customer_type_col,
         email_col: mapping.email_col,
@@ -1673,7 +1679,7 @@ function CustomersFlow() {
   }
 
   const initialMapping = parseResult
-    ? columnsToMapping<keyof DetectedCustomerColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, CUSTOMER_COLUMN_SPECS)
+    ? columnsToMapping<keyof DetectedCustomerColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, customerColumnSpecs)
     : null
 
   return (
@@ -1715,7 +1721,7 @@ function CustomersFlow() {
         <RegisterColumnMappingStep<keyof DetectedCustomerColumns>
           headers={parseResult.headers}
           previewRows={parseResult.preview_rows}
-          specs={CUSTOMER_COLUMN_SPECS}
+          specs={customerColumnSpecs}
           initial={initialMapping}
           onConfirm={handleColumnMappingConfirm}
           onBack={() => setStep('upload')}

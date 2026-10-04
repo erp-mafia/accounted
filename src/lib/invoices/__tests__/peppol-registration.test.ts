@@ -97,9 +97,20 @@ describe('preparePeppolParticipant', () => {
 
   it('refuses missing numbers, personnummer and missing names', () => {
     expect(preparePeppolParticipant({ ...settings, org_number: null })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' })
-    expect(preparePeppolParticipant({ ...settings, org_number: '198001011234' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' })
+    expect(preparePeppolParticipant({ ...settings, org_number: '198001011234' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
+    expect(preparePeppolParticipant({ ...settings, org_number: '20050101-1234' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
+    expect(preparePeppolParticipant({ ...settings, org_number: '555953862191' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' })
     expect(preparePeppolParticipant({ ...settings, org_number: '8001011234' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
     expect(preparePeppolParticipant({ ...settings, company_name: ' ' })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_COMPANY_NAME_REQUIRED' })
+  })
+
+  it('refuses a form whose org number is the owner\'s personnummer, whatever the stored number looks like', () => {
+    expect(preparePeppolParticipant({ ...settings, entity_type: 'enskild_firma' }))
+      .toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
+    expect(preparePeppolParticipant({ ...settings, org_number: '198001011234', entity_type: 'enskild_firma' }))
+      .toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
+    expect(preparePeppolParticipant({ ...settings, entity_type: 'aktiebolag' })).toMatchObject({ ok: true })
+    expect(preparePeppolParticipant({ ...settings, entity_type: 'ideell_forening', org_number: '802400-1234' })).toMatchObject({ ok: true })
   })
 
   it('describes eligibility as ok/code for the settings page', () => {

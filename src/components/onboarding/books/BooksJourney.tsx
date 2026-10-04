@@ -46,6 +46,8 @@ interface BooksJourneyProps {
   hasMigration: boolean
   hasBanking: boolean
   hasSkatteverket: boolean
+  /** See BooksFlags.skvOmbud. */
+  skvOmbud?: boolean
 }
 
 /**
@@ -64,8 +66,13 @@ export default function BooksJourney(props: BooksJourneyProps) {
   const router = useRouter()
   const { appName } = useBranding()
   const flags = useMemo<BooksFlags>(
-    () => ({ hasMigration: props.hasMigration, hasBanking: props.hasBanking, hasSkatteverket: props.hasSkatteverket }),
-    [props.hasMigration, props.hasBanking, props.hasSkatteverket],
+    () => ({
+      hasMigration: props.hasMigration,
+      hasBanking: props.hasBanking,
+      hasSkatteverket: props.hasSkatteverket,
+      skvOmbud: props.skvOmbud ?? false,
+    }),
+    [props.hasMigration, props.hasBanking, props.hasSkatteverket, props.skvOmbud],
   )
   const entry = useMemo<BooksEntry>(
     () => ({

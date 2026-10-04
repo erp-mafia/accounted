@@ -4,6 +4,7 @@ import type { ProviderMigrationJob } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload } from '@/lib/providers/migration-payload'
 import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
+import { enrichBokioSupplierInvoice } from '@/lib/providers/bokio/supplier-evidence'
 const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn() }))
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn() }) }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
@@ -136,6 +137,31 @@ describe('bounded durable worker', () => {
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
     expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
       p_records: [{ id: dto.id, error: 'MIGRATION_ROWS_MISMATCH' }],
+    }))
+  })
+  it.each([
+    ['keeps a Bokio invoice whose rows name no account, without rows', 'bokio', undefined],
+    ['refuses another provider\'s invoice whose rows name no account as missing lines', 'visma', 'MIGRATION_SOURCE_LINES_MISSING'],
+  ] as const)('%s', async (_label, provider, error) => {
+    // The mapper drops a row set with a row lacking an account instead of
+    // writing 4000 on it. A Bokio invoice already imports row-less when its
+    // rows are withheld, so it keeps doing so; no account is guessed.
+    const db = database({ phase: 'import', resources: ['supplierInvoices'], provider })
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider, org_number: '556000-0000' } })
+    const listed = mapBokioToSupplierInvoice({ id: 'si-noacc', invoiceNumber: '1001', invoiceDate: '2026-01-02', currency: 'SEK',
+      totalAmount: 1250, remainingAmount: 1250, supplierRef: { id: 'supplier', name: 'Supplier' },
+      lineItems: [{ description: 'Test', quantity: 1, unitPrice: 1000, taxRate: 25 }] })
+    const dto = provider === 'bokio' ? enrichBokioSupplierInvoice(listed) : listed
+    vi.mocked(mapSupplierInvoice).mockReturnValueOnce({
+      invoice: { subtotal: 1000, vat_amount: 250, total_sek: 1250 },
+      items: [], rowsMismatch: false, rowsUnaccounted: true,
+      fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null,
+    })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [error ? { id: dto.id, error } : expect.objectContaining({ id: dto.id, items: [] })],
     }))
   })
   it('keeps same-named Bokio customers and suppliers separate through their source references', () => {

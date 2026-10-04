@@ -72,6 +72,13 @@ export type OperationOutcome<O> =
       details?: Record<string, unknown>
       messageSv?: string
       error?: unknown
+      /**
+       * Set when the operation already made an irreversible change before
+       * this failure (e.g. one of several inline rättelser committed): the
+       * staged-operation commit path lands the op in 'failed_partial' with
+       * these ids instead of 'rejected' (issue #842).
+       */
+      partialPostedIds?: Record<string, string>
     }
 
 export interface OperationDocs {

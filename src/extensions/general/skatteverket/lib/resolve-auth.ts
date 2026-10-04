@@ -4,6 +4,7 @@ import { getSkatteverketEnvironment, type SkvAuth } from './api-client'
 import { getSystemAuthMode, isSystemAuthConfigured } from './system-auth/config'
 import {
   getConnection,
+  keepRowsOnCurrentOrgNumber,
   type SkvBehorighet,
   type SkvEnvironment,
 } from './connection-store'
@@ -56,7 +57,11 @@ export type ResolvedReadAuth =
     }
   | { ok: false; reason: 'no_token' | 'needs_reconsent' }
 
-/** True when the company's connection row has the behorighet granted. */
+/**
+ * True when the company's connection row has the behorighet granted AND the
+ * company still answers for the org number the grant was verified on (see
+ * keepRowsOnCurrentOrgNumber).
+ */
 export async function hasVerifiedGrant(
   companyId: string,
   behorighet: SkvBehorighet
@@ -65,7 +70,23 @@ export async function hasVerifiedGrant(
   if (!connection) return false
   const grant =
     behorighet === 'lasombud' ? connection.lasombud_status : connection.moms_ombud_status
-  return grant === 'granted' && ['verified', 'partial'].includes(connection.status)
+  if (grant !== 'granted' || !['verified', 'partial'].includes(connection.status)) return false
+  return (await keepRowsOnCurrentOrgNumber([connection])).length === 1
+}
+
+/** System (ombud) reads are switched on and configured in this deployment. */
+export function isSystemReadActive(): boolean {
+  return getSystemAuthMode() === 'on' && isSystemAuthConfigured()
+}
+
+/**
+ * The company's background reads run on Accounted's ombud credentials, so a
+ * dead personal BankID session is no reason to ask anyone to log in again.
+ * One definition for resolveReadAuth, /status, the agent briefing and core's
+ * Hem and notice surfaces (through the extension's services).
+ */
+export async function hasOmbudReadAccess(companyId: string): Promise<boolean> {
+  return isSystemReadActive() && (await hasVerifiedGrant(companyId, 'lasombud'))
 }
 
 export async function resolveReadAuth(
@@ -73,7 +94,7 @@ export async function resolveReadAuth(
   companyId: string,
   opts: { requires: SkvBehorighet; userId?: string }
 ): Promise<ResolvedReadAuth> {
-  if (getSystemAuthMode() === 'on' && isSystemAuthConfigured()) {
+  if (isSystemReadActive()) {
     if (await hasVerifiedGrant(companyId, opts.requires)) {
       return {
         ok: true,

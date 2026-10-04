@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
 import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
+import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import { decideHemGate } from '@/lib/onboarding/hem-gate'
 import { readAiConnection } from '@/lib/onboarding/ai-clients.server'
@@ -92,6 +93,7 @@ export default async function DashboardPage() {
     agentProfile,
     { count: skatteverketTokenCount },
     aiConnection,
+    skvOmbudReadAccess,
   ] =
     await Promise.all([
       getDashboardSettings(),
@@ -109,6 +111,8 @@ export default async function DashboardPage() {
       // the person. Throws on a failed read: guessing "not connected" would
       // re-open the connect step for a connected user.
       readAiConnection(serviceClient, user.id),
+      // Accounted as ombud counts as connected too (lib/skatteverket/ombud-access.ts).
+      hasSkatteverketOmbudReadAccess(companyId),
     ])
 
   // A FAILED settings read must not masquerade as "onboarding not done":
@@ -190,7 +194,7 @@ export default async function DashboardPage() {
             companyId={companyId}
             now={now}
             setupOpen={setupOpen}
-            hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
+            hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0 || skvOmbudReadAccess}
             aiConnection={aiConnection}
           />
         </Suspense>

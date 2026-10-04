@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// i3440-suspension: these tests cover the cut-off itself, which #3440
+// suspends at both doors. They lift the suspension here so the coverage keeps
+// running; the fix PR deletes this mock together with
+// lib/core/bookkeeping/kontantmetod-cutoff-suspension.ts. The suspension's own
+// tests live in kontantmetod-cutoff-suspension.test.ts.
+vi.mock('@/lib/core/bookkeeping/kontantmetod-cutoff-suspension', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/core/bookkeeping/kontantmetod-cutoff-suspension')>()),
+  isKontantmetodCutoffSuspended: () => false,
+}))
+
 vi.mock('@/lib/core/bookkeeping/period-service', async () => {
   const actual = await vi.importActual<typeof import('@/lib/core/bookkeeping/period-service')>(
     '@/lib/core/bookkeeping/period-service',

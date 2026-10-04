@@ -20,6 +20,7 @@ import {
 import { CheckCircle2, ExternalLink, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
+import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
 
 type Environment = 'test' | 'prod'
 
@@ -445,6 +446,10 @@ interface SystemConnectionState {
     moms_ombud_status: GrantStatus
     verified_at: string | null
     last_probe_at: string | null
+    last_probe_detail?: {
+      lasombud?: { reason?: string } | null
+      moms_ombud?: { reason?: string } | null
+    } | null
   } | null
 }
 
@@ -460,48 +465,6 @@ function SkatteverketSystemConnectionCard() {
   const { toast } = useToast()
   const [state, setState] = useState<SystemConnectionState | null>(null)
   const [verifying, setVerifying] = useState(false)
-  const [linking, setLinking] = useState(false)
-
-  /**
-   * Ombudshantering deep link: Skatteverket's e-service opens with the app
-   * pre-filled as ombud and both roles pre-selected, so the company only
-   * signs. The tab is opened synchronously on click (popup blockers) and
-   * pointed at the link once the server has minted it.
-   */
-  async function openDeepLink() {
-    setLinking(true)
-    // No 'noopener' feature here: with it window.open returns null and the
-    // pre-opened tab (the popup-blocker mitigation) would never exist. The
-    // opener link is cut by hand instead.
-    const tab = window.open('', '_blank')
-    if (tab) tab.opener = null
-    try {
-      const res = await fetch('/api/extensions/ext/skatteverket/system-connection/deeplink', {
-        method: 'POST',
-      })
-      const body = await res.json().catch(() => ({}))
-      const url = typeof body?.data?.djuplank === 'string' ? body.data.djuplank : null
-      if (!res.ok || !url) {
-        tab?.close()
-        toast({
-          title: t('system_deeplink_failed'),
-          description: typeof body?.error === 'string' ? body.error : undefined,
-          variant: 'destructive',
-        })
-        return
-      }
-      // A blocked pre-open means a second window.open after the await would
-      // be blocked too: navigate this tab instead so the link is never lost.
-      if (tab) tab.location.href = url
-      else window.location.assign(url)
-    } catch {
-      tab?.close()
-      toast({ title: t('system_deeplink_failed'), variant: 'destructive' })
-    } finally {
-      setLinking(false)
-    }
-  }
-
   async function loadState() {
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/system-connection')
@@ -518,6 +481,12 @@ function SkatteverketSystemConnectionCard() {
   useEffect(() => {
     loadState()
   }, [])
+
+  // Appoint via the deep link, then re-check the register when the user is
+  // back from signing at Skatteverket (shared with Hem and onboarding).
+  const { appoint, linking, checking } = useOmbudAppointWithToasts(() => {
+    void loadState()
+  })
 
   async function verify() {
     setVerifying(true)
@@ -581,6 +550,11 @@ function SkatteverketSystemConnectionCard() {
         {grantBadge(state.connection?.moms_ombud_status)}
       </SettingsRow>
 
+      {(state.connection?.last_probe_detail?.lasombud?.reason === 'predates_opt_in' ||
+        state.connection?.last_probe_detail?.moms_ombud?.reason === 'predates_opt_in') && (
+        <WarningLine>{t('system_predates_opt_in', { appName })}</WarningLine>
+      )}
+
       {state.cert?.expiresSoon && (
         <WarningLine>
           {t('system_cert_expires_soon', { days: state.cert.daysUntilExpiry, appName })}
@@ -588,7 +562,7 @@ function SkatteverketSystemConnectionCard() {
       )}
 
       <div className="flex flex-wrap items-center gap-4 px-1 py-3">
-        <Button size="sm" variant="outline" onClick={openDeepLink} loading={linking} title={t('system_deeplink_hint', { appName })}>
+        <Button size="sm" variant="outline" onClick={() => void appoint()} loading={linking || checking} title={t('system_deeplink_hint', { appName })}>
           {!linking && <ExternalLink className="mr-2 h-4 w-4" />}
           {linking ? t('system_deeplink_loading') : t('system_deeplink', { appName })}
         </Button>

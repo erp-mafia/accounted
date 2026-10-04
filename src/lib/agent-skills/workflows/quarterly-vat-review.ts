@@ -1,4 +1,12 @@
 import type { Skill } from '../types'
+import { isKontantmetodCutoffSuspended } from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
+
+// #3440: while the kontantmetoden cut-off is suspended it cannot have been
+// done, so the skill says so instead of asking. The fix PR deletes the
+// suspension module and keeps the second branch.
+const YEAR_END_CUTOFF_NOTE = isKontantmetodCutoffSuspended()
+  ? 'If this period contains the fiscal year-end, the year-end cut-off from `year-end-close` is temporarily suspended (#3440), so the moms on invoices unpaid at year end is not in this declaration yet. Say so to the user before they file, and never book that moms or the receivables and payables by hand as a workaround.'
+  : 'If this period contains the fiscal year-end, ask whether the year-end cut-off from `year-end-close` has been done before filing.'
 
 const body = `# Quarterly VAT Review (Momsdeklaration): Accounted
 
@@ -56,7 +64,7 @@ Before starting, tell the user in two lines what you found (company, cadence, pe
 
 **When the period is not fully booked or reconciled:** do not treat the rutor as final and do not validate or submit. Tell the user exactly which blockers remain, offer the sibling skill for each, and either stop there or continue the review clearly labelled as preliminary ("preliminär, perioden är inte klar"). After the fixes are approved, run \`gnubok_vat_close_check\` again; never assume a fix landed.
 
-**Kontantmetoden:** under \`accounting_method: cash\`, moms is recognised when paid, so unpaid customer and supplier invoices are correctly absent from the period. Exception: at fiscal year-end open invoices must be brought in. If this period contains the fiscal year-end, ask whether the year-end cut-off from \`year-end-close\` has been done before filing. Faktureringsmetoden is required above 3M SEK omsättning; if a cash-method company looks larger than that, raise it as a question, do not change anything.
+**Kontantmetoden:** under \`accounting_method: cash\`, moms is recognised when paid, so unpaid customer and supplier invoices are correctly absent from the period. Exception: at fiscal year-end open invoices must be brought in. ${YEAR_END_CUTOFF_NOTE} Faktureringsmetoden is required above 3M SEK omsättning; if a cash-method company looks larger than that, raise it as a question, do not change anything.
 
 ## Step 2: Read the declaration ruta by ruta
 

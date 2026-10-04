@@ -102,8 +102,9 @@ export function PeppolReceiveSettings() {
   const isOn = registration?.status === 'registered' || registration?.status === 'pending'
   const transportAvailable = !!state?.transport.available
   const receivingAvailable = transportAvailable && !!state?.receiving_supported && !!access?.receive_enabled
-  // The company cannot publish a Peppol id at all (personnummer, no org
-  // number, no name): say so where the receiving offer would otherwise be.
+  // The company cannot be a Peppol participant at all (personnummer, no org
+  // number, no name): it can neither send nor receive, so the access request
+  // is refused. Say why where the request would otherwise be.
   const participantBlocked = state !== null && !state.participant.ok
   const eligibilityText = participantBlocked
     ? registryText(state.participant.code ?? 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED', localeKey)
@@ -210,22 +211,21 @@ export function PeppolReceiveSettings() {
           {/* The request controls live under the status text and wrap: a long
               checkbox label next to a button in a shrink-0 end slot pushed the
               whole settings panel wider than its column. */}
-          {state !== null && transportAvailable && (access?.status === 'none' || access?.status === 'disabled') && (
+          {state !== null && transportAvailable && participantBlocked && access?.status !== 'enabled' && (
+            <SettingsRowNote className="block min-w-0">{eligibilityText}</SettingsRowNote>
+          )}
+          {state !== null && transportAvailable && !participantBlocked && (access?.status === 'none' || access?.status === 'disabled') && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              {participantBlocked ? (
-                <SettingsRowNote className="min-w-0">{eligibilityText}</SettingsRowNote>
-              ) : (
-                <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 shrink-0 rounded-sm border-border"
-                    checked={wantsReceiving}
-                    onChange={(event) => setWantsReceiving(event.target.checked)}
-                    disabled={isRequesting || !canWrite}
-                  />
-                  <span>{t('request_receiving_label')}</span>
-                </label>
-              )}
+              <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0 rounded-sm border-border"
+                  checked={wantsReceiving}
+                  onChange={(event) => setWantsReceiving(event.target.checked)}
+                  disabled={isRequesting || !canWrite}
+                />
+                <span>{t('request_receiving_label')}</span>
+              </label>
               <Button
                 type="button"
                 variant="outline"

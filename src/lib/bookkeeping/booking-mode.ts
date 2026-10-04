@@ -24,6 +24,25 @@ export function booksInvoicesOnIssue(
 }
 
 /**
+ * When an invoice's own verifikat is posted, for the surfaces that describe
+ * it before the user confirms (review dialogs, ready lines). Derived from
+ * booksInvoicesOnIssue so a UI never re-derives it from accounting_method:
+ *
+ * - 'issue': faktureringsmetoden, posted at registration (or send).
+ * - 'payment': kontantmetoden, posted when the invoice is paid, as one cash
+ *   entry with no 2440/1510 leg. Wins over the defer flag.
+ * - 'manual': defer_invoice_booking, posted by the explicit Bokför step.
+ */
+export type InvoiceBookingMoment = 'issue' | 'payment' | 'manual'
+
+export function invoiceBookingMoment(
+  settings: Parameters<typeof booksInvoicesOnIssue>[0],
+): InvoiceBookingMoment {
+  if (booksInvoicesOnIssue(settings)) return 'issue'
+  return settings?.accounting_method === 'cash' ? 'payment' : 'manual'
+}
+
+/**
  * Kontantmetoden guard for the GENERATED payment entries on never-booked
  * invoices. createInvoiceCashEntry and createSupplierInvoiceCashEntry always
  * book the FULL invoice (revenue or expense + VAT + a full-total settlement

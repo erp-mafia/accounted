@@ -4,6 +4,7 @@ import type { ImportNotice } from '@/lib/import/notices'
 /** Result of auto-detecting columns in a customer register file. */
 export interface DetectedCustomerColumns {
   name_col: number
+  customer_number_col: number | null
   org_number_col: number | null
   customer_type_col: number | null
   email_col: number | null
@@ -25,6 +26,7 @@ export interface ParsedCustomerRow {
   row_index: number
   name: string
   customer_type: CustomerType
+  customer_number: string | null
   org_number: string | null
   email: string | null
   phone: string | null

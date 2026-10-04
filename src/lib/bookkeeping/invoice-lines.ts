@@ -1,15 +1,18 @@
 /**
  * The pure line builders of the customer-invoice verifikat: per-rate revenue
- * and moms lines, the skattereduktion (1513) lines, and the whole
- * kontantmetoden payment entry (buildInvoiceCashLines).
+ * and moms lines, the skattereduktion (1513) lines, the whole registration
+ * and credit-note entries (buildInvoiceRegistrationLines,
+ * buildCreditNoteLines) and the whole kontantmetoden payment entry
+ * (buildInvoiceCashLines).
  *
  * No engine, Supabase or logger import, so the browser can run them: the
  * payment dialog proposes the kontantmetoden entry with buildInvoiceCashLines
- * itself instead of a hand-kept copy that had drifted from it (it credited the
- * rate's default account where the invoice line named its own). The engine
- * wrappers that book these lines stay in ./invoice-entries.
+ * and the send dialog the registration or credit-note entry, instead of
+ * hand-kept copies that had drifted (they credited the rate's default account
+ * where the invoice line named its own). The engine wrappers that book these
+ * lines stay in ./invoice-entries.
  */
-import { resolveSekAmountOrNull } from './currency-utils'
+import { buildCurrencyMetadata, resolveSekAmountOrNull } from './currency-utils'
 import { resolveBookingAccount } from './accruals/account-suggestions'
 import {
   coerceDimensionsBag,
@@ -22,6 +25,8 @@ import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { computeDeduction, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
+import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { roundOre } from '@/lib/money'
 import type {
   CreateJournalEntryLineInput,
   EntityType,
@@ -367,6 +372,237 @@ export function generateRotRutLines(
 }
 
 /**
+ * The invoice fields the registration and credit-note entries read: the same
+ * set as the kontantmetoden entry, so a full Invoice satisfies it and so does
+ * the send dialog's invoice.
+ */
+export type InvoiceRegistrationLinesSource = InvoiceCashLinesSource
+
+/**
+ * The faktureringsmetoden registration verifikat of an issued invoice, pure:
+ * buildInvoiceJournalEntryInput books exactly these lines, and the send
+ * dialog (proposeSendLines) previews them, so the rows a user approves or
+ * edits carry what gets booked. Supports per-item VAT rates and revenue
+ * accounts; periodiserade lines credit the 29xx interim account.
+ *
+ *   Debit  1510 Kundfordringar     [total incl VAT, minus ROT/RUT]
+ *   Debit  1513 Skatteverket       [ROT/RUT per item]
+ *   Credit 30xx Försäljning        [subtotal per rate and account]
+ *   Credit 26xx Utgående moms      [vat per rate]
+ *
+ * numberOverride replaces the invoice number in the line texts (self-billing
+ * received books under the counterparty's external number).
+ */
+export function buildInvoiceRegistrationLines(
+  invoice: InvoiceRegistrationLinesSource,
+  entityType: EntityType,
+  numberOverride?: string | null,
+): CreateJournalEntryLineInput[] {
+  const lines: CreateJournalEntryLineInput[] = []
+  const isForeign = invoice.currency !== 'SEK'
+  const tag = numberOverride ?? invoiceTag(invoice)
+  // Dimensions PR7: the invoice default rides every generated line; item bags
+  // merge over it inside generatePerRateLines/generateRotRutLines.
+  const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
+
+  // Credit lines: revenue + VAT per rate group (compute first to guarantee balance)
+  const creditLines: CreateJournalEntryLineInput[] = []
+
+  if (invoice.items && invoice.items.length > 0) {
+    creditLines.push(...generatePerRateLines(
+      invoice.items, invoice.vat_treatment, entityType, tag,
+      invoice.currency, invoice.exchange_rate,
+      // Schedules are created right after this entry commits (send/mark-sent
+      // flows), so deferring to 29xx here is safe.
+      { deferAccruals: true, defaultDimensions, goodsDeliveryCountry: invoice.delivery_country }
+    ))
+  } else {
+    // Fallback: no items available, use invoice-level amounts. Strict
+    // conversion: a rate-less foreign header must refuse exactly like the
+    // item-driven path, not post the raw foreign number as kronor.
+    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
+    const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
+
+    creditLines.push({
+      account_number: revenueAccount,
+      debit_amount: 0,
+      credit_amount: subtotalSek,
+      line_description: `Försäljning faktura ${tag}`,
+      dimensions: defaultDimensions,
+    })
+
+    if (invoice.vat_amount > 0) {
+      if (isForeign) {
+        const vatSek = headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
+        const vatAccount = getOutputVatAccount(invoice.vat_treatment)
+        creditLines.push({
+          account_number: vatAccount,
+          debit_amount: 0,
+          credit_amount: vatSek,
+          line_description: `Utgående moms faktura ${tag}`,
+          dimensions: defaultDimensions,
+        })
+      } else {
+        const vatLines = generateSalesVatLines({
+          vatTreatment: invoice.vat_treatment,
+          baseAmount: invoice.subtotal,
+          direction: 'sales',
+        })
+        creditLines.push(...vatLines.map((line) => ({
+          ...line,
+          dimensions: defaultDimensions,
+        })))
+      }
+    }
+  }
+
+  // ROT/RUT-avdrag debit lines (1513 Skatteverket). When present, they
+  // reduce the 1510 debit by the same total so the verifikation stays
+  // balanced (debits 1510 + 1513 = credits revenue + VAT). The customer
+  // only owes the post-deduction amount; Skatteverket pays the rest.
+  const rotRut = invoice.items && invoice.items.length > 0
+    ? generateRotRutLines(invoice.items, tag, invoice.currency, invoice.exchange_rate, defaultDimensions)
+    : { lines: [], totalSek: 0 }
+
+  // Debit: Kundfordringar, balance guarantee: debit = NET of all revenue/VAT
+  // lines (a negative rabatt/avrundning row sits on the debit side after
+  // creditNatural, so it must subtract) MINUS the ROT/RUT total which goes
+  // to 1513 instead.
+  const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0)
+  const debitAmount = isForeign
+    ? Math.round(totalCredits * 100) / 100
+    : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
+  const arAmount = Math.round((debitAmount - rotRut.totalSek) * 100) / 100
+
+  lines.push({
+    account_number: '1510',
+    debit_amount: arAmount,
+    credit_amount: 0,
+    line_description: `Faktura ${tag}`,
+    dimensions: defaultDimensions,
+    ...buildCurrencyMetadata(invoice.currency, isForeign ? invoice.total : undefined, invoice.exchange_rate),
+  })
+
+  lines.push(...rotRut.lines)
+  lines.push(...creditLines)
+
+  return lines
+}
+
+/**
+ * The credit-note verifikat (reversed version of the original invoice entry),
+ * pure: createCreditNoteJournalEntry books exactly these lines, and the send
+ * dialog previews them. Supports per-item VAT rates and revenue accounts with
+ * reversed debit/credit sides.
+ *
+ *   Debit  30xx Försäljning         [subtotal per rate and account]
+ *   Debit  26xx Utgående moms       [vat per rate]
+ *   Credit 1510 Kundfordringar      [total, minus ROT/RUT]
+ *   Credit 1513 Skatteverket        [ROT/RUT per item]
+ *
+ * originalVoucherRef (e.g. "A-42") is embedded in the line texts: BFL 5 kap.
+ * 5 § requires a correction to point back to the corrected verifikation.
+ */
+export function buildCreditNoteLines(
+  creditNote: InvoiceRegistrationLinesSource,
+  entityType: EntityType,
+  originalVoucherRef?: string,
+): CreateJournalEntryLineInput[] {
+  const lines: CreateJournalEntryLineInput[] = []
+  const tag = invoiceTag(creditNote)
+  const lineSuffix = originalVoucherRef ? ` (avser ${originalVoucherRef})` : ''
+  // Dimensions PR7: the credit note's bag (copied from the original at credit
+  // time) so the reversal nets against the same dimension cells in reports.
+  const defaultDimensions = coerceDimensionsBag(creditNote.default_dimensions)
+
+  // Generate reversed revenue + VAT lines per rate group (debit side for credit notes)
+  const debitLines: CreateJournalEntryLineInput[] = []
+
+  if (creditNote.items && creditNote.items.length > 0) {
+    // Use absolute items for generatePerRateLines, then swap debit/credit
+    const creditLines = generatePerRateLines(
+      creditNote.items, creditNote.vat_treatment, entityType, tag,
+      creditNote.currency, creditNote.exchange_rate,
+      // Credit-note items carry the original's accrual fields so the reversal
+      // hits the same 29xx interim account; the original's schedule is
+      // cancelled/stornoed by the credit flow. delivery_country is copied
+      // from the original too, so goods revenue reverses on 3105 / 3108.
+      { deferAccruals: true, defaultDimensions, goodsDeliveryCountry: creditNote.delivery_country }
+    )
+    // Every caller hands us items negated with -Math.abs (build-credit-note-
+    // item.ts), so generatePerRateLines lands every line on the debit side
+    // via creditNatural. Taking |net| as the debit reproduces the pre-existing
+    // output exactly (the old column swap would now flip them back). Known
+    // gap, unchanged by this commit: an original with a NEGATIVE row (rabatt,
+    // avrundning) is credited on the same side as the original instead of
+    // the opposite one, because -Math.abs erases the row's sign upstream.
+    for (const line of creditLines) {
+      debitLines.push({
+        ...line,
+        debit_amount: Math.round(Math.abs(line.credit_amount - line.debit_amount) * 100) / 100,
+        credit_amount: 0,
+        line_description: `Kreditfaktura ${tag}${lineSuffix}`,
+      })
+    }
+  } else {
+    // Fallback: invoice-level amounts. Same strict conversion as the
+    // registration fallback above: a rate-less foreign credit note must
+    // refuse, not reverse the receivable with a mislabelled number.
+    const revenueAccount = getRevenueAccount(creditNote.vat_treatment, entityType, creditNote.delivery_country)
+    const absSubtotal = Math.abs(headerToSekOrThrow(creditNote.subtotal, creditNote.subtotal_sek, creditNote.currency, creditNote.exchange_rate))
+    const absVat = Math.abs(headerToSekOrThrow(creditNote.vat_amount, creditNote.vat_amount_sek, creditNote.currency, creditNote.exchange_rate))
+
+    debitLines.push({
+      account_number: revenueAccount,
+      debit_amount: absSubtotal,
+      credit_amount: 0,
+      line_description: `Kreditfaktura ${tag}`,
+      dimensions: defaultDimensions,
+    })
+
+    if (absVat > 0) {
+      const vatAccount = getOutputVatAccount(creditNote.vat_treatment)
+      debitLines.push({
+        account_number: vatAccount,
+        debit_amount: absVat,
+        credit_amount: 0,
+        line_description: `Moms kreditfaktura ${tag}${lineSuffix}`,
+        dimensions: defaultDimensions,
+      })
+    }
+  }
+
+  lines.push(...debitLines)
+
+  // ROT/RUT reverses the exact receivable split used by the original invoice:
+  // 1510 for the customer portion and 1513 for the Skatteverket portion.
+  const rotRut = creditNote.items && creditNote.items.length > 0
+    ? generateRotRutLines(
+        creditNote.items,
+        tag,
+        creditNote.currency,
+        creditNote.exchange_rate,
+        defaultDimensions,
+        'credit',
+      )
+    : { lines: [], totalSek: 0 }
+
+  // Credit: Kundfordringar, balance guarantee: 1510 + 1513 equals debits.
+  const totalDebits = debitLines.reduce((sum, l) => sum + l.debit_amount, 0)
+  const customerReceivable = roundOre(totalDebits - rotRut.totalSek)
+  lines.push({
+    account_number: '1510',
+    debit_amount: 0,
+    credit_amount: customerReceivable,
+    line_description: `Kreditfaktura ${tag}`,
+    dimensions: defaultDimensions,
+  })
+  lines.push(...rotRut.lines)
+
+  return lines
+}
+
+/**
  * The invoice fields the kontantmetoden entry reads. A full Invoice satisfies
  * it; so does the payment dialog's proposal input.
  */
@@ -388,6 +624,20 @@ export interface InvoiceCashLinesSource {
 }
 
 /**
+ * The SEK that arrived on the bank row a kontantmetoden payment is matched
+ * to, for buildInvoiceCashLines' `knownBankSek`. Undefined unless the row is
+ * in SEK: öresavrundning is a whole-krona rule, and a foreign row settles
+ * with a kursdiff instead. One derivation for the match route, its preview
+ * and createInvoiceCashEntry, so what the dialog shows is what gets booked.
+ */
+export function invoiceCashBankSek(
+  bankTransaction?: { amount: number; currency?: string | null } | null,
+): number | undefined {
+  if (!bankTransaction || bankTransaction.currency !== 'SEK') return undefined
+  return roundOre(Math.abs(bankTransaction.amount))
+}
+
+/**
  * The kontantmetoden (cash method) verifikat for a received payment, pure:
  * createInvoiceCashEntry books exactly these lines, and the bank-match
  * preview and the payment dialog (proposePaymentLines) show them, so the
@@ -395,15 +645,26 @@ export interface InvoiceCashLinesSource {
  * dimensions included. Supports per-item VAT rates. Revenue + VAT
  * recognised at payment.
  *
- *   Debit  1930 Företagskonto       [total]
+ *   Debit  1930 Företagskonto       [customer share, or the bank amount]
+ *   Debit  1513 Skatteverket        [ROT/RUT deduction]  (if applicable)
  *   Credit 30xx Försäljning         [subtotal per rate]
  *   Credit 26xx Utgående moms       [vat per rate]  (if applicable)
+ *   Dr/Cr  3740 Öresavrundning      [bank vs share gap]  (if applicable)
+ *
+ * `knownBankSek`: the SEK that actually arrived (invoiceCashBankSek), when
+ * the payment is matched to a bank row. On a SEK invoice a gap under one
+ * krona to the customer share is öresavrundning: 1930 takes what arrived and
+ * 3740 the gap (customer side of oreRoundingLine), so 1930 follows the bank
+ * statement. Revenue and moms stay on the invoice amounts: 3740 carries no
+ * VAT. An exact row, a gap of a krona or more (the routes refuse those
+ * before booking) and a foreign invoice book the customer share as before.
  */
 export function buildInvoiceCashLines(
   invoice: InvoiceCashLinesSource,
   entityType: EntityType,
   customerName?: string,
   settlementAccountNumber: string = '1930',
+  knownBankSek?: number,
 ): { description: string; lines: CreateJournalEntryLineInput[] } {
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = invoice.currency !== 'SEK'
@@ -463,7 +724,11 @@ export function buildInvoiceCashLines(
   const cashDebit = isForeign
     ? Math.round(totalCredits * 100) / 100
     : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
-  const bankAmount = Math.round((cashDebit - rotRut.totalSek) * 100) / 100
+  const customerShare = roundOre(cashDebit - rotRut.totalSek)
+  const oreGap = !isForeign && customerShare > 0 && knownBankSek != null && knownBankSek > 0
+    ? oreSettlementResidual(customerShare, knownBankSek)
+    : 0
+  const bankAmount = roundOre(customerShare - oreGap)
   lines.push({
     account_number: settlementAccountNumber,
     debit_amount: bankAmount,
@@ -474,6 +739,9 @@ export function buildInvoiceCashLines(
 
   lines.push(...rotRut.lines)
   lines.push(...creditLines)
+  if (oreGap !== 0) {
+    lines.push({ ...oreRoundingLine(oreGap, 'customer'), dimensions: defaultDimensions })
+  }
 
   return {
     description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),

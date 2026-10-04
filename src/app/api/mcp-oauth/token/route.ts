@@ -219,8 +219,14 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
 
   // Segregation of duties, mirrored from app/api/settings/api-keys: a key
   // that can both stage and approve is recorded as an acknowledged risk
-  // acceptance. The consent page states the rule above the Allow button, so
-  // the consent click is the self-attestation (ASVS V16.1.1 / SOC 2 CC6.1).
+  // acceptance. The consent page shows the rule above the Allow button while
+  // approve is ticked together with a staging scope (and always when its
+  // script cannot run, since the sentence is rendered visible and only the
+  // script hides it), so the consent click is the self-attestation
+  // (ASVS V16.1.1 / SOC 2 CC6.1). Only the scopes
+  // actually granted count, after the role cap: approve is never pre-ticked
+  // (founder decision 2026-10-03, issue #3408), so a default one-click
+  // consent records nothing here.
   const conflictingScope = findStageApproveConflict(grantedScopes)
   const sodAcknowledgedAt = conflictingScope ? new Date().toISOString() : null
   let storedClient: string | null = builtInRedirectProvider(payload.redirectUri)

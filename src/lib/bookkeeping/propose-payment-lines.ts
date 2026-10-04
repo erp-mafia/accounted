@@ -5,12 +5,13 @@
  * No DB or Supabase dependency: all inputs are plain data.
  */
 import { resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
-import { roundOre, ORE_TOLERANCE, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
+import { roundOre, ORE_TOLERANCE } from '@/lib/money'
 import { InvoiceFxRateMissingError } from './invoice-accounts'
 import { buildInvoiceCashLines } from './invoice-lines'
+import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import type { EntityType, InvoiceItem, VatTreatment } from '@/types'
+import type { CreateJournalEntryLineInput, EntityType, InvoiceItem, VatTreatment } from '@/types'
 
 export interface ProposePaymentLinesInput {
   invoice: {
@@ -190,14 +191,12 @@ function proposeRemainingAwareLines(
   const hasPartial = remaining > ORE_TOLERANCE && total - remaining > ORE_TOLERANCE
   if (!hasPartial) return null
 
-  if (remaining < ORE_ROUNDING_SETTLEMENT_MAX) {
+  // Nothing arrives at the bank, so the whole remaining is the residual; it
+  // is öresavrundning only inside the shared band.
+  const residual = oreSettlementResidual(remaining, 0)
+  if (residual !== 0) {
     return [
-      {
-        account_number: '3740',
-        debit_amount: toFormAmount(remaining),
-        credit_amount: '',
-        line_description: 'Öresavrundning',
-      },
+      toFormLine(oreRoundingLine(residual, 'customer')),
       {
         account_number: '1510',
         debit_amount: '',
@@ -246,17 +245,16 @@ function resolveDeductionSek(invoice: ProposePaymentLinesInput['invoice']): numb
   return roundOre(sek)
 }
 
-/**
- * The 3740 (öres- och kronutjämning) residual line. Customer paid over the
- * stored total (rounded up) → credit (vinst); under (rounded down) → debit
- * (förlust). Same polarity as buildInvoicePaymentClearingLines.
- */
-function oreRoundingLine(roundingDelta: number): FormLine {
+/** A built verifikat line as an editable dialog row, its bag kept. */
+function toFormLine(line: CreateJournalEntryLineInput): FormLine {
   return {
-    account_number: '3740',
-    debit_amount: roundingDelta < 0 ? toFormAmount(Math.abs(roundingDelta)) : '',
-    credit_amount: roundingDelta > 0 ? toFormAmount(roundingDelta) : '',
-    line_description: 'Öresavrundning',
+    account_number: line.account_number,
+    debit_amount: toFormAmount(line.debit_amount),
+    credit_amount: toFormAmount(line.credit_amount),
+    line_description: line.line_description ?? '',
+    ...(line.dimensions && Object.keys(line.dimensions).length > 0
+      ? { dimensions: { ...line.dimensions } }
+      : {}),
   }
 }
 
@@ -324,8 +322,10 @@ function proposeAccrualLines(
       credit_amount: toFormAmount(amount),
       line_description: desc,
     })
-    if (roundingDelta !== 0) {
-      lines.push(oreRoundingLine(roundingDelta))
+    // roundingDelta is "Att betala" minus the total: the residual's negative.
+    const residual = oreSettlementResidual(amount, amount + roundingDelta)
+    if (residual !== 0) {
+      lines.push(toFormLine(oreRoundingLine(residual, 'customer')))
     }
   }
 
@@ -343,8 +343,9 @@ function proposeAccrualLines(
  * with no rate makes the builder refuse (InvoiceFxRateMissingError) instead
  * of relabelling the foreign numbers as kronor; the dialog shows it as a toast.
  *
- * The one thing added on top is öresavrundning: the customer pays the rounded
- * "Att betala", so the bank leg is that amount and 3740 carries the residual.
+ * Öresavrundning: the customer pays the rounded "Att betala", so that is the
+ * bank amount the builder is given, exactly as a bank match gives it the
+ * bank row: 1930 takes it and 3740 the residual.
  */
 function proposeCashLines(
   invoice: ProposePaymentLinesInput['invoice'],
@@ -352,29 +353,12 @@ function proposeCashLines(
   entityType: EntityType,
   roundingDelta = 0,
 ): FormLine[] {
-  const { lines } = buildInvoiceCashLines(
-    invoice,
-    entityType,
-    invoice.customer_name ?? undefined,
-    paymentAccount,
-  )
-  const formLines: FormLine[] = lines.map((line) => ({
-    account_number: line.account_number,
-    debit_amount: toFormAmount(line.debit_amount),
-    credit_amount: toFormAmount(line.credit_amount),
-    line_description: line.line_description ?? '',
-    ...(line.dimensions && Object.keys(line.dimensions).length > 0
-      ? { dimensions: { ...line.dimensions } }
-      : {}),
-  }))
-
+  const build = (knownBankSek?: number) =>
+    buildInvoiceCashLines(invoice, entityType, invoice.customer_name ?? undefined, paymentAccount, knownBankSek)
+  let { lines } = build()
   if (roundingDelta !== 0) {
-    // The builder's first line is the settlement debit.
-    const bank = lines[0]
-    formLines[0] = { ...formLines[0], debit_amount: toFormAmount(bank.debit_amount + roundingDelta) }
-    const [ore] = withInvoiceDimensions([oreRoundingLine(roundingDelta)], invoice)
-    formLines.push(ore)
+    // The builder's first line is the settlement debit: the customer share.
+    lines = build(roundOre(lines[0].debit_amount + roundingDelta)).lines
   }
-
-  return formLines
+  return lines.map(toFormLine)
 }

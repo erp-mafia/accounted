@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { loadAiConnection } from '@/lib/onboarding/ai-clients.server'
 
@@ -191,7 +192,11 @@ export async function loadBooksFindings(
   const bank = (bankRows ?? [])[0] as
     | { bank_name: string | null; status: string; last_sie_sweep: { auto_linked?: number; suggested?: number; unmatched?: number } | null }
     | undefined
-  const skvActive = ((skvRows ?? []) as { status: string | null }[]).some((r) => r.status === 'active')
+  // Accounted as ombud counts as connected: its reads need no personal
+  // BankID session. Asked only when no session is active (one lookup less).
+  const skvActive =
+    ((skvRows ?? []) as { status: string | null }[]).some((r) => r.status === 'active') ||
+    (await hasSkatteverketOmbudReadAccess(companyId))
 
   return {
     books: {

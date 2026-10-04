@@ -2489,6 +2489,8 @@ export interface BalansrapportSection {
   label: string
   /** "Summa <label>", the line under the section. */
   total_label: string
+  /** What to do about the section's accounts; set only on 'unclassified'. */
+  note?: string
   rows: BalansrapportRow[]
   sections: BalansrapportSection[]
   subtotal_ib: number
@@ -2721,6 +2723,7 @@ export type PendingOperationType =
   | 'add_arsredovisning_signature'
   | 'set_opening_balances_manual'
   | 'correct_opening_balances'
+  | 'split_opening_balances_per_project'
   | 'delete_supplier_invoice'
   | 'uncredit_supplier_invoice'
   | 'update_supplier_invoice_item_account'

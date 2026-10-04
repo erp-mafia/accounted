@@ -27,6 +27,7 @@ import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 import { buildInvoiceCashLines } from '@/lib/bookkeeping/invoice-entries'
+import { invoiceCashBankSek } from '@/lib/bookkeeping/invoice-lines'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -270,7 +271,10 @@ export const GET = withRouteContext(
 
     if (useCashEntry) {
       entryType = 'cash'
-      booked = buildInvoiceCashLines(inv, entityType, inv.customer?.name ?? undefined, paymentAccount).lines
+      booked = buildInvoiceCashLines(
+        inv, entityType, inv.customer?.name ?? undefined, paymentAccount,
+        invoiceCashBankSek(transaction),
+      ).lines
     } else {
       booked = buildInvoiceMatchClearingLines(
         {

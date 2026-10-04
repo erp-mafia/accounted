@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { buildInvoiceCashLines, createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
+import { invoiceCashBankSek } from '@/lib/bookkeeping/invoice-lines'
 import {
   buildInvoiceMatchClearingLines,
   invoiceMatchPaymentDescription,
@@ -511,7 +512,11 @@ export const POST = withRouteContext(
       paymentLines = customLines
         ? customLines
         : useCashEntry
-          ? buildInvoiceCashLines(invoice as Invoice, entityType, invoice.customer?.name, paymentAccount).lines
+          ? buildInvoiceCashLines(
+              invoice as Invoice, entityType, invoice.customer?.name, paymentAccount,
+              // The bank amount createInvoiceCashEntry derives from the same row.
+              invoiceCashBankSek(transaction),
+            ).lines
           : buildInvoiceMatchClearingLines(
               {
                 amount: transaction.amount,

@@ -42,10 +42,13 @@
  * The accrual clearing builder below and the kontantmetoden builder
  * (`buildSupplierInvoiceCashLines`, via `resolveSupplierCashSettlement`) both
  * go through them, so the two methods cannot drift apart again (#2852: the
- * cash path credited the exact öre while the user paid whole kronor).
+ * cash path credited the exact öre while the user paid whole kronor). They
+ * are the supplier side of the rule the customer side uses too
+ * (./ore-rounding).
  */
 import type { CreateJournalEntryLineInput } from '@/types'
-import { roundOre, ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
+import { roundOre } from '@/lib/money'
+import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { RESIDUAL_KINDS } from '@/lib/reconciliation/residual'
 import {
   supplierInvoiceDisplayFigures,
@@ -83,18 +86,12 @@ export interface SupplierClearingResult {
  *   < 0: the bank paid MORE than owed  -> öresavrundningsförlust -> Dr 3740
  */
 export function supplierOreResidual(owedSek: number, bankSek: number): number {
-  const diff = roundOre(roundOre(owedSek) - roundOre(bankSek))
-  return diff !== 0 && Math.abs(diff) < ORE_ROUNDING_SETTLEMENT_MAX ? diff : 0
+  return oreSettlementResidual(owedSek, bankSek)
 }
 
 /** The 3740 line for a non-zero `supplierOreResidual`. 3740 carries no VAT. */
 export function supplierOreRoundingLine(residual: number): CreateJournalEntryLineInput {
-  return {
-    account_number: ORE_ROUNDING_ACCOUNT,
-    debit_amount: residual < 0 ? Math.abs(residual) : 0,
-    credit_amount: residual > 0 ? residual : 0,
-    line_description: 'Öresavrundning',
-  }
+  return oreRoundingLine(residual, 'supplier')
 }
 
 /**

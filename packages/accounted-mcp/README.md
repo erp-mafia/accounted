@@ -90,7 +90,7 @@ change.
 
 ## Releasing
 
-The package is published to npm by the `Publish MCP bridges to npm` workflow
+The package is published to npm by the `Publish packages to npm` workflow
 (`.github/workflows/npm-publish.yml`), never by hand:
 
 1. Bump `version` in `packages/accounted-mcp/package.json`.
@@ -100,12 +100,12 @@ The package is published to npm by the `Publish MCP bridges to npm` workflow
    already exists on npm is skipped, so other `package.json` edits are harmless.
 
 The workflow needs the repository secret `NPM_TOKEN`: an npm granular access
-token with read and write access to `accounted-mcp` and `gnubok-mcp`, with
-two-factor bypass enabled so CI can publish. npm caps the lifetime of such
-tokens (90 days at the time of writing), so rotate the secret before it lapses.
-Without the secret the run fails at its first step. The workflow can also be
-started from the Actions tab, for one package or both, with a dry-run option
-that packs and validates without publishing.
+token with read and write access to `accounted-mcp`, `gnubok-mcp` and
+`accounted`, with two-factor bypass enabled so CI can publish. npm caps the
+lifetime of such tokens (90 days at the time of writing), so rotate the secret
+before it lapses. Without the secret the run fails at its first step. The
+workflow can also be started from the Actions tab, for one package or all, with
+a dry-run option that packs and validates without publishing.
 
 ## Gather what is missing
 

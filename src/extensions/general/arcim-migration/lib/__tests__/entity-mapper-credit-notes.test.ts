@@ -471,7 +471,7 @@ describe('mapSupplierInvoice: kreditfaktura', () => {
   })
 
   it('keeps the relative sign of the rows on a credit note that also charges something', () => {
-    const line = (id: string, total: number) => ({ id, quantity: total < 0 ? -1 : 1, unitPrice: { value: Math.abs(total), currencyCode: 'SEK' },
+    const line = (id: string, total: number) => ({ id, accountNumber: '4010', quantity: total < 0 ? -1 : 1, unitPrice: { value: Math.abs(total), currencyCode: 'SEK' },
       lineExtensionAmount: { value: total, currencyCode: 'SEK' }, taxPercent: 25, taxAmount: { value: total * 0.25, currencyCode: 'SEK' } })
     const { items, invoice } = mapSupplier({ ...supplierDto({ invoiceTypeCode: '381', signOfAmounts: -1 }), lines: [line('1', -1200), line('2', 200)] })
     expect(items.map((item) => [item.quantity, item.unit_price, item.line_total, item.vat_amount]))

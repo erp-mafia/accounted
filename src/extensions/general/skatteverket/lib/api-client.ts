@@ -9,6 +9,7 @@ import { baseUrlToService, parseConnectorCode, skatteverketConnectorMode } from 
 import { refreshAccessToken } from './oauth'
 import { getTokens, storeTokens, deleteTokens } from './token-store'
 import { getSystemAccessToken, invalidateSystemToken } from './system-auth/token-provider'
+import { getSystemApiGwCredentials } from './system-auth/config'
 import type { SkatteverketTokens } from '../types'
 
 /**
@@ -99,6 +100,16 @@ function getApiGwClientSecret(): string {
   const secret = process.env.SKATTEVERKET_APIGW_CLIENT_SECRET
   if (!secret) throw new Error('SKATTEVERKET_APIGW_CLIENT_SECRET is required')
   return secret
+}
+
+/**
+ * Gateway keys for one call. System-mode calls carry the system application's
+ * own pair when it is configured (see getSystemApiGwCredentials), otherwise
+ * the shared pair, exactly as before the split.
+ */
+function apiGwCredentialsFor(auth: SkvAuth): { clientId: string; clientSecret: string } {
+  const system = auth.mode === 'system' ? getSystemApiGwCredentials() : null
+  return system ?? { clientId: getApiGwClientId(), clientSecret: getApiGwClientSecret() }
 }
 
 /**
@@ -505,8 +516,9 @@ export async function skvRequestWithAuth(
   } else {
     url = `${effectiveBase}${path}`
     headers['Authorization'] = `Bearer ${accessToken}`
-    headers['Client_Id'] = getApiGwClientId()
-    headers['Client_Secret'] = getApiGwClientSecret()
+    const gateway = apiGwCredentialsFor(auth)
+    headers['Client_Id'] = gateway.clientId
+    headers['Client_Secret'] = gateway.clientSecret
     headers['skv_client_correlation_id'] = crypto.randomUUID()
   }
   // Ombudshantering lists Accept as a required header (406 otherwise); the
@@ -629,7 +641,7 @@ export async function skvRequestWithAuth(
       invalidateSystemToken()
       throw new SkatteverketAuthError(
         'Skatteverket avvisade systemautentiseringen. Kontrollera certifikatet ' +
-        'och APIGW-prenumerationerna för systemklienten.',
+        'och APIGW-prenumerationerna för systemklienten (SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID).',
         'SYSTEM_AUTH_FAILED',
         clientRefused ? 'APIGW_CLIENT_REFUSED' : undefined
       )

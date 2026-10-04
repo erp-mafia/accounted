@@ -85,6 +85,25 @@ describe('gnubok_list_pending_operations', () => {
     expect(result.has_more).toBe(true)
     expect(result.next_offset).toBe(1)
   })
+
+  // Issue #3408: approve is never pre-ticked on consent, so the default
+  // connection lacks it; the widget reads can_approve to hide its buttons.
+  it('says whether the calling key can approve or reject', async () => {
+    const run = async (args: Record<string, unknown>) => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [{ id: 'op-1' }], error: null, count: 1 })
+      return (await listTool.execute(args, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+        can_approve?: boolean
+      }
+    }
+
+    expect((await run({ __keyScopes: ['pending_operations:read', 'transactions:write'] })).can_approve).toBe(false)
+    expect(
+      (await run({ __keyScopes: ['pending_operations:read', 'pending_operations:approve'] })).can_approve,
+    ).toBe(true)
+    // Scopes unknown (not injected): no claim either way, the widget keeps its buttons.
+    expect(await run({})).not.toHaveProperty('can_approve')
+  })
 })
 
 describe('gnubok_approve_pending_operation', () => {

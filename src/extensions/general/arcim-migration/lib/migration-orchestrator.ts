@@ -1439,6 +1439,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         let fxUnresolved = 0
         let vatUnresolved = 0
         let rowsMismatch = 0
+        let rowsUnaccounted = 0
         let creditNotesUnlinked = 0
         let creditNotesLinked = 0
         // Supplier credit notes whose provider named the invoice they credit,
@@ -1449,11 +1450,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
 
         for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
           const mappedBatch = batch.map((r) => {
-            const { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, rowsMismatch: rowsOff, creditedInvoiceRef } = mapSupplierInvoice(
+            const { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, rowsMismatch: rowsOff, rowsUnaccounted: rowsNoAccount, creditedInvoiceRef } = mapSupplierInvoice(
               r.dto, userId, companyId, r.supplierId, fxRates
             )
             invoice.arrival_number = nextArrivalNumber++
-            return { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, rowsMismatch: rowsOff === true, creditedInvoiceRef, dto: r.dto, supplierId: r.supplierId }
+            return { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, rowsMismatch: rowsOff === true, rowsUnaccounted: rowsNoAccount === true, creditedInvoiceRef, dto: r.dto, supplierId: r.supplierId }
           })
 
           const outcome = await insertWithPerRowFallback(
@@ -1537,6 +1538,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
                 + 'the invoice; imported without rows.'
               )
             }
+            if (mappedBatch[i].rowsUnaccounted) {
+              rowsUnaccounted++
+              console.warn(
+                `[migration] Supplier invoice ${mappedBatch[i].dto.invoiceNumber}: a provider row has no account; `
+                + 'imported without rows rather than guessing one.'
+              )
+            }
             imported++
           }
 
@@ -1586,7 +1594,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           skipReasons.outsideFiscalYears = excluded.length
           skipped += excluded.length
         }
-        results.supplierInvoices = { total: listedAll.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, rowsMismatch, creditNotesUnlinked, creditNotesLinked, hydration, errorSample: errorSample ?? undefined }
+        results.supplierInvoices = { total: listedAll.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, rowsMismatch, rowsUnaccounted, creditNotesUnlinked, creditNotesLinked, hydration, errorSample: errorSample ?? undefined }
         console.log(`[migration] Supplier invoices: ${imported} imported, ${skipped} skipped (${elapsedSeconds(stepStartedAt)} s)`)
       } catch (err) {
         console.error('Failed to import supplier invoices:', err)

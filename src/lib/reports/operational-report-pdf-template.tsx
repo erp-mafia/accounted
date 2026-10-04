@@ -155,6 +155,11 @@ const styles = StyleSheet.create({
     marginBottom: 2,
     paddingLeft: 12,
   },
+  sectionNote: {
+    fontSize: 8,
+    color: '#666',
+    marginBottom: 3,
+  },
   sectionTotalRow: {
     flexDirection: 'row',
     paddingVertical: 2,
@@ -509,6 +514,7 @@ function BalansrapportSectionPDF({ section, depth }: { section: BalansrapportSec
       <Text style={depth === 0 ? styles.sectionHeading : styles.subsectionHeading} minPresenceAhead={30}>
         {section.label}
       </Text>
+      {section.note && <Text style={styles.sectionNote}>{section.note}</Text>}
       {section.sections.map((child) => (
         <BalansrapportSectionPDF key={child.key} section={child} depth={1} />
       ))}

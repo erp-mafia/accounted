@@ -186,6 +186,7 @@ Peppol is locked per company until the operators grant it (every transmission is
 
 **Pitfalls:**
 - A company that already has access answers 409 PEPPOL_ACCESS_ALREADY_ENABLED; ask support for a higher cap or a receiving slot instead.
+- A company that cannot be a Peppol participant answers 422 with the code GET /peppol/registration reports in participant.code (PEPPOL_REGISTRATION_PERSONAL_NUMBER for a sole trader identified by personnummer); nothing is recorded.
 - Nothing is enabled immediately: poll GET /peppol/registration for access.status=enabled.
 
 | Parameter | In | Type | Required | Notes |

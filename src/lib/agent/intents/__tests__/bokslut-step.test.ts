@@ -192,6 +192,22 @@ describe('bokslut.step prompt template', () => {
     expect(missingOut).not.toContain('status: öppen')
   })
 
+  // #3440 interim block: the prompt must not send the agent to stage the
+  // cut-off, nor let it book one by hand. The fix PR deletes this case with
+  // the suspension module.
+  it('says the kontantmetoden cut-off is temporarily suspended instead of pointing to staging it', async () => {
+    const { captured } = await capture({
+      fiscal_periods: { data: periodRow(), error: null },
+      companies: { data: { entity_type: 'ab' }, error: null },
+    })
+    const out = render(captured)
+
+    expect(out).toContain('tillfälligt avstängd')
+    expect(out).toContain('KONTANTMETOD_CUTOFF_SUSPENDED')
+    expect(out).toContain('bokför aldrig kundfordringarna, leverantörsskulderna eller deras moms manuellt')
+    expect(out).not.toContain('använd gnubok_post_kontantmetod_cutoff, visa alla föreslagna verifikat')
+  })
+
   it('exposes gnubok_list_fiscal_periods so the fail-closed instruction is actionable', () => {
     expect(bokslutStep.tools).toContain('gnubok_list_fiscal_periods')
     expect(bokslutStep.tools).toContain('gnubok_year_end_readiness')

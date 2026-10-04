@@ -258,24 +258,9 @@ export default function SendInvoiceDialog({
   const proposedLines = useMemo(() => {
     if (!isInitialized || !shouldBookOnIssue) return []
 
-    return proposeSendLines({
-      invoice: {
-        invoice_number: invoice.invoice_number,
-        total: invoice.total,
-        total_sek: invoice.total_sek,
-        subtotal: invoice.subtotal,
-        subtotal_sek: invoice.subtotal_sek,
-        vat_amount: invoice.vat_amount,
-        vat_amount_sek: invoice.vat_amount_sek,
-        currency: invoice.currency,
-        exchange_rate: invoice.exchange_rate,
-        vat_treatment: invoice.vat_treatment,
-        credited_invoice_id: invoice.credited_invoice_id,
-        items: invoice.items,
-        default_dimensions: invoice.default_dimensions,
-      },
-      entityType,
-    })
+    // The whole row: the server books from all of it (item accounts and
+    // dimensions, delivery_country), so the preview must read the same.
+    return proposeSendLines({ invoice, entityType })
   }, [isInitialized, shouldBookOnIssue, entityType, invoice])
 
   const additionalCc = useMemo(

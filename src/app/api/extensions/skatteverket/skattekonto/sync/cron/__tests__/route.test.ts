@@ -81,7 +81,7 @@ function makeRequest(): Request {
   return new Request('http://localhost/api/extensions/skatteverket/skattekonto/sync/cron')
 }
 
-function makeSupabaseStub(tokens: Record<string, unknown>[]) {
+function makeSupabaseStub(tokens: Record<string, unknown>[], opts: { lastSyncedAt?: string } = {}) {
   return {
     from: vi.fn((table: string) => {
       const resolved = table === 'skatteverket_tokens'
@@ -91,7 +91,11 @@ function makeSupabaseStub(tokens: Record<string, unknown>[]) {
       for (const method of ['select', 'eq', 'order', 'range']) {
         chain[method] = vi.fn(() => chain)
       }
-      chain.maybeSingle = vi.fn().mockResolvedValue(resolved)
+      // The per-company cooldown read (extension_data, maybeSingle).
+      const single = table === 'extension_data' && opts.lastSyncedAt
+        ? { data: { value: opts.lastSyncedAt }, error: null }
+        : resolved
+      chain.maybeSingle = vi.fn().mockResolvedValue(single)
       chain.then = (resolve: (value: unknown) => void) => resolve(resolved)
       return chain
     }),
@@ -162,5 +166,23 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
     expect(body).toMatchObject({ processed: 1, synced: 1, errors: 0 })
     expect(mocks.syncSkattekonto).toHaveBeenCalledTimes(1)
     expect(mocks.syncSkattekonto.mock.calls[0][0]).toMatchObject({ companyId: entitledCompanyId })
+  })
+
+  it('the hourly schedule is never blocked by the previous run: 55 minutes ago syncs, 30 minutes ago waits', async () => {
+    const companyId = '11111111-1111-4111-8111-111111111111'
+    const tokens = [{ user_id: 'u1', company_id: companyId, expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 }]
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([companyId]))
+
+    mocks.createClient.mockReturnValue(
+      makeSupabaseStub(tokens, { lastSyncedAt: new Date(Date.now() - 55 * 60 * 1000).toISOString() }),
+    )
+    expect(await (await GET(makeRequest())).json()).toMatchObject({ synced: 1 })
+
+    mocks.syncSkattekonto.mockClear()
+    mocks.createClient.mockReturnValue(
+      makeSupabaseStub(tokens, { lastSyncedAt: new Date(Date.now() - 30 * 60 * 1000).toISOString() }),
+    )
+    await GET(makeRequest())
+    expect(mocks.syncSkattekonto).not.toHaveBeenCalled()
   })
 })

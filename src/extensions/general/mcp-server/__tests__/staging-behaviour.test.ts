@@ -27,6 +27,16 @@ import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
+// i3440-suspension: #3440 suspends gnubok_post_kontantmetod_cutoff before its
+// first read, which would stop this harness short of the cut-off computation
+// STOPS_AT_LAST_GATE pins. Lifted here so that coverage keeps running; the fix
+// PR deletes this mock together with
+// lib/core/bookkeeping/kontantmetod-cutoff-suspension.ts.
+vi.mock('@/lib/core/bookkeeping/kontantmetod-cutoff-suspension', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/core/bookkeeping/kontantmetod-cutoff-suspension')>()),
+  isKontantmetodCutoffSuspended: () => false,
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
   createServiceClient: vi.fn(),
@@ -132,6 +142,9 @@ const READ_ONLY_RPCS = new Set([
   // The entitlement read (hasCapability): the payslip send preview checks
   // the email_send capability before listing recipients.
   'company_capability_grant_rows',
+  // The previous year's closing balance per project: the IB split preview
+  // (gnubok_split_opening_balances_per_project) reads it, #3313.
+  'compute_object_closing_balances',
 ])
 
 /**
@@ -777,6 +790,31 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       journal_entry_lines: { journal_entry_id: SOME_UUID, account_number: '1930', debit_amount: 1000, credit_amount: 0, line_description: null, dimensions: null },
     },
     counts: { journal_entries: 0 },
+  },
+  // Dela upp IB per projekt (#3313): an open, unlocked 2026 whose IB (A1)
+  // holds 1470 untagged, no bokslut, 2025 left P1 with 600 on 1470. The
+  // preview reads the registry and the previous year's object balances
+  // (compute_object_closing_balances, STABLE) and never reaches the
+  // inline rättelse RPC.
+  gnubok_split_opening_balances_per_project: {
+    rows: {
+      fiscal_periods: {
+        ...FISCAL_YEAR_2026,
+        locked_at: null,
+        opening_balances_set: true,
+        opening_balance_entry_id: SOME_UUID,
+        previous_period_id: SOME_UUID,
+      },
+      journal_entries: { status: 'posted', entry_date: '2026-01-01', voucher_series: 'A', voucher_number: 1 },
+      journal_entry_lines: { account_number: '1470', debit_amount: 1000, credit_amount: 0, line_description: null, dimensions: {}, currency: 'SEK' },
+      dimensions: { sie_dim_no: 6, resets_annually: false },
+      'rpc:compute_object_closing_balances': { account_number: '1470', dimensions: { '6': 'P1' }, net: 600 },
+      chart_of_accounts: { account_number: '1470', account_name: 'Pågående arbeten' },
+      dimension_values: { dimension_id: SOME_UUID, code: 'P1', name: 'P1', is_active: true },
+      company_settings: { bookkeeping_locked_through: null },
+    },
+    counts: { journal_entries: 0 },
+    empty: ['document_attachments'],
   },
   // Peppol (wave 4): the previews validate with reads and never reach the
   // (throwing) transport registered at the top. No registration yet, so
