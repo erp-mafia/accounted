@@ -4,8 +4,10 @@
  * a leverantörsfaktura or bokföringsunderlag").
  *
  * Two sources, in priority order:
- *   1. kind_hint: what the sender declared through the +lev / +ver
- *      plus-address tag. A column, so it survives re-extraction.
+ *   1. kind_hint: what was declared, not read: the sender's +lev / +ver
+ *      plus-address tag, the type Arkiv queued the document as, or a
+ *      person's type in Dokument (route-from-arkiv.ts). A column, so it
+ *      survives re-extraction.
  *   2. extracted_data.documentKind: the AI classification.
  *
  * A supplier document can be a credit note (issue #2980): the reading says
@@ -72,7 +74,7 @@ export function readsAsCredit(
   return options.labelled && isNegative(totals.total)
 }
 
-/** The kind to show for an item: the sender's hint first, then the AI's. */
+/** The kind to show for an item: the declared hint first, then the AI's. */
 export function resolveInboxKind(item: InboxKindSource): InboxDocumentKind | null {
   const hint = isInboxDocumentKind(item.kind_hint) ? item.kind_hint : null
   if (hint === 'receipt') return hint

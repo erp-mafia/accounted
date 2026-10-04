@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { arkivSectionRollout, isArkivSectionEnabled } from '@/lib/arkiv/flag'
+import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
 
 /**
  * Arkiv phase 7: the queue is decided by what the document is, not by the
@@ -34,7 +35,33 @@ export function inboxSawABill(extracted: Record<string, unknown> | null | undefi
   return kind === 'government_letter' || arkivType === 'other'
 }
 
-export type RouteOutcome = 'queued' | 'requeued' | 'already_queued' | 'booked' | 'routed_to_arkiv' | 'left' | 'not_found'
+export type RouteOutcome = 'queued' | 'requeued' | 'retyped' | 'already_queued' | 'booked' | 'routed_to_arkiv' | 'left' | 'not_found'
+
+/** The queue item's hint for a voucher type: a credit note comes from a supplier, so its hint is supplier_invoice. */
+const kindHintFor = (docType: string): 'receipt' | 'supplier_invoice' => (docType === 'receipt' ? 'receipt' : 'supplier_invoice')
+
+/**
+ * What a person's type in Dokument writes on the open queue item, so Underlag shows what they said: the badge,
+ * the type filter and the "Vem betalade?" default all read resolveInboxKind, not the document's type. The hint
+ * carries it (it wins over the inbox reader and survives a re-read); the reading's label is set too only when the
+ * hint alone would still resolve to something else, a credit note being a supplier document the reading refines,
+ * as the insert below does (#2980). Null when the item already says it. Negative amounts still read as a credit:
+ * a payable below zero does not exist, whoever typed it.
+ */
+export function personsAnswer(
+  docType: string,
+  item: { kind_hint?: string | null; extracted_data?: Record<string, unknown> | null },
+  documentReading: Record<string, unknown> | null,
+): { kind_hint?: 'receipt' | 'supplier_invoice'; extracted_data?: Record<string, unknown> } | null {
+  const hint = kindHintFor(docType)
+  const reading = item.extracted_data ?? documentReading
+  const relabel = !!reading && reading.documentKind !== docType && resolveInboxKind({ kind_hint: hint, extracted_data: reading } as InboxKindSource) !== docType
+  if (item.kind_hint === hint && !relabel) return null
+  return {
+    kind_hint: item.kind_hint === hint ? undefined : hint,
+    extracted_data: relabel ? { ...reading, documentKind: docType } : undefined,
+  }
+}
 
 /**
  * Only a document classified within a day of arriving is put in the queue as new work. The Arkiv backfill
@@ -54,6 +81,7 @@ interface DocumentRow {
 
 interface ItemRow {
   id: string
+  kind_hint?: string | null
   extracted_data?: Record<string, unknown> | null
   routed_to_arkiv_at: string | null
   created_supplier_invoice_id: string | null
@@ -65,7 +93,7 @@ const consumed = (i: ItemRow) => !!(i.created_supplier_invoice_id || i.created_j
 
 export async function routeClassifiedDocument(
   supabase: SupabaseClient,
-  input: { documentId: string; companyId: string; userId: string | null; docType: string; admission: 'admitted' | 'held' },
+  input: { documentId: string; companyId: string; userId: string | null; docType: string; admission: 'admitted' | 'held'; decidedBy?: 'model' | 'human' },
 ): Promise<RouteOutcome> {
   const { data: doc, error: docError } = await supabase
     .from('document_attachments')
@@ -78,7 +106,7 @@ export async function routeClassifiedDocument(
   const d = doc as DocumentRow
   const { data: rows, error: itemsError } = await supabase
     .from('invoice_inbox_items')
-    .select('id, extracted_data, routed_to_arkiv_at, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id')
+    .select('id, kind_hint, extracted_data, routed_to_arkiv_at, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id')
     .eq('company_id', input.companyId)
     .eq('document_id', input.documentId)
   if (itemsError) throw new Error(`inbox items fetch failed: ${itemsError.message}`)
@@ -88,12 +116,33 @@ export async function routeClassifiedDocument(
   if (VOUCHER_TYPES.has(input.docType) && input.admission === 'admitted') {
     if (d.journal_entry_id || items.some(consumed)) return 'booked'
     const open = items.find((i) => !consumed(i))
-    if (open?.routed_to_arkiv_at) {
-      const { error } = await supabase.from('invoice_inbox_items').update({ routed_to_arkiv_at: null, routed_doc_type: null }).eq('id', open.id)
+    if (open) {
+      // Only a person's type is written on the item: a model's type never overrides the inbox reader, since where
+      // the two readers disagree a person decides (inboxSawABill). Retyping in Dokument is the only place a person
+      // can state the type, so without this Underlag kept showing what the reader had guessed.
+      const answer = input.decidedBy === 'human' ? personsAnswer(input.docType, open, d.extracted_data) : null
+      if (!open.routed_to_arkiv_at && !answer) return 'already_queued'
+      // Guarded on the open-item predicate like the duplicate-upload hint (upload-and-extract.ts): an item booked
+      // or matched since it was read keeps what it was booked as. A voucher type belongs in Underlag, so the
+      // routing is cleared either way; undefined is dropped by supabase-js, so only what the answer changes moves.
+      const { data: updated, error } = await supabase
+        .from('invoice_inbox_items')
+        .update({
+          routed_to_arkiv_at: null,
+          routed_doc_type: null,
+          kind_hint: answer?.kind_hint,
+          extracted_data: answer?.extracted_data,
+        })
+        .eq('id', open.id)
+        .eq('company_id', input.companyId)
+        .is('created_supplier_invoice_id', null)
+        .is('created_journal_entry_id', null)
+        .is('matched_transaction_id', null)
+        .select('id')
       if (error) throw new Error(`inbox item update failed: ${error.message}`)
-      return 'requeued'
+      if (((updated as Array<{ id: string }> | null) ?? []).length === 0) return 'booked'
+      return open.routed_to_arkiv_at ? 'requeued' : 'retyped'
     }
-    if (open) return 'already_queued'
     if (d.created_at && Date.now() - new Date(d.created_at).getTime() > QUEUE_NEW_WITHIN_MS) return 'left'
     const { error } = await supabase.from('invoice_inbox_items').insert({
       company_id: input.companyId,
@@ -101,7 +150,7 @@ export async function routeClassifiedDocument(
       status: 'received',
       source: 'upload',
       document_id: input.documentId,
-      kind_hint: input.docType === 'receipt' ? 'receipt' : 'supplier_invoice',
+      kind_hint: kindHintFor(input.docType),
       // A credit note is a supplier document (the hint) that credits an
       // invoice: the reading carries what Arkiv says it is, so the inbox
       // offers Kreditera instead of a new payable (issue #2980).

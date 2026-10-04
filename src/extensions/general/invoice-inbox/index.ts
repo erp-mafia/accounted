@@ -275,7 +275,8 @@ export const invoiceInboxExtension: Extension = {
 
   eventHandlers: [
     {
-      // Arkiv said what a document is: queue a receipt or invoice that came in another way, release what is not booked from here.
+      // Arkiv said what a document is: queue a receipt or invoice that came in another way, release what is not booked
+      // from here, and carry a person's type onto the item already queued.
       eventType: 'document.classified',
       handler: async (payload: EventPayload<'document.classified'>) => {
         try {
@@ -285,8 +286,9 @@ export const invoiceInboxExtension: Extension = {
             userId: payload.userId,
             docType: payload.docType,
             admission: payload.admission,
+            decidedBy: payload.decidedBy,
           })
-          if (outcome === 'queued' || outcome === 'requeued' || outcome === 'routed_to_arkiv') {
+          if (outcome === 'queued' || outcome === 'requeued' || outcome === 'retyped' || outcome === 'routed_to_arkiv') {
             extensionLog.info('routed classified document', { doc: payload.document.id, docType: payload.docType, outcome })
           }
         } catch (err) {

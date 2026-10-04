@@ -44,7 +44,7 @@ const InboxItemSummaryOut = z.object({
   source: z.string().describe('How it arrived: email, upload, api, whatsapp, ...'),
   created_at: z.string(),
   document_id: z.string().uuid().nullable(),
-  kind_hint: z.string().nullable().describe('Sender-declared kind from a +lev / +ver address tag.'),
+  kind_hint: z.string().nullable().describe("Declared kind: a +lev / +ver address tag, the type Arkiv queued it as, or a person's type in Dokument."),
   vendor_name: z.string().nullable().describe('Supplier name as read from the document.'),
   amount: z.number().nullable().describe('Total as read from the document, in its currency.'),
   currency: z.string().nullable(),

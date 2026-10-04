@@ -3172,8 +3172,9 @@ export interface InvoiceInboxItem {
   email_body_text: string | null
   resend_email_id: string | null
   resend_attachment_id: string | null
-  // Sender-declared kind from the +lev / +ver plus-address tag (migration
-  // 20260901210000). Wins over extracted_data.documentKind in the inbox UI.
+  // Declared kind: the +lev / +ver plus-address tag (migration 20260901210000),
+  // the type Arkiv queued it as, or a person's type in Dokument. Wins over
+  // extracted_data.documentKind in the inbox UI.
   kind_hint?: 'supplier_invoice' | 'receipt' | null
   document_id: string | null
   extracted_data: Record<string, unknown> | null

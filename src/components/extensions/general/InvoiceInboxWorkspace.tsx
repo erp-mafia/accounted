@@ -181,9 +181,10 @@ interface InboxItem {
   email_body_text: string | null
   document_id: string | null
   extracted_data: InvoiceExtractionResult | null
-  // Sender-declared kind from the +lev / +ver plus-address tag. A column, so
-  // it survives re-extraction; wins over extracted_data.documentKind for the
-  // row badge and the type filter. Absent on client-side placeholders.
+  // Declared kind: the +lev / +ver plus-address tag, the type Arkiv queued it
+  // as, or a person's type in Dokument. A column, so it survives
+  // re-extraction; wins over extracted_data.documentKind for the row badge
+  // and the type filter. Absent on client-side placeholders.
   kind_hint?: 'supplier_invoice' | 'receipt' | null
   // Arkiv classified the document as something not booked from here; it left the queue for its own page.
   routed_to_arkiv_at?: string | null

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
 import { inboxSawABill, requeueHiddenRoutedItems, routeClassifiedDocument, routeStaleQueueItems } from '../route-from-arkiv'
 
 const mock = createQueuedMockSupabase()
@@ -16,8 +17,14 @@ const item = (over: Record<string, unknown> = {}) => ({
   matched_transaction_id: null,
   ...over,
 })
-const classified = (docType: string, admission: 'admitted' | 'held' = 'admitted') =>
-  routeClassifiedDocument(supabase, { documentId: 'doc-1', companyId: 'co-1', userId: 'user-1', docType, admission })
+const classified = (docType: string, admission: 'admitted' | 'held' = 'admitted', decidedBy?: 'model' | 'human') =>
+  routeClassifiedDocument(supabase, { documentId: 'doc-1', companyId: 'co-1', userId: 'user-1', docType, admission, decidedBy })
+const retypedByPerson = (docType: string) => classified(docType, 'admitted', 'human')
+/** What Underlag shows for the item once the update is applied; supabase-js drops undefined keys from the body. */
+const shownAfterUpdate = (before: Record<string, unknown>) => {
+  const written = Object.entries(findCall('invoice_inbox_items', 'update')?.[0] as Record<string, unknown>).filter(([, v]) => v !== undefined)
+  return resolveInboxKind({ ...before, ...Object.fromEntries(written) } as InboxKindSource)
+}
 
 const savedSection = process.env.ARKIV_COMPANY_IDS
 
@@ -107,7 +114,7 @@ describe('routeClassifiedDocument', () => {
     reset()
     enqueue({ data: doc })
     enqueue({ data: [item({ routed_to_arkiv_at: '2026-09-16T05:00:00Z' })] })
-    enqueue({})
+    enqueue({ data: [{ id: 'item-1' }] })
     expect(await classified('receipt')).toBe('requeued')
     expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ routed_to_arkiv_at: null, routed_doc_type: null })
   })
@@ -121,6 +128,141 @@ describe('routeClassifiedDocument', () => {
     expect(await classified('other')).toBe('left')
     enqueue({ data: null })
     expect(await classified('receipt')).toBe('not_found')
+  })
+
+  describe("a person's type in Dokument reaches the item already in Underlag", () => {
+    const readAsInvoice = { documentKind: 'supplier_invoice', totals: { subtotal: 80, vatAmount: 20, total: 100 } }
+    const inUnderlag = { routed_to_arkiv_at: null, routed_doc_type: null }
+
+    it('shows a receipt the inbox read as a supplier invoice as a receipt once a person says so (reported case)', async () => {
+      const queued = item({ kind_hint: null, extracted_data: readAsInvoice })
+      expect(resolveInboxKind(queued as InboxKindSource)).toBe('supplier_invoice')
+      enqueue({ data: doc })
+      enqueue({ data: [queued] })
+      enqueue({ data: [{ id: 'item-1' }] })
+      expect(await retypedByPerson('receipt')).toBe('retyped')
+      expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ ...inUnderlag, kind_hint: 'receipt' })
+      expect(shownAfterUpdate(queued)).toBe('receipt')
+      // Only while the item is open: the guard is on the write itself, not only on the read before it.
+      expect(findCalls('invoice_inbox_items', 'eq')).toEqual(
+        expect.arrayContaining([
+          ['id', 'item-1'],
+          ['company_id', 'co-1'],
+        ]),
+      )
+      expect(findCalls('invoice_inbox_items', 'is')).toEqual([
+        ['created_supplier_invoice_id', null],
+        ['created_journal_entry_id', null],
+        ['matched_transaction_id', null],
+      ])
+    })
+
+    it("leaves the inbox reader's kind alone when the type came from the model", async () => {
+      enqueue({ data: doc })
+      enqueue({ data: [item({ kind_hint: null, extracted_data: readAsInvoice })] })
+      expect(await classified('receipt', 'admitted', 'model')).toBe('already_queued')
+      enqueue({ data: doc })
+      enqueue({ data: [item({ kind_hint: null, extracted_data: readAsInvoice })] })
+      expect(await classified('receipt')).toBe('already_queued')
+      expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+    })
+
+    it('writes nothing when the item already shows what the person said', async () => {
+      enqueue({ data: doc })
+      enqueue({ data: [item({ kind_hint: 'supplier_invoice', extracted_data: readAsInvoice })] })
+      expect(await retypedByPerson('supplier_invoice')).toBe('already_queued')
+      enqueue({ data: doc })
+      enqueue({ data: [item({ kind_hint: 'receipt', extracted_data: readAsInvoice })] })
+      expect(await retypedByPerson('receipt')).toBe('already_queued')
+      expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+    })
+
+    it("shows a supplier invoice the inbox read as a receipt as a supplier invoice, through the hint alone", async () => {
+      const queued = item({ kind_hint: null, extracted_data: { documentKind: 'receipt', totals: { total: 100 } } })
+      enqueue({ data: doc })
+      enqueue({ data: [queued] })
+      enqueue({ data: [{ id: 'item-1' }] })
+      expect(await retypedByPerson('supplier_invoice')).toBe('retyped')
+      expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ ...inUnderlag, kind_hint: 'supplier_invoice' })
+      expect(shownAfterUpdate(queued)).toBe('supplier_invoice')
+    })
+
+    it('makes a credit note of a supplier invoice the inbox read: the hint says supplier, the reading says credit (#2980)', async () => {
+      const queued = item({ kind_hint: null, extracted_data: readAsInvoice })
+      enqueue({ data: doc })
+      enqueue({ data: [queued] })
+      enqueue({ data: [{ id: 'item-1' }] })
+      expect(await retypedByPerson('credit_note')).toBe('retyped')
+      expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({
+        ...inUnderlag,
+        kind_hint: 'supplier_invoice',
+        extracted_data: { ...readAsInvoice, documentKind: 'credit_note' },
+      })
+      expect(shownAfterUpdate(queued)).toBe('credit_note')
+    })
+
+    it('makes a supplier invoice of one the inbox read as a credit note', async () => {
+      const queued = item({ kind_hint: 'supplier_invoice', extracted_data: { ...readAsInvoice, documentKind: 'credit_note' } })
+      enqueue({ data: doc })
+      enqueue({ data: [queued] })
+      enqueue({ data: [{ id: 'item-1' }] })
+      expect(await retypedByPerson('supplier_invoice')).toBe('retyped')
+      expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ ...inUnderlag, extracted_data: readAsInvoice })
+      expect(shownAfterUpdate(queued)).toBe('supplier_invoice')
+    })
+
+    it('never relabels negative amounts as a payable: a payable below zero does not exist, whoever typed it', async () => {
+      const credit = { documentKind: 'supplier_invoice', totals: { subtotal: -80, vatAmount: -20, total: -100 } }
+      const queued = item({ kind_hint: null, extracted_data: credit })
+      enqueue({ data: doc })
+      enqueue({ data: [queued] })
+      enqueue({ data: [{ id: 'item-1' }] })
+      expect(await retypedByPerson('supplier_invoice')).toBe('retyped')
+      expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ ...inUnderlag, kind_hint: 'supplier_invoice' })
+      expect(shownAfterUpdate(queued)).toBe('credit_note')
+    })
+
+    it("uses the document's reading when the item has none, and invents none when neither was read", async () => {
+      const documentReading = { documentKind: 'supplier_invoice', lineItems: [] }
+      enqueue({ data: { ...doc, extracted_data: documentReading } })
+      enqueue({ data: [item({ kind_hint: null, extracted_data: null })] })
+      enqueue({ data: [{ id: 'item-1' }] })
+      expect(await retypedByPerson('credit_note')).toBe('retyped')
+      expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({
+        ...inUnderlag,
+        kind_hint: 'supplier_invoice',
+        extracted_data: { ...documentReading, documentKind: 'credit_note' },
+      })
+
+      reset()
+      enqueue({ data: { ...doc, extracted_data: null } })
+      enqueue({ data: [item({ kind_hint: null, extracted_data: null })] })
+      enqueue({ data: [{ id: 'item-1' }] })
+      expect(await retypedByPerson('credit_note')).toBe('retyped')
+      expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ ...inUnderlag, kind_hint: 'supplier_invoice' })
+    })
+
+    it('puts a routed item back with what the person said, in one write', async () => {
+      enqueue({ data: doc })
+      enqueue({ data: [item({ kind_hint: null, extracted_data: readAsInvoice, routed_to_arkiv_at: '2026-09-16T05:00:00Z' })] })
+      enqueue({ data: [{ id: 'item-1' }] })
+      expect(await retypedByPerson('receipt')).toBe('requeued')
+      expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ ...inUnderlag, kind_hint: 'receipt' }]])
+    })
+
+    it('keeps what an item was booked as when it was booked between the read and the write', async () => {
+      enqueue({ data: doc })
+      enqueue({ data: [item({ kind_hint: null, extracted_data: readAsInvoice })] })
+      enqueue({ data: [] })
+      expect(await retypedByPerson('receipt')).toBe('booked')
+    })
+
+    it('throws when the write fails, so the handler logs it', async () => {
+      enqueue({ data: doc })
+      enqueue({ data: [item({ kind_hint: null, extracted_data: readAsInvoice })] })
+      enqueue({ error: { message: 'boom' } })
+      await expect(retypedByPerson('receipt')).rejects.toThrow('inbox item update failed: boom')
+    })
   })
 
   it('keeps a document in Underlag when the company cannot see the Dokument section, and still queues a receipt', async () => {
