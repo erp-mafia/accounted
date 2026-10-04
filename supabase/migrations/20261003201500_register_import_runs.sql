@@ -6,9 +6,10 @@
 -- had created: the only way back was deleting rows one at a time.
 --
 -- 1. register_import_runs: one row per import, written by the execute route
---    after the import, holding the ids it created. Readable by the company,
---    insertable by a writer for themself, never updated or deleted by a
---    client: the only later write is the undo below.
+--    after the import, holding the ids it created and, for every existing
+--    row it merge-updated, the fields it changed (before and after).
+--    Readable by the company, insertable by a writer for themself, never
+--    updated or deleted by a client: the only later write is the undo below.
 --
 -- 2. undo_register_import RPC: deletes the created rows that nothing
 --    references, keeps the rest and says why, and marks the run undone.
@@ -20,6 +21,18 @@
 --    a plain DELETE would quietly strip a customer from its invoices; a used
 --    row is kept whatever its key's delete action. The check runs as the
 --    definer so a row hidden from the caller by RLS still counts as a use.
+--
+--    Updated rows get the changed fields back, unless one of those fields
+--    has changed again since the import, or something has used the row
+--    since (a row pointing at it, through any foreign key, was created or
+--    updated after the import: an invoice issued to the customer names it
+--    with the imported details, so those details stay). Such rows are kept
+--    as they are and reported: the undo takes back what the import did,
+--    never what someone did afterwards. Fields the import did not touch are
+--    never written.
+--    Only real, user-editable columns are restored; the snapshot is client
+--    input, so id, company, owner, timestamps and the party link (the role
+--    trigger re-derives it from the restored org number) are skipped.
 --
 -- Party rows that the role-link trigger (link_party_on_role_write) created
 -- for imported customers and suppliers stay, as they do after the regular
@@ -37,9 +50,12 @@ CREATE TABLE public.register_import_runs (
   kind          text NOT NULL CHECK (kind IN ('customers', 'suppliers', 'articles')),
   created_ids   uuid[] NOT NULL DEFAULT '{}',
   created_count integer GENERATED ALWAYS AS (cardinality(created_ids)) STORED,
+  -- [{id, before: {field: value}, after: {field: value}}], changed fields only.
+  updated_rows  jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(updated_rows) = 'array'),
+  updated_count integer GENERATED ALWAYS AS (jsonb_array_length(updated_rows)) STORED,
   undone_at     timestamptz,
   undone_by     uuid REFERENCES auth.users(id),
-  -- {deleted, kept: [{id, name, reason, referenced_by}]}, written by the undo.
+  -- {deleted, restored, kept: [{id, name, reason, referenced_by}]}, written by the undo.
   undo_result   jsonb,
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
@@ -106,6 +122,14 @@ DECLARE
   v_deletable  uuid[];
   v_kept       jsonb := '[]'::jsonb;
   v_deleted    integer := 0;
+  v_restored   integer := 0;
+  v_entry      jsonb;
+  v_row_id     uuid;
+  v_cols       text[];
+  v_current    jsonb;
+  v_updated_ids uuid[];
+  v_used_pairs jsonb := '[]'::jsonb;
+  v_used_by    jsonb;
   v_result     jsonb;
 BEGIN
   -- Actor: p_user_id is honored only for the service role (the server's
@@ -211,17 +235,111 @@ BEGIN
     v_table
   ) INTO v_deleted USING p_company_id, v_deletable;
 
-  v_result := jsonb_build_object('deleted', v_deleted, 'kept', v_kept);
+  -- Updated rows: put back the fields the import changed, unless one of
+  -- them has changed since or the row has been used since. Locked first, so
+  -- nothing new can start pointing at one between the check and the write.
+  v_updated_ids := ARRAY(SELECT (e->>'id')::uuid FROM jsonb_array_elements(v_run.updated_rows) e);
+  EXECUTE format(
+    'SELECT count(*) FROM (SELECT id FROM %s WHERE company_id = $1 AND id = ANY($2) ORDER BY id FOR UPDATE) locked',
+    v_table
+  ) USING p_company_id, v_updated_ids;
+
+  -- Used since the import: a row pointing at it (any foreign key, as for
+  -- the created rows) was written after the run was recorded. updated_at
+  -- when the referring table has it (a draft sent after the import counts),
+  -- else created_at, else any reference at all.
+  FOR v_fk IN
+    SELECT
+      (SELECT relname FROM pg_class WHERE oid = c.conrelid) AS referrer,
+      c.conrelid::regclass AS referrer_table,
+      (SELECT string_agg(format('r.%I = t.%I', ra.attname, ta.attname), ' AND ' ORDER BY k.ord)
+         FROM unnest(c.conkey, c.confkey) WITH ORDINALITY AS k(ref_att, tgt_att, ord)
+         JOIN pg_attribute ra ON ra.attrelid = c.conrelid AND ra.attnum = k.ref_att
+         JOIN pg_attribute ta ON ta.attrelid = c.confrelid AND ta.attnum = k.tgt_att) AS join_cond,
+      (SELECT a.attname FROM pg_attribute a
+        WHERE a.attrelid = c.conrelid AND a.attname IN ('updated_at', 'created_at')
+          AND a.attnum > 0 AND NOT a.attisdropped
+        ORDER BY a.attname DESC LIMIT 1) AS since_col
+    FROM pg_constraint c
+    WHERE c.contype = 'f'
+      AND c.confrelid = v_table
+    ORDER BY 1
+  LOOP
+    EXECUTE format(
+      'SELECT coalesce(array_agg(DISTINCT t.id), ''{}'') FROM %s t JOIN %s r ON %s WHERE t.id = ANY($1) AND %s',
+      v_table, v_fk.referrer_table, v_fk.join_cond,
+      CASE WHEN v_fk.since_col IS NULL THEN 'true' ELSE format('r.%I > $2', v_fk.since_col) END
+    ) INTO v_hits USING v_updated_ids, v_run.created_at;
+
+    SELECT v_used_pairs || coalesce(jsonb_agg(jsonb_build_object('id', h, 'by', v_fk.referrer)), '[]'::jsonb)
+      INTO v_used_pairs
+      FROM unnest(v_hits) AS h;
+  END LOOP;
+
+  -- Each restore runs in its own subtransaction so a value that is now
+  -- taken (a unique number reused since) keeps that one row instead of
+  -- failing the whole undo.
+  FOR v_entry IN SELECT * FROM jsonb_array_elements(v_run.updated_rows) LOOP
+    v_row_id := (v_entry->>'id')::uuid;
+    v_cols := ARRAY(
+      SELECT k
+        FROM jsonb_object_keys(coalesce(v_entry->'before', '{}'::jsonb)) AS k
+       WHERE k NOT IN ('id', 'company_id', 'user_id', 'created_at', 'updated_at', 'party_id')
+         AND EXISTS (
+           SELECT 1 FROM pg_attribute a
+            WHERE a.attrelid = v_table AND a.attname = k
+              AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
+         )
+       ORDER BY k
+    );
+    CONTINUE WHEN cardinality(v_cols) = 0;
+
+    EXECUTE format('SELECT to_jsonb(t) FROM %s t WHERE t.id = $1 AND t.company_id = $2 FOR UPDATE', v_table)
+      INTO v_current USING v_row_id, p_company_id;
+    -- Deleted since the import: nothing left to restore.
+    CONTINUE WHEN v_current IS NULL;
+
+    SELECT jsonb_agg(DISTINCT e->>'by') INTO v_used_by
+      FROM jsonb_array_elements(v_used_pairs) e
+     WHERE (e->>'id')::uuid = v_row_id;
+    IF v_used_by IS NOT NULL THEN
+      v_kept := v_kept || jsonb_build_array(jsonb_build_object(
+        'id', v_row_id, 'name', v_current->>'name', 'reason', 'used_since_import', 'referenced_by', v_used_by));
+      CONTINUE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM unnest(v_cols) AS k WHERE v_current->k IS DISTINCT FROM v_entry->'after'->k) THEN
+      v_kept := v_kept || jsonb_build_array(jsonb_build_object(
+        'id', v_row_id, 'name', v_current->>'name', 'reason', 'changed_since_import'));
+      CONTINUE;
+    END IF;
+
+    BEGIN
+      EXECUTE format(
+        'UPDATE %s t SET %s FROM jsonb_populate_record(NULL::%s, $1) r WHERE t.id = $2 AND t.company_id = $3',
+        v_table,
+        (SELECT string_agg(format('%I = r.%I', k, k), ', ') FROM unnest(v_cols) AS k),
+        v_table
+      ) USING v_entry->'before', v_row_id, p_company_id;
+      v_restored := v_restored + 1;
+    EXCEPTION WHEN unique_violation OR check_violation OR foreign_key_violation OR not_null_violation THEN
+      v_kept := v_kept || jsonb_build_array(jsonb_build_object(
+        'id', v_row_id, 'name', v_current->>'name', 'reason', 'conflict'));
+    END;
+  END LOOP;
+
+  v_result := jsonb_build_object('deleted', v_deleted, 'restored', v_restored, 'kept', v_kept);
 
   UPDATE public.register_import_runs
      SET undone_at = now(), undone_by = v_actor, undo_result = v_result
    WHERE id = p_run_id;
 
-  -- Behandlingshistorik: a summary row named for what happened (customers
-  -- carry no per-row audit trigger, so without it the undo would leave no
-  -- trace of who removed what). Counts only: the rows themselves are not
-  -- copied into the log. When every row was kept, the only change is the
-  -- run being marked undone, and that is what the row says.
+  -- Behandlingshistorik: one summary row per kind of change, named for what
+  -- happened (customers carry no per-row audit trigger, so without it the
+  -- undo would leave no trace of who removed or restored what). Counts
+  -- only: the rows themselves are not copied into the log. When every row
+  -- was kept, the only change is the run being marked undone, and that is
+  -- what the row says.
   IF v_deleted > 0 THEN
     INSERT INTO public.audit_log (
       user_id, company_id, action, table_name, record_id, actor_id,
@@ -232,7 +350,19 @@ BEGIN
       jsonb_build_object('deleted', v_deleted, 'kept', jsonb_array_length(v_kept)),
       'Register import undone: created rows nothing references deleted'
     );
-  ELSE
+  END IF;
+  IF v_restored > 0 THEN
+    INSERT INTO public.audit_log (
+      user_id, company_id, action, table_name, record_id, actor_id,
+      old_state, new_state, description
+    ) VALUES (
+      v_actor, p_company_id, 'UPDATE', v_run.kind, p_run_id, v_actor,
+      jsonb_build_object('register_import_run_id', p_run_id, 'updated', jsonb_array_length(v_run.updated_rows)),
+      jsonb_build_object('restored', v_restored, 'kept', jsonb_array_length(v_kept)),
+      'Register import undone: fields the import changed restored on updated rows'
+    );
+  END IF;
+  IF v_deleted = 0 AND v_restored = 0 THEN
     INSERT INTO public.audit_log (
       user_id, company_id, action, table_name, record_id, actor_id,
       old_state, new_state, description
@@ -252,6 +382,6 @@ REVOKE EXECUTE ON FUNCTION public.undo_register_import(uuid, uuid, uuid) FROM PU
 GRANT EXECUTE ON FUNCTION public.undo_register_import(uuid, uuid, uuid) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.undo_register_import(uuid, uuid, uuid) IS
-  'Undoes a register import run: deletes the created rows no foreign key references, keeps and reports the rest, marks the run undone. Requires the actor to be a non-viewer member of p_company_id; p_user_id is honored only for service_role callers. Raises 42501 (no access), P0002 (no such run), 55000 (already undone).';
+  'Undoes a register import run: deletes the created rows no foreign key references, restores the fields it changed on updated rows unless they changed since, keeps and reports the rest, marks the run undone. Requires the actor to be a non-viewer member of p_company_id; p_user_id is honored only for service_role callers. Raises 42501 (no access), P0002 (no such run), 55000 (already undone).';
 
 NOTIFY pgrst, 'reload schema';

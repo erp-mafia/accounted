@@ -3,29 +3,43 @@
  * it can be undone (migration 20261003201500_register_import_runs).
  *
  * The execute routes record one run after the import with the ids it
- * created. The undo (undo_register_import RPC) deletes the created rows that
- * no foreign key references and reports the rest with a reason; the run is
- * then marked undone and cannot be undone twice.
+ * created and, for each existing row it merge-updated, the fields it changed
+ * (before and after). The undo (undo_register_import RPC) deletes the
+ * created rows that no foreign key references, puts the changed fields back
+ * unless they changed again since, and reports what it kept with a reason;
+ * the run is then marked undone and cannot be undone twice.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { rpcClientForBulkDelete } from '@/lib/import/sie-import'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 export type RegisterKind = 'customers' | 'suppliers' | 'articles'
 
-/** Why the undo left a row in place. */
-export type RegisterUndoKeptReason = 'referenced'
+/**
+ * Why the undo left a row in place: a created row something uses, an
+ * updated row something has used since the import (an invoice issued to the
+ * customer names it with the imported details), an updated row whose
+ * changed fields were edited again after the import, or an updated row
+ * whose old value is now taken by another row.
+ */
+export type RegisterUndoKeptReason =
+  | 'referenced'
+  | 'used_since_import'
+  | 'changed_since_import'
+  | 'conflict'
 
 export interface RegisterUndoKeptRow {
   id: string
   name: string
   reason: RegisterUndoKeptReason
-  /** Tables whose rows point at it (invoices, sales_orders, ...), for 'referenced'. */
+  /** Tables whose rows point at it (invoices, sales_orders, ...), for 'referenced' and 'used_since_import'. */
   referenced_by?: string[] | null
 }
 
 export interface RegisterUndoResult {
   deleted: number
+  restored: number
   kept: RegisterUndoKeptRow[]
 }
 
@@ -34,9 +48,80 @@ export interface RegisterImportRunListRow {
   id: string
   kind: RegisterKind
   created_count: number
+  updated_count: number
   created_at: string
   undone_at: string | null
   undo_result: RegisterUndoResult | null
+}
+
+type Row = Record<string, unknown>
+
+/** One merge-updated row: the fields the import changed, before and after. */
+export interface RegisterUpdatedRow {
+  id: string
+  before: Row
+  after: Row
+}
+
+/**
+ * Never restored: identity, ownership and timestamps, and the party link,
+ * which the role-link trigger re-derives from the restored org number. The
+ * RPC skips the same columns, since the snapshot is client input.
+ */
+const NOT_RESTORED = new Set(['id', 'company_id', 'user_id', 'created_at', 'updated_at', 'party_id'])
+
+/**
+ * The full rows an import may overwrite, read before it writes anything so
+ * the undo can put back what it changed. Nothing is read when duplicates are
+ * skipped: the import then only creates. Throws on a read error, before the
+ * import has written anything.
+ */
+export async function snapshotRowsForUndo(
+  supabase: SupabaseClient,
+  companyId: string,
+  kind: RegisterKind,
+  updateDuplicates: boolean,
+): Promise<Map<string, Row>> {
+  if (!updateDuplicates) return new Map()
+  const rows = await fetchAllRows<Row>(({ from, to }) =>
+    supabase.from(kind).select('*').eq('company_id', companyId).order('id').range(from, to),
+  )
+  return new Map(rows.map((row) => [String(row.id), row]))
+}
+
+const sameValue = (a: unknown, b: unknown): boolean =>
+  JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+
+/**
+ * The fields each updated row changed, from the snapshot taken before the
+ * import and the row the update returned. A row matched twice in one file
+ * counts once (first snapshot, last result); a row this run created is left
+ * out (the undo deletes it); a row whose update changed nothing is left out.
+ */
+export function diffUpdatedRows(
+  before: ReadonlyMap<string, Row>,
+  createdIds: ReadonlySet<string>,
+  updated: ReadonlyArray<{ id: string }>,
+): RegisterUpdatedRow[] {
+  const last = new Map<string, Row>()
+  for (const row of updated) last.set(row.id, row as unknown as Row)
+
+  const out: RegisterUpdatedRow[] = []
+  for (const [id, after] of last) {
+    const prev = before.get(id)
+    if (!prev || createdIds.has(id)) continue
+    const changedBefore: Row = {}
+    const changedAfter: Row = {}
+    for (const key of Object.keys(after)) {
+      if (NOT_RESTORED.has(key) || !(key in prev) || sameValue(prev[key], after[key])) continue
+      changedBefore[key] = prev[key] ?? null
+      changedAfter[key] = after[key] ?? null
+    }
+    if (Object.keys(changedBefore).length > 0) {
+      out.push({ id, before: changedBefore, after: changedAfter })
+    }
+  }
+  return out
 }
 
 /**
@@ -52,11 +137,16 @@ export async function recordRegisterImportRun(
     userId: string
     kind: RegisterKind
     created: ReadonlyArray<{ id: string }>
+    /** Rows the import merge-updated, as the update returned them. */
+    updated: ReadonlyArray<{ id: string }>
+    /** snapshotRowsForUndo from before the import. */
+    before: ReadonlyMap<string, Row>
   },
   log: Logger,
 ): Promise<string | null> {
   const createdIds = params.created.map((row) => row.id)
-  if (createdIds.length === 0) return null
+  const updatedRows = diffUpdatedRows(params.before, new Set(createdIds), params.updated)
+  if (createdIds.length === 0 && updatedRows.length === 0) return null
 
   try {
     const { data, error } = await supabase
@@ -66,6 +156,7 @@ export async function recordRegisterImportRun(
         user_id: params.userId,
         kind: params.kind,
         created_ids: createdIds,
+        updated_rows: updatedRows,
       })
       .select('id')
       .single()
@@ -73,6 +164,7 @@ export async function recordRegisterImportRun(
       log.error('register import run not recorded: this import cannot be undone', error, {
         kind: params.kind,
         created: createdIds.length,
+        updated: updatedRows.length,
       })
       return null
     }

@@ -7,7 +7,17 @@ vi.mock('@/lib/import/sie-import', () => ({
   rpcClientForBulkDelete: vi.fn(async () => ({ rpc: (...a: unknown[]) => rpcMock(...a) })),
 }))
 
-import { recordRegisterImportRun, undoRegisterImport } from '../register-runs'
+const fetchAllRowsMock = vi.fn()
+vi.mock('@/lib/supabase/fetch-all', () => ({
+  fetchAllRows: (...a: unknown[]) => fetchAllRowsMock(...a),
+}))
+
+import {
+  diffUpdatedRows,
+  recordRegisterImportRun,
+  snapshotRowsForUndo,
+  undoRegisterImport,
+} from '../register-runs'
 
 const { supabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 
@@ -32,20 +42,57 @@ describe('recordRegisterImportRun', () => {
 
     const id = await recordRegisterImportRun(
       supabase as never,
-      { companyId: 'company-1', userId: 'user-1', kind: 'customers', created: [{ id: 'c1' }, { id: 'c2' }] },
+      {
+        companyId: 'company-1',
+        userId: 'user-1',
+        kind: 'customers',
+        created: [{ id: 'c1' }, { id: 'c2' }],
+        updated: [],
+        before: new Map(),
+      },
       testLog(),
     )
 
     expect(id).toBe('run-1')
     expect(findCall('register_import_runs', 'insert')).toEqual([
-      { company_id: 'company-1', user_id: 'user-1', kind: 'customers', created_ids: ['c1', 'c2'] },
+      { company_id: 'company-1', user_id: 'user-1', kind: 'customers', created_ids: ['c1', 'c2'], updated_rows: [] },
     ])
   })
 
-  it('records nothing when the import created nothing', async () => {
+  it('records a run that only updated existing rows', async () => {
+    enqueue({ data: { id: 'run-2' } })
+
     const id = await recordRegisterImportRun(
       supabase as never,
-      { companyId: 'company-1', userId: 'user-1', kind: 'articles', created: [] },
+      {
+        companyId: 'company-1',
+        userId: 'user-1',
+        kind: 'suppliers',
+        created: [],
+        updated: [{ id: 's1', name: 'Nytt namn', email: 'a@b.se' } as { id: string }],
+        before: new Map([['s1', { id: 's1', name: 'Gammalt namn', email: 'a@b.se' }]]),
+      },
+      testLog(),
+    )
+
+    expect(id).toBe('run-2')
+    expect(findCall('register_import_runs', 'insert')?.[0]).toMatchObject({
+      created_ids: [],
+      updated_rows: [{ id: 's1', before: { name: 'Gammalt namn' }, after: { name: 'Nytt namn' } }],
+    })
+  })
+
+  it('records nothing when the import neither created nor changed anything', async () => {
+    const id = await recordRegisterImportRun(
+      supabase as never,
+      {
+        companyId: 'company-1',
+        userId: 'user-1',
+        kind: 'articles',
+        created: [],
+        updated: [{ id: 'a1', name: 'Samma' } as { id: string }],
+        before: new Map([['a1', { id: 'a1', name: 'Samma' }]]),
+      },
       testLog(),
     )
 
@@ -59,12 +106,75 @@ describe('recordRegisterImportRun', () => {
 
     const id = await recordRegisterImportRun(
       supabase as never,
-      { companyId: 'company-1', userId: 'user-1', kind: 'suppliers', created: [{ id: 's1' }] },
+      { companyId: 'company-1', userId: 'user-1', kind: 'suppliers', created: [{ id: 's1' }], updated: [], before: new Map() },
       log,
     )
 
     expect(id).toBeNull()
     expect(log.error).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('diffUpdatedRows', () => {
+  const before = new Map<string, Record<string, unknown>>([
+    ['c1', {
+      id: 'c1', company_id: 'co', name: 'Gamla AB', email: null, phone: '08-1',
+      invoice_email_cc_addresses: ['a@b.se'], updated_at: '2026-10-01T00:00:00Z', party_id: 'p1',
+    }],
+    ['c2', { id: 'c2', name: 'Oförändrad', email: 'x@y.se' }],
+  ])
+
+  it('keeps only the fields the import changed, never identity, timestamps or the party link', () => {
+    const rows = diffUpdatedRows(before, new Set(), [
+      {
+        id: 'c1', company_id: 'co', name: 'Nya AB', email: 'ny@ab.se', phone: '08-1',
+        invoice_email_cc_addresses: ['a@b.se'], updated_at: '2026-10-03T00:00:00Z', party_id: 'p2',
+      } as { id: string },
+    ])
+
+    expect(rows).toEqual([
+      { id: 'c1', before: { name: 'Gamla AB', email: null }, after: { name: 'Nya AB', email: 'ny@ab.se' } },
+    ])
+  })
+
+  it('leaves out rows whose update changed nothing and rows this run created', () => {
+    const rows = diffUpdatedRows(before, new Set(['c1']), [
+      { id: 'c1', name: 'Nya AB' } as { id: string },
+      { id: 'c2', name: 'Oförändrad', email: 'x@y.se' } as { id: string },
+    ])
+
+    expect(rows).toEqual([])
+  })
+
+  it('counts a row matched twice once: first snapshot, last result', () => {
+    const rows = diffUpdatedRows(before, new Set(), [
+      { id: 'c2', name: 'Första', email: 'x@y.se' } as { id: string },
+      { id: 'c2', name: 'Andra', email: 'x@y.se' } as { id: string },
+    ])
+
+    expect(rows).toEqual([{ id: 'c2', before: { name: 'Oförändrad' }, after: { name: 'Andra' } }])
+  })
+})
+
+describe('snapshotRowsForUndo', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('reads nothing when duplicates are skipped', async () => {
+    const snapshot = await snapshotRowsForUndo(supabase as never, 'company-1', 'customers', false)
+
+    expect(snapshot.size).toBe(0)
+    expect(fetchAllRowsMock).not.toHaveBeenCalled()
+  })
+
+  it('maps every row of the register by id when duplicates are updated', async () => {
+    fetchAllRowsMock.mockResolvedValue([{ id: 'c1', name: 'A' }, { id: 'c2', name: 'B' }])
+
+    const snapshot = await snapshotRowsForUndo(supabase as never, 'company-1', 'customers', true)
+
+    expect([...snapshot.keys()]).toEqual(['c1', 'c2'])
+    expect(snapshot.get('c2')).toEqual({ id: 'c2', name: 'B' })
   })
 })
 
@@ -98,7 +208,7 @@ describe('undoRegisterImport', () => {
 
   it('calls the RPC with the caller as actor and returns its report', async () => {
     enqueue({ data: { id: 'run-1', undone_at: null } })
-    const report = { deleted: 3, kept: [] }
+    const report = { deleted: 3, restored: 1, kept: [] }
     rpcMock.mockResolvedValue({ data: report, error: null })
 
     const outcome = await undoRegisterImport(supabase as never, 'company-1', 'run-1', 'user-1')

@@ -108,7 +108,7 @@ describe('POST /api/import/articles/execute', () => {
     expect(mockEnsureArticleNumber).toHaveBeenCalledTimes(1)
     // The run is recorded so the import can be undone from the history.
     expect(findCall('register_import_runs', 'insert')).toEqual([
-      { company_id: 'company-1', user_id: 'user-1', kind: 'articles', created_ids: ['a1', 'a2'] },
+      { company_id: 'company-1', user_id: 'user-1', kind: 'articles', created_ids: ['a1', 'a2'], updated_rows: [] },
     ])
   })
 
@@ -139,6 +139,16 @@ describe('POST /api/import/articles/execute', () => {
     expect(status).toBe(200)
     expect(body.data.updated).toBe(1)
     expect(body.data.created).toBe(0)
+    // The run keeps what the update changed, so an undo can put it back.
+    expect(findCall('register_import_runs', 'insert')).toEqual([
+      {
+        company_id: 'company-1',
+        user_id: 'user-1',
+        kind: 'articles',
+        created_ids: [],
+        updated_rows: [{ id: 'x', before: { name: 'Old' }, after: { name: 'New name' } }],
+      },
+    ])
   })
 
   it('matches a duplicate by name (case-insensitive)', async () => {

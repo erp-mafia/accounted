@@ -13,10 +13,13 @@ import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
  * different tables (invoices and deadlines, both ON DELETE SET NULL, and
  * invoice_items for articles, invoice_inbox_items for suppliers) to prove the
  * check is not a hand-kept list and that a SET NULL key still keeps the row.
+ * Updated rows get back only the fields the import changed, and only when
+ * nobody changed those fields again since.
  */
 
 type UndoResult = {
   deleted: number
+  restored: number
   kept: Array<{ id: string; name: string; reason: string; referenced_by: string[] | null }>
 }
 
@@ -33,16 +36,28 @@ async function insertRow(
   return rows[0]!.id
 }
 
+type UpdatedRow = { id: string; before: Record<string, unknown>; after: Record<string, unknown> }
+
 async function insertRun(params: {
   companyId: string
   userId: string
   kind: 'customers' | 'suppliers' | 'articles'
   createdIds: string[]
+  updatedRows?: UpdatedRow[]
+  /** When the import ran; defaults to now. */
+  createdAt?: Date
 }): Promise<string> {
   const { rows } = await getPool().query<{ id: string }>(
-    `INSERT INTO public.register_import_runs (company_id, user_id, kind, created_ids)
-     VALUES ($1, $2, $3, $4::uuid[]) RETURNING id`,
-    [params.companyId, params.userId, params.kind, params.createdIds],
+    `INSERT INTO public.register_import_runs (company_id, user_id, kind, created_ids, updated_rows, created_at)
+     VALUES ($1, $2, $3, $4::uuid[], $5::jsonb, coalesce($6, now())) RETURNING id`,
+    [
+      params.companyId,
+      params.userId,
+      params.kind,
+      params.createdIds,
+      JSON.stringify(params.updatedRows ?? []),
+      params.createdAt ?? null,
+    ],
   )
   return rows[0]!.id
 }
@@ -296,6 +311,197 @@ describe('undo_register_import (pg)', () => {
 
     expect(await errcode(() => runAsServiceRole((c) => undoAs(c, a.companyId, runId, a.userId)))).toBe('55000')
     expect(await errcode(() => runAsServiceRole((c) => undoAs(c, b.companyId, runId, b.userId)))).toBe('P0002')
+  })
+
+  it('restores only the fields the import changed, and keeps a row whose fields were edited again', async () => {
+    const { userId, companyId } = await seedCompany()
+    const restored = await insertRow('customers', companyId, userId, 'Nya AB')
+    // Imported: name and email; edited by hand after the import: phone.
+    await getPool().query(`UPDATE public.customers SET email = 'ny@ab.se', phone = '08-2' WHERE id = $1`, [restored])
+    const editedAgain = await insertRow('customers', companyId, userId, 'Ändrad för hand')
+    const runId = await insertRun({
+      companyId,
+      userId,
+      kind: 'customers',
+      createdIds: [],
+      updatedRows: [
+        { id: restored, before: { name: 'Gamla AB', email: null }, after: { name: 'Nya AB', email: 'ny@ab.se' } },
+        { id: editedAgain, before: { name: 'Gammal' }, after: { name: 'Importerad' } },
+        { id: randomUUID(), before: { name: 'Borttagen sedan' }, after: { name: 'X' } },
+      ],
+    })
+
+    const result = await runAsServiceRole((client) => undoAs(client, companyId, runId, userId))
+
+    expect(result).toEqual({
+      deleted: 0,
+      restored: 1,
+      kept: [{ id: editedAgain, name: 'Ändrad för hand', reason: 'changed_since_import' }],
+    })
+    const { rows } = await getPool().query(
+      `SELECT id, name, email, phone FROM public.customers WHERE id = ANY($1::uuid[]) ORDER BY name`,
+      [[restored, editedAgain]],
+    )
+    expect(rows).toEqual([
+      { id: editedAgain, name: 'Ändrad för hand', email: null, phone: null },
+      { id: restored, name: 'Gamla AB', email: null, phone: '08-2' },
+    ])
+    // A restore is logged as an update of the register, never as a delete.
+    const { rows: audit } = await getPool().query(
+      `SELECT action, table_name, new_state FROM public.audit_log WHERE record_id = $1`,
+      [runId],
+    )
+    expect(audit).toEqual([{ action: 'UPDATE', table_name: 'customers', new_state: { restored: 1, kept: 1 } }])
+  })
+
+  it('keeps a row whose old value is taken now, restores the rest, and compares numbers by value', async () => {
+    const { userId, companyId } = await seedCompany()
+    const renumbered = await insertRow('articles', companyId, userId, 'Skruv M8')
+    await getPool().query(`UPDATE public.articles SET article_number = 'A-2' WHERE id = $1`, [renumbered])
+    const taker = await insertRow('articles', companyId, userId, 'Ny artikel')
+    await getPool().query(`UPDATE public.articles SET article_number = 'A-1' WHERE id = $1`, [taker])
+    const repriced = await insertRow('articles', companyId, userId, 'Konsulttimme')
+    await getPool().query(`UPDATE public.articles SET price_excl_vat = 120.50 WHERE id = $1`, [repriced])
+    const runId = await insertRun({
+      companyId,
+      userId,
+      kind: 'articles',
+      createdIds: [],
+      updatedRows: [
+        { id: renumbered, before: { article_number: 'A-1' }, after: { article_number: 'A-2' } },
+        // 120.5 as JSON from the client, 120.50 in the numeric column.
+        { id: repriced, before: { price_excl_vat: 100 }, after: { price_excl_vat: 120.5 } },
+      ],
+    })
+
+    const result = await runAsServiceRole((client) => undoAs(client, companyId, runId, userId))
+
+    expect(result.restored).toBe(1)
+    expect(result.kept).toEqual([{ id: renumbered, name: 'Skruv M8', reason: 'conflict' }])
+    const { rows } = await getPool().query(
+      `SELECT id, article_number, price_excl_vat::text AS price FROM public.articles WHERE id = ANY($1::uuid[])`,
+      [[renumbered, repriced]],
+    )
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    expect(byId.get(renumbered)?.article_number).toBe('A-2')
+    expect(Number(byId.get(repriced)?.price)).toBe(100)
+  })
+
+  it('never writes identity columns or unknown keys from the snapshot', async () => {
+    const { userId, companyId } = await seedCompany()
+    const other = await seedCompany()
+    const row = await insertRow('suppliers', companyId, userId, 'Ny leverantör')
+    const runId = await insertRun({
+      companyId,
+      userId,
+      kind: 'suppliers',
+      createdIds: [],
+      updatedRows: [
+        {
+          id: row,
+          before: { name: 'Gammal leverantör', company_id: other.companyId, user_id: other.userId, no_such_column: 1 },
+          after: { name: 'Ny leverantör', company_id: companyId, user_id: userId, no_such_column: 2 },
+        },
+      ],
+    })
+
+    const result = await runAsServiceRole((client) => undoAs(client, companyId, runId, userId))
+
+    expect(result.restored).toBe(1)
+    const { rows } = await getPool().query(`SELECT name, company_id, user_id FROM public.suppliers WHERE id = $1`, [row])
+    expect(rows[0]).toEqual({ name: 'Gammal leverantör', company_id: companyId, user_id: userId })
+  })
+
+  it('keeps an updated row an invoice has used since the import, and restores one only used before it', async () => {
+    const { userId, companyId } = await seedCompany()
+    const usedSince = await insertRow('customers', companyId, userId, 'Importerat namn')
+    const usedBefore = await insertRow('customers', companyId, userId, 'Också importerat')
+    // An invoice written before the import (the run is recorded a minute
+    // later) and one written after it (the run is an hour old).
+    await insertInvoice(companyId, userId, usedBefore)
+    const before = await insertRun({
+      companyId,
+      userId,
+      kind: 'customers',
+      createdIds: [],
+      createdAt: new Date(Date.now() + 60_000),
+      updatedRows: [{ id: usedBefore, before: { name: 'Gammalt namn B' }, after: { name: 'Också importerat' } }],
+    })
+    const since = await insertRun({
+      companyId,
+      userId,
+      kind: 'customers',
+      createdIds: [],
+      createdAt: new Date(Date.now() - 3_600_000),
+      updatedRows: [{ id: usedSince, before: { name: 'Gammalt namn A' }, after: { name: 'Importerat namn' } }],
+    })
+    await insertInvoice(companyId, userId, usedSince)
+
+    const kept = await runAsServiceRole((client) => undoAs(client, companyId, since, userId))
+    const restored = await runAsServiceRole((client) => undoAs(client, companyId, before, userId))
+
+    expect(kept).toEqual({
+      deleted: 0,
+      restored: 0,
+      kept: [{ id: usedSince, name: 'Importerat namn', reason: 'used_since_import', referenced_by: ['invoices'] }],
+    })
+    expect(restored).toEqual({ deleted: 0, restored: 1, kept: [] })
+    const { rows } = await getPool().query(
+      `SELECT id, name FROM public.customers WHERE id = ANY($1::uuid[]) ORDER BY name`,
+      [[usedSince, usedBefore]],
+    )
+    expect(rows).toEqual([
+      { id: usedBefore, name: 'Gammalt namn B' },
+      { id: usedSince, name: 'Importerat namn' },
+    ])
+  })
+
+  it('counts a draft written before the import but sent after it as used since', async () => {
+    const { userId, companyId } = await seedCompany()
+    const customer = await insertRow('customers', companyId, userId, 'Importerat namn')
+    const invoiceId = await insertInvoice(companyId, userId, customer)
+    // Created two hours ago, last written now (as sending it would): only
+    // updated_at is past the run, recorded an hour ago.
+    await getPool().query(
+      `UPDATE public.invoices SET created_at = now() - interval '2 hours' WHERE id = $1`,
+      [invoiceId],
+    )
+    const runId = await insertRun({
+      companyId,
+      userId,
+      kind: 'customers',
+      createdIds: [],
+      createdAt: new Date(Date.now() - 3_600_000),
+      updatedRows: [{ id: customer, before: { name: 'Gammalt namn' }, after: { name: 'Importerat namn' } }],
+    })
+
+    const result = await runAsServiceRole((client) => undoAs(client, companyId, runId, userId))
+
+    expect(result.kept.map((k) => k.reason)).toEqual(['used_since_import'])
+  })
+
+  it('links a restored org number back to its own party', async () => {
+    const { userId, companyId } = await seedCompany()
+    const { rows: created } = await getPool().query<{ id: string; party_id: string }>(
+      `INSERT INTO public.customers (company_id, user_id, name, org_number) VALUES ($1, $2, 'Kund AB', '5564300142')
+       RETURNING id, party_id`,
+      [companyId, userId],
+    )
+    const customer = created[0]!
+    // The import changed the org number: the role trigger moved it to a new party.
+    await getPool().query(`UPDATE public.customers SET org_number = '5560125790' WHERE id = $1`, [customer.id])
+    const runId = await insertRun({
+      companyId,
+      userId,
+      kind: 'customers',
+      createdIds: [],
+      updatedRows: [{ id: customer.id, before: { org_number: '5564300142' }, after: { org_number: '5560125790' } }],
+    })
+
+    await runAsServiceRole((client) => undoAs(client, companyId, runId, userId))
+
+    const { rows } = await getPool().query(`SELECT org_number, party_id FROM public.customers WHERE id = $1`, [customer.id])
+    expect(rows[0]).toEqual({ org_number: '5564300142', party_id: customer.party_id })
   })
 
   it('is not executable by anon', async () => {

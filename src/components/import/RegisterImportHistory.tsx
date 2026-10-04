@@ -37,6 +37,12 @@ const CONFIRM_KEY: Record<RegisterKind, string> = {
   articles: 'register_history_undo_confirm_articles',
 }
 
+const CONFIRM_RESTORE_KEY: Record<RegisterKind, string> = {
+  customers: 'register_history_undo_confirm_restore_customers',
+  suppliers: 'register_history_undo_confirm_restore_suppliers',
+  articles: 'register_history_undo_confirm_restore_articles',
+}
+
 /**
  * The tables the undo RPC reports in `referenced_by`, as the user knows them.
  * The RPC reads every foreign key from the catalog, so a table added later
@@ -57,8 +63,9 @@ const REFERRER_LABEL_KEY: Record<string, string> = {
  * History of customer, supplier and article imports with per-run undo.
  * Rendered fold-open from the 'Tidigare registerimporter' row on the import
  * tab; mirrors BankFileImportHistory. What an undo keeps (rows already in
- * use) opens in a dialog right after the undo and stays one click away on
- * the run's row afterwards (one-line rows, design.md convention 4).
+ * use, rows edited again since the import) opens in a dialog right after
+ * the undo and stays one click away on the run's row afterwards (one-line
+ * rows, design.md convention 4).
  */
 export default function RegisterImportHistory() {
   const t = useTranslations('import')
@@ -107,6 +114,9 @@ export default function RegisterImportHistory() {
 
       const result = data.data as RegisterUndoResult
       const parts = [t('register_history_undo_success_deleted', { count: result.deleted })]
+      if (result.restored > 0) {
+        parts.push(t('register_history_undo_success_restored', { count: result.restored }))
+      }
       if (result.kept.length > 0) {
         parts.push(t('register_history_undo_success_kept', { count: result.kept.length }))
       }
@@ -124,6 +134,8 @@ export default function RegisterImportHistory() {
   }, [pendingUndo, fetchRuns, t, toast])
 
   const keptReason = (row: RegisterUndoKeptRow): string => {
+    if (row.reason === 'changed_since_import') return t('register_history_kept_reason_changed')
+    if (row.reason === 'conflict') return t('register_history_kept_reason_conflict')
     const places = (row.referenced_by ?? []).map((table) => {
       const key = REFERRER_LABEL_KEY[table]
       return key ? t(key) : t('register_history_ref_other')
@@ -132,8 +144,19 @@ export default function RegisterImportHistory() {
     const list = unique.length > 0
       ? new Intl.ListFormat(locale, { style: 'long', type: 'conjunction' }).format(unique)
       : t('register_history_ref_other')
-    return t('register_history_kept_reason_referenced', { places: list })
+    return row.reason === 'used_since_import'
+      ? t('register_history_kept_reason_used_since', { places: list })
+      : t('register_history_kept_reason_referenced', { places: list })
   }
+
+  // What the undo will do, both halves only when the run did both.
+  const confirmDescription = (run: RegisterImportRunListRow): string =>
+    [
+      run.created_count > 0 ? t(CONFIRM_KEY[run.kind], { count: run.created_count }) : null,
+      run.updated_count > 0 ? t(CONFIRM_RESTORE_KEY[run.kind], { count: run.updated_count }) : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join('\n\n')
 
   const statusCell = (row: RegisterImportRunListRow) => {
     if (!row.undone_at) {
@@ -193,6 +216,7 @@ export default function RegisterImportHistory() {
               <th className={TH_CLASS}>{t('register_history_col_register')}</th>
               <th className={TH_CLASS}>{t('register_history_col_date')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{t('register_history_col_created')}</th>
+              <th className={cn(TH_CLASS, 'text-right')}>{t('register_history_col_updated')}</th>
               <th className={TH_CLASS}>{t('register_history_col_status')}</th>
               <th className={TH_CLASS}>
                 <span className="sr-only">{t('register_history_undo_button')}</span>
@@ -207,6 +231,7 @@ export default function RegisterImportHistory() {
                   {formatDateTime(row.created_at)}
                 </td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{row.created_count}</td>
+                <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{row.updated_count}</td>
                 <td className={TD_CLASS}>{statusCell(row)}</td>
                 <td className={cn(TD_CLASS, 'text-right')}>
                   {!row.undone_at && (
@@ -233,11 +258,7 @@ export default function RegisterImportHistory() {
           if (!open) setPendingUndo(null)
         }}
         title={t('register_history_undo_confirm_title')}
-        description={
-          pendingUndo
-            ? t(CONFIRM_KEY[pendingUndo.kind], { count: pendingUndo.created_count })
-            : ''
-        }
+        description={pendingUndo ? confirmDescription(pendingUndo) : ''}
         confirmLabel={t('register_history_undo_confirm_label')}
         onConfirm={handleUndoConfirm}
       />

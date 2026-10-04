@@ -7,7 +7,7 @@ import { normalizeOrgNumber } from '@/lib/import/shared/column-utils'
 import { createRegisterMatcher } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { recordRegisterImportRun } from '@/lib/import/register-runs'
+import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
 import type { CustomerImportExecuteResult } from '@/lib/import/customers/types'
@@ -60,6 +60,7 @@ export const POST = withRouteContext(
     }
 
     try {
+      const beforeImport = await snapshotRowsForUndo(supabase, companyId, 'customers', update_duplicates)
       const existingRaw = await fetchAllRows(({ from, to }) =>
         supabase
           .from('customers')
@@ -178,7 +179,7 @@ export const POST = withRouteContext(
         })
       }
 
-      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created }, opLog)
+      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)
 
       const response: CustomerImportExecuteResult = {
         success: errors.length === 0,

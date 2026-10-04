@@ -18,7 +18,7 @@ export const GET = withRouteContext(
   async (_request, { supabase, companyId, log, requestId }) => {
     const { data, error } = await supabase
       .from('register_import_runs')
-      .select('id, kind, created_count, created_at, undone_at, undo_result')
+      .select('id, kind, created_count, updated_count, created_at, undone_at, undo_result')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(LIST_LIMIT)

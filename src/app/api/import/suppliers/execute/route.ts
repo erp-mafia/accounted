@@ -7,7 +7,7 @@ import { orgNumberKey } from '@/lib/invariants/org-number'
 import { createRegisterMatcher, supplierOrgKey } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { recordRegisterImportRun } from '@/lib/import/register-runs'
+import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Supplier } from '@/types'
 import type { SupplierImportExecuteResult } from '@/lib/import/suppliers/types'
@@ -41,6 +41,7 @@ export const POST = withRouteContext(
     }
 
     try {
+      const beforeImport = await snapshotRowsForUndo(supabase, companyId, 'suppliers', update_duplicates)
       const existingRaw = await fetchAllRows(({ from, to }) =>
         supabase
           .from('suppliers')
@@ -163,7 +164,7 @@ export const POST = withRouteContext(
         })
       }
 
-      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'suppliers', created }, opLog)
+      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'suppliers', created, updated, before: beforeImport }, opLog)
 
       const response: SupplierImportExecuteResult = {
         success: errors.length === 0,

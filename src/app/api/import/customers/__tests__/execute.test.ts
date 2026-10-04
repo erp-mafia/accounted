@@ -108,6 +108,12 @@ describe('POST /api/import/customers/execute', () => {
     expect(body.data.created).toBe(1)
     const [payload] = findCall('customers', 'insert') as [Record<string, unknown>]
     expect(payload.customer_number).toBe('1001')
+    // The run is recorded so the import can be undone from the history.
+    expect(findCall('register_import_runs', 'insert')?.[0]).toMatchObject({
+      kind: 'customers',
+      created_ids: ['c1'],
+      updated_rows: [],
+    })
   })
 
   it('accepts a row without the field (client from before the column existed)', async () => {
@@ -139,6 +145,11 @@ describe('POST /api/import/customers/execute', () => {
     expect(body.data.updated).toBe(1)
     const [payload] = findCall('customers', 'update') as [Record<string, unknown>]
     expect(payload.customer_number).toBe('1001')
+    // What the update changed is kept for the undo, and only that.
+    expect(findCall('register_import_runs', 'insert')?.[0]).toMatchObject({
+      created_ids: [],
+      updated_rows: [{ id: 'x', before: { customer_number: null }, after: { customer_number: '1001' } }],
+    })
   })
 
   it('leaves an existing customer number alone when the file has none', async () => {
@@ -169,6 +180,8 @@ describe('POST /api/import/customers/execute', () => {
     expect(status).toBe(200)
     expect(body.data.skipped).toBe(1)
     expect(findCall('customers', 'update')).toBeUndefined()
+    // Nothing created or changed: no run to undo.
+    expect(findCall('register_import_runs', 'insert')).toBeUndefined()
   })
 
   it('matches on the customer number before the org number', async () => {

@@ -6,7 +6,7 @@ import { validateBody } from '@/lib/api/validate'
 import { ArticleImportExecuteSchema } from '@/lib/api/schemas'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { recordRegisterImportRun } from '@/lib/import/register-runs'
+import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { checkRevenueAccount, type RevenueAccountStatus } from '@/lib/articles/validate-revenue-account'
@@ -51,6 +51,7 @@ export const POST = withRouteContext(
     }
 
     try {
+      const beforeImport = await snapshotRowsForUndo(supabase, companyId, 'articles', update_duplicates)
       const existingRaw = await fetchAllRows(({ from, to }) =>
         supabase
           .from('articles')
@@ -242,7 +243,7 @@ export const POST = withRouteContext(
         })
       }
 
-      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'articles', created }, opLog)
+      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'articles', created, updated, before: beforeImport }, opLog)
 
       const response: ArticleImportExecuteResult = {
         success: errors.length === 0,
