@@ -115,7 +115,8 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/ef-declaration', () => {
 
     const res = await GET(
       mkReq(
-        '?category=pensioner&kapitalunderlag=-600000&priorYearSchablonavdrag=12000' +
+        '?category=pensioner&kapitalunderlag=-600000&expansionsfondKapitalunderlag=250000' +
+          '&priorYearSchablonavdrag=12000' +
           '&priorYearActualCharged=9000&pfondDesiredAmount=20000' +
           '&expansionsfondExistingBalance=0&expansionsfondDesiredChange=-5000',
       ),
@@ -127,6 +128,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/ef-declaration', () => {
     expect(computeEfDeclarationPreview).toHaveBeenCalledWith(expect.anything(), 'company-1', 'period-1', {
       category: 'pensioner',
       kapitalunderlag: -600_000,
+      expansionsfondKapitalunderlag: 250_000,
       priorYearSchablonavdrag: 12_000,
       priorYearActualCharged: 9_000,
       pfondDesiredAmount: 20_000,
@@ -148,5 +150,30 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/ef-declaration', () => {
     expect(body.data.postedEntryCount).toBe(0)
     expect(body.data.inputWarnings).toHaveLength(1)
     expect(body.data.inputWarnings[0]).toMatch(/^Kapitalunderlag saknas/)
+  })
+
+  it('warns when an expansionsfond avsättning has no closing kapitalunderlag', async () => {
+    const { enqueue } = signedIn()
+    enqueue({ data: { id: 'period-1' } })
+    enqueue({ count: 3 })
+    vi.mocked(computeEfDeclarationPreview).mockResolvedValue(PREVIEW)
+
+    const res = await GET(mkReq('?kapitalunderlag=100000&expansionsfondDesiredChange=50000'), mkParams())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.inputWarnings).toEqual([
+      expect.stringMatching(/^Kapitalunderlag för expansionsfond saknas/),
+    ])
+  })
+
+  it('does not ask for the closing kapitalunderlag for a återföring', async () => {
+    const { enqueue } = signedIn()
+    enqueue({ data: { id: 'period-1' } })
+    enqueue({ count: 3 })
+    vi.mocked(computeEfDeclarationPreview).mockResolvedValue(PREVIEW)
+
+    const res = await GET(mkReq('?kapitalunderlag=100000&expansionsfondDesiredChange=-50000'), mkParams())
+    const body = await res.json()
+    expect(body.data.inputWarnings).toEqual([])
   })
 })

@@ -32,3 +32,10 @@ describe('calculateRantefordelning', () => {
     expect(r!.amount).toBe(7_960)
   })
 })
+
+describe('calculateRantefordelning: NE-bilaga rutor', () => {
+  it('positiv räntefördelning in R30, negativ in R31', () => {
+    expect(calculateRantefordelning({ kapitalunderlag: 1_000_000 })!.ne_ruta).toMatch(/^R30\b/)
+    expect(calculateRantefordelning({ kapitalunderlag: -600_000 })!.ne_ruta).toMatch(/^R31\b/)
+  })
+})

@@ -25,6 +25,7 @@ interface EfDeclarationSectionProps {
 interface EfOverrideInputs {
   category: EgenavgiftCategory
   kapitalunderlag: string
+  expansionsfondKapitalunderlag: string
   priorSchablon: string
   priorActual: string
   pfondDesired: string
@@ -48,6 +49,7 @@ interface EfPreviewResponse {
 const DEFAULT_OVERRIDES: EfOverrideInputs = {
   category: 'full',
   kapitalunderlag: '',
+  expansionsfondKapitalunderlag: '',
   priorSchablon: '',
   priorActual: '',
   pfondDesired: '',
@@ -108,6 +110,8 @@ export function EfDeclarationSection({
     params.set('category', overrides.category)
     const kap = parseFloat(overrides.kapitalunderlag)
     if (Number.isFinite(kap)) params.set('kapitalunderlag', String(kap))
+    const kapUb = parseFloat(overrides.expansionsfondKapitalunderlag)
+    if (Number.isFinite(kapUb)) params.set('expansionsfondKapitalunderlag', String(kapUb))
     const ps = parseFloat(overrides.priorSchablon)
     if (Number.isFinite(ps)) params.set('priorYearSchablonavdrag', String(ps))
     const pa = parseFloat(overrides.priorActual)
@@ -223,7 +227,7 @@ export function EfDeclarationSection({
               </select>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Kapitalunderlag (vid IB)</Label>
+              <Label className="text-xs">Kapitalunderlag för räntefördelning (vid IB)</Label>
               <Input
                 type="number"
                 step="1"
@@ -277,7 +281,18 @@ export function EfDeclarationSection({
                 className="tabular-nums h-9"
               />
             </div>
-            <div className="space-y-1 col-span-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Kapitalunderlag för expansionsfond (vid UB)</Label>
+              <Input
+                type="number"
+                step="1"
+                value={overrides.expansionsfondKapitalunderlag}
+                onChange={(e) => update('expansionsfondKapitalunderlag', e.target.value)}
+                placeholder="0"
+                className="tabular-nums h-9"
+              />
+            </div>
+            <div className="space-y-1">
               <Label className="text-xs">
                 Ändring av expansionsfond (+ avsättning, − återföring)
               </Label>
