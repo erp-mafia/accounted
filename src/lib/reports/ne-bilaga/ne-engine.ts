@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { formatCurrency } from '@/lib/utils'
-import { roundOre } from '@/lib/money'
+import { roundOre, truncateToWholeKronor } from '@/lib/money'
 import type { FiscalPeriod } from '@/types'
 import type {
   NEDeclaration,
@@ -24,8 +24,10 @@ import type {
  * the booked result (BAS: 899x). The engine computes both from the same
  * trial balance; an account no range covers is named in a warning and the
  * SRU file is refused, rather than leaving it out of every ruta. A booked
- * periodiseringsfond (881x) refuses it too: an enskild firma claims one only
- * on the NE-bilaga.
+ * periodiseringsfond (881x) or skatt (89xx) refuses it too: an enskild firma
+ * claims the first only on the NE-bilaga, and the second is the owner's
+ * private tax. Each ruta is in whole kronor, öre truncated toward zero
+ * (SFL 22 kap. 1 §), as on INK2.
  */
 
 /** A range whose balance goes to one ruta whatever its sign. */
@@ -100,17 +102,20 @@ export const NE_ACCOUNT_RANGES: readonly NEAccountRange[] = [
   line('8460', '8469', 'R8'),
   line('8480', '8489', 'R8'),
   signed('8490', '8499'),
-  // 88xx (bokslutsdispositioner): BAS lists 881x, 886x, 888x and 889x as
-  // (+/-); 882x-884x (koncernbidrag, gottgörelser) are absent from the table
-  // and follow the same rule. 885x is listed on both R9 and R10: 8852
-  // (byggnader och markanläggningar) to R9, the rest (immateriella, maskiner
-  // och inventarier) to R10. 88xx and 89xx also get a named warning, and a
-  // booked periodiseringsfond (881x) refuses the SRU file.
-  signed('8800', '8849'),
+  // 88xx (bokslutsdispositioner) exactly as the table lists it: 881x, 886x,
+  // 888x and 889x (+/-). 880x, 882x-884x (koncernbidrag, gottgörelser) and
+  // 887x are absent, so they have no ruta and refuse the SRU file. 885x is
+  // listed on both R9 and R10, to follow what is booked on it: 8852
+  // (byggnader och markanläggningar) to R9; 8851 (immateriella), 8853
+  // (maskiner och inventarier) and the group account 8850 to R10. The rest of
+  // 88xx gets a named warning; a booked periodiseringsfond (881x) or skatt
+  // (89xx) refuses the SRU file.
+  signed('8810', '8819'),
   line('8850', '8851', 'R10'),
   line('8852', '8852', 'R9'),
   line('8853', '8859', 'R10'),
-  signed('8860', '8899'),
+  signed('8860', '8869'),
+  signed('8880', '8899'),
   line('8900', '8989', 'R8'), // 89xx exkl. 899x
 ]
 
@@ -132,25 +137,36 @@ function isResultAccount(accountNumber: string): boolean {
   return /^[3-8]/.test(accountNumber) && !accountNumber.startsWith('899')
 }
 
-/** Bokslutsdispositioner and skatt (88xx, 89xx exkl. 899x): AB accounts an enskild firma should not use. */
-function isNotForEnskildFirma(accountNumber: string): boolean {
-  return accountNumber >= '8800' && accountNumber <= '8989'
+/** Bokslutsdispositioner (88xx): AB accounts an enskild firma normally does not use. */
+function isBokslutsdisposition(accountNumber: string): boolean {
+  return accountNumber >= '8800' && accountNumber <= '8899'
 }
 
 /**
- * Periodiseringsfond (881x). An enskild firma never books one: avsättning and
- * återföring are made only on the NE-bilaga (R34, R32), the opposite of an AB.
+ * Accounts an enskild firma never books, though the table gives them a ruta.
+ * Each refuses the SRU file; the amount stays in its ruta, so R11 is still
+ * the booked result.
  */
-function isPeriodiseringsfond(accountNumber: string): boolean {
-  return accountNumber >= '8810' && accountNumber <= '8819'
-}
-
-/**
- * Round to nearest krona (whole number) for NE declaration
- */
-function roundToKrona(value: number): number {
-  return Math.round(value)
-}
+const NEVER_BOOKED_BY_ENSKILD_FIRMA: ReadonlyArray<{ start: string; end: string; explain: string }> = [
+  {
+    // Avsättning and återföring are made only on the NE-bilaga, the opposite of an AB.
+    start: '8810',
+    end: '8819',
+    explain:
+      'bokför en periodiseringsfond. En enskild firma bokför inte periodiseringsfond: avsättning och ' +
+      'återföring görs bara i deklarationen (NE-bilagan R34 och R32). SRU-filen kan inte laddas ner ' +
+      'förrän periodiseringsfonden är borttagen ur bokföringen.',
+  },
+  {
+    // Preliminär- and slutskatt are the owner's private tax: an eget uttag (2013), never a cost.
+    start: '8900',
+    end: '8989',
+    explain:
+      'bokför skatt som en kostnad. En enskild firma bokför inte skatt i resultaträkningen: preliminärskatt ' +
+      'och slutlig skatt är ägarens egen skatt och bokförs som eget uttag (2013), återbetald skatt som ' +
+      'egen insättning (2018). SRU-filen kan inte laddas ner förrän skatten är ombokad.',
+  },
+]
 
 /** "1 234,56 kr debet": a balance as a bookkeeper reads it. */
 function describeBalance(balance: number): string {
@@ -264,7 +280,9 @@ export async function generateNEDeclaration(
 
   const warnings: string[] = []
   const unmapped: Array<{ accountNumber: string; accountName: string; balance: number }> = []
-  const periodiseringsfond: Array<{ accountNumber: string; accountName: string; balance: number }> = []
+  const neverBooked = NEVER_BOOKED_BY_ENSKILD_FIRMA.map(() =>
+    [] as Array<{ accountNumber: string; accountName: string; balance: number }>,
+  )
   // Unrounded ruta sums and the booked result, both in öre, from the same rows.
   const rawRutor: Record<NERuta, number> = {
     R1: 0, R2: 0, R3: 0, R4: 0, R5: 0, R6: 0, R7: 0, R8: 0, R9: 0, R10: 0,
@@ -287,23 +305,26 @@ export async function generateNEDeclaration(
     // rutor as is, so a credit on a cost account reduces its ruta.
     const amount = REVENUE_RUTOR.has(ruta) ? -balance : balance
     rawRutor[ruta] += amount
-    breakdown[ruta].accounts.push({ accountNumber, accountName, amount: roundToKrona(amount) })
+    breakdown[ruta].accounts.push({ accountNumber, accountName, amount: truncateToWholeKronor(amount) })
 
-    if (isPeriodiseringsfond(accountNumber)) {
-      periodiseringsfond.push({ accountNumber, accountName, balance })
-    } else if (isNotForEnskildFirma(accountNumber)) {
+    const never = NEVER_BOOKED_BY_ENSKILD_FIRMA.findIndex(
+      (r) => accountNumber >= r.start && accountNumber <= r.end,
+    )
+    if (never >= 0) {
+      neverBooked[never].push({ accountNumber, accountName, balance })
+    } else if (isBokslutsdisposition(accountNumber)) {
       warnings.push(
         `Konto ${accountNumber} ${accountName} (${describeBalance(balance)}) är ett konto för ` +
-          `bokslutsdispositioner eller skatt som en enskild firma normalt inte använder. Beloppet ` +
+          `bokslutsdispositioner som en enskild firma normalt inte använder. Beloppet ` +
           `ingår i ${ruta} enligt BAS kopplingstabell för NE; kontrollera bokföringen.`,
       )
     }
   }
   bookedResult = roundOre(bookedResult)
 
-  // Round all rutor to whole numbers
+  // Whole kronor, öre truncated toward zero (SFL 22 kap. 1 §)
   for (const key of Object.keys(rawRutor) as NERuta[]) {
-    rutor[key] = roundToKrona(rawRutor[key])
+    rutor[key] = truncateToWholeKronor(rawRutor[key])
     breakdown[key].total = rutor[key]
   }
 
@@ -314,7 +335,7 @@ export async function generateNEDeclaration(
   rutor.R11 = totalRevenue - totalExpenses
   breakdown.R11.total = rutor.R11
 
-  // R11 may differ from the booked result only by the whole-krona rounding of
+  // R11 may differ from the booked result only by the öre truncation of
   // R1-R10: compared unrounded, the two are equal to the öre unless an
   // account is missing from the rutor.
   const unroundedR11 = roundOre(
@@ -341,14 +362,11 @@ export async function generateNEDeclaration(
     parts.push('SRU-filen kan inte laddas ner förrän beloppen är bokförda på BAS-konton som hör till en ruta.')
     sruBlockers.push(parts.join(' '))
   }
-  if (periodiseringsfond.length > 0) {
-    sruBlockers.push(
-      `${periodiseringsfond.length === 1 ? 'Konto' : 'Kontona'} ${nameAccounts(periodiseringsfond)} ` +
-        'bokför en periodiseringsfond. En enskild firma bokför inte periodiseringsfond: avsättning och ' +
-        'återföring görs bara i deklarationen (NE-bilagan R34 och R32). SRU-filen kan inte laddas ner ' +
-        'förrän periodiseringsfonden är borttagen ur bokföringen.',
-    )
-  }
+  NEVER_BOOKED_BY_ENSKILD_FIRMA.forEach((r, i) => {
+    const accounts = neverBooked[i]
+    if (accounts.length === 0) return
+    sruBlockers.push(`${accounts.length === 1 ? 'Konto' : 'Kontona'} ${nameAccounts(accounts)} ${r.explain}`)
+  })
   warnings.unshift(...sruBlockers)
 
   // Add warnings

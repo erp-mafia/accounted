@@ -25,9 +25,6 @@ const OFFICIAL: Record<Exclude<NERuta, 'R3'>, string> = {
   R10: '771x, 773x, 776x, 778x, 781x, 783x, 885x',
 }
 
-/** 882x-884x (koncernbidrag, gottgörelser) are absent from the table: mapped like the rest of 88xx. */
-const EXTENSIONS = new Set(['882', '883', '884'])
-
 function range(a: number, b: number): string[] {
   const out: string[] = []
   for (let n = a; n <= b; n++) out.push(String(n))
@@ -83,14 +80,16 @@ describe('NE_ACCOUNT_RANGES', () => {
     }
   })
 
-  it('cover every BAS 2026 class 3-8 account except 899x exactly once', () => {
+  it('cover every BAS 2026 class 3-8 account the official table lists exactly once, and no other', () => {
     expect(BAS_RESULT_ACCOUNTS.length).toBeGreaterThan(700)
-    const uncovered: string[] = []
+    const official = officialRutor()
+    const wrong: string[] = []
     for (const account of BAS_RESULT_ACCOUNTS) {
       const hits = NE_ACCOUNT_RANGES.filter((r) => account >= r.start && account <= r.end)
-      if (hits.length !== 1) uncovered.push(`${account} (${hits.length})`)
+      const expected = official.has(account) ? 1 : 0
+      if (hits.length !== expected) wrong.push(`${account} (${hits.length}, expected ${expected})`)
     }
-    expect(uncovered).toEqual([])
+    expect(wrong).toEqual([])
   })
 
   it('never map 899x, the booked result itself', () => {
@@ -102,14 +101,14 @@ describe('NE_ACCOUNT_RANGES', () => {
     const official = officialRutor()
     const mismatches: string[] = []
     for (const account of BAS_RESULT_ACCOUNTS) {
-      if (EXTENSIONS.has(account.slice(0, 3))) continue
       const allowed = official.get(account)
-      if (!allowed) {
-        mismatches.push(`${account}: not in the official table`)
-        continue
-      }
       const onIncome = neRutaForAccount(account, CREDIT)
       const onCost = neRutaForAccount(account, DEBIT)
+      if (!allowed) {
+        // Absent from the table (8820, 8830, 8840): no ruta, so the SRU file is refused.
+        if (onIncome !== null || onCost !== null) mismatches.push(`${account}: not in the table, mapped to ${onIncome}/${onCost}`)
+        continue
+      }
       if (!onIncome || !allowed.income.has(onIncome)) mismatches.push(`${account} income: ${onIncome}`)
       if (!onCost || !allowed.cost.has(onCost)) mismatches.push(`${account} cost: ${onCost}`)
     }
@@ -157,6 +156,7 @@ describe('neRutaForAccount', () => {
     ['7960', 'R8'],
     ['7970', 'R8'],
     ['8410', 'R8'],
+    ['8850', 'R10'], // överavskrivningar, group account: asset class unknown
     ['8851', 'R10'], // överavskrivningar, immateriella
     ['8852', 'R9'], // överavskrivningar, byggnader och markanläggningar
     ['8853', 'R10'], // överavskrivningar, maskiner och inventarier
@@ -175,6 +175,22 @@ describe('neRutaForAccount', () => {
     expect(neRutaForAccount('8336', DEBIT)).toBe('R8')
     expect(neRutaForAccount('8860', CREDIT)).toBe('R4')
     expect(neRutaForAccount('8860', DEBIT)).toBe('R8')
+  })
+
+  it('maps 885x by asset class whatever the sign, the group account 8850 to R10', () => {
+    expect(neRutaForAccount('8850', CREDIT)).toBe('R10')
+    expect(neRutaForAccount('8852', CREDIT)).toBe('R9')
+  })
+
+  it('maps 88xx exactly as NE_EJ_K1: 880x, 882x-884x and 887x have no ruta', () => {
+    for (const account of ['8800', '8809', '8820', '8830', '8840', '8849', '8870', '8879']) {
+      expect(neRutaForAccount(account, CREDIT)).toBeNull()
+      expect(neRutaForAccount(account, DEBIT)).toBeNull()
+    }
+    expect(neRutaForAccount('8811', DEBIT)).toBe('R8')
+    expect(neRutaForAccount('8869', CREDIT)).toBe('R4')
+    expect(neRutaForAccount('8880', DEBIT)).toBe('R8')
+    expect(neRutaForAccount('8899', CREDIT)).toBe('R4')
   })
 
   it('keeps a contra balance in the account\'s own ruta', () => {

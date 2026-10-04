@@ -195,7 +195,33 @@ describe('generateNEDeclaration: R11 equals the booked result', () => {
     expect(result.sruBlockers[0]).not.toContain('R11 blir')
   })
 
-  it('does not block on the whole-krona rounding of the rutor', async () => {
+  it('truncates öre toward zero in every ruta (SFL 22 kap. 1 §), not to the nearest krona', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        row('3001', 'Försäljning', -100_000.75),
+        row('5010', 'Lokalhyra', 20_000.5),
+        // Återföring av nedskrivning: a credit on a cost ruta makes R9 negative.
+        row('7770', 'Återföring av nedskrivningar av byggnader', -1_000.6),
+      ],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await generateNEDeclaration(makeSupabase() as any, COMPANY_ID, PERIOD_ID)
+
+    // Rounded, these would be 100 001, 20 001 and -1 001.
+    expect(result.rutor.R1).toBe(100_000)
+    expect(result.rutor.R6).toBe(20_000)
+    expect(result.rutor.R9).toBe(-1_000)
+    expect(result.breakdown.R1.accounts[0].amount).toBe(100_000)
+    expect(result.rutor.R11).toBe(81_000)
+    expect(result.bookedResult).toBe(81_000.85)
+    expect(result.sruBlockers).toEqual([])
+    expect(generateNESRUSubmission(result).blanketterSru).toContain('#UPPGIFT 7400 100000\r\n')
+  })
+
+  it('does not block on the öre truncation of the rutor', async () => {
     vi.mocked(generateTrialBalance).mockResolvedValue({
       rows: [
         row('3001', 'Försäljning', -100_000.4),
@@ -216,12 +242,12 @@ describe('generateNEDeclaration: R11 equals the booked result', () => {
     expect(result.sruBlockers).toEqual([])
   })
 
-  it('warns by name about 88xx and 89xx but keeps them in their ruta', async () => {
+  it('warns by name about 88xx bokslutsdispositioner but keeps them in their ruta', async () => {
     vi.mocked(generateTrialBalance).mockResolvedValue({
       rows: [
         row('3001', 'Försäljning', -400_000),
+        row('8853', 'Förändring av överavskrivningar, maskiner respektive inventarier', 5_000),
         row('8860', 'Förändring av ersättningsfond', 10_000),
-        row('8910', 'Skatt som belastar årets resultat', 5_000),
       ],
       totalDebit: 0,
       totalCredit: 0,
@@ -230,11 +256,59 @@ describe('generateNEDeclaration: R11 equals the booked result', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await generateNEDeclaration(makeSupabase() as any, COMPANY_ID, PERIOD_ID)
 
-    expect(result.rutor.R8).toBe(15_000)
+    expect(result.rutor.R8).toBe(10_000)
+    expect(result.rutor.R10).toBe(5_000)
     expect(result.rutor.R11).toBe(385_000)
     expect(result.sruBlockers).toEqual([])
-    expect(result.warnings.filter((w) => w.includes('bokslutsdispositioner eller skatt'))).toHaveLength(2)
-    expect(result.warnings.some((w) => w.startsWith('Konto 8910 Skatt som belastar årets resultat'))).toBe(true)
+    expect(result.warnings.filter((w) => w.includes('bokslutsdispositioner som en enskild firma'))).toHaveLength(2)
+    expect(result.warnings.some((w) => w.startsWith('Konto 8860 Förändring av ersättningsfond'))).toBe(true)
+  })
+
+  it('refuses the SRU file for a booked skatt (89xx), which is the owner\'s private tax', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        row('3001', 'Försäljning', -400_000),
+        row('8910', 'Skatt som belastar årets resultat', 5_000),
+        row('8980', 'Övriga skatter', 1_000),
+      ],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await generateNEDeclaration(makeSupabase() as any, COMPANY_ID, PERIOD_ID)
+
+    // Still in R8, so R11 is the booked result: only the file is refused.
+    expect(result.rutor.R8).toBe(6_000)
+    expect(result.rutor.R11).toBe(394_000)
+    expect(result.bookedResult).toBe(394_000)
+    expect(result.sruBlockers).toHaveLength(1)
+    expect(result.sruBlockers[0]).toMatch(/^Kontona 8910 Skatt som belastar årets resultat .*8980 Övriga skatter .*bokför skatt som en kostnad/)
+    expect(result.sruBlockers[0]).toContain('eget uttag (2013)')
+    expect(result.warnings[0]).toBe(result.sruBlockers[0])
+    expect(result.warnings.filter((w) => w.includes('8910'))).toHaveLength(1)
+    expect(() => generateNESRUSubmission(result)).toThrow(NESruBlockedError)
+  })
+
+  it('refuses the SRU file for koncernbidrag (882x-884x), which NE_EJ_K1 gives no ruta', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        row('3001', 'Försäljning', -400_000),
+        row('8820', 'Mottagna koncernbidrag', -50_000),
+      ],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await generateNEDeclaration(makeSupabase() as any, COMPANY_ID, PERIOD_ID)
+
+    expect(result.rutor.R4).toBe(0)
+    expect(result.rutor.R11).toBe(400_000)
+    expect(result.bookedResult).toBe(450_000)
+    expect(result.sruBlockers).toHaveLength(1)
+    expect(result.sruBlockers[0]).toMatch(/^Konto 8820 Mottagna koncernbidrag .*hör inte till någon ruta/)
+    expect(() => generateNESRUSubmission(result)).toThrow(/8820/)
   })
 
   it('refuses the SRU file for a booked periodiseringsfond, which an enskild firma claims only on the NE', async () => {

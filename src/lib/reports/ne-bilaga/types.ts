@@ -61,11 +61,11 @@ export interface NEDeclaration {
   // Warnings
   warnings: string[]
   // The booked result (öre) from the same pre-closing trial balance: what R11
-  // must equal, up to the whole-krona rounding of R1-R10.
+  // must equal, up to the öre truncation of R1-R10.
   bookedResult: number
   // Why the SRU file is refused (an account without a ruta, R11 differing
-  // from bookedResult, or a booked periodiseringsfond). Empty when it can be
-  // filed; each text is also in warnings.
+  // from bookedResult, a booked periodiseringsfond or a booked skatt). Empty
+  // when it can be filed; each text is also in warnings.
   sruBlockers: string[]
 }
 
