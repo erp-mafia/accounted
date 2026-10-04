@@ -1124,6 +1124,12 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     file: 'supplier_payment_batch_items.json',
     orderBy: 'created_at',
   },
+  // Bank payments (payment initiation): the instruction a person approved and
+  // signed with BankID, what the bank reported about it, and the signing it
+  // was part of; underlag for the payments they initiated, like the betalfil.
+  { name: 'payment_orders', file: 'payment_orders.json', orderBy: 'created_at' },
+  { name: 'payment_order_batches', file: 'payment_order_batches.json', orderBy: 'created_at' },
+  { name: 'payment_order_events', file: 'payment_order_events.json', orderBy: 'occurred_at' },
   // Underlag intake: the chat answers behind a verifikat.
   //
   // A projection, not the whole table. `channel_context` holds the human

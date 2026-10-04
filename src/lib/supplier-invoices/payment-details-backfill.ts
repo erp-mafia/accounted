@@ -51,6 +51,31 @@ export function cleanSupplierPaymentDetails(details: SupplierPaymentDetails | nu
   return out
 }
 
+/** supplier_invoices.payee_* columns: the payee the invoice document states. */
+export interface StatedPayeeColumns {
+  payee_bankgiro: string | null
+  payee_plusgiro: string | null
+  payee_iban: string | null
+  payee_bic: string | null
+}
+
+/**
+ * The payee a document states, validated the same way as the backfill, as
+ * the supplier invoice's own columns. Unlike the backfill this never defers
+ * to the supplier card: the invoice keeps what IT says, so a payment can
+ * compare the two and stop on a changed account instead of silently paying
+ * whichever one it happened to read.
+ */
+export function statedPayeeColumns(details: SupplierPaymentDetails | null | undefined): StatedPayeeColumns {
+  const clean = cleanSupplierPaymentDetails(details)
+  return {
+    payee_bankgiro: clean.bankgiro ?? null,
+    payee_plusgiro: clean.plusgiro ?? null,
+    payee_iban: clean.iban ?? null,
+    payee_bic: clean.bic ?? null,
+  }
+}
+
 /**
  * Which of the cleaned details the supplier row still lacks. Existing values
  * are never overwritten: a person who typed a bankgiro by hand is right

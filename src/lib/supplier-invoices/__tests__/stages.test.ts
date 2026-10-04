@@ -33,9 +33,9 @@ describe('supplier invoice stages', () => {
 
   it('counts invoices per stage', () => {
     const counts = countByStage([
-      { stage: 'registered', approved_at: null, batch: null, paid: null, reconciled_through: null },
-      { stage: 'registered', approved_at: null, batch: null, paid: null, reconciled_through: null },
-      { stage: 'paid', approved_at: null, batch: null, paid: null, reconciled_through: null },
+      { stage: 'registered', approved_at: null, batch: null, payment_order: null, paid: null, reconciled_through: null },
+      { stage: 'registered', approved_at: null, batch: null, payment_order: null, paid: null, reconciled_through: null },
+      { stage: 'paid', approved_at: null, batch: null, payment_order: null, paid: null, reconciled_through: null },
     ])
     expect(counts.registered).toBe(2)
     expect(counts.paid).toBe(1)

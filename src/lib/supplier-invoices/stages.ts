@@ -31,7 +31,12 @@ export interface StageInput {
   status: string
   approved_at: string | null
   is_credit_note: boolean
-  /** In a payment batch that is neither cancelled nor settled. */
+  /**
+   * Covered by a payment instruction that is still open: a payment file batch
+   * that is neither cancelled nor settled, or a bank payment order that has
+   * not failed, been rejected or cancelled, and whose debit is not yet matched
+   * (isOpenPaymentOrder). Same step on the ladder, two kinds of evidence.
+   */
   in_open_batch: boolean
   /** Every paying bank row is signed off in a reconciliation through its date. */
   reconciled: boolean
@@ -66,6 +71,8 @@ export interface InvoiceLifecycle {
   approved_at: string | null
   /** The open payment batch carrying the invoice, if any. */
   batch: { id: string; created_at: string } | null
+  /** The open bank payment order carrying the invoice, if any. */
+  payment_order: { id: string; status: string; created_at: string } | null
   /** The bank row that paid it, if matched. */
   paid: { transaction_id: string; date: string } | null
   /** Sign-off date that covers the payment, when reconciled. */

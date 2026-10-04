@@ -228,7 +228,10 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // documents.list and inbox-items.list (lib/documents/document-actions.ts,
 // lib/documents/inbox-item-actions.ts) is a runtime or-string, the same
 // shape expense-claims.list already carries.
-const UNRESOLVED_CEILING = 424
+// Payment orders (+1): lib/payments/orders/types.ts logPaymentOrderEvents
+// inserts one payment_order_events row per order built by a map, the same
+// shape as the Arkiv phase 1 and 4 entries; headroom of 1 kept.
+const UNRESOLVED_CEILING = 425
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
