@@ -9,10 +9,18 @@ name: Provider names
 # against is published). Without the secret (a fork's PR) the job warns and
 # passes.
 #
-# Runs on the untrusted PR head with a read-only token. The PR text reaches
-# the script through env, never through ${{ }} in the shell body: expression
-# substitution happens before bash parses the script, so a title with shell
-# metacharacters would otherwise be a code-execution sink.
+# Runs on the PR head with a read-only token. The PR text reaches the script
+# through env, never through ${{ }} in the shell body: expression substitution
+# happens before bash parses the script, so a title with shell metacharacters
+# would otherwise be a code-execution sink.
+#
+# Trust boundary of the secret: fork PRs never receive it. Same-repository
+# PRs do, as they receive every repository secret: anyone who can push a
+# branch here can reference any secret from a workflow of their own, so
+# running this scan from the base branch would not keep the value from them.
+# Branch pushers are the maintainers, who know the names anyway. If that ever
+# changes, move the secret into an environment restricted to main and the
+# scan into a workflow_run stage (the swedish-compliance-review pattern).
 
 on:
   pull_request:
