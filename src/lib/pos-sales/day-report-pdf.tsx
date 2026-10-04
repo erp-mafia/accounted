@@ -114,8 +114,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  footerText: { fontSize: 7, color: '#888', maxWidth: 420 },
+  // The page counter is a render prop, measured only after layout, so it
+  // gets a fixed width; the note takes the rest and never runs into it.
+  footerText: { fontSize: 7, color: '#888', flex: 1, marginRight: 16 },
+  footerPage: { fontSize: 7, color: '#888', width: 150, textAlign: 'right' },
 })
+
+/** A receipt's way of paying in Swedish when it names a known kind, else as the provider wrote it. */
+function methodLabel(method: string): string {
+  const key = method.toLowerCase()
+  return Object.hasOwn(TENDER_LABELS, key) ? TENDER_LABELS[key as PosTenderKind] : method
+}
 
 export function PosDayReportPDF({ input }: { input: PosDayReportInput }) {
   const { day, lines } = input
@@ -278,12 +287,12 @@ export function PosDayReportPDF({ input }: { input: PosDayReportInput }) {
         </View>
         {day.receipts.map((r) => (
           <View key={`${r.kind}:${r.number}`} style={styles.row} wrap={false}>
-            <Text style={styles.colShort}>
-              {r.number}
-              {r.kind === 'refund' ? ' R' : ''}
-            </Text>
+            <Text style={styles.colShort}>{r.number}</Text>
             <Text style={styles.colShort}>{timeOf(r.paidAt)}</Text>
-            <Text style={styles.colName}>{r.method}</Text>
+            <Text style={styles.colName}>
+              {methodLabel(r.method)}
+              {r.kind === 'refund' ? ', retur' : ''}
+            </Text>
             <Text style={styles.colAmount}>{r.tips ? formatReportAmount(r.tips) : ''}</Text>
             <Text style={styles.colAmount}>{formatReportAmount(r.gross)}</Text>
           </View>
@@ -296,7 +305,7 @@ export function PosDayReportPDF({ input }: { input: PosDayReportInput }) {
             finns kvar i kassasystemet.
           </Text>
           <Text
-            style={styles.footerText}
+            style={styles.footerPage}
             render={({ pageNumber, totalPages }) => `Genererad ${input.generatedAt} · Sida ${pageNumber} av ${totalPages}`}
           />
         </View>

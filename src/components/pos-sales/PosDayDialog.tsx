@@ -144,7 +144,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
             {day.changed_after_booking ? <AttnLine>{t('changed_after_booking')}</AttnLine> : null}
 
             <section className="space-y-2">
-              <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('section_vat')}</h3>
+              <h3 className="font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('section_vat')}</h3>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -174,7 +174,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
             </section>
 
             <section className="space-y-2">
-              <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('section_payments')}</h3>
+              <h3 className="font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('section_payments')}</h3>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -215,7 +215,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
 
             {lines.length > 0 ? (
               <section className="space-y-2">
-                <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h3 className="font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                   {booked ? t('section_lines_booked') : t('section_lines')}
                 </h3>
                 <Table>
