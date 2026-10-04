@@ -15,7 +15,7 @@
  * Where the names come from: UNSIGNED_PROVIDER_NAMES, a comma-separated
  * secret held by the maintainers and by CI (a GitHub Actions secret), never
  * written into the repository. A pinned public fingerprint of a name (a hash
- * of a six-letter word, say) would not do: anyone can hash a guess and
+ * of a short word, say) would not do: anyone can hash a guess and
  * confirm it, which discloses exactly what the guard exists to keep quiet.
  * Without the secret the check is skipped with a note.
  *
