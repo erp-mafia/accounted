@@ -938,3 +938,49 @@ processing_activities:
       - not_sent_to_model
       - transient_comparison_no_new_storage
       - fail_open_to_nulls_on_lookup_error
+
+  - id: imports.register_undo_runs
+    name: Ångra import av kunder, leverantörer och artiklar
+    purpose: >-
+      Göra en registerimport (kunder, leverantörer, artiklar) möjlig att ångra.
+      Varje import sparar id:n för raderna den skapade och, för befintliga
+      rader den skrev över, endast de fält som ändrades (värdet före och
+      efter). Ångra tar bort skapade rader som inget använder och lägger
+      tillbaka de överskrivna fälten. Raden följer med i företagets
+      fullständiga arkivexport, eftersom kunder saknar egen ändringshistorik.
+    lawful_basis: art_6_1_b
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - customer_contact
+      - supplier_contact
+      - company_member            # who imported and who undid
+    data_categories:
+      - user.name
+      - user.contact.email
+      - user.contact.phone
+      - user.contact.address
+      - user.government_id        # org number; a private customer's personnummer only as stored ciphertext
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor.
+    retention:
+      duration: retained_with_the_company_registers
+      basis: contract_and_bfl_7_kap_traceability
+      note: >-
+        No automatic purge: rows go with the company (ON DELETE CASCADE)
+        and hold only the fields an import changed, never whole rows.
+      stored_in:
+        - register_import_runs
+    security_measures:
+      - rls_company_scoped
+      - insert_only_for_the_importing_writer_no_client_update_or_delete
+      - undo_via_security_definer_rpc_with_writer_gate
+      - changed_fields_only_never_whole_rows
+      - counts_only_summary_in_immutable_audit_log
