@@ -181,3 +181,32 @@ describe('createInvoiceCashEntry books the bank row it is matched to', () => {
     expect(input.lines.some((l) => l.account_number === '3740')).toBe(false)
   })
 })
+
+describe('buildInvoiceCashLines with an overpayment account (crm#253)', () => {
+  it('3740: 1930 takes the bank row, revenue and moms stay on the invoice, 3740 credits the excess', () => {
+    const { lines } = buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930', 1240, '3740')
+    expect(rows(lines)).toEqual([
+      ['1930', 1240, 0],
+      ['3001', 0, 987.65],
+      ['2611', 0, 246.91],
+      ['3740', 0, 5.44],
+    ])
+    expect(balances(lines)).toBe(true)
+  })
+
+  it('2420: any excess as an advance from the customer', () => {
+    const { lines } = buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930', 2000, '2420')
+    expect(rows(lines)).toContainEqual(['1930', 2000, 0])
+    expect(rows(lines)).toContainEqual(['2420', 0, 765.44])
+    expect(balances(lines)).toBe(true)
+  })
+
+  it('without an account, or 3740 at the cap, books the customer share as before', () => {
+    for (const account of [undefined, '3740']) {
+      const { lines } = buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930', 1244.56, account)
+      expect(rows(lines)[0]).toEqual(['1930', 1234.56, 0])
+      expect(lines.map((l) => l.account_number)).not.toContain('2420')
+      expect(balances(lines)).toBe(true)
+    }
+  })
+})

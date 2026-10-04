@@ -3505,7 +3505,12 @@ async function commitMatchTransactionInvoice(
   // invoice was silently accepted (paid_amount > total, AR over-credited).
   // Runs BEFORE the storno + JE below, so a rejected match leaves the
   // transaction untouched and never burns a voucher number.
-  const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice)
+  // overpayment_account: where the user chose to book an excess of a krona
+  // or more (2420, or 3740 under its cap). The plan re-checks it against the
+  // amounts as they are now, and the builders book exactly what it allows.
+  const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice, {
+    overpaymentAccount: typeof params.overpayment_account === 'string' ? params.overpayment_account : undefined,
+  })
   if (!matchPlan.ok) {
     return {
       error: getErrorEntry(matchPlan.code)?.message_sv ?? matchPlan.code,
@@ -3513,12 +3518,29 @@ async function commitMatchTransactionInvoice(
       status: 400,
       // The amounts the stage-time refusal names, so an op staged before that
       // guard (or whose invoice changed since) is just as actionable here.
-      ...(matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING'
+      ...(matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING' || matchPlan.code === 'MATCH_OVERPAYMENT_ROUNDING_CAP'
         ? { data: { currency: matchPlan.currency, ...matchPlan.details } }
         : {}),
     }
   }
+  // The approver saw one excess amount: book that one or nothing. A payment
+  // applied to the invoice since staging would otherwise grow the excess
+  // booked on 2420 past what was approved.
+  if (
+    matchPlan.overpayment &&
+    roundOre(Number(params.overpayment_amount)) !== matchPlan.overpayment.amount
+  ) {
+    return {
+      error:
+        getErrorEntry('MATCH_OVERPAYMENT_CHANGED')?.message_sv ??
+        'Fakturans återstående belopp har ändrats sedan matchningen förbereddes.',
+      errorCode: 'MATCH_OVERPAYMENT_CHANGED',
+      status: 409,
+      data: { staged_excess: params.overpayment_amount ?? null, current_excess: matchPlan.overpayment.amount },
+    }
+  }
   const { fx } = matchPlan
+  const overpaymentAccount = matchPlan.overpayment?.account
   const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = matchPlan.plan
   const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
@@ -3590,7 +3612,7 @@ async function commitMatchTransactionInvoice(
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
         supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name,
-        paymentAccount, transaction,
+        paymentAccount, transaction, overpaymentAccount,
       )
       journalEntryId = je?.id ?? null
     } else {
@@ -3623,6 +3645,7 @@ async function commitMatchTransactionInvoice(
         },
         fx.required ? fx.paidInInvoiceCurrency : undefined,
         paymentAccount,
+        overpaymentAccount,
       )
       const je = await createJournalEntry(supabase, companyId, userId, {
         fiscal_period_id: fiscalPeriodId,
@@ -3797,7 +3820,14 @@ async function commitMatchTransactionInvoice(
     companyId,
   })
 
-  return { data: { invoice_status: newStatus, paid_amount: newPaidAmount, journal_entry_id: journalEntryId } }
+  return {
+    data: {
+      invoice_status: newStatus,
+      paid_amount: newPaidAmount,
+      journal_entry_id: journalEntryId,
+      ...(matchPlan.overpayment ? { overpayment: matchPlan.overpayment } : {}),
+    },
+  }
 }
 
 type VoucherLinkOutcome =
