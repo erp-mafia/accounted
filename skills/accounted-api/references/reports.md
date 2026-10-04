@@ -1213,6 +1213,7 @@ The enskild firma's NE-bilaga as the two SRU files Skatteverket's filöverförin
 - The zip and its file name contain the owner's personnummer: store and forward it as personal data.
 - Unzip and upload INFO.SRU and BLANKETTER.SRU under exactly those names; do not re-encode them to UTF-8.
 - Only for enskild firma: another legal form answers 400 TAX_DECL_NE_WRONG_LEGAL_FORM.
+- A declaration with sruBlockers (an account without a ruta, R11 not the booked result, a booked periodiseringsfond) answers 422 TAX_DECL_NE_SRU_BLOCKED with the reason in details.reason: correct the books, do not retry.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

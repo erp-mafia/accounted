@@ -1,28 +1,33 @@
-// NE-bilaga rutor (NE appendix boxes)
+// NE-bilaga rutor (NE appendix boxes). Which BAS accounts feed each one:
+// NE_ACCOUNT_RANGES in ne-engine.ts (BAS kopplingstabell NE_EJ_K1).
 export interface NEDeclarationRutor {
-  R1: number   // Försäljning med 25% moms (3000-3499 excl 3100)
-  R2: number   // Momsfria intäkter (3100, 3970, 3980)
-  R3: number   // Bil/bostadsförmån (3200)
-  R4: number   // Ränteintäkter (8310-8330)
-  R5: number   // Varuinköp (4000-4990)
-  R6: number   // Övriga kostnader (5000-6990, 7970)
-  R7: number   // Lönekostnader (7000-7699)
-  R8: number   // Räntekostnader (8400-8499)
-  R9: number   // Avskrivningar fastighet (7820)
-  R10: number  // Avskrivningar övrigt (7700-7899 excl 7820)
-  R11: number  // Årets resultat (beräknat)
+  R1: number   // Försäljning och utfört arbete samt övriga momspliktiga intäkter
+  R2: number   // Momsfria intäkter
+  R3: number   // Bil- och bostadsförmån m.m. (no BAS account)
+  R4: number   // Ränteintäkter m.m.
+  R5: number   // Varor och legoarbeten
+  R6: number   // Övriga externa kostnader
+  R7: number   // Anställd personal
+  R8: number   // Räntekostnader m.m.
+  R9: number   // Av- och nedskrivningar byggnader och markanläggningar
+  R10: number  // Av- och nedskrivningar maskiner, inventarier, immateriella
+  R11: number  // Bokfört resultat (R1+R2+R3+R4 - R5..R10)
 }
 
-// NE account mapping configuration
-export interface NEAccountMapping {
-  ruta: keyof NEDeclarationRutor
-  description: string
-  accountRanges: Array<{
-    start: string
-    end: string
-    exclude?: string[]
-  }>
-  isExpense: boolean  // true = debit normal, false = credit normal
+/** A ruta an account balance is reported in: every ruta except the computed R11. */
+export type NERuta = Exclude<keyof NEDeclarationRutor, 'R11'>
+
+/**
+ * One range of BAS accounts and the ruta its balance goes to. `income` takes
+ * a credit balance, `cost` a debit balance: the same ruta for most ranges,
+ * R4/R8 where BAS marks the accounts (+)/(-) because one account can be
+ * either an income or a cost.
+ */
+export interface NEAccountRange {
+  start: string
+  end: string
+  income: NERuta
+  cost: NERuta
 }
 
 // NE declaration response
@@ -55,6 +60,13 @@ export interface NEDeclaration {
   }
   // Warnings
   warnings: string[]
+  // The booked result (öre) from the same pre-closing trial balance: what R11
+  // must equal, up to the whole-krona rounding of R1-R10.
+  bookedResult: number
+  // Why the SRU file is refused (an account without a ruta, R11 differing
+  // from bookedResult, or a booked periodiseringsfond). Empty when it can be
+  // filed; each text is also in warnings.
+  sruBlockers: string[]
 }
 
 // A complete SRU submission: two files (INFO.SRU + BLANKETTER.SRU), ISO 8859-1 encoded by the route.

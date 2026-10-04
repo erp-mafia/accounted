@@ -3070,6 +3070,11 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
     message_sv: 'NE-bilagan lämnas bara av enskild firma. Ett aktiebolag lämnar INK2 i stället.',
     message_en: 'The NE-bilaga is filed only by an enskild firma. An aktiebolag files INK2 instead.',
   },
+  TAX_DECL_NE_SRU_BLOCKED: {
+    httpStatus: 422,
+    message_sv: 'SRU-filen kan inte laddas ner förrän bokföringen är rättad. Orsaken står i NE-bilagans varningar.',
+    message_en: 'The NE-bilaga SRU file is refused until the books are corrected. details.reason and the NE-bilaga warnings name the cause.',
+  },
   VAT_ESKD_SETTINGS_MISSING: {
     httpStatus: 404,
     message_sv: 'Företagsinställningar saknas: momsdeklarationsfilen kan inte skapas.',

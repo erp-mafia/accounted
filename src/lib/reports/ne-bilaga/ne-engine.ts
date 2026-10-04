@@ -1,143 +1,148 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { isAccountNumber } from '@/lib/invariants/account-number'
+import { formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import type { FiscalPeriod } from '@/types'
 import type {
   NEDeclaration,
   NEDeclarationRutor,
-  NEAccountMapping,
+  NEAccountRange,
+  NERuta,
 } from './types'
 
 /**
- * NE-bilaga (Enskild Firma / Sole Proprietorship Declaration)
+ * NE-bilaga (enskild näringsidkare): BAS account balances to rutor R1-R11.
  *
- * Maps BAS account balances to NE declaration rutor (R1-R11) for
- * tax reporting to Skatteverket.
+ * Source: BAS kopplingstabell "NE - Inkomst av näringsverksamhet, Enskilda
+ * näringsidkare - övriga" (NE_EJ_K1-Intervall-231002.xlsx, konton i BAS 2023,
+ * bas.se/kontoplaner/sru/), the table for a firm that keeps the full BAS chart
+ * rather than the förenklat årsbokslut one. A test pins every BAS 2026 class
+ * 3-8 account (899x aside) to exactly one range.
  *
- * Account mappings:
- * R1:  Försäljning med moms (3000-3599 excl 3100, 3700-3799)
- * R2:  Momsfria intäkter (3100, 3900-3969, 3970-3980, 3981-3999) - inkl gåvor utan motprestation
- * R3:  Bil/bostadsförmån (3200)
- * R4:  Ränteintäkter (8310-8330)
- * R5:  Varuinköp (4000-4990)
- * R6:  Övriga kostnader (5000-6990, 7970) - inkl avdragsgilla gåvor (5460)
- * R7:  Lönekostnader (7000-7699)
- * R8:  Räntekostnader (8400-8499)
- * R9:  Avskrivningar fastighet (7820)
- * R10: Avskrivningar övrigt (7700-7899 excl 7820)
- * R11: Årets resultat (calculated)
- *
- * Gift handling:
- * - Gåvor MED motprestation: R1 (momspliktig bytestransaktion)
- * - Gåvor UTAN motprestation: R2 via konto 3900
- * - Avdragsgilla gåvor: R6 via konto 5460
+ * R11 is the arithmetic of the form, R1+R2+R3+R4 - R5..R10, and must equal
+ * the booked result (BAS: 899x). The engine computes both from the same
+ * trial balance; an account no range covers is named in a warning and the
+ * SRU file is refused, rather than leaving it out of every ruta. A booked
+ * periodiseringsfond (881x) refuses it too: an enskild firma claims one only
+ * on the NE-bilaga.
  */
 
+/** A range whose balance goes to one ruta whatever its sign. */
+function line(start: string, end: string, ruta: NERuta): NEAccountRange {
+  return { start, end, income: ruta, cost: ruta }
+}
+
+/** BAS (+)/(-): a credit balance is a ränteintäkt (R4), a debit balance a räntekostnad (R8). */
+function signed(start: string, end: string): NEAccountRange {
+  return { start, end, income: 'R4', cost: 'R8' }
+}
+
 /**
- * Account mapping configuration for NE declaration
+ * Disjoint, sorted ranges: an account is in at most one, so order does not
+ * matter. BAS lists 30xx-37xx and 39xx on both R1 and R2 ("the ruta follows
+ * what is booked on the account"): the split below follows the account's VAT
+ * status, R1 for momspliktig (export, VMB and omvänd moms included) and R2
+ * for momsfri, with 3100 and 39xx on R2 unless the account says momspliktig.
+ * R3 (bil- och bostadsförmån) has no BAS account.
  */
-export const NE_ACCOUNT_MAPPINGS: NEAccountMapping[] = [
-  {
-    ruta: 'R1',
-    description: 'Försäljning med moms (25%)',
-    accountRanges: [
-      { start: '3000', end: '3599', exclude: ['3100'] },
-      { start: '3700', end: '3799' },
-    ],
-    isExpense: false,
-  },
-  {
-    ruta: 'R2',
-    description: 'Momsfria intäkter',
-    accountRanges: [
-      { start: '3100', end: '3100' },
-      { start: '3900', end: '3969' }, // Övriga rörelseintäkter (inkl gåvor utan motprestation)
-      { start: '3970', end: '3980' },
-      { start: '3981', end: '3999' },
-    ],
-    isExpense: false,
-  },
-  {
-    ruta: 'R3',
-    description: 'Bil/bostadsförmån',
-    accountRanges: [
-      { start: '3200', end: '3299' },
-    ],
-    isExpense: false,
-  },
-  {
-    ruta: 'R4',
-    description: 'Ränteintäkter',
-    accountRanges: [
-      { start: '8310', end: '8330' },
-    ],
-    isExpense: false,
-  },
-  {
-    ruta: 'R5',
-    description: 'Varuinköp',
-    accountRanges: [
-      { start: '4000', end: '4990' },
-    ],
-    isExpense: true,
-  },
-  {
-    ruta: 'R6',
-    description: 'Övriga kostnader',
-    accountRanges: [
-      { start: '5000', end: '6990' },
-      { start: '7970', end: '7970' },
-    ],
-    isExpense: true,
-  },
-  {
-    ruta: 'R7',
-    description: 'Lönekostnader',
-    accountRanges: [
-      { start: '7000', end: '7699' },
-    ],
-    isExpense: true,
-  },
-  {
-    ruta: 'R8',
-    description: 'Räntekostnader',
-    accountRanges: [
-      { start: '8400', end: '8499' },
-    ],
-    isExpense: true,
-  },
-  {
-    ruta: 'R9',
-    description: 'Avskrivningar fastighet',
-    accountRanges: [
-      { start: '7820', end: '7820' },
-    ],
-    isExpense: true,
-  },
-  {
-    ruta: 'R10',
-    description: 'Avskrivningar övrigt',
-    accountRanges: [
-      { start: '7700', end: '7899', exclude: ['7820'] },
-    ],
-    isExpense: true,
-  },
+export const NE_ACCOUNT_RANGES: readonly NEAccountRange[] = [
+  line('3000', '3003', 'R1'),
+  line('3004', '3004', 'R2'), // Försäljning inom Sverige, momsfri
+  line('3005', '3099', 'R1'),
+  line('3100', '3100', 'R2'),
+  line('3101', '3403', 'R1'),
+  line('3404', '3404', 'R2'), // Egna uttag, momsfria
+  line('3405', '3799', 'R1'),
+  line('3800', '3899', 'R4'), // 38xx
+  line('3900', '3912', 'R2'),
+  line('3913', '3914', 'R1'), // Frivilligt och övriga momspliktiga hyresintäkter
+  line('3915', '3999', 'R2'),
+  line('4000', '4999', 'R5'), // 40xx-49xx
+  line('5000', '6999', 'R6'), // 50xx-69xx
+  line('7000', '7699', 'R7'), // 70xx-76xx
+  line('7710', '7719', 'R10'),
+  line('7720', '7729', 'R9'),
+  line('7730', '7739', 'R10'),
+  line('7740', '7749', 'R8'),
+  line('7760', '7769', 'R10'),
+  line('7770', '7779', 'R9'),
+  line('7780', '7789', 'R10'),
+  line('7790', '7799', 'R8'),
+  line('7810', '7819', 'R10'),
+  line('7820', '7829', 'R9'),
+  line('7830', '7839', 'R10'),
+  line('7840', '7849', 'R9'),
+  line('7900', '7999', 'R8'), // 79xx
+  line('8010', '8019', 'R4'),
+  signed('8020', '8039'),
+  line('8070', '8089', 'R8'),
+  line('8110', '8119', 'R4'),
+  signed('8120', '8139'),
+  line('8170', '8189', 'R8'),
+  line('8200', '8219', 'R4'),
+  // 822x(+/-), 823x(+) on R4 and unsigned on R8, 824x(+/-): signed throughout.
+  signed('8220', '8249'),
+  line('8250', '8269', 'R4'),
+  line('8270', '8289', 'R8'),
+  signed('8290', '8299'),
+  line('8300', '8319', 'R4'),
+  signed('8320', '8339'),
+  line('8340', '8349', 'R4'),
+  signed('8350', '8359'),
+  line('8360', '8369', 'R4'),
+  line('8370', '8389', 'R8'),
+  line('8390', '8399', 'R4'),
+  line('8400', '8429', 'R8'),
+  signed('8430', '8439'),
+  line('8440', '8449', 'R4'),
+  signed('8450', '8459'),
+  line('8460', '8469', 'R8'),
+  line('8480', '8489', 'R8'),
+  signed('8490', '8499'),
+  // 88xx (bokslutsdispositioner): BAS lists 881x, 886x, 888x and 889x as
+  // (+/-); 882x-884x (koncernbidrag, gottgörelser) are absent from the table
+  // and follow the same rule. 885x is listed on both R9 and R10: 8852
+  // (byggnader och markanläggningar) to R9, the rest (immateriella, maskiner
+  // och inventarier) to R10. 88xx and 89xx also get a named warning, and a
+  // booked periodiseringsfond (881x) refuses the SRU file.
+  signed('8800', '8849'),
+  line('8850', '8851', 'R10'),
+  line('8852', '8852', 'R9'),
+  line('8853', '8859', 'R10'),
+  signed('8860', '8899'),
+  line('8900', '8989', 'R8'), // 89xx exkl. 899x
 ]
 
+const REVENUE_RUTOR: ReadonlySet<NERuta> = new Set<NERuta>(['R1', 'R2', 'R3', 'R4'])
+
 /**
- * Check if an account number falls within a mapping's ranges
+ * The ruta an account balance goes to, or null when no range covers the
+ * account. `balance` is debit minus credit.
  */
-function isAccountInMapping(accountNumber: string, mapping: NEAccountMapping): boolean {
-  for (const range of mapping.accountRanges) {
-    const num = accountNumber
-    if (num >= range.start && num <= range.end) {
-      // Check exclusions
-      if (range.exclude && range.exclude.includes(num)) {
-        continue
-      }
-      return true
-    }
-  }
-  return false
+export function neRutaForAccount(accountNumber: string, balance: number): NERuta | null {
+  if (!isAccountNumber(accountNumber)) return null
+  const range = NE_ACCOUNT_RANGES.find((r) => accountNumber >= r.start && accountNumber <= r.end)
+  if (!range) return null
+  return balance < 0 ? range.income : range.cost
+}
+
+/** An income statement account: class 3-8, except the result accounts 899x. */
+function isResultAccount(accountNumber: string): boolean {
+  return /^[3-8]/.test(accountNumber) && !accountNumber.startsWith('899')
+}
+
+/** Bokslutsdispositioner and skatt (88xx, 89xx exkl. 899x): AB accounts an enskild firma should not use. */
+function isNotForEnskildFirma(accountNumber: string): boolean {
+  return accountNumber >= '8800' && accountNumber <= '8989'
+}
+
+/**
+ * Periodiseringsfond (881x). An enskild firma never books one: avsättning and
+ * återföring are made only on the NE-bilaga (R34, R32), the opposite of an AB.
+ */
+function isPeriodiseringsfond(accountNumber: string): boolean {
+  return accountNumber >= '8810' && accountNumber <= '8819'
 }
 
 /**
@@ -145,6 +150,19 @@ function isAccountInMapping(accountNumber: string, mapping: NEAccountMapping): b
  */
 function roundToKrona(value: number): number {
   return Math.round(value)
+}
+
+/** "1 234,56 kr debet": a balance as a bookkeeper reads it. */
+function describeBalance(balance: number): string {
+  const side = balance < 0 ? 'kredit' : 'debet'
+  return `${formatCurrency(Math.abs(balance), 'SEK', { minimumFractionDigits: 2 })} ${side}`
+}
+
+/** "8470 Egen post (100,00 kr debet), 8811 ...": accounts named for a warning. */
+function nameAccounts(accounts: Array<{ accountNumber: string; accountName: string; balance: number }>): string {
+  return accounts
+    .map((a) => `${a.accountNumber} ${a.accountName} (${describeBalance(a.balance)})`)
+    .join(', ')
 }
 
 /**
@@ -245,41 +263,48 @@ export async function generateNEDeclaration(
   }
 
   const warnings: string[] = []
+  const unmapped: Array<{ accountNumber: string; accountName: string; balance: number }> = []
+  const periodiseringsfond: Array<{ accountNumber: string; accountName: string; balance: number }> = []
+  // Unrounded ruta sums and the booked result, both in öre, from the same rows.
+  const rawRutor: Record<NERuta, number> = {
+    R1: 0, R2: 0, R3: 0, R4: 0, R5: 0, R6: 0, R7: 0, R8: 0, R9: 0, R10: 0,
+  }
+  let bookedResult = 0
 
-  // Process each account balance
   for (const [accountNumber, balance] of accountBalances) {
-    // Skip zero balances
     if (Math.abs(balance) < 0.01) continue
+    if (!isResultAccount(accountNumber)) continue
 
-    // Find which ruta this account belongs to
-    for (const mapping of NE_ACCOUNT_MAPPINGS) {
-      if (isAccountInMapping(accountNumber, mapping)) {
-        // For revenue accounts (credit normal), negate the balance
-        // For expense accounts (debit normal), use as-is
-        // Net balance is debit - credit, so:
-        // - Revenue accounts have negative net balance (credit > debit)
-        // - Expense accounts have positive net balance (debit > credit)
-        const amount = mapping.isExpense ? balance : -balance
+    bookedResult -= balance
+    const accountName = accountNameMap.get(accountNumber) || `Konto ${accountNumber}`
+    const ruta = neRutaForAccount(accountNumber, balance)
+    if (!ruta) {
+      unmapped.push({ accountNumber, accountName, balance })
+      continue
+    }
 
-        rutor[mapping.ruta] += amount
+    // Net balance is debit - credit: revenue rutor carry it negated, cost
+    // rutor as is, so a credit on a cost account reduces its ruta.
+    const amount = REVENUE_RUTOR.has(ruta) ? -balance : balance
+    rawRutor[ruta] += amount
+    breakdown[ruta].accounts.push({ accountNumber, accountName, amount: roundToKrona(amount) })
 
-        breakdown[mapping.ruta].accounts.push({
-          accountNumber,
-          accountName: accountNameMap.get(accountNumber) || `Konto ${accountNumber}`,
-          amount: roundToKrona(amount),
-        })
-
-        break // Account matched, no need to check other mappings
-      }
+    if (isPeriodiseringsfond(accountNumber)) {
+      periodiseringsfond.push({ accountNumber, accountName, balance })
+    } else if (isNotForEnskildFirma(accountNumber)) {
+      warnings.push(
+        `Konto ${accountNumber} ${accountName} (${describeBalance(balance)}) är ett konto för ` +
+          `bokslutsdispositioner eller skatt som en enskild firma normalt inte använder. Beloppet ` +
+          `ingår i ${ruta} enligt BAS kopplingstabell för NE; kontrollera bokföringen.`,
+      )
     }
   }
+  bookedResult = roundOre(bookedResult)
 
   // Round all rutor to whole numbers
-  for (const key of Object.keys(rutor) as (keyof NEDeclarationRutor)[]) {
-    if (key !== 'R11') {
-      rutor[key] = roundToKrona(rutor[key])
-      breakdown[key].total = rutor[key]
-    }
+  for (const key of Object.keys(rawRutor) as NERuta[]) {
+    rutor[key] = roundToKrona(rawRutor[key])
+    breakdown[key].total = rutor[key]
   }
 
   // Calculate R11 (Årets resultat)
@@ -288,6 +313,43 @@ export async function generateNEDeclaration(
   const totalExpenses = rutor.R5 + rutor.R6 + rutor.R7 + rutor.R8 + rutor.R9 + rutor.R10
   rutor.R11 = totalRevenue - totalExpenses
   breakdown.R11.total = rutor.R11
+
+  // R11 may differ from the booked result only by the whole-krona rounding of
+  // R1-R10: compared unrounded, the two are equal to the öre unless an
+  // account is missing from the rutor.
+  const unroundedR11 = roundOre(
+    rawRutor.R1 + rawRutor.R2 + rawRutor.R3 + rawRutor.R4 -
+      (rawRutor.R5 + rawRutor.R6 + rawRutor.R7 + rawRutor.R8 + rawRutor.R9 + rawRutor.R10),
+  )
+  const unexplained = roundOre(bookedResult - unroundedR11)
+  const sruBlockers: string[] = []
+  if (unmapped.length > 0 || unexplained !== 0) {
+    const parts: string[] = []
+    if (unmapped.length > 0) {
+      const named = nameAccounts(unmapped)
+      parts.push(
+        unmapped.length === 1
+          ? `Konto ${named} hör inte till någon ruta i NE-bilagan.`
+          : `Kontona ${named} hör inte till någon ruta i NE-bilagan.`,
+      )
+    }
+    if (unexplained !== 0) {
+      parts.push(
+        `R11 blir ${formatCurrency(rutor.R11)} men bokfört resultat är ${formatCurrency(bookedResult, 'SEK', { minimumFractionDigits: 2 })}.`,
+      )
+    }
+    parts.push('SRU-filen kan inte laddas ner förrän beloppen är bokförda på BAS-konton som hör till en ruta.')
+    sruBlockers.push(parts.join(' '))
+  }
+  if (periodiseringsfond.length > 0) {
+    sruBlockers.push(
+      `${periodiseringsfond.length === 1 ? 'Konto' : 'Kontona'} ${nameAccounts(periodiseringsfond)} ` +
+        'bokför en periodiseringsfond. En enskild firma bokför inte periodiseringsfond: avsättning och ' +
+        'återföring görs bara i deklarationen (NE-bilagan R34 och R32). SRU-filen kan inte laddas ner ' +
+        'förrän periodiseringsfonden är borttagen ur bokföringen.',
+    )
+  }
+  warnings.unshift(...sruBlockers)
 
   // Add warnings
   if (!(period as FiscalPeriod).is_closed) {
@@ -317,5 +379,7 @@ export async function generateNEDeclaration(
       email: settings?.email || null,
     },
     warnings,
+    bookedResult,
+    sruBlockers,
   }
 }

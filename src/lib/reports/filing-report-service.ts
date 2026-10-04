@@ -23,6 +23,7 @@ import { generateNEDeclaration } from '@/lib/reports/ne-bilaga/ne-engine'
 import {
   generateNESRUSubmission,
   getZipFilename as getNeZipFilename,
+  NESruBlockedError,
 } from '@/lib/reports/ne-bilaga/sru-generator'
 import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
 import { encodeISO88591 } from '@/lib/reports/sru-encoding'
@@ -193,6 +194,9 @@ export async function getNeSruFile(ctx: OperationContext, periodId: string): Pro
       data: { filename: getNeZipFilename(declaration.data), contentType: 'application/zip', bytes },
     }
   } catch (err) {
+    if (err instanceof NESruBlockedError) {
+      return { ok: false, code: 'TAX_DECL_NE_SRU_BLOCKED', details: { reason: getUserErrorMessage(err) } }
+    }
     return declarationFailure(ctx, err, 'ne-bilaga sru')
   }
 }

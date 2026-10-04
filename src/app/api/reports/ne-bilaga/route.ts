@@ -3,6 +3,7 @@ import { generateNEDeclaration } from '@/lib/reports/ne-bilaga/ne-engine'
 import {
   generateNESRUSubmission,
   getZipFilename,
+  NESruBlockedError,
 } from '@/lib/reports/ne-bilaga/sru-generator'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -55,6 +56,12 @@ export const GET = withRouteContext(
 
       return NextResponse.json({ data: declaration })
     } catch (err) {
+      if (err instanceof NESruBlockedError) {
+        return errorResponseFromCode('TAX_DECL_NE_SRU_BLOCKED', opLog, {
+          requestId,
+          details: { reason: getUserErrorMessage(err) },
+        })
+      }
       opLog.error('ne-bilaga declaration generation failed', err as Error)
       return errorResponseFromCode('TAX_DECL_GENERATION_FAILED', opLog, {
         requestId,
