@@ -28,7 +28,6 @@ import {
   type AnlaggningAsset,
 } from './anlaggningstillgangar-note'
 import { computeAssetNoteFigures, loadPostedSchedules } from './asset-note-figures'
-import { registeredOfficeFallbackWarning, resolveRegisteredOffice } from './registered-office'
 import { hasMedelantalOverride, resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
 import type {
   ArsredovisningData,
@@ -94,7 +93,7 @@ export async function buildArsredovisningData(
       .single(),
     supabase
       .from('company_settings')
-      .select('company_name, org_number, registered_office, city, entity_type')
+      .select('company_name, org_number, registered_office, entity_type')
       .eq('company_id', companyId)
       .maybeSingle(),
     // Source-of-truth for entity_type and accounting_framework lives on
@@ -149,12 +148,11 @@ export async function buildArsredovisningData(
   // made the whole settings query fail, so every ÅR fell back to "Bolaget"
   // with an empty org number.
   //
-  // Säte is its own column (registered_office); `city` is the postal town.
-  // Until a company has a säte, the postal town stands in with a warning
-  // (registered-office.ts holds the switch to block instead).
-  const registeredOffice = resolveRegisteredOffice(
-    settings as { registered_office?: string | null; city?: string | null } | null,
-  )
+  // Säte is its own column (registered_office), never the postal town
+  // (`city`). Without one it stays null and completeness blocks the report
+  // (AR-COMPANY-REGISTERED-OFFICE) until it is filled in.
+  const registeredOffice =
+    (settings as { registered_office?: string | null } | null)?.registered_office?.trim() || null
 
   // Previous fiscal year → jämförelsesiffror (ÅRL 3:5 §). Resolved from the
   // already-fetched period list; a TB failure downgrades to "no comparison
@@ -378,9 +376,6 @@ export async function buildArsredovisningData(
   // obalans, reclass review nudges), surfacing them pre-download is what
   // keeps a non-fileable PDF from reaching Bolagsverket.
   const warnings: string[] = [...statementWarnings, ...mapping.warnings, ...noterWarnings]
-  if (registeredOffice.fromCity && registeredOffice.value) {
-    warnings.push(registeredOfficeFallbackWarning(registeredOffice.value))
-  }
   if (entityType !== 'aktiebolag' && entityType !== 'ekonomisk_forening' && entityType !== 'unknown') {
     warnings.push(
       'Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.',
@@ -445,7 +440,7 @@ export async function buildArsredovisningData(
       name: companyName,
       org_number: orgNumber,
       entity_type: entityType,
-      registered_office: registeredOffice.value,
+      registered_office: registeredOffice,
     },
     fiscal_period: {
       id: period.id,
