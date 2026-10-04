@@ -12,7 +12,14 @@ import { Label } from '@/components/ui/label'
 import { Trash2, AlertTriangle, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ArticleType } from '@/types'
-import type { AnnotatedArticleRow } from '@/lib/import/articles/types'
+import type { AnnotatedArticleRow, DetectedArticleColumns } from '@/lib/import/articles/types'
+import { useArticleReviewFields } from '@/components/import/register-review-fields'
+import {
+  RegisterColumnSummary,
+  RegisterRowDetails,
+  RowExpandButton,
+  useExpandedRows,
+} from '@/components/import/RegisterReviewDetails'
 
 let idCounter = 0
 const newId = () => `art_row_${++idCounter}_${Date.now()}`
@@ -29,6 +36,10 @@ interface ArticlesEditStepProps {
   error: string | null
   /** What the parser noticed about the file (lib/import/notices.ts). */
   notices?: ImportNotice[]
+  /** The file's header row, first rows and detected columns: the column summary. */
+  headers: string[]
+  previewRows: string[][]
+  detectedColumns: DetectedArticleColumns
 }
 
 const TYPE_LABELS: Record<ArticleType, string> = {
@@ -45,11 +56,16 @@ export default function ArticlesEditStep({
   isLoading,
   error,
   notices = [],
+  headers,
+  previewRows,
+  detectedColumns,
 }: ArticlesEditStepProps) {
   const [rows, setRows] = useState<EditableArticleRow[]>(() =>
     initialRows.map((r) => ({ ...r, id: newId() })),
   )
   const [updateDuplicates, setUpdateDuplicates] = useState(false)
+  const reviewFields = useArticleReviewFields()
+  const [expanded, toggleExpanded] = useExpandedRows()
 
   const liveDuplicateCount = useMemo(
     () => rows.filter((r) => r.duplicate_match !== null).length,
@@ -143,6 +159,13 @@ export default function ArticlesEditStep({
           ]}
         />
 
+        <RegisterColumnSummary
+          headers={headers}
+          previewRows={previewRows}
+          columns={detectedColumns}
+          fields={reviewFields}
+        />
+
         {/* Table */}
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full text-sm">
@@ -154,11 +177,11 @@ export default function ArticlesEditStep({
                 <th className="px-3 py-2 text-right w-28">Pris exkl moms</th>
                 <th className="px-3 py-2 text-left w-24">Moms</th>
                 <th className="px-3 py-2 text-left w-28">Status</th>
-                <th className="px-3 py-2 w-10" />
+                <th className="px-3 py-2 w-24" />
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {rows.map((row) => [
                 <tr
                   key={row.id}
                   className={cn('border-b last:border-0', !row.is_valid && 'bg-destructive/5')}
@@ -265,17 +288,29 @@ export default function ArticlesEditStep({
                     </div>
                   </td>
                   <td className="px-3 py-1.5">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="Ta bort rad"
-                      onClick={() => deleteRow(row.id)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
+                    <div className="flex items-center justify-end gap-1">
+                      <RowExpandButton
+                        expanded={expanded.has(row.id)}
+                        onToggle={(trigger) => toggleExpanded(row.id, trigger)}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Ta bort rad"
+                        onClick={() => deleteRow(row.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                      </Button>
+                    </div>
                   </td>
-                </tr>
-              ))}
+                </tr>,
+                <RegisterRowDetails
+                  key={`${row.id}:details`}
+                  row={row}
+                  fields={reviewFields}
+                  colSpan={expanded.get(row.id)}
+                />,
+              ])}
             </tbody>
           </table>
         </div>

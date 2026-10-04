@@ -1731,6 +1731,9 @@ function CustomersFlow() {
       {step === 'edit' && parseResult && (
         <CustomersEditStep
           rows={parseResult.rows}
+          headers={parseResult.headers}
+          previewRows={parseResult.preview_rows}
+          detectedColumns={parseResult.detected_columns}
           notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
@@ -1989,6 +1992,9 @@ function SuppliersFlow() {
       {step === 'edit' && parseResult && (
         <SuppliersEditStep
           rows={parseResult.rows}
+          headers={parseResult.headers}
+          previewRows={parseResult.preview_rows}
+          detectedColumns={parseResult.detected_columns}
           notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
@@ -2235,6 +2241,9 @@ function ArticlesFlow() {
       {step === 'edit' && parseResult && (
         <ArticlesEditStep
           rows={parseResult.rows}
+          headers={parseResult.headers}
+          previewRows={parseResult.preview_rows}
+          detectedColumns={parseResult.detected_columns}
           notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}

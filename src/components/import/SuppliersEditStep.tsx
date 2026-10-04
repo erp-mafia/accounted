@@ -14,7 +14,14 @@ import { Label } from '@/components/ui/label'
 import { Trash2, AlertTriangle, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { SupplierType } from '@/types'
-import type { AnnotatedSupplierRow } from '@/lib/import/suppliers/types'
+import type { AnnotatedSupplierRow, DetectedSupplierColumns } from '@/lib/import/suppliers/types'
+import { useSupplierReviewFields } from '@/components/import/register-review-fields'
+import {
+  RegisterColumnSummary,
+  RegisterRowDetails,
+  RowExpandButton,
+  useExpandedRows,
+} from '@/components/import/RegisterReviewDetails'
 
 let idCounter = 0
 const newId = () => `supp_row_${++idCounter}_${Date.now()}`
@@ -31,6 +38,10 @@ interface SuppliersEditStepProps {
   error: string | null
   /** What the parser noticed about the file (lib/import/notices.ts). */
   notices?: ImportNotice[]
+  /** The file's header row, first rows and detected columns: the column summary. */
+  headers: string[]
+  previewRows: string[][]
+  detectedColumns: DetectedSupplierColumns
 }
 
 const TYPE_LABELS: Record<SupplierType, string> = {
@@ -46,12 +57,17 @@ export default function SuppliersEditStep({
   isLoading,
   error,
   notices = [],
+  headers,
+  previewRows,
+  detectedColumns,
 }: SuppliersEditStepProps) {
   const tMatch = useTranslations('import.register_match')
   const [rows, setRows] = useState<EditableSupplierRow[]>(() =>
     initialRows.map((r) => ({ ...r, id: newId() })),
   )
   const [updateDuplicates, setUpdateDuplicates] = useState(false)
+  const reviewFields = useSupplierReviewFields()
+  const [expanded, toggleExpanded] = useExpandedRows()
 
   const liveDuplicateCount = useMemo(
     () => rows.filter((r) => r.duplicate_match !== null || !!r.confirmed_duplicate_of).length,
@@ -123,6 +139,13 @@ export default function SuppliersEditStep({
           </div>
         )}
 
+        <RegisterColumnSummary
+          headers={headers}
+          previewRows={previewRows}
+          columns={detectedColumns}
+          fields={reviewFields}
+        />
+
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full text-sm">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
@@ -132,11 +155,11 @@ export default function SuppliersEditStep({
                 <th className="px-3 py-2 text-left w-36">Orgnr</th>
                 <th className="px-3 py-2 text-left w-32">Bankgiro/IBAN</th>
                 <th className="px-3 py-2 text-left w-32">Status</th>
-                <th className="px-3 py-2 w-10" />
+                <th className="px-3 py-2 w-24" />
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {rows.map((row) => [
                 <tr
                   key={row.id}
                   className={cn(
@@ -215,17 +238,29 @@ export default function SuppliersEditStep({
                     </div>
                   </td>
                   <td className="px-3 py-1.5">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="Ta bort rad"
-                      onClick={() => deleteRow(row.id)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
+                    <div className="flex items-center justify-end gap-1">
+                      <RowExpandButton
+                        expanded={expanded.has(row.id)}
+                        onToggle={(trigger) => toggleExpanded(row.id, trigger)}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Ta bort rad"
+                        onClick={() => deleteRow(row.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                      </Button>
+                    </div>
                   </td>
-                </tr>
-              ))}
+                </tr>,
+                <RegisterRowDetails
+                  key={`${row.id}:details`}
+                  row={row}
+                  fields={reviewFields}
+                  colSpan={expanded.get(row.id)}
+                />,
+              ])}
             </tbody>
           </table>
         </div>
