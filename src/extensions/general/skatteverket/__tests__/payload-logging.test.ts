@@ -105,7 +105,14 @@ function everythingLogged(ctx: ExtensionContext): string {
     ...consoleSpies.flatMap((spy) => spy.mock.calls as unknown[][]),
     ...Object.values(ctx.log).flatMap((fn) => vi.mocked(fn).mock.calls),
   ]
-  return calls.map((args) => args.map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg))).join(' ')).join('\n')
+  return calls.map((args) => args.map(asLoggedText).join(' ')).join('\n')
+}
+
+/** JSON.stringify(new Error(...)) is "{}", so an Error is spelled out or a leak through it goes unseen. */
+function asLoggedText(arg: unknown): string {
+  if (typeof arg === 'string') return arg
+  if (arg instanceof Error) return `${arg.message}\n${arg.stack ?? ''}`
+  return JSON.stringify(arg)
 }
 
 function expectNoPayloadLogged(ctx: ExtensionContext) {
@@ -158,6 +165,24 @@ describe('Skatteverket routes never log the declaration payload or the redovisar
         redovisningsperiod: '202606',
         status: 400,
       })
+      expectNoPayloadLogged(ctx)
+    },
+  )
+
+  it.each(['/declaration/validate', '/declaration/draft'])(
+    '%s sends an unexpected error through the redacting module logger, even when it carries the redovisare',
+    async (path) => {
+      mockSkvRequest.mockRejectedValue(
+        new Error(`request to /kontrollera/${PERSONNUMMER}/202606 failed, belopp ${PAYLOAD_MARKER}`),
+      )
+      const ctx = makeContext()
+
+      const response = await route('POST', path).handler(postJson(path, vatBody), ctx)
+
+      expect(response.status).toBe(500)
+      // handleSkvError has no request context, so it writes through the module
+      // logger (createLogger('skatteverket')), the same redacting writer ctx.log wraps.
+      expect(everythingLogged(ctx)).toContain('[skatteverket] ERROR API error')
       expectNoPayloadLogged(ctx)
     },
   )

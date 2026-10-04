@@ -802,7 +802,7 @@ export const skatteverketExtension: Extension = {
 
           return respondWithSuccess(successPath)
         } catch (err) {
-          log.error('token exchange failed', err)
+          log.error('token exchange failed', err, { companyId, userId })
           // BankID auth codes expire after 5 minutes. Surface timeouts distinctly
           // so the user retries quickly instead of exhausting the code window.
           const message = err instanceof TimeoutError

@@ -449,6 +449,27 @@ describe('skatteverket OAuth callback', () => {
       expect(html).toContain(JSON.stringify(`${BRAND}/settings/tax?skv_error=exchange%20boom`))
       expect(mockRefresh).not.toHaveBeenCalled()
     })
+
+    it('logs a failed exchange through the redacting logger, scoped to the company, without a personnummer the SKV body echoes', async () => {
+      handoffIs(handoffOn(BRAND))
+      mockExchange.mockRejectedValueOnce(
+        new Error('Skatteverket token exchange failed (400): {"error":"invalid_grant","subject":"191212121212"}'),
+      )
+
+      await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
+
+      const logged = vi
+        .mocked(console.error)
+        .mock.calls.flat()
+        // JSON.stringify(new Error(...)) is "{}": spell an Error out so a raw one is caught.
+        .map((arg) =>
+          typeof arg === 'string' ? arg : arg instanceof Error ? `${arg.message}\n${arg.stack ?? ''}` : JSON.stringify(arg),
+        )
+        .join('\n')
+      expect(logged).toContain('[skatteverket] ERROR token exchange failed')
+      expect(logged).toContain('companyId="company-1"')
+      expect(logged).not.toContain('191212121212')
+    })
   })
 
   describe('single hop when the callback host is the app host (self-hosted)', () => {
