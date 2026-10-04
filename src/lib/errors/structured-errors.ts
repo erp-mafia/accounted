@@ -6796,6 +6796,151 @@ export function conflictCode(dbMessage: unknown): keyof typeof DB_CONFLICTS | 'C
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Collections and delivery (lib/collections, lib/invoices/distribution).
+// The thrower composes the message with the provider's name from the Connect
+// catalogue (lib/collections/errors.ts collectionsErrorMessage), so these are
+// thrown_message_sv and message_sv is the neutral fallback ("inkassobolaget").
+// lib/collections/__tests__/errors.test.ts keeps each fallback equal to its
+// template there. Connector codes that already carry Peppol wording above
+// (CONNECTOR_UNREACHABLE and friends) are answered under COLLECTIONS_* aliases.
+// ─────────────────────────────────────────────────────────────────
+
+const COLLECTIONS: Record<string, StructuredErrorEntry> = {
+  COLLECTIONS_DISABLED: {
+    httpStatus: 503,
+    message_sv: 'Inkasso är inte tillgängligt just nu.',
+    message_en: 'Debt collection is not available right now.',
+  },
+  COLLECTIONS_NOT_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Aktivera inkasso och utskick först.',
+    message_en: 'Activate debt collection and delivery first.',
+  },
+  COLLECTIONS_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Kopplingen till inkassobolaget är inte konfigurerad i den här miljön.',
+    message_en: 'The connection to the collection agency is not configured in this environment.',
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Ärendet finns inte hos inkassobolaget.',
+    message_en: 'The collection agency has no such case.',
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_CONNECTOR_UNREACHABLE: {
+    httpStatus: 502,
+    message_sv: 'Kunde inte nå inkassobolaget just nu. Försök igen om en stund.',
+    message_en: 'Could not reach the collection agency right now. Try again shortly.',
+    retryable: true,
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_CONNECTOR_PROTOCOL_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Svaret från inkassobolaget kunde inte tolkas. Kontakta support om felet kvarstår.',
+    message_en: 'The answer from the collection agency could not be read. Contact support if the problem persists.',
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_CONNECTOR_SCOPE_MISSING: {
+    httpStatus: 403,
+    message_sv: 'Kopplingsnyckeln saknar behörighet för inkasso och utskick. Kontakta support.',
+    message_en: 'The connector key lacks permission for debt collection and delivery. Contact support.',
+  },
+  COLLECTIONS_CONNECTOR_RATE_LIMITED: {
+    httpStatus: 429,
+    message_sv: 'För många anrop till inkassobolaget på kort tid. Vänta en stund och försök igen.',
+    message_en: 'Too many calls to the collection agency in a short time. Wait a moment and try again.',
+    retryable: true,
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_CONNECTOR_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Inkassobolaget svarade med ett fel. Försök igen om en stund.',
+    message_en: 'The collection agency answered with an error. Try again shortly.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_UPSTREAM_DISABLED: {
+    httpStatus: 503,
+    message_sv: 'Tjänsten är tillfälligt avstängd.',
+    message_en: 'The service is temporarily switched off.',
+  },
+  CONNECTOR_IDEMPOTENCY_IN_FLIGHT: {
+    httpStatus: 409,
+    message_sv: 'Förfrågan behandlas redan. Försök igen om en stund.',
+    message_en: 'The request is already being processed. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_IDEMPOTENCY_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'En tidigare förfrågan med samma nyckel innehöll andra uppgifter, så inget skickades. Kontakta support.',
+    message_en: 'An earlier request with the same key carried different data, so nothing was sent. Contact support.',
+  },
+  CONNECTOR_CONTRACT_VERSION_UNSUPPORTED: {
+    httpStatus: 502,
+    message_sv: 'Den här versionen av Accounted är för gammal för kopplingstjänsten. Uppdatera installationen.',
+    message_en: 'This version of Accounted is too old for the connector service. Update the installation.',
+  },
+  CONNECTOR_CONNECTION_NOT_OWNED: {
+    httpStatus: 403,
+    message_sv: 'Kopplingen till inkassobolaget hör inte till det här företaget. Kontakta support.',
+    message_en: 'The connection to the collection agency does not belong to this company. Contact support.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_NOT_ONBOARDED: {
+    httpStatus: 409,
+    message_sv: 'Företaget är inte anslutet till inkassobolaget ännu.',
+    message_en: 'The company is not connected to the collection agency yet.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_NOT_APPROVED: {
+    httpStatus: 409,
+    message_sv: 'Inkassobolaget har inte godkänt företaget ännu.',
+    message_en: 'The collection agency has not approved the company yet.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_CASE_NOT_OWNED: {
+    httpStatus: 404,
+    message_sv: 'Ärendet hör inte till det här företaget hos inkassobolaget.',
+    message_en: 'The case does not belong to this company at the collection agency.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_ACTION_UNAVAILABLE: {
+    httpStatus: 409,
+    message_sv: 'Det går inte att göra det i ärendets nuvarande läge.',
+    message_en: 'That is not possible in the case\'s current state.',
+  },
+  CONNECTOR_COLLECTIONS_DEBTOR_INVALID: {
+    httpStatus: 422,
+    message_sv: 'Inkassobolaget godtog inte kunduppgifterna. Kontrollera adress och person- eller organisationsnummer.',
+    message_en: 'The collection agency did not accept the customer details. Check the address and the personal identity or organisation number.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_DUPLICATE_CASE: {
+    httpStatus: 409,
+    message_sv: 'Inkassobolaget har redan ett öppet ärende för fakturan.',
+    message_en: 'The collection agency already has an open case for the invoice.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_AMOUNT_INVALID: {
+    httpStatus: 422,
+    message_sv: 'Inkassobolaget godtog inte beloppet.',
+    message_en: 'The collection agency did not accept the amount.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_DELIVERY_METHOD_UNAVAILABLE: {
+    httpStatus: 422,
+    message_sv: 'Utskickssättet är inte tillgängligt för den här kunden.',
+    message_en: 'The delivery method is not available for this customer.',
+  },
+  CONNECTOR_DELIVERY_DOCUMENT_REJECTED: {
+    httpStatus: 422,
+    message_sv: 'Inkassobolaget godtog inte fakturans PDF.',
+    message_en: 'The collection agency did not accept the invoice PDF.',
+    thrown_message_sv: true,
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
 
@@ -6848,6 +6993,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...WEBSHOP_ORDERS,
   ...RECONCILIATION_SIGNOFF,
   ...NODE_SYSTEM,
+  ...COLLECTIONS,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {
