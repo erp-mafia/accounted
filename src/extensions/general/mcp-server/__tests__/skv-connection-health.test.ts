@@ -3,11 +3,7 @@ import sv from '@/messages/sv.json'
 
 vi.mock('@/extensions/general/skatteverket/lib/resolve-auth', () => ({
   findCompanyTokenUser: vi.fn(),
-  hasVerifiedGrant: vi.fn(),
-}))
-vi.mock('@/extensions/general/skatteverket/lib/system-auth/config', () => ({
-  getSystemAuthMode: vi.fn(),
-  isSystemAuthConfigured: vi.fn(),
+  hasOmbudReadAccess: vi.fn(),
 }))
 
 import { SKV_NEEDS_RECONSENT_MESSAGE } from '../skv-connection-health'
