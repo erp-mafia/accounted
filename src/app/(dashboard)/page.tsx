@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
+import { RefreshWhenRestored } from '@/components/system/RefreshWhenRestored'
 import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
@@ -205,8 +207,13 @@ export default async function DashboardPage() {
   const tV2 = await getTranslations('att_gora_v2')
   const header = <PageHeader title={tV2('title')} help={<HelpPopover>{tV2('help')}</HelpPopover>} />
 
+  // Att göra is a live worklist: when the client router shows this render
+  // again from its cache (back/forward, or a link click within
+  // staleTimes.dynamic), it re-renders from the server instead of showing the
+  // counts from the earlier visit.
   return (
     <>
+      <RefreshWhenRestored renderId={randomUUID()} />
       {header}
       {hem}
     </>
