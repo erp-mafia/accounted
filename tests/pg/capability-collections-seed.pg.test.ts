@@ -9,13 +9,13 @@ import { PAID_CAPABILITIES, PAID_PLAN_ONLY_CAPABILITIES, TRIAL_CAPABILITIES } fr
 
 // The collections capability is PAID-PLAN ONLY (founder decision 2026-10-04):
 // the company-creation trial never seeds it, and the backfill in
-// 20261004002300_collections_capability_backfill.sql mirrors only the paid and
+// 20261004044900_collections_capability_backfill.sql mirrors only the paid and
 // operator sources of each email_send grant (stripe, manual, comp), never a
 // trial or a connector row.
 
 const MIGRATION_PATH = path.resolve(
   __dirname,
-  '../../supabase/migrations/20261004002300_collections_capability_backfill.sql',
+  '../../supabase/migrations/20261004044900_collections_capability_backfill.sql',
 )
 
 async function grantKeys(companyId: string, source?: string): Promise<string[]> {
@@ -72,7 +72,7 @@ describe('collections capability: never trial-seeded', () => {
   })
 })
 
-describe('20261004002300 backfill: mirrors only paid and operator email_send grants', () => {
+describe('20261004044900 backfill: mirrors only paid and operator email_send grants', () => {
   /** Run the migration inside a transaction that is rolled back, so no other test file sees its rows. */
   async function inRolledBackTransaction(fn: (client: PoolClient) => Promise<void>): Promise<void> {
     const client = await getPool().connect()
@@ -155,7 +155,7 @@ describe('20261004002300 backfill: mirrors only paid and operator email_send gra
       expect(stripeRows).toHaveLength(1)
       expect(stripeRows[0].source).toBe('stripe')
       expect(stripeRows[0].expires_at?.toISOString()).toBe(periodEnd)
-      expect(stripeRows[0].metadata).toEqual({ backfilled_from: 'email_send', backfill_migration: '20261004002300' })
+      expect(stripeRows[0].metadata).toEqual({ backfilled_from: 'email_send', backfill_migration: '20261004044900' })
       expect(await hasCapability(client, stripeCo, 'collections')).toBe(true)
 
       const compRows = await collectionsRows(client, { companyId: compCo })

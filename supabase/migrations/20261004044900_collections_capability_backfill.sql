@@ -33,7 +33,7 @@ select
   g.expires_at,
   jsonb_build_object(
     'backfilled_from', 'email_send',
-    'backfill_migration', '20261004002300'
+    'backfill_migration', '20261004044900'
   )
 from public.capability_grants g
 where g.capability_key = 'email_send'
