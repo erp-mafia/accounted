@@ -234,3 +234,34 @@ describe('getAiStatus', () => {
     expect(getAiStatus().capabilities.imageInput).toBe(false)
   })
 })
+
+// The two backends name Haiku 4.5 differently and the defaults are the only
+// place that knows it. Both forms are in fact accepted by the Anthropic API
+// (verified against it: the dated id answers as claude-haiku-4-5-20251001),
+// so this pins a convention, not a fix: the bare id is the documented current
+// form and the one the comment above the constant promises, while Bedrock
+// needs the versioned id plus the eu prefix.
+describe('default model ids per backend', () => {
+  it('gives the Anthropic API the bare Haiku id, with no date suffix', () => {
+    process.env.ANTHROPIC_API_KEY = 'test-not-a-real-key'
+    expect(resolveAiProvider()).toBe('anthropic')
+    const cheap = resolveTierModel('cheap')
+    expect(cheap).toBe('claude-haiku-4-5')
+    expect(cheap).not.toMatch(/-\d{8}/)
+    expect(toProviderModelId(cheap!, 'anthropic')).toBe('claude-haiku-4-5')
+  })
+
+  it('keeps the versioned id and the eu prefix on Bedrock', () => {
+    hosted()
+    expect(resolveAiProvider()).toBe('bedrock')
+    const cheap = resolveTierModel('cheap')
+    expect(cheap).toBe('claude-haiku-4-5-20251001-v1:0')
+    expect(toProviderModelId(cheap!, 'bedrock')).toBe('eu.anthropic.claude-haiku-4-5-20251001-v1:0')
+  })
+
+  it('lets AI_MODEL override the cheap tier', () => {
+    process.env.ANTHROPIC_API_KEY = 'test-not-a-real-key'
+    process.env.AI_MODEL = 'claude-sonnet-5'
+    expect(resolveTierModel('cheap')).toBe('claude-sonnet-5')
+  })
+})
