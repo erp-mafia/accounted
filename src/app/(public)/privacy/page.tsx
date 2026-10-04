@@ -232,7 +232,7 @@ export default function PrivacyPolicyPage() {
             <ul>
               <li>
                 När ansökan skickas in, villkoren godkänns och avtalet signeras:
-                företagets uppgifter, kontaktuppgifter, utbetalningskonto och
+                ditt företags uppgifter, kontaktuppgifter, utbetalningskonto och
                 svar på frågor om kundkännedom, namnet på den som godkänner
                 villkoren och firmatecknarens e-post om signeringslänken ska
                 skickas dit, för en enskild firma även ägarens personnummer.
