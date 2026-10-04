@@ -101,11 +101,42 @@ describe('submitSIEJob: the file\'s #ORGNR against the company', () => {
     expect(vi.mocked(supabase.rpc).mock.calls[0][1].p_manifest.originalSource).toMatchObject({ orgNumber: null })
   })
 
-  it('admits a file into a company without an org number', async () => {
+  it('admits a file into a company without an org number in companies or settings', async () => {
     vi.stubEnv('SIE_IMPORT_JOBS', 'true')
-    const { supabase, job } = admitting(null)
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    const job = { id: 'import-1', job_state: 'queued' } as unknown as SIEJob
+    enqueueMany([{ data: { org_number: null } }, { data: { org_number: null } },
+      { data: { id: 'period-1' } }, { data: null }, { data: job }])
 
     await expect(submitSIEJob(supabase as unknown as SupabaseClient, 'company-1', 'user-1',
       fileFor('556677-8899'), mappings, options)).resolves.toEqual(job)
+    expect(findCall('company_settings', 'select')).toEqual(['org_number'])
+  })
+
+  // companies.org_number is empty for companies whose number lives only in
+  // company_settings (in prod, every company that took a SIE import without
+  // companies.org_number had one there): the gate must not go blind for them.
+  it('refuses another organisation\'s file against company_settings when companies has no number', async () => {
+    vi.stubEnv('SIE_IMPORT_JOBS', 'true')
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: { org_number: null } }, { data: { org_number: '198001011231' } }])
+
+    await expect(submitSIEJob(supabase as unknown as SupabaseClient, 'company-1', 'user-1',
+      fileFor('556677-8899'), mappings, options)).rejects.toMatchObject({
+      code: 'SIE_IMPORT_ORG_NUMBER_MISMATCH',
+      details: { file_org_number: '556677-8899', company_org_number: '198001011231' },
+    })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('admits the company\'s own number from company_settings without a confirmation', async () => {
+    vi.stubEnv('SIE_IMPORT_JOBS', 'true')
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    const job = { id: 'import-1', job_state: 'queued' } as unknown as SIEJob
+    enqueueMany([{ data: { org_number: '' } }, { data: { org_number: '198001011231' } },
+      { data: { id: 'period-1' } }, { data: null }, { data: job }])
+
+    await expect(submitSIEJob(supabase as unknown as SupabaseClient, 'company-1', 'user-1',
+      fileFor('800101-1231'), mappings, options)).resolves.toEqual(job)
   })
 })

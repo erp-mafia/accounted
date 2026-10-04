@@ -22448,15 +22448,10 @@ export const tools: McpTool[] = [
       // the worst silent failure this flow can have. The comparison the
       // submit gate uses, so 10- and 12-digit forms of one number match;
       // missing on either side reports unverified instead of ok.
-      const { data: companyRow } = await supabase
-        .from('companies')
-        .select('org_number')
-        .eq('id', companyId)
-        .maybeSingle()
-      const { compareSIEOrgNumber } = await import('@/lib/import/sie-org-number')
+      const { compareSIEOrgNumber, readCompanyOrgNumber } = await import('@/lib/import/sie-org-number')
       const orgCheck = compareSIEOrgNumber(
         parsed.header.orgNumber,
-        (companyRow as { org_number?: string | null } | null)?.org_number,
+        await readCompanyOrgNumber(supabase, companyId),
       )
       const orgMatch =
         orgCheck.companyOrgNumber && orgCheck.fileOrgNumber

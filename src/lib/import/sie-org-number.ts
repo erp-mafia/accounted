@@ -19,8 +19,9 @@ export interface SIEOrgNumberCheck {
  * 16556677-8899 (or 19... for an enskild firma's personnummer) are one
  * number. A value that is not org-number shaped is compared as written, the
  * rule orgNumberKey documents. A side without a number is not evidence of
- * anything: #ORGNR is optional in SIE 4 and a company may lack one, so
- * that file passes.
+ * anything: #ORGNR is optional in SIE 4 and a company may lack one in both
+ * companies and company_settings, so that file passes (its #ORGNR is still
+ * kept in the job's manifest.originalSource).
  */
 export function compareSIEOrgNumber(fileOrg: string | null | undefined,
   companyOrg: string | null | undefined): SIEOrgNumberCheck {
@@ -31,12 +32,29 @@ export function compareSIEOrgNumber(fileOrg: string | null | undefined,
   return { fileOrgNumber, companyOrgNumber, mismatch }
 }
 
-/** compareSIEOrgNumber against companies.org_number, the canonical copy. */
+/**
+ * The company's org number: companies.org_number, or company_settings.org_number
+ * when that is empty. The number drifts between the two (the tic-fetch and
+ * client-overview fallbacks exist for the same reason), and in prod every
+ * company that took a SIE import without companies.org_number had one in
+ * settings, so reading companies alone would skip the check for a company
+ * that does have a number.
+ */
+export async function readCompanyOrgNumber(supabase: SupabaseClient, companyId: string): Promise<string | null> {
+  const { data, error } = await supabase.from('companies').select('org_number').eq('id', companyId).maybeSingle()
+  if (error) throw error
+  const own = (data as { org_number?: string | null } | null)?.org_number?.trim()
+  if (own) return own
+  const { data: settings, error: settingsError } = await supabase.from('company_settings')
+    .select('org_number').eq('company_id', companyId).maybeSingle()
+  if (settingsError) throw settingsError
+  return (settings as { org_number?: string | null } | null)?.org_number?.trim() || null
+}
+
+/** compareSIEOrgNumber against the company's number (readCompanyOrgNumber). */
 export async function checkSIEOrgNumber(supabase: SupabaseClient, companyId: string,
   fileOrg: string | null | undefined): Promise<SIEOrgNumberCheck> {
   // Nothing to compare: skip the read.
   if (!fileOrg?.trim()) return compareSIEOrgNumber(null, null)
-  const { data, error } = await supabase.from('companies').select('org_number').eq('id', companyId).maybeSingle()
-  if (error) throw error
-  return compareSIEOrgNumber(fileOrg, (data as { org_number?: string | null } | null)?.org_number)
+  return compareSIEOrgNumber(fileOrg, await readCompanyOrgNumber(supabase, companyId))
 }
