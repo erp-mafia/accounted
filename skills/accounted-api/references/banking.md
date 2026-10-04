@@ -1078,7 +1078,7 @@ Response `200`:
 ```ts
 {
   data: {
-    accounts: { account_key: string, kind: "bank" | "skattekonto" | "manual", account_number: string, name: string, currency: string, logo_url: string | null, source: { type: "psd2" | "bank_file" | "skatteverket_api" | "skatteverket_file" | "manual", synced_at: string | null, stale: boolean }, status: { state: "reconciled" | "open" | "stale" | "not_configured", as_of: string, unexplained_difference: number | null, open_counts: { proposed: number, unmatched_external: number, unmatched_ledger: number } } | null, superseded_by: string | null, signed_off_through?: string | null }[]
+    accounts: { account_key: string, kind: "bank" | "skattekonto" | "manual", account_number: string, name: string, currency: string, logo_url: string | null, source: { type: "psd2" | "bank_file" | "skatteverket_api" | "skatteverket_file" | "manual", synced_at: string | null, stale: boolean }, status: { state: "reconciled" | "open" | "stale" | "not_configured", as_of: string, unexplained_difference: number | null, open_counts: { proposed: number, unmatched_external: number, unmatched_ledger: number } } | null, superseded_by: string | null, signed_off_through?: string | null, balance?: number | null, balance_at?: string | null }[]
   },
   meta: {
     request_id: string,
