@@ -26,6 +26,7 @@ import { computeDeduction, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
 import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
 import { roundOre } from '@/lib/money'
 import type {
   CreateJournalEntryLineInput,
@@ -650,6 +651,7 @@ export function invoiceCashBankSek(
  *   Credit 30xx Försäljning         [subtotal per rate]
  *   Credit 26xx Utgående moms       [vat per rate]  (if applicable)
  *   Dr/Cr  3740 Öresavrundning      [bank vs share gap]  (if applicable)
+ *   Credit 2420/3740 Överbetalning  [bank above share]   (if applicable)
  *
  * `knownBankSek`: the SEK that actually arrived (invoiceCashBankSek), when
  * the payment is matched to a bank row. On a SEK invoice a gap under one
@@ -658,6 +660,11 @@ export function invoiceCashBankSek(
  * statement. Revenue and moms stay on the invoice amounts: 3740 carries no
  * VAT. An exact row, a gap of a krona or more (the routes refuse those
  * before booking) and a foreign invoice book the customer share as before.
+ *
+ * `overpaymentAccount`: when the row brought a krona or more ABOVE the
+ * customer share and this names an account allowed to take the excess
+ * (overpayment.ts), 1930 takes what arrived and that account the excess.
+ * Revenue and moms stay on the invoice amounts.
  */
 export function buildInvoiceCashLines(
   invoice: InvoiceCashLinesSource,
@@ -665,6 +672,7 @@ export function buildInvoiceCashLines(
   customerName?: string,
   settlementAccountNumber: string = '1930',
   knownBankSek?: number,
+  overpaymentAccount?: string,
 ): { description: string; lines: CreateJournalEntryLineInput[] } {
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = invoice.currency !== 'SEK'
@@ -725,10 +733,12 @@ export function buildInvoiceCashLines(
     ? Math.round(totalCredits * 100) / 100
     : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
   const customerShare = roundOre(cashDebit - rotRut.totalSek)
-  const oreGap = !isForeign && customerShare > 0 && knownBankSek != null && knownBankSek > 0
-    ? oreSettlementResidual(customerShare, knownBankSek)
-    : 0
-  const bankAmount = roundOre(customerShare - oreGap)
+  const knowsBank = !isForeign && customerShare > 0 && knownBankSek != null && knownBankSek > 0
+  const oreGap = knowsBank ? oreSettlementResidual(customerShare, knownBankSek) : 0
+  const excess = knowsBank ? overpaymentExcess(customerShare, knownBankSek) : 0
+  const overpayment =
+    excess !== 0 && overpaymentAccount && overpaymentAllowed(overpaymentAccount, excess) ? excess : 0
+  const bankAmount = roundOre(customerShare - oreGap + overpayment)
   lines.push({
     account_number: settlementAccountNumber,
     debit_amount: bankAmount,
@@ -741,6 +751,9 @@ export function buildInvoiceCashLines(
   lines.push(...creditLines)
   if (oreGap !== 0) {
     lines.push({ ...oreRoundingLine(oreGap, 'customer'), dimensions: defaultDimensions })
+  }
+  if (overpayment !== 0) {
+    lines.push({ ...overpaymentLine(overpayment, overpaymentAccount!), dimensions: defaultDimensions })
   }
 
   return {
