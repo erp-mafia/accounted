@@ -56,6 +56,7 @@ export const GENERAL_SETTINGS_FIELDS = [
   'address_line2',
   'postal_code',
   'city',
+  'registered_office',
   'country',
   'phone',
   'email',
@@ -220,7 +221,7 @@ const SettingsResource = z.object({
     .describe('The one payment QR code invoice PDFs print (auto, bank_app, swish, payment_link, none). invoice_show_payment_qr is superseded by it.'),
   ...Object.fromEntries(
     [
-      'company_name', 'address_line1', 'address_line2', 'postal_code', 'city', 'country', 'phone', 'email',
+      'company_name', 'address_line1', 'address_line2', 'postal_code', 'city', 'registered_office', 'country', 'phone', 'email',
       'website', 'tax_contact_name', 'tax_contact_phone', 'tax_contact_email', 'bank_name', 'clearing_number',
       'account_number', 'bankgiro', 'plusgiro', 'swish', 'iban', 'bic', 'invoice_prefix', 'invoice_default_notes',
       'invoice_company_name_position', 'invoice_late_fee_text', 'invoice_credit_terms_text',

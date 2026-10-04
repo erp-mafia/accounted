@@ -22,7 +22,7 @@ function makeMinimalK3Data(): ArsredovisningData {
       name: 'Testbolaget AB',
       org_number: '556677-8899',
       entity_type: 'aktiebolag',
-      city: 'Stockholm',
+      registered_office: 'Stockholm',
     },
     fiscal_period: {
       id: 'fp1',

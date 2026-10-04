@@ -55,6 +55,10 @@ export function CompanySettingsContent() {
       address_line1: formData.get('address_line1') as string,
       postal_code: formData.get('postal_code') as string,
       city: formData.get('city') as string,
+      // Säte is its own field (not the postal town); empty clears it.
+      ...(formData.has('registered_office') && {
+        registered_office: String(formData.get('registered_office') ?? '').trim() || null,
+      }),
       phone: (formData.get('phone') as string) || '',
       email: (formData.get('email') as string) || '',
       website: (formData.get('website') as string) || '',

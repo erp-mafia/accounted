@@ -59,6 +59,8 @@ function makeSupabase(opts: {
   medelantalOverride?: number | null
   noteOverrides?: Record<string, string>
   omitCashFlow?: boolean
+  registeredOffice?: string | null
+  city?: string | null
 }): ChainableMock {
   const from = vi.fn((table: string) => {
     if (table === 'fiscal_periods') {
@@ -93,6 +95,8 @@ function makeSupabase(opts: {
                   company_name: 'Testbolaget AB',
                   org_number: '556677-8899',
                   address: { city: 'Stockholm' },
+                  registered_office: opts.registeredOffice ?? null,
+                  city: opts.city ?? null,
                   entity_type: opts.entityType ?? 'aktiebolag',
                   aktiekapital: opts.aktiekapital ?? null,
                   antal_aktier:
@@ -328,6 +332,24 @@ describe('buildArsredovisningData: medelantal anställda override (ÅRL 5:20 §)
       expect(data.disclosures.medelantal_anstallda_override).toBe(1)
     },
   )
+})
+
+describe('buildArsredovisningData: säte', () => {
+  it('prints registered_office as säte, never the postal town', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2', registeredOffice: 'Sateskommunen', city: 'Postorten' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.company.registered_office).toBe('Sateskommunen')
+    expect(data.warnings.join('\n')).not.toContain('Säte saknas')
+  })
+
+  it('falls back to the postal town with a warning while the säte is unknown', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2', registeredOffice: null, city: 'Postorten' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.company.registered_office).toBe('Postorten')
+    expect(data.warnings).toContainEqual(expect.stringContaining('Säte saknas i företagsinställningarna'))
+  })
 })
 
 describe('buildArsredovisningData: K3', () => {

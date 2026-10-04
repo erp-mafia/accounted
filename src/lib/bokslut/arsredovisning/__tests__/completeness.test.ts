@@ -25,7 +25,7 @@ const eligibility: AnnualReportEligibilityResult = {
 function report(): ArsredovisningData {
   return {
     accounting_framework: 'k2',
-    company: { name: 'Test AB', org_number: '556012-5790', city: 'Stockholm' },
+    company: { name: 'Test AB', org_number: '556012-5790', registered_office: 'Stockholm' },
     fiscal_period: {
       id: 'period-1',
       name: '2025',
@@ -149,6 +149,15 @@ describe('validateAnnualReportCompleteness', () => {
     value.report.company.org_number = '556012-5791'
     const result = validateAnnualReportCompleteness(value)
     expect(result.issues.some((issue) => issue.code === 'AR-COMPANY-ORGNR')).toBe(true)
+  })
+
+  it('blocks the report when the säte is unknown', () => {
+    const value = input('draft')
+    value.report.company.registered_office = null
+    const result = validateAnnualReportCompleteness(value)
+    const issue = result.issues.find((item) => item.code === 'AR-COMPANY-REGISTERED-OFFICE')
+    expect(issue?.severity).toBe('error')
+    expect(result.ok).toBe(false)
   })
 
   it('requires confirmation that the signer roster matches Bolagsverket', () => {

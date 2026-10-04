@@ -259,8 +259,8 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
           <Text style={styles.k3Banner}>Upprättad enligt K3 (BFNAR 2012:1)</Text>
           <Text style={styles.paragraph}>{data.company.name}</Text>
           <Text style={styles.paragraph}>Organisationsnummer: {data.company.org_number}</Text>
-          {data.company.city && (
-            <Text style={styles.paragraph}>Säte: {data.company.city}</Text>
+          {data.company.registered_office && (
+            <Text style={styles.paragraph}>Säte: {data.company.registered_office}</Text>
           )}
         </View>
       </Page>
@@ -576,7 +576,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         <PageChrome data={data} pageLabel="Underskrifter" />
         <Text style={styles.sectionTitle}>Underskrifter</Text>
         <Text style={styles.paragraph}>
-          {data.company.city ? `${data.company.city}, ` : ''}
+          {data.company.registered_office ? `${data.company.registered_office}, ` : ''}
           {reportSignatureDate ?? '____________________'}
         </Text>
         {(data.signatures.length > 0
@@ -627,7 +627,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
           <Text style={{ width: 240 }}>Styrelseledamot (närvarande vid stämman)</Text>
         </View>
         <Text style={[styles.paragraph, { marginTop: 30, fontSize: 9, color: '#666' }]}>
-          {data.company.city ? `${data.company.city}, ` : ''}
+          {data.company.registered_office ? `${data.company.registered_office}, ` : ''}
           datum: {data.forvaltningsberattelse.agm_date ?? '____________________'}
         </Text>
       </Page>

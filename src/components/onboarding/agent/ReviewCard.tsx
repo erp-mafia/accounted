@@ -351,8 +351,10 @@ export default function ReviewCard({
                     onCommit={() => setEditing(null)}
                   />
                   <SniRow sniCodes={fields.sni_codes} />
+                  {/* The postal town of the registered address, not the säte:
+                      säte is its own field (company_settings.registered_office). */}
                   <FieldRow
-                    label="Säte"
+                    label="Ort"
                     value={fields.city ?? ''}
                     placeholder="-"
                     editing={editing === 'city'}

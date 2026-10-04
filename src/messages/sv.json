@@ -2015,6 +2015,8 @@
     "address_label": "Adress",
     "postal_code_label": "Postnummer",
     "city_label": "Ort",
+    "registered_office_label": "Säte",
+    "registered_office_help": "Kommunen där företaget har sitt registrerade säte. Skrivs ut som säte i årsredovisningen. Kan skilja sig från orten i postadressen.",
     "phone_label": "Telefon",
     "email_label": "E-post",
     "website_label": "Webbplats",

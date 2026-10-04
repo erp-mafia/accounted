@@ -2866,6 +2866,9 @@ export const UpdateSettingsSchema = z.object({
   address_line2: z.string().optional(),
   postal_code: z.string().optional(),
   city: z.string().optional(),
+  // Säte: the municipality the company is registered in, printed as säte in
+  // the annual report. Not the postal town (`city`).
+  registered_office: z.string().trim().max(100, 'Säte får vara max 100 tecken').nullable().optional(),
   country: z.string().optional(),
   f_skatt: z.boolean().optional(),
   vat_registered: z.boolean().optional(),

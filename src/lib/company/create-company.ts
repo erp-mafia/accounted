@@ -5,6 +5,7 @@ import { regenerateTaxDeadlinesForUser, toDeadlineSettings } from '@/lib/tax/dea
 import type { CompanySettingsForDeadlines } from '@/lib/tax/deadline-config'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import type { EntityType } from '@/types'
+import { registeredOfficeFromRegistry } from './registered-office'
 
 /**
  * The one company-creation sequence, shared by the web wizard (Server
@@ -37,7 +38,13 @@ export interface CreateCompanyInput {
   ticLookup?: CompanyLookupResult | null
 }
 
-export type CreateCompanyResult = { companyId: string; error?: undefined } | { companyId?: undefined; error: string }
+/**
+ * `registeredOffice`: the säte the register gave and the settings row now
+ * carries (null when unknown), so a caller can show it without a re-read.
+ */
+export type CreateCompanyResult =
+  | { companyId: string; registeredOffice: string | null; error?: undefined }
+  | { companyId?: undefined; error: string }
 
 export const COMPANY_CREATION_ERRORS = {
   org_number_invalid: 'org_number_invalid',
@@ -76,6 +83,12 @@ export async function createCompanyCore(
   if (rawOrgNumber && rawOrgNumber.trim() && !cleanedOrgNumber) {
     return { error: COMPANY_CREATION_ERRORS.org_number_invalid }
   }
+
+  // Säte comes from the register (SCB Säteskommun), never from the postal
+  // town in `settings.city`. Started now so the call overlaps the steps
+  // below; it never rejects and is capped by a deadline, so a slow or
+  // unconfigured register costs at most that and leaves the säte unset.
+  const registeredOfficeLookup = registeredOfficeFromRegistry(cleanedOrgNumber)
 
   // 1. Create company + owner membership atomically via RPC
   const { data: newCompanyIdRaw, error: companyError } = await createCompanyRow()
@@ -182,6 +195,11 @@ export async function createCompanyCore(
       : deriveSwedishVatNumber(settingsToSave.org_number as string | null | undefined)
   }
 
+  // The register wins over anything the caller passed: it is the authority
+  // on säte. Without a register answer the caller's value (if any) stands.
+  const registeredOffice = await registeredOfficeLookup
+  if (registeredOffice) settingsToSave.registered_office = registeredOffice
+
   const { error: settingsError } = await supabase
     .from('company_settings')
     .upsert(
@@ -229,5 +247,9 @@ export async function createCompanyCore(
     return { error: COMPANY_CREATION_ERRORS.deadlines_failed }
   }
 
-  return { companyId: newCompanyId }
+  const savedOffice = settingsToSave.registered_office
+  return {
+    companyId: newCompanyId,
+    registeredOffice: typeof savedOffice === 'string' && savedOffice.trim() ? savedOffice.trim() : null,
+  }
 }

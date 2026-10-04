@@ -493,8 +493,9 @@ export function buildKnownFacts(inputs: ComposerInputs): string[] {
     if (s.accounting_method) {
       out.push(`Bokföringsmetod: ${s.accounting_method}`)
     }
+    // `city` is the postal town, not the säte (company_settings.registered_office).
     if (s.city) {
-      out.push(`Säte: ${s.city}`)
+      out.push(`Ort: ${s.city}`)
     }
   }
   // Outside the settings block on purpose: a live employee count is a fact even

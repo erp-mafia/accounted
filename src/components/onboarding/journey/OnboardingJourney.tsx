@@ -205,6 +205,9 @@ export default function OnboardingJourney({
   const [thinking, setThinking] = useState(false)
   const [narration, setNarration] = useState<string | null>(null)
   const [monogram, setMonogram] = useState<string | null>(null)
+  // Säte as the register gave it at creation (SCB Säteskommun). The postal
+  // town in settings.city is never shown as säte.
+  const [registeredOffice, setRegisteredOffice] = useState<string | null>(null)
   const [dupName, setDupName] = useState<string | null>(null)
   // The company the user already has under the org number being set up, and
   // the org number they explicitly chose a separate copy for. Together they
@@ -545,6 +548,7 @@ export default function OnboardingJourney({
           })
           return
         }
+        setRegisteredOffice(result.registeredOffice ?? null)
         dispatch({ type: 'SUBMIT_SUCCEEDED' })
         const initial = (s.settings.company_name || 'A').trim().charAt(0).toUpperCase()
         window.setTimeout(() => setMonogram(initial), reduced ? 0 : 1600)
@@ -1149,6 +1153,7 @@ export default function OnboardingJourney({
             fyAnswer={fyAnswer}
             momsAnswer={momsAnswer}
             methodAnswer={methodAnswer}
+            registeredOffice={registeredOffice}
             onOpen={() => router.push('/')}
             // Act two (issue #2438): the books, the bank and Skatteverket
             // continue inside the journey chrome under the dashboard layout.
@@ -1467,6 +1472,7 @@ function DoneStep({
   fyAnswer,
   momsAnswer,
   methodAnswer,
+  registeredOffice,
   onOpen,
   onContinue,
 }: {
@@ -1476,6 +1482,8 @@ function DoneStep({
   fyAnswer: string | null
   momsAnswer: string | null
   methodAnswer: string | null
+  /** Säte from the register (SCB Säteskommun); null hides the row. */
+  registeredOffice: string | null
   onOpen: () => void
   onContinue: () => void
 }) {
@@ -1491,7 +1499,7 @@ function DoneStep({
       s.org_number,
     ])
   }
-  if (s.city) rows.push([t('journey_card_seat'), s.city])
+  if (registeredOffice) rows.push([t('journey_card_seat'), registeredOffice])
   if (fyAnswer) rows.push([t('journey_card_fy'), fyAnswer])
   if (s.f_skatt !== undefined) {
     rows.push([t('journey_card_fskatt'), s.f_skatt ? t('journey_card_fskatt_yes') : t('journey_card_fskatt_pending')])

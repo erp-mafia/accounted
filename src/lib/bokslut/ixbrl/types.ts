@@ -81,8 +81,9 @@ export interface IxbrlArsredovisningInput {
     name: string
     /** Formatted with dash, e.g. "556999-9999". */
     orgNumber: string
-    /** Säte (city): used in underskrifter and allmänt om verksamheten. */
-    city: string | null
+    /** Säte (company_settings.registered_office, never the postal town):
+     *  used in underskrifter and allmänt om verksamheten. */
+    registeredOffice: string | null
   }
   period: { start: string; end: string }
   previousPeriod: { start: string; end: string } | null

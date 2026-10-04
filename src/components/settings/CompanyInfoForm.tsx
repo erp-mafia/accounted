@@ -6,6 +6,7 @@ import {
   SettingsInput,
   SettingsRow,
 } from '@/components/settings/SettingsRows'
+import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import type { CompanySettings } from '@/types'
 
 interface CompanyInfoFormProps {
@@ -15,6 +16,11 @@ interface CompanyInfoFormProps {
 export function CompanyInfoForm({ settings }: CompanyInfoFormProps) {
   const t = useTranslations('settings_company')
   const orgLocked = settings.onboarding_complete === true
+  // Säte belongs to a legal person; a form whose org number is the owner's
+  // personnummer (enskild firma) has none.
+  const hasRegisteredOffice = !(
+    isEntityType(settings.entity_type) && usesPersonnummerAsOrgNumber(settings.entity_type)
+  )
   return (
     <SettingsGroup label={t('company_info_heading')}>
       <SettingsRow
@@ -60,6 +66,20 @@ export function CompanyInfoForm({ settings }: CompanyInfoFormProps) {
       <SettingsRow label={t('city_label')} htmlFor="city" align="baseline">
         <SettingsInput id="city" name="city" defaultValue={settings.city || ''} />
       </SettingsRow>
+      {hasRegisteredOffice && (
+        <SettingsRow
+          label={t('registered_office_label')}
+          htmlFor="registered_office"
+          help={t('registered_office_help')}
+          align="baseline"
+        >
+          <SettingsInput
+            id="registered_office"
+            name="registered_office"
+            defaultValue={settings.registered_office || ''}
+          />
+        </SettingsRow>
+      )}
       <SettingsRow label={t('phone_label')} htmlFor="phone" align="baseline">
         <SettingsInput
           id="phone"

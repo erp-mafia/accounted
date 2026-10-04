@@ -412,6 +412,10 @@ export interface CompanySettings {
   postal_code: string | null
   city: string | null
   country: string
+  /** Säte: the municipality the company is registered in (SCB Säteskommun
+   *  at creation). Printed as säte in the annual report; not the postal
+   *  town, which is `city`. Null until known. */
+  registered_office?: string | null
 
   // Contact
   phone: string | null

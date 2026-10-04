@@ -78,7 +78,7 @@ export async function createCompanyFromOnboarding(params: {
   // No books-gate flag: whether the first-session gate arms is decided
   // server-side from the user's memberships (shouldArmBooksGate), because
   // "Lägg till företag" reaches the same journey page a new account does.
-}): Promise<{ companyId?: string; error?: string }> {
+}): Promise<{ companyId?: string; registeredOffice?: string | null; error?: string }> {
   try {
     return await createCompanyFromOnboardingImpl(params)
   } catch (err) {
@@ -96,7 +96,7 @@ async function createCompanyFromOnboardingImpl(params: {
   settings: Record<string, unknown>
   fiscalPeriod: { startDate: string; endDate: string; name: string }
   ticLookup?: CompanyLookupResult | null
-}): Promise<{ companyId?: string; error?: string }> {
+}): Promise<{ companyId?: string; registeredOffice?: string | null; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -250,7 +250,9 @@ async function createCompanyFromOnboardingImpl(params: {
   }
 
   revalidatePath('/')
-  return { companyId: newCompanyId }
+  // The säte the register gave (SCB Säteskommun): the journey's summary card
+  // shows it as "Säte", never the postal town.
+  return { companyId: newCompanyId, registeredOffice: created.registeredOffice }
 }
 
 /**
