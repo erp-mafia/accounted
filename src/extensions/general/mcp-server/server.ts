@@ -22577,7 +22577,7 @@ export const tools: McpTool[] = [
         voucher_series: { type: 'string', description: 'Override voucher series for imported vouchers' },
         opening_balance_series: { type: 'string', description: 'Series for the IB voucher; default avoids series used by the file' },
         update_account_names: { type: 'boolean', description: 'Use #KONTO names from the file for created and existing accounts (default true). Set false to keep BAS default names.' },
-        confirm_org_number_mismatch: { type: 'boolean', description: 'True only after the user confirmed a file whose #ORGNR is not this company\'s' },
+        confirm_org_number_mismatch: { type: 'boolean' },
       },
       required: ['filename', 'mappings'],
     },
