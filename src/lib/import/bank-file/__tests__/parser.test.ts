@@ -350,6 +350,26 @@ describe('detectFileFormat', () => {
     expect(format!.id).toBe('seb')
   })
 
+  it('detects a bank export saved through Excel, past its sep= hint line', () => {
+    // Excel's hint used to be read as the header, so the file matched no
+    // format and the user was told to pick a bank by hand.
+    const excelSaved = 'sep=;\nBokföringsdag;Valutadag;Verifikationsnummer;Text;Belopp;Saldo\n2026-01-15;2026-01-15;123;SPOTIFY;-99,00;12345,67'
+    const format = detectFileFormat(excelSaved, 'export.csv')
+    expect(format).not.toBeNull()
+    expect(format!.id).toBe('seb')
+  })
+
+  it('does not claim a wide export as SEB when it carries no belopp column', () => {
+    // A real export (Kontohavare;Kontonr;IBAN;...;Bokföringsdag;Reskontradag;
+    // Valutadag;...;Insättning/Uttag) matched SEB on the two date columns and
+    // then failed in parse with "Kunde inte identifiera nödvändiga kolumner".
+    // Detecting is a promise that parse can read the file: falling through to
+    // the generic mapper is the honest outcome.
+    const wide = 'Kontohavare;Kontonr;IBAN;BIC;Kontoform;Valuta;Kontor;Bokföringsdag;Reskontradag;Valutadag;Referens;Insättning/Uttag;Bokfört saldo\nAB;123;SE1;HANDSESS;Företag;SEK;01;2026-01-15;2026-01-15;2026-01-15;SPOTIFY;-99,00;12345,67'
+    const format = detectFileFormat(wide, 'export.csv')
+    expect(format?.id).not.toBe('seb')
+  })
+
   it('detects SEB CSV from semicolon-delimited header with bokföringsdag', () => {
     const format = detectFileFormat(SEB_CSV, 'kontoutdrag.csv')
     expect(format).not.toBeNull()
