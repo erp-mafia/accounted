@@ -543,7 +543,7 @@ const CREATE_INVOICE_ITEM_SCHEMA = {
       description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, revenue account and, only when compatible with the customer VAT rules, vat_rate. Values set on the line win.',
     },
     line_type: { type: 'string', enum: ['product', 'text'], description: 'text = free-text row: no amounts, never books.' },
-    revenue_account: { type: ['string', 'null'], description: 'BAS class 1-3 posting-account override; class 1-2 only on a 0 % line.' },
+    revenue_account: { type: ['string', 'null'], description: 'BAS class 1-3 posting account; class 1-2 only at 0 % VAT.' },
     dimensions: {
       type: 'object',
       additionalProperties: { type: 'string' },
@@ -9055,7 +9055,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_invoice',
     keywords: ['faktura', 'kundfaktura', 'fakturera', 'ny faktura'],
     title: 'Create Customer Invoice',
-    description: 'Stage a new invoice or quote (offert). Validates inputs, calculates VAT preview. Items accept dims bags. Approval creates a draft (F-number assigned on send) or an open quote numbered OF-nnn at once; quotes require valid_until and never book.',
+    description: 'Stage a new invoice or quote (offert) with a VAT preview. Approval creates a draft (F-number assigned on send) or an open quote numbered OF-nnn at once; quotes never book.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -9071,7 +9071,7 @@ export const tools: McpTool[] = [
         items: {
           type: 'array',
           items: CREATE_INVOICE_ITEM_SCHEMA,
-          description: 'Invoice line items. ROT/RUT and periodisering fields as on gnubok_update_invoice lines.',
+          description: 'ROT/RUT and periodisering line fields as on gnubok_update_invoice.',
         },
         default_dimensions: {
           type: 'object',
