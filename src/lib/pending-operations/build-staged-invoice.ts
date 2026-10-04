@@ -172,7 +172,7 @@ export function describeInvoiceBuildRefusal(code: string, details?: Record<strin
     return (
       `revenue_account ${String(details.account)} is a balance-sheet account (class 1-2) and cannot take a ` +
       `${String(details.vatRate)}% VAT line: the sale would be missing from ruta 05. ` +
-      'Use a 3xxx revenue account, or vat_rate 0 for a deposit, advance or outlay.'
+      'Use a 3xxx revenue account, or vat_rate 0 for a refundable deposit or an outlay (utlägg).'
     )
   }
   const entry = getErrorEntry(code)
