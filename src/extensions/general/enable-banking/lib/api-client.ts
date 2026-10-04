@@ -16,6 +16,8 @@ import { getAuthorizationHeader } from './jwt'
 import { deriveTransactionLabel } from './transaction-label'
 import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
+import { CONTRACT_VERSION_HEADER } from '@/lib/connect/instance/connector-fetch'
+import { CONTRACT_VERSION } from '@accounted/connect-contract'
 import { normalizeBankTransactionCode } from '@accounted/connect-contract'
 import { dateFromDaysBefore, historyWindowDays } from './history-window'
 
@@ -449,6 +451,8 @@ async function authenticatedFetch(
       headers: {
         'Authorization': authorization,
         'Content-Type': 'application/json',
+        // Connect reads the caller's contract version on every family.
+        ...(connector ? { [CONTRACT_VERSION_HEADER]: CONTRACT_VERSION } : {}),
         ...options.headers,
       },
     })

@@ -1,6 +1,7 @@
 import { PEPPOL_OPERATIONS, connectorErrorSchema, type PeppolOperation } from '@accounted/connect-contract'
 import type { z } from 'zod'
-import { CONNECTOR_COMPANY_HEADER, type ConnectorUpstream } from '@/lib/connect/instance/upstreams'
+import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
+import type { ConnectorUpstream } from '@/lib/connect/instance/upstreams'
 import {
   CONNECTOR_PEPPOL_PROVIDER,
   PeppolTransportError,
@@ -162,12 +163,8 @@ export function createConnectorPeppolTransport(
         signal: controller.signal,
         redirect: 'error',
         cache: 'no-store',
-        headers: {
-          Authorization: `Bearer ${upstream.key}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          ...(options.companyRef ? { [CONNECTOR_COMPANY_HEADER]: options.companyRef } : {}),
-        },
+        // Bearer key, contract version and (when known) the company header.
+        headers: connectorHeaders({ key: upstream.key, companyId: options.companyRef, json: true }),
         body: body === undefined ? undefined : JSON.stringify(body),
       })
       const json = await readJson(response)

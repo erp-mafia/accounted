@@ -5,6 +5,7 @@ import {
   CONNECTOR_UPSTREAM_AUTH_HEADER,
   CONNECTOR_UPSTREAM_CONTENT_TYPE_HEADER,
 } from '@/lib/connect/instance/upstreams'
+import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
 import { baseUrlToService, parseConnectorCode, skatteverketConnectorMode } from './connector-mode'
 import { refreshAccessToken } from './oauth'
 import { getTokens, storeTokens, deleteTokens } from './token-store'
@@ -511,7 +512,8 @@ export async function skvRequestWithAuth(
   const headers: Record<string, string> = {}
   if (connector) {
     url = `${connector.baseUrl}/api/${baseUrlToService(effectiveBase)}${path}`
-    headers['Authorization'] = `Bearer ${connector.key}`
+    // Bearer key and contract version; the user's token rides in its own header.
+    Object.assign(headers, connectorHeaders({ key: connector.key }))
     headers[CONNECTOR_UPSTREAM_AUTH_HEADER] = `Bearer ${accessToken}`
   } else {
     url = `${effectiveBase}${path}`

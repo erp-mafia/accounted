@@ -997,10 +997,11 @@ describe('self-hosted own-credentials seam', () => {
     expect(result.capabilities).toContain(CAPABILITY.bank_sync)
     expect(result.capabilities).not.toContain(CAPABILITY.skatteverket)
     expect(result.entitlementState).toBe('none') // no connector grant; touchpoint renders nothing
-    expect(grantRpcParams(calls).map((p) => p.p_capability_keys)).toEqual([[CAPABILITY.skatteverket]])
+    // collections has no own-credentials form: it always needs a connector grant.
+    expect(grantRpcParams(calls).map((p) => p.p_capability_keys)).toEqual([[CAPABILITY.skatteverket, CAPABILITY.collections]])
   })
 
-  it('getCompanyEntitlements skips the grants read entirely when every connector upstream has own credentials', async () => {
+  it('getCompanyEntitlements reads grants only for collections when every other connector upstream has own credentials', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
     stubNoOwnCredentials()
     vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
@@ -1018,8 +1019,10 @@ describe('self-hosted own-credentials seam', () => {
       COMPANY,
       { teamId: null },
     )
-    expect(result.capabilities).toEqual([...PAID_CAPABILITIES])
-    expect(calls.filter((c) => c.table === 'capability_grants')).toHaveLength(0)
+    // Collections runs only behind Connect, so even an instance with every
+    // own credential needs the connector grant for it.
+    expect(result.capabilities).toEqual(PAID_CAPABILITIES.filter((k) => k !== CAPABILITY.collections))
+    expect(grantRpcParams(calls).map((p) => p.p_capability_keys)).toEqual([[CAPABILITY.collections]])
   })
 
   it('self-host block copy names the connector key, hosted copy keeps the subscription upsell', async () => {

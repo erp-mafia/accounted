@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   bankConnectorMode,
+  collectionsConnectorMode,
+  deliveryConnectorMode,
   peppolConnectorMode,
   skatteverketConnectorMode,
   hasOwnEnableBankingCredentials,
@@ -118,5 +120,33 @@ describe('skatteverket canary companies', () => {
     vi.stubEnv('SKATTEVERKET_OAUTH2_CLIENT_ID', 'client')
     vi.stubEnv('CONNECT_SKV_CANARY_COMPANIES', 'c-1')
     expect(skatteverketConnectorMode('c-1')).toBeNull()
+  })
+})
+
+describe('collections and delivery connector modes', () => {
+  it('are off without a connector key', () => {
+    clear()
+    expect(collectionsConnectorMode()).toBeNull()
+    expect(deliveryConnectorMode()).toBeNull()
+  })
+
+  it('route through Connect whenever a key is set: there is no own-credentials form', () => {
+    clear()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
+    // Own credentials for other upstreams change nothing here.
+    vi.stubEnv('ENABLE_BANKING_PRIVATE_KEY', 'pk')
+    vi.stubEnv('QVALIA_API_KEY', 'q')
+    expect(collectionsConnectorMode()).toEqual({ baseUrl: 'https://connect.accounted.se/api/connect/collections', key: 'gnubok_ck_x' })
+    expect(deliveryConnectorMode()).toEqual({ baseUrl: 'https://connect.accounted.se/api/connect/delivery', key: 'gnubok_ck_x' })
+  })
+
+  it('follow GNUBOK_CONNECT_URL and stay off when it is not https', () => {
+    clear()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
+    vi.stubEnv('GNUBOK_CONNECT_URL', 'https://connect.example.se/')
+    expect(collectionsConnectorMode()?.baseUrl).toBe('https://connect.example.se/api/connect/collections')
+    vi.stubEnv('GNUBOK_CONNECT_URL', 'http://connect.example.se')
+    expect(collectionsConnectorMode()).toBeNull()
+    expect(deliveryConnectorMode()).toBeNull()
   })
 })

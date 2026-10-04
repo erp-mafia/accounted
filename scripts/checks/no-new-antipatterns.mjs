@@ -146,6 +146,15 @@
  *      keeps lib/init out of the cold start of routes that never emit.
  *      Implementation and rationale in event-route-init.mjs. Allowlisted
  *      file-set, may only shrink.
+ *   16. unsigned-provider-names: the name of a provider whose contract is not
+ *      signed yet, anywhere in the change against the merge base (added
+ *      lines and file paths; committed, uncommitted and untracked). The
+ *      names come from the UNSIGNED_PROVIDER_NAMES secret, never from the
+ *      repository, so this check names nothing. No baseline: any hit is a
+ *      hard failure. Without the secret, or without a merge base (a shallow
+ *      CI checkout), it is skipped with a note; the provider-names workflow
+ *      runs it with full history and also over the PR text. Implementation
+ *      and rationale in unsigned-provider-names.mjs.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -179,6 +188,12 @@ import {
   findUninitializedEmittingRoutes,
   UNINITIALIZED_EMITTING_ROUTES,
 } from './event-route-init.mjs'
+import {
+  checkWorkingChange as checkUnsignedProviderNames,
+  formatFinding as formatProviderNameFinding,
+  HINT as PROVIDER_NAME_HINT,
+  NO_NAMES_NOTE as PROVIDER_NAMES_UNSET_NOTE,
+} from './unsigned-provider-names.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SOURCE_ROOT = path.join(ROOT, 'src')
@@ -1151,6 +1166,7 @@ const current = {
   literalLegalForm: findLiteralLegalForms(SOURCE_ROOT),
   uiUniformity: findUiUniformityFindings(SOURCE_ROOT),
   tableWithoutGrant: findTablesWithoutGrant(ROOT),
+  unsignedProviderNames: checkUnsignedProviderNames(),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1548,6 +1564,24 @@ if (baseline.providerHosts && newProviderHosts.length) {
   )
 }
 
+// 1c3. unsigned-provider-names: no baseline, any hit is a hard failure. The
+// findings never print the matched text (CI logs are public).
+if (current.unsignedProviderNames.skipped === 'no-names') {
+  console.log(`\n· unsigned-provider-names: skipped, ${PROVIDER_NAMES_UNSET_NOTE}.`)
+} else if (current.unsignedProviderNames.skipped === 'no-base') {
+  console.log(
+    `\n· unsigned-provider-names: skipped, no merge base with ${current.unsignedProviderNames.baseRef} in this checkout` +
+      ' (the provider-names workflow scans the PR with full history).',
+  )
+} else if (current.unsignedProviderNames.findings.length) {
+  failed = true
+  console.error(
+    `\n✗ unsigned-provider-names: ${current.unsignedProviderNames.findings.length} place(s) in the change name a provider that is not signed yet:`,
+  )
+  current.unsignedProviderNames.findings.forEach((f) => console.error(formatProviderNameFinding(f)))
+  console.error(PROVIDER_NAME_HINT)
+}
+
 // 1d. raw-reference-fetch: per-file ratchet. A file outside the baseline set
 // that fetches reference data raw (see raw-reference-fetch.mjs) is a NEW
 // violation; grandfathered files stay until they move to the hooks. Once the
@@ -1720,5 +1754,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, uninitialized-event-route: ${current.eventRouteInit.uninitialized.length}/${UNINITIALIZED_EMITTING_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, uninitialized-event-route: ${current.eventRouteInit.uninitialized.length}/${UNINITIALIZED_EMITTING_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

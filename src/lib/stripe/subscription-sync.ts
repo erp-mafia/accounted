@@ -92,6 +92,8 @@ export async function applySubscriptionState(
     const expiresAt = state.currentPeriodEnd
       ? new Date(new Date(state.currentPeriodEnd).getTime() + 3 * 24 * 3600 * 1000).toISOString()
       : null
+    // Every PAID key, the paid-plan-only ones included (collections): a
+    // subscription is the one self-serve source of those, a trial never is.
     const rows = PAID_CAPABILITIES.map((key) => ({
       company_id: state.companyId,
       capability_key: key,

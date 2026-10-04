@@ -8,6 +8,7 @@ import {
   type ConnectorSyncReport,
 } from '../contract'
 import { getConnectorConfig, type ConnectorConfig } from './config'
+import { connectorHeaders } from './connector-fetch'
 
 const log = createLogger('connector-sync')
 
@@ -108,11 +109,7 @@ export async function syncConnectorEntitlements(
   try {
     response = await fetchImpl(`${config.baseUrl}${CONNECTOR_ENTITLEMENTS_PATH}`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.key}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
+      headers: connectorHeaders({ key: config.key, json: true }),
       body: JSON.stringify(report),
     })
   } catch (err) {
