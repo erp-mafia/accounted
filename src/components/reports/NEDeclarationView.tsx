@@ -133,7 +133,13 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
                 {data.companyInfo.orgNumber && ` · Org.nr: ${data.companyInfo.orgNumber}`}
               </p>
             </div>
-            <Button variant="outline" onClick={downloadSRU} disabled={downloading}>
+            {/* A blocked declaration (R11 not the booked result) has no file: the
+                reason is the first warning below. */}
+            <Button
+              variant="outline"
+              onClick={downloadSRU}
+              disabled={downloading || data.sruBlockers.length > 0}
+            >
               <Download className="h-4 w-4 mr-2" />
               {downloading ? 'Laddar ner...' : 'Ladda ner SRU-fil'}
             </Button>

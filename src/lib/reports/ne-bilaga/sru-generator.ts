@@ -159,8 +159,26 @@ function generateBlanketterSru(declaration: NEDeclaration, now: Date, identity12
   return lines.join(CRLF) + CRLF
 }
 
+/**
+ * The declaration has sruBlockers: the books must be corrected before a file
+ * can exist, so both doors answer it as a 422, not a generation failure.
+ */
+export class NESruBlockedError extends Error {
+  constructor(readonly blockers: string[]) {
+    super(blockers.join(' '))
+    this.name = 'NESruBlockedError'
+  }
+}
+
 /** Generate a complete SRU submission (INFO.SRU + BLANKETTER.SRU) for the NE-bilaga. */
 export function generateNESRUSubmission(declaration: NEDeclaration): SRUSubmission {
+  // An account outside every ruta, or an R11 that differs from the booked
+  // result, would file a näringsverksamhet that is not the one in the books.
+  // Both SRU downloads (dashboard and v1) build here, so this refuses both.
+  if (declaration.sruBlockers.length > 0) {
+    throw new NESruBlockedError(declaration.sruBlockers)
+  }
+
   const now = new Date()
   const incomeYear = parseInt(getIncomeYear(declaration.fiscalYear.end), 10)
   const identity12 = formatIdentityNumber12(declaration.companyInfo.orgNumber, incomeYear)
