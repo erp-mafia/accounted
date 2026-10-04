@@ -20,7 +20,7 @@ export default function PrivacyPolicyPage() {
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-09-11
+            Senast uppdaterad: 2026-10-03
           </p>
         </div>
 
@@ -47,11 +47,12 @@ export default function PrivacyPolicyPage() {
               <li><strong>Kontouppgifter:</strong> E-postadress (för inloggning)</li>
               <li><strong>BankID-inloggning (hostad tjänst):</strong> Personnummer (lagras krypterat), namn och vilka företag du har en roll i. För en enskild firma är organisationsnumret detsamma som ditt personnummer.</li>
               <li><strong>Företagsuppgifter:</strong> Företagsnamn, organisationsnummer, adress, kontaktuppgifter</li>
-              <li><strong>Kundidentitet:</strong> Personnummer för privatkunder när det behövs för avtal eller fakturering</li>
+              <li><strong>Kundidentitet:</strong> Personnummer för privatkunder när det behövs för avtal, fakturering eller, om du har aktiverat det, utskick och inkasso</li>
               <li><strong>Bokföringsdata:</strong> Verifikationer, fakturor, kvitton, transaktioner, kontoplaner</li>
               <li><strong>Bankdata:</strong> Kontosaldon och transaktioner (via PSD2-koppling)</li>
               <li><strong>Dokument:</strong> Uppladdade kvitton, fakturor och andra bokföringsunderlag</li>
-              <li><strong>Fakturaleverans:</strong> Mottagaradress, leveransstatus, tidpunkt och innehållet i skickade fakturamejl</li>
+              <li><strong>Fakturaleverans:</strong> Mottagaradress (e-post, eller postadress vid utskick via ett inkasso- och utskicksföretag), leveransstatus, tidpunkt och innehållet i skickade fakturamejl</li>
+              <li><strong>Inkasso och utskick (om du aktiverar det):</strong> Utbetalningskonto, svar på frågor om kundkännedom (även om ägare och ledning), vem som godkände villkoren och när, firmatecknarens kontaktuppgifter för signering, för en enskild firma ägarens personnummer, samt status och händelser i de ärenden du har lämnat över</li>
               <li><strong>Tekniska uppgifter:</strong> IP-adress, enhetstyp, användningsstatistik</li>
             </ul>
           </CardContent>
@@ -213,6 +214,63 @@ export default function PrivacyPolicyPage() {
               adresser om du inte vill att de skickas.
             </p>
 
+            <p className="mt-4">
+              <strong>Inkasso- och utskicksföretag som du aktiverar.</strong>{' '}
+              Om du aktiverar inkasso och utskick lämnar vi uppgifter till det
+              inkasso- och utskicksföretag du har valt, för utskick av fakturor
+              med post, till digital brevlåda eller till kundens internetbank och
+              för påminnelser och inkasso. Företaget är en mottagare som du själv
+              anlitar, inte vårt underbiträde: när du aktiverar kopplingen
+              godkänner du företagets villkor för ditt företags räkning, och av
+              dem framgår om företaget behandlar uppgifterna som självständigt
+              personuppgiftsansvarig eller som ditt personuppgiftsbiträde.
+              Företagets namn och villkor, och dess information om hur det
+              behandlar personuppgifter när sådan finns, visas innan du godkänner.
+              Inget skickas innan en ägare eller administratör har godkänt
+              företagets villkor och skickat in ansökan, och sedan bara följande:
+            </p>
+            <ul>
+              <li>
+                När ansökan skickas in, villkoren godkänns och avtalet signeras:
+                ditt företags uppgifter, kontaktuppgifter, utbetalningskonto och
+                svar på frågor om kundkännedom, namnet på den som godkänner
+                villkoren och firmatecknarens e-post om signeringslänken ska
+                skickas dit, för en enskild firma även ägarens personnummer.
+              </li>
+              <li>
+                När du skickar en faktura via företaget, lämnar över den till
+                påminnelse eller inkasso, ställer in ett återkommande
+                fakturaschema att skicka via företaget eller godkänner en
+                sammanställd omgång: fakturan med de betalningar och
+                krediteringar som redan finns på den, och uppgifter om kunden
+                (namn, postadress, e-post och telefonnummer när de finns, samt
+                organisationsnummer eller, för privatpersoner, personnummer).
+              </li>
+              <li>
+                När du väljer en utskickskanal för en kund: kundens
+                organisationsnummer eller personnummer, för att kontrollera att
+                kunden kan nås där.
+              </li>
+              <li>
+                Så länge företaget har ett öppet ärende för en faktura:
+                betalningar och kreditfakturor på fakturan, och dina åtgärder i
+                ärendet, till exempel paus, återkallelse eller bestridande, med
+                eventuellt meddelande från dig. Om en rapporterad betalning
+                senare tas bort eller ändras meddelas det också, även efter att
+                ärendet har avslutats. Ärendets status, händelser och
+                avräkningar hämtas tillbaka till tjänsten.
+              </li>
+            </ul>
+            <p>
+              Uppgifter om dig själv lämnar vi för att fullgöra tjänsten du har
+              bett om (art. 6.1b). För uppgifter om dina kunder och om andra
+              personer i företaget, som ägare, ledning och firmatecknare, är du
+              personuppgiftsansvarig och vi ditt biträde, se{' '}
+              <Link href="/dpa" className="text-primary underline underline-offset-4">
+                personuppgiftsbiträdesavtalet
+              </Link>.
+            </p>
+
             <p className="mt-4 text-sm text-muted-foreground">
               AI-funktioner är frivilliga och kräver separat samtycke före
               aktivering: data skickas först när du aktivt godkänner
@@ -308,6 +366,12 @@ export default function PrivacyPolicyPage() {
               <li>
                 <strong>Kundidentitet:</strong> Under kundrelationen, eller i sju år när uppgiften
                 ingår i räkenskapsinformation som måste bevaras.
+              </li>
+              <li>
+                <strong>Inkasso och utskick:</strong> Ärendehistorik, rapporterade betalningar och
+                avräkningar hör till fakturan och bevaras lika länge som den, under
+                bokföringslagens lagringstid. Kundens personnummer sparas inte i dem; det finns
+                krypterat på kunden.
               </li>
               <li>
                 <strong>Tekniska loggar:</strong> Maximalt 90 dagar.
