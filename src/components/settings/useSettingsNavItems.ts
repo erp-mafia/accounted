@@ -56,6 +56,7 @@ export const SETTINGS_SECTION_PARENT: Record<string, string> = {
   peppol: 'connections',
   mail: 'connections',
   assistant: 'connections',
+  pos: 'connections',
 }
 
 /**

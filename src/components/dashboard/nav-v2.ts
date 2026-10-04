@@ -17,6 +17,8 @@ export interface NavGateFlags {
   // /quotes page and the APIs work regardless, existing quotes are kept).
   requiresQuotes?: boolean
   requiresWebshop?: boolean
+  /** Kassarapporter: a POS connection exists, live or ended (computed by the layout). */
+  requiresPosSales?: boolean
   requiresMileage?: boolean
   requiresExpenses?: boolean
   // Arkiv: shown only for companies in the ARKIV_COMPANY_IDS rollout (computed by the layout).
@@ -97,6 +99,8 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
       { href: '/invoices', labelKey: 'invoices' },
       { href: '/sales-orders', labelKey: 'sales_orders', requiresSalesOrders: true },
       { href: '/orders', labelKey: 'webshop_orders', requiresWebshop: true, betaBadge: true },
+      // Kassarapporter: the POS days (kassasystem via Accounted Connect), shown once a venue is connected.
+      { href: '/kassa', labelKey: 'pos_sales', requiresPosSales: true, betaBadge: true },
       { href: '/customers', labelKey: 'customers' },
       { href: '/articles', labelKey: 'articles' },
     ],

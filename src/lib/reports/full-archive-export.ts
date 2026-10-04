@@ -1178,6 +1178,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Webshop order rows are booking underlag (and carry customer personal
   // data), so they belong in the archive like transactions do.
   { name: 'webshop_orders', file: 'webshop_orders.json', orderBy: 'order_date' },
+  // A point-of-sale day is the basis of its daily takings voucher: the day
+  // model and the provider's answer verbatim (BFL 7 kap) belong in the archive.
+  { name: 'pos_sales_days', file: 'pos_sales_days.json', orderBy: 'business_date' },
   // Kundorder: non-ledger sales documents. Not räkenskapsinformation on
   // their own, but the provenance of invoices created from them
   // (invoices.sales_order_id / invoice_items.sales_order_item_id) points
@@ -1401,6 +1404,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   woocommerce_connections: 'WooCommerce connection state (encrypted API secrets)',
   shopify_connections: 'Shopify connection state (encrypted API secrets)',
   zettle_connections: 'Zettle connection state (encrypted OAuth refresh token)',
+  pos_connections: 'POS connection state (venue, fetch schedule, account mapping); the days and their vouchers are dumped',
 }
 
 /** Max parent ids per `IN (...)` chunk: keeps the PostgREST URL well under limits. */

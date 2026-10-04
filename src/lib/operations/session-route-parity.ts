@@ -409,6 +409,18 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/webshop-orders/:id/mark-booked': gap('P3'),
   'POST /api/webshop-orders/bulk-book': gap('P3'),
   'PUT /api/webshop-orders/settings': gap('P3', 'payment-method to account mapping'),
+  // POS sales (kassasystem via Accounted Connect): lib/operations/pos-sales.ts
+  'POST /api/pos-sales/connections': covered([`POST ${V}/pos-sales/connections`, 'gnubok_connect_pos_venue']),
+  'POST /api/pos-sales/connections/:id/disconnect': covered([
+    `POST ${V}/pos-sales/connections/:connectionId/disconnect`,
+    'gnubok_disconnect_pos_connection',
+  ]),
+  'PATCH /api/pos-sales/connections/:id/settings': covered([
+    `PATCH ${V}/pos-sales/connections/:connectionId/settings`,
+    'gnubok_update_pos_settings',
+  ]),
+  'POST /api/pos-sales/days/:id/book': covered([`POST ${V}/pos-sales/days/:dayId/book`, 'gnubok_book_pos_sales_day']),
+  'POST /api/pos-sales/fetch': covered([`POST ${V}/pos-sales/fetch`]),
 
   // ── VAT, tax, ROT/RUT ──────────────────────────────────────────────
   'POST /api/reports/vat-declaration/filings': covered([`POST ${V}/reports/vat-declaration/filings`]),

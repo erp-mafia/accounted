@@ -1947,6 +1947,9 @@ export type JournalEntrySourceType =
   // from 1513 back onto the customer (debit 1510 / credit 1513) and the
   // invoice reopens for that amount. lib/invoices/rot-rut-reclaim.ts.
   | 'rot_rut_reclaim'
+  // One point-of-sale business day booked as its daily takings voucher
+  // (gemensam verifikation, BFL 5 kap 6 §). lib/pos-sales/book-day.ts.
+  | 'pos_daily_sales'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -2724,6 +2727,11 @@ export type PendingOperationType =
   | 'set_opening_balances_manual'
   | 'correct_opening_balances'
   | 'split_opening_balances_per_project'
+  // POS sales (kassasystem): lib/operations/pos-sales.ts.
+  | 'connect_pos_venue'
+  | 'disconnect_pos_connection'
+  | 'update_pos_sales_settings'
+  | 'book_pos_sales_day'
   | 'delete_supplier_invoice'
   | 'uncredit_supplier_invoice'
   | 'update_supplier_invoice_item_account'
