@@ -72,6 +72,8 @@ vi.mock('../lib/declaration-prep', async (importOriginal) => {
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { skatteverketExtension } from '../index'
 import { skvRequestWithAuth, SkatteverketAuthError } from '../lib/api-client'
+import { getSaldo, getTransaktioner } from '../lib/skattekonto-client'
+import { listOmbudGrants } from '../lib/ombud-client'
 
 /** Upstream answers, consumed in call order. */
 let answers: Array<Response | Error> = []
@@ -264,6 +266,29 @@ describe('transport: one audit row per outbound call', () => {
         responseStatus: 200,
       }),
     )
+  })
+})
+
+describe('callers that read the answer as JSON: a 2xx without JSON is skv_error, never ok', () => {
+  const USER = { mode: 'user' as const, supabase: {} as never, userId: 'user-1', companyId: 'company-1' }
+  const ACTOR = { companyId: 'company-1', userId: 'user-1' }
+
+  it('skattekonto saldo and transaktioner', async () => {
+    answers = [new Response('', { status: 200 }), new Response('<html></html>', { status: 200 })]
+    await expect(getSaldo(USER, REDOVISARE, ACTOR)).rejects.toThrow()
+    await expect(getTransaktioner(USER, REDOVISARE, undefined, ACTOR)).rejects.toThrow()
+    expect(rows()).toEqual([
+      expect.objectContaining({ endpoint: 'skattekonto/saldo', outcome: 'skv_error', responseStatus: 200 }),
+      expect.objectContaining({ endpoint: 'skattekonto/transaktioner', outcome: 'skv_error', responseStatus: 200 }),
+    ])
+  })
+
+  it('a company-scoped Ombudshantering read', async () => {
+    answers = [new Response('', { status: 200 })]
+    await expect(listOmbudGrants({ huvudman: REDOVISARE }, ACTOR)).rejects.toMatchObject({ code: 'OBR_BAD_RESPONSE' })
+    expect(rows()).toEqual([
+      expect.objectContaining({ endpoint: 'ombud/autentisieratOmbud', outcome: 'skv_error', responseStatus: 200 }),
+    ])
   })
 })
 

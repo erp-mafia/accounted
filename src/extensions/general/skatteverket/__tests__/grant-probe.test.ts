@@ -79,6 +79,7 @@ describe('probeCompanyGrants via the ombudsregister', () => {
       companyId: 'company-1',
       userId: null,
       agRegistreradId: ORG,
+      expectJson: true,
     })
     expect(options).toMatchObject({
       baseUrl: 'https://api.test.skatteverket.se/behorighet/ombudshantering/v2',
@@ -326,7 +327,13 @@ describe('probeCompanyGrants service-probe fallback', () => {
 
     // Every probe call names the user who asked for the verification.
     expect(mockSkvRequestWithAuth.mock.calls.map((call) => call[3])).toEqual([
-      { endpoint: 'ombud/autentisieratOmbud', companyId: 'company-1', userId: 'user-1', agRegistreradId: ORG },
+      {
+        endpoint: 'ombud/autentisieratOmbud',
+        companyId: 'company-1',
+        userId: 'user-1',
+        agRegistreradId: ORG,
+        expectJson: true,
+      },
       {
         endpoint: 'system-connection/verify/lasombud',
         companyId: 'company-1',

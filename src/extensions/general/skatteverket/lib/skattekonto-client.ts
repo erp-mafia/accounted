@@ -109,7 +109,7 @@ export async function getSaldo(
     auth,
     'GET',
     `/skattekonton/${omfragad}/saldo${qs}`,
-    { endpoint: 'skattekonto/saldo', ...actor, agRegistreradId: omfragad },
+    { endpoint: 'skattekonto/saldo', ...actor, agRegistreradId: omfragad, expectJson: true },
     undefined,
     { baseUrl: getSkattekontoBaseUrl() },
   )
@@ -140,7 +140,7 @@ export async function getTransaktioner(
     auth,
     'GET',
     `/skattekonton/${omfragad}/transaktioner${qs}`,
-    { endpoint: 'skattekonto/transaktioner', ...actor, agRegistreradId: omfragad },
+    { endpoint: 'skattekonto/transaktioner', ...actor, agRegistreradId: omfragad, expectJson: true },
     undefined,
     { baseUrl: getSkattekontoBaseUrl() },
   )

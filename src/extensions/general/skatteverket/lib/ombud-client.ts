@@ -199,7 +199,9 @@ export type OmbudCaller = SkvAuditActor | 'ombud_register'
 
 function ombudAudit(caller: OmbudCaller, endpoint: string, huvudman?: string): SkvAudit {
   if (caller === 'ombud_register') return { unaudited: 'ombud_register', operation: endpoint }
-  return { endpoint, ...caller, agRegistreradId: huvudman ?? null }
+  // Every company-scoped register call reads its answer with readJsonOrThrow,
+  // so a 2xx without JSON is the caller's error and must not be recorded 'ok'.
+  return { endpoint, ...caller, agRegistreradId: huvudman ?? null, expectJson: true }
 }
 
 async function ombudRequest(method: 'GET' | 'POST', path: string, audit: SkvAudit, body?: unknown): Promise<Response> {

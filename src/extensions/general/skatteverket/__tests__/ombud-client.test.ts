@@ -108,6 +108,7 @@ describe('listOmbudGrants', () => {
       endpoint: 'ombud/autentisieratOmbud',
       ...ACTOR,
       agRegistreradId: '165560000000',
+      expectJson: true,
     })
   })
 
@@ -204,7 +205,12 @@ describe('roles and deep links', () => {
     expect(auth).toEqual({ mode: 'system' })
     expect(method).toBe('POST')
     expect(path).toBe('/ombud/autentisieratOmbud/huvudman/165560000000/djuplank/utseombud')
-    expect(audit).toEqual({ endpoint: 'system-connection/deeplink', ...ACTOR, agRegistreradId: '165560000000' })
+    expect(audit).toEqual({
+      endpoint: 'system-connection/deeplink',
+      ...ACTOR,
+      agRegistreradId: '165560000000',
+      expectJson: true,
+    })
     expect(body).toEqual({ ombudsroller: ['JLO', 'MOMS'] })
     expect(options).toMatchObject({ accept: 'application/json' })
   })
