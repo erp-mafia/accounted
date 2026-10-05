@@ -920,6 +920,20 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'Transaction amount exceeds the invoice remaining amount. Use the split-payment flow to allocate the excess across one or more other invoices.',
   },
+  MATCH_OVERPAYMENT_ROUNDING_CAP: {
+    httpStatus: 400,
+    message_sv:
+      'Överskottet är för stort för att bokas som kronutjämning på 3740. Boka det som förskott från kund på 2420 i stället.',
+    message_en:
+      'The excess is too large to book as rounding on 3740. Book it on 2420 (advances from customers) instead, a liability to refund or offset.',
+  },
+  MATCH_OVERPAYMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturans återstående belopp har ändrats sedan matchningen förbereddes, så överskottet blir ett annat än det som visades. Förbered matchningen igen.',
+    message_en:
+      'The invoice remaining amount changed after the match was staged, so the excess differs from the one shown for approval. Stage the match again.',
+  },
 }
 
 const LINK_TX_JE: Record<string, StructuredErrorEntry> = {

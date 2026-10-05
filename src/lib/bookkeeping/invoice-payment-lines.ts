@@ -59,6 +59,7 @@ import type { CreateJournalEntryLineInput } from '@/types'
 import { resolveSekAmount } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
 
 const TWO_DP = (n: number): number => Math.round(n * 100) / 100
 
@@ -172,6 +173,13 @@ export interface PaymentClearingLines {
    * invoice settles, and the residual balances the verifikat via 3740.
    */
   oreRoundingSek: number
+  /**
+   * Customer overpayment (SEK) booked on the caller's overpayment account:
+   * bankSek − remainingSek when that is a krona or more and the caller named
+   * an account allowed to take it (overpayment.ts), else 0. When non-zero the
+   * AR leg is the FULL remaining and the excess is credited to that account.
+   */
+  overpaymentSek: number
   lines: CreateJournalEntryLineInput[]
 }
 
@@ -231,6 +239,13 @@ export interface PaymentClearingLines {
  *   account) and pass it here so a receipt into a non-primary bank/cash
  *   account (e.g. a secondary SEK account, or a EUR account on 1940) doesn't
  *   silently get misbooked to the primary account.
+ *
+ * # overpaymentAccount
+ *   Pure SEK only. When the bank moved a krona or more above the remaining
+ *   and this names an account allowed to take the excess (2420, or 3740
+ *   under its cap: see overpayment.ts), 1510 is credited the full remaining
+ *   and the excess goes to that account. Without it the caller must have
+ *   refused the overshoot (planInvoicePayment does) before building.
  */
 export function buildInvoicePaymentClearingLines(
   tx: PaymentClearingTx,
@@ -246,6 +261,7 @@ export function buildInvoicePaymentClearingLines(
    * here instead of always booking to the primary bank account.
    */
   paymentAccount = '1930',
+  overpaymentAccount?: string,
 ): PaymentClearingLines {
   // Bank-leg: actual SEK that hit the bank. resolveSekAmount returns the
   // raw amount for SEK txs and amount * exchange_rate for foreign txs
@@ -267,6 +283,7 @@ export function buildInvoicePaymentClearingLines(
   let arSek: number
   let fxDiffSek: number
   let oreRoundingSek = 0
+  let overpaymentSek = 0
 
   if (pureSek) {
     // A whole-krona bank settlement of an öre-bearing SEK invoice leaves a
@@ -274,9 +291,13 @@ export function buildInvoicePaymentClearingLines(
     // and let 3740 absorb the öre; a ≥1 kr short payment stays a real partial.
     const remainingSek = TWO_DP(invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0))
     const oreDiff = oreSettlementResidual(remainingSek, bankSek)
+    const excess = overpaymentExcess(remainingSek, bankSek)
     if (oreDiff !== 0) {
       arSek = remainingSek
       oreRoundingSek = oreDiff
+    } else if (excess !== 0 && overpaymentAccount && overpaymentAllowed(overpaymentAccount, excess)) {
+      arSek = remainingSek
+      overpaymentSek = excess
     } else {
       arSek = bankSek
     }
@@ -369,8 +390,11 @@ export function buildInvoicePaymentClearingLines(
   if (oreRoundingSek !== 0) {
     lines.push(oreRoundingLine(oreRoundingSek, 'customer'))
   }
+  if (overpaymentSek !== 0) {
+    lines.push(overpaymentLine(overpaymentSek, overpaymentAccount!))
+  }
 
-  return { bankSek, arSek, fxDiffSek, oreRoundingSek, lines }
+  return { bankSek, arSek, fxDiffSek, oreRoundingSek, overpaymentSek, lines }
 }
 
 /**
@@ -406,6 +430,7 @@ export function buildInvoiceMatchClearingLines(
   invoice: InvoiceMatchClearingInvoice,
   paidInInvoiceCurrency: number | undefined,
   paymentAccount: string,
+  overpaymentAccount?: string,
 ): { description: string; lines: CreateJournalEntryLineInput[] } {
   const description = invoiceMatchPaymentDescription(invoice)
   const { lines } = buildInvoicePaymentClearingLines(
@@ -414,6 +439,7 @@ export function buildInvoiceMatchClearingLines(
     description,
     paidInInvoiceCurrency,
     paymentAccount,
+    overpaymentAccount,
   )
   const bag = coerceDimensionsBag(invoice.default_dimensions)
   if (bag) {

@@ -143,3 +143,51 @@ describe('planTransactionInvoiceMatch: cross-currency', () => {
     expect(mockFetchExchangeRate).not.toHaveBeenCalled()
   })
 })
+
+describe('planTransactionInvoiceMatch: overpaymentAccount (crm#253)', () => {
+  const invoice = { currency: 'SEK', total: 337.5, paid_amount: 0, remaining_amount: 337.5 }
+
+  it('settles exactly the remaining and hands the excess to 3740 under the cap', async () => {
+    const r = await planTransactionInvoiceMatch(supabase, sekTx(340), invoice, { overpaymentAccount: '3740' })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.overpayment).toEqual({ account: '3740', amount: 2.5 })
+      expect(r.paidAmount).toBe(337.5)
+      expect(r.plan).toMatchObject({ newStatus: 'paid', newPaidAmount: 337.5, newRemaining: 0, oreSettled: false })
+    }
+  })
+
+  it('refuses 3740 at the cap and takes any excess on 2420', async () => {
+    const capped = await planTransactionInvoiceMatch(supabase, sekTx(347.5), invoice, { overpaymentAccount: '3740' })
+    expect(capped).toMatchObject({ ok: false, code: 'MATCH_OVERPAYMENT_ROUNDING_CAP', details: { excess: 10 } })
+
+    const advance = await planTransactionInvoiceMatch(supabase, sekTx(5000), invoice, { overpaymentAccount: '2420' })
+    expect(advance).toMatchObject({ ok: true, overpayment: { account: '2420', amount: 4662.5 } })
+  })
+
+  it('books no overpayment without an account, for a sub-krona overshoot or for an unknown account', async () => {
+    expect(await planTransactionInvoiceMatch(supabase, sekTx(340), invoice)).toMatchObject({
+      ok: false,
+      code: 'MATCH_AMOUNT_EXCEEDS_REMAINING',
+    })
+    expect(await planTransactionInvoiceMatch(supabase, sekTx(338), invoice, { overpaymentAccount: '2420' })).toMatchObject({
+      ok: true,
+      overpayment: null,
+      plan: { oreSettled: true },
+    })
+    expect(await planTransactionInvoiceMatch(supabase, sekTx(340), invoice, { overpaymentAccount: '3990' })).toMatchObject({
+      ok: false,
+      code: 'MATCH_AMOUNT_EXCEEDS_REMAINING',
+    })
+  })
+
+  it('keeps refusing a foreign overshoot with an account named', async () => {
+    const r = await planTransactionInvoiceMatch(
+      supabase,
+      { amount: 105, amount_sek: 1207.5, currency: 'EUR', exchange_rate: 11.5, date: '2026-09-30' },
+      { currency: 'EUR', total: 100, paid_amount: 0, remaining_amount: 100 },
+      { overpaymentAccount: '2420' },
+    )
+    expect(r).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING', absorbsOre: false })
+  })
+})
