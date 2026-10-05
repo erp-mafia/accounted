@@ -31,6 +31,13 @@ stages:
   - test
   - pg
 
+# Checks run on merge requests only, like the GitHub workflows (pull_request
+# only): with squash merges onto a straight history, main receives exactly the
+# tree its merge request already tested. main runs the production jobs only.
+.mr-only:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
 # npm's download cache, kept on the runner between pipelines and keyed on the
 # lockfile, like the restore-only cache in .github/actions/setup-core.
 .npm:
@@ -75,7 +82,7 @@ stages:
 
 checks:
   stage: checks
-  extends: .setup-core
+  extends: [.setup-core, .mr-only]
   needs: []
   script:
     - npm run skills:check
@@ -100,7 +107,7 @@ checks:
 
 build:
   stage: test
-  extends: .setup-core
+  extends: [.setup-core, .mr-only]
   needs: []
   variables:
     # The Next.js build worker needs more than the default heap (see
@@ -111,7 +118,7 @@ build:
 
 unit-tests:
   stage: test
-  extends: .setup-core
+  extends: [.setup-core, .mr-only]
   needs: []
   parallel: 4
   script:
@@ -132,7 +139,7 @@ pg-coverage-gate:
 # Every migration replayed on an empty database, then the pg-real suite.
 pg-real:
   stage: pg
-  extends: .pg
+  extends: [.pg, .mr-only]
   needs: []
   script:
     - npm ci --prefer-offline --no-audit --fund=false
@@ -184,7 +191,7 @@ pg-upgrade:
 # reach Postgres by its alias.
 tool-pg:
   stage: pg
-  extends: .npm
+  extends: [.npm, .mr-only]
   needs: []
   variables:
     FF_NETWORK_PER_BUILD: "true"
@@ -247,3 +254,28 @@ tool-pg:
       done
       curl -sf -o /dev/null "$TOOL_PG_REST_URL/"
     - npm run test:tools
+
+# Production migrations on every merge to main, as Supabase's GitHub
+# integration did (it applied out-of-order versions too, hence --include-all).
+# STEP 1: dry run only. It links the production project and lists what WOULD
+# be applied, proving the token and password work without changing anything.
+# Secrets are protected, masked CI variables: SUPABASE_ACCESS_TOKEN (scoped to
+# the production project) and SUPABASE_DB_PASSWORD. One run at a time.
+migrations-production:
+  stage: checks
+  needs: []
+  interruptible: false
+  resource_group: production-database
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+  variables:
+    SUPABASE_PROJECT_REF: pwxtzglxptnnvjrpixpg
+    SUPABASE_CLI: supabase@2.119.0
+  script:
+    - test -n "$SUPABASE_ACCESS_TOKEN" || { echo "SUPABASE_ACCESS_TOKEN is not set for main"; exit 1; }
+    - test -n "$SUPABASE_DB_PASSWORD" || { echo "SUPABASE_DB_PASSWORD is not set for main"; exit 1; }
+    # The repo keeps no supabase/config.toml; link needs one in the workspace.
+    - npx -y "$SUPABASE_CLI" init >/dev/null
+    - npx -y "$SUPABASE_CLI" link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+    - npx -y "$SUPABASE_CLI" migration list --password "$SUPABASE_DB_PASSWORD" | tail -15
+    - npx -y "$SUPABASE_CLI" db push --dry-run --include-all --password "$SUPABASE_DB_PASSWORD"
