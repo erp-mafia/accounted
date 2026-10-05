@@ -257,10 +257,14 @@ tool-pg:
 
 # Production migrations on every merge to main, as Supabase's GitHub
 # integration did (it applied out-of-order versions too, hence --include-all).
-# STEP 1: dry run only. It links the production project and lists what WOULD
-# be applied, proving the token and password work without changing anything.
-# Secrets are protected, masked CI variables: SUPABASE_ACCESS_TOKEN (scoped to
-# the production project) and SUPABASE_DB_PASSWORD. One run at a time.
+# STEP 1: dry run only. It lists what WOULD be applied, proving the token and
+# password work without changing anything.
+#
+# No `supabase link`: that reads the project's API keys, which this job has no
+# use for. The token only looks up the session pooler's address; the CLI then
+# connects with the database password. The URL holds the password and is never
+# printed. Secrets: SUPABASE_ACCESS_TOKEN and SUPABASE_DB_PASSWORD, protected
+# and masked. One run at a time.
 migrations-production:
   stage: checks
   needs: []
@@ -274,8 +278,19 @@ migrations-production:
   script:
     - test -n "$SUPABASE_ACCESS_TOKEN" || { echo "SUPABASE_ACCESS_TOKEN is not set for main"; exit 1; }
     - test -n "$SUPABASE_DB_PASSWORD" || { echo "SUPABASE_DB_PASSWORD is not set for main"; exit 1; }
-    # The repo keeps no supabase/config.toml; link needs one in the workspace.
-    - npx -y "$SUPABASE_CLI" init >/dev/null
-    - npx -y "$SUPABASE_CLI" link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
-    - npx -y "$SUPABASE_CLI" migration list --password "$SUPABASE_DB_PASSWORD" | tail -15
-    - npx -y "$SUPABASE_CLI" db push --dry-run --include-all --password "$SUPABASE_DB_PASSWORD"
+    - |
+      set -euo pipefail
+      curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+        "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/config/database/pooler" > /tmp/pooler.json
+      node -e '
+        const list = [].concat(JSON.parse(require("fs").readFileSync("/tmp/pooler.json", "utf8")));
+        const p = list.find((x) => x.database_type === "PRIMARY") || list[0];
+        if (!p || !p.db_host || !p.db_user) { console.error("No pooler config for the primary database"); process.exit(1) }
+        console.log("Session pooler: " + p.db_host + ":5432 as " + p.db_user);
+        const pw = encodeURIComponent(process.env.SUPABASE_DB_PASSWORD);
+        require("fs").writeFileSync("/tmp/db-url", `postgresql://${p.db_user}:${pw}@${p.db_host}:5432/${p.db_name || "postgres"}?sslmode=require`);
+      '
+      export SUPABASE_DB_URL="$(cat /tmp/db-url)"
+      rm -f /tmp/db-url
+      npx -y "$SUPABASE_CLI" migration list --db-url "$SUPABASE_DB_URL" | tail -15
+      npx -y "$SUPABASE_CLI" db push --dry-run --include-all --db-url "$SUPABASE_DB_URL"
