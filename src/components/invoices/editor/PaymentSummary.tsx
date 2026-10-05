@@ -76,9 +76,12 @@ export function PaymentSummary({
   }
 
   const reasonAction =
-    reason?.action === 'add_giro'
+    reason?.action === 'add_account' || reason?.action === 'fix_account'
       ? canEditCompany
-        ? { label: t('action_add_giro'), href: '/settings/invoicing' }
+        ? {
+            label: t(reason.action === 'add_account' ? 'action_add_account' : 'action_fix_account'),
+            href: '/settings/invoicing',
+          }
         : null
       : reason?.action === 'open_panel'
         ? { label: t('action_change'), onClick: onOpenPanel }

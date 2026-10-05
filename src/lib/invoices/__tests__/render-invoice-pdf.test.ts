@@ -152,6 +152,37 @@ describe('renderInvoicePdfBuffer', () => {
     expect(templateProps().paymentQr).toBeNull()
   })
 
+  it('draws the bank-app code for a frozen payee that is only a bank account', async () => {
+    const payee: InvoicePaymentAccount = {
+      bank_name: 'Handelsbanken',
+      clearing_number: '6000',
+      account_number: '658159712',
+      bankgiro: null,
+      plusgiro: null,
+      swish: null,
+      iban: null,
+      bic: null,
+      bank_code: null,
+      foreign_account_number: null,
+    }
+    const result = await renderInvoicePdfBuffer({
+      invoice: sentInvoice({ payment_details: payee }),
+      customer: makeCustomer({ customer_type: 'swedish_business' }),
+      items: [],
+      company: company(),
+    })
+    expect(result.paymentQr.kind).toBe('bank_app')
+    // The payee's account, not the company's bankgiro: the code pays where the page says.
+    expect(result.paymentQr.kind && JSON.parse(result.paymentQr.payload)).toMatchObject({
+      pt: 'BBAN',
+      acc: '6000658159712',
+      bc: 'HANDSESS',
+    })
+    const qr = templateProps().paymentQr as { kind: string; vector?: { path: string; size: number } }
+    expect(qr.kind).toBe('bank_app')
+    expect(qr.vector?.path).toMatch(/^M\d+ \d+h\d+v1h-\d+z/)
+  })
+
   it('honours the invoice QR mode', async () => {
     const result = await renderInvoicePdfBuffer({
       invoice: sentInvoice({ qr_mode: 'none' }),
