@@ -15,18 +15,48 @@ import {
   EfDeclarationNotApplicableError,
 } from '../enskild-firma/ef-declaration-preview'
 
-vi.mock('@/lib/reports/income-statement', () => ({
-  generateIncomeStatement: vi.fn(async () => ({ net_result: 120_000 })),
+// The real NE engine runs on top of a mocked trial balance, so the preview
+// base is whatever NE R11 says for these rows.
+vi.mock('@/lib/reports/trial-balance', () => ({
+  generateTrialBalance: vi.fn(),
 }))
+
+import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { generateNEDeclaration } from '@/lib/reports/ne-bilaga/ne-engine'
 
 const PERIOD = { id: 'fp-1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }
 
-/** Table-routed mock: companies.entity_type and the fiscal period row. */
-function makeSupabase(entityType: string | null) {
+type Row = { account_number: string; account_name: string; closing_debit: number; closing_credit: number }
+
+function row(account_number: string, side: 'debit' | 'credit', amount: number): Row {
+  return {
+    account_number,
+    account_name: `Konto ${account_number}`,
+    closing_debit: side === 'debit' ? amount : 0,
+    closing_credit: side === 'credit' ? amount : 0,
+  }
+}
+
+/** One sale of 120 000 kr: NE R11 = 120 000. */
+function useRows(rowsFor: (closingEntry: string | undefined) => Row[]) {
+  vi.mocked(generateTrialBalance).mockImplementation((async (
+    _supabase: unknown,
+    _companyId: unknown,
+    _periodId: unknown,
+    options?: { closingEntry?: string },
+  ) => ({ rows: rowsFor(options?.closingEntry) })) as never)
+}
+
+/**
+ * Table-routed mock: companies.entity_type, the fiscal period row, and the
+ * company_settings row the NE engine reads its form from.
+ */
+function makeSupabase(entityType: string | null, settingsEntityType: string | null = 'enskild_firma') {
   const reads: string[] = []
   const rows: Record<string, unknown> = {
     companies: entityType ? { entity_type: entityType } : null,
-    fiscal_periods: PERIOD,
+    fiscal_periods: { ...PERIOD, is_closed: false },
+    company_settings: settingsEntityType ? { entity_type: settingsEntityType } : null,
   }
   const from = vi.fn((table: string) => {
     reads.push(table)
@@ -41,6 +71,7 @@ function makeSupabase(entityType: string | null) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useRows(() => [row('3001', 'credit', 120_000)])
 })
 
 describe('computeEfDeclarationPreview: legal-form gate', () => {
@@ -64,7 +95,7 @@ describe('computeEfDeclarationPreview: legal-form gate', () => {
 
     const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1')
 
-    expect(preview.fiscalPeriod).toEqual(PERIOD)
+    expect(preview.fiscalPeriod).toMatchObject(PERIOD)
     expect(preview.bookedSurplus).toBe(120_000)
     expect(preview.items.map((i) => i.kind)).toContain('egenavgifter')
   })
@@ -96,5 +127,41 @@ describe('computeEfDeclarationPreview: legal-form gate', () => {
     expect(entry?.httpStatus).toBe(400)
     expect(entry?.message_sv).toMatch(/enskild firma/)
     expect(entry?.message_en).toMatch(/enskild firma/)
+  })
+})
+
+describe('computeEfDeclarationPreview: base is NE R11', () => {
+  // Sale 200 000, rent 50 000, and a year-end depreciation entry of 20 000
+  // (source_type 'year_end'). The operating income statement reads the books
+  // with 'exclude-all-year-end' and would leave the depreciation out (150 000);
+  // NE R11 keeps every bokslut entry but the result transfer (130 000).
+  beforeEach(() => {
+    useRows((closingEntry) => [
+      row('3001', 'credit', 200_000),
+      row('5010', 'debit', 50_000),
+      ...(closingEntry === 'exclude-all-year-end' ? [] : [row('7832', 'debit', 20_000)]),
+    ])
+  })
+
+  it('takes the booked surplus from NE R11, year-end depreciation included', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1')
+    const ne = await generateNEDeclaration(supabase, 'co-1', 'fp-1')
+
+    expect(ne.rutor.R11).toBe(130_000)
+    expect(preview.bookedSurplus).toBe(ne.rutor.R11)
+    for (const call of vi.mocked(generateTrialBalance).mock.calls) {
+      expect(call[3]).toMatchObject({ closingEntry: 'exclude-final' })
+    }
+  })
+
+  it('computes egenavgifter on that base', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1')
+    const egenavgifter = preview.items.find((i) => i.kind === 'egenavgifter')
+
+    expect(egenavgifter?.computation).toMatchObject({ surplusBeforeEgenavgifter: 130_000 })
   })
 })
