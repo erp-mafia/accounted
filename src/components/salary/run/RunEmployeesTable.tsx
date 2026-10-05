@@ -17,10 +17,10 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { FileDown, Receipt, Trash2 } from 'lucide-react'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
-import { periodLabelOf, type RunDetail } from './types'
+import { formatRunAmount, periodLabelOf, type RunDetail } from './types'
 
 type SreWithEmployee = SalaryRunEmployee & {
   employee?: {
@@ -76,6 +76,10 @@ export function RunEmployeesTable({
   const notAdded = availableEmployees.filter(e => !addedEmployeeIds.has(e.id))
   const canRemoveEmployee = run.status === 'draft' && canWrite
   const isDraft = run.status === 'draft'
+  // Gross is a calculated figure: while the calculation is not current
+  // (isCalculated, lib/salary/calculation-state.ts) the row shows the salary
+  // the next calculation starts from, never the stale gross.
+  const showInputSalary = isDraft || !isCalculated
 
   // Δ vs the latest booked run: hidden on the first-ever run and before
   // calculation (gross is 0 until then, the diff would be noise).
@@ -99,7 +103,7 @@ export function RunEmployeesTable({
     return (
       <span className="text-xs text-muted-foreground tabular-nums">
         {sign}
-        {formatCurrency(Math.abs(delta))}
+        {formatRunAmount(Math.abs(delta))}
       </span>
     )
   }
@@ -144,7 +148,7 @@ export function RunEmployeesTable({
                 {showDiff && previous && (
                   <th className={TH_CLASS}>{t('th_diff', { period: periodLabelOf(previous) })}</th>
                 )}
-                <th className={numericTh}>{isDraft ? t('th_monthly_salary') : t('th_gross')}</th>
+                <th className={numericTh}>{showInputSalary ? t('th_monthly_salary') : t('th_gross')}</th>
                 {isCalculated && (
                   <>
                     <th className={numericTh}>{t('th_tax')}</th>
@@ -171,9 +175,9 @@ export function RunEmployeesTable({
                   .join(' · ')
                 const taxValue = sre.tax_withheld_override ?? sre.tax_withheld
                 const avgifterValue = sre.avgifter_amount_override ?? sre.avgifter_amount
-                const netValue = sre.net_salary + (sre.tax_withheld - taxValue)
+                const netValue = roundOre(sre.net_salary + (sre.tax_withheld - taxValue))
                 const editableSalary = isDraft && canWrite && sre.salary_type === 'monthly'
-                const primaryNumber = isDraft ? sre.monthly_salary : sre.gross_salary
+                const primaryNumber = showInputSalary ? sre.monthly_salary : sre.gross_salary
                 // In a draft the number on the row is the full-time monthly salary
                 // the engine multiplies by the employee's sysselsättningsgrad. Below
                 // 100 % that product is not obvious from the input alone (a 10 %
@@ -187,7 +191,7 @@ export function RunEmployeesTable({
                   <span className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
                     {t('degree_hint', {
                       degree: degree.toLocaleString('sv-SE'),
-                      amount: formatCurrency(roundOre((sre.monthly_salary || 0) * (degree / 100))),
+                      amount: formatRunAmount(roundOre((sre.monthly_salary || 0) * (degree / 100))),
                     })}
                   </span>
                 ) : null
@@ -233,17 +237,17 @@ export function RunEmployeesTable({
                             className="-my-1 h-8 w-28 text-right tabular-nums"
                           />
                         ) : (
-                          <span>{formatCurrency(primaryNumber)}</span>
+                          <span>{formatRunAmount(primaryNumber)}</span>
                         )}
                         {degreeHint}
                       </span>
                     </td>
                     {isCalculated && (
                       <>
-                        <td className={numericTd}>{formatCurrency(taxValue)}</td>
-                        <td className={numericTd}>{formatCurrency(netValue)}</td>
-                        <td className={numericTd}>{formatCurrency(avgifterValue)}</td>
-                        <td className={numericTd}>{formatCurrency(sre.vacation_accrual)}</td>
+                        <td className={numericTd}>{formatRunAmount(taxValue)}</td>
+                        <td className={numericTd}>{formatRunAmount(netValue)}</td>
+                        <td className={numericTd}>{formatRunAmount(avgifterValue)}</td>
+                        <td className={numericTd}>{formatRunAmount(sre.vacation_accrual)}</td>
                       </>
                     )}
                     <td className={cn(TD_CLASS, 'pr-0 text-right')}>
@@ -267,7 +271,7 @@ export function RunEmployeesTable({
                             <span className="tabular-nums">
                               {t('add_expense_claims', {
                                 count: openClaims.count,
-                                amount: formatCurrency(openClaims.total_sek),
+                                amount: formatRunAmount(openClaims.total_sek),
                               })}
                             </span>
                           </Button>

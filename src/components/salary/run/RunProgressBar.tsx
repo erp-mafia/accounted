@@ -64,17 +64,22 @@ export function RunProgressBar(props: RunProgressBarProps) {
     detail?: string
   }
 
+  // isCalculated means the calculation is current. Past review it is frozen;
+  // before that a run whose calculation went stale is back on this step, in
+  // review too (a run that reached review before the review step checked it).
+  const calculationDone = rank > 1 || isCalculated
+
   const steps: Step[] = [
     {
       key: 'calculate',
       label: t('rail_calculate'),
-      state: rank > 0 || isCalculated ? 'done' : 'active',
-      detail: rank === 0 && !isCalculated ? t('rail_calculate_hint') : undefined,
+      state: calculationDone ? 'done' : 'active',
+      detail: !calculationDone ? t('rail_calculate_hint') : undefined,
     },
     {
       key: 'approve',
       label: t('rail_approve'),
-      state: rank > 1 ? 'done' : run.status === 'review' ? 'active' : 'upcoming',
+      state: rank > 1 ? 'done' : run.status === 'review' && calculationDone ? 'active' : 'upcoming',
       detail: run.approved_at ? formatDateLong(run.approved_at, locale) : undefined,
     },
     {

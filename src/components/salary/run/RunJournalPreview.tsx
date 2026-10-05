@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { Calculator, FileText } from 'lucide-react'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { formatRunAmount } from './types'
 
 export interface EntryPreviewLine {
   account_number: string
@@ -101,7 +102,7 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating, under
               </div>
               {entry.balanced === false && (
                 <p className="text-sm text-destructive" role="alert">
-                  {t('journal_preview_unbalanced', { amount: formatCurrency(entry.difference ?? 0) })}
+                  {t('journal_preview_unbalanced', { amount: formatRunAmount(entry.difference ?? 0) })}
                 </p>
               )}
               <div className="overflow-x-auto">
@@ -120,10 +121,10 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating, under
                         <td className={cn(TD_CLASS, 'pl-0 tabular-nums font-mono')}>{line.account_number}</td>
                         <td className={cn(TD_CLASS, 'text-muted-foreground')}>{line.line_description}</td>
                         <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                          {line.debit_amount ? formatCurrency(line.debit_amount) : ''}
+                          {line.debit_amount ? formatRunAmount(line.debit_amount) : ''}
                         </td>
                         <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
-                          {line.credit_amount ? formatCurrency(line.credit_amount) : ''}
+                          {line.credit_amount ? formatRunAmount(line.credit_amount) : ''}
                         </td>
                       </tr>
                     ))}

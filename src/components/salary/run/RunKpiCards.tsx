@@ -1,9 +1,9 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import type { SalaryRunEmployee } from '@/types'
-import type { RunDetail } from './types'
+import { formatRunAmount, type RunDetail } from './types'
 
 interface RunKpiCardsProps {
   run: RunDetail
@@ -18,22 +18,26 @@ interface RunKpiCardsProps {
 export function RunKpiCards({ run, employees }: RunKpiCardsProps) {
   const t = useTranslations('salary_run')
 
-  const effTax = employees.reduce((s, e) => s + (e.tax_withheld_override ?? e.tax_withheld), 0)
+  // Each step rounded to whole öre (CLAUDE.md rule 6), so a sum over many
+  // rows never shows binary drift.
+  const effTax = employees.reduce((s, e) => roundOre(s + (e.tax_withheld_override ?? e.tax_withheld)), 0)
   const effAvgifter = employees.reduce(
-    (s, e) => s + (e.avgifter_amount_override ?? e.avgifter_amount),
+    (s, e) => roundOre(s + (e.avgifter_amount_override ?? e.avgifter_amount)),
     0,
   )
   const effNet = employees.reduce(
-    (s, e) => s + (e.net_salary + (e.tax_withheld - (e.tax_withheld_override ?? e.tax_withheld))),
+    (s, e) => roundOre(s + e.net_salary + (e.tax_withheld - (e.tax_withheld_override ?? e.tax_withheld))),
     0,
   )
   const effEmployerCost = employees.reduce(
     (s, e) =>
-      s +
-      e.gross_salary +
-      (e.avgifter_amount_override ?? e.avgifter_amount) +
-      e.vacation_accrual +
-      e.vacation_accrual_avgifter,
+      roundOre(
+        s +
+          e.gross_salary +
+          (e.avgifter_amount_override ?? e.avgifter_amount) +
+          e.vacation_accrual +
+          e.vacation_accrual_avgifter,
+      ),
     0,
   )
 
@@ -55,7 +59,7 @@ export function RunKpiCards({ run, employees }: RunKpiCardsProps) {
           <p
             className={`mt-1 font-display text-xl tabular-nums leading-none ${accent ? 'text-success' : ''}`}
           >
-            {formatCurrency(value)}
+            {formatRunAmount(value)}
           </p>
         </div>
       ))}

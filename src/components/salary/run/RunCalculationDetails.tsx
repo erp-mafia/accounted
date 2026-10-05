@@ -3,8 +3,8 @@
 import { useTranslations } from 'next-intl'
 import { DetailSection } from '@/components/ui/detail-section'
 import { TaxTableStatus } from '@/components/salary/TaxTableStatus'
-import { formatCurrency } from '@/lib/utils'
 import type { SalaryRunEmployee } from '@/types'
+import { formatRunAmount } from './types'
 
 type SreWithEmployee = SalaryRunEmployee & {
   employee?: { first_name: string; last_name: string }
@@ -44,7 +44,7 @@ export function RunCalculationDetails({ periodYear, employees }: RunCalculationD
                       {step.label}: <span className="font-mono">{step.formula}</span>
                     </span>
                     {step.output !== null && (
-                      <span className="shrink-0 tabular-nums">{formatCurrency(step.output)}</span>
+                      <span className="shrink-0 tabular-nums">{formatRunAmount(step.output)}</span>
                     )}
                   </div>
                 ))}

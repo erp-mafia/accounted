@@ -43,14 +43,14 @@ import { RunKpiCards } from '@/components/salary/run/RunKpiCards'
 import { RunEmployeesTable } from '@/components/salary/run/RunEmployeesTable'
 import { RunCalculationDetails } from '@/components/salary/run/RunCalculationDetails'
 import { RunJournalPreview, type PreviewData } from '@/components/salary/run/RunJournalPreview'
-import { periodLabelOf, type RunDetail } from '@/components/salary/run/types'
+import { formatRunAmount, periodLabelOf, type RunDetail } from '@/components/salary/run/types'
 import {
   agiReportingPeriod,
   formatAgiPeriodCompact,
   formatAgiPeriodDashed,
 } from '@/lib/salary/agi/reporting-period'
+import { runCalculationState } from '@/lib/salary/calculation-state'
 import { roundOre } from '@/lib/money'
-import { formatCurrency } from '@/lib/utils'
 import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
 
 /** The fields of GET /api/expense-claims?status=registered the run page reads. */
@@ -209,14 +209,24 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
+  // One rule for "calculated", shared with the review and approve steps
+  // (lib/salary/calculation-state.ts). The run-level calculation_params alone
+  // survives a payment date change that cleared every employee's calculation,
+  // so reading only it kept stale figures on screen next to a Godkänn that
+  // the server then refused (crm#1001).
+  const calculationState = run
+    ? runCalculationState(run, (run.employees ?? []) as SalaryRunEmployee[])
+    : 'not_calculated'
+
   // Auto-load the journal view once the run is calculated, so the voucher box
   // renders beside Beräkningsdetaljer without a manual Förhandsgranska click.
   // Re-runs when the calculated totals change (e.g. after Beräkna om) so the
-  // preview stays in sync; clears while the run isn't calculated yet. For
-  // booked/corrected runs the route returns the ACTUAL posted verifikat
-  // (voucher numbers included) instead of a recomputed projection, which
-  // could contradict vouchers booked under earlier rules.
-  const isCalculatedForPreview = run?.calculation_params != null
+  // preview stays in sync; clears while the calculation isn't current (not yet
+  // made, or stale after a change). For booked/corrected runs the route
+  // returns the ACTUAL posted verifikat (voucher numbers included) instead of
+  // a recomputed projection, which could contradict vouchers booked under
+  // earlier rules.
+  const isCalculatedForPreview = calculationState === 'current'
   useEffect(() => {
     if (!isCalculatedForPreview) {
       setPreview(null)
@@ -285,12 +295,27 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         body: JSON.stringify({ payment_date: date }),
       })
       if (res.ok) {
-        // Optimistic: the PATCH returns the updated run row.
+        // Optimistic: the PATCH returns the updated run row, and it cleared
+        // every employee's calculation (skatteavdrag follows the payment
+        // date). Mirror that clear at once, so the page turns stale and
+        // offers Beräkna om instead of Till granskning until the reconcile.
         const payload = await res.json().catch(() => null)
         if (payload?.data) {
-          setRun(prev => (prev ? { ...prev, ...payload.data } : prev))
+          setRun(prev =>
+            prev
+              ? {
+                  ...prev,
+                  ...payload.data,
+                  employees: prev.employees?.map(sre => ({ ...sre, calculation_breakdown: null })),
+                }
+              : prev,
+          )
         }
-        toast({ title: t('toast_payment_date_updated') })
+        toast({
+          title: t('toast_payment_date_updated'),
+          description:
+            run?.calculation_params != null ? t('toast_payment_date_updated_hint') : undefined,
+        })
         loadRun() // background reconcile - not awaited
         return true
       }
@@ -532,7 +557,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           title: t('toast_expense_claims_added'),
           description: t('toast_expense_claims_added_detail', {
             count: added?.claim_count ?? 0,
-            amount: formatCurrency(added?.total_sek ?? 0),
+            amount: formatRunAmount(added?.total_sek ?? 0),
           }),
         })
       } else {
@@ -588,9 +613,24 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     }
   }
 
-  async function handleCalculate() {
+  // Beräkna / Beräkna om. fromReview: a run in review whose calculation is not
+  // current (it reached review before the review step checked) goes back to
+  // draft first, the only status the calculation runs in.
+  async function handleCalculate(options: { fromReview?: boolean } = {}) {
     setActionLoading('calculate')
     try {
+      if (options.fromReview) {
+        const revertRes = await fetch(`/api/salary/runs/${id}/revert`, { method: 'POST' })
+        if (!revertRes.ok) {
+          const result = await revertRes.json().catch(() => ({}))
+          toast({
+            title: t('toast_calculation_failed'),
+            description: getErrorMessage(result, { context: 'salary', statusCode: revertRes.status }),
+            variant: 'destructive',
+          })
+          return
+        }
+      }
       const res = await fetch(`/api/salary/runs/${id}/calculate`, { method: 'POST' })
       if (res.ok) {
         const payload = await res.json().catch(() => ({}))
@@ -605,6 +645,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         }
       } else {
         const result = await res.json().catch(() => ({}))
+        // Reverted but not calculated: show the draft it now is.
+        if (options.fromReview) await loadRun()
         toast({
           title: t('toast_calculation_failed'),
           description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
@@ -852,9 +894,12 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     openExpenseClaims[claim.employee_id] = bucket
   }
 
-  // calculation_params is frozen only when the run has been calculated, so it
-  // distinguishes "not yet calculated" from "calculated to 0" (a nollkörning).
-  const isCalculated = run.calculation_params != null
+  // Calculated means current (calculationState above): only then are the
+  // figures on this page the ones approval and booking accept. A stale run
+  // shows no calculated figures, says why, and offers Beräkna om. "Not yet
+  // calculated" still differs from "calculated to 0" (a nollkörning).
+  const isCalculated = calculationState === 'current'
+  const isStale = calculationState === 'stale'
   const isNollkorning = isCalculated && Math.round((run.total_gross ?? 0) * 100) === 0
   // A run that pays out nothing (a nollkörning, or one fully consumed by a
   // nettolöneavdrag) has no payment-file line and no payout to perform. The
@@ -893,9 +938,20 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     : run.status === 'draft'
       ? isCalculated
         ? { key: 'review', label: t('action_to_review'), onClick: handleToReview }
-        : { key: 'calculate', label: t('action_calculate'), onClick: handleCalculate }
+        : {
+            key: 'calculate',
+            label: isStale ? t('action_recalculate') : t('action_calculate'),
+            onClick: () => handleCalculate(),
+          }
       : run.status === 'review'
-        ? { key: 'approve', label: t('action_approve'), onClick: () => doApprove(false) }
+        ? isCalculated
+          ? { key: 'approve', label: t('action_approve'), onClick: () => doApprove(false) }
+          : // Godkänn would be refused: offer the step that makes it possible.
+            {
+              key: 'calculate',
+              label: t('action_recalculate'),
+              onClick: () => handleCalculate({ fromReview: true }),
+            }
         : run.status === 'approved'
           ? { key: 'paid', label: noPayout ? t('action_continue') : t('action_mark_paid'), onClick: () => handleAction('paid') }
           : run.status === 'paid'
@@ -925,8 +981,12 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         onUpdatePaymentDate={handleUpdatePaymentDate}
       />
 
-      {/* The one attention sentence on the page: an empty declaration will be
-          filed for the period, which should be deliberate. */}
+      {/* The one attention sentence on the page (the two never coincide: a
+          nollkörning is a current calculation). A stale calculation: say why
+          the figures are gone and Godkänn is not offered; Beräkna om is the
+          header's primary action. An empty declaration will be filed for the
+          period, which should be deliberate. */}
+      {isStale && <AttnLine>{t('calculation_stale')}</AttnLine>}
       {isNollkorning && (
         <AttnLine>
           {t('nollkorning_title')}: {t('nollkorning_body', { period: periodLabel })}
@@ -943,7 +1003,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         agiKvittensnummer={agiKvittensnummer}
       />
 
-      <RunKpiCards run={run} employees={employees} />
+      {/* Totals of a stale calculation are not the run's figures any more. */}
+      {!isStale && <RunKpiCards run={run} employees={employees} />}
 
       <RunEmployeesTable
         run={run}
@@ -968,7 +1029,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         {preview && (
           <RunJournalPreview
             preview={preview}
-            onRecalculate={run.status === 'draft' && canWrite ? handleCalculate : undefined}
+            onRecalculate={run.status === 'draft' && canWrite ? () => handleCalculate() : undefined}
             recalculating={actionLoading === 'calculate'}
             underlagHref={
               preview.booked ? `/api/salary/runs/${id}/underlag/pdf` : undefined

@@ -69,6 +69,8 @@ interface RunHeaderProps {
   canWrite: boolean
   actionLoading: string | null
   employeeCount: number
+  // The calculation is current (lib/salary/calculation-state.ts): a stale
+  // one has nothing worth previewing.
   isCalculated: boolean
   // The single "forward" step for the current status (Beräkna, Till
   // granskning, Godkänn, Markera utbetald, Bokför): the one default button
@@ -309,7 +311,7 @@ export function RunHeader({
                 {showPreview && (
                   <DropdownMenuItem
                     onSelect={onPreview}
-                    disabled={busy || (run.status === 'draft' && !isCalculated)}
+                    disabled={busy || !isCalculated}
                   >
                     <Eye className="h-4 w-4" />
                     {t('action_preview')}
