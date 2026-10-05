@@ -170,6 +170,8 @@ function neDeclaration() {
     breakdown: {},
     companyInfo: { companyName: 'Anna Svensson Konsult', orgNumber: PNR, addressLine1: 'Gatan 1', postalCode: '11122', city: 'Stockholm', email: 'anna@example.se' },
     warnings: [`Kontrollera ${PNR} mot Skatteverket`],
+    bookedResult: 480000,
+    sruBlockers: [],
   }
 }
 
@@ -313,6 +315,17 @@ describe('GET /reports/ne-bilaga and /reports/ne-bilaga/sru', () => {
     const zip = await JSZip.loadAsync(await res.arrayBuffer())
     const info = await zip.file('INFO.SRU')!.async('string')
     expect(info).toContain(PNR)
+  })
+
+  it('refuses the SRU file when R11 cannot be reconciled with the books, with the reason', async () => {
+    useClient({ fiscal_periods: PERIOD, company_settings: EF })
+    const blocker = 'Konto 8470 Egen post (100,00 kr debet) hör inte till någon ruta i NE-bilagan. SRU-filen kan inte laddas ner förrän beloppen är bokförda på BAS-konton som hör till en ruta.'
+    m.ne.mockResolvedValue({ ...neDeclaration(), sruBlockers: [blocker] })
+    const res = await get(getNeSru, `/reports/ne-bilaga/sru?period_id=${PERIOD_ID}`)
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.error.code).toBe('TAX_DECL_NE_SRU_BLOCKED')
+    expect(JSON.stringify(body.error)).toContain('Konto 8470')
   })
 })
 
