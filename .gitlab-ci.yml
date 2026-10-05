@@ -1,0 +1,249 @@
+# GitLab CI for the ledger: the same gates as .github/workflows/core-build.yml
+# and .github/workflows/test-pg-real.yml, run on the group's own runner
+# (ci-runner-1, Hetzner, two jobs at a time). The GitHub workflows stay in the
+# repository unchanged; GitHub ignores this file and GitLab ignores theirs.
+#
+# Jobs run without stage ordering (needs: []), like the parallel GitHub jobs.
+# A merge request can only merge when every job here is green (project
+# setting "Pipelines must succeed").
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    # A branch with an open merge request already gets the MR pipeline.
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+default:
+  image: node:20-bookworm
+  interruptible: true
+  retry:
+    max: 1
+    when: [runner_system_failure, stuck_or_timeout_failure, scheduler_failure]
+
+variables:
+  npm_config_cache: "$CI_PROJECT_DIR/.npm"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+stages:
+  - checks
+  - test
+  - pg
+
+# npm's download cache, kept on the runner between pipelines and keyed on the
+# lockfile, like the restore-only cache in .github/actions/setup-core.
+.npm:
+  cache:
+    key:
+      prefix: npm-node20
+      files: [package-lock.json]
+    paths: [.npm/]
+
+# The prologue every core job needs (.github/actions/setup-core): dependencies
+# and a zero-extension registry, because CI builds core with no extensions.
+.setup-core:
+  extends: .npm
+  before_script:
+    - npm ci --prefer-offline --no-audit --fund=false
+    - echo '{"extensions":[]}' > extensions.config.json
+    - npm run setup:extensions
+
+# Postgres with the Supabase auth schema, as in the GitHub pg jobs.
+.pg:
+  extends: .npm
+  services:
+    - name: supabase/postgres:15.8.1.060
+      alias: postgres
+      variables:
+        POSTGRES_PASSWORD: postgres
+  variables:
+    DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+    PGPASSWORD: postgres
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null
+    # The image initialises and restarts once; wait until it answers twice.
+    - |
+      for i in $(seq 1 90); do
+        if psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1; then
+          sleep 3
+          psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1 && break
+        fi
+        sleep 2
+      done
+      psql "$DATABASE_URL" -tAc 'select version()'
+
+checks:
+  stage: checks
+  extends: .setup-core
+  needs: []
+  script:
+    - npm run skills:check
+    - npm run taxonomy:check
+    - npm run apiskill:check
+    - npm run check:lint
+    - npm run check:types
+    - npm run check:guards
+    - npm run validate:packs
+    - npm run validate:registry
+    - |
+      VIOLATIONS=$(grep -r "from '@/extensions/" src/lib/ src/app/api/ src/components/ --include="*.ts" --include="*.tsx" \
+        | grep -v "app/api/extensions/" \
+        | grep -v "components/extensions/" \
+        | grep -v "lib/extensions/_generated/" \
+        | grep -v "lib/extensions/loader.ts" || true)
+      if [ -n "$VIOLATIONS" ]; then
+        echo "ERROR: Core code imports from @/extensions/:"
+        echo "$VIOLATIONS"
+        exit 1
+      fi
+
+build:
+  stage: test
+  extends: .setup-core
+  needs: []
+  variables:
+    # The Next.js build worker needs more than the default heap (see
+    # core-build.yml); the runner has 16 GB plus swap.
+    NODE_OPTIONS: --max-old-space-size=8192
+  script:
+    - npm run build
+
+unit-tests:
+  stage: test
+  extends: .setup-core
+  needs: []
+  parallel: 4
+  script:
+    - npm test -- --shard="${CI_NODE_INDEX}/${CI_NODE_TOTAL}"
+
+# A migration that touches a trigger, RPC, RLS policy or DEFERRABLE constraint
+# must come with a *.pg.test.ts (scripts/check-pg-test-coverage.mjs).
+pg-coverage-gate:
+  stage: checks
+  needs: []
+  variables:
+    GIT_DEPTH: "0"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - PG_GATE_BASE="$CI_MERGE_REQUEST_DIFF_BASE_SHA" node scripts/check-pg-test-coverage.mjs
+
+# Every migration replayed on an empty database, then the pg-real suite.
+pg-real:
+  stage: pg
+  extends: .pg
+  needs: []
+  script:
+    - npm ci --prefer-offline --no-audit --fund=false
+    - psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+    - psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
+    - |
+      set -euo pipefail
+      for f in supabase/migrations/*.sql; do
+        psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null || { echo "Failed applying $f"; exit 1; }
+      done
+    - npm run test:pg
+
+# Schema at the merge base, real rows seeded, then ONLY the new migrations on
+# top: proves existing data survives them (see test-pg-real.yml).
+pg-upgrade:
+  stage: pg
+  extends: .pg
+  needs: []
+  variables:
+    GIT_DEPTH: "0"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - |
+      set -euo pipefail
+      BASE="$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+      echo "Merge base: $BASE"
+      git ls-tree -r --name-only HEAD -- supabase/migrations | grep '\.sql$' | sort > /tmp/head-migrations.txt
+      git ls-tree -r --name-only "$BASE" -- supabase/migrations | grep '\.sql$' | sort > /tmp/base-migrations.txt
+      comm -23 /tmp/head-migrations.txt /tmp/base-migrations.txt > /tmp/new-migrations.txt
+      COUNT=$(wc -l < /tmp/new-migrations.txt | tr -d ' ')
+      echo "New migrations ($COUNT):"
+      cat /tmp/new-migrations.txt
+      if [ "$COUNT" = "0" ]; then echo "This merge request adds no migration; nothing to upgrade-test."; exit 0; fi
+      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
+      while read -r f; do
+        git show "$BASE:$f" | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q >/dev/null || { echo "Failed applying (base) $f"; exit 1; }
+      done < /tmp/base-migrations.txt
+      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/upgrade/seed.sql
+      while read -r f; do
+        echo "Applying (new) $f"
+        psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
+      done < /tmp/new-migrations.txt
+      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/pg/upgrade/assert.sql
+
+# MCP tools driven through a real supabase-js client against a real PostgREST.
+# Services share one network per job (FF_NETWORK_PER_BUILD) so PostgREST can
+# reach Postgres by its alias.
+tool-pg:
+  stage: pg
+  extends: .npm
+  needs: []
+  variables:
+    FF_NETWORK_PER_BUILD: "true"
+    DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+    TOOL_PG_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+    TOOL_PG_REST_URL: http://postgrest:3000
+    PGPASSWORD: postgres
+  services:
+    - name: supabase/postgres:15.8.1.060
+      alias: postgres
+      variables:
+        POSTGRES_PASSWORD: postgres
+    - name: postgrest/postgrest:v12.2.3
+      alias: postgrest
+      variables:
+        PGRST_DB_URI: postgres://postgres:postgres@postgres:5432/postgres
+        PGRST_DB_SCHEMAS: public
+        PGRST_DB_ANON_ROLE: anon
+        PGRST_JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
+        PGRST_DB_MAX_ROWS: "100000"
+        PGRST_SERVER_PORT: "3000"
+  script:
+    - npm ci --prefer-offline --no-audit --fund=false
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null
+    - |
+      for i in $(seq 1 90); do
+        if psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1; then
+          sleep 3
+          psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1 && break
+        fi
+        sleep 2
+      done
+    - psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+    # Without these PostgREST answers every request with 42501: the grants have
+    # to exist before the migrations create the tables.
+    - |
+      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "
+        GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres, anon, authenticated, service_role;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO postgres, anon, authenticated, service_role;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres, anon, authenticated, service_role;
+      "
+    - |
+      set -euo pipefail
+      for f in supabase/migrations/*.sql; do
+        psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null || { echo "Failed applying $f"; exit 1; }
+      done
+    - |
+      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "
+        GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+        GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+        GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+      "
+    # PostgREST started before the schema existed: make it reload, then wait.
+    - psql "$DATABASE_URL" -q -c "NOTIFY pgrst, 'reload schema'"
+    - |
+      for i in $(seq 1 60); do
+        curl -sf -o /dev/null "$TOOL_PG_REST_URL/" && break
+        sleep 1
+      done
+      curl -sf -o /dev/null "$TOOL_PG_REST_URL/"
+    - npm run test:tools
