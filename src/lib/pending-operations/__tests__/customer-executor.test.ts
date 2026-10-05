@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PendingOperation } from '@/types'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { encryptPersonnummer } from '@/lib/salary/personnummer'
+import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
 import { commitPendingOperation } from '../commit'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 
@@ -480,5 +480,49 @@ describe('commitPendingOperation: update_customer personal_number', () => {
     expect(result.http_status).toBe(400)
     expect(result.error).toMatch(/encrypted personal number/i)
     expect(findCall('customers', 'update')).toBeUndefined()
+  })
+})
+
+// A privatperson has no org number: the same rule as staging, repeated at
+// commit as the tamper gate and for operations staged before staging
+// enforced it.
+describe('commitPendingOperation: update_customer org_number on an individual', () => {
+  it('refuses an org number that is not a personnummer without writing', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } })
+    enqueue({ data: { customer_type: 'individual', org_number: null } })
+    enqueue({ data: null })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ customer_id: CUSTOMER_ID, changes: { org_number: '556677-8899' } }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/privatperson har inget organisationsnummer/)
+    expect(findCall('customers', 'update')).toBeUndefined()
+  })
+
+  it('moves a personnummer staged in org_number into personal_number', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } })
+    enqueue({ data: { customer_type: 'individual', org_number: null } })
+    enqueue({ data: individualRow() })
+    enqueue({ data: null })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ customer_id: CUSTOMER_ID, changes: { org_number: PERSONAL_NUMBER } }),
+    )
+
+    expect(result.status).toBe('committed')
+    const updatePayload = findCall('customers', 'update')?.[0] as Record<string, unknown>
+    expect(updatePayload.org_number).toBeNull()
+    expect(decryptPersonnummer(updatePayload.personal_number as string)).toBe(PERSONAL_NUMBER)
   })
 })

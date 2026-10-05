@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { parseCustomersFile } from '@/lib/import/customers/parser'
 import { normalizeOrgNumber } from '@/lib/import/shared/column-utils'
-import { createRegisterMatcher } from '@/lib/import/shared/register-match'
+import { createRegisterMatcher, customerMatchRow } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -68,7 +68,7 @@ export const POST = withRouteContext(
       const existing = await fetchAllRows(({ from, to }) =>
         supabase
           .from('customers')
-          .select('id, name, customer_number, org_number, email')
+          .select('id, name, customer_number, org_number, email, customer_type')
           .eq('company_id', companyId)
           .range(from, to),
       )
@@ -79,7 +79,7 @@ export const POST = withRouteContext(
 
       let duplicateCount = 0
       const annotated: AnnotatedCustomerRow[] = parsed.rows.map((r) => {
-        const found = matcher.find(r)
+        const found = matcher.find(customerMatchRow(r))
         const match: AnnotatedCustomerRow['duplicate_match'] = found && !found.possible
           ? { customer_id: found.record.id, matched_by: found.matched_by, existing_name: found.record.name }
           : null

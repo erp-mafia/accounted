@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isOrgNumberRefusedOnIndividual,
   isPersonalNumberOrgNumberDisallowed,
   looksLikeSwedishPersonalNumber,
   normalizeReroutedPersonalNumber,
@@ -115,6 +116,23 @@ describe('orgNumberHoldsPersonalNumber', () => {
     expect(orgNumberHoldsPersonalNumber('individual', null)).toBe(false)
     expect(orgNumberHoldsPersonalNumber('individual', undefined)).toBe(false)
     expect(orgNumberHoldsPersonalNumber(undefined, '19900101-1234')).toBe(false)
+  })
+})
+
+describe('isOrgNumberRefusedOnIndividual', () => {
+  it('refuses a legal-entity or unrecognised org number on an individual', () => {
+    expect(isOrgNumberRefusedOnIndividual('individual', '556677-8899')).toBe(true)
+    expect(isOrgNumberRefusedOnIndividual('individual', 'HRB 12345')).toBe(true)
+  })
+
+  it('passes a personnummer (rerouted elsewhere), an empty value and every business type', () => {
+    expect(isOrgNumberRefusedOnIndividual('individual', '19900101-1234')).toBe(false)
+    expect(isOrgNumberRefusedOnIndividual('individual', '')).toBe(false)
+    expect(isOrgNumberRefusedOnIndividual('individual', '   ')).toBe(false)
+    expect(isOrgNumberRefusedOnIndividual('individual', null)).toBe(false)
+    expect(isOrgNumberRefusedOnIndividual('individual', undefined)).toBe(false)
+    expect(isOrgNumberRefusedOnIndividual('swedish_business', '556677-8899')).toBe(false)
+    expect(isOrgNumberRefusedOnIndividual(undefined, '556677-8899')).toBe(false)
   })
 })
 

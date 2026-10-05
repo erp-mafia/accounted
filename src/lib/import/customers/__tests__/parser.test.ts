@@ -111,6 +111,20 @@ describe('parseCustomersFile', () => {
     expect(result.rows[1].customer_type).toBe('individual')
   })
 
+  it('flags a privatperson whose number is an org number, not a personnummer', () => {
+    // Synthetic numbers only.
+    const buffer = buildXlsx([
+      ['Namn', 'Orgnr', 'Kundtyp'],
+      ['Sven', '5560217780', 'privatperson'],
+      ['Stina', '198001011234', 'privatperson'],
+    ])
+
+    const result = parseCustomersFile(buffer, 'individuals.xlsx')
+    expect(result.rows[0].is_valid).toBe(false)
+    expect(result.rows[0].validation_errors.join(' ')).toMatch(/privatperson har inget organisationsnummer/)
+    expect(result.rows[1].is_valid).toBe(true)
+  })
+
   it('preserves row_index pointing to spreadsheet row', () => {
     const buffer = buildXlsx([
       ['Namn'],

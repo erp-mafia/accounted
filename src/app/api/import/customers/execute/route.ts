@@ -4,7 +4,7 @@ import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { CustomerImportExecuteSchema } from '@/lib/api/schemas'
 import { normalizeOrgNumber } from '@/lib/import/shared/column-utils'
-import { createRegisterMatcher } from '@/lib/import/shared/register-match'
+import { createRegisterMatcher, customerMatchRow } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
@@ -12,6 +12,11 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
 import type { CustomerImportExecuteResult } from '@/lib/import/customers/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import {
+  normalizeReroutedPersonalNumber,
+  orgNumberHoldsPersonalNumber,
+} from '@/lib/customers/personal-number-shape'
 
 ensureInitialized()
 
@@ -20,6 +25,8 @@ interface ExistingCustomer {
   name: string
   customer_number: string | null
   org_number: string | null
+  /** Ciphertext; read only to know whether one is stored. */
+  personal_number: string | null
   email: string | null
   phone: string | null
   address_line1: string | null
@@ -40,6 +47,12 @@ interface ExistingCustomer {
  * org number or e-mail, or a same-name customer the user confirmed: see
  * lib/import/shared/register-match.ts) are either updated (merge: only
  * non-empty file fields overwrite) or skipped based on `update_duplicates`.
+ *
+ * An individual's personnummer arrives in the org number column; the schema
+ * moves it into personal_number and this route stores it encrypted, with
+ * org_number empty. It is never a match key, here as in the preview
+ * (customerMatchRow): an individual is found by customer number, e-mail or a
+ * confirmed name only, and never in a business that has an org number.
  */
 export const POST = withRouteContext(
   'register_import.customers.execute',
@@ -67,7 +80,7 @@ export const POST = withRouteContext(
           .select(
             'id, name, customer_number, org_number, email, phone, address_line1, address_line2, ' +
               'postal_code, city, country, vat_number, default_payment_terms, notes, ' +
-              'customer_type',
+              'customer_type, personal_number',
           )
           .eq('company_id', companyId)
           .range(from, to),
@@ -82,7 +95,7 @@ export const POST = withRouteContext(
       const errors: { row_index: number; name: string; reason: string }[] = []
 
       for (const row of rows) {
-        const match = matcher.resolve(row, row.confirmed_duplicate_of)
+        const match = matcher.resolve(customerMatchRow(row), row.confirmed_duplicate_of)
 
         if (match) {
           if (!update_duplicates) {
@@ -95,7 +108,20 @@ export const POST = withRouteContext(
           if (row.name) merged.name = row.name
           if (row.customer_type) merged.customer_type = row.customer_type
           if (row.customer_number) merged.customer_number = row.customer_number
-          if (row.org_number) merged.org_number = row.org_number
+          if (row.customer_type === 'individual') {
+            // An individual has no org number, so whatever the matched row
+            // carried there goes. A personnummer an earlier import stored
+            // there is kept, encrypted in personal_number, unless the file
+            // brings one or the row already holds one.
+            if (match.org_number?.trim()) merged.org_number = null
+            const personalNumber = row.personal_number
+              ?? (!match.personal_number && orgNumberHoldsPersonalNumber('individual', match.org_number)
+                ? normalizeReroutedPersonalNumber(match.org_number!)
+                : null)
+            if (personalNumber) merged.personal_number = encryptCustomerPersonalNumber(personalNumber)
+          } else if (row.org_number) {
+            merged.org_number = row.org_number
+          }
           if (row.email) merged.email = row.email
           if (row.phone) merged.phone = row.phone
           if (row.address_line1) merged.address_line1 = row.address_line1
@@ -148,6 +174,8 @@ export const POST = withRouteContext(
             city: row.city,
             country: row.country || 'SE',
             org_number: row.org_number,
+            // Stored as ciphertext (customers_personal_number_check).
+            personal_number: encryptCustomerPersonalNumber(row.personal_number),
             vat_number: row.vat_number,
             default_payment_terms: row.default_payment_terms || 30,
             notes: row.notes,
@@ -172,11 +200,28 @@ export const POST = withRouteContext(
       }
 
       // Emit events for downstream listeners (non-blocking).
+      // Masked like POST /api/customers: the row carries personal_number
+      // ciphertext, which no listener needs.
       for (const c of created) {
         await eventBus.emit({
           type: 'customer.created',
-          payload: { customer: c, companyId: companyId!, userId: user.id },
+          payload: { customer: maskCustomerRow(c), companyId: companyId!, userId: user.id },
         })
+      }
+
+      // A personnummer the merge moved out of a legacy individual's
+      // org_number stays out of the undo record: register_import_runs would
+      // hold it in plaintext and the undo would put it back in org_number.
+      // The undo restores the row's other fields and leaves it encrypted.
+      for (const c of updated) {
+        const prev = beforeImport.get(c.id)
+        if (
+          prev?.customer_type === 'individual'
+          && c.customer_type === 'individual'
+          && orgNumberHoldsPersonalNumber('individual', prev.org_number as string | null)
+        ) {
+          beforeImport.set(c.id, { ...prev, org_number: c.org_number, personal_number: c.personal_number })
+        }
       }
 
       await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'customers', created, updated, before: beforeImport }, opLog)

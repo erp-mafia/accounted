@@ -4380,6 +4380,13 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The org number looks like a Swedish personal identity number, which a foreign business cannot have. Choose the customer type Swedish business for a sole trader, or Individual for a private person.',
   },
+  CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL: {
+    httpStatus: 400,
+    message_sv:
+      'En privatperson har inget organisationsnummer. Lämna fältet tomt, ange personnumret som personnummer, eller välj kundtypen Svenskt företag.',
+    message_en:
+      'An individual customer has no org number. Leave org_number empty, pass the personnummer as personal_number, or choose the customer type Swedish business.',
+  },
   CUSTOMER_COUNTRY_MISMATCH: {
     httpStatus: 400,
     message_sv: 'Landet stämmer inte med kundtypen eller VAT-numrets landsprefix.',

@@ -192,6 +192,20 @@ describe('gnubok_create_customer: personal_number', () => {
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
+  it('refuses an org number that is not a personnummer on an individual before staging', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute(
+        { name: 'Bertil Bengtsson', customer_type: 'individual', org_number: '556677-8899' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/no org number/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
   // #2367: a Swedish enskild firma has no org number of its own, so its
   // owner's personnummer is the firm's identifier and stages as org_number.
   it('stages a personnummer-shaped org_number on swedish_business as the org number', async () => {

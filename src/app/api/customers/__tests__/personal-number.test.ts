@@ -500,6 +500,146 @@ describe('personnummer submitted as org_number on an individual', () => {
   })
 })
 
+// A privatperson has no org number: anything on an individual that is not
+// its personnummer is refused, judged on the row as it will end up.
+describe('an org number that is not a personnummer on an individual', () => {
+  const routeParams = { params: Promise.resolve({ id: 'customer-1' }) }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    captured.insert.length = 0
+    captured.update.length = 0
+    queryResult = { data: null, error: null }
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('POST refuses it with 400', async () => {
+    const response = await POST(
+      createMockRequest('/api/customers', {
+        method: 'POST',
+        body: { name: 'Bertil Bengtsson', customer_type: 'individual', org_number: '556677-8899' },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    const { status } = await parseJsonResponse<unknown>(response)
+    expect(status).toBe(400)
+    expect(captured.insert).toHaveLength(0)
+  })
+
+  it('POST still accepts an empty org_number on an individual', async () => {
+    queryResult = { data: { id: 'customer-1', customer_type: 'individual', org_number: '' }, error: null }
+
+    const response = await POST(
+      createMockRequest('/api/customers', {
+        method: 'POST',
+        body: { name: 'Bertil Bengtsson', customer_type: 'individual', org_number: '' },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    const { status } = await parseJsonResponse<unknown>(response)
+    expect(status).toBe(200)
+  })
+
+  it('PATCH refuses it on a stored individual', async () => {
+    queryResult = { data: { id: 'customer-1', customer_type: 'individual', org_number: null }, error: null }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { org_number: '556677-8899' },
+      }),
+      routeParams,
+    )
+
+    const { status, body } = await parseJsonResponse<unknown>(response)
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL')
+    expect(captured.update).toHaveLength(0)
+  })
+
+  it('PATCH refuses a type change to individual that would keep a stored org number', async () => {
+    queryResult = {
+      data: { id: 'customer-1', customer_type: 'swedish_business', country: 'SE', org_number: '5566778899' },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { customer_type: 'individual' },
+      }),
+      routeParams,
+    )
+
+    const { status, body } = await parseJsonResponse<unknown>(response)
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL')
+    expect(captured.update).toHaveLength(0)
+  })
+
+  it('PATCH allows that type change when the same body clears org_number', async () => {
+    queryResult = {
+      data: { id: 'customer-1', customer_type: 'swedish_business', country: 'SE', org_number: '5566778899' },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { customer_type: 'individual', org_number: '' },
+      }),
+      routeParams,
+    )
+
+    const { status } = await parseJsonResponse<unknown>(response)
+    expect(status).toBe(200)
+    expect((captured.update[0] as { org_number?: string }).org_number).toBe('')
+  })
+
+  it('PATCH moves a stored personnummer into personal_number on a type change to individual', async () => {
+    // An enskild firma (owner's personnummer as org number) becoming a
+    // privatperson.
+    queryResult = {
+      data: { id: 'customer-1', customer_type: 'swedish_business', country: 'SE', org_number: PERSONAL_NUMBER },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { customer_type: 'individual' },
+      }),
+      routeParams,
+    )
+
+    const { status } = await parseJsonResponse<unknown>(response)
+    expect(status).toBe(200)
+    const updated = captured.update[0] as { org_number?: string | null; personal_number?: string | null }
+    expect(updated.org_number).toBeNull()
+    expect(updated.personal_number).toMatch(CIPHERTEXT_SHAPE)
+    expect(decryptPersonnummer(updated.personal_number!)).toBe(PERSONAL_NUMBER)
+  })
+
+  it('PATCH leaves a legacy row alone when neither org_number nor customer_type is in the body', async () => {
+    queryResult = { data: { id: 'customer-1', customer_type: 'individual', org_number: '5566778899' }, error: null }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { email: 'new@example.test' },
+      }),
+      routeParams,
+    )
+
+    const { status } = await parseJsonResponse<unknown>(response)
+    expect(status).toBe(200)
+  })
+})
+
 // #2367: a Swedish enskild firma has no organisationsnummer of its own; the
 // owner's personnummer IS the firm's org number (SFS 1974:174 2 §). It is
 // therefore a valid swedish_business org_number, and the list surfaces mask it

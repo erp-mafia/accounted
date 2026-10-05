@@ -43,6 +43,18 @@ describe('buildCustomerMetadataEnrichment', () => {
     }, { org_number: '5566778899' })).toBeNull()
   })
 
+  it('never gives an org number to an individual matched by name', () => {
+    // A privatperson has no org number; a provider business record that maps
+    // onto one by name must not put its number there.
+    expect(buildCustomerMetadataEnrichment({
+      contact_person: 'Anna Andersson',
+      invoice_email_cc_addresses: [],
+      invoice_email_bcc_addresses: [],
+      org_number: null,
+      customer_type: 'individual',
+    }, { org_number: '5566778899' })).toBeNull()
+  })
+
   it('does not turn unknown provider metadata into explicit empty values', () => {
     expect(buildCustomerMetadataEnrichment({
       contact_person: null,

@@ -419,3 +419,59 @@ describe('gnubok_update_customer: personal_number', () => {
     expect(second.findCall('pending_operations', 'insert')).toBeUndefined()
   })
 })
+
+// A privatperson has no org number, same rules as the REST PATCH route.
+describe('gnubok_update_customer: org_number on an individual', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('stages a personnummer sent as org_number encrypted in personal_number, org_number cleared', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: currentCustomer({ customer_type: 'individual', org_number: null }) })
+    enqueue({ data: { id: 'op-org-1' } })
+
+    const result = (await tool().execute(
+      { customer_id: CUSTOMER_ID, org_number: PERSONAL_NUMBER },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: StagedInsert['preview_data'] }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes.personal_number_masked).toBe(MASKED)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
+    expect(inserted.params.changes.org_number).toBe('')
+    expect(decryptPersonnummer(inserted.params.changes.personal_number_encrypted as string)).toBe(PERSONAL_NUMBER)
+    expect(JSON.stringify(inserted)).not.toContain(PERSONAL_NUMBER)
+  })
+
+  it('refuses an org number that is not a personnummer', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: currentCustomer({ customer_type: 'individual', org_number: null }) })
+
+    await expect(
+      tool().execute(
+        { customer_id: CUSTOMER_ID, org_number: '556677-8899' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/no org number/)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a type change to individual that would keep a stored org number', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: currentCustomer({ country: 'SE' }) }) // swedish_business, org 556000-0000
+
+    await expect(
+      tool().execute(
+        { customer_id: CUSTOMER_ID, customer_type: 'individual' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/no org number/)
+  })
+})

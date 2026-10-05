@@ -8,6 +8,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
 import {
+  isOrgNumberRefusedOnIndividual,
   isPersonalNumberOrgNumberDisallowed,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
@@ -118,13 +119,24 @@ export const PATCH = withRouteContext(
       return errorResponseFromCode('CUSTOMER_ORG_NUMBER_IS_PERSONAL', opLog, { requestId })
     }
 
+    // An individual has no org number. Judged on the same end state, but
+    // only when org_number or customer_type is in the body: a legacy row must
+    // still be able to change its email.
+    const individualOrgNumber =
+      body.org_number !== undefined || body.customer_type !== undefined ? effectiveOrgNumber : undefined
+    if (isOrgNumberRefusedOnIndividual(effectiveType, individualOrgNumber)) {
+      return errorResponseFromCode('CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL', opLog, { requestId })
+    }
+
     // The mirror image for individuals: a personnummer submitted as
     // org_number is the personnummer in the wrong field. It is stored
     // encrypted in personal_number and org_number is cleared, same as
-    // CreateCustomerSchema does on create. Next to a DIFFERENT plaintext
-    // personal_number in the same body the two conflict.
-    const reroutedPersonalNumber = orgNumberHoldsPersonalNumber(effectiveType, body.org_number)
-      ? normalizeReroutedPersonalNumber(body.org_number!)
+    // CreateCustomerSchema does on create. A type change to individual
+    // moves a stored one the same way (an enskild firma becoming a
+    // privatperson). Next to a DIFFERENT plaintext personal_number in the
+    // same body the two conflict.
+    const reroutedPersonalNumber = orgNumberHoldsPersonalNumber(effectiveType, individualOrgNumber)
+      ? normalizeReroutedPersonalNumber(individualOrgNumber!)
       : null
     if (
       reroutedPersonalNumber
@@ -177,8 +189,10 @@ export const PATCH = withRouteContext(
     if (body.postal_code !== undefined) updateData.postal_code = body.postal_code
     if (body.city !== undefined) updateData.city = body.city
     if (body.country !== undefined) updateData.country = body.country
-    if (body.org_number !== undefined) {
-      updateData.org_number = reroutedPersonalNumber ? null : body.org_number
+    if (reroutedPersonalNumber) {
+      updateData.org_number = null
+    } else if (body.org_number !== undefined) {
+      updateData.org_number = body.org_number
     }
     if (body.vat_number !== undefined) updateData.vat_number = body.vat_number
     if (reroutedPersonalNumber && !(personalNumberSubmitted && body.personal_number)) {
