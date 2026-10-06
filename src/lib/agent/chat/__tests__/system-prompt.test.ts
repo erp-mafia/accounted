@@ -52,6 +52,19 @@ const VAT_STATES: VatStatus[] = [
   { vat_registered: false, vat_number: null },
 ]
 
+describe('chat system prompt: UI it names exists', () => {
+  it('forbids inventing buttons and menus, and gives no example buttons of its own', () => {
+    const out = block(null)
+    expect(out).toContain('Hitta ALDRIG på knappar')
+    expect(out).toContain('säg det i stället för att gissa')
+    // It used to point at a per-transaction-row button no page renders.
+    expect(out).not.toContain('transaktionsrad')
+    expect(out).not.toContain('motsvarande knapp')
+    // gnubok_load_skill takes `slug`; "(skill_id)" taught a parameter that does not exist.
+    expect(out).not.toContain('gnubok_load_skill(skill_id)')
+  })
+})
+
 describe('chat system prompt: always-on epistemics rules', () => {
   it('forces load-before-answer for regulatory figures, on every VAT status', () => {
     for (const vs of VAT_STATES) {

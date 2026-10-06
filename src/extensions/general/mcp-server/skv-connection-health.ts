@@ -9,7 +9,7 @@ export interface SkvConnectionHealth {
 }
 
 export const SKV_NEEDS_RECONSENT_MESSAGE =
-  'Skatteverket-sessionen har gått ut. Skatteverkets personliga inloggning gäller bara ca 1 timme, så detta är normalt. Be användaren ansluta igen med BankID under Inställningar → Skatteverket; bara en person kan göra det, så försök inte med Skatteverket-verktyg förrän användaren bekräftat.'
+  'Skatteverket-sessionen har gått ut. Skatteverkets personliga inloggning gäller bara ca 1 timme, så detta är normalt. Be användaren ansluta igen med BankID under Inställningar → Kopplingar → Skatteverket; bara en person kan göra det, så försök inte med Skatteverket-verktyg förrän användaren bekräftat.'
 
 /**
  * Is the company's Skatteverket connection usable right now? One answer for

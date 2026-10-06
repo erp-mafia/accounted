@@ -34,12 +34,11 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 // the button reads "Fråga Anna" (with Anna's face) rather than the generic
 // "Fråga min assistent".
 //
-// Page-specific triggers (e.g. "Granska med assistent" on a supplier invoice)
-// still call useAgentSheet() directly from their own buttons because they
-// know exactly which entity to pass. (Per-transaction help has its own
-// row-level "Fråga [namn]" button in TransactionInboxCard, and the matching
-// "Fråga assistenten" in Dokumentinkorgen: both passing a transaction_id the
-// pathname-only FAB can't know.)
+// Page-specific triggers call useAgentSheet() directly from their own buttons
+// because they know exactly which entity to pass: "Skapa med assistent" on
+// Bokföring (verifikation.draft) and the "Fråga assistenten" buttons in
+// Underlag (transaction.categorization with a transaction_id, inbox.bulk-book
+// with the marked items), which the pathname-only FAB can't know.
 // Session-scoped dismissal flag for the non-payer upsell pill. sessionStorage
 // on purpose: "close" means gone for THIS browser session, and the pill comes
 // back full-size next session. Anything permanent (localStorage or

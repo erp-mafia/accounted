@@ -286,12 +286,12 @@ export const verifikationDraft = defineAgentIntent<
       if (periodState === 'closed') {
         lines.push('PERIODEN ÄR STÄNGD: ingenting får bokföras på detta datum, och en stängd period kan inte låsas upp. Vägled användaren att flytta verifikationsdatumet till en öppen period.')
       } else if (periodState === 'locked') {
-        lines.push('PERIODEN ÄR LÅST: ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden under Bokföring → Räkenskapsår om datumet måste stå kvar.')
+        lines.push('PERIODEN ÄR LÅST: ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden om datumet måste stå kvar: ett låst räkenskapsår under Inställningar → Bokföring → Räkenskapsår, bolagets låsdatum (Periodlåsning, "Bokföring låst t.o.m.") under Inställningar → Bokföring → Allmänt.')
       } else if (periodState === 'unknown') {
         // Fail closed: the lock lookup failed, so we cannot claim the period is
         // open. Posting into a locked period is blocked by DB triggers anyway;
         // the agent must not promise the user that it will go through.
-        lines.push('PERIODLÅSET KUNDE INTE LÄSAS: utgå INTE från att perioden är öppen. Be användaren kontrollera periodlåset under Bokföring → Räkenskapsår innan något bokförs på detta datum.')
+        lines.push('PERIODLÅSET KUNDE INTE LÄSAS: utgå INTE från att perioden är öppen. Be användaren kontrollera låsen innan något bokförs på detta datum: Periodlåsning under Inställningar → Bokföring → Allmänt och räkenskapsåret under Inställningar → Bokföring → Räkenskapsår.')
       } else if (periodState === 'open' && captured.period_status.period_id === null) {
         lines.push('INGET RÄKENSKAPSÅR TÄCKER DATUMET: periodlåset gick inte att avgöra. Kontrollera att verifikationsdatumet ligger inom ett upplagt räkenskapsår innan du föreslår bokföring.')
       }
@@ -306,12 +306,12 @@ export const verifikationDraft = defineAgentIntent<
     }
     lines.push('')
     lines.push('Arbetssätt:')
-    lines.push('1. UNDERLAG FÖRST. Saknas underlaget i sammanhanget ovan: leta i Dokumentinkorgen med gnubok_list_inbox_items (och gnubok_list_unmatched_documents). Läs det relevanta underlaget med gnubok_get_inbox_item / gnubok_get_document_content och dra fram datum, belopp, moms och motpart INNAN du föreslår konton. Användaren ser ofta inte underlagets innehåll själv: det är just det du hjälper till med.')
+    lines.push('1. UNDERLAG FÖRST. Saknas underlaget i sammanhanget ovan: leta bland underlagen (sidomenyn: Inköp → Underlag) med gnubok_list_inbox_items (och gnubok_list_unmatched_documents). Läs det relevanta underlaget med gnubok_get_inbox_item / gnubok_get_document_content och dra fram datum, belopp, moms och motpart INNAN du föreslår konton. Användaren ser ofta inte underlagets innehåll själv: det är just det du hjälper till med.')
     lines.push('2. Föreslå rätt BAS-konton utifrån underlaget och beskrivningen. Syns en motpart: kolla historiken med gnubok_query_journal({ text: "<motpartens namn>", limit: 5 }) och följ tidigare mönster.')
     lines.push('3. Säkerställ att debet = kredit. Förklara varje rad kort (i kategori-/kontonamn, inte kontonummer).')
     lines.push('4. Är detta egentligen en kund-/leverantörsfaktura eller en bankrad? Be användaren matcha den istället: direktbokning skapar dubbletter.')
     lines.push('5. Skapa verifikationen:')
-    lines.push('   • NY verifikation (inget utkast visas ovan): staga via gnubok_create_voucher när allt stämmer. Ligger underlaget i Dokumentinkorgen: skicka med inbox_item_id så kvittot kopplas till verifikationen automatiskt vid godkännande.')
+    lines.push('   • NY verifikation (inget utkast visas ovan): staga via gnubok_create_voucher när allt stämmer. Ligger underlaget under Underlag: skicka med inbox_item_id så kvittot kopplas till verifikationen automatiskt vid godkännande.')
     lines.push('   • BEFINTLIGT utkast (visas ovan): föreslå konton/moms och kontrollera balansen så att användaren kan färdigställa utkastet i formuläret. Staga INTE en ny verifikation för ett utkast som redan finns: det skapar en dubblett.')
     lines.push('')
     lines.push('Svara på svenska, kort och konkret.')

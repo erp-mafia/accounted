@@ -18,6 +18,7 @@ import {
   persistAssistantTurn,
 } from '@/lib/agent/ask/persist'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { SUPPORTED_LOCALES } from '@/i18n/config'
 
 // The assistant answers over the read-only MCP tools, which are registered
 // into the agent tool registry by the mcp-server extension at load. Without
@@ -63,6 +64,12 @@ const Schema = z.object({
   persist: z.boolean().optional(),
   conversation_id: z.string().uuid().nullable().optional(),
   context_ref: z.string().max(200).nullable().optional(),
+  // The page the question was asked from (AskConsole sends usePathname()),
+  // named in the prompt and resolved against the real menu. A path, never a
+  // URL: it starts with a slash and carries no whitespace.
+  route: z.string().max(300).regex(/^\/\S*$/).optional(),
+  // The UI locale, so the menu the model is given uses the labels on screen.
+  locale: z.enum(SUPPORTED_LOCALES).optional(),
 })
 
 export async function POST(request: Request): Promise<Response> {
@@ -118,6 +125,8 @@ export async function POST(request: Request): Promise<Response> {
         userId: user.id,
         question: parsed.data.question,
         pageContext: parsed.data.context,
+        route: parsed.data.route,
+        locale: parsed.data.locale,
         tier: parsed.data.tier,
       })
       return NextResponse.json({ data: result })
@@ -167,6 +176,8 @@ export async function POST(request: Request): Promise<Response> {
       conversationId,
       question: parsed.data.question,
       pageContext: parsed.data.context,
+      route: parsed.data.route,
+      locale: parsed.data.locale,
       tier: parsed.data.tier,
       history,
     })

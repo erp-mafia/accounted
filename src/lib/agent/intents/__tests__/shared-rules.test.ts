@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import sv from '@/messages/sv.json'
 import { renderAgentGroundRules, AGENT_GROUND_RULES } from '../shared-rules'
+import { svMenuPath } from '../../ask/__tests__/ui-fixture'
 
 // AGENT_GROUND_RULES is rendered into the first user message of the bookkeeping
 // intents that inject it (general.help, vat-review, invoice-draft,
@@ -28,6 +30,35 @@ describe('agent ground rules: bookkeeping heuristics it owns', () => {
   it('still renders as a non-trivial joined block', () => {
     expect(AGENT_GROUND_RULES.length).toBeGreaterThan(10)
     expect(text.split('\n').length).toBeGreaterThan(10)
+  })
+})
+
+describe('agent ground rules: UI it names exists', () => {
+  it('sends a missing underlag to the real Underlag menu entry', () => {
+    expect(text).toContain(svMenuPath('/e/general/invoice-inbox'))
+    expect(text).not.toContain('Dokumentinkorgen')
+  })
+
+  it('describes both rättelse tracks (CLAUDE.md Hard Rule 1) with the verifikation page labels', () => {
+    // It said a posted verifikat can never be edited and named a "Rätta"
+    // button; the page has inline rättelse in an open, unlocked period and a
+    // "Rätta" group in its ⋯ menu.
+    expect(text).not.toContain('kan aldrig redigeras direkt')
+    expect(text).not.toContain('knappen "Rätta"')
+    expect(text).toContain('ÖPPEN, OLÅST period')
+    const labels = sv.journal_detail as Record<string, string>
+    for (const key of [
+      'correct_menu',
+      'strike_lines',
+      'correct_metadata',
+      'correct_lines',
+      'correct_date',
+      'reverse_action',
+      'delete_entry',
+      'correct_opening_balances',
+    ]) {
+      expect(text).toContain(`"${labels[key]}"`)
+    }
   })
 })
 
