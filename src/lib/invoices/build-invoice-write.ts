@@ -3,6 +3,7 @@ import type { Currency, Customer, DeductionType, InvoiceDocumentType, InvoiceQrM
 import {
   deriveInvoiceVatHeader,
   explainVatTreatment,
+  isZeroRatedInvoiceTreatment,
   resolveInvoiceVatRules,
   type InvoiceVatOverride,
   type InvoiceVatTreatmentOverride,
@@ -325,8 +326,8 @@ export async function buildInvoiceWriteData(params: {
 
   // Periodisering guards. The line schema already validates the period shape;
   // here we gate the flows where deferral has no meaning: cash method
-  // (recognition at payment), reverse charge/export (3308/3305 must reflect the
-  // full sale for ruta 39/40), and non-invoice document types.
+  // (recognition at payment), reverse charge/export (3308/3231/3305 must
+  // reflect the full sale for ruta 39/41/40), and non-invoice document types.
   const hasAccrualItems = items.some(
     (item) => item.accrual_period_start && item.accrual_period_end,
   )
@@ -334,7 +335,7 @@ export async function buildInvoiceWriteData(params: {
     if (documentType !== 'invoice') {
       return { ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVALID', details: { reason: 'document_type', documentType } }
     }
-    if (vatRules.treatment === 'reverse_charge' || vatRules.treatment === 'export') {
+    if (isZeroRatedInvoiceTreatment(vatRules.treatment)) {
       return { ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVALID', details: { reason: 'vat_treatment', vatTreatment: vatRules.treatment } }
     }
     const { data: methodSettings } = await supabase

@@ -77,6 +77,9 @@ export function getRevenueAccount(
     case 'reverse_charge':
       // Varor till annat EU-land, momsfri / Försäljning tjänst EU
       return goodsDeliveryCountry ? '3108' : '3308'
+    case 'reverse_charge_domestic':
+      // Försäljning inom byggsektorn, omvänd betalningsskyldighet (ruta 41)
+      return '3231'
     case 'export':
       // Försäljning varor till land utanför EU / Försäljning tjänst Export
       return goodsDeliveryCountry ? '3105' : '3305'

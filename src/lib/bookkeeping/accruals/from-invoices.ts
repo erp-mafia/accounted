@@ -23,7 +23,7 @@ import {
   suggestBalanceAccount,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-entries'
-import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
+import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from '@/lib/invoices/vat-rules'
 import { toSingleLine } from '@/lib/invoices/display'
 import type { EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
@@ -192,8 +192,9 @@ export async function createSchedulesForCustomerInvoice(
 
 /**
  * Resolve a line's revenue account exactly the way generatePerRateLines does:
- * per-line override only for ordinary domestic rates; reverse_charge/export
- * force the statutory account and are flagged `special` (never deferrable).
+ * per-line override only for ordinary domestic rates; reverse charge (EU or
+ * domestic) and export force the statutory account and are flagged `special`
+ * (never deferrable).
  */
 function resolveRevenueTarget(
   item: InvoiceItem,
@@ -201,11 +202,8 @@ function resolveRevenueTarget(
   entityType: EntityType,
 ): { account: string; special: boolean } {
   const rate = item.vat_rate ?? 0
-  const treatment =
-    rate === 0 && (invoiceTreatment === 'reverse_charge' || invoiceTreatment === 'export')
-      ? invoiceTreatment
-      : getVatTreatmentForRate(rate)
-  const special = treatment === 'reverse_charge' || treatment === 'export'
+  const treatment = resolveLineVatTreatment(rate, invoiceTreatment)
+  const special = isZeroRatedInvoiceTreatment(treatment)
   const account =
     !special && item.revenue_account
       ? item.revenue_account

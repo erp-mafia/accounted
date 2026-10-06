@@ -28,14 +28,19 @@ import {
   explainVatTreatment,
   getVatRules,
   requiresSwedishVatAcknowledgement,
+  resolveInvoiceVatRules,
+  type InvoiceVatOverride,
 } from '@/lib/invoices/vat-rules'
 import { buildSummaryVatLines } from '@/lib/invoices/editor/summary-vat'
 import {
   resolveLineVatRates,
   planCustomerSwitchVatSnap,
+  planVatPlanSnap,
   FALLBACK_VAT_RATE,
 } from '@/components/invoices/line-vat-rates'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
+import { AttnLine } from '@/components/ui/attn-line'
+import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   defaultGronTeknikWorkType,
@@ -110,6 +115,7 @@ import UnitPicker from '@/components/invoices/UnitPicker'
 import {
   buildInvoiceWritePayload,
   buildSelfBilledPayload,
+  domesticReverseChargeStatement,
   hasDimensionValues,
 } from '@/lib/invoices/editor-payload'
 import { InvoiceEditorShell, type EditorPane } from '@/components/invoices/editor/InvoiceEditorShell'
@@ -303,6 +309,10 @@ const EMAIL_BLOCK_KEYS: Record<EmailBlockReason, string> = {
   no_email_plan: 'email_block_no_email_plan',
   no_customer_email: 'email_block_no_customer_email',
 }
+
+// The one VAT treatment the editor states for the invoice itself (crm#1007):
+// omvänd betalningsskyldighet for construction services (ML 16 kap. 13 §).
+const DOMESTIC_REVERSE_CHARGE: InvoiceVatOverride = { vat_treatment: 'reverse_charge_domestic', delivery_country: null }
 
 export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'create' }) {
   // Edit mode pre-fills the form from an existing draft and saves via PATCH.
@@ -625,6 +635,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
+  // Omvänd betalningsskyldighet for construction services (crm#1007): a
+  // statement about this invoice, ticked by hand, never derived from the
+  // customer. A draft that states it, or a copy of one, starts ticked.
+  const storedDomesticReverseCharge = initial?.vat_treatment_override === 'reverse_charge_domestic'
+  const [domesticReverseCharge, setDomesticReverseCharge] = useState<boolean>(
+    storedDomesticReverseCharge || copyInitial?.domestic_reverse_charge === true,
+  )
+  // The tick where it can apply (VAT-registered seller, a document that
+  // carries VAT, not a received självfaktura), as of the last render: the
+  // customer sync effect reads it without re-running on every toggle.
+  const domesticReverseChargeArmedRef = useRef(false)
+  const [isSavingBuyerVatNumber, setIsSavingBuyerVatNumber] = useState(false)
   // The confirm dialog's intent (a send on a channel, or create without
   // sending), opened from the top bar, its caret menu or Cmd/Ctrl+Enter.
   const [confirmIntent, setConfirmIntent] = useState<ConfirmIntent | null>(null)
@@ -1546,7 +1568,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       // the saved draft and must not be overwritten. Applied normally on every
       // subsequent (user-initiated) customer change, and always in create mode.
       if (customer) {
-        const nextDefaultRate = resolveLineVatRates(customer).defaultRate
+        // Omvänd betalningsskyldighet needs a Swedish business as buyer: any
+        // other customer unticks it. Under it the rate plan is the invoice's
+        // own (0 % only) once the buyer's Swedish VAT number is on the card.
+        const isSwedishBusiness = customer.customer_type === 'swedish_business'
+        if (!isSwedishBusiness) setDomesticReverseCharge(false)
+        const nextPlan = resolveLineVatRates(
+          customer,
+          isSwedishBusiness && domesticReverseChargeArmedRef.current ? DOMESTIC_REVERSE_CHARGE : null,
+        )
+        const nextDefaultRate = nextPlan.defaultRate
         if (didInitialCustomerSync.current) {
           // Update due date based on customer payment terms, counted from the
           // invoice date the form is actually on: picking a customer after
@@ -1570,11 +1601,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           // the user moved off that default stays put: 12% on a Stockholm
           // hotel night sold to a German company is lawful (taxed where
           // performed, ML 6 kap.) and snapping it to 0% would destroy it.
+          // A plan locked to 0 % (omvänd betalningsskyldighet) takes every
+          // line: no other rate is lawful under it (planVatPlanSnap).
           if (didSeedVatSnapBaseline.current) {
-            for (const snap of planCustomerSwitchVatSnap({
+            for (const snap of planVatPlanSnap({
               items: watchItems ?? [],
               previousDefaultRate: previousDefaultRateRef.current,
-              nextDefaultRate,
+              next: nextPlan,
             })) {
               setValue(`items.${snap.index}.vat_rate`, snap.rate)
             }
@@ -1686,15 +1719,97 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return sum + computeLineNet(item.quantity || 0, item.unit_price || 0, item.discount_percent)
   }, 0)
 
-  const vatRules = selectedCustomer
-    ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, selectedCustomer.country)
-    : null
+  // Omvänd betalningsskyldighet (crm#1007) applies where a VAT-registered
+  // seller issues a document that carries VAT to a Swedish business. Once the
+  // buyer's Swedish VAT number is on the customer card the rules are the
+  // invoice's own (0 %, 3231, ruta 41); until then they stay the customer's,
+  // as the server would book them, and the checkbox says what is missing.
+  domesticReverseChargeArmedRef.current =
+    domesticReverseCharge && vatRegistered && mode !== 'self_billed' && watchDocumentType !== 'delivery_note'
+  const domesticReverseChargeAvailable = selectedCustomer?.customer_type === 'swedish_business' &&
+    vatRegistered && mode !== 'self_billed' && watchDocumentType !== 'delivery_note'
+  const domesticReverseChargeOn = domesticReverseCharge && domesticReverseChargeAvailable
+  const domesticReverseChargeRules =
+    domesticReverseChargeOn && selectedCustomer ? resolveInvoiceVatRules(selectedCustomer, DOMESTIC_REVERSE_CHARGE) : null
+  const buyerVatNumberMissing = domesticReverseChargeRules?.ok === false
+  // Organisationsnummer + 01; null for a masked personnummer (enskild firma).
+  const derivedBuyerVatNumber = buyerVatNumberMissing ? deriveSwedishVatNumber(selectedCustomer?.org_number) : null
+  // The invoice's own VAT treatment on the wire: ticked states it, unticked on
+  // a draft that had it clears it, anything else leaves a stored one alone.
+  const vatStatement = domesticReverseChargeStatement({
+    checked: domesticReverseChargeOn,
+    stored: storedDomesticReverseCharge,
+  })
+
+  const vatRules = domesticReverseChargeRules?.ok
+    ? domesticReverseChargeRules.rules
+    : selectedCustomer
+      ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, selectedCustomer.country)
+      : null
 
   // Rendered options and the default are deliberately two different sets:
   // `options` is what may LAWFULLY appear on a line (getPermittedVatRates),
   // `defaultRates` / `defaultRate` is what the form OFFERS by itself
   // (getAvailableVatRates). See components/invoices/line-vat-rates.ts.
-  const vatRatePlan = resolveLineVatRates(selectedCustomer)
+  const vatRatePlan = resolveLineVatRates(selectedCustomer, domesticReverseChargeOn ? DOMESTIC_REVERSE_CHARGE : null)
+
+  // Ticking moves every priced line to 0 % (the only lawful rate under
+  // omvänd betalningsskyldighet); unticking moves them back to the
+  // customer's default, like a customer switch (line-vat-rates.ts).
+  function handleDomesticReverseChargeChange(next: boolean) {
+    setDomesticReverseCharge(next)
+    if (!selectedCustomer) return
+    const nextPlan = resolveLineVatRates(selectedCustomer, next ? DOMESTIC_REVERSE_CHARGE : null)
+    for (const snap of planVatPlanSnap({
+      items: watchItems ?? [],
+      previousDefaultRate: previousDefaultRateRef.current,
+      next: nextPlan,
+    })) {
+      setValue(`items.${snap.index}.vat_rate`, snap.rate, { shouldDirty: true })
+    }
+    previousDefaultRateRef.current = nextPlan.defaultRate
+  }
+
+  // One click from the checkbox's notice: the buyer's Swedish VAT number,
+  // derived from its organisationsnummer, saved on the customer card. Mirrored
+  // on the local copy like a VIES check (handleCustomerVatValidated), so the
+  // lines move to 0 % at once; the session cache catches up on its own.
+  async function handleUseBuyerVatNumber(vatNumber: string) {
+    if (!selectedCustomer || isSavingBuyerVatNumber) return
+    setIsSavingBuyerVatNumber(true)
+    try {
+      const response = await fetch(`/api/customers/${encodeURIComponent(selectedCustomer.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vat_number: vatNumber }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(result, { locale, context: 'customer', statusCode: response.status }))
+      }
+      const savedVatNumber: string = result?.data?.vat_number ?? vatNumber
+      const updatedCustomer: Customer = { ...selectedCustomer, vat_number: savedVatNumber }
+      const nextPlan = resolveLineVatRates(updatedCustomer, DOMESTIC_REVERSE_CHARGE)
+      for (const snap of planVatPlanSnap({
+        items: watchItems ?? [],
+        previousDefaultRate: previousDefaultRateRef.current,
+        next: nextPlan,
+      })) {
+        setValue(`items.${snap.index}.vat_rate`, snap.rate, { shouldDirty: true })
+      }
+      previousDefaultRateRef.current = nextPlan.defaultRate
+      setSelectedCustomer(updatedCustomer)
+      toast({ title: tForm('domestic_reverse_charge_vat_saved', { number: savedVatNumber }) })
+    } catch (error) {
+      toast({
+        title: tForm('domestic_reverse_charge_vat_save_failed'),
+        description: getErrorMessage(error, { locale, context: 'customer' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSavingBuyerVatNumber(false)
+    }
+  }
   // Effective rates of the priced lines, as the server will store them: an
   // absent rate falls back to the customer default (build-invoice-write).
   // Empty for a non-momsregistrerad seller, who charges nothing.
@@ -2228,6 +2343,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     const sanitizedPayload = buildInvoiceWritePayload(withQuoteValidity(pendingData), {
       oreRounding,
       defaultDims,
+      vatStatement,
     })
 
     try {
@@ -2276,7 +2392,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         invoiceId: initial?.id ?? null,
         invoiceNumber: initial?.invoice_number ?? null,
         documentType: pendingData.document_type,
-        payload: buildInvoiceWritePayload(withQuoteValidity(pendingData), { oreRounding, defaultDims }),
+        payload: buildInvoiceWritePayload(withQuoteValidity(pendingData), { oreRounding, defaultDims, vatStatement }),
         channel,
         email:
           channel === 'email'
@@ -2516,6 +2632,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       saveAsDraft: true,
       oreRounding,
       defaultDims,
+      vatStatement,
     })
 
     try {
@@ -2558,6 +2675,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     const payload = buildInvoiceWritePayload(withQuoteValidity(data), {
       oreRounding,
       defaultDims,
+      vatStatement,
     })
 
     try {
@@ -2711,9 +2829,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // values through the same body builder (lib/invoices/editor/preview-request).
   const formValues = watch()
   const printedNumber = (isEditMode ? initial?.invoice_number : null) ?? numberPreview
+  // The preview states omvänd betalningsskyldighet only once the server would
+  // accept it (the buyer's VAT number is on the card), so a missing number
+  // shows as the checkbox's notice, not as a failed preview.
   const previewRequest = isSelfBilled
     ? null
-    : buildEditorPreviewRequest(formValues, { oreRounding, defaultDims, invoiceNumber: printedNumber ?? null })
+    : buildEditorPreviewRequest(formValues, {
+        oreRounding,
+        defaultDims,
+        invoiceNumber: printedNumber ?? null,
+        vatStatement: domesticReverseChargeRules?.ok ? vatStatement : undefined,
+      })
   const previewBody = previewRequest ? JSON.stringify(previewRequest) : null
   const emailRequestBody = previewRequest
     ? JSON.stringify({
@@ -3367,6 +3493,45 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             ) : null}
             {errors.customer_id && (
               <p className="mt-2 text-sm text-destructive">{errors.customer_id.message}</p>
+            )}
+
+            {/* Omvänd betalningsskyldighet for construction services
+                (crm#1007): the seller states it per invoice, so it sits with
+                the buyer it depends on, only for a Swedish business. The
+                buyer's Swedish VAT number must print on the invoice: when the
+                card lacks it, one click saves the one the org number gives. */}
+            {domesticReverseChargeAvailable && (
+              <div className="mt-3 space-y-1">
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    id="domestic-reverse-charge"
+                    checked={domesticReverseCharge}
+                    onCheckedChange={(checked) => handleDomesticReverseChargeChange(checked === true)}
+                    className="mt-0.5"
+                  />
+                  <Label htmlFor="domestic-reverse-charge" className="text-[13px] font-normal leading-5">
+                    {tForm('domestic_reverse_charge_label')}
+                  </Label>
+                </div>
+                <p className={cn(FIELD_HINT_CLASS, 'pl-6')}>{tForm('domestic_reverse_charge_hint')}</p>
+                {buyerVatNumberMissing && selectedCustomer && (
+                  <AttnLine
+                    className="pl-6 text-muted-foreground"
+                    action={
+                      derivedBuyerVatNumber && canWrite
+                        ? {
+                            label: isSavingBuyerVatNumber
+                              ? tForm('domestic_reverse_charge_vat_saving')
+                              : tForm('domestic_reverse_charge_use_vat', { number: derivedBuyerVatNumber }),
+                            onClick: () => void handleUseBuyerVatNumber(derivedBuyerVatNumber),
+                          }
+                        : { label: tVat('open_customer_action'), href: `/customers/${selectedCustomer.id}` }
+                    }
+                  >
+                    {tForm('domestic_reverse_charge_vat_missing')}
+                  </AttnLine>
+                )}
+              </div>
             )}
 
             {/* References are per-invoice data, not defaults: always visible

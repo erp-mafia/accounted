@@ -27,7 +27,7 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
+import { DOMESTIC_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
 import { POST as createInvoice } from '../route'
 import { POST as bulkCreateInvoices } from '../bulk-create/route'
 
@@ -262,6 +262,89 @@ describe('POST /invoices with vat_treatment + delivery_country (#2906)', () => {
       vat_treatment_override: null,
       delivery_country: null,
     })
+  })
+})
+
+describe('POST /invoices with vat_treatment reverse_charge_domestic (construction services, crm#1007)', () => {
+  const BYGG_BODY = {
+    ...BODY,
+    vat_treatment: 'reverse_charge_domestic',
+    items: [{ description: 'Snickeriarbete, kök', quantity: 10, unit: 'tim', unit_price: 1000 }],
+  }
+
+  it('returns 401 without a bearer token', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase({}))
+    const res = await createInvoice(post(BYGG_BODY, { auth: false }), params)
+    expect(res.status).toBe(401)
+  })
+
+  it('returns 404 INVOICE_CUSTOMER_NOT_FOUND for a customer outside the company', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase(baseTables({ customers: { data: null, error: null } })))
+    const res = await createInvoice(post(BYGG_BODY), params)
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('INVOICE_CUSTOMER_NOT_FOUND')
+  })
+
+  it('refuses a buyer without a Swedish VAT number, and writes nothing', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeSupabase(baseTables({ customers: { data: { ...SWEDISH_BUYER, vat_number: null }, error: null } }), captures),
+    )
+    const res = await createInvoice(post(BYGG_BODY), params)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED')
+    expect(body.error.details).toMatchObject({ reason: 'missing', vat_treatment: 'reverse_charge_domestic' })
+    expect(captures.filter((c) => c.table.startsWith('invoice'))).toEqual([])
+  })
+
+  it('refuses a delivery country (a construction service is no goods delivery)', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase(baseTables()))
+    const res = await createInvoice(post({ ...BYGG_BODY, delivery_country: 'SE' }), params)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH')
+    expect(body.error.details.required).toBe('no_delivery_country')
+  })
+
+  it('refuses a Swedish rate on a line: the buyer accounts for the VAT', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase(baseTables()))
+    const res = await createInvoice(
+      post({ ...BYGG_BODY, items: [{ ...BYGG_BODY.items[0], vat_rate: 25 }] }),
+      params,
+    )
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('INVOICE_CREATE_VAT_RULE_VIOLATION')
+  })
+
+  it('creates the draft: 0 %, ruta 41, the notice, the statement stored', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeSupabase(
+        baseTables({
+          invoices: { data: { id: INVOICE_ID, customer_id: CUSTOMER_ID, status: 'draft', total: 10000 }, error: null },
+          invoice_items: { data: null, error: null },
+        }),
+        captures,
+      ),
+    )
+
+    const res = await createInvoice(post(BYGG_BODY), params)
+
+    expect(res.status).toBe(201)
+    expect(captures.find((c) => c.table === 'invoices' && c.op === 'insert')?.payload).toMatchObject({
+      vat_treatment: 'reverse_charge_domestic',
+      moms_ruta: '41',
+      reverse_charge_text: DOMESTIC_REVERSE_CHARGE_NOTICE,
+      vat_amount: 0,
+      total: 10000,
+      vat_treatment_override: 'reverse_charge_domestic',
+      delivery_country: null,
+    })
+    const itemsInsert = captures.find((c) => c.table === 'invoice_items' && c.op === 'insert')?.payload as Array<{
+      vat_rate: number
+    }>
+    expect(itemsInsert[0].vat_rate).toBe(0)
   })
 })
 

@@ -9,12 +9,17 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
+  DOMESTIC_REVERSE_CHARGE_NOTICE,
   EU_GOODS_SUPPLY_NOTICE,
   EU_REVERSE_CHARGE_NOTICE,
   EXPORT_NOTICE_SV,
+  deriveInvoiceVatHeader,
   getPermittedVatRates,
   getVatRules,
+  isZeroRatedInvoiceTreatment,
   resolveInvoiceVatRules,
+  resolveLineVatTreatment,
+  type InvoiceVatTreatmentOverride,
   type VatTreatmentCustomer,
 } from '../vat-rules'
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-accounts'
@@ -253,12 +258,13 @@ describe('a delivery country alone implies the goods treatment', () => {
 describe('the header ruta and the booked revenue account always agree', () => {
   // moms_ruta is written from the rule; the momsdeklaration reads the account
   // the booking picks (ACCOUNT_RUTA). They must name the same box.
-  const cases: Array<[string, VatTreatmentCustomer, { vat_treatment: 'standard' | 'export' | 'reverse_charge' | null; delivery_country: string | null } | null]> = [
+  const cases: Array<[string, VatTreatmentCustomer, { vat_treatment: InvoiceVatTreatmentOverride | null; delivery_country: string | null } | null]> = [
     ['export of goods', swedishBusiness, { vat_treatment: 'export', delivery_country: 'NO' }],
     ['intra-EU goods', germanBusiness, { vat_treatment: 'reverse_charge', delivery_country: 'DE' }],
     ['EU services (customer)', germanBusiness, null],
     ['export services (customer)', norwegianBusiness, null],
     ['domestic', swedishBusiness, { vat_treatment: 'standard', delivery_country: null }],
+    ['domestic reverse charge (construction)', swedishBusiness, { vat_treatment: 'reverse_charge_domestic', delivery_country: null }],
   ]
   it.each(cases)('%s', (_label, customer, override) => {
     const resolved = resolveInvoiceVatRules(customer, override)
@@ -266,5 +272,107 @@ describe('the header ruta and the booked revenue account always agree', () => {
     if (!resolved.ok) return
     const account = getRevenueAccount(resolved.rules.treatment, 'aktiebolag', override?.delivery_country ?? null)
     expect(ACCOUNT_RUTA[account]?.box).toBe(`ruta${resolved.rules.momsRuta}`)
+  })
+})
+
+describe('domestic reverse charge for construction services (ML 16 kap. 13 §, crm#1007)', () => {
+  // swedish-invoice-compliance + bygg-hantverk skills: the seller invoices
+  // without VAT, prints "Omvänd betalningsskyldighet" and the buyer's VAT
+  // number (ML 17 kap. 24 §), and reports the sale in ruta 41 (3231).
+  const domestic = { vat_treatment: 'reverse_charge_domestic' as const, delivery_country: null }
+
+  it('a Swedish business with a Swedish VAT number: 0 %, ruta 41, the notice, booked on 3231', () => {
+    const resolved = resolveInvoiceVatRules(swedishBusiness, domestic)
+    expect(resolved).toEqual({
+      ok: true,
+      rules: {
+        treatment: 'reverse_charge_domestic',
+        rate: 0,
+        momsRuta: '41',
+        reverseChargeText: DOMESTIC_REVERSE_CHARGE_NOTICE,
+      },
+      permittedRates: [{ rate: 0, label: '0% (omvänd betalningsskyldighet)', treatment: 'reverse_charge_domestic' }],
+      explainFromCustomer: false,
+    })
+    expect(getRevenueAccount('reverse_charge_domestic', 'aktiebolag')).toBe('3231')
+    expect(getRevenueAccount('reverse_charge_domestic', 'enskild_firma')).toBe('3231')
+    expect(DOMESTIC_REVERSE_CHARGE_NOTICE).toMatch(/^Omvänd betalningsskyldighet/)
+  })
+
+  it('reads the VAT number as people type it and needs no VIES check', () => {
+    const typed = { ...swedishBusiness, vat_number: 'se 556677-8899 01', vat_number_validated: false }
+    expect(resolveInvoiceVatRules(typed, domestic)).toMatchObject({ ok: true, rules: { momsRuta: '41' } })
+  })
+
+  it.each([
+    ['a private person', consumer, 'private_person'],
+    ['an EU business', germanBusiness, 'not_swedish_business'],
+    ['a business outside the EU', norwegianBusiness, 'not_swedish_business'],
+    ['a Swedish business without a VAT number', { ...swedishBusiness, vat_number: null }, 'missing'],
+    ['a Swedish business with a blank VAT number', { ...swedishBusiness, vat_number: '  ' }, 'missing'],
+    ['a Swedish business with an org number in the VAT field', { ...swedishBusiness, vat_number: '556677-8899' }, 'not_swedish_vat_number'],
+    ['a Swedish business with a foreign VAT number', { ...swedishBusiness, vat_number: 'DE811234567' }, 'not_swedish_vat_number'],
+  ])('refuses %s', (_label, customer, reason) => {
+    expect(resolveInvoiceVatRules(customer, domestic)).toEqual({
+      ok: false,
+      code: 'INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED',
+      details: {
+        vat_treatment: 'reverse_charge_domestic',
+        delivery_country: null,
+        reason,
+        customer_id: customer.id,
+      },
+    })
+  })
+
+  it('refuses a delivery country: a construction service is performed on a property in Sweden', () => {
+    for (const country of ['SE', 'NO', 'DE']) {
+      expect(
+        resolveInvoiceVatRules(swedishBusiness, { vat_treatment: 'reverse_charge_domestic', delivery_country: country }),
+      ).toEqual({
+        ok: false,
+        code: 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH',
+        details: { vat_treatment: 'reverse_charge_domestic', delivery_country: country, required: 'no_delivery_country' },
+      })
+    }
+  })
+
+  it('is never implied: without the statement a Swedish business gets Swedish VAT', () => {
+    expect(resolveInvoiceVatRules(swedishBusiness, null)).toMatchObject({ ok: true, rules: { treatment: 'standard_25', momsRuta: '05' } })
+    expect(resolveInvoiceVatRules(swedishBusiness, { vat_treatment: null, delivery_country: 'SE' })).toMatchObject({
+      ok: true,
+      rules: { treatment: 'standard_25' },
+    })
+  })
+
+  it('the header carries the treatment, ruta 41 and the notice', () => {
+    const resolved = resolveInvoiceVatRules(swedishBusiness, domestic)
+    if (!resolved.ok) throw new Error('expected ok')
+    expect(deriveInvoiceVatHeader(resolved.rules, [0], { vatRegistered: true })).toEqual({
+      vat_treatment: 'reverse_charge_domestic',
+      moms_ruta: '41',
+      reverse_charge_text: DOMESTIC_REVERSE_CHARGE_NOTICE,
+    })
+  })
+})
+
+describe('zero-rated invoice treatments', () => {
+  it('reverse charge (EU and domestic) and export are zero-rated; momsfri and the Swedish rates are not', () => {
+    expect(isZeroRatedInvoiceTreatment('reverse_charge')).toBe(true)
+    expect(isZeroRatedInvoiceTreatment('reverse_charge_domestic')).toBe(true)
+    expect(isZeroRatedInvoiceTreatment('export')).toBe(true)
+    for (const treatment of ['exempt', 'standard_25', 'reduced_12', 'reduced_6', null, undefined] as const) {
+      expect(isZeroRatedInvoiceTreatment(treatment)).toBe(false)
+    }
+  })
+
+  it('a 0 % line takes the invoice treatment, any other line its own rate', () => {
+    expect(resolveLineVatTreatment(0, 'reverse_charge_domestic')).toBe('reverse_charge_domestic')
+    expect(resolveLineVatTreatment(0, 'reverse_charge')).toBe('reverse_charge')
+    expect(resolveLineVatTreatment(0, 'export')).toBe('export')
+    expect(resolveLineVatTreatment(0, 'standard_25')).toBe('exempt')
+    expect(resolveLineVatTreatment(0, null)).toBe('exempt')
+    expect(resolveLineVatTreatment(25, 'reverse_charge_domestic')).toBe('standard_25')
+    expect(resolveLineVatTreatment(12, 'export')).toBe('reduced_12')
   })
 })

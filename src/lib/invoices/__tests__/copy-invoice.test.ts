@@ -104,5 +104,23 @@ describe('buildInvoiceCopyInitial', () => {
     expect(copy).not.toHaveProperty('payment_link_url')
     expect(copy).not.toHaveProperty('journal_entry_id')
     expect(copy).not.toHaveProperty('status')
+    expect(copy.domestic_reverse_charge).toBe(false)
+  })
+
+  it('keeps a stated domestic reverse charge for construction services, and only that statement (crm#1007)', () => {
+    const items = [makeItem({ vat_rate: 0 })]
+    const construction = buildInvoiceCopyInitial({
+      ...makeInvoice({ vat_treatment: 'reverse_charge_domestic', vat_treatment_override: 'reverse_charge_domestic' }),
+      items,
+    })
+    expect(construction.domestic_reverse_charge).toBe(true)
+
+    // A goods export stated through the API is not something the editor can
+    // show, so the copy starts from the customer's own treatment.
+    const goodsExport = buildInvoiceCopyInitial({
+      ...makeInvoice({ vat_treatment: 'export', vat_treatment_override: 'export', delivery_country: 'NO' }),
+      items,
+    })
+    expect(goodsExport.domestic_reverse_charge).toBe(false)
   })
 })

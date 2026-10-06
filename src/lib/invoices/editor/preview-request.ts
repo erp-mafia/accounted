@@ -1,6 +1,7 @@
 import {
   buildInvoiceWritePayload,
   type DeductionItemFields,
+  type EditorVatStatement,
   type SelfBillingCarrierFields,
 } from '@/lib/invoices/editor-payload'
 
@@ -36,6 +37,8 @@ export interface EditorPreviewOptions {
   defaultDims: Record<string, string>
   /** The number to print: the predicted next number, or the draft's own. */
   invoiceNumber: string | null
+  /** The invoice's own VAT treatment, so the preview prints its notice. */
+  vatStatement?: EditorVatStatement
 }
 
 export function buildEditorPreviewRequest<
@@ -49,6 +52,7 @@ export function buildEditorPreviewRequest<
     ...buildInvoiceWritePayload(withQuoteValidity(values), {
       oreRounding: options.oreRounding,
       defaultDims: options.defaultDims,
+      vatStatement: options.vatStatement,
     }),
     // '' is "the company default" in the form; the preview reads null so.
     payment_cash_account_id: values.payment_cash_account_id || null,

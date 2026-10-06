@@ -161,6 +161,21 @@ describe('buildCutoffLines: fordringar', () => {
     expect(totals.debit).toBe(totals.credit)
   })
 
+  it('books an unpaid domestic reverse charge invoice on 3231 with no moms (crm#1007)', () => {
+    // Construction services under omvänd betalningsskyldighet carry no output
+    // moms for the seller: the whole outstanding amount is ruta 41 revenue.
+    const { receivableLines } = buildCutoffLines(
+      [receivable({ id: 'inv-bygg', vatTreatment: 'reverse_charge_domestic', outstanding: 8000, vat: 0 })],
+      [],
+      'enskild_firma',
+    )
+    expect(receivableLines.find((l) => l.account_number === '3231')?.credit_amount).toBe(8000)
+    expect(receivableLines.find((l) => l.account_number === '1510')?.debit_amount).toBe(8000)
+    expect(receivableLines.some((l) => l.account_number.startsWith('26'))).toBe(false)
+    const totals = sum(receivableLines)
+    expect(totals.debit).toBe(totals.credit)
+  })
+
   it('still balances if a stray moms amount reaches buildCutoffLines directly', () => {
     // The collector now excludes these rows and the posting step refuses them,
     // so this is the last-resort path. It must never invent a moms account and

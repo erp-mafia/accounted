@@ -1126,7 +1126,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       'The delivery country does not match the VAT treatment. Export requires the goods to leave the EU; an intra-EU supply requires transport to another EU member state.',
     remediation: {
       description:
-        'Check delivery_country. Goods to another EU member state: vat_treatment reverse_charge (needs the buyer VAT number). Goods leaving the EU: export. Goods staying in Sweden: standard. details.required names what the treatment needs.',
+        'Check delivery_country. Goods to another EU member state: vat_treatment reverse_charge (needs the buyer VAT number). Goods leaving the EU: export. Goods staying in Sweden: standard. reverse_charge_domestic (construction services) takes no delivery_country. details.required names what the treatment needs.',
     },
   },
   INVOICE_VAT_TREATMENT_BUYER_VAT_NUMBER_REQUIRED: {
@@ -1138,6 +1138,18 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     remediation: {
       description:
         'Add the buyer EU VAT number to the customer (it is validated against VIES when saved), or send vat_treatment standard for Swedish VAT (for example a consumer under the distance-sales threshold). details.reason: private_person, missing, not_another_member_state or not_validated.',
+      tool: 'gnubok_update_customer',
+    },
+  },
+  INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED: {
+    httpStatus: 400,
+    message_sv:
+      'Omvänd betalningsskyldighet för byggtjänster kräver att kunden är ett svenskt företag med svenskt momsregistreringsnummer (SE + 12 siffror) på kundkortet. Numret skrivs ut på fakturan (ML 17 kap. 24 §).',
+    message_en:
+      "Domestic reverse charge for construction services requires a Swedish business customer with a Swedish VAT number (SE + 12 digits) on the customer card. The number is printed on the invoice (ML 17 kap. 24 §).",
+    remediation: {
+      description:
+        "Add the buyer's Swedish VAT number (vat_number, SE + organisationsnummer + 01) to the customer, or omit vat_treatment for Swedish VAT. details.reason: private_person, not_swedish_business, missing or not_swedish_vat_number.",
       tool: 'gnubok_update_customer',
     },
   },

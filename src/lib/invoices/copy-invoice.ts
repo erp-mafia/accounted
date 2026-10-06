@@ -50,6 +50,12 @@ export interface InvoiceCopyInitial {
   default_dimensions: Record<string, string>
   /** The bank account the source asked to be paid to; reusable commercial content. */
   payment_cash_account_id: string | null
+  /**
+   * The source stated omvänd betalningsskyldighet for construction services
+   * (crm#1007): the editor's checkbox starts ticked, and the copy is validated
+   * again against the customer as it is now when it is saved.
+   */
+  domestic_reverse_charge: boolean
   items: InvoiceCopyItem[]
 }
 
@@ -82,6 +88,7 @@ export function buildInvoiceCopyInitial(source: InvoiceCopySource): InvoiceCopyI
     ore_rounding: source.ore_rounding,
     default_dimensions: source.default_dimensions ?? {},
     payment_cash_account_id: source.payment_cash_account_id ?? null,
+    domestic_reverse_charge: source.vat_treatment_override === 'reverse_charge_domestic',
     items: [...source.items]
       .sort((a, b) => a.sort_order - b.sort_order)
       .map((item) => ({

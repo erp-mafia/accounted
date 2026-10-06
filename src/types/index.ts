@@ -270,6 +270,7 @@ export type VatTreatment =
   | 'reduced_12'        // 12% reduced rate
   | 'reduced_6'         // 6% reduced rate
   | 'reverse_charge'    // EU reverse charge (0%)
+  | 'reverse_charge_domestic' // Domestic reverse charge, construction services (0%, ruta 41)
   | 'export'            // Non-EU export (0%)
   | 'exempt'            // VAT exempt
 
@@ -1445,8 +1446,10 @@ export interface Invoice {
   // = the customer decides. delivery_country is where the GOODS were
   // transported (ISO alpha-2); under an export / reverse_charge header it
   // books the goods accounts 3105 / 3108 instead of the services ones
-  // 3305 / 3308. Optional in TS for pre-migration fixtures.
-  vat_treatment_override?: 'standard' | 'export' | 'reverse_charge' | null
+  // 3305 / 3308. reverse_charge_domestic (crm#1007, migration
+  // 20261005220322) is construction services, 3231 / ruta 41. Optional in TS
+  // for pre-migration fixtures.
+  vat_treatment_override?: import('@/lib/invoices/invoice-vat-override').InvoiceVatTreatmentOverride | null
   delivery_country?: string | null
 
   // Reference

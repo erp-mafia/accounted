@@ -1,4 +1,4 @@
-import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
+import { DOMESTIC_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
 import type { PdfLang } from '@/lib/invoices/pdf/format'
 
 // Customer-facing labels. Statutory chapter references (ML 17 kap 24§, ML 3 kap.)
@@ -91,6 +91,7 @@ export const PDF_LABELS = {
     quoteNotice: 'Detta är en offert och utgör ingen faktura eller betalningsanmodan.',
     exemptNotice: 'Undantag från skatteplikt, ML 3 kap.',
     exportNotice: EXPORT_NOTICE_SV,
+    domesticReverseChargeNotice: DOMESTIC_REVERSE_CHARGE_NOTICE,
     notVatRegisteredNotice: 'Företaget är inte momsregistrerat. Mervärdesskatt redovisas ej.',
     // Footer
     orgNoLong: 'Org.nr:',
@@ -164,6 +165,8 @@ export const PDF_LABELS = {
     quoteNotice: 'This is a quote and is not an invoice or a request for payment.',
     exemptNotice: 'Exempt from VAT (ML 3 kap., Swedish VAT Act).',
     exportNotice: 'Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).',
+    // Skatteverket accepts "Reverse charge" as the English notation (dnr 8-724682).
+    domesticReverseChargeNotice: 'Reverse charge, construction services: the buyer accounts for the VAT (ML 16 kap. 13 §, Swedish VAT Act).',
     notVatRegisteredNotice: 'The seller is not VAT-registered. No VAT is charged on this invoice.',
     orgNoLong: 'Reg. no.:',
     vatRegNo: 'VAT reg. no.:',
@@ -190,6 +193,7 @@ export const PDF_LABELS = {
  */
 export function localizeVatNotice(text: string, lang: PdfLang): string {
   if (text === EXPORT_NOTICE_SV) return PDF_LABELS[lang].exportNotice
+  if (text === DOMESTIC_REVERSE_CHARGE_NOTICE) return PDF_LABELS[lang].domesticReverseChargeNotice
   return text
 }
 

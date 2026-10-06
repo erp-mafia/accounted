@@ -21,7 +21,7 @@ import {
   type LineDimensions,
 } from './dimension-resolver'
 import { generateSalesVatLines } from './vat-entries'
-import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
+import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from '@/lib/invoices/vat-rules'
 import { computeDeduction, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
@@ -219,21 +219,20 @@ export function generatePerRateLines(
 
   for (const item of items) {
     const rate = item.vat_rate ?? 0
-    const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
-      ? invoiceVatTreatment
-      : getVatTreatmentForRate(rate)
-    // reverse_charge / export force the statutory revenue account (3308/3305,
-    // or 3108/3105 for goods delivered abroad); a per-line override only
-    // applies to ordinary domestic rates so EU/export sales keep landing in
-    // the right VAT-declaration ruta.
-    const isSpecialTreatment = treatment === 'reverse_charge' || treatment === 'export'
+    const treatment = resolveLineVatTreatment(rate, invoiceVatTreatment)
+    // reverse_charge / reverse_charge_domestic / export force the statutory
+    // revenue account (3308/3231/3305, or 3108/3105 for goods delivered
+    // abroad); a per-line override only applies to ordinary domestic rates so
+    // reverse charge and export sales keep landing in the right
+    // VAT-declaration ruta.
+    const isSpecialTreatment = isZeroRatedInvoiceTreatment(treatment)
     const plAccount = !isSpecialTreatment && item.revenue_account
       ? item.revenue_account
       : getRevenueAccount(treatment, entityType, goodsDeliveryCountry)
     // Periodiserade lines credit the 29xx interim account (förutbetalda
     // intäkter) instead of revenue; the schedule dissolves it monthly. Output
     // VAT below is untouched. Moms is never deferred. Special treatments are
-    // never deferred (ruta 39/40 must reflect the full period's sales).
+    // never deferred (ruta 39/40/41 must reflect the full period's sales).
     const account = isSpecialTreatment || !options?.deferAccruals
       ? plAccount
       : resolveBookingAccount('revenue', item, plAccount)
@@ -251,9 +250,7 @@ export function generatePerRateLines(
 
   // Generate revenue + VAT lines per rate group.
   for (const [rate, group] of rateGroups) {
-    const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
-      ? invoiceVatTreatment
-      : getVatTreatmentForRate(rate)
+    const treatment = resolveLineVatTreatment(rate, invoiceVatTreatment)
 
     // The rate-level rounded subtotal is the balance anchor: identical to the
     // pre-override single-account behaviour. When a rate splits across multiple

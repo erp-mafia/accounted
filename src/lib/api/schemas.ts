@@ -664,7 +664,7 @@ export const InvoiceVatOverrideShape = {
     .nullable()
     .optional()
     .describe(
-      "This invoice's own VAT treatment instead of the customer's. standard = Swedish VAT at the line rates (ruta 05). export with delivery_country = export of goods (0 %, 3105, ruta 36); reverse_charge with delivery_country = intra-EU supply of goods (0 %, 3108, ruta 35). Without delivery_country, export / reverse_charge are the services treatments and only accepted where the customer already gets them. Omit to let the customer decide; null clears.",
+      "This invoice's own VAT treatment instead of the customer's. standard = Swedish VAT at the line rates (ruta 05). export with delivery_country = export of goods (0 %, 3105, ruta 36); reverse_charge with delivery_country = intra-EU supply of goods (0 %, 3108, ruta 35). Without delivery_country, export / reverse_charge are the services treatments and only accepted where the customer already gets them. reverse_charge_domestic = omvänd betalningsskyldighet for construction services (0 %, 3231, ruta 41, ML 16 kap. 13 §): only to a swedish_business customer with a Swedish VAT number (SE + 12 digits), never with delivery_country; every line 0 %. Omit to let the customer decide; null clears.",
     ),
   delivery_country: z
     .string()
