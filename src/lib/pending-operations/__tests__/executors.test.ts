@@ -924,6 +924,36 @@ describe('commitPendingOperation: import_sie', () => {
     )
   })
 
+  it.each([
+    [true, true],
+    [undefined, false],
+    ['true', false],
+  ])('passes confirm_org_number_mismatch=%s through to submitSIEJob as %s', async (param, expected) => {
+    vi.mocked(submitSIEJob).mockResolvedValueOnce({id:'imp-1',fiscal_period_id:'fp-1',job_state:'queued'} as never)
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's update
+
+    const op = makePendingOp({
+      operation_type: 'import_sie',
+      params: {
+        file_content: '#FLAGGA 0\n',
+        filename: 'test.sie',
+        mappings: [],
+        ...(param === undefined ? {} : { confirm_org_number_mismatch: param }),
+      },
+    })
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    // Only a literal true confirms: submitSIEJob re-checks the file's #ORGNR.
+    expect(submitSIEJob).toHaveBeenCalledWith(
+      expect.anything(), 'company-1', 'user-1', expect.anything(), [],
+      expect.objectContaining({ confirmOrgNumberMismatch: expected }),
+    )
+  })
+
   it('rejects when required params are missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

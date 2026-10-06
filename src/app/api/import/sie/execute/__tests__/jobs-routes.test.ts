@@ -173,6 +173,38 @@ describe('durable SIE HTTP boundaries',()=>{
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
+  it('answers another organisation\'s file with 409 and both numbers through the real submission gate', async () => {
+    vi.stubEnv('SIE_IMPORT_JOBS', 'true')
+    const actual = await vi.importActual<typeof import('@/lib/import/sie-jobs')>('@/lib/import/sie-jobs')
+    submit.mockImplementationOnce(actual.submitSIEJob)
+    queued.enqueue({ data: { org_number: '5599887766' } })
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#FNAMN "Other AB"\n#ORGNR 556677-8899\n#RAR 0 20260101 20261231\n' +
+      '#VER A 1 20260201 "Sale"\n{\n#TRANS 1930 {} 100\n#TRANS 3001 {} -100\n}'], 'other.se'))
+    form.set('mappings', JSON.stringify(['1930', '3001'].map(number => ({
+      sourceAccount: number, targetAccount: number, sourceName: 'Account', targetName: 'Account',
+      confidence: 1, matchType: 'manual', isOverride: true,
+    }))))
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(409)
+    expect((await response.json()).error).toMatchObject({
+      code: 'SIE_IMPORT_ORG_NUMBER_MISMATCH',
+      details: { file_org_number: '556677-8899', company_org_number: '5599887766', file_company_name: 'Other AB' },
+    })
+    expect(supabase.storage.from).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('passes the review step\'s confirmation through to submission', async () => {
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231'], 'confirmed.se'))
+    form.set('mappings', '[]')
+    form.set('options', JSON.stringify({ confirmOrgNumberMismatch: true }))
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(202)
+    expect(submit.mock.calls[0][5]).toMatchObject({ confirmOrgNumberMismatch: true })
+  })
+
   it('without supplied mappings, applies the upload\'s class 9 decision over a stored 9xxx mapping (#3312)', async () => {
     // What an earlier provider import saved for the account, which the job refuses as a target for amounts.
     queued.enqueue({ data: [{ id: 'm-1', user_id: 'actor-1', source_account: '9999', source_name: 'OBS', target_account: '9999',

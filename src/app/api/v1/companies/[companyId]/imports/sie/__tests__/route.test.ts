@@ -28,11 +28,14 @@ const { submitSIEJobMock } = vi.hoisted(() => ({
   submitSIEJobMock: vi.fn(),
 }))
 
-vi.mock('@/lib/import/sie-jobs', () => ({ submitSIEJob: submitSIEJobMock }))
+vi.mock('@/lib/import/sie-jobs', async (load) => ({
+  ...await load<typeof import('@/lib/import/sie-jobs')>(), submitSIEJob: submitSIEJobMock,
+}))
 vi.mock('next/server', async (load) => ({...await load<typeof import('next/server')>(), after:vi.fn()}))
 vi.mock('@/lib/import/sie-job-worker', () => ({runSIEWorker:vi.fn()}))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { POST } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -172,6 +175,28 @@ describe('POST /imports/sie', () => {
     // Undefined lets job preparation pick a series the file's own vouchers
     // do not use, instead of a hardcoded default that could collide.
     expect(options.openingBalanceSeries).toBeUndefined()
+  })
+
+  it('passes confirmOrgNumberMismatch through and leaves it undefined by default', async () => {
+    await callRoute({ confirmOrgNumberMismatch: true })
+    expect(submitSIEJobMock.mock.calls[0][5]).toMatchObject({ confirmOrgNumberMismatch: true })
+
+    submitSIEJobMock.mockClear()
+    await callRoute()
+    expect((submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>).confirmOrgNumberMismatch).toBeUndefined()
+  })
+
+  it('answers another organisation\'s file with 409 and both numbers', async () => {
+    submitSIEJobMock.mockRejectedValueOnce(new SIEJobValidationError('mismatch', 'SIE_IMPORT_ORG_NUMBER_MISMATCH', {
+      file_org_number: '5566778899', company_org_number: '5599887766', file_company_name: 'Import AB',
+    }))
+
+    const res = await callRoute()
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SIE_IMPORT_ORG_NUMBER_MISMATCH')
+    expect(body.error.details).toMatchObject({ file_org_number: '5566778899', company_org_number: '5599887766' })
   })
 
   // #3312: the dashboard upload's class 9 decision, not suggestMappings alone.

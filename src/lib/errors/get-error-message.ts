@@ -676,6 +676,15 @@ export function getErrorMessage(
         }
       }
 
+      // Name both numbers, so the reader can tell a wrong file from a
+      // company registered under the wrong number.
+      if (structured.code === 'SIE_IMPORT_ORG_NUMBER_MISMATCH') {
+        const details = structured.details as { file_org_number?: unknown; company_org_number?: unknown } | undefined
+        if (typeof details?.file_org_number === 'string' && typeof details.company_org_number === 'string') {
+          return `SIE-filen gäller organisationsnummer ${details.file_org_number}, men företaget har ${details.company_org_number}. Kontrollera att det är rätt fil och rätt företag, och bekräfta för att importera ändå.`
+        }
+      }
+
       if (structured.code === 'JOURNAL_ENTRY_NOT_BALANCED') {
         const details = structured.details as { totalDebit?: number; totalCredit?: number } | undefined
         if (details && typeof details.totalDebit === 'number' && typeof details.totalCredit === 'number') {

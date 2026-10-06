@@ -25,6 +25,7 @@ import { hasSIEFileExtension } from '@/lib/import/sie-file-extensions'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { readSIERequestFile } from '@/lib/import/sie-intake'
 import { resolveSIEFiscalYear } from '@/lib/import/sie-jobs'
+import { checkSIEOrgNumber } from '@/lib/import/sie-org-number'
 import { ensureInitialized } from '@/lib/init'
 
 ensureInitialized()
@@ -143,6 +144,12 @@ export const POST = withRouteContext(
         mappings,
         new Set(chartRows.map((r) => r.account_number)),
       )
+
+      // Another organisation's file: the review step asks for the
+      // confirmation the submit gate (submitSIEJob) requires.
+      const orgCheck = await checkSIEOrgNumber(supabase, companyId!, parsed.header.orgNumber)
+      preview.orgNumberMismatch = orgCheck.mismatch
+      preview.companyOrgNumber = orgCheck.companyOrgNumber
 
       // Same containment/overlap verdict the import runs (ensureFiscalPeriod),
       // so a fiscal-year conflict shows here instead of after the mapping step.

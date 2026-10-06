@@ -24,6 +24,7 @@ import {
 } from '../lib/provider'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 
 const THEATER_MAX_FILE_BYTES = 8 * 1024 * 1024
 
@@ -71,6 +72,7 @@ function yearsOf(files: FileEntry[]): string[] {
  */
 export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const t = useTranslations('books')
+  const tNotice = useTranslations('import_notices')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
   const { state, dispatch, flags, loadFindings } = ctx
   const { settings } = useCompanySettings()
@@ -80,6 +82,9 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const [optsOpen, setOptsOpen] = useState(false)
   const [ibOn, setIbOn] = useState<boolean | null>(null)
   const [namesOn, setNamesOn] = useState(true)
+  // Files whose #ORGNR is not the company's that the user said yes to. By
+  // id, so a file added after the yes needs its own.
+  const [orgConfirmedIds, setOrgConfirmedIds] = useState<string[]>([])
   const [phase, setPhase] = useState<Phase>('drop')
   const [model, setModel] = useState<TheaterModelInput | null>(null)
   const [shown, setShown] = useState(0)
@@ -175,6 +180,10 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   // Class 9 accounts with amounts are routed to 2999 OBS-konto by the parse
   // route (sie-preview-mappings.ts); this flow has no mapping page, so say so.
   const obsAccounts = useMemo(() => obsAccountsOf(ready.flatMap((f) => f.parsed!.mappings)), [ready])
+  // Another organisation's file: the server refuses it without a yes
+  // (submitSIEJob), so the import waits for the checkbox below.
+  const orgMismatched = useMemo(() => ready.filter((f) => f.parsed!.preview.orgNumberMismatch === true), [ready])
+  const orgConfirmed = orgMismatched.every((f) => orgConfirmedIds.includes(f.id))
   const hasIb = ready.some((f) => (f.parsed?.preview.openingBalanceTotal ?? 0) > 0)
   const ib = ibOn ?? hasIb
   const ibAmount = ready.reduce((s, f) => s + (f.parsed?.preview.openingBalanceTotal ?? 0), 0)
@@ -188,8 +197,15 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     list.push(unmapped.length === 0 ? { text: t('fact_accounts_known', { count: totalAccounts }) } : { text: t('fact_accounts_new', { count: totalAccounts, created: unmapped.length }) })
     if (obsAccounts.length > 0) list.push({ text: t('fact_obs_to_2999', { accounts: obsAccounts.join(', ') }) })
     if (unresolved.length > 0) list.push({ text: t('accounts_outside_bas', { count: unresolved.length, accounts: unresolved.join(', ') }), warn: true })
+    const fileOrgs = new Set<string>()
+    for (const f of orgMismatched) {
+      const fileOrg = f.parsed!.preview.orgNumber ?? '?'
+      if (fileOrgs.has(fileOrg)) continue
+      fileOrgs.add(fileOrg)
+      list.push({ text: tNotice('sie_org_mismatch', { fileOrg, companyOrg: f.parsed!.preview.companyOrgNumber ?? '?' }), warn: true })
+    }
     return list
-  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, obsAccounts, unresolved, t])
+  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, obsAccounts, unresolved, orgMismatched, t, tNotice])
 
   /* ── import ──────────────────────────────────────────────────────── */
   const lines: TheaterLine[] = [
@@ -282,6 +298,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
           voucherSeries,
           openingBalanceSeries: defaultOpeningBalanceSeries([...(p.preview.voucherSeriesInFile ?? []), voucherSeries]),
           markImportedNoDocRequired: true,
+          ...(p.preview.orgNumberMismatch && orgConfirmedIds.includes(f.id) ? { confirmOrgNumberMismatch: true } : {}),
         }))
         const res = await fetch('/api/import/sie/execute', { method: 'POST', body: fd })
         const data = await res.json().catch(() => ({}))
@@ -491,6 +508,17 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                   />
                 </OptRows>
               ) : null}
+              {orgMismatched.length > 0 ? (
+                <div className="flex items-start justify-center gap-2" style={{ marginTop: 12 }}>
+                  <Checkbox
+                    id="sie-confirm-org-number"
+                    className="mt-0.5"
+                    checked={orgConfirmed}
+                    onCheckedChange={(checked) => setOrgConfirmedIds(checked === true ? orgMismatched.map((f) => f.id) : [])}
+                  />
+                  <label htmlFor="sie-confirm-org-number" className="text-[13px] leading-5">{tNotice('sie_org_mismatch_confirm')}</label>
+                </div>
+              ) : null}
             </>
           ) : null}
           <div className="jny-qactions">
@@ -501,7 +529,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
               </>
             ) : null}
             {ready.length > 0 && !parsing ? (
-              <Button size="lg" onClick={() => void runImport()}>{t('sie_import', { count: nYears })}</Button>
+              <Button size="lg" disabled={!orgConfirmed} onClick={() => void runImport()}>{t('sie_import', { count: nYears })}</Button>
             ) : null}
           </div>
         </>

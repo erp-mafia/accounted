@@ -57,6 +57,7 @@ beforeEach(() => {
 describe('gnubok_import_sie: stage-time validation', () => {
   it('stages a valid file with a parsed, content-rich preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { org_number: '5566778899' }, error: null }) // companies: the file's own number
     enqueue({ data: { id: 'op-sie' }, error: null }) // pending_operations insert
 
     const result = (await importSie.execute(
@@ -159,6 +160,7 @@ describe('gnubok_import_sie: stage-time validation', () => {
 
   it('stages when partial overlap exists (1 of 2 accounts mapped)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { org_number: '5566778899' }, error: null }) // companies
     enqueue({ data: { id: 'op-sie-partial' }, error: null })
 
     const partial = [
@@ -181,10 +183,13 @@ describe('gnubok_import_sie: stage-time validation', () => {
 describe('gnubok_import_sie: update_account_names staging', () => {
   // Captures the pending_operations insert payload so the staged params can
   // be asserted (createQueuedMockSupabase cannot inspect arguments).
-  function buildCapturingSupabase() {
+  function buildCapturingSupabase(companyOrg = '5566778899') {
     const staged: Array<Record<string, unknown>> = []
     const supabase = {
       from: (table: string) => {
+        if (table === 'companies') {
+          return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { org_number: companyOrg }, error: null }) }) }) }
+        }
         if (table !== 'pending_operations') throw new Error(`Unexpected table: ${table}`)
         return {
           insert: (row: Record<string, unknown>) => {
@@ -286,5 +291,49 @@ describe('gnubok_import_sie: update_account_names staging', () => {
     )
 
     expect((staged[0].params as Record<string, unknown>).opening_balance_series).toBeUndefined()
+  })
+})
+
+describe('gnubok_import_sie: the file\'s #ORGNR against the company', () => {
+  function buildCapturingSupabase(companyOrg: string) {
+    const staged: Array<Record<string, unknown>> = []
+    const supabase = {
+      from: (table: string) => table === 'companies'
+        ? { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { org_number: companyOrg }, error: null }) }) }) }
+        : { insert: (row: Record<string, unknown>) => {
+            staged.push(row)
+            return { select: () => ({ single: () => Promise.resolve({ data: { id: 'op-sie' }, error: null }) }) }
+          } },
+    }
+    return { supabase, staged }
+  }
+  const stage = (supabase: unknown, extra: Record<string, unknown> = {}) => importSie.execute(
+    { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE, ...extra },
+    'company-1', 'user-1', supabase as never, { type: 'api_key' },
+  )
+
+  it('refuses to stage another organisation\'s file without a confirmation', async () => {
+    const { supabase, staged } = buildCapturingSupabase('5599887766')
+
+    await expect(stage(supabase)).rejects.toMatchObject({ code: 'SIE_IMPORT_ORG_NUMBER_MISMATCH' })
+    expect(staged).toHaveLength(0)
+  })
+
+  it('stages it on confirm_org_number_mismatch=true and shows the approver both numbers', async () => {
+    const { supabase, staged } = buildCapturingSupabase('5599887766')
+
+    const result = (await stage(supabase, { confirm_org_number_mismatch: true })) as { preview: Record<string, unknown> }
+
+    expect((staged[0].params as Record<string, unknown>).confirm_org_number_mismatch).toBe(true)
+    expect(result.preview).toMatchObject({ org_number: '5566778899', org_number_mismatch: true, company_org_number: '5599887766' })
+  })
+
+  it('stages the company\'s own number in its 12-digit form without a confirmation', async () => {
+    const { supabase, staged } = buildCapturingSupabase('165566778899')
+
+    const result = (await stage(supabase)) as { preview: Record<string, unknown> }
+
+    expect(staged[0].params as Record<string, unknown>).not.toHaveProperty('confirm_org_number_mismatch')
+    expect(result.preview.org_number_mismatch).toBe(false)
   })
 })

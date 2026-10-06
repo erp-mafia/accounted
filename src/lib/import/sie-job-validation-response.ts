@@ -5,7 +5,7 @@ import { SIEJobValidationError } from './sie-jobs'
 type RouteLogger = Parameters<typeof errorResponseFromCode>[1]
 
 /**
- * The 400 for a SIEJobValidationError, carrying the validator's own sentence.
+ * The 4xx for a SIEJobValidationError, carrying the validator's own sentence.
  *
  * validateSIEJobInput names exactly what refused the file ("SIE-verifikation
  * LESSLIE2 (2025-01-02) ligger utanför räkenskapsåret."), but the generic
@@ -25,7 +25,9 @@ export function sieJobValidationResponse(
   const specificEntry = error.code !== 'VALIDATION_ERROR'
   return errorResponseFromCode(error.code, log, {
     requestId,
-    status: 400,
+    // A code with its own entry keeps that entry's status: 409 for the
+    // org-number confirmation gate, 400 for the account-class refusal.
+    ...(specificEntry ? {} : { status: 400 }),
     reason: error.message,
     ...(error.details ? { details: error.details } : {}),
     // The sv/en pair is overridden together (the context's contract). The
