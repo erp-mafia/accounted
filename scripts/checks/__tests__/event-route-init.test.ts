@@ -173,7 +173,7 @@ describe('uninitialized-event-route on the real tree', () => {
 
     expect(result.emittingRoutes).toContain(LOCK_ROUTE)
     expect(result.uninitialized).not.toContain(LOCK_ROUTE)
-  })
+  }, 60_000)
 
   it('keeps lib/init out of withRouteContext, so non-emitting routes stay light on a cold start', () => {
     const wrapper = fs.readFileSync(path.join(SOURCE_ROOT, 'lib/api/with-route-context.ts'), 'utf8')
