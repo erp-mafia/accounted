@@ -257,14 +257,14 @@ tool-pg:
 
 # Production migrations on every merge to main, as Supabase's GitHub
 # integration did (it applied out-of-order versions too, hence --include-all).
-# STEP 1: dry run only. It lists what WOULD be applied, proving the token and
-# password work without changing anything.
+# Runs on push to main only, one at a time, and lists what is applied before
+# and after so the log shows exactly what changed.
 #
 # No `supabase link`: that reads the project's API keys, which this job has no
 # use for. The token only looks up the session pooler's address; the CLI then
 # connects with the database password. The URL holds the password and is never
 # printed. Secrets: SUPABASE_ACCESS_TOKEN and SUPABASE_DB_PASSWORD, protected
-# and masked. One run at a time.
+# and masked.
 migrations-production:
   stage: checks
   needs: []
@@ -293,4 +293,5 @@ migrations-production:
       export SUPABASE_DB_URL="$(cat /tmp/db-url)"
       rm -f /tmp/db-url
       npx -y "$SUPABASE_CLI" migration list --db-url "$SUPABASE_DB_URL" | tail -15
-      npx -y "$SUPABASE_CLI" db push --dry-run --include-all --db-url "$SUPABASE_DB_URL"
+      npx -y "$SUPABASE_CLI" db push --include-all --db-url "$SUPABASE_DB_URL"
+      npx -y "$SUPABASE_CLI" migration list --db-url "$SUPABASE_DB_URL" | tail -8
