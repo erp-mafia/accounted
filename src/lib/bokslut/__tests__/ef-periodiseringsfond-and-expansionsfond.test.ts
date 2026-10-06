@@ -67,3 +67,40 @@ describe('Expansionsfond', () => {
     ).toBeNull()
   })
 })
+
+// Rutor per Skatteverket's NE-bilaga (SKV 2161): R32 återföring och R34
+// avsättning periodiseringsfond, R36 ökning och R37 minskning expansionsfond.
+describe('NE-bilaga rutor', () => {
+  it('periodiseringsfond: avsättning in R34, återföring in R32', () => {
+    const avsattning = proposeEfPfondAvsattning({ surplus: 100_000, fiscalYear: 2026 })
+    expect(avsattning!.ne_ruta).toBe('R34')
+    expect(avsattning!.description).toContain('R34')
+
+    const [ateforing] = proposeEfPfondAteforing({
+      existingFonder: [{ cohort_year: 2020, balance: 50_000 }],
+      closingYear: 2026,
+    })
+    expect(ateforing.ne_ruta).toBe('R32')
+    expect(ateforing.description).toContain('R32')
+  })
+
+  it('expansionsfond: ökning in R36, minskning in R37', () => {
+    const okning = calculateExpansionsfondChange({ kapitalunderlag: 100_000, desiredChange: 10_000 })
+    expect(okning!.ne_ruta).toBe('R36')
+
+    const minskning = calculateExpansionsfondChange({
+      kapitalunderlag: 100_000,
+      existingBalance: 30_000,
+      desiredChange: -10_000,
+    })
+    expect(minskning!.ne_ruta).toBe('R37')
+  })
+
+  it('expansionsfond: an avsättning capped to 0 is still an avsättning, not a återföring', () => {
+    const r = calculateExpansionsfondChange({ kapitalunderlag: 0, desiredChange: 10_000 })
+    expect(r!.kind).toBe('expansionsfond_avsattning')
+    expect(r!.ne_ruta).toBe('R36')
+    expect(r!.amount).toBe(0)
+    expect(r!.warnings[0]).toContain('125,94')
+  })
+})

@@ -67,4 +67,23 @@ describe('gnubok_preview_ef_declaration: legal-form gate', () => {
     expect(result.bookedSurplus).toBe(120_000)
     expect(result.items.map((i) => i.kind)).toContain('egenavgifter')
   })
+
+  it('caps an expansionsfond avsättning on expansionsfond_kapitalunderlag, not kapitalunderlag', async () => {
+    const result = (await tool.execute(
+      {
+        fiscal_period_id: 'fp-1',
+        kapitalunderlag: 100_000,
+        expansionsfond_kapitalunderlag: 400_000,
+        expansionsfond_desired_change: 300_000,
+      },
+      'company-1',
+      'user-1',
+      makeSupabase('enskild_firma') as never,
+      { type: 'api_key' } as never,
+    )) as { items: Array<{ kind: string; amount: number; computation: Record<string, unknown> }> }
+
+    const exp = result.items.find((i) => i.kind === 'expansionsfond_avsattning')
+    expect(exp?.computation).toMatchObject({ kapitalunderlag: 400_000 })
+    expect(exp?.amount).toBe(300_000)
+  })
 })

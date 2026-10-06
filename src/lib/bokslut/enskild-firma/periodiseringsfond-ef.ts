@@ -6,7 +6,9 @@ export const PFOND_EF_RATE = 0.30
 export const PFOND_EF_MAX_HOLD_YEARS = 6
 
 export interface EfPfondAvsattningInput {
-  /** Skattemässigt överskott efter alla andra justeringar. */
+  /** NE R33: the för periodiseringsfond justerade resultatet (IL 30 kap
+   *  6 §), i.e. after räntefördelning and återföring, before this
+   *  avsättning, expansionsfond and any avdrag för egenavgifter. */
   surplus: number
   /** Året då avsättningen görs. */
   fiscalYear: number
@@ -31,9 +33,9 @@ export function proposeEfPfondAvsattning(input: EfPfondAvsattningInput): EfDecla
   return {
     kind: 'periodiseringsfond_avsattning',
     label: `Periodiseringsfond ${input.fiscalYear}: avsättning`,
-    description: `Max 30 % av skattemässigt överskott. Sätts av i NE-bilaga R30 (uppskjuten skatt). Bokförs inte.`,
+    description: `Max 30 % av överskottet före avsättning (NE-bilaga R33). Sätts av i NE-bilaga R34 (uppskjuten skatt). Bokförs inte.`,
     amount,
-    ne_ruta: 'R30',
+    ne_ruta: 'R34',
     computation: {
       surplus: input.surplus,
       rate: PFOND_EF_RATE,
@@ -73,9 +75,9 @@ export function proposeEfPfondAteforing(
     items.push({
       kind: 'periodiseringsfond_ateforing',
       label: `Periodiseringsfond ${fond.cohort_year}: återföring`,
-      description: 'Återförs i NE-bilaga R29.',
+      description: 'Återförs i NE-bilaga R32.',
       amount,
-      ne_ruta: 'R29',
+      ne_ruta: 'R32',
       computation: {
         cohort_year: fond.cohort_year,
         opening_balance: fond.balance,
