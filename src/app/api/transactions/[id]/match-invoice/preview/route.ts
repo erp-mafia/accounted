@@ -18,6 +18,11 @@
  *
  * The UI uses this to show the user the exact lines before they confirm:
  * the lack of any preview was part of the reported bug.
+ *
+ * `overpayment_account` (optional): where a SEK customer's excess of a krona
+ * or more goes, as the POST takes it. Without it such a match previews no
+ * rows and `overpayment` names the excess and the accounts that may take it,
+ * since the POST refuses it until the user picks one (crm#1045).
  */
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
@@ -25,10 +30,16 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 import { buildInvoiceCashLines } from '@/lib/bookkeeping/invoice-entries'
 import { invoiceCashBankSek } from '@/lib/bookkeeping/invoice-lines'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import {
+  CUSTOMER_ADVANCE_ACCOUNT,
+  OVERPAYMENT_ACCOUNTS,
+  overpaymentAllowed,
+} from '@/lib/bookkeeping/overpayment'
+import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
+import { planMatchPayment } from '@/lib/invoices/match-payment-plan'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
@@ -49,6 +60,7 @@ type PreviewLine = {
 
 const QuerySchema = z.object({
   invoice_id: z.string().uuid(),
+  overpayment_account: z.enum([CUSTOMER_ADVANCE_ACCOUNT, ORE_ROUNDING_ACCOUNT]).optional(),
 })
 
 export const GET = withRouteContext(
@@ -58,14 +70,24 @@ export const GET = withRouteContext(
     const { supabase, companyId, log, requestId } = ctx
 
     const url = new URL(request.url)
-    const parsed = QuerySchema.safeParse({ invoice_id: url.searchParams.get('invoice_id') })
+    const parsed = QuerySchema.safeParse({
+      invoice_id: url.searchParams.get('invoice_id'),
+      overpayment_account: url.searchParams.get('overpayment_account') ?? undefined,
+    })
     if (!parsed.success) {
+      const field = parsed.error.issues[0]?.path[0] === 'overpayment_account' ? 'overpayment_account' : 'invoice_id'
       return errorResponseFromCode('VALIDATION_ERROR', log, {
         requestId,
-        details: { field: 'invoice_id', message: 'invoice_id must be a UUID' },
+        details: {
+          field,
+          message:
+            field === 'invoice_id'
+              ? 'invoice_id must be a UUID'
+              : `overpayment_account must be ${CUSTOMER_ADVANCE_ACCOUNT} or ${ORE_ROUNDING_ACCOUNT}`,
+        },
       })
     }
-    const { invoice_id } = parsed.data
+    const { invoice_id, overpayment_account } = parsed.data
 
     // Data minimization (GDPR Art.5(1)(c)): amount_sek + exchange_rate are
     // pulled because buildInvoicePaymentClearingLines needs them for the
@@ -218,24 +240,37 @@ export const GET = withRouteContext(
       fxConversion.required && !('error' in fxConversion)
         ? fxConversion.paid_in_invoice_currency
         : transaction.amount
-    const currentRemaining =
-      invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
-    const newRemaining = Math.max(
-      0,
-      Math.round((currentRemaining - paidAmount) * 100) / 100,
-    )
     // A rate-unavailable cross-currency payment can't be resolved to invoice
     // currency yet, so never report fully-paid (or preview the cash shape) on
     // a guess: the dialog blocks confirm until a manual rate is entered and
     // the POST recomputes the real figure.
     const fxRateUnavailable = fxConversion.required && 'error' in fxConversion
-    // Pure-SEK whole-krona settlements absorb a sub-krona remainder as
-    // öresavrundning (3740) and settle in full: mirror that here so the
-    // preview's fully-paid signal matches the committed verifikat.
+    // The POST's own payment step on the same inputs: the overshoot guard,
+    // the öresavrundning band (a sub-krona remainder settles in full on 3740)
+    // and a named overpayment account. A private copy of that math here once
+    // counted any overpayment as fully paid and previewed a booking the POST
+    // refused (crm#1045).
     const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
-    const isFullyPaid =
-      !fxRateUnavailable &&
-      (newRemaining <= 0 || (pureSek && newRemaining < ORE_ROUNDING_SETTLEMENT_MAX))
+    const payment = fxRateUnavailable
+      ? null
+      : planMatchPayment(invoice, paidAmount, { pureSek, overpaymentAccount: overpayment_account })
+    // The excess of a SEK customer who paid a krona or more too much and has
+    // not named its account yet: nothing is bookable until they do.
+    let unplacedExcess: number | null = null
+    if (payment && !payment.ok) {
+      if (payment.code !== 'MATCH_AMOUNT_EXCEEDS_REMAINING' || !payment.absorbsOre) {
+        return errorResponseFromCode(payment.code, log, { requestId, details: payment.details })
+      }
+      unplacedExcess = payment.details.excess
+    }
+    // Any account the user may name settles the invoice in full.
+    const isFullyPaid = unplacedExcess !== null || (payment?.ok === true && payment.plan.isFullyPaid)
+    const overpayment =
+      unplacedExcess !== null
+        ? { excess: unplacedExcess, account: null }
+        : payment?.ok && payment.overpayment
+          ? { excess: payment.overpayment.amount, account: payment.overpayment.account }
+          : null
 
     const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
@@ -269,11 +304,14 @@ export const GET = withRouteContext(
     let entryType: 'clearing' | 'cash' = 'clearing'
     let booked: CreateJournalEntryLineInput[]
 
-    if (useCashEntry) {
-      entryType = 'cash'
+    if (useCashEntry) entryType = 'cash'
+    if (unplacedExcess !== null) {
+      booked = []
+    } else if (useCashEntry) {
       booked = buildInvoiceCashLines(
         inv, entityType, inv.customer?.name ?? undefined, paymentAccount,
         invoiceCashBankSek(transaction),
+        overpayment?.account ?? undefined,
       ).lines
     } else {
       booked = buildInvoiceMatchClearingLines(
@@ -297,6 +335,7 @@ export const GET = withRouteContext(
           ? fxConversion.paid_in_invoice_currency
           : undefined,
         paymentAccount,
+        overpayment?.account ?? undefined,
       ).lines
     }
 
@@ -320,6 +359,13 @@ export const GET = withRouteContext(
       fx_conversion: fxConversion,
       // The settled invoice's bag, for a row the user adds while editing.
       document_dimensions: coerceDimensionsBag(inv.default_dimensions),
+      // A SEK excess of a krona or more: the accounts that may take it and
+      // the one the user named (null until then, with no rows above).
+      overpayment: overpayment && {
+        excess: overpayment.excess,
+        accounts: OVERPAYMENT_ACCOUNTS.filter((account) => overpaymentAllowed(account, overpayment.excess)),
+        account: overpayment.account,
+      },
     })
   },
 )

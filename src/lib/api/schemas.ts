@@ -20,6 +20,8 @@ import { orgNumberKey } from '@/lib/invariants/org-number'
 import { DIMENSION_RULE_POLICY } from '@/lib/bookkeeping/dimension-rule-policy'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import { CUSTOMER_ADVANCE_ACCOUNT } from '@/lib/bookkeeping/overpayment'
+import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
 import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
@@ -2462,7 +2464,7 @@ export const BulkBookInboxSchema = z.object({
   dimensions: DimensionsBagSchema.nullish().transform((v) => v ?? undefined),
 })
 
-export const MatchInvoiceSchema = z
+const matchInvoiceFields = z
   .object({
     invoice_id: uuid,
     // Bypass the soft-duplicate guard (MATCH_INVOICE_POSSIBLE_DUPLICATE).
@@ -2506,9 +2508,34 @@ export const MatchInvoiceSchema = z
     // died in Postgres. The shared primitive is exclusive on both ends.
     manual_exchange_rate: exchangeRate.optional(),
   })
-  .refine((v) => !v.force || !!v.expected_journal_entry_id, {
-    message: 'expected_journal_entry_id is required when force=true',
-    path: ['expected_journal_entry_id'],
+
+function forceNamesCandidate(v: { force?: boolean; expected_journal_entry_id?: string }): boolean {
+  return !v.force || !!v.expected_journal_entry_id
+}
+
+const FORCE_NAMES_CANDIDATE_ISSUE = {
+  message: 'expected_journal_entry_id is required when force=true',
+  path: ['expected_journal_entry_id'],
+}
+
+export const MatchInvoiceSchema = matchInvoiceFields.refine(forceNamesCandidate, FORCE_NAMES_CANDIDATE_ISSUE)
+
+/**
+ * The dashboard match dialog's body: MatchInvoiceSchema plus where a
+ * customer's excess of a krona or more is booked (lib/bookkeeping/
+ * overpayment.ts) and the excess the dialog showed, which the route books or
+ * refuses with MATCH_OVERPAYMENT_CHANGED, as the agent match does at approval
+ * (crm#1045). Not on the v1 body: that route does not book an overpayment.
+ */
+export const DashboardMatchInvoiceSchema = matchInvoiceFields
+  .extend({
+    overpayment_account: z.enum([CUSTOMER_ADVANCE_ACCOUNT, ORE_ROUNDING_ACCOUNT]).optional(),
+    overpayment_amount: z.number().positive().optional(),
+  })
+  .refine(forceNamesCandidate, FORCE_NAMES_CANDIDATE_ISSUE)
+  .refine((v) => (v.overpayment_account === undefined) === (v.overpayment_amount === undefined), {
+    message: 'overpayment_account and overpayment_amount are sent together',
+    path: ['overpayment_amount'],
   })
 
 /**

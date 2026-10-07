@@ -353,3 +353,80 @@ describe('GET /api/transactions/[id]/match-invoice/preview', () => {
     })
   })
 })
+
+describe('GET /api/transactions/[id]/match-invoice/preview: a customer overpayment (crm#1045)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
+  })
+
+  async function preview(searchParams: Record<string, string> = {}) {
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice/preview', {
+      searchParams: { invoice_id: VALID_UUID, ...searchParams },
+    })
+    const response = await GET(request, createMockRouteParams({ id: 'tx-1' }))
+    return parseJsonResponse<{
+      lines: unknown[]
+      is_fully_paid: boolean
+      overpayment: { excess: number; accounts: string[]; account: string | null } | null
+      error: { code: string; details?: Record<string, unknown> }
+    }>(response)
+  }
+
+  function enqueueSek(amount: number) {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount, currency: 'SEK', date: '2026-05-30', invoice_id: null }), error: null })
+    enqueue({
+      data: makeInvoice({ id: VALID_UUID, status: 'sent', total: 812.4, remaining_amount: 812.4, paid_amount: 0, journal_entry_id: 'je-sent' }),
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: [], error: null }) // cash accounts -> 1930
+  }
+
+  it('an excess of 10 kr or more offers only 2420 and previews no rows until it is named', async () => {
+    enqueueSek(1312.4)
+    const { status, body } = await preview()
+    expect(status).toBe(200)
+    expect(body.lines).toEqual([])
+    expect(body.is_fully_paid).toBe(true)
+    expect(body.overpayment).toEqual({ excess: 500, accounts: ['2420'], account: null })
+  })
+
+  it('an exact payment carries no overpayment', async () => {
+    enqueueSek(812.4)
+    const { status, body } = await preview()
+    expect(status).toBe(200)
+    expect(body.overpayment).toBeNull()
+    expect(body.lines).not.toEqual([])
+  })
+
+  it('refuses 3740 for an excess at its cap, as the POST does', async () => {
+    enqueueSek(1312.4)
+    const { status, body } = await preview({ overpayment_account: '3740' })
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_OVERPAYMENT_ROUNDING_CAP')
+  })
+
+  it('returns 400 for an account that may not take an overpayment', async () => {
+    const { status, body } = await preview({ overpayment_account: '1510' })
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details).toMatchObject({ field: 'overpayment_account' })
+  })
+
+  it('a cross-currency overshoot is refused like the POST refuses it, not previewed as paid', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: 2000, currency: 'SEK', date: '2026-05-30', invoice_id: null }), error: null })
+    enqueue({
+      data: makeInvoice({ id: VALID_UUID, status: 'sent', currency: 'USD', exchange_rate: 10, total: 140, remaining_amount: 140, paid_amount: 0, journal_entry_id: 'je-sent' }),
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: [], error: null }) // cash accounts -> 1930
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'USD', rate: 10, date: '2026-05-30' })
+
+    const { status, body } = await preview()
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
+  })
+})

@@ -18,9 +18,9 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
-import { MatchInvoiceSchema } from '@/lib/api/schemas'
+import { DashboardMatchInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
-import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { planMatchPayment } from '@/lib/invoices/match-payment-plan'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
@@ -60,12 +60,19 @@ export const POST = withRouteContext(
     const { id: transactionId } = await params
     const { user, supabase, companyId, log, requestId } = ctx
 
-    const validation = await validateBody(request, MatchInvoiceSchema, {
+    const validation = await validateBody(request, DashboardMatchInvoiceSchema, {
       log,
       operation: 'transaction.match_invoice',
     })
     if (!validation.success) return validation.response
-    const { invoice_id, force, expected_journal_entry_id, lines: customLines } = validation.data
+    const {
+      invoice_id,
+      force,
+      expected_journal_entry_id,
+      lines: customLines,
+      overpayment_account,
+      overpayment_amount,
+    } = validation.data
 
     const txLog = log.child({ transactionId, invoiceId: invoice_id })
 
@@ -401,20 +408,33 @@ export const POST = withRouteContext(
       ? fx.paidInInvoiceCurrency
       : transaction.amount
 
-    // Overshoot guard + paid/remaining math: shared with the v1 and agent
-    // (commit) paths via planInvoicePayment so they cannot drift again.
-    // Pure-SEK settlements absorb sub-krona öresavrundning (booked to 3740 by
-    // buildInvoicePaymentClearingLines) so a whole-krona payment settles in full.
+    // Overshoot guard + paid/remaining math: the step the preview and the
+    // agent (commit) path run too, so the dialog never shows a booking this
+    // refuses. Pure-SEK settlements absorb sub-krona öresavrundning (3740) so a
+    // whole-krona payment settles in full; an excess of a krona or more books
+    // only on the account the user picked in the dialog (crm#1045).
     const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
-    const payment = planInvoicePayment(invoice, paidAmountInInvoiceCurrency, {
-      absorbOreRounding: pureSek,
+    const payment = planMatchPayment(invoice, paidAmountInInvoiceCurrency, {
+      pureSek,
+      overpaymentAccount: overpayment_account,
     })
     if (!payment.ok) {
-      return errorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', txLog, {
+      return errorResponseFromCode(payment.code, txLog, {
         requestId,
         details: payment.details,
       })
     }
+    // The dialog showed one excess: book that one or nothing. A payment
+    // applied to the invoice since the preview would otherwise book a
+    // different amount on the account than the one the user confirmed.
+    const shownExcess = overpayment_amount === undefined ? 0 : roundOre(overpayment_amount)
+    if (shownExcess !== (payment.overpayment?.amount ?? 0)) {
+      return errorResponseFromCode('MATCH_OVERPAYMENT_CHANGED', txLog, {
+        requestId,
+        details: { shown_excess: shownExcess, current_excess: payment.overpayment?.amount ?? 0 },
+      })
+    }
+    const overpaymentAccount = payment.overpayment?.account
     const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
     const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
@@ -516,6 +536,7 @@ export const POST = withRouteContext(
               invoice as Invoice, entityType, invoice.customer?.name, paymentAccount,
               // The bank amount createInvoiceCashEntry derives from the same row.
               invoiceCashBankSek(transaction),
+              overpaymentAccount,
             ).lines
           : buildInvoiceMatchClearingLines(
               {
@@ -538,6 +559,7 @@ export const POST = withRouteContext(
               // so 1510 is credited proportionally and the FX-diff line posted.
               fx.required ? fx.paidInInvoiceCurrency : undefined,
               paymentAccount,
+              overpaymentAccount,
             ).lines
     } catch (err) {
       return bookingFailure(err)
@@ -606,7 +628,7 @@ export const POST = withRouteContext(
         const journalEntry = await createInvoiceCashEntry(
           supabase, companyId, user.id, invoice as Invoice, transaction.date,
           entityType, invoice.customer?.name, paymentAccount,
-          transaction,
+          transaction, overpaymentAccount,
         )
         journalEntryId = journalEntry?.id ?? null
       } else {

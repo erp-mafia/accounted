@@ -2447,6 +2447,8 @@ export default function TransactionsPage() {
       credit_amount: number
       line_description?: string
     }>
+    overpayment_account?: string
+    overpayment_amount?: number
   }) {
     if (!selectedTransaction) return
     const isSupplier = !!selectedTransaction.potential_supplier_invoice
@@ -2477,6 +2479,12 @@ export default function TransactionsPage() {
       // createJournalEntry directly. Default routing applies when omitted.
       if (opts?.lines && opts.lines.length >= 2) {
         body.lines = opts.lines
+      }
+      // Where a customer's excess goes, with the excess the dialog showed:
+      // the route books exactly that or refuses (crm#1045).
+      if (!isSupplier && opts?.overpayment_account && opts.overpayment_amount !== undefined) {
+        body.overpayment_account = opts.overpayment_account
+        body.overpayment_amount = opts.overpayment_amount
       }
 
       const response = await fetch(url, {

@@ -934,7 +934,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(mockFindUnresolvableAccounts.mock.calls[0][2]).toContain('3740')
     expect(mockCreateInvoiceCashEntry).toHaveBeenCalledWith(
       expect.anything(), 'company-1', 'user-1', expect.anything(), '2024-06-15',
-      'enskild_firma', undefined, '1930', tx,
+      'enskild_firma', undefined, '1930', tx, undefined,
     )
     expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
       status: 'paid',
@@ -1106,6 +1106,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
         undefined,
         '1940',
         tx,
+        undefined, // no overpayment account
       )
     })
 
@@ -1829,5 +1830,108 @@ describe('POST /api/transactions/[id]/match-invoice: refusals come before the st
     expect(mockReverseEntry.mock.invocationCallOrder[0]).toBeLessThan(
       mockCreateJournalEntry.mock.invocationCallOrder[0],
     )
+  })
+})
+
+describe('POST /api/transactions/[id]/match-invoice: a customer overpayment (crm#1045)', () => {
+  // A booked invoice with 812,40 left, settled by a 1 312,40 bank row: 500 over.
+  const TX = { id: 'tx-1', amount: 1312.4, invoice_id: null, date: '2024-06-15' }
+  const BOOKED = { id: VALID_UUID, status: 'sent' as const, total: 812.4, remaining_amount: 812.4, paid_amount: 0, journal_entry_id: 'je-sent', invoice_number: 'F-2024001' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
+    mockDetectDuplicate.mockResolvedValue(null)
+    mockFindUnresolvableAccounts.mockResolvedValue([])
+    mockFindFiscalPeriod.mockResolvedValue('fp-1')
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
+  })
+
+  function enqueueUpToRefusal(tx: Record<string, unknown> = {}) {
+    enqueue({ data: makeTransaction({ ...TX, ...tx }), error: null })
+    enqueue({ data: makeInvoice({ ...BOOKED, customer: makeCustomer() }), error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
+  }
+
+  async function post(body: Record<string, unknown>) {
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID, ...body },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    return parseJsonResponse<{ error: { code: string; details?: Record<string, unknown> } }>(response)
+  }
+
+  function expectNothingWritten() {
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toHaveLength(0)
+    expect(findCalls('transactions', 'update')).toHaveLength(0)
+  }
+
+  it('returns 400 when the account comes without the excess the dialog showed', async () => {
+    const { status } = await post({ overpayment_account: '2420' })
+    expect(status).toBe(400)
+    expectNothingWritten()
+  })
+
+  it('returns 400 for an account that may not take an overpayment', async () => {
+    const { status } = await post({ overpayment_account: '1510', overpayment_amount: 500 })
+    expect(status).toBe(400)
+    expectNothingWritten()
+  })
+
+  it('faktureringsmetod: 1510 settles at the remaining amount and 2420 takes the excess', async () => {
+    enqueueUpToRefusal()
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount -> 1930
+    enqueue({ data: null, error: null }) // invoice PDF lookup for the payment verifikat
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // invoice update
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // transaction link
+
+    const { status } = await post({ overpayment_account: '2420', overpayment_amount: 500 })
+
+    expect(status).toBe(200)
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 1312.4, 0],
+      ['1510', 0, 812.4],
+      ['2420', 0, 500],
+    ])
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 812.4,
+      remaining_amount: 0,
+    })
+    expect(findCalls('invoice_payments', 'insert').at(-1)?.[0]).toMatchObject({ amount: 812.4 })
+  })
+
+  it('refuses 3740 for an excess at its cap before anything is written', async () => {
+    enqueueUpToRefusal()
+    const { status, body } = await post({ overpayment_account: '3740', overpayment_amount: 500 })
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_OVERPAYMENT_ROUNDING_CAP')
+    expectNothingWritten()
+  })
+
+  it('refuses MATCH_OVERPAYMENT_CHANGED when the excess is not the one the dialog showed', async () => {
+    enqueueUpToRefusal()
+    const { status, body } = await post({ overpayment_account: '2420', overpayment_amount: 499 })
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_OVERPAYMENT_CHANGED')
+    expect(body.error.details).toMatchObject({ shown_excess: 499, current_excess: 500 })
+    expectNothingWritten()
+  })
+
+  it('refuses MATCH_OVERPAYMENT_CHANGED when the payment no longer overshoots', async () => {
+    enqueueUpToRefusal({ amount: 812.4 })
+    const { status, body } = await post({ overpayment_account: '2420', overpayment_amount: 500 })
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_OVERPAYMENT_CHANGED')
+    expectNothingWritten()
   })
 })

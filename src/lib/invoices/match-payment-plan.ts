@@ -15,7 +15,8 @@
  * the excess goes (`overpaymentAccount`, pure SEK only, see
  * lib/bookkeeping/overpayment.ts): then the invoice settles for exactly its
  * remaining amount and `overpayment` carries the excess the verifikat books
- * on that account.
+ * on that account. That step, after FX, is `planMatchPayment`, which the
+ * dashboard match route and its preview run too (crm#1045).
  *
  * Read-only: the only side effect is the exchange-rate cache that
  * `fetchExchangeRate` maintains for a cross-currency match.
@@ -48,20 +49,18 @@ export type MatchFx =
   | { required: false }
   | { required: true; rate: number; paidInInvoiceCurrency: number }
 
-export type MatchPaymentPlanResult =
+/** An overshoot, in the invoice's currency. */
+type OvershootDetails = { transaction_amount: number; remaining_amount: number; excess: number }
+
+export type MatchPaymentStepResult =
   | {
       ok: true
-      fx: MatchFx
       /** The payment in the INVOICE's currency, as accumulated into paid_amount. */
       paidAmount: number
       plan: InvoicePaymentPlan
       /** The excess booked on the caller's overpayment account, when any. */
       overpayment: { account: string; amount: number } | null
     }
-  /** A foreign-currency transaction with neither amount_sek nor a rate. */
-  | { ok: false; code: 'MATCH_INVOICE_TX_FX_RATE_MISSING' }
-  /** No exchange rate for the payment date (not published yet, or upstream down). */
-  | { ok: false; code: 'MATCH_INVOICE_FX_RATE_UNAVAILABLE' }
   | {
       ok: false
       code: 'MATCH_AMOUNT_EXCEEDS_REMAINING'
@@ -69,15 +68,68 @@ export type MatchPaymentPlanResult =
       currency: string
       /** True when a sub-krona overshoot would have been absorbed (pure SEK). */
       absorbsOre: boolean
-      details: { transaction_amount: number; remaining_amount: number; excess: number }
+      details: OvershootDetails
     }
   /** overpaymentAccount 3740 named for an excess at or above its cap. */
   | {
       ok: false
       code: 'MATCH_OVERPAYMENT_ROUNDING_CAP'
       currency: string
-      details: { transaction_amount: number; remaining_amount: number; excess: number }
+      details: OvershootDetails
     }
+
+export type MatchPaymentPlanResult =
+  | (Extract<MatchPaymentStepResult, { ok: true }> & { fx: MatchFx })
+  /** A foreign-currency transaction with neither amount_sek nor a rate. */
+  | { ok: false; code: 'MATCH_INVOICE_TX_FX_RATE_MISSING' }
+  /** No exchange rate for the payment date (not published yet, or upstream down). */
+  | { ok: false; code: 'MATCH_INVOICE_FX_RATE_UNAVAILABLE' }
+  | Extract<MatchPaymentStepResult, { ok: false }>
+
+/**
+ * The payment step of a match once the payment is in the invoice's currency:
+ * planInvoicePayment's overshoot guard and paid/remaining math (pure SEK
+ * absorbs a sub-krona öresavrundning), and for an overshoot of a krona or more
+ * the settlement at exactly the remaining amount when the caller named an
+ * account allowed to take the excess. Pure. The agent stage and commit paths,
+ * the dashboard match route and its preview all run this one step, so the
+ * preview cannot show a booking the route refuses (crm#1045).
+ */
+export function planMatchPayment(
+  invoice: MatchInvoiceAmounts,
+  paidAmount: number,
+  opts: { pureSek: boolean; overpaymentAccount?: string },
+): MatchPaymentStepResult {
+  const { pureSek } = opts
+  const payment = planInvoicePayment(invoice, paidAmount, { absorbOreRounding: pureSek })
+  if (payment.ok) return { ok: true, paidAmount, plan: payment.plan, overpayment: null }
+  // The user named where the excess goes: settle exactly the remaining
+  // amount and hand the excess to the verifikat builders. Pure SEK only: a
+  // cross-currency excess has no SEK amount the user agreed to.
+  const account = opts.overpaymentAccount
+  if (pureSek && isOverpaymentAccount(account)) {
+    const { excess, remaining_amount: remaining } = payment.details
+    if (!overpaymentAllowed(account, excess)) {
+      return {
+        ok: false,
+        code: 'MATCH_OVERPAYMENT_ROUNDING_CAP',
+        currency: invoice.currency,
+        details: payment.details,
+      }
+    }
+    const exact = planInvoicePayment(invoice, remaining, { absorbOreRounding: true })
+    if (exact.ok) {
+      return { ok: true, paidAmount: remaining, plan: exact.plan, overpayment: { account, amount: excess } }
+    }
+  }
+  return {
+    ok: false,
+    code: payment.code,
+    currency: invoice.currency,
+    absorbsOre: pureSek,
+    details: payment.details,
+  }
+}
 
 export async function planTransactionInvoiceMatch(
   supabase: SupabaseClient,
@@ -131,39 +183,11 @@ export async function planTransactionInvoiceMatch(
   }
   const paidAmount = fx.required ? fx.paidInInvoiceCurrency : transaction.amount
 
-  // Overshoot guard + paid/remaining math: shared with the dashboard and v1
-  // routes via planInvoicePayment. Pure-SEK settlements absorb sub-krona
-  // öresavrundning (booked to 3740 by buildInvoicePaymentClearingLines) so a
-  // whole-krona payment settles in full, exactly as on the other two routes.
+  // Overshoot guard + paid/remaining math + a named overpayment account: the
+  // one step the dashboard match route and its preview run too. Pure-SEK
+  // settlements absorb sub-krona öresavrundning (booked to 3740 by the
+  // builders) so a whole-krona payment settles in full.
   const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
-  const payment = planInvoicePayment(invoice, paidAmount, { absorbOreRounding: pureSek })
-  if (!payment.ok) {
-    // The user named where the excess goes: settle exactly the remaining
-    // amount and hand the excess to the verifikat builders. Pure SEK only: a
-    // cross-currency excess has no SEK amount the user agreed to.
-    const account = opts?.overpaymentAccount
-    if (pureSek && isOverpaymentAccount(account)) {
-      const { excess, remaining_amount: remaining } = payment.details
-      if (!overpaymentAllowed(account, excess)) {
-        return {
-          ok: false,
-          code: 'MATCH_OVERPAYMENT_ROUNDING_CAP',
-          currency: invoice.currency,
-          details: payment.details,
-        }
-      }
-      const exact = planInvoicePayment(invoice, remaining, { absorbOreRounding: true })
-      if (exact.ok) {
-        return { ok: true, fx, paidAmount: remaining, plan: exact.plan, overpayment: { account, amount: excess } }
-      }
-    }
-    return {
-      ok: false,
-      code: payment.code,
-      currency: invoice.currency,
-      absorbsOre: pureSek,
-      details: payment.details,
-    }
-  }
-  return { ok: true, fx, paidAmount, plan: payment.plan, overpayment: null }
+  const step = planMatchPayment(invoice, paidAmount, { pureSek, overpaymentAccount: opts?.overpaymentAccount })
+  return step.ok ? { ...step, fx } : step
 }

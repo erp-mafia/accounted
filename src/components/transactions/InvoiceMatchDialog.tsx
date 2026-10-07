@@ -16,6 +16,7 @@ import {
 } from '@/lib/invoices/matchable-statuses'
 import { CheckCircle2, AlertTriangle, Trash2, Plus, Pencil } from 'lucide-react'
 import { withLineDimensions, type LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
+import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
 import type { TransactionWithInvoice } from './transaction-types'
 
 interface DuplicateCandidate {
@@ -71,6 +72,13 @@ interface MatchPreview {
   bank_fee_sek?: number
   /** Supplier match only: the settled invoice's bag, given to a row the user adds. */
   document_dimensions?: LineDimensions
+  /**
+   * Customer match only: a SEK payment a krona or more above what the invoice
+   * still owes. `accounts` may take the excess; `account` is the one the
+   * preview was asked for, null until the user picks one (then `lines` is
+   * empty, since the route books the match only with an account named).
+   */
+  overpayment?: { excess: number; accounts: string[]; account: string | null } | null
 }
 
 // String-typed working copy of a line. The amount is a single value plus a
@@ -101,6 +109,10 @@ export interface ConfirmOpts {
   // for the payment date isn't available; the dialog asks the user to type
   // the rate from their bank statement. Same field flows to the route.
   manual_exchange_rate?: number
+  // Where a customer's excess goes and the excess the preview showed: the
+  // route books exactly that or refuses (MATCH_OVERPAYMENT_CHANGED).
+  overpayment_account?: string
+  overpayment_amount?: number
 }
 
 interface InvoiceMatchDialogProps {
@@ -189,9 +201,19 @@ export default function InvoiceMatchDialog({
   // flows through ConfirmOpts.manual_exchange_rate to the route, which
   // re-runs the preview math with the supplied rate.
   const [manualRate, setManualRate] = useState<string>('')
+  // The account the user picked for a customer's excess of a krona or more.
+  // Never preselected: nothing over the öre band is booked without the user
+  // naming the account (DECISIONS 2026-10-03).
+  const [overpaymentAccount, setOverpaymentAccount] = useState<string | null>(null)
   // BAS accounts power the AccountCombobox suggestions in edit mode. Loaded
   // once on dialog open; same endpoint that PaymentBookingDialog uses.
   const { accounts } = useAccounts()
+
+  // A pick belongs to one transaction and invoice: never carry it to another,
+  // where it would book that match's excess without the user choosing.
+  useEffect(() => {
+    setOverpaymentAccount(null)
+  }, [transactionId, invoiceId])
 
   useEffect(() => {
     if (!open || !transactionId || targetBlocked) {
@@ -200,11 +222,13 @@ export default function InvoiceMatchDialog({
       setIsEditing(false)
       setEditLines([])
       setManualRate('')
+      setOverpaymentAccount(null)
       return
     }
     let cancelled = false
     const previewUrl = isCustomerInvoice && invoiceId
-      ? `/api/transactions/${transactionId}/match-invoice/preview?invoice_id=${invoiceId}`
+      ? `/api/transactions/${transactionId}/match-invoice/preview?invoice_id=${invoiceId}` +
+        (overpaymentAccount ? `&overpayment_account=${overpaymentAccount}` : '')
       : isSupplierInvoice && supplierInvoiceId
         ? `/api/transactions/${transactionId}/match-supplier-invoice/preview?supplier_invoice_id=${supplierInvoiceId}`
         : null
@@ -263,6 +287,7 @@ export default function InvoiceMatchDialog({
     supplierInvoiceId,
     targetBlocked,
     uiLocale,
+    overpaymentAccount,
   ])
 
   useEffect(() => {
@@ -356,12 +381,23 @@ export default function InvoiceMatchDialog({
     const manualRateNum = fxNeedsManualRate ? parseAmount(manualRate) : 0
     const manualRatePayload =
       fxNeedsManualRate && manualRateNum > 0 ? { manual_exchange_rate: manualRateNum } : {}
+    // The account and the excess the preview booked them with.
+    const placed = isCustomerInvoice ? preview?.overpayment : null
+    const overpaymentPayload = placed?.account
+      ? { overpayment_account: placed.account, overpayment_amount: placed.excess }
+      : {}
     onConfirm({
       ...(opts ?? {}),
       ...(linesPayload ? { lines: linesPayload } : {}),
       ...manualRatePayload,
+      ...overpaymentPayload,
     })
   }
+
+  // A customer overpayment whose account the user has not picked yet: the
+  // preview has no rows and the route would refuse the match.
+  const customerOverpayment = isCustomerInvoice ? (preview?.overpayment ?? null) : null
+  const overpaymentUnplaced = !!customerOverpayment && !customerOverpayment.account
 
   const resetEdits = () => {
     if (preview) setEditLines(preview.lines.map(previewToEditable))
@@ -571,6 +607,63 @@ export default function InvoiceMatchDialog({
                             : 'target_not_open_description',
                         )}
                       </p>
+                    </div>
+                  </div>
+                )
+              }
+
+              // Customer paid a krona or more too much (SEK), as the preview
+              // reports it: the match books once the user picks where the
+              // excess goes, so ask here instead of warning about a difference
+              // the route would then refuse.
+              if (customerOverpayment) {
+                return (
+                  <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
+                      <div className="text-sm space-y-1">
+                        <p className="font-medium">
+                          {t('customer_overpayment_title', {
+                            amount: formatCurrency(customerOverpayment.excess, 'SEK'),
+                          })}
+                        </p>
+                        <p className="text-muted-foreground">{t('customer_overpayment_description')}</p>
+                      </div>
+                    </div>
+                    <div
+                      role="radiogroup"
+                      aria-label={t('customer_overpayment_choose')}
+                      className="grid gap-2 sm:grid-cols-2"
+                    >
+                      {customerOverpayment.accounts.map((account) => {
+                        const isRounding = account === ORE_ROUNDING_ACCOUNT
+                        const selected = overpaymentAccount === account
+                        return (
+                          <button
+                            key={account}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            onClick={() => setOverpaymentAccount(account)}
+                            disabled={isConfirming}
+                            className={cn(
+                              'rounded-lg border p-3 text-left text-sm transition-colors',
+                              selected ? 'border-foreground bg-secondary' : 'border-border hover:bg-secondary/60',
+                            )}
+                          >
+                            <span className="block font-medium">
+                              {isRounding
+                                ? t('customer_overpayment_account_3740')
+                                : t('customer_overpayment_account_2420')}
+                            </span>
+                            <span className="block text-muted-foreground">
+                              {isRounding
+                                ? t('customer_overpayment_hint_3740')
+                                : t('customer_overpayment_hint_2420')}
+                            </span>
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
                 )
@@ -810,7 +903,7 @@ export default function InvoiceMatchDialog({
               <div className="rounded-lg border p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium">{t('booking_title')}</p>
-                  {preview && (
+                  {preview && !overpaymentUnplaced && (
                     <div className="flex gap-2">
                       {isEditing && (
                         <Button variant="ghost" size="sm" onClick={resetEdits} disabled={isConfirming}>
@@ -845,7 +938,11 @@ export default function InvoiceMatchDialog({
                   </p>
                 )}
 
-                {preview && !isEditing && (
+                {overpaymentUnplaced && (
+                  <p className="text-sm text-muted-foreground">{t('customer_overpayment_choose_first')}</p>
+                )}
+
+                {preview && !isEditing && !overpaymentUnplaced && (
                   <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
                     <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                       {t('booking_account')}
@@ -1020,7 +1117,11 @@ export default function InvoiceMatchDialog({
               // successful preview to enter, so today this only relaxes the
               // guard in the defense-in-depth branch of
               // isInvoiceBookingRateMissing.)
-              (invoiceRateMissing && !(isEditing && editValidation.isValid))
+              (invoiceRateMissing && !(isEditing && editValidation.isValid)) ||
+              // A customer overpayment books only on the account the user
+              // picked, and only once the preview shows that account's rows.
+              (!!customerOverpayment &&
+                (!customerOverpayment.account || customerOverpayment.account !== overpaymentAccount))
             }
           >
             {isConfirming ? t('confirming') : t('confirm_match')}

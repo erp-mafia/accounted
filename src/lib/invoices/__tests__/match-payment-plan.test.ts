@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const { mockFetchExchangeRate } = vi.hoisted(() => ({ mockFetchExchangeRate: vi.fn() }))
 vi.mock('@/lib/currency/riksbanken', () => ({ fetchExchangeRate: mockFetchExchangeRate }))
 
-import { planTransactionInvoiceMatch } from '@/lib/invoices/match-payment-plan'
+import { planMatchPayment, planTransactionInvoiceMatch } from '@/lib/invoices/match-payment-plan'
 
 const supabase = {} as never
 
@@ -189,5 +189,37 @@ describe('planTransactionInvoiceMatch: overpaymentAccount (crm#253)', () => {
       { overpaymentAccount: '2420' },
     )
     expect(r).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING', absorbsOre: false })
+  })
+})
+
+// The step after FX, run as-is by the dashboard match route and its preview
+// (crm#1045): the same outcome as the agent's plan for the same amounts.
+describe('planMatchPayment', () => {
+  const invoice = { currency: 'SEK', total: 837.5, paid_amount: 0, remaining_amount: 418.75 }
+
+  it('refuses a krona or more over without an account, naming the excess', () => {
+    expect(planMatchPayment(invoice, 420, { pureSek: true })).toEqual({
+      ok: false,
+      code: 'MATCH_AMOUNT_EXCEEDS_REMAINING',
+      currency: 'SEK',
+      absorbsOre: true,
+      details: { transaction_amount: 420, remaining_amount: 418.75, excess: 1.25 },
+    })
+  })
+
+  it('settles the remaining amount and hands the excess to the named account', () => {
+    const r = planMatchPayment(invoice, 420, { pureSek: true, overpaymentAccount: '3740' })
+    expect(r).toMatchObject({
+      ok: true,
+      paidAmount: 418.75,
+      plan: { newPaidAmount: 418.75, newRemaining: 0, isFullyPaid: true, newStatus: 'paid' },
+      overpayment: { account: '3740', amount: 1.25 },
+    })
+  })
+
+  it('agrees with planTransactionInvoiceMatch on the same SEK amounts', async () => {
+    const step = planMatchPayment(invoice, 420, { pureSek: true, overpaymentAccount: '2420' })
+    const plan = await planTransactionInvoiceMatch(supabase, sekTx(420), invoice, { overpaymentAccount: '2420' })
+    expect(plan).toEqual({ ...step, fx: { required: false } })
   })
 })
