@@ -334,7 +334,7 @@ import {
 } from '@/lib/suppliers/match-supplier'
 import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
-import { withSIEExternalReport } from '@/lib/import/sie-period-read'
+import { readSIEUndoLockRefusal, withSIEExternalReport } from '@/lib/import/sie-period-read'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 // Account-keyed reconciliation (one engine, three doors): the same service
 // the dashboard routes and the v1 API call.
@@ -22861,9 +22861,10 @@ export const tools: McpTool[] = [
       }
 
       // Pre-flight confirms a tracked job exists, belongs to this company,
-      // supports undo, and (if linked) the fiscal
-      // period is open + unlocked. Surfacing rejection at stage-time keeps
-      // the agent honest about what the approver is being asked to confirm.
+      // supports undo, and that no date a storno must carry is locked (the
+      // fiscal year, or the company lock date). Surfacing rejection at
+      // stage-time keeps the agent honest about what the approver is being
+      // asked to confirm.
       type ImportRow = {
         id: string
         filename: string
@@ -22895,20 +22896,22 @@ export const tools: McpTool[] = [
         throw new Error(`Bara slutförda importer kan ångras (nuvarande status: ${importRow.status}).`)
       }
 
+      // The database's own answer, the one request_sie_import_undo gives
+      // (crm#1022): each storno is dated like the voucher it reverses, so a
+      // closed or locked fiscal year, or a company lock date on or after the
+      // first imported voucher, refuses the undo. The sentence names the
+      // locked range and what the user would have to unlock.
+      const lockRefusal = await readSIEUndoLockRefusal(supabase, companyId, importId)
+      if (lockRefusal) throw Object.assign(new Error(lockRefusal), { code: 'SIE_IMPORT_PERIOD_LOCKED' })
+
       let fiscalPeriodName: string | null = null
       if (importRow.fiscal_period_id) {
         const { data: period } = await supabase
           .from('fiscal_periods')
-          .select('name, is_closed, locked_at')
+          .select('name')
           .eq('id', importRow.fiscal_period_id)
           .eq('company_id', companyId)
           .maybeSingle()
-        if (period?.is_closed || period?.locked_at) {
-          throw new Error(
-            `Räkenskapsåret "${period.name ?? 'okänt'}" är låst eller stängt. ` +
-            `Öppna perioden innan du ångrar importen.`,
-          )
-        }
         fiscalPeriodName = (period as { name?: string } | null)?.name ?? null
       }
 

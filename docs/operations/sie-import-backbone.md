@@ -60,6 +60,14 @@ job's error and receipts, correct the cause, then resume from the job screen.
 If abandoning it, request undo and verify its terminal state and retained
 storno trail. Do not resubmit a changed file as an identical retry.
 
+Stornos carry the dates of the vouchers they reverse. Undo, resume of an undo
+and replacement refuse a closed or locked fiscal year, or a company lock date
+on or after the first date they write, before anything is queued
+(`SIE_IMPORT_PERIOD_LOCKED`; the sentence names the range). While a year is
+held, only a lock date that locks more waits; moving it back or removing it
+is always allowed. An undo that a lock date stopped continues from its last
+receipt once the user moves the lock date back and resumes it (crm#1022).
+
 For suspected bad worker code, disable admission and pause workers. Deploy a
 compatible fix, reconcile the recorded attempt/receipts, resume workers, then
 restore admission. Do not restore the one-shot writer, drop uniqueness, delete

@@ -11,19 +11,24 @@
  * entry the import posted gets a reversing entry and the originals stay in
  * the ledger (BFL 5 kap 5 §). The RPC refuses while another SIE run is
  * active, while a reversal of an imported voucher is already in progress,
- * while an imported voucher has a live correction, and when the period is
- * closed or locked. Owner/admin only.
+ * while an imported voucher has a live correction, and when a date a storno
+ * must carry is locked: a closed or locked fiscal year, or the company lock
+ * date (SIE_IMPORT_PERIOD_LOCKED, migration 20261005193558). Owner/admin only.
  *
  * Resume re-queues an interrupted (paused / failed-chunk) run from where it
- * stopped; allowed to the user who ran it and to owners/admins.
+ * stopped; allowed to the user who ran it and to owners/admins. Resuming an
+ * undo refuses the same locked range, so an undo that a lock date stopped
+ * continues once the user moves the lock date back.
  *
  * Both are asynchronous: the answer is the job with its new state, and the
  * worker (kicked right after the request, and by the worker cron) does the
- * ledger work. A dry run reads and checks; it never calls the RPC.
+ * ledger work. A dry run reads and checks; it never calls a mutating RPC
+ * (sie_undo_lock_refusal, the database's own lock answer, is read-only).
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { requestSIEJobAction } from './sie-jobs'
+import { readSIEUndoLockRefusal } from './sie-period-read'
 import type { SIEJob } from './sie-job-contract'
 
 export type SIEJobActionKind = 'undo' | 'resume'
@@ -93,6 +98,8 @@ export async function requestSIEImportAction(
     if (code === 'DB_PERMISSION_DENIED') {
       return { ok: false, code: 'FORBIDDEN', messageSv: ADMIN_MESSAGE, details: { required_roles: ['owner', 'admin'] } }
     }
+    // The database's own sentence: the locked range and what to unlock.
+    if (code === 'SIE_IMPORT_PERIOD_LOCKED') return { ok: false, code, messageSv: (err as Error).message }
     if (code === 'CONFLICT') {
       return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: (err as Error).message } }
     }
@@ -115,6 +122,24 @@ export async function requestSIEImportAction(
   }
 }
 
+/**
+ * The lock refusal the undo RPCs raise, asked read-only: a closed or locked
+ * fiscal year, or a company lock date on or after the first date a storno
+ * would carry. Null when nothing is locked.
+ */
+async function undoLockRefusal(
+  ctx: OperationContext,
+  importId: string,
+): Promise<Extract<OperationOutcome<SIEJobActionResult>, { ok: false }> | null> {
+  let refusal: string | null
+  try {
+    refusal = await readSIEUndoLockRefusal(ctx.supabase, ctx.companyId, importId)
+  } catch (error) {
+    return { ok: false, code: 'UNKNOWN_ERROR', error }
+  }
+  return refusal ? { ok: false, code: 'SIE_IMPORT_PERIOD_LOCKED', messageSv: refusal } : null
+}
+
 /** The RPC's refusals that reads can answer, then what would happen. */
 async function previewAction(
   ctx: OperationContext,
@@ -125,6 +150,11 @@ async function previewAction(
   const state = job.job_state!
 
   if (action === 'resume') {
+    // Resuming an undo writes stornos: the same locked range refuses it.
+    if (!TERMINAL.has(state) && job.job_kind === 'import' && job.job_phase === 'undo') {
+      const locked = await undoLockRefusal(ctx, job.id)
+      if (locked) return locked
+    }
     return {
       ok: true,
       dryRun: true,
@@ -159,17 +189,20 @@ async function previewAction(
     return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: 'Another SIE execution must finish before undo.' } }
   }
 
+  const locked = await undoLockRefusal(ctx, job.id)
+  if (locked) return locked
+
   if (job.fiscal_period_id) {
     const { data: period, error: periodError } = await supabase
       .from('fiscal_periods')
-      .select('id, is_closed, locked_at, import_hold')
+      .select('id, import_hold')
       .eq('company_id', companyId)
       .eq('id', job.fiscal_period_id)
       .maybeSingle()
     if (periodError) return { ok: false, code: 'UNKNOWN_ERROR', error: periodError }
-    const p = period as { is_closed: boolean | null; locked_at: string | null; import_hold: string | null } | null
-    if (p && (p.is_closed || p.locked_at || (p.import_hold && p.import_hold !== job.id))) {
-      return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: 'The period is closed or locked, or has another execution.' } }
+    const p = period as { import_hold: string | null } | null
+    if (p?.import_hold && p.import_hold !== job.id) {
+      return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: 'The period has another execution.' } }
     }
   }
 

@@ -108,7 +108,20 @@ const JOB_REFUSALS: Record<string,string> = {
   'Legacy SIE import requires reviewed reconciliation before replacement':'SIE_IMPORT_LEGACY_REVIEW_REQUIRED',
 }
 
+/**
+ * The undo, the resume of an undo and the replacement refuse a locked fiscal
+ * year or company lock date before anything is queued (migration
+ * 20261005193558, crm#1022). The database writes the sentence after this
+ * prefix: it names the locked range and the setting to change, so it reaches
+ * the reader as is through every door.
+ */
+const LOCK_REFUSAL_PREFIX = 'SIE_IMPORT_PERIOD_LOCKED: '
+
 export function jobDatabaseError(error:{code?:string;message:string}):SIEJobDatabaseError {
+  if (error.code === '55000' && error.message.startsWith(LOCK_REFUSAL_PREFIX)) {
+    return userFacing(new SIEJobDatabaseError(error.message.slice(LOCK_REFUSAL_PREFIX.length),
+      'SIE_IMPORT_PERIOD_LOCKED',error.code),'SIE_IMPORT_PERIOD_LOCKED')
+  }
   // 55P03 (lock not available) frees itself: the same request succeeds on a
   // retry, which is what TRANSIENT_ERROR says. It is never an existing import.
   const codes:Record<string,string> = {P0002:'NOT_FOUND','42501':'DB_PERMISSION_DENIED','22P02':'VALIDATION_ERROR',

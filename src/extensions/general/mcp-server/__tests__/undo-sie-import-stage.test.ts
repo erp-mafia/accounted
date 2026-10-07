@@ -2,8 +2,11 @@
  * Stage-time pre-flight for gnubok_undo_sie_import.
  *
  * The tool mirrors undoSIEImport's gates so the approver sees an honest
- * preview: row must exist, must be in 'completed' status, and if linked
- * to a fiscal period that period must be open + unlocked.
+ * preview: row must exist, must be in 'completed' status, and no date a
+ * storno must carry may be locked. The lock question is the database's own
+ * (sie_undo_lock_refusal, the answer request_sie_import_undo gives): a
+ * closed or locked fiscal year, or a company lock date covering the
+ * imported vouchers (crm#1022).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -32,8 +35,9 @@ describe('gnubok_undo_sie_import: stage-time validation', () => {
       },
       error: null,
     }) // sie_imports lookup
+    enqueue({ data: null, error: null }) // rpc sie_undo_lock_refusal: nothing locked
     enqueue({
-      data: { name: 'Räkenskapsår 2019/2020', is_closed: false, locked_at: null },
+      data: { name: 'Räkenskapsår 2019/2020' },
       error: null,
     }) // fiscal_periods lookup
     enqueue({ data: { id: 'op-undo-1' }, error: null }) // pending_operations insert
@@ -100,36 +104,47 @@ describe('gnubok_undo_sie_import: stage-time validation', () => {
     ).rejects.toMatchObject({ code: 'SIE_IMPORT_LEGACY_REVIEW_REQUIRED' })
   })
 
-  it('rejects when the linked fiscal period is locked', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: {
-        id: 'imp-3',
-        filename: 'locked.se',
-        fiscal_year_start: '2024-01-01',
-        fiscal_year_end: '2024-12-31',
-        transactions_count: 1,
-        opening_balance_entry_id: 'ob-1',
-        status: 'completed', job_state: 'completed',
-        fiscal_period_id: 'fp-locked',
-        imported_at: '2026-05-01T00:00:00Z',
-      },
-      error: null,
-    })
-    enqueue({
-      data: { name: 'Räkenskapsår 2024', is_closed: false, locked_at: '2026-04-30T00:00:00Z' },
-      error: null,
-    })
+  const lockedImport = {
+    data: {
+      id: 'imp-3',
+      filename: 'locked.se',
+      fiscal_year_start: '2024-01-01',
+      fiscal_year_end: '2024-12-31',
+      transactions_count: 1,
+      opening_balance_entry_id: 'ob-1',
+      status: 'completed', job_state: 'completed',
+      fiscal_period_id: 'fp-locked',
+      imported_at: '2026-05-01T00:00:00Z',
+    },
+    error: null,
+  }
 
-    await expect(
-      undoTool.execute(
-        { import_id: 'imp-3' },
-        'company-1',
-        'user-1',
-        supabase as never,
-        { type: 'api_key' },
-      ),
-    ).rejects.toThrow(/låst eller stängt/i)
+  it.each([
+    ['the linked fiscal year is locked',
+      'Räkenskapsåret 2024 (2024-01-01 till 2024-12-31) är låst. Lås upp det under Inställningar > Bokföring > Räkenskapsår först och försök igen.'],
+    ['the company lock date covers the imported vouchers',
+      'Bokföringen är låst t.o.m. 2025-12-31, och ångringen bokför storno med de importerade verifikationernas datum, 2024-03-04 till 2024-12-31. ' +
+      'Lås upp till och med 2024-03-04 först: sätt Bokföring låst t.o.m. till 2024-03-03 eller tidigare, eller töm fältet, under Inställningar > Bokföring och försök igen. ' +
+      'Lås bokföringen igen när ångringen är klar.'],
+  ])('rejects with the database\'s sentence when %s, staging nothing', async (_case, sentence) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue(lockedImport)
+    enqueue({ data: sentence, error: null }) // rpc sie_undo_lock_refusal
+
+    const thrown = await undoTool.execute(
+      { import_id: 'imp-3' },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    ).catch((err: unknown) => err)
+
+    expect(thrown).toMatchObject({ code: 'SIE_IMPORT_PERIOD_LOCKED', message: sentence })
+    expect(supabase.rpc).toHaveBeenCalledWith('sie_undo_lock_refusal', { p_company_id: 'company-1', p_import_id: 'imp-3' })
+    // Refused before staging: no pending operation was written.
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+    const { getStructuredError } = await import('@/lib/errors/get-structured-error')
+    expect(getStructuredError(thrown)).toMatchObject({ code: 'SIE_IMPORT_PERIOD_LOCKED', message_sv: sentence, retryable: false })
   })
 
   it('rejects missing import_id before any DB hit', async () => {

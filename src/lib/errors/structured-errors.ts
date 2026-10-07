@@ -3399,6 +3399,26 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The SIE import cannot be undone or resumed right now: another run is in progress, the period is locked, or a correction of an imported voucher needs review first.',
   },
+  // The undo, the resume of an undo and the replacement refuse before anything
+  // is queued when a date they must write is locked (migration
+  // 20261005193558, crm#1022): stornos carry the dates of the vouchers they
+  // reverse. The database composes the sentence (the locked fiscal year or the
+  // lock date, the dates the run writes, the setting to change).
+  SIE_IMPORT_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsåret eller bokföringens låsdatum täcker datum som importen behöver bokföra på. Lås upp under Inställningar > Bokföring och försök igen.',
+    message_en:
+      'The fiscal year, or the company lock date, covers dates this SIE run must write: stornos are dated like the vouchers they reverse. Unlock under Settings > Bookkeeping, then retry.',
+    retryable: false,
+    remediation: {
+      description:
+        'Nothing was queued. The Swedish message names the locked fiscal year or the lock date and the first date the run writes. Unlocking is the user\'s decision: move the lock date back (gnubok_update_bookkeeping_lock) or unlock the fiscal year (gnubok_unlock_period) only when they ask, then retry the same request.',
+      tool: 'gnubok_update_bookkeeping_lock',
+      resource: '/settings/bookkeeping',
+    },
+    thrown_message_sv: true,
+  },
 }
 
 /**

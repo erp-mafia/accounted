@@ -606,7 +606,7 @@ export const settingsUpdateBookkeepingLock = defineOperation({
       'Locking or closing a single fiscal period (POST /fiscal-periods/{id}/lock, /close), or correcting a posted verifikat (storno or rättelse).',
     pitfalls: [
       'Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.',
-      'Refused while an SIE import is still holding a fiscal period (finish the import first).',
+      'Locking more (a first lock date, or a later one) is refused while an SIE import is still holding a fiscal period (finish the import first). Moving the date back or removing it is always allowed: that is how an SIE undo stopped by the lock date continues.',
       'A backwards move is allowed but high risk. When it reopens a filed momsdeklaration period it is refused with 409 BOOKKEEPING_LOCK_REOPENS_FILED_VAT (details.filed_periods) unless acknowledge_filed_vat_periods is true: reopen a filed period only to book a correction and file a corrected declaration for it.',
     ],
     example: {

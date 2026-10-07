@@ -789,6 +789,7 @@ Re-queues a paused or interrupted durable SIE import (or an interrupted undo) so
 **Pitfalls:**
 - Another user's import needs an owner or admin key: 403 FORBIDDEN otherwise.
 - Legacy imports made before durable jobs return 409 SIE_IMPORT_LEGACY_REVIEW_REQUIRED.
+- Resuming an undo that a lock stopped returns 409 SIE_IMPORT_PERIOD_LOCKED until the user unlocks the range in details.reason; it then continues from the last committed chunk.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -842,14 +843,15 @@ Example response `200`:
 **Undo an SIE import by batch storno: every entry it posted is reversed, nothing is deleted.**
 `scope:bookkeeping:write · risk:high · idempotent · dry-run`
 
-Queues a batch storno of the import: each verifikat the import posted gets a reversing entry (BFL 5 kap 5 §) and the originals stay in the ledger. Asynchronous: the answer carries state "undoing" and the worker finishes in the background (state "undone"). Refused while another SIE run is active, while a reversal of an imported voucher is already in progress, while an imported voucher has a live correction, or when the period is closed or locked. Owner/admin only. Idempotent. Dry-runnable (the dry run counts the entries that would be reversed).
+Queues a batch storno of the import: each verifikat the import posted gets a reversing entry (BFL 5 kap 5 §) and the originals stay in the ledger. Asynchronous: the answer carries state "undoing" and the worker finishes in the background (state "undone"). Refused while another SIE run is active, while a reversal of an imported voucher is already in progress, while an imported voucher has a live correction, or when a date a storno must carry is locked (the fiscal year is closed or locked, or the company lock date covers it). Owner/admin only. Idempotent. Dry-runnable (the dry run counts the entries that would be reversed).
 
 **Use when:** An SIE file was imported into the wrong company or year, or with a wrong mapping, and its entries must be cancelled before a corrected import.
 **Do not use for:** Removing single vouchers (POST /journal-entries/{id}/reverse), bank file imports (POST /imports/bank/{id}/undo), or legacy imports made before durable jobs (409 SIE_IMPORT_LEGACY_REVIEW_REQUIRED: review them in the app).
 
 **Pitfalls:**
 - Nothing is deleted: the ledger keeps both the imported entries and their reversals, and voucher numbers are never reused.
-- A closed or locked period, another active run or a live correction returns 409 SIE_IMPORT_ACTION_CONFLICT with details.reason.
+- Each storno is dated like the voucher it reverses. A closed or locked fiscal year, or a company lock date on or after the first imported voucher, returns 409 SIE_IMPORT_PERIOD_LOCKED before anything is queued; details.reason names the locked range and what to unlock (the user's decision).
+- Another active run or a live correction returns 409 SIE_IMPORT_ACTION_CONFLICT with details.reason.
 - Owner or admin only: a member key gets 403 FORBIDDEN.
 - Undoing an already undone import answers its state unchanged.
 

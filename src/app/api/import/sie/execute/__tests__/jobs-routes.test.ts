@@ -51,6 +51,23 @@ describe('durable SIE HTTP boundaries',()=>{
     const { after } = await import('next/server')
     expect(after).not.toHaveBeenCalled()
   })
+  // crm#1022: a locked range is refused before anything is queued, and the
+  // database's sentence (the range, the setting to change) is what the
+  // dashboard shows, not the generic conflict line.
+  it.each(['undo', 'resume', 'compatibility-undo'])('answers a locked range with the database sentence through the real %s service', async name => {
+    const sentence = 'Bokföringen är låst t.o.m. 2025-12-31, och ångringen bokför storno med de importerade verifikationernas datum, ' +
+      '2024-03-04 till 2024-12-31. Lås upp till och med 2024-03-04 först: sätt Bokföring låst t.o.m. till 2024-03-03 eller tidigare, ' +
+      'eller töm fältet, under Inställningar > Bokföring och försök igen. Lås bokföringen igen när ångringen är klar.'
+    const actual = await vi.importActual<typeof import('@/lib/import/sie-jobs')>('@/lib/import/sie-jobs')
+    action.mockImplementationOnce(actual.requestSIEJobAction)
+    queued.enqueueMany([{ data: { id: job.id, job_state: 'paused' } },
+      { error: { code: '55000', message: `SIE_IMPORT_PERIOD_LOCKED: ${sentence}` } }])
+    const response = name === 'compatibility-undo' ? await undo(request({}), params) : await act(request({ action: name }), params)
+    expect(response.status).toBe(409)
+    expect((await response.json()).error).toMatchObject({ code: 'SIE_IMPORT_PERIOD_LOCKED', message: sentence })
+    const { after } = await import('next/server')
+    expect(after).not.toHaveBeenCalled()
+  })
   for(const [name,route] of Object.entries(routes)) it(`${name} requires authentication`,async()=>{
     auth.mockResolvedValue({user:null,supabase,error:NextResponse.json({error:'Unauthorized'},{status:401})})
     expect((await route(request({}))).status).toBe(401)

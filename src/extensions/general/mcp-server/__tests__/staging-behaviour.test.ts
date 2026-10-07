@@ -145,6 +145,10 @@ const READ_ONLY_RPCS = new Set([
   // The previous year's closing balance per project: the IB split preview
   // (gnubok_split_opening_balances_per_project) reads it, #3313.
   'compute_object_closing_balances',
+  // The undo's lock answer (closed or locked fiscal year, company lock date):
+  // gnubok_undo_sie_import refuses at stage time what the undo RPC would,
+  // crm#1022.
+  'sie_undo_lock_refusal',
 ])
 
 /**

@@ -24,6 +24,24 @@ export function withSIEExternalReport<T>(supabase:SupabaseClient,companyId:strin
     ? withSIEPeriodRead(supabase,companyId,'report_export',read) : read()
 }
 
+/**
+ * Why an SIE import cannot be undone right now because of a lock, read-only
+ * (sie_undo_lock_refusal, migration 20261005193558, crm#1022): each storno is
+ * dated like the voucher it reverses, so a closed or locked fiscal year, or a
+ * company lock date on or after the first imported voucher, refuses the undo.
+ * The answer is the Swedish sentence request_sie_import_undo would raise,
+ * naming the locked range and what to unlock, or null when nothing is locked.
+ * For previews and stage-time checks; the undo RPC asks the same question
+ * itself when it runs.
+ */
+export async function readSIEUndoLockRefusal(supabase: SupabaseClient, companyId: string,
+  importId: string,
+): Promise<string | null> {
+  const {data,error} = await supabase.rpc('sie_undo_lock_refusal',{p_company_id:companyId,p_import_id:importId})
+  if (error) throw Object.assign(new Error(error.message), { code: error.code })
+  return typeof data === 'string' && data ? data : null
+}
+
 /** Keep a multi-request export/filing outside unfinished imports. */
 export async function withSIEPeriodRead<T>(supabase: SupabaseClient, companyId: string,
   purpose: 'sie_export' | 'vat_submission' | 'report_export', read: () => Promise<T>,
