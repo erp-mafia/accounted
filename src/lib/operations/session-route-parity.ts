@@ -608,6 +608,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/bokfor-batch': covered(['gnubok_book_skattekonto_rows']),
   'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/:id/bokfor': covered(['gnubok_book_skattekonto_row']),
   'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/:id/match': covered(['gnubok_reconcile_match']),
+  'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/group-match-candidates': covered(
+    ['gnubok_query_journal', 'gnubok_reconcile_match'],
+    'read helper for the match dialog: find the verifikat by its 1630 amount, then link the rows as one pair',
+  ),
   'PATCH /api/extensions/ext/skatteverket/skattekonto/transaktioner/:id/ignore': covered(
     [`POST ${V}/reconciliation/accounts/:accountKey/items/:itemId/ignore`],
     'with accountKey=skattekonto',

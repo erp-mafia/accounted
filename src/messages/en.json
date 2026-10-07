@@ -4610,7 +4610,11 @@
     "cancel": "Cancel",
     "combined_note": "Together with {count, plural, one {# event} other {# events}} on the same day, total {total} on 1630:",
     "joins_linked_note": "Already linked to {count, plural, one {# event} other {# events}}; together they match the 1630 lines.",
-    "link_group": "Link {count} events"
+    "link_group": "Link {count} events",
+    "group_description": "{count, plural, one {# event} other {# events}}, total {total}",
+    "group_no_candidates_title": "No voucher has a line on account 1630 that equals the sum of the events.",
+    "group_no_candidates_help": "The sum must match to the öre, and the voucher must be dated within 14 days of the selected events. For the employer declaration, vouchers dated in the declaration month also count. Vouchers reversed by an opposite voucher are not shown. Use <strong>Post</strong> on the events to create new vouchers instead.",
+    "group_match_success_title": "{count, plural, one {# event linked} other {# events linked}} to the voucher"
   },
   "unit_picker": {
     "empty": "Unit",
@@ -10274,7 +10278,8 @@
     "payment_title": "Payment details",
     "payment_description": "The charge on {date} is {charge}.",
     "payment_bankgiro_label": "Bankgiro (Skatteverket)",
-    "payment_shortfall_label": "Missing on the account"
+    "payment_shortfall_label": "Missing on the account",
+    "bulk_match_cta": "Match to voucher"
   },
   "expense_claims": {
     "title": "Expense claims",

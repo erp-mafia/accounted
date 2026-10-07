@@ -98,6 +98,7 @@ import {
   SkattekontoBookingError,
 } from './lib/skattekonto-booking'
 import {
+  findGroupMatchCandidates,
   findMatchCandidates,
   findMatchSuggestionsBulk,
   matchSkattekontoToEntry,
@@ -136,6 +137,12 @@ const SKV_SESSION_MISSING_MESSAGE =
 const SkattekontoBokforBatchSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(200),
   allow_duplicate_ids: z.array(z.string().uuid()).max(200).optional(),
+})
+
+// Rows the user ticked together to match against ONE verifikat ("Matcha mot
+// verifikat"); linkSkattekontoRows caps a group at 50.
+const SkattekontoGroupMatchSchema = z.object({
+  transaction_ids: z.array(z.string().uuid()).min(2).max(50),
 })
 
 /**
@@ -2741,6 +2748,52 @@ export const skatteverketExtension: Extension = {
               err.code === 'TRANSACTION_NOT_FOUND' ? 404
               : err.code === 'ALREADY_BOOKED' ? 409
               : 400
+            return NextResponse.json({ error: err.message, code: err.code }, { status })
+          }
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    // ── Matcha flera händelser mot ett verifikat ─────────────────────
+    // The bulk bar's "Matcha mot verifikat": candidates for several open
+    // rows the user ticked together (findGroupMatchCandidates). The rows may
+    // have either sign and different dates. Linking reuses POST /:id/match
+    // with also_transaction_ids, which checks the whole group again.
+    {
+      method: 'POST',
+      path: '/skattekonto/transaktioner/group-match-candidates',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        let body: unknown
+        try {
+          body = await request.json()
+        } catch {
+          return NextResponse.json({ error: 'Ogiltig JSON i förfrågan.' }, { status: 400 })
+        }
+        const parsed = SkattekontoGroupMatchSchema.safeParse(body)
+        if (!parsed.success) {
+          return NextResponse.json(
+            { error: 'Ogiltiga parametrar: transaction_ids måste vara en lista med 2-50 transaktions-id.' },
+            { status: 400 },
+          )
+        }
+        try {
+          const { candidates } = await findGroupMatchCandidates(
+            ctx.supabase,
+            ctx.companyId,
+            parsed.data.transaction_ids,
+          )
+          return NextResponse.json({ data: { candidates } })
+        } catch (err) {
+          if (err instanceof SkattekontoMatchError) {
+            const status =
+              err.code === 'TRANSACTION_NOT_FOUND' ? 404
+              : err.code === 'ALREADY_BOOKED' ? 409
+              : err.code === 'ROW_IGNORED' ? 409
+              : 422
             return NextResponse.json({ error: err.message, code: err.code }, { status })
           }
           return handleSkvError(err)

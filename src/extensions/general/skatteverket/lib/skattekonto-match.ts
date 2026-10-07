@@ -867,6 +867,157 @@ export async function findMatchCandidates(
   return { tx, candidates: (byRow.get(tx.id) ?? []).slice(0, 25) }
 }
 
+/** Most rows one ticked selection links to one verifikat (linkSkattekontoRows' own cap). */
+const MAX_GROUP_EVENTS = 50
+
+type GroupRow = {
+  id: string
+  transaktionsdatum: string
+  transaktionstext: string | null
+  belopp_skatteverket: number | string
+  journal_entry_id: string | null
+  is_ignored: boolean | null
+  status: 'booked' | 'upcoming'
+}
+
+/**
+ * Candidate verifikat for several open rows the user ticked together
+ * ("Matcha mot verifikat" in the /skattekonto bulk bar): the entries whose
+ * 1630 movement the whole selection settles, together with any rows already
+ * linked to the entry (groupSettlesEntry, exact to the öre).
+ *
+ * The automatic combined candidates stop at same-day groups of
+ * MAX_COMBINED_EVENTS rows; a selection is the user's own, so its rows may
+ * have either sign and different dates. The window runs from
+ * combinedMatchWindow's start for the earliest row (widened to a declaration
+ * month every row names) to 14 days after the latest. Cancelled verifikat
+ * (storno pairs) are never listed. Linking goes through
+ * matchSkattekontoToEntry with the other rows as alsoTransactionIds, which
+ * checks the whole group again before the write.
+ *
+ * Returns up to 25 candidates, nearest the earliest row's date first, then
+ * voucher number descending. Throws SkattekontoMatchError for a selection
+ * that cannot be linked, and a plain Error when a read fails.
+ */
+export async function findGroupMatchCandidates(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionIds: string[],
+): Promise<{ candidates: SkattekontoMatchCandidate[] }> {
+  const ids = [...new Set(transactionIds)]
+  if (ids.length < 2 || ids.length > MAX_GROUP_EVENTS) {
+    throw new SkattekontoMatchError(
+      `Välj mellan 2 och ${MAX_GROUP_EVENTS} händelser.`,
+      'INVALID_CANDIDATE',
+    )
+  }
+
+  const { data, error } = await supabase
+    .from('skattekonto_transactions')
+    .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket, journal_entry_id, is_ignored, status')
+    .eq('company_id', companyId)
+    .in('id', ids)
+  const rows = (data ?? []) as GroupRow[]
+  if (error || rows.length !== ids.length) {
+    throw new SkattekontoMatchError(
+      'Någon av skattekonto-transaktionerna hittades inte.',
+      'TRANSACTION_NOT_FOUND',
+    )
+  }
+  if (rows.some(r => r.journal_entry_id)) {
+    throw new SkattekontoMatchError(
+      'En av transaktionerna är redan kopplad till ett verifikat.',
+      'ALREADY_BOOKED',
+    )
+  }
+  if (rows.some(r => r.is_ignored)) {
+    throw new SkattekontoMatchError(
+      'En av transaktionerna är ignorerad. Återställ den innan du kopplar.',
+      'ROW_IGNORED',
+    )
+  }
+  if (rows.some(r => r.status !== 'booked')) {
+    throw new SkattekontoMatchError(
+      'En kommande händelse kan inte kopplas ännu.',
+      'INVALID_CANDIDATE',
+    )
+  }
+
+  const belopps = rows.map(r => Number(r.belopp_skatteverket))
+  const total = roundOre(belopps.reduce((s, b) => s + b, 0))
+  const dates = rows.map(r => r.transaktionsdatum).sort()
+  const earliest = dates[0]
+  const from = combinedMatchWindow(earliest, rows).from
+  const to = addDays(dates[dates.length - 1], DATE_WINDOW_DAYS)
+
+  let lines: LineRow[]
+  try {
+    lines = await fetchEntryLines<LineRow>({
+      supabase,
+      entryColumns: 'id, voucher_number, voucher_series, entry_date, description, status, company_id',
+      lineColumns: 'debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', companyId)
+          .gte('entry_date', from)
+          .lte('entry_date', to)
+          .in('status', LIVE_ENTRY_STATUSES),
+      filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
+    })
+  } catch (err) {
+    throw searchFailed(err)
+  }
+  if (lines.length === 0) return { candidates: [] }
+
+  // Rows already linked to a candidate entry join the group check. A failed
+  // read throws: treating a linked entry as unlinked would offer a link the
+  // write then refuses.
+  const entryIds = Array.from(new Set(lines.map(l => l.journal_entries.id)))
+  const linked: Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }> = []
+  for (let i = 0; i < entryIds.length; i += LINKED_ID_CHUNK) {
+    const { data: linkedData, error: linkedError } = await supabase
+      .from('skattekonto_transactions')
+      .select('journal_entry_id, belopp_skatteverket')
+      .eq('company_id', companyId)
+      .in('journal_entry_id', entryIds.slice(i, i + LINKED_ID_CHUNK))
+    if (linkedError) throw searchFailed(linkedError.message)
+    linked.push(...((linkedData ?? []) as typeof linked))
+  }
+
+  let cancelled: Set<string>
+  try {
+    cancelled = await loadCancelledEntryIds(supabase, companyId, from, to)
+  } catch (err) {
+    throw searchFailed(err)
+  }
+
+  const candidates: SkattekontoMatchCandidate[] = []
+  for (const view of buildEntryViews(lines, linked, cancelled).values()) {
+    const settles = groupSettlesEntry(view.lines, [...view.linked, ...belopps])
+    if (!settles.ok) continue
+    const e = view.entry
+    candidates.push({
+      journal_entry_id: e.id,
+      voucher_number: e.voucher_number,
+      voucher_series: e.voucher_series,
+      entry_date: e.entry_date,
+      description: e.description,
+      status: e.status,
+      matched_amount: Math.abs(total),
+      matched_side: expectedSide(total),
+      ...(settles.via === 'entry_total' ? { matched_via_entry_total: true } : {}),
+      ...(view.linked.length > 0 ? { joins_linked_count: view.linked.length } : {}),
+    })
+  }
+  candidates.sort((a, b) => {
+    const da = Math.abs(daysBetweenIso(a.entry_date, earliest))
+    const db = Math.abs(daysBetweenIso(b.entry_date, earliest))
+    if (da !== db) return da - db
+    return (b.voucher_number ?? 0) - (a.voucher_number ?? 0)
+  })
+  return { candidates: candidates.slice(0, 25) }
+}
+
 /**
  * findLedgerTwinCandidates for rows given by id: reads the rows first and
  * searches only the open ones (not linked, not ignored). A booked, ignored or

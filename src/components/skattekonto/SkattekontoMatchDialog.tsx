@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { StoredSkattekontoTransaction } from '@/types/skatteverket'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -51,6 +52,8 @@ function candidateKey(c: MatchCandidate): string {
   return [c.journal_entry_id, ...(c.combined_with ?? []).map((o) => o.id)].join(':')
 }
 
+const TRANSACTIONS_API = '/api/extensions/ext/skatteverket/skattekonto/transaktioner'
+
 /**
  * Shared dialog for linking a skattekonto_transactions row to an existing
  * journal entry. Used by both /skattekonto and /transactions so we don't
@@ -59,14 +62,20 @@ function candidateKey(c: MatchCandidate): string {
  * The dialog owns its own data fetch: pass the row + open flag and it
  * handles the rest. On successful match it calls onMatched(), letting the
  * caller refresh its data.
+ *
+ * Group mode (`rows`, two or more): the rows the user ticked together are
+ * matched to ONE verifikat whose 1630 movement their sum settles
+ * (findGroupMatchCandidates); linking sends them as one all-or-nothing group.
  */
 export function SkattekontoMatchDialog({
   row,
+  rows,
   open,
   onClose,
   onMatched,
 }: {
   row: StoredSkattekontoTransaction | null
+  rows?: StoredSkattekontoTransaction[] | null
   open: boolean
   onClose: () => void
   onMatched: () => void
@@ -76,9 +85,25 @@ export function SkattekontoMatchDialog({
   const [candidates, setCandidates] = useState<MatchCandidate[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [submittingId, setSubmittingId] = useState<string | null>(null)
+  const group = rows && rows.length > 1 ? rows : null
+  const groupTotal = group
+    ? roundOre(group.reduce((s, r) => s + Number(r.belopp_skatteverket), 0))
+    : 0
 
   useEffect(() => {
-    if (!open || !row) {
+    const request: [string, RequestInit?] | null = group
+      ? [
+          `${TRANSACTIONS_API}/group-match-candidates`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transaction_ids: group.map((r) => r.id) }),
+          },
+        ]
+      : row
+        ? [`${TRANSACTIONS_API}/${row.id}/match-candidates`]
+        : null
+    if (!open || !request) {
       setCandidates(null)
       return
     }
@@ -86,9 +111,7 @@ export function SkattekontoMatchDialog({
     setLoading(true)
     ;(async () => {
       try {
-        const res = await fetch(
-          `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/match-candidates`,
-        )
+        const res = await fetch(...request)
         const json = await res.json()
         if (cancelled) return
         if (!res.ok) {
@@ -119,25 +142,26 @@ export function SkattekontoMatchDialog({
     return () => {
       cancelled = true
     }
-  }, [open, row, toast, onClose, t])
+  }, [open, row, group, toast, onClose, t])
 
   async function confirmMatch(candidate: MatchCandidate) {
-    if (!row) return
+    const primary = group ? group[0] : row
+    if (!primary) return
+    // A group links every ticked row; a combined candidate links the
+    // companions it names. The server checks the whole group either way.
+    const others = group
+      ? group.slice(1).map((r) => r.id)
+      : (candidate.combined_with ?? []).map((o) => o.id)
     setSubmittingId(candidateKey(candidate))
     try {
-      const res = await fetch(
-        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/match`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            journal_entry_id: candidate.journal_entry_id,
-            ...(candidate.combined_with?.length
-              ? { also_transaction_ids: candidate.combined_with.map((o) => o.id) }
-              : {}),
-          }),
-        },
-      )
+      const res = await fetch(`${TRANSACTIONS_API}/${primary.id}/match`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          journal_entry_id: candidate.journal_entry_id,
+          ...(others.length > 0 ? { also_transaction_ids: others } : {}),
+        }),
+      })
       const json = await res.json()
       if (!res.ok) {
         toast({
@@ -147,7 +171,11 @@ export function SkattekontoMatchDialog({
         })
         return
       }
-      toast({ title: t('match_success_title') })
+      toast({
+        title: group
+          ? t('group_match_success_title', { count: group.length })
+          : t('match_success_title'),
+      })
       onMatched()
       onClose()
     } catch (err) {
@@ -168,15 +196,29 @@ export function SkattekontoMatchDialog({
           <DialogTitle>{t('title')}</DialogTitle>
           {/* data-ph-mask: transaction text and amount are user data */}
           <DialogDescription data-ph-mask="">
-            {row && (
-              <>
-                {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
-                <span className="tabular-nums">
-                  {formatCurrency(Number(row.belopp_skatteverket))}
-                </span>
-              </>
-            )}
+            {group
+              ? t('group_description', { count: group.length, total: formatCurrency(groupTotal) })
+              : row && (
+                  <>
+                    {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
+                    <span className="tabular-nums">
+                      {formatCurrency(Number(row.belopp_skatteverket))}
+                    </span>
+                  </>
+                )}
           </DialogDescription>
+          {group && (
+            /* data-ph-mask: event texts and amounts are user data */
+            <ul className="max-h-32 space-y-1 overflow-y-auto text-xs text-muted-foreground" data-ph-mask="">
+              {group.map((r) => (
+                <li key={r.id} className="flex gap-3 tabular-nums">
+                  <span>{formatDate(r.transaktionsdatum)}</span>
+                  <span className="min-w-0 flex-1 truncate">{r.transaktionstext}</span>
+                  <span>{formatCurrency(Number(r.belopp_skatteverket))}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </DialogHeader>
 
         {loading && (
@@ -187,11 +229,15 @@ export function SkattekontoMatchDialog({
 
         {!loading && candidates && candidates.length === 0 && (
           <div className="space-y-2 py-4 text-sm">
-            <p>{t('no_candidates_title')}</p>
+            <p>{group ? t('group_no_candidates_title') : t('no_candidates_title')}</p>
             <p className="text-muted-foreground">
-              {t.rich('no_candidates_help', {
-                strong: (chunks) => <strong>{chunks}</strong>,
-              })}
+              {group
+                ? t.rich('group_no_candidates_help', {
+                    strong: (chunks) => <strong>{chunks}</strong>,
+                  })
+                : t.rich('no_candidates_help', {
+                    strong: (chunks) => <strong>{chunks}</strong>,
+                  })}
             </p>
           </div>
         )}
@@ -256,9 +302,11 @@ export function SkattekontoMatchDialog({
                       >
                         {submittingId === candidateKey(c)
                           ? t('linking')
-                          : c.combined_with?.length
-                            ? t('link_group', { count: c.combined_with.length + 1 })
-                            : t('link')}
+                          : group
+                            ? t('link_group', { count: group.length })
+                            : c.combined_with?.length
+                              ? t('link_group', { count: c.combined_with.length + 1 })
+                              : t('link')}
                       </Button>
                     </TableCell>
                   </TableRow>

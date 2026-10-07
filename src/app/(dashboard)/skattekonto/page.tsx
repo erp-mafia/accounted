@@ -118,6 +118,11 @@ export default function SkattekontoPage() {
   const [matchOpenFor, setMatchOpenFor] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
+  // Rows ticked together for "Matcha mot verifikat" (bulk bar): matched to
+  // ONE verifikat as a group; null = dialog closed.
+  const [groupMatchRows, setGroupMatchRows] = useState<StoredSkattekontoTransaction[] | null>(
+    null,
+  )
   // Ignored rows are always fetched (include_ignored=1) but rendered only on
   // demand: the count line below the table toggles the "Ignorerade" band.
   const [showIgnored, setShowIgnored] = useState(false)
@@ -339,6 +344,7 @@ export default function SkattekontoPage() {
     setMatchOpenFor(row)
   }
   const closeMatch = useCallback(() => setMatchOpenFor(null), [])
+  const closeGroupMatch = useCallback(() => setGroupMatchRows(null), [])
 
   function copyOcr(ocr: string) {
     navigator.clipboard
@@ -554,6 +560,20 @@ export default function SkattekontoPage() {
     return new Set([...selectedIds].filter((id) => selectable.has(id)))
   }, [selectableIds, selectedIds])
   const range = useRangeSelect({ visibleIds: selectableIds, selectedIds, setSelectedIds })
+  // The bulk bar matches the ticked rows to one verifikat only when every
+  // one is settled (Genomförda): a kommande row cannot be linked yet. Date
+  // order, so the dialog lists them the way they happened.
+  const selectedSettledRows = useMemo(
+    () =>
+      (tx?.booked ?? [])
+        .filter((r) => activeSelectedIds.has(r.id) && !r.journal_entry_id)
+        .sort((a, b) =>
+          a.transaktionsdatum < b.transaktionsdatum ? -1 : a.transaktionsdatum > b.transaktionsdatum ? 1 : 0,
+        ),
+    [tx, activeSelectedIds],
+  )
+  const canMatchSelection =
+    selectedSettledRows.length >= 2 && selectedSettledRows.length === activeSelectedIds.size
   const toggleSelect = useCallback(
     (id: string, extend?: boolean) => range.toggle(id, extend),
     [range],
@@ -805,6 +825,11 @@ export default function SkattekontoPage() {
           <Button size="sm" onClick={() => void ignoreSelected([...activeSelectedIds])}>
             {t('bulk_ignore_cta', { count: activeSelectedIds.size })}
           </Button>
+          {canMatchSelection && (
+            <Button size="sm" variant="outline" onClick={() => setGroupMatchRows(selectedSettledRows)}>
+              {t('bulk_match_cta')}
+            </Button>
+          )}
           {activeSelectedIds.size < selectableIds.length && (
             <button
               type="button"
@@ -880,6 +905,18 @@ export default function SkattekontoPage() {
         open={!!matchOpenFor}
         onClose={closeMatch}
         onMatched={() => void reload()}
+      />
+
+      <SkattekontoMatchDialog
+        row={null}
+        rows={groupMatchRows}
+        open={!!groupMatchRows}
+        onClose={closeGroupMatch}
+        onMatched={() => {
+          setSelectedIds(new Set())
+          range.resetAnchor()
+          void reload()
+        }}
       />
 
       <Dialog open={showPayment} onOpenChange={setShowPayment}>

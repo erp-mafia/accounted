@@ -4610,7 +4610,11 @@
     "cancel": "Avbryt",
     "combined_note": "Tillsammans med {count, plural, one {# händelse} other {# händelser}} samma dag, summa {total} på 1630:",
     "joins_linked_note": "Redan kopplat till {count, plural, one {# händelse} other {# händelser}}; tillsammans motsvarar de raderna på 1630.",
-    "link_group": "Koppla {count} händelser"
+    "link_group": "Koppla {count} händelser",
+    "group_description": "{count, plural, one {# händelse} other {# händelser}}, summa {total}",
+    "group_no_candidates_title": "Hittade inget verifikat där raden på konto 1630 motsvarar summan av händelserna.",
+    "group_no_candidates_help": "Summan måste stämma på öret, och verifikatet måste vara daterat inom 14 dagar från de valda händelserna. För arbetsgivardeklarationen räknas även verifikat i deklarationsmånaden. Verifikat som har återförts med ett motsatt verifikat visas inte. Använd <strong>Bokför</strong> på händelserna för att skapa nya verifikat istället.",
+    "group_match_success_title": "{count, plural, one {# händelse kopplad} other {# händelser kopplade}} till verifikatet"
   },
   "unit_picker": {
     "empty": "Enhet",
@@ -10274,7 +10278,8 @@
     "payment_title": "Betalningsuppgifter",
     "payment_description": "Dragningen {date} är {charge}.",
     "payment_bankgiro_label": "Bankgiro (Skatteverket)",
-    "payment_shortfall_label": "Saknas på kontot"
+    "payment_shortfall_label": "Saknas på kontot",
+    "bulk_match_cta": "Matcha mot verifikat"
   },
   "expense_claims": {
     "title": "Utlägg",
