@@ -19,14 +19,18 @@ import {
 } from '../booking-templates'
 import { applySettlementAccount } from '../mapping-engine'
 import { getCategoryAccountMapping } from '../category-mapping'
+import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
+import { resolveVatTreatmentRuta } from '@/lib/vat/account-vat-treatment'
+import { isEuMemberCountry } from '@/lib/vat/eu-countries'
+import { DIRECTORY_SEED } from '@/lib/parties/resolver/directory-seed'
 
 // ============================================================
 // Template Data Integrity
 // ============================================================
 
 describe('BOOKING_TEMPLATES data integrity', () => {
-  it('has exactly 86 templates', () => {
-    expect(BOOKING_TEMPLATES).toHaveLength(86)
+  it('has exactly 87 templates', () => {
+    expect(BOOKING_TEMPLATES).toHaveLength(87)
   })
 
   it('scopes templates to legal forms through templateAppliesToForm', () => {
@@ -199,7 +203,7 @@ describe('getTemplateGroups', () => {
   it('every template is in exactly one group', () => {
     const groups = getTemplateGroups()
     const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(86)
+    expect(allTemplates).toHaveLength(87)
   })
 })
 
@@ -1014,5 +1018,114 @@ describe('buildMappingResultFromTemplate: VAT registration', () => {
     const notRegistered = buildMappingResultFromTemplate(template, tx, 'aktiebolag', false)
     expect(notRegistered.vat_lines).toEqual(registered.vat_lines)
     expect(notRegistered.vat_lines.length).toBeGreaterThan(0)
+  })
+})
+
+// ============================================================
+// Reverse charge follows the supplier's location (crm#1028):
+// a service from another EU country is ruta 21, from outside the EU ruta 22
+// ============================================================
+
+describe('reverse-charge software lands in the box of the supplier location', () => {
+  const topFor = (description: string, mcc_code: number | null = null) =>
+    findMatchingTemplates(
+      makeTransaction({ description, original_description: description, merchant_name: null, amount: -1000, mcc_code }),
+      'aktiebolag',
+    )[0]?.template
+
+  /** The VAT lines of a 1 000 kr purchase, each with the declaration box its account feeds. */
+  const linesFor = (template: BookingTemplate) =>
+    buildMappingResultFromTemplate(template, makeTransaction({ amount: -1000 }), 'aktiebolag').vat_lines.map((l) => ({
+      account: l.account_number,
+      debit: l.debit_amount,
+      credit: l.credit_amount,
+      box: ACCOUNT_RUTA[l.account_number]?.box,
+    }))
+
+  it.each(['Google Workspace', 'GOOGLE*WORKSPACE', 'GOOGLE *WORKSPACE', 'GOOGLE GSUITE', 'GOOGLE*GSUITE'])(
+    'proposes the EU template for Google Workspace, billed from Ireland: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('it_saas_eu')
+    },
+  )
+
+  it('keeps Google Workspace on the EU template when the card MCC is one the 25 % SaaS template shares', () => {
+    expect(topFor('Google Workspace', 5817)?.id).toBe('it_saas_eu')
+  })
+
+  it.each(['SUPABASE', 'SUPABASE,SINGAPORE,SG'])('proposes the non-EU template for Supabase: %s', (text) => {
+    expect(topFor(text)?.id).toBe('it_saas_non_eu')
+  })
+
+  it('keeps Supabase off the 25 % SaaS template on a software-store MCC card row', () => {
+    expect(topFor('SUPABASE', 5734)?.id).toBe('it_saas_non_eu')
+  })
+
+  it('books Google Workspace with the basis in ruta 21, output VAT on 2614 (ruta 30) and input VAT on 2645 (ruta 48)', () => {
+    expect(linesFor(topFor('Google Workspace')!)).toEqual([
+      { account: '2645', debit: 250, credit: 0, box: 'ruta48' },
+      { account: '2614', debit: 0, credit: 250, box: 'ruta30' },
+      { account: '4535', debit: 1000, credit: 0, box: 'ruta21' },
+      { account: '4598', debit: 0, credit: 1000, box: undefined },
+    ])
+  })
+
+  it('books Supabase with the basis in ruta 22, never ruta 21, and the same 2614/2645 pair', () => {
+    expect(linesFor(topFor('SUPABASE')!)).toEqual([
+      { account: '2645', debit: 250, credit: 0, box: 'ruta48' },
+      { account: '2614', debit: 0, credit: 250, box: 'ruta30' },
+      { account: '4531', debit: 1000, credit: 0, box: 'ruta22' },
+      { account: '4598', debit: 0, credit: 1000, box: undefined },
+    ])
+  })
+
+  it('puts the basis in the box resolveVatTreatmentRuta gives the supplier location', () => {
+    const treatment = { eu_business: 'reverse_charge_eu_services', non_eu_business: 'reverse_charge_non_eu_services' } as const
+    for (const id of ['it_saas_eu', 'it_cloud_hosting', 'it_saas_non_eu', 'it_services_foreign']) {
+      const t = getTemplateById(id)!
+      const supplier = t.reverse_charge_supplier_type ?? 'eu_business'
+      if (supplier === 'swedish_business') throw new Error(`${id} is not a foreign-supplier template`)
+      const basis = linesFor(t).find((l) => /^45\d{2}$/.test(l.account) && l.debit > 0)
+      expect(basis?.box, id).toBe(resolveVatTreatmentRuta(treatment[supplier], Number(t.debit_account.charAt(0)))!.box)
+    }
+  })
+
+  it('lists on the non-EU template only vendors the counterpart directory places outside the EU', () => {
+    for (const keyword of getTemplateById('it_saas_non_eu')!.keywords) {
+      const country = DIRECTORY_SEED.find((e) => e.patterns.includes(keyword))?.country
+      expect(country, keyword).toBeDefined()
+      expect(isEuMemberCountry(country!), keyword).toBe(false)
+    }
+  })
+
+  it('lets no new vendor from outside the EU onto an EU reverse-charge template', () => {
+    // These keywords book ruta 21 today although the directory places the
+    // vendor outside the EU. Moving them to it_saas_non_eu waits on a founder
+    // call (crm#1028); remove an entry when its keyword moves, never add one.
+    const awaitingFounderCall = ['anthropic', 'chatgpt', 'claude', 'cloudflare', 'digitalocean', 'godaddy', 'midjourney', 'openai', 'vercel']
+    const outsideEu = new Set(
+      DIRECTORY_SEED.filter((e) => e.country && !isEuMemberCountry(e.country)).flatMap((e) => e.patterns),
+    )
+    const listed = BOOKING_TEMPLATES
+      .filter((t) => t.direction === 'expense' && t.vat_treatment === 'reverse_charge' && (t.reverse_charge_supplier_type ?? 'eu_business') === 'eu_business')
+      .flatMap((t) => t.keywords.filter((k) => outsideEu.has(k)))
+    expect(listed.sort()).toEqual(awaitingFounderCall)
+  })
+
+  it.each(['LOOPIA AB', 'LOOPIA AB,VASTERAAS,SE', 'BINERO'])(
+    'proposes Swedish VAT for a Swedish web host or domain, not reverse charge: %s',
+    (text) => {
+      const t = topFor(text)!
+      expect(t.id).toBe('it_saas_subscription')
+      expect(linesFor(t)).toEqual([{ account: '2641', debit: 200, credit: 0, box: 'ruta48' }])
+    },
+  )
+
+  it('lists no vendor the counterpart directory places in Sweden on a foreign-supplier reverse-charge template', () => {
+    const swedish = new Set(DIRECTORY_SEED.filter((e) => e.country === 'SE').flatMap((e) => e.patterns))
+    const listed = BOOKING_TEMPLATES
+      .filter((t) => t.direction === 'expense' && t.vat_treatment === 'reverse_charge' && t.reverse_charge_supplier_type !== 'swedish_business')
+      .flatMap((t) => t.keywords.filter((k) => swedish.has(k)).map((k) => `${t.id}:${k}`))
+    expect(listed).toEqual([])
   })
 })

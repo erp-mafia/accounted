@@ -9,6 +9,7 @@ import {
   costAccountReportsRcBasis,
   DEFAULT_REVERSE_CHARGE_KIND,
   getVatRate,
+  isReverseChargeBasisAccount,
   isReverseChargeVatAccount,
 } from './vat-entries'
 import {
@@ -653,12 +654,17 @@ export function patternDirection(pattern: LinePatternEntry[]): TemplateDirection
  * (the mapping-rule default); a template whose business account is itself a
  * basis account gets no pair.
  */
-function learnedReverseChargeLines(tmpl: CategorizationTemplate, absAmount: number) {
+function learnedReverseChargeLines(debitAccount: string, absAmount: number) {
   return generateReverseChargePurchaseLines({
     base: absAmount,
     kind: DEFAULT_REVERSE_CHARGE_KIND,
-    basisBase: costAccountReportsRcBasis(tmpl.debit_account) ? 0 : absAmount,
+    basisBase: costAccountReportsRcBasis(debitAccount) ? 0 : absAmount,
   })
+}
+
+/** The basis accounts (ruta 20-24) among reverse-charge lines, as one comparable key. */
+function rcBasisKey(lines: readonly { account_number: string }[]): string {
+  return lines.map((l) => l.account_number).filter(isReverseChargeBasisAccount).sort().join(',')
 }
 
 /**
@@ -712,7 +718,7 @@ export function buildMappingResultFromCounterpartyTemplate(
   const vatLines: VatJournalLine[] = []
   if (isExpense && vatTreatment) {
     if (vatTreatment === 'reverse_charge') {
-      for (const rcl of learnedReverseChargeLines(tmpl, absAmount)) {
+      for (const rcl of learnedReverseChargeLines(tmpl.debit_account, absAmount)) {
         vatLines.push({
           account_number: rcl.account_number,
           debit_amount: rcl.debit_amount,
@@ -782,7 +788,7 @@ function buildLegacyMismatchResult(
     if (vatTreatment === 'reverse_charge') {
       // Both pairs flip, so the refund also takes the basis back out of
       // ruta 20-24, not only the moms out of ruta 30/48.
-      for (const rcl of learnedReverseChargeLines(tmpl, absAmount)) {
+      for (const rcl of learnedReverseChargeLines(tmpl.debit_account, absAmount)) {
         vatLines.push({
           account_number: rcl.account_number,
           debit_amount: rcl.credit_amount,
@@ -1163,6 +1169,18 @@ export async function upsertCounterpartyTemplate(
   // Mirrored refund/repayment bookings must never be learned: they would
   // flip the template's accounts and poison future matches.
   if (mappingResult.direction_mismatch) return
+
+  // A learned pair keeps only 'reverse_charge' and replays it through
+  // learnedReverseChargeLines (EU services, 25 %). A purchase that replay would
+  // book with another basis, such as 4531 for a supplier outside the EU, would
+  // come back in the wrong ruta, so it teaches nothing: the catalog template or
+  // a saved rule keeps proposing it (crm#1028).
+  if (
+    detectVatTreatment(mappingResult) === 'reverse_charge' &&
+    rcBasisKey(mappingResult.vat_lines) !== rcBasisKey(learnedReverseChargeLines(mappingResult.debit_account, 100))
+  ) {
+    return
+  }
 
   // Learn from the immutable bank original (see findCounterpartyTemplatesBatch):
   // learning and lookup MUST derive the key from the same string, or the

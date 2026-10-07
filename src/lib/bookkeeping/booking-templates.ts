@@ -315,7 +315,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     common: false,
   },
 
-  // --- IT & SOFTWARE (3) ---
+  // --- IT & SOFTWARE (4) ---
   {
     id: 'it_saas_subscription',
     name_sv: 'Programvara / SaaS',
@@ -329,14 +329,16 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_rate: 0.25,
     deductibility: 'full',
     mcc_codes: [5734, 5817, 5818],
-    keywords: ['software', 'saas', 'programvara', 'licens', 'subscription', 'app', 'microsoft', 'google', 'adobe', 'slack', 'notion', 'figma', 'github', 'atlassian', 'jira', 'antivirus', 'vpn', 'norton', '1password', 'lastpass', 'bitwarden', 'spotify', 'crm', 'hubspot', 'salesforce', 'pipedrive', 'asana', 'monday', 'trello', 'basecamp', 'clickup', 'linear', 'dropbox', 'onedrive', 'icloud', 'backup'],
+    // Swedish web hosts and domain registrars charge 25 % moms: same account as
+    // it_cloud_hosting, but 2641 instead of reverse charge.
+    keywords: ['software', 'saas', 'programvara', 'licens', 'subscription', 'app', 'microsoft', 'google', 'adobe', 'slack', 'notion', 'figma', 'github', 'atlassian', 'jira', 'antivirus', 'vpn', 'norton', '1password', 'lastpass', 'bitwarden', 'spotify', 'crm', 'hubspot', 'salesforce', 'pipedrive', 'asana', 'monday', 'trello', 'basecamp', 'clickup', 'linear', 'dropbox', 'onedrive', 'icloud', 'backup', 'loopia', 'binero'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 10,
     auto_match_confidence: 0.90,
     default_private: false,
     fallback_category: 'expense_software',
-    description_sv: 'Programvarulicens eller SaaS-prenumeration (svensk leverantör med moms)',
+    description_sv: 'Programvarulicens, SaaS-prenumeration, webbhotell eller domän (svensk leverantör med moms)',
     common: false,
   },
   {
@@ -351,18 +353,50 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_treatment: 'reverse_charge',
     vat_rate: 0,
     deductibility: 'full',
-    special_rules_sv: 'Utländsk leverantör (EU/USA) med omvänd skattskyldighet',
+    special_rules_sv: 'Leverantör i annat EU-land fakturerar utan moms; du redovisar 25 % själv (ruta 21, 30 och 48). Leverantör utanför EU, till exempel i USA: välj Programvara / SaaS utanför EU (ruta 22).',
     mcc_codes: [5734, 5817, 5818],
-    keywords: ['software', 'saas', 'eu', 'ireland', 'reverse charge', 'omvänd moms', 'openai', 'chatgpt', 'anthropic', 'claude', 'ai', 'midjourney', 'copilot', 'google cloud', 'aws', 'azure'],
+    // Google Workspace is billed from Ireland. Card texts also write it
+    // "GOOGLE*WORKSPACE" and "GOOGLE *WORKSPACE", and every spelling needs two
+    // hits here to outrank the domestic template's broader 'google' keyword.
+    keywords: ['software', 'saas', 'eu', 'ireland', 'reverse charge', 'omvänd moms', 'openai', 'chatgpt', 'anthropic', 'claude', 'ai', 'midjourney', 'copilot', 'google cloud', 'aws', 'azure', 'google workspace', 'google*workspace', 'google *workspace', 'workspace', 'gsuite', 'google gsuite', 'google*gsuite'],
     risk_level: 'LOW',
     requires_review: false,
     impact_score: 9,
     auto_match_confidence: 0.80,
     default_private: false,
     fallback_category: 'expense_software',
-    description_sv: 'Programvara från utländsk leverantör med omvänd skattskyldighet',
+    description_sv: 'Programvara från leverantör i annat EU-land med omvänd skattskyldighet',
     common: true,
     requires_vat_registration_data: true,
+  },
+  {
+    // The non-EU sibling of it_saas_eu: same cost account and MCCs, only the
+    // basis box differs (4531, ruta 22). Keywords are vendors the counterpart
+    // directory places outside the EU, never an EU-billed one.
+    id: 'it_saas_non_eu',
+    name_sv: 'Programvara / SaaS utanför EU (omvänd moms)',
+    name_en: 'Software / SaaS from outside the EU (reverse charge)',
+    group: 'it_software',
+    direction: 'expense',
+    entity_applicability: 'all',
+    debit_account: '5420',
+    credit_account: '1930',
+    vat_treatment: 'reverse_charge',
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Leverantör utanför EU, till exempel i USA, fakturerar utan moms; du redovisar 25 % själv (ruta 22, 30 och 48). Leverantör i annat EU-land: välj Programvara / SaaS (omvänd moms), ruta 21.',
+    mcc_codes: [5734, 5817, 5818],
+    keywords: ['supabase'],
+    risk_level: 'LOW',
+    requires_review: false,
+    impact_score: 9,
+    auto_match_confidence: 0.80,
+    default_private: false,
+    fallback_category: 'expense_software',
+    description_sv: 'Programvara, SaaS eller molntjänst från leverantör utanför EU med omvänd skattskyldighet',
+    common: true,
+    requires_vat_registration_data: true,
+    reverse_charge_supplier_type: 'non_eu_business',
   },
   {
     id: 'it_cloud_hosting',
@@ -377,9 +411,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_treatment: 'reverse_charge',
     vat_rate: 0,
     deductibility: 'full',
-    special_rules_sv: 'Ofta EU/utländsk leverantör med omvänd skattskyldighet',
+    special_rules_sv: 'Bokförs som tjänst från annat EU-land med omvänd skattskyldighet (ruta 21, 30 och 48). Leverantör utanför EU: välj Programvara / SaaS utanför EU (ruta 22). Svensk leverantör som tar ut moms: välj Programvara / SaaS.',
     mcc_codes: [4816],
-    keywords: ['aws', 'azure', 'google cloud', 'gcp', 'hosting', 'server', 'cloud', 'vercel', 'heroku', 'digitalocean', 'cloudflare', 'hetzner', 'domän', 'domain', 'dns', 'loopia', 'binero', 'godaddy'],
+    keywords: ['aws', 'azure', 'google cloud', 'gcp', 'hosting', 'server', 'cloud', 'vercel', 'heroku', 'digitalocean', 'cloudflare', 'hetzner', 'domain', 'dns', 'godaddy'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 9,

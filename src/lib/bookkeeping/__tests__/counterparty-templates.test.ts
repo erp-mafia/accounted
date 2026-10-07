@@ -19,6 +19,7 @@ import {
 } from '../counterparty-templates'
 import { buildTransactionEntryLines } from '../transaction-entries'
 import { buildMappingResultFromCategory } from '../category-mapping'
+import { buildMappingResultFromTemplate, findMatchingTemplates, getTemplateById } from '../booking-templates'
 import { roundOre } from '@/lib/money'
 import type { TemplateUpsertParams } from '../counterparty-templates'
 import type { LinePatternEntry } from '@/types'
@@ -564,13 +565,8 @@ describe('counterparty-templates', () => {
       expect(result.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
     })
 
-    it('learns the categorize shape and replays it with the basis pair (round trip)', async () => {
-      // What gnubok_categorize_transaction books for reverse_charge ...
-      const tx = makeTransaction({ merchant_name: 'Google Play', amount: -250, date: '2026-09-01' })
-      const booked = buildMappingResultFromCategory(
-        'expense_software', tx, true, 'aktiebolag', 'reverse_charge', null, null, 'non_eu_services',
-      )
-      booked.debit_account = '6540' // account_override
+    /** A client that records every categorization_templates insert; no template exists yet. */
+    const recordingClient = () => {
       const inserted: Record<string, unknown>[] = []
       const chain = {
         select: () => chain,
@@ -584,7 +580,19 @@ describe('counterparty-templates', () => {
           return { error: null }
         },
       }
-      await upsertCounterpartyTemplate({ from: () => chain } as never, 'company-1', tx, booked, 'user_approved')
+      const from = vi.fn(() => chain)
+      return { supabase: { from } as never, from, inserted }
+    }
+
+    it('learns an EU-services reverse-charge purchase and replays the same lines (round trip)', async () => {
+      // What gnubok_categorize_transaction books for reverse_charge ...
+      const tx = makeTransaction({ merchant_name: 'Google Play', amount: -250, date: '2026-09-01' })
+      const booked = buildMappingResultFromCategory(
+        'expense_software', tx, true, 'aktiebolag', 'reverse_charge', null, null, 'eu_services',
+      )
+      booked.debit_account = '6540' // account_override
+      const { supabase, inserted } = recordingClient()
+      await upsertCounterpartyTemplate(supabase, 'company-1', tx, booked, 'user_approved')
 
       // ... is learned as a reverse-charge pair on the cost account ...
       expect(inserted).toHaveLength(1)
@@ -596,7 +604,8 @@ describe('counterparty-templates', () => {
       })
 
       // ... and the next purchase replays fiktiv moms AND the basis pair. The
-      // template stores no seller country, so the basis is EU services.
+      // template stores no seller country; its replay is EU services, which is
+      // what was booked, so the round trip holds.
       const template = makeCategorizationTemplate({
         debit_account: inserted[0].debit_account as string,
         credit_account: inserted[0].credit_account as string,
@@ -609,6 +618,48 @@ describe('counterparty-templates', () => {
         'aktiebolag',
       )
       expect(next.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4535', '4598'])
+      expect(next.vat_lines.map((l) => l.account_number)).toEqual(booked.vat_lines.map((l) => l.account_number))
+    })
+
+    it('does not learn a reverse-charge purchase from outside the EU, which the pair would replay in ruta 21 (crm#1028)', async () => {
+      const tx = makeTransaction({ merchant_name: 'Google Play', amount: -250, date: '2026-09-01' })
+      const booked = buildMappingResultFromCategory(
+        'expense_software', tx, true, 'aktiebolag', 'reverse_charge', null, null, 'non_eu_services',
+      )
+      expect(booked.vat_lines.map((l) => l.account_number)).toContain('4531')
+      const { supabase, from } = recordingClient()
+      await upsertCounterpartyTemplate(supabase, 'company-1', tx, booked, 'user_approved')
+      expect(from).not.toHaveBeenCalled()
+    })
+
+    it('still learns a purchase booked straight on a basis account, which the pair replays as booked', async () => {
+      const tx = makeTransaction({ merchant_name: 'Upwork', amount: -1000, date: '2026-09-01' })
+      const booked = buildMappingResultFromTemplate(
+        { ...getTemplateById('it_saas_non_eu')!, debit_account: '4531' }, tx, 'aktiebolag',
+      )
+      expect(booked.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+      const { supabase, inserted } = recordingClient()
+      await upsertCounterpartyTemplate(supabase, 'company-1', tx, booked, 'user_approved')
+      expect(inserted).toHaveLength(1)
+      expect(inserted[0]).toMatchObject({ debit_account: '4531', vat_treatment: 'reverse_charge' })
+    })
+
+    it('books a second Supabase row on 4531 (ruta 22) too: the first booking teaches no template that would outrank the catalog (crm#1028)', async () => {
+      const row = (date: string) =>
+        makeTransaction({ description: 'SUPABASE', original_description: 'SUPABASE', merchant_name: null, amount: -250, date })
+      const bookFromCatalog = (tx: ReturnType<typeof row>) =>
+        buildMappingResultFromTemplate(findMatchingTemplates(tx, 'aktiebolag')[0]!.template, tx, 'aktiebolag')
+
+      const first = row('2026-09-01')
+      const firstBooking = bookFromCatalog(first)
+      expect(firstBooking.template_id).toBe('it_saas_non_eu')
+      const { supabase, from } = recordingClient()
+      await upsertCounterpartyTemplate(supabase, 'company-1', first, firstBooking, 'user_approved')
+      expect(from).not.toHaveBeenCalled()
+
+      const secondBooking = bookFromCatalog(row('2026-10-01'))
+      expect(secondBooking.template_id).toBe('it_saas_non_eu')
+      expect(secondBooking.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4531', '4598'])
     })
 
     it('mirrors the basis pair too for a refund against a reverse-charge template on a cost account', () => {
