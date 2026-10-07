@@ -1,3 +1,5 @@
+import type { ProviderRefusalReason } from './with-provider-call'
+
 /** Serializable contract shared by the provider worker and the migration wizard. */
 export const MIGRATION_RESOURCES = ['customers', 'suppliers', 'salesInvoices', 'supplierInvoices'] as const
 export type MigrationResource = typeof MIGRATION_RESOURCES[number]
@@ -31,6 +33,12 @@ export interface ProviderMigrationJob {
    */
   review_accepted_at?: string | null
   review_accepted_by?: string | null
+  /**
+   * Registers the provider refused for this job, and why (migration
+   * 20261005193815). The worker skips such a register and imports the rest;
+   * the wizard names it with its remedy. Absent before that migration.
+   */
+  refused_resources?: Partial<Record<MigrationResource, ProviderRefusalReason>>
   created_at: string
   updated_at: string
 }
@@ -145,8 +153,12 @@ export function migrationRetrySeconds(failures: number): number {
 }
 
 /** Group internal failure codes into actionable, translated messages. */
-export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'exists' | 'retry' {
+export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'refused' | 'review' | 'lines' | 'size' | 'exists' | 'retry' {
   if (code === 'PROVIDER_AUTH_EXPIRED') return 'connection'
+  // A job parked on a refused register before the worker learned to skip one
+  // (migration 20261005193815). Resuming now skips that register, so say so
+  // instead of promising that a retry fixes the record.
+  if (code === 'PROVIDER_RESOURCE_FORBIDDEN') return 'refused'
   // A record with the same number already exists and differs. Resuming
   // repeats the same outcome, so never suggest a retry (23505 = unique_violation).
   if (code === 'MIGRATION_INVOICE_NUMBER_TAKEN' || code === '23505') return 'exists'
@@ -262,4 +274,34 @@ export function migrationIssueReason(issue: Pick<ProviderMigrationIssue, 'error_
   }
   if (code.startsWith('BOKIO_')) return 'source_check'
   return 'unknown'
+}
+
+/**
+ * Translation key (extensions namespace) for what to do about a refused
+ * register. A missing licence names the module: Fortnox requires Kundfaktura
+ * or Order for customers and customer invoices, Bokföring for suppliers and
+ * supplier invoices. A missing permission takes `{provider}`.
+ */
+export function migrationRefusalMessageKey(resource: MigrationResource, reason: ProviderRefusalReason): string {
+  if (reason === 'permission') return 'ext_arcim_job_refused_permission'
+  return resource === 'customers' || resource === 'salesInvoices'
+    ? 'ext_arcim_job_refused_license_sales'
+    : 'ext_arcim_job_refused_license_purchase'
+}
+
+/**
+ * The job's refused registers, grouped by remedy in register order, so
+ * customers and customer invoices refused for the same missing licence read
+ * as one line. Empty for a job with none, and for one stored before
+ * refused_resources existed.
+ */
+export function migrationRefusals(job: Pick<ProviderMigrationJob, 'refused_resources'>): { messageKey: string; resources: MigrationResource[] }[] {
+  const groups = new Map<string, MigrationResource[]>()
+  for (const resource of MIGRATION_RESOURCES) {
+    const reason = job.refused_resources?.[resource]
+    if (reason !== 'license' && reason !== 'permission') continue
+    const key = migrationRefusalMessageKey(resource, reason)
+    groups.set(key, [...(groups.get(key) ?? []), resource])
+  }
+  return [...groups].map(([messageKey, resources]) => ({ messageKey, resources }))
 }

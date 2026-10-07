@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { AttnLine } from '@/components/ui/attn-line'
-import { migrationProgress, migrationIssueKind, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
+import { migrationProgress, migrationIssueKind, migrationRefusals, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
 import ProviderMigrationIssues, { migrationProviderName } from './ProviderMigrationIssues'
 
 const ROOT = '/api/extensions/ext/arcim-migration/migration-jobs'
@@ -95,6 +95,12 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
             })}</span>
           </li>)}
         </ul>
+        {migrationRefusals(status.job).map(group => <div key={group.messageKey} className="space-y-1 text-sm">
+          <p>{t('ext_arcim_job_refused', {
+            resources: group.resources.map(resource => t(`ext_arcim_job_resource_${resource}`)).join(', '),
+          })}</p>
+          <p className="text-muted-foreground">{t(group.messageKey, { provider })}</p>
+        </div>)}
       </>}
       {disconnected && <p className="text-sm text-muted-foreground">{t('ext_arcim_job_connection')}</p>}
       {review && status && <div className="space-y-6">

@@ -2,10 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   classifyProviderError,
   isApiModuleInactiveError,
+  providerRefusalReason,
   ProviderCallError,
   type ProviderCallErrorCode,
 } from '../with-provider-call'
-import { FortnoxApiError } from '../fortnox/client'
+import { FortnoxApiError, fortnoxApiErrorCode } from '../fortnox/client'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 /**
@@ -142,6 +143,37 @@ describe('classifyProviderError', () => {
   it('returns null for an unclassifiable error', () => {
     expect(classifyProviderError(new Error('boom'))).toBeNull()
     expect(classifyProviderError('not an error')).toBeNull()
+  })
+})
+
+/**
+ * PH 149: GET /3/customers answered HTTP 400 with the lowercase body below on
+ * a Fortnox company without Kundfaktura or Order. PH 145: GET /3/suppliers
+ * answered 403. Both are a refusal of one register; only their remedy differs.
+ */
+describe('a Fortnox register refusal', () => {
+  const unlicensed = new FortnoxApiError('Fortnox API error: 400 Bad Request', 400,
+    '{"ErrorInformation":{"error":1,"message":"Det finns ingen aktiv licens för önskat scope.","code":2001101}}')
+
+  it('reads the error code whichever way Fortnox spells the key', () => {
+    expect(fortnoxApiErrorCode(unlicensed)).toBe('2001101')
+    expect(fortnoxApiErrorCode(new FortnoxApiError('Fortnox API error: 403', 403, FORTNOX_SUPPLIER_BODY))).toBe('2003275')
+    expect(fortnoxApiErrorCode(new FortnoxApiError('Fortnox API error: 400', 400,
+      '{"ErrorInformation":{"Error":1,"Message":"Det finns ingen aktiv licens för önskat scope.","Code":2001101}}'))).toBe('2001101')
+    expect(fortnoxApiErrorCode(new FortnoxApiError('Fortnox API error: 403', 403))).toBeUndefined()
+  })
+
+  it('classifies a missing module licence as a refused register, not as a transient failure', () => {
+    expect(classifyProviderError(unlicensed)).toBe('PROVIDER_RESOURCE_FORBIDDEN')
+  })
+
+  it('names a missing module licence apart from a missing permission', () => {
+    expect(providerRefusalReason(unlicensed)).toBe('license')
+    expect(providerRefusalReason(new FortnoxApiError('Fortnox API error: 400', 400,
+      '{"ErrorInformation":{"error":1,"message":"Har inte behörighet för scope.","code":2000663}}'))).toBe('permission')
+    expect(providerRefusalReason(new FortnoxApiError('Fortnox API error: 403', 403, FORTNOX_SUPPLIER_BODY))).toBe('permission')
+    expect(providerRefusalReason(new FortnoxApiError('Fortnox API error: 403', 403))).toBe('permission')
+    expect(providerRefusalReason(vismaError(403))).toBe('permission')
   })
 })
 

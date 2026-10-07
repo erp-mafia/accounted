@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { isTransientIssueCode, migrationIssueKind, migrationIssueReason } from '../migration-contract'
+import {
+  isTransientIssueCode, migrationIssueKind, migrationIssueReason, migrationRefusalMessageKey, migrationRefusals,
+} from '../migration-contract'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 
@@ -24,6 +26,46 @@ describe('migrationIssueKind', () => {
     expect(migrationIssueKind('MIGRATION_DETAIL_RETRY')).toBe('retry')
     expect(migrationIssueKind('40001')).toBe('retry')
     expect(migrationIssueKind(null)).toBe('retry')
+  })
+
+  it('never calls a refused register a record to retry', () => {
+    // A job parked on PROVIDER_RESOURCE_FORBIDDEN before the worker learned to
+    // skip the register: resuming it now skips that register.
+    expect(migrationIssueKind('PROVIDER_RESOURCE_FORBIDDEN')).toBe('refused')
+  })
+})
+
+describe('refused registers', () => {
+  it('points a missing licence at the module the register needs, and a missing permission at the user', () => {
+    expect(migrationRefusalMessageKey('customers', 'license')).toBe('ext_arcim_job_refused_license_sales')
+    expect(migrationRefusalMessageKey('salesInvoices', 'license')).toBe('ext_arcim_job_refused_license_sales')
+    expect(migrationRefusalMessageKey('suppliers', 'license')).toBe('ext_arcim_job_refused_license_purchase')
+    expect(migrationRefusalMessageKey('supplierInvoices', 'license')).toBe('ext_arcim_job_refused_license_purchase')
+    for (const resource of ['customers', 'suppliers', 'salesInvoices', 'supplierInvoices'] as const) {
+      expect(migrationRefusalMessageKey(resource, 'permission')).toBe('ext_arcim_job_refused_permission')
+    }
+  })
+
+  it('groups the registers one remedy covers, in register order', () => {
+    expect(migrationRefusals({ refused_resources: { salesInvoices: 'license', suppliers: 'permission', customers: 'license' } })).toEqual([
+      { messageKey: 'ext_arcim_job_refused_license_sales', resources: ['customers', 'salesInvoices'] },
+      { messageKey: 'ext_arcim_job_refused_permission', resources: ['suppliers'] },
+    ])
+  })
+
+  it('reads a job with none, or one stored before the column existed, as none', () => {
+    expect(migrationRefusals({ refused_resources: {} })).toEqual([])
+    expect(migrationRefusals({})).toEqual([])
+    expect(migrationRefusals({ refused_resources: { customers: 'timeout' } as never })).toEqual([])
+  })
+
+  it('has every message it can point at in both languages', () => {
+    const keys = ['ext_arcim_job_refused', 'ext_arcim_job_error_refused', ...(['license', 'permission'] as const)
+      .flatMap(reason => (['customers', 'suppliers'] as const).map(resource => migrationRefusalMessageKey(resource, reason)))]
+    for (const messages of [sv, en]) {
+      const extensions = messages.extensions as Record<string, string>
+      for (const key of keys) expect(extensions[key], key).toEqual(expect.any(String))
+    }
   })
 })
 

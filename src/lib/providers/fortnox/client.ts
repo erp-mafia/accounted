@@ -20,12 +20,17 @@ export class FortnoxApiError extends Error {
   }
 }
 
-/** Fortnox documents numeric resource error codes separately from OAuth errors. */
+/**
+ * Fortnox documents numeric resource error codes separately from OAuth errors.
+ * The key is spelled both ways in live answers: `code` on a missing licence
+ * (2001101), `Code` on a per-register 403 (2003275), as fortnoxErrorMessage
+ * already reads `message` and `Message`.
+ */
 export function fortnoxApiErrorCode(error: unknown): string | undefined {
   if (!(error instanceof FortnoxApiError) || !error.body) return undefined;
   try {
     const parsed = JSON.parse(error.body);
-    const code = parsed?.ErrorInformation?.code;
+    const code = parsed?.ErrorInformation?.code ?? parsed?.ErrorInformation?.Code;
     return typeof code === 'number' || (typeof code === 'string' && /^\d+$/.test(code)) ? String(code) : undefined;
   } catch { return undefined; }
 }

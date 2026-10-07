@@ -276,6 +276,27 @@ export function classifyProviderError(
   return null
 }
 
+/** Why the provider refused one register. */
+export type ProviderRefusalReason = 'license' | 'permission'
+
+/**
+ * Why the provider refused a register that classifyProviderError reads as
+ * PROVIDER_RESOURCE_FORBIDDEN. The two causes have different remedies, and
+ * Fortnox names them with different codes:
+ *
+ *   license     2001101 "Det finns ingen aktiv licens för önskat scope": the
+ *               Fortnox company's plan lacks the module the register needs
+ *               (customers and invoices need Kundfaktura or Order). No
+ *               reconnect can change that; activating the module can.
+ *   permission  everything else: 2000663 "Har inte behörighet för scope", or
+ *               a per-register 403 ("Saknar behörighet för
+ *               leverantörsregister."). The user who connected lacks the
+ *               right; granting it, or connecting as a user who has it, does.
+ */
+export function providerRefusalReason(error: unknown): ProviderRefusalReason {
+  return error instanceof FortnoxApiError && fortnoxApiErrorCode(error) === '2001101' ? 'license' : 'permission'
+}
+
 /**
  * True when a provider token/OAuth failure means the integration license is
  * missing or inactive, NOT an ordinary expired/revoked grant.

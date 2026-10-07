@@ -4,7 +4,8 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execution-budget'
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
-import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { classifyProviderError, providerRefusalReason } from '@/lib/providers/with-provider-call'
+import { fortnoxApiErrorCode } from '@/lib/providers/fortnox/client'
 import { fetchMigrationPage, hydrateSalesInvoices, hydrateSupplierInvoices, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
 import { migrationRetrySeconds, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
@@ -424,17 +425,53 @@ export function failureCode(error: unknown): string {
 /**
  * Structured facts only. A raw message can quote the row a database error
  * rejected, so it stays out of the log; the class, SQLSTATE or PostgREST
- * code and HTTP status say which layer failed and how.
+ * code, HTTP status and the provider's numeric error code say which layer
+ * failed and how. The provider code tells a missing Fortnox licence (2001101)
+ * from a missing permission (2000663) apart, which the status alone does not.
  */
-function failureDetails(error: unknown): { errorName: string; dbCode?: string; httpStatus?: number } {
+function failureDetails(error: unknown): { errorName: string; dbCode?: string; httpStatus?: number; providerCode?: string } {
   // The consent resolver throws plain objects with a status, not Errors.
   const { code, statusCode, status } = (typeof error === 'object' && error !== null ? error : {}) as
     { code?: unknown; statusCode?: unknown; status?: unknown }
   const http = typeof statusCode === 'number' ? statusCode : typeof status === 'number' ? status : undefined
+  const providerCode = fortnoxApiErrorCode(error)
   return {
     errorName: error instanceof Error ? error.name : typeof error,
     ...(typeof code === 'string' && /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(code) ? { dbCode: code } : {}),
     ...(http !== undefined && Number.isInteger(http) && http >= 100 && http <= 599 ? { httpStatus: http } : {}),
+    ...(providerCode ? { providerCode } : {}),
+  }
+}
+
+/**
+ * One page of a register, or null when the provider refused the register.
+ *
+ * A refusal is the provider's verdict on the register, not a fault: Fortnox
+ * answers 2001101 when the company's plan lacks the module (customers and
+ * invoices need Kundfaktura or Order) and 2000663 or a 403 when the user who
+ * connected lacks the right. Every retry gets the same answer, so the job
+ * records the register with why and moves on to the next one: the others
+ * still import, and the wizard names the refused one with its remedy. Pages
+ * of the register already saved stay and import.
+ */
+async function fetchRegisterPage(supabase: SupabaseClient, job: ProviderMigrationJob, connection: ResolvedConsent,
+  resource: MigrationResource, deadline: number): Promise<Awaited<ReturnType<typeof fetchMigrationPage>> | null> {
+  try {
+    // The budget scope reaches the provider client, its rate limiter and
+    // withRetry: at the deadline the request aborts and no retry starts.
+    // The outer race alone only stops waiting, and left up to three 60 s
+    // attempts running on in a long-lived (self-hosted) process.
+    return await withinMigrationDeadline(withExecutionDeadline(deadline, 'migration-list',
+      () => fetchMigrationPage(job.provider as ProviderName, connection.accessToken,
+        connection.providerCompanyId, resource, job.next_page)), deadline)
+  } catch (error) {
+    if (failureCode(error) !== 'PROVIDER_RESOURCE_FORBIDDEN') throw error
+    const reason = providerRefusalReason(error)
+    await migrationRpc(supabase, job, 'skip_provider_migration_resource',
+      { p_resource: resource, p_page: job.next_page, p_reason: reason }, deadline)
+    log.warn('migration register refused by the provider: skipped', { jobId: job.id, resource, page: job.next_page,
+      reason, ...failureDetails(error) })
+    return null
   }
 }
 
@@ -470,33 +507,29 @@ export async function runProviderMigrationWorker(options: {
         log.info('migration phase started', { jobId: job.id, phase: job.phase, resource: job.resources[job.resource_index - 1], page: job.next_page })
         if (job.phase === 'discover') {
           const resource = job.resources[job.resource_index - 1]
-          // The budget scope reaches the provider client, its rate limiter and
-          // withRetry: at the deadline the request aborts and no retry starts.
-          // The outer race alone only stops waiting, and left up to three 60 s
-          // attempts running on in a long-lived (self-hosted) process.
-          const page = await withinMigrationDeadline(withExecutionDeadline(deadline - 5000, 'migration-list',
-            () => fetchMigrationPage(job.provider as ProviderName, connection.accessToken,
-              connection.providerCompanyId, resource, job.next_page)), deadline - 5000)
-          const records = page.items.map((dto, i) => ({ source_id: dto.id || `missing:${job.next_page}:${i}`,
-            ...sealMigrationPayload(Buffer.byteLength(JSON.stringify(dto)) > MAX_BATCH_BYTES / 2
-              ? { id: dto.id, migrationError: 'MIGRATION_INVOICE_TOO_LARGE' } : dto) }))
-          // Persist bounded segments even when an unpaged upstream returns its
-          // entire register. Only the final segment advances the page cursor.
-          let segment: typeof records = []; let bytes = 0
-          for (const record of records) {
-            const size = Buffer.byteLength(JSON.stringify(record))
-            if (segment.length >= 250 || bytes + size > MAX_BATCH_BYTES) {
-              if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
-              await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
-                p_records: segment, p_next_page: 0 }, deadline - 5000)
-              segment = []; bytes = 0
+          const page = await fetchRegisterPage(supabase, job, connection, resource, deadline - 5000)
+          if (page) {
+            const records = page.items.map((dto, i) => ({ source_id: dto.id || `missing:${job.next_page}:${i}`,
+              ...sealMigrationPayload(Buffer.byteLength(JSON.stringify(dto)) > MAX_BATCH_BYTES / 2
+                ? { id: dto.id, migrationError: 'MIGRATION_INVOICE_TOO_LARGE' } : dto) }))
+            // Persist bounded segments even when an unpaged upstream returns its
+            // entire register. Only the final segment advances the page cursor.
+            let segment: typeof records = []; let bytes = 0
+            for (const record of records) {
+              const size = Buffer.byteLength(JSON.stringify(record))
+              if (segment.length >= 250 || bytes + size > MAX_BATCH_BYTES) {
+                if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
+                await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
+                  p_records: segment, p_next_page: 0 }, deadline - 5000)
+                segment = []; bytes = 0
+              }
+              segment.push(record); bytes += size
             }
-            segment.push(record); bytes += size
+            if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
+            await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
+              p_records: segment, p_next_page: page.nextPage }, deadline - 5000)
+            log.info('migration page persisted', { jobId: job.id, resource, page: job.next_page, rows: records.length, total: page.total })
           }
-          if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
-          await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
-            p_records: segment, p_next_page: page.nextPage }, deadline - 5000)
-          log.info('migration page persisted', { jobId: job.id, resource, page: job.next_page, rows: records.length, total: page.total })
         } else {
           const state = { import: 'pending', link: 'imported', reconcile: 'linked', settle: 'planned', completed: 'done' }[job.phase]
           const { data: rows, error: readError } = await withinMigrationDeadline(supabase.from('migration_job_chunks')

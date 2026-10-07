@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ProviderMigrationJob } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload } from '@/lib/providers/migration-payload'
 import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
+import { FortnoxApiError } from '@/lib/providers/fortnox/client'
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
 import { enrichBokioSupplierInvoice } from '@/lib/providers/bokio/supplier-evidence'
 const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn() }))
@@ -28,6 +29,12 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
     account_key: '5560000000', attempt: 0, failures: 0, fiscal_year_scope: null, ...overrides } as ProviderMigrationJob
   type Row = { id: string; resource: string; source_id: string; payload: string; state: string; target_id?: string; receipt?: unknown }
   const rows: Row[] = []
+  // As the RPCs: a register's last page, or its refusal, moves the cursor to
+  // the next register, and past the last one discovery ends.
+  const nextRegister = () => {
+    Object.assign(job, { resource_index: job.resource_index + 1, next_page: 1, failures: 0, error_code: null })
+    if (job.resource_index > job.resources.length) job.phase = 'import'
+  }
   const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
     if (name === 'claim_provider_migration_job') {
       if (job.state === 'completed' || job.state === 'needs_attention') return { data: null }
@@ -38,8 +45,12 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
       for (const r of args.p_records as Row[]) {
         if (!rows.some(row => row.source_id === r.source_id)) rows.push({ ...r, id: r.source_id, resource: args.p_resource as string, state: 'pending' })
       }
-      if (args.p_next_page === null) job.phase = 'import'
+      if (args.p_next_page === null) nextRegister()
       else if (args.p_next_page !== 0) job.next_page = args.p_next_page as number
+    }
+    if (name === 'skip_provider_migration_resource') {
+      job.refused_resources = { ...job.refused_resources, [args.p_resource as string]: args.p_reason as 'license' | 'permission' }
+      nextRegister()
     }
     if (name === 'commit_provider_migration_records') {
       for (const r of args.p_records as { id: string; error?: string }[]) rows.find(row => row.id === r.id)!.state = r.error ? 'needs_attention' : 'done'
@@ -390,6 +401,89 @@ it('recognizes the consent resolver’s structured authorization errors', async 
   expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
     code: 'PROVIDER_AUTH_EXPIRED', needsAttention: true, errorName: 'object', httpStatus: 401,
   }))
+})
+
+/**
+ * A register Fortnox refuses (PH 149, PH 145). Its answer never changes on a
+ * retry: 2001101 (HTTP 400) when the company's plan lacks the module, a 403
+ * or 2000663 when the user who connected lacks the right. The worker used to
+ * retry it five times over about four minutes and then park the whole job at
+ * discovery, so not even the registers Fortnox did hand out were imported.
+ */
+describe('a register the provider refuses', () => {
+  const fortnoxError = (status: number, code: number, message: string) =>
+    new FortnoxApiError(`Fortnox API error: ${status}`, status, JSON.stringify({ ErrorInformation: { error: 1, message, code } }))
+  const supplier = (id: number) => ({ id: `supplier-${id}`, active: true, party: { name: `Supplier ${id}` } })
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+  })
+
+  it('is fetched once, recorded with a missing licence, and the other registers import and complete the job', async () => {
+    const db = database({ provider: 'fortnox', resources: ['customers', 'suppliers', 'salesInvoices', 'supplierInvoices'] })
+    const unlicensed = () => fortnoxError(400, 2001101, 'Det finns ingen aktiv licens för önskat scope.')
+    mocks.page.mockRejectedValueOnce(unlicensed())
+      .mockResolvedValueOnce({ items: [supplier(1)], nextPage: null, total: 1 })
+      .mockRejectedValueOnce(unlicensed())
+      .mockResolvedValueOnce({ items: [], nextPage: null, total: 0 })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page.mock.calls.map(call => [call[3], call[4]])).toEqual([
+      ['customers', 1], ['suppliers', 1], ['salesInvoices', 1], ['supplierInvoices', 1],
+    ])
+    expect(db.rpc.mock.calls.filter(([name]) => name === 'skip_provider_migration_resource').map(([, args]) => args)).toEqual([
+      { p_job_id: 'job', p_worker_id: expect.any(String), p_attempt: 1, p_resource: 'customers', p_page: 1, p_reason: 'license' },
+      { p_job_id: 'job', p_worker_id: expect.any(String), p_attempt: 1, p_resource: 'salesInvoices', p_page: 1, p_reason: 'license' },
+    ])
+    expect(db.rpc.mock.calls.some(([name, args]) => name === 'release_provider_migration_job' && args.p_error_code)).toBe(false)
+    expect(db.job).toMatchObject({ state: 'completed', failures: 0, error_code: null,
+      refused_resources: { customers: 'license', salesInvoices: 'license' } })
+    expect(db.rows.map(row => [row.resource, row.state])).toEqual([['suppliers', 'done']])
+    expect(mocks.warn).toHaveBeenCalledWith('migration register refused by the provider: skipped', expect.objectContaining({
+      jobId: 'job', resource: 'customers', page: 1, reason: 'license', errorName: 'FortnoxApiError', httpStatus: 400, providerCode: '2001101',
+    }))
+  })
+
+  it('records a per-register 403 as a missing permission and keeps what was already fetched', async () => {
+    const db = database({ provider: 'fortnox', resources: ['customers', 'suppliers'] })
+    // The live answer spells its keys with capitals.
+    mocks.page.mockResolvedValueOnce({ items: [customer(1)], nextPage: null, total: 1 })
+      .mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 403', 403,
+        '{"ErrorInformation":{"Error":1,"Message":"Saknar behörighet för leverantörsregister.","Code":2003275}}'))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page).toHaveBeenCalledTimes(2)
+    expect(db.job).toMatchObject({ state: 'completed', refused_resources: { suppliers: 'permission' } })
+    expect(db.rows.map(row => [row.resource, row.state])).toEqual([['customers', 'done']])
+    expect(mocks.warn).toHaveBeenCalledWith('migration register refused by the provider: skipped', expect.objectContaining({
+      resource: 'suppliers', reason: 'permission', httpStatus: 403, providerCode: '2003275',
+    }))
+  })
+
+  it('still parks the job at once when the whole API licence is missing, without skipping anything', async () => {
+    const db = database({ provider: 'fortnox', resources: ['customers', 'suppliers'] })
+    mocks.page.mockRejectedValueOnce(fortnoxError(400, 2001103, 'Api-licens saknas.'))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page).toHaveBeenCalledOnce()
+    expect(db.rpc.mock.calls.some(([name]) => name === 'skip_provider_migration_resource')).toBe(false)
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_LICENSE_MISSING', resource_index: 1 })
+    expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
+      code: 'PROVIDER_LICENSE_MISSING', needsAttention: true, httpStatus: 400, providerCode: '2001103',
+    }))
+  })
+
+  it('leaves a transient provider failure on the retry path', async () => {
+    const db = database({ provider: 'fortnox', resources: ['customers', 'suppliers'] })
+    mocks.page.mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 503', 503, ''))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(db.rpc.mock.calls.some(([name]) => name === 'skip_provider_migration_resource')).toBe(false)
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'PROVIDER_UPSTREAM_ERROR', failures: 1, resource_index: 1 })
+  })
 })
 
 /**

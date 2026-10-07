@@ -276,7 +276,9 @@ import { canSkipMappingStep } from '@/extensions/general/arcim-migration/lib/map
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ProviderMigrationProgress from './ProviderMigrationProgress'
 import ProviderMigrationIssues from './ProviderMigrationIssues'
-import { MIGRATION_RESOURCES, type ProviderMigrationIssue, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
+import {
+  MIGRATION_RESOURCES, migrationRefusals, type ProviderMigrationIssue, type ProviderMigrationStatus,
+} from '@/lib/providers/migration-contract'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
 import {
@@ -3778,6 +3780,13 @@ export default function ArcimMigrationWorkspace({
           } : {}),
         }
       }
+      // A register the provider refused is a step that could not be fetched:
+      // the result names it with the remedy, the same way /migrate reports one.
+      const providerName = ARCIM_PROVIDERS.find(p => p.id === status.job.provider)?.name ?? status.job.provider
+      const refused: MigrationStepError[] = migrationRefusals(status.job).flatMap(group => group.resources.map(resource => ({
+        step: resource, code: 'PROVIDER_RESOURCE_FORBIDDEN', message: t(group.messageKey, { provider: providerName }),
+      })))
+      if (refused.length) results.stepErrors = refused
       setMigrationResults(previous => mergeMigrationResults(previous ?? {}, results))
       setProviderReview(status.issues.length ? {
         issues: status.issues, total: status.review.total, truncated: status.review.truncated,
