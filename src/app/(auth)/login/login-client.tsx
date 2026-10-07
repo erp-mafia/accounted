@@ -288,18 +288,19 @@ export function LoginClient({
 
         if (nextPath !== '/') {
           // An explicit destination (e.g. the MCP OAuth consent page, raw
-          // HTML from a route handler) outranks the company picker.
+          // HTML from a route handler) outranks the default landing.
           window.location.assign(nextPath)
           return
         }
 
-        // Byrå staff on their byrå's home domain land in the cockpit
-        // (WL-14). Everyone else keeps the picker: landing on
-        // /select-company after BankID is deliberate, so the user sees
-        // fresh CompanyRoles fetched during this session's enrichment
-        // (and any failure inside the helper degrades to it).
-        const dest = await resolvePostLoginDestination()
-        router.push(dest === '/clients' ? '/clients' : '/select-company')
+        // The same landing as every other sign-in (crm#1034): byrå staff on
+        // their byrå's home domain land in the cockpit (WL-14), everyone
+        // else on '/', which opens the active company. A user without a
+        // company is sent on by the middleware, to the BankID picker when
+        // this login stored engagements. Engagements not yet in Accounted
+        // wait under "Lägg till företag": as a stop on the way in, a company
+        // the user chose not to add came back at every sign-in.
+        router.push(await resolvePostLoginDestination())
         router.refresh()
       } catch (error) {
         console.error('[login] BankID complete error', error)

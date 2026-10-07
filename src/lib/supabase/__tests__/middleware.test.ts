@@ -76,6 +76,8 @@ const state = vi.hoisted(() => ({
   // Row returned for user_preferences reads (the auto_logout mint lookup).
   userPreferences: null as null | { auto_logout: boolean },
   userPreferencesError: null as unknown,
+  // Row returned for the bankid_enrichment read in the no-company branch.
+  bankidEnrichment: null as null | { user_id: string },
 }))
 
 vi.mock('@supabase/ssr', () => ({
@@ -153,6 +155,9 @@ vi.mock('@supabase/ssr', () => ({
             return undefined
           }
           if (prop === 'maybeSingle' || prop === 'single') {
+            if (table === 'bankid_enrichment') {
+              return async () => ({ data: state.bankidEnrichment, error: null })
+            }
             return async () => ({
               data:
                 table === 'user_preferences' && !state.userPreferencesError
@@ -255,6 +260,7 @@ describe('updateSession redirect destinations', () => {
     state.allowlisted = false
     state.userPreferences = null
     state.userPreferencesError = null
+    state.bankidEnrichment = null
     delete process.env.NEXT_PUBLIC_REQUIRE_MFA
     delete process.env.NEXT_PUBLIC_SELF_HOSTED
     process.env.SESSION_TIMEOUT_SECRET = 'middleware-test-secret'
@@ -979,6 +985,34 @@ describe('updateSession redirect destinations', () => {
       const response = await run('/')
 
       expect(new URL(locationOf(response)!).pathname).toBe('/onboarding')
+    })
+  })
+
+  // ── BankID landing (crm#1034): '/' decides, the picker is for no company ─
+
+  describe('landing after a BankID login', () => {
+    beforeEach(() => {
+      state.user = SIGNED_IN
+      // The login stored CompanyRoles for this user.
+      state.bankidEnrichment = { user_id: 'user-1' }
+    })
+
+    it('sends a user without a company on to the BankID picker', async () => {
+      state.company = {
+        data: [{ company_id: null, locale: 'sv', used_fallback: false }],
+        error: null,
+      }
+
+      const response = await run('/')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/select-company')
+    })
+
+    it('opens the active company for a user who has one, whatever the BankID roles say', async () => {
+      const response = await run('/')
+
+      expect(response.status).toBe(200)
+      expect(locationOf(response)).toBeNull()
     })
   })
 
