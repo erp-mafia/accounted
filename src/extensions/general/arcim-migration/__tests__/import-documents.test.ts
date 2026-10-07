@@ -946,6 +946,31 @@ describe('importProviderDocuments', () => {
       ])
     })
 
+    it('spends the budget on attachments only, not on listing the provider archive', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+      // Listing "costs" 1000 ms, each download 100 ms; the budget fits two downloads.
+      let clock = 0
+      mockFetchFortnoxFileConnections.mockImplementation(async () => {
+        clock += 1_000
+        return THREE_CONNECTIONS
+      })
+      mockDownloadFortnoxArchiveFile.mockImplementation(async () => {
+        clock += 100
+        return { bytes: bytesOf('FORTNOX-PDF-' + clock), contentType: 'application/pdf' }
+      })
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        timeBudgetMs: 150,
+        now: () => clock,
+      })
+
+      expect(result).toMatchObject({ total: 3, scanned: 2, linked: 2, partial: true, nextCursor: 'file-b' })
+    })
+
     it('always processes at least one attachment per call even when the budget is already spent', async () => {
       const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
 

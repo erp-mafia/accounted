@@ -7,6 +7,7 @@ import {
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   ArcimDocumentImportRequestError,
   arcimDocumentImportReducer,
+  documentImportProgress,
   documentOAuthProblemFromReason,
   parseArcimDocumentResumeMarker,
   mergeArcimDocumentImportResults,
@@ -491,5 +492,53 @@ describe('resumable import (one server slice per call)', () => {
       result: result({ dryRun: false, scanned: 40, linked: 39, skipped: 1, total: 40 }),
     })
     expect(complete).toMatchObject({ phase: 'complete', found: 40, result: { linked: 39, skipped: 1 } })
+  })
+})
+
+describe('document import progress', () => {
+  const offered = arcimDocumentImportReducer(
+    { phase: 'discovering', provider: 'fortnox', found: 0, result: null, problem: null },
+    { type: 'discovery-succeeded', result: result({ dryRun: true, scanned: 658, total: 658 }) },
+  )
+
+  it('counts zero of the discovered total before the first slice answers', () => {
+    const importing = arcimDocumentImportReducer(offered, { type: 'import-started' })
+
+    expect(documentImportProgress(importing)).toEqual({ done: 0, total: 658 })
+  })
+
+  it('counts the running totals once a slice has answered', () => {
+    const importing = arcimDocumentImportReducer(offered, { type: 'import-started' })
+    const progressed = arcimDocumentImportReducer(importing, {
+      type: 'import-progress',
+      result: result({ dryRun: false, scanned: 277, total: 658, partial: true, nextCursor: 'file-277' }),
+    })
+
+    expect(documentImportProgress(progressed)).toEqual({ done: 277, total: 658 })
+  })
+
+  it('starts a retry from zero instead of the failed run totals', () => {
+    const problem = { code: null, requestId: null, reconnectRequired: false }
+    const failed = arcimDocumentImportReducer(
+      {
+        phase: 'importing',
+        provider: 'fortnox',
+        found: 658,
+        result: result({ dryRun: false, scanned: 277, total: 658, partial: true, nextCursor: 'file-277' }),
+        problem: null,
+      },
+      { type: 'import-failed', problem },
+    )
+    const retrying = arcimDocumentImportReducer(failed, { type: 'import-started' })
+
+    expect(documentImportProgress(retrying)).toEqual({ done: 0, total: 658 })
+  })
+
+  it('counts nothing without a known total or outside the import', () => {
+    // An import resumed after a full-page OAuth redirect has no discovery count.
+    const resumed = arcimDocumentImportReducer(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE, { type: 'import-started' })
+
+    expect(documentImportProgress(resumed)).toBeNull()
+    expect(documentImportProgress(offered)).toBeNull()
   })
 })

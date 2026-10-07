@@ -271,7 +271,9 @@ export function arcimDocumentImportReducer(
     case 'dismissed':
       return { ...state, phase: 'dismissed', problem: null }
     case 'import-started':
-      return { ...state, phase: 'importing', problem: null }
+      // A run counts from zero: drop the dry-run preview and any totals a
+      // failed run left behind, so neither is shown as this run's progress.
+      return { ...state, phase: 'importing', result: null, problem: null }
     case 'import-progress':
       // Running totals after each server slice; the phase stays 'importing'
       // so the UI keeps its spinner and shows "x av y".
@@ -289,6 +291,21 @@ export function arcimDocumentImportReducer(
     case 'reconnect-started':
       return { ...state, phase: 'reconnecting' }
   }
+}
+
+/**
+ * What the importing panel counts: the running totals once a slice has
+ * answered, and before that zero of the total discovery found, so a long
+ * first slice is never a bare spinner. Null when there is no honest total.
+ */
+export function documentImportProgress(
+  state: ArcimDocumentImportState,
+): { done: number; total: number } | null {
+  if (state.phase !== 'importing') return null
+  if (state.result) {
+    return state.result.total > 0 ? { done: state.result.scanned, total: state.result.total } : null
+  }
+  return state.found > 0 ? { done: 0, total: state.found } : null
 }
 
 export class ArcimDocumentImportRequestError extends Error {

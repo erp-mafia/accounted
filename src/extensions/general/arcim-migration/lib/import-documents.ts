@@ -109,16 +109,18 @@ export interface ImportDocumentsOptions {
   /** Resume after this provider attachment id (sorted order); omit to start from the top. */
   cursor?: string | null
   /**
-   * Wall-clock budget for this call. Once spent, the sweep stops after the
-   * attachment in flight and reports `nextCursor`. Default leaves headroom
-   * under the hosted 300 s function limit for listing + the final response.
+   * Wall-clock budget for the attachment sweep of this call, counted after
+   * the listing. Once spent, the sweep stops after the attachment in flight
+   * and reports `nextCursor`. The budget sets how often the UI's "x of y"
+   * moves, so it stays short; listing + one slice sits far under the hosted
+   * 300 s function limit.
    */
   timeBudgetMs?: number
   /** Clock, injectable for tests. */
   now?: () => number
 }
 
-export const DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS = 200_000
+export const DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS = 30_000
 
 export interface ImportDocumentsResult {
   provider: string
@@ -423,12 +425,15 @@ export async function importProviderDocuments(
   }
 
   let refreshedAfterUnauthorized = false
+  // The listing above is paid again by every slice; it must not eat the
+  // slice itself (or cut the in-memory dry run short).
+  const sweepStartedAt = now()
 
   for (let index = startIndex; index < attachments.length; index++) {
     // Always make progress: at least one attachment per call, then stop at
-    // the budget so the route answers well inside the function limit and the
-    // caller resumes after the last handled id.
-    if (index > startIndex && now() - startedAt >= timeBudgetMs) {
+    // the budget so the caller can report progress and resume after the
+    // last handled id.
+    if (index > startIndex && now() - sweepStartedAt >= timeBudgetMs) {
       result.partial = true
       result.nextCursor = attachments[index - 1].id
       break
