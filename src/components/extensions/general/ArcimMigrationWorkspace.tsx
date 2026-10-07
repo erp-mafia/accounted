@@ -38,6 +38,7 @@ import {
 } from 'lucide-react'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
+import { previewCountsForSelection, type ProviderPreviewCounts } from '@/lib/providers/preview-counts'
 import {
   ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
   INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
@@ -345,11 +346,9 @@ interface PreviewData {
     email: string | null
   } | null
   sieAvailable: boolean
-  sieStats: {
-    accountCount: number
-    transactionCount: number
-    fiscalYears: number[]
-  } | null
+  // Counts over the default years the preview read, naming them: shown only
+  // while exactly those years are ticked (previewCountsForSelection).
+  sieStats: ProviderPreviewCounts | null
   // Every fiscal year the source has, oldest first, with the default
   // selection marked: rendered as the year picker so the user chooses
   // before the import runs and no year is left out silently (#2211, #2238).
@@ -1101,26 +1100,29 @@ function PreviewStep({
         )}
 
         {/* SIE + asset stats: one quiet statline, the same grammar as the
-            import reveal, instead of a boxed summary. The asset count renders
-            on its own when the SIE fetch failed: the preview endpoint sets
-            them independently. */}
+            import reveal, instead of a boxed summary. It speaks for the
+            ticked years (crm#1037): the account and voucher counts were read
+            from the default years only, so they show while exactly those
+            years are ticked; any other selection names its years and says
+            the counts come when the years are fetched. The asset count
+            renders on its own when the SIE fetch failed: the preview
+            endpoint sets them independently. */}
         {(() => {
-          const sieStats = preview?.sieAvailable ? preview.sieStats : null
-          const assetCount = preview?.assetStats?.importable ?? 0
-          if (!sieStats && assetCount === 0) return null
           const parts: string[] = []
-          if (sieStats) {
-            parts.push(`${sieStats.accountCount.toLocaleString('sv-SE')} konton`)
-            parts.push(`${sieStats.transactionCount.toLocaleString('sv-SE')} verifikationer`)
-            parts.push(
-              sieStats.fiscalYears.length === 1
-                ? `räkenskapsåret ${sieStats.fiscalYears[0]}`
-                : `${sieStats.fiscalYears.length} räkenskapsår: ${sieStats.fiscalYears.join(', ')}`,
-            )
+          if (preview?.sieAvailable && selectedYears.length > 0) {
+            const counts = previewCountsForSelection(preview.sieStats, selectedYears)
+            if (counts) {
+              parts.push(t('ext_arcim_preview_accounts', { count: counts.accounts }))
+              parts.push(t('ext_arcim_preview_vouchers', { count: counts.vouchers }))
+            }
+            parts.push(t('ext_arcim_preview_years', { count: selectedYears.length, years: selectedYears.join(', ') }))
+            if (!counts) parts.push(t('ext_arcim_preview_counted_on_fetch'))
           }
+          const assetCount = preview?.assetStats?.importable ?? 0
           if (assetCount > 0) {
-            parts.push(`${assetCount.toLocaleString('sv-SE')} anläggningstillgångar`)
+            parts.push(t('ext_arcim_preview_assets', { count: assetCount }))
           }
+          if (parts.length === 0) return null
           return (
             <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground tabular-nums">
               {parts.join(' · ')}

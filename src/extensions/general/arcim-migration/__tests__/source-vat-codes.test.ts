@@ -120,7 +120,6 @@ beforeEach(() => {
   ;(getAllowedFiscalYears as Mock).mockReturnValue(new Set([CY - 2, CY - 1, CY]))
   ;(fetchProviderSieFiles as Mock).mockResolvedValue({
     files: [{ fiscalYear: CY, rawContent: SIE }],
-    availableYears: [CY],
     sourceYears: [{ year: CY, fromDate: `${CY}-01-01`, toDate: `${CY}-12-31`, inDefaultSelection: true }],
     failedYears: [],
     omittedYears: [],

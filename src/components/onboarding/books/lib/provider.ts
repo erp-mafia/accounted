@@ -4,6 +4,7 @@ import { waitForSIEJob } from '@/lib/import/sie-job-client'
 import type { SIEJob } from '@/lib/import/sie-job-contract'
 import { useEffect, useRef } from 'react'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import type { ProviderPreviewCounts } from '@/lib/providers/preview-counts'
 
 /**
  * The provider migration routes as the books act calls them. Same
@@ -33,7 +34,8 @@ export interface ProviderPreview {
   consent: { id: string; provider: string; status: number; companyName?: string }
   companyInfo: { company_name: string | null; org_number: string | null } | null
   sieAvailable: boolean
-  sieStats: { accountCount: number; transactionCount: number; fiscalYears: number[] } | null
+  /** Counts over the default years the preview read; shown via previewCountsForSelection. */
+  sieStats: ProviderPreviewCounts | null
   sourceYears?: SourceFiscalYear[]
   maxSelectedYears?: number
   hasSieData: boolean

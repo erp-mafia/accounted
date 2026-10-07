@@ -8,6 +8,7 @@ import { formatImportFailure } from '@/lib/import/import-failure'
 import { countSieVouchers, importProviderYears, planProviderYears, providerYearsComplete, type ProviderYearsOutcome } from '@/lib/onboarding-books/provider-years'
 import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
 import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
+import { previewCountsForSelection } from '@/lib/providers/preview-counts'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -182,6 +183,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
 
   /* ── preview: the facts, the years, the sentence ─────────────────── */
   const sourceYears = useMemo(() => preview?.sourceYears ?? [], [preview])
+  const previewCounts = previewCountsForSelection(preview?.sieStats, years)
   const maxYears = preview?.maxSelectedYears ?? 6
   const companyName = preview?.companyInfo?.company_name || preview?.consent.companyName || ''
   const scopeParts = useMemo(() => {
@@ -443,21 +445,31 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
             <span>{t('provider_connected', { provider: provName })}</span>
             {companyName ? <span style={{ color: 'hsl(var(--muted-foreground))' }}>· {companyName}</span> : null}
           </p>
+          {/* The facts speak for the ticked years (crm#1037). The account and
+              voucher counts were read from the default years only, so they
+              show while exactly those years are ticked; otherwise the tile
+              says they are counted when the years are fetched. The year tile
+              used to count the source's years beside those counts, which read
+              as five years holding the three default years' vouchers. */}
           <dl className="stats">
             <div className="stat" style={{ animationDelay: '0ms' }}>
               <dt>{t('stat_years')}</dt>
               <dd>
-                {sourceYears.length || preview.sieStats?.fiscalYears.length || 0}
-                {sourceYears.length > 1 ? <small>{sourceYears[0].year} till {sourceYears[sourceYears.length - 1].year}</small> : null}
+                {years.length}
+                {years.length > 1 ? <small>{years[0]} till {years[years.length - 1]}</small> : null}
               </dd>
             </div>
             <div className="stat" style={{ animationDelay: '120ms' }}>
               <dt>{t('stat_accounts')}</dt>
-              <dd>{(preview.sieStats?.accountCount ?? 0).toLocaleString('sv-SE')}</dd>
+              {previewCounts
+                ? <dd>{previewCounts.accounts.toLocaleString('sv-SE')}</dd>
+                : <dd className="later">{t('stat_counted_on_fetch')}</dd>}
             </div>
             <div className="stat" style={{ animationDelay: '240ms' }}>
               <dt>{t('stat_vouchers')}</dt>
-              <dd>{(preview.sieStats?.transactionCount ?? 0).toLocaleString('sv-SE')}</dd>
+              {previewCounts
+                ? <dd>{previewCounts.vouchers.toLocaleString('sv-SE')}</dd>
+                : <dd className="later">{t('stat_counted_on_fetch')}</dd>}
             </div>
           </dl>
           {sourceYears.length > 1 ? (

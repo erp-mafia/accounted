@@ -131,7 +131,6 @@ beforeEach(async () => {
   ;(getAllowedFiscalYears as Mock).mockReturnValue(new Set([2025, 2026]))
   ;(fetchProviderSieFiles as Mock).mockResolvedValue({
     files: [{ fiscalYear: 2025, rawContent: FY2025 }, { fiscalYear: 2026, rawContent: FY2026 }],
-    availableYears: [2025, 2026],
     sourceYears: [],
     failedYears: [],
     omittedYears: [],

@@ -57,6 +57,7 @@ import { fortnoxVatCodeToTreatment } from '@/lib/providers/fortnox/vat-codes'
 import { loadMappings, generateImportPreview, findOverlappingPeriodImports } from '@/lib/import/sie-import'
 import { buildMappingTargets } from './lib/mapping-targets'
 import type { ProviderName } from '@/lib/providers/types'
+import type { ProviderPreviewCounts } from '@/lib/providers/preview-counts'
 import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
 import {
   buildLundifyActivationUrl,
@@ -1056,25 +1057,24 @@ export const arcimMigrationExtension: Extension = {
 
           // Try to fetch SIE data (Fortnox and Briox serve SIE over the API)
           let sieAvailable = false
-          let sieStats: { accountCount: number; transactionCount: number; fiscalYears: number[] } | null = null
+          let sieStats: ProviderPreviewCounts | null = null
           // Every fiscal year the source has, with the default selection
           // marked: the preview step renders them as the year picker, so the
           // user chooses BEFORE the import runs and no year is left out
-          // silently (issues #2211, #2238). The stats below stay on the
-          // default selection: that is what the preview fetched.
+          // silently (issues #2211, #2238). The counts below cover only the
+          // default years the preview read, and say which (crm#1037).
           let sourceYears: SourceFiscalYear[] = []
 
           if (providerSupportsSie(provider)) {
             try {
               log.info(`Fetching SIE export from ${provider} for consent ${consentId}...`)
-              // Fetch SIE type 4 for EVERY allowed year, not latestOnly: the
-              // stats below render as "Hittade X konton och Y verifikationer"
-              // on the connect step, and a mid-year export has few or zero
-              // vouchers in the newest year (the One.com migration previewed
+              // Fetch SIE type 4 for every year of the default selection, not
+              // just the newest: a mid-year export has few or zero vouchers
+              // in the newest year (a migration once previewed
               // "0 verifikationer" and then imported 4153). Costs one SIE
               // export per extra year, the same work /sie-data repeats right
               // after: honest numbers are worth it.
-              const { files, availableYears, sourceYears: source } = await fetchProviderSieFiles(
+              const { files, sourceYears: source } = await fetchProviderSieFiles(
                 provider,
                 resolved.accessToken,
                 resolved.providerCompanyId,
@@ -1086,7 +1086,11 @@ export const arcimMigrationExtension: Extension = {
                 sieStats = {
                   accountCount: merged.accounts.length,
                   transactionCount: merged.vouchers.length,
-                  fiscalYears: availableYears,
+                  // The years these counts were read from, not the default
+                  // window: a year whose export failed is in neither. The
+                  // wizard shows the counts only while exactly these years
+                  // are ticked (previewCountsForSelection, crm#1037).
+                  fiscalYears: files.map((f) => f.fiscalYear),
                 }
               }
             } catch (err) {

@@ -7,7 +7,8 @@
  * validation, account mapping, replace-mode import) is provider-agnostic:
  * this module's only job is to produce raw SIE file contents per fiscal year.
  *
- * Shared by /preview (latest year, for stats) and /sie-data (all years).
+ * Shared by /preview (the default selection: the year picker and its counts)
+ * and /sie-data (the years the user ticked).
  */
 
 import { FortnoxClient } from '@/lib/providers/fortnox/client'
@@ -76,14 +77,14 @@ export interface ProviderSieFile {
 }
 
 export interface ProviderSieFetchResult {
-  files: ProviderSieFile[]
   /**
-   * Every fiscal year available at the provider within the selection (the
-   * default window, or the explicit `years`): also populated when latestOnly
-   * fetched just one file, so /preview can show the full year list without a
-   * second round-trip.
+   * One file per selected year whose export came back, oldest first:
+   * `files.map((f) => f.fiscalYear)` is what was read, and a year whose
+   * export failed is in `failedYears` instead. (An `availableYears` list of
+   * the attempted years used to sit beside this; /preview labelled its
+   * counts with it, failed years included, crm#1037.)
    */
-  availableYears: number[]
+  files: ProviderSieFile[]
   /**
    * Every fiscal year the source has, oldest first, with the provider's own
    * bounds and whether it is in the default selection. The preview step
@@ -178,7 +179,6 @@ export async function fetchProviderSieFiles(
   }
   const allowedYears = allYears.filter((fy) => selectedFiscalYears.has(fy.year))
 
-  const availableYears = allowedYears.map((fy) => fy.year)
   const toFetch = opts?.latestOnly ? allowedYears.slice(-1) : allowedYears
 
   // Both derived from the year list already fetched: naming every source
@@ -211,7 +211,7 @@ export async function fetchProviderSieFiles(
     }
   }
 
-  return { files, availableYears, sourceYears, failedYears, omittedYears }
+  return { files, sourceYears, failedYears, omittedYears }
 }
 
 interface SieFetcher {
