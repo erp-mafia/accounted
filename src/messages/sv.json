@@ -8582,6 +8582,7 @@
     "suggested_view": "Visa transaktionen",
     "suggested_confirmed_toast": "Matchning bokförd",
     "suggested_failed_toast": "Matchningen misslyckades",
+    "suggested_overpayment_toast": "Betalningen är större än fakturan. Välj var överskottet ska bokföras.",
     "row_deadlines": "Moms- och skattedeadlines",
     "row_reconciliation_due": "Konton att stämma av",
     "row_reconciliation_due_detail": "Inte avstämda t.o.m. förra månadsskiftet",

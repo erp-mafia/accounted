@@ -809,6 +809,9 @@ export default function TransactionsPage() {
   const [moveAccountTarget, setMoveAccountTarget] = useState<TransactionWithInvoice | null>(null)
   const supabase = useRealtimeSupabase()
   const highlightId = searchParams.get('highlight')
+  // ?open=match beside ?highlight: also open the row's suggested match (Att
+  // göra sends a match that needs a decision here, e.g. an overpayment).
+  const openMatchOnHighlight = searchParams.get('open') === 'match'
   // Tracks the last highlight target we acted on so re-renders don't re-trigger
   // the auto-open every time the user closes the categorize panel.
   const handledHighlightRef = useRef<string | null>(null)
@@ -1816,7 +1819,12 @@ export default function TransactionsPage() {
         }
       })
     })
-  }, [highlightId, mode, skvRows, sourceFilter, transactions])
+
+    if (openMatchOnHighlight && tx?.potential_invoice) {
+      setSelectedTransaction(tx)
+      setMatchDialogOpen(true)
+    }
+  }, [highlightId, mode, openMatchOnHighlight, skvRows, sourceFilter, transactions])
 
   // Auto-fetch suggestions when transactions load
   useEffect(() => {

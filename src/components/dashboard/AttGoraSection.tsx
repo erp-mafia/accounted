@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
@@ -185,6 +186,7 @@ export default function AttGoraSection({
   showKopplingar = false,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
+  const router = useRouter()
   const { toast } = useToast()
   // The Dokumentinkorg is a paid (AI) surface: a non-payer's home to-do list
   // must not offer a row that jumps to the gated workspace. Mirrors the sidebar
@@ -255,6 +257,19 @@ export default function AttGoraSection({
         body: JSON.stringify(body),
       })
       const result = await res.json().catch(() => ({}))
+      // A SEK payment a krona or more above what the invoice owes: where the
+      // excess goes (3740 or 2420) is the user's choice, made in the match
+      // dialog, so open it on the transaction instead of reporting a failure
+      // whose text tells them to split the payment.
+      if (
+        match.kind === 'invoice' &&
+        match.transaction_currency === 'SEK' &&
+        result?.error?.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING'
+      ) {
+        toast({ title: t('suggested_overpayment_toast') })
+        router.push(`/transactions?highlight=${match.transaction_id}&open=match`)
+        return
+      }
       if (!res.ok || result.error) {
         toast({
           title: t('suggested_failed_toast'),
