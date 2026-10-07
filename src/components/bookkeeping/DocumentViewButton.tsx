@@ -1,7 +1,7 @@
 'use client'
 
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { Eye } from 'lucide-react'
+import { ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -66,7 +66,9 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
       onClick={handleClick}
       className={className}
     >
-      <Eye className="mr-1.5 h-3.5 w-3.5" />
+      {/* It opens a new tab, which is what this glyph says; the eye it
+          replaced reads as a show/hide toggle (crm#1003). */}
+      <ExternalLink className="mr-1.5 h-3.5 w-3.5" aria-hidden />
       {label}
     </Button>
   )

@@ -1864,7 +1864,10 @@ export default function JournalEntryList({
                                     // Server-side saknade-underlag filter on: an
                                     // exempted row leaves the filtered set, so
                                     // refetch in place (keeps expansion state
-                                    // semantics of a background refresh).
+                                    // semantics of a background refresh). The
+                                    // toggle reports only once the mark and its
+                                    // reason are saved, so the row cannot leave
+                                    // before the reason was entered (crm#1003).
                                     if (exempted && showMissingOnly) {
                                       void fetchEntries({ preserveSelection: true })
                                     }

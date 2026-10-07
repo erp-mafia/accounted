@@ -13283,8 +13283,9 @@ export const tools: McpTool[] = [
       // (issue #2294).
       // A detector failure without force fails open, but never silently:
       // the approval card carries the warning (preview.compliance_warning,
-      // rendered by GenericPreview) so the approver knows the check did not
-      // run. With force the guard returns 'unverifiable', refused below.
+      // rendered on the /pending row and above the preview) so the approver
+      // knows the check did not run. With force the guard returns
+      // 'unverifiable', refused below.
       let explainedCheckFailed = false
       const explained = await guardAlreadyExplained(
         supabase,

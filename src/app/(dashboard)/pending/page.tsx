@@ -52,9 +52,14 @@ import type {
   PendingOperation,
   PendingOperationRejectionCategory,
 } from '@/types'
-import { OperationPreview, AccountNamesContext } from '@/components/pending-operations/OperationPreview'
+import {
+  OperationPreview,
+  AccountNamesContext,
+  useComplianceWarningText,
+} from '@/components/pending-operations/OperationPreview'
 import { useAccountNamesSource } from '@/components/pending-operations/use-account-names'
 import {
+  complianceWarningOf,
   operationLabel,
   singleActionWarning,
   REJECTION_CATEGORY_LABELS,
@@ -239,6 +244,7 @@ type ViewTab = 'pending' | 'history'
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
   const tSkills = useTranslations('skills_registry')
+  const complianceWarningText = useComplianceWarningText()
   const router = useRouter()
   const accountNames = useAccountNamesSource()
   const [operations, setOperations] = useState<PendingOperation[]>([])
@@ -423,6 +429,18 @@ export default function PendingOperationsPage() {
     setSelectedIds(new Set())
   }, [activeTab, sourceFilter, conversationFilter])
 
+  // Resolving operations changes what Att göra counts, and Att göra is a
+  // server render the client router keeps (staleTimes.dynamic in
+  // next.config.ts, and every back/forward restore): without this the user
+  // walked back to the counts from before the approvals and had to hard-reload
+  // (crm#1003). router.refresh() drops those cached renders, the contract the
+  // 30 s router cache was introduced under for every mutation flow. This list
+  // reconciles through fetchOperations; the sidebar badges through realtime.
+  function afterResolve() {
+    router.refresh()
+    fetchOperations()
+  }
+
   // Shared by the direct-commit pill (low/medium risk) and the high-risk
   // confirmation dialog. The Granskning row already states source, title and
   // risk and offers Detaljer, so for low/medium the pill IS the deliberate
@@ -449,7 +467,7 @@ export default function PendingOperationsPage() {
         next.delete(op.id)
         return next
       })
-      fetchOperations()
+      afterResolve()
     } catch (err) {
       toast({
         title: 'Misslyckades',
@@ -524,7 +542,7 @@ export default function PendingOperationsPage() {
 
       setShowBulkDialog(false)
       setSelectedIds(new Set())
-      fetchOperations()
+      afterResolve()
     } catch (err) {
       toast({
         title: 'Misslyckades',
@@ -592,7 +610,7 @@ export default function PendingOperationsPage() {
       }
 
       setRejectTarget(null)
-      fetchOperations()
+      afterResolve()
     } catch (err) {
       toast({
         title: 'Kunde inte avvisa',
@@ -695,6 +713,14 @@ export default function PendingOperationsPage() {
     }
     return Array.from(counts.entries()).map(([type, count]) => ({ type, count }))
   }, [bulkEligible, selectedIds])
+
+  // Selected operations that carry a compliance warning. The bulk
+  // confirmation says how many, so "Godkänn alla" cannot carry a warning past
+  // an approver who never scrolled to its row (crm#1003).
+  const selectedWarnedCount = useMemo(
+    () => bulkEligible.filter((op) => selectedIds.has(op.id) && complianceWarningOf(op) != null).length,
+    [bulkEligible, selectedIds],
+  )
 
   // The instructions the agent retrieved, by the names the Instruktioner page uses: never raw slugs or uuids.
   const retrievedNames = (slugs: readonly string[]) => [...new Set(describeRetrievedSkills(slugs).map((item) => {
@@ -910,6 +936,7 @@ export default function PendingOperationsPage() {
               const warningSentence = singleActionWarning(op.operation_type, op.params)
               const showHighRiskWarning =
                 op.risk_level === 'high' && warningSentence && op.status === 'pending'
+              const complianceWarning = complianceWarningOf(op)
 
               if (op.status !== 'pending') {
                 // Historik row (concept k-row): status chip + text + sub line.
@@ -970,8 +997,10 @@ export default function PendingOperationsPage() {
                       </Badge>
                     )}
                     <div className="min-w-0 flex-1">
-                      <div className="text-[13px] leading-snug">{op.title}</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">
+                      {/* break-words: titles carry file names with no space to
+                          wrap at, which ran out of the row (crm#1003). */}
+                      <div className="break-words text-[13px] leading-snug">{op.title}</div>
+                      <div className="mt-0.5 break-words text-xs text-muted-foreground">
                         {sub}
                         {op.status === 'rejected' && op.rejection_reason
                           ? ` · ${t('history_reason', { reason: op.rejection_reason })}`
@@ -1049,7 +1078,19 @@ export default function PendingOperationsPage() {
                     <div className="pt-0.5 text-[11px] uppercase tracking-[0.07em] text-muted-foreground">
                       {sourceLine(op)}
                     </div>
-                    <div className="mt-1 text-[13px] leading-snug">{op.title}</div>
+                    <div className="mt-1 break-words text-[13px] leading-snug">{op.title}</div>
+                    {/* The staged compliance warning on the row itself: it
+                        used to live in the detail panel only, so approving
+                        from the row or with "Godkänn alla" never showed it
+                        (crm#1003). Clamped here; the panel has it in full. */}
+                    {complianceWarning && (
+                      <p className="mt-1 flex items-start gap-1 text-[12.5px] leading-5 text-attn">
+                        <AlertTriangle className="mt-1 h-3 w-3 shrink-0" aria-hidden />
+                        <span className="line-clamp-2 min-w-0 break-words">
+                          {complianceWarningText(complianceWarning)}
+                        </span>
+                      </p>
+                    )}
                     {showHighRiskWarning && (
                       <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
                         <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
@@ -1121,7 +1162,10 @@ export default function PendingOperationsPage() {
           if (!open) setDetailOpId(null)
         }}
       >
-        <SlideOverContent aria-describedby={undefined}>
+        {/* 640px, the width the Arkiv document review uses: at the 480px
+            default the previews' two-column rows squeezed file names and
+            texts into a column a word wide (crm#1003). */}
+        <SlideOverContent aria-describedby={undefined} className="w-[640px]">
           {detailOp && (
             <>
               <SlideOverHeader kicker={sourceLine(detailOp)} title={detailOp.title} />
@@ -1130,9 +1174,11 @@ export default function PendingOperationsPage() {
                   <PeriodLockBanner period={detailPeriod} />
                 )}
                 {/* The operation itself in its own box (concept): what the
-                    agent is about to do, clearly framed. */}
+                    agent is about to do, clearly framed. `detail`: this is
+                    the review surface, where a preview may also show the
+                    objects involved (the verifikat's lines, the document). */}
                 <div className="rounded-lg border border-border p-4">
-                  <OperationPreview op={detailOp} />
+                  <OperationPreview op={detailOp} detail />
                 </div>
                 {/* The agent's audit-trail note for this operation (the
                     `notes` tool input): the approver should read why, not
@@ -1142,7 +1188,7 @@ export default function PendingOperationsPage() {
                     <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
                       {t('note_label')}
                     </p>
-                    <p className="mt-0.5 whitespace-pre-wrap text-xs leading-snug">{detailOp.params.notes}</p>
+                    <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-snug">{detailOp.params.notes}</p>
                   </div>
                 )}
                 {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type, detailOp.params) && (
@@ -1239,7 +1285,7 @@ export default function PendingOperationsPage() {
         open={showBulkDialog}
         onOpenChange={setShowBulkDialog}
         title={t('approve_bulk_title', { count: selectedCount })}
-        warningText=""
+        warningText={selectedWarnedCount > 0 ? t('bulk_warning_note', { count: selectedWarnedCount }) : ''}
         confirmLabel={t('approve_count', { count: selectedCount })}
         isSubmitting={isBulkCommitting}
         onConfirm={() => handleBulkCommit(Array.from(selectedIds))}

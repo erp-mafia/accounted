@@ -176,7 +176,7 @@ describe('gnubok_match_transaction_to_invoice: soft-duplicate guard at stage tim
     const result = (await run(supabase)) as { staged: boolean; preview: Record<string, unknown> }
     expect(result.staged).toBe(true)
     expect(result.preview.compliance_warning).toContain('Dubblettkontrollen kunde inte köras')
-    // Persisted with the op: MatchTransactionInvoicePreview renders it on /pending.
+    // Persisted with the op: /pending renders it on the row and above the preview.
     const inserted = findCall('pending_operations', 'insert')?.[0] as { preview_data: Record<string, unknown> }
     expect(inserted.preview_data.compliance_warning).toContain('Dubblettkontrollen kunde inte köras')
   })

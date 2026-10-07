@@ -2,11 +2,19 @@
 
 import { ArrowDown, AlertTriangle } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { isUuid } from '@/lib/invariants/uuid'
 import { DocumentViewButton } from './DocumentViewButton'
+import DocumentViewerPane from './DocumentViewerPane'
 
 interface AttachDocumentPreviewProps {
   data: Record<string, unknown>
   params: Record<string, unknown>
+  /**
+   * The Granskning drawer: the document renders inside the review instead of
+   * behind a button that opens a new tab, so the pairing can be judged in
+   * place (crm#1003). Confirm dialogs and the chat card stay compact.
+   */
+  detail?: boolean
 }
 
 /**
@@ -14,7 +22,7 @@ interface AttachDocumentPreviewProps {
  * the transaction and the document side by side so the reviewer can confirm
  * the pairing without cross-referencing IDs.
  */
-export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewProps) {
+export function AttachDocumentPreview({ data, params, detail = false }: AttachDocumentPreviewProps) {
   const txDescription = (data.transaction_description as string) || '-'
   const txAmount = data.transaction_amount as number | undefined
   const txCurrency = (data.transaction_currency as string) || 'SEK'
@@ -35,7 +43,8 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
   const existingIsAccounting =
     willOverwrite && data.existing_document_is_rakenskapsinformation !== false
 
-  const documentId = params.document_id as string | undefined
+  const documentId = isUuid(params.document_id) ? params.document_id : null
+  const docMimeType = typeof data.document_mime_type === 'string' ? data.document_mime_type : null
 
   return (
     <div className="space-y-3 text-sm">
@@ -57,13 +66,22 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
           {typeof docAmount === 'number' && (
             <Row label="Belopp" value={formatCurrency(docAmount, docCurrency)} tabular />
           )}
-          {documentId && (
+          {documentId && !detail && (
             <div className="pt-1">
               <DocumentViewButton documentId={documentId} />
             </div>
           )}
         </PreviewCard>
       </div>
+
+      {documentId && detail && (
+        <DocumentViewerPane
+          documentId={documentId}
+          mime={docMimeType}
+          fileName={docFileName === '-' ? null : docFileName}
+          className="h-[56vh]"
+        />
+      )}
 
       <div className="flex items-center justify-center text-xs text-muted-foreground">
         <ArrowDown className="h-3.5 w-3.5 mr-1" />

@@ -300,3 +300,53 @@ export const REJECTION_CATEGORY_LABELS: Record<PendingOperationRejectionCategory
   wrong_period: 'Fel period',
   other: 'Annat',
 }
+
+/**
+ * The advisory warning a staging tool attached to an operation, read once for
+ * every surface that shows it: the Granskning row, the bulk confirmation and
+ * the preview. It used to be read per preview component, so a type whose
+ * preview forgot the field (attach_document_to_transaction) never showed it,
+ * and the row never did: "Godkänn alla" approved warned operations unseen
+ * (crm#1003).
+ *
+ * - missing_underlag: create_voucher's note is agent guidance in English
+ *   (it names tools), so the UI says it in its own words. Gated on the staged
+ *   note, not on document_attached: the server decides when the warning
+ *   applies (IB entries are exempt there), so the UI mirrors it instead of
+ *   running a second, looser policy. The UI sentence stays conditional
+ *   ("om ... avser en mottagen handling"): accruals and FX entries
+ *   legitimately lack a kvitto.
+ * - vat: create_invoice and update_invoice stage the VAT-treatment
+ *   explanation twice, English prose in compliance_warning for the agent and
+ *   Swedish in vat_warnings; only the Swedish one is for the approver.
+ * - note: every other compliance_warning, rendered as the server wrote it.
+ */
+export type ComplianceWarning =
+  | { kind: 'missing_underlag' }
+  | { kind: 'vat'; text: string }
+  | { kind: 'note'; text: string }
+
+const VAT_WARNING_OPERATION_TYPES = new Set(['create_invoice', 'update_invoice'])
+
+export function complianceWarningOf(op: {
+  operation_type: string
+  preview_data?: Record<string, unknown> | null
+}): ComplianceWarning | null {
+  const data = op.preview_data ?? {}
+  if (VAT_WARNING_OPERATION_TYPES.has(op.operation_type)) {
+    const texts = Array.isArray(data.vat_warnings)
+      ? data.vat_warnings.flatMap((warning: unknown) => {
+          const text =
+            warning != null && typeof warning === 'object'
+              ? (warning as { message_sv?: unknown }).message_sv
+              : null
+          return typeof text === 'string' && text.trim() ? [text.trim()] : []
+        })
+      : []
+    return texts.length > 0 ? { kind: 'vat', text: texts.join(' ') } : null
+  }
+  const note = typeof data.compliance_warning === 'string' ? data.compliance_warning.trim() : ''
+  if (!note) return null
+  if (op.operation_type === 'create_voucher') return { kind: 'missing_underlag' }
+  return { kind: 'note', text: note }
+}

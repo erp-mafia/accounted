@@ -7,15 +7,23 @@
 // keep markup and classNames in lockstep with the design system, not with any
 // one consumer.
 
-import { Fragment, createContext, useContext, type ReactNode } from 'react'
+import { Fragment, createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { cn, formatCurrency } from '@/lib/utils'
+import { ArrowDown } from 'lucide-react'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
+import { isUuid } from '@/lib/invariants/uuid'
 import { AttnLine } from '@/components/ui/attn-line'
-import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
+import { Skeleton } from '@/components/ui/skeleton'
+import { QUIET_LINK_CLASS, VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
 import { DEDUCTION_TYPE_LABELS, isDeductionType } from '@/lib/invoices/rot-rut-rules'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
+import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
+import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
+import { complianceWarningOf, type ComplianceWarning } from './vocabulary'
 
 // The subset of a PendingOperation the preview actually reads. operation_type
 // is widened to string: the chat surface derives it from an MCP tool name and
@@ -455,43 +463,20 @@ function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency
   )
 }
 
-// showSeries: false for a toEntryPreview payload, which carries no series;
-// the engine picks it per source type at commit, so defaulting to A here
-// would state a series the verifikat may not get.
-function VoucherPreview({ data, showSeries = true }: { data: Record<string, unknown>; showSeries?: boolean }) {
-  const lines = (data.lines as VoucherLine[]) || []
-  const totalDebit = data.total_debit as number | undefined
-  const totalCredit = data.total_credit as number | undefined
-  // Advisory, mirrors the MCP staging warning: a verifikat for a received
-  // handling must carry the handling itself (BFL 5 kap 6 §). Gated on the
-  // staged compliance_warning, not on document_attached: the server decides
-  // when the warning applies (IB entries are exempt there), so this stays a
-  // mirror instead of a second, looser policy. Older ops without the field
-  // render unchanged. The wording stays conditional ("om ... avser en
-  // mottagen handling"): internal entries (accruals, FX) legitimately lack
-  // a kvitto, and flagging them as deficient would be wrong.
-  const missingUnderlag = typeof data.compliance_warning === 'string'
-
+// The verifikat's kontering with its column heads and, when known, the sums:
+// the staged lines of create_voucher and a toEntryPreview payload, and the
+// posted lines a link_document_to_voucher review fetches.
+function VoucherLinesBlock({
+  lines,
+  totalDebit,
+  totalCredit,
+}: {
+  lines: VoucherLine[]
+  totalDebit?: number
+  totalCredit?: number
+}) {
   return (
-    <div className="space-y-3 text-sm">
-      {missingUnderlag && (
-        <AttnLine>
-          Underlag saknas: om verifikatet avser en mottagen handling ska handlingen användas som
-          verifikation (BFL 5 kap 6 §).
-        </AttnLine>
-      )}
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Datum</span>
-        <span className="font-mono">{String(data.entry_date ?? '')}</span>
-        <span className="text-muted-foreground">Beskrivning</span>
-        <span className="truncate">{String(data.description ?? '')}</span>
-        {showSeries && (
-          <>
-            <span className="text-muted-foreground">Serie</span>
-            <span className="font-mono">{String(data.voucher_series ?? 'A')}</span>
-          </>
-        )}
-      </div>
+    <>
       {lines.length > 0 && (
         <div>
           <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-[11px] uppercase tracking-wider text-muted-foreground pb-1">
@@ -515,6 +500,35 @@ function VoucherPreview({ data, showSeries = true }: { data: Record<string, unkn
           </span>
         </div>
       )}
+    </>
+  )
+}
+
+// showSeries: false for a toEntryPreview payload, which carries no series;
+// the engine picks it per source type at commit, so defaulting to A here
+// would state a series the verifikat may not get. The missing-underlag
+// warning (BFL 5 kap 6 §) is read by complianceWarningOf and rendered by
+// OperationPreview above every preview type, not here.
+function VoucherPreview({ data, showSeries = true }: { data: Record<string, unknown>; showSeries?: boolean }) {
+  const lines = (data.lines as VoucherLine[]) || []
+  const totalDebit = data.total_debit as number | undefined
+  const totalCredit = data.total_credit as number | undefined
+
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        <span className="text-muted-foreground">Datum</span>
+        <span className="font-mono">{String(data.entry_date ?? '')}</span>
+        <span className="text-muted-foreground">Beskrivning</span>
+        <span className="truncate">{String(data.description ?? '')}</span>
+        {showSeries && (
+          <>
+            <span className="text-muted-foreground">Serie</span>
+            <span className="font-mono">{String(data.voucher_series ?? 'A')}</span>
+          </>
+        )}
+      </div>
+      <VoucherLinesBlock lines={lines} totalDebit={totalDebit} totalCredit={totalCredit} />
     </div>
   )
 }
@@ -732,13 +746,26 @@ function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
   )
 }
 
+// Keys GenericPreview never lists as a row: period_status has its own banner
+// and compliance_warning its own line above the preview (OperationPreview),
+// so a row would state the same fact twice.
+const GENERIC_PREVIEW_SKIPPED_KEYS = new Set(['period_status', 'compliance_warning'])
+
 function GenericPreview({ data }: { data: Record<string, unknown> }) {
-  // Skip period_status here: it's surfaced in the dedicated banner, not the
-  // generic key-value dump (otherwise the approver sees the same fact twice).
-  const entries = Object.entries(data).filter(([k, v]) => v != null && v !== '' && k !== 'period_status')
+  const t = useTranslations('pending')
+  // A uuid is a database handle, not something the approver can check
+  // against anything: the title already names the objects involved.
+  const entries = Object.entries(data).filter(
+    ([k, v]) => v != null && v !== '' && !GENERIC_PREVIEW_SKIPPED_KEYS.has(k) && !isUuid(v),
+  )
   const entryPreviews = entries.filter(([, v]) => isEntryPreview(v))
   const konteringEntries = entries.filter(([, v]) => isKonteringLines(v))
   const rest = entries.filter(([, v]) => !isKonteringLines(v) && !isEntryPreview(v))
+  // preview_data keys are the staging tools' field names. The approver reads
+  // them through the preview_field labels (sv and en); a key without a label
+  // yet still shows, spelled out, rather than hiding what the approval does.
+  const label = (key: string) =>
+    t.has(`preview_field.${key}`) ? t(`preview_field.${key}`) : key.replace(/_/g, ' ')
   return (
     <div className="space-y-3">
       {entryPreviews.map(([key, value]) => (
@@ -748,12 +775,12 @@ function GenericPreview({ data }: { data: Record<string, unknown> }) {
         <PreviewKonteringTable key={key} lines={value as PreviewKonteringLine[]} />
       ))}
       {rest.length > 0 && (
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+        <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-4 gap-y-1 text-sm">
           {rest.map(([key, value]) => (
             <Fragment key={key}>
-              <span className="text-muted-foreground">{key.replace(/_/g, ' ')}</span>
+              <span className="min-w-0 break-words text-muted-foreground">{label(key)}</span>
               <span className={cn('min-w-0 break-words', typeof value === 'number' && 'font-mono tabular-nums')}>
-                {renderValue(value)}
+                {typeof value === 'boolean' ? (value ? t('preview_yes') : t('preview_no')) : renderValue(value)}
               </span>
             </Fragment>
           ))}
@@ -806,7 +833,200 @@ function UpdateAccountPreview({ data }: { data: Record<string, unknown> }) {
   )
 }
 
-export function OperationPreview({ op }: { op: OperationPreviewInput }) {
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null
+}
+
+/**
+ * The posted lines of the verifikat a link_document_to_voucher review points
+ * at, fetched when the review opens. The staged preview carries the voucher's
+ * label, date and text but not its kontering, and the kontering is what tells
+ * whether the document belongs to it. The result is tagged with the id it
+ * belongs to, so a slow answer for the previous review never renders under
+ * the next one (the DocumentViewerPane idiom).
+ */
+function useVoucherLines(journalEntryId: string | null) {
+  const [fetched, setFetched] = useState<{ id: string; lines: VoucherLine[] | null } | null>(null)
+  useEffect(() => {
+    if (!journalEntryId) return
+    let cancelled = false
+    fetch(`/api/bookkeeping/journal-entries/${journalEntryId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { data?: { lines?: unknown } } | null) => {
+        if (cancelled) return
+        const raw = body?.data?.lines
+        const lines = Array.isArray(raw)
+          ? (raw as Array<Record<string, unknown>>)
+              .slice()
+              .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0))
+              .map((line) => ({
+                account_number: String(line.account_number ?? ''),
+                debit_amount: Number(line.debit_amount) || 0,
+                credit_amount: Number(line.credit_amount) || 0,
+                line_description: readString(line.line_description),
+              }))
+          : null
+        setFetched({ id: journalEntryId, lines })
+      })
+      .catch(() => {
+        if (!cancelled) setFetched({ id: journalEntryId, lines: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [journalEntryId])
+  const current = fetched?.id === journalEntryId ? fetched : null
+  return { loading: journalEntryId != null && current == null, lines: current?.lines ?? null }
+}
+
+function LinkPreviewCard({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-2 rounded-lg border border-border p-3">
+      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
+      {children}
+    </div>
+  )
+}
+
+function LinkPreviewRows({ rows }: { rows: Array<{ label: string; value: ReactNode; tabular?: boolean }> }) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-x-3 gap-y-1">
+      {rows.map((row) => (
+        <Fragment key={row.label}>
+          <span className="text-xs text-muted-foreground">{row.label}</span>
+          <span className={cn('min-w-0 break-words', row.tabular && 'tabular-nums')}>{row.value}</span>
+        </Fragment>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * link_document_to_voucher, the most staged operation type: a document is
+ * attached to an already posted verifikat. It fell through to GenericPreview,
+ * which printed the staging tool's field names ("voucher date", "document
+ * currently linked to other") and raw values ("posted", "false") (crm#1003).
+ *
+ * `detail` is the Granskning drawer: there the review also shows the
+ * verifikat's kontering and the document itself, so the approver can tell
+ * what is being linked without leaving the view. The confirm dialog and the
+ * chat card stay compact (no fetch, no embedded document).
+ */
+function LinkDocumentToVoucherPreview({
+  data,
+  params,
+  detail,
+}: {
+  data: Record<string, unknown>
+  params: Record<string, unknown>
+  detail: boolean
+}) {
+  const t = useTranslations('pending')
+  const tStatus = useTranslations('journal_status')
+  const documentId = isUuid(params.document_id) ? params.document_id : null
+  const journalEntryId = isUuid(params.journal_entry_id) ? params.journal_entry_id : null
+  const fileName = readString(data.document_file_name)
+  const mimeType = readString(data.document_mime_type)
+  const voucherLabel = readString(data.voucher_label)
+  const voucherDate = readString(data.voucher_date)
+  const voucherText = readString(data.voucher_description)
+  const voucherStatus = readString(data.voucher_status)
+  const statusLabel =
+    voucherStatus && tStatus.has(`status_${voucherStatus}`) ? tStatus(`status_${voucherStatus}`) : voucherStatus
+  const { loading: linesLoading, lines } = useVoucherLines(detail ? journalEntryId : null)
+
+  const voucherRows = [
+    { label: t('preview_link_number'), value: voucherLabel ?? '-', tabular: true },
+    { label: t('preview_link_date'), value: voucherDate ? formatDate(voucherDate) : '-', tabular: true },
+    ...(voucherText ? [{ label: t('preview_link_description'), value: voucherText }] : []),
+    ...(statusLabel ? [{ label: t('preview_link_status'), value: statusLabel }] : []),
+  ]
+
+  const voucherCard = (
+    <LinkPreviewCard label={t('preview_link_voucher_heading')}>
+      <LinkPreviewRows rows={voucherRows} />
+      {detail && journalEntryId && (
+        <div className="space-y-2 pt-1">
+          {linesLoading ? (
+            <div className="space-y-1.5">
+              <Skeleton className="h-4 w-full rounded-sm" />
+              <Skeleton className="h-4 w-full rounded-sm" />
+            </div>
+          ) : lines && lines.length > 0 ? (
+            <VoucherLinesBlock
+              lines={lines}
+              totalDebit={roundOre(lines.reduce((sum, line) => sum + line.debit_amount, 0))}
+              totalCredit={roundOre(lines.reduce((sum, line) => sum + line.credit_amount, 0))}
+            />
+          ) : (
+            <p className="text-xs text-muted-foreground">{t('preview_link_lines_failed')}</p>
+          )}
+          <Link href={`/bookkeeping/${journalEntryId}`} className={QUIET_LINK_CLASS}>
+            {t('preview_link_open_voucher')}
+          </Link>
+        </div>
+      )}
+    </LinkPreviewCard>
+  )
+
+  const showViewer = detail && documentId != null
+  const documentCard = (
+    <LinkPreviewCard label={t('preview_link_document_heading')}>
+      {/* The viewer's own header names the file. */}
+      {!showViewer && <LinkPreviewRows rows={[{ label: t('preview_link_file'), value: fileName ?? '-' }]} />}
+      {data.document_already_linked === true && (
+        <p className="text-xs text-muted-foreground">{t('preview_link_already_linked')}</p>
+      )}
+      {data.document_currently_linked_to_other === true && (
+        <p className="text-xs text-attn">{t('preview_link_linked_elsewhere')}</p>
+      )}
+      {documentId &&
+        (showViewer ? (
+          <DocumentViewerPane
+            documentId={documentId}
+            mime={mimeType}
+            fileName={fileName}
+            className="h-[56vh]"
+          />
+        ) : (
+          <div className="pt-1">
+            <DocumentViewButton documentId={documentId} />
+          </div>
+        ))}
+    </LinkPreviewCard>
+  )
+
+  if (detail) {
+    return (
+      <div className="space-y-3 text-sm">
+        {voucherCard}
+        {documentCard}
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        {voucherCard}
+        {documentCard}
+      </div>
+      <div className="flex items-center justify-center text-xs text-muted-foreground">
+        <ArrowDown className="mr-1 h-3.5 w-3.5" aria-hidden />
+        {t('preview_link_caption')}
+      </div>
+    </div>
+  )
+}
+
+/** The warning as the approver reads it: the UI's own words where the UI owns them. */
+export function useComplianceWarningText(): (warning: ComplianceWarning) => string {
+  const t = useTranslations('pending')
+  return (warning) => (warning.kind === 'missing_underlag' ? t('warning_missing_underlag') : warning.text)
+}
+
+export function OperationPreview({ op, detail = false }: { op: OperationPreviewInput; detail?: boolean }) {
+  const warningText = useComplianceWarningText()
+  const warning = complianceWarningOf(op)
   const body = (() => {
     switch (op.operation_type) {
       case 'categorize_transaction':
@@ -828,12 +1048,23 @@ export function OperationPreview({ op }: { op: OperationPreviewInput }) {
       case 'update_account':
         return <UpdateAccountPreview data={op.preview_data} />
       case 'attach_document_to_transaction':
-        return <AttachDocumentPreview data={op.preview_data} params={op.params ?? {}} />
+        return <AttachDocumentPreview data={op.preview_data} params={op.params ?? {}} detail={detail} />
       case 'match_transaction_invoice':
         return <MatchTransactionInvoicePreview data={op.preview_data} />
+      case 'link_document_to_voucher':
+        return <LinkDocumentToVoucherPreview data={op.preview_data} params={op.params ?? {}} detail={detail} />
       default:
         return <GenericPreview data={op.preview_data} />
     }
   })()
-  return body
+  // One line above every preview type, from the same reading the Granskning
+  // row uses. The VAT explanation stays inside the invoice previews, next to
+  // the lines it is about.
+  if (!warning || warning.kind === 'vat') return body
+  return (
+    <div className="space-y-3">
+      <AttnLine className="break-words">{warningText(warning)}</AttnLine>
+      {body}
+    </div>
+  )
 }

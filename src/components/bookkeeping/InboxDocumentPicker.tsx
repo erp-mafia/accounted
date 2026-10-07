@@ -15,7 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { FileText, ImageIcon, Loader2, Search, Inbox, Eye } from 'lucide-react'
+import { FileText, ImageIcon, Loader2, Search, Inbox } from 'lucide-react'
 
 // InboxDocumentPicker
 //
@@ -32,10 +32,11 @@ import { FileText, ImageIcon, Loader2, Search, Inbox, Eye } from 'lucide-react'
 //   journal entry does not exist yet, so `onSelect` is provided instead and the
 //   pick is reported to the parent, which links after the entry is created.
 //
-// Each row carries a preview button (eye) that opens a quick dialog rendering
-// the document inline, so the user can confirm the right file before attaching.
-// Attaching is the row's primary click (fast path) and is also offered from
-// inside the preview dialog (preview → confirm).
+// Each row carries a "Förhandsgranska" button that opens a quick dialog
+// rendering the document inline, so the user can confirm the right file before
+// attaching. It is a word, not the eye icon it used to be: an eye reads as a
+// show/hide toggle (crm#1003). Attaching is the row's primary click (fast
+// path) and is also offered from inside the preview dialog (preview → confirm).
 
 export interface AvailableInboxDoc {
   inbox_item_id: string
@@ -246,16 +247,14 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                     </button>
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className="shrink-0"
-                      aria-label={t('picker_preview')}
-                      title={t('picker_preview')}
+                      size="sm"
+                      className="shrink-0 text-muted-foreground"
                       onClick={(e) => {
                         e.stopPropagation()
                         setPreviewItem(it)
                       }}
                     >
-                      <Eye className="h-4 w-4" />
+                      {t('picker_preview')}
                     </Button>
                   </div>
                 )

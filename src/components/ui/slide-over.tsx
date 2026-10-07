@@ -68,7 +68,9 @@ function SlideOverHeader({
               {kicker}
             </div>
           )}
-          <DialogPrimitive.Title className="font-display text-lg leading-6 tracking-tight">
+          {/* break-words: a title naming a file has no space to wrap at and
+              ran past the panel's edge (crm#1003). */}
+          <DialogPrimitive.Title className="break-words font-display text-lg leading-6 tracking-tight">
             {title}
           </DialogPrimitive.Title>
         </div>
