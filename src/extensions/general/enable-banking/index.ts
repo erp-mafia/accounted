@@ -56,6 +56,7 @@ import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import type { StoredAccount } from './types'
 import { createServiceClient } from '@/lib/supabase/server'
 import { attachSharedBankSession, readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
+import { bankAccountLabel, ibanLast4, ledgerSyncedElsewhereMessage } from '@/lib/cash-accounts/selection-refusal'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 
 // Per-user limits keep one tenant from spamming any single bank handler.
@@ -1399,12 +1400,16 @@ export const enableBankingExtension: Extension = {
         const { resolvePsd2LedgerAccount, getRevokedConnectionIds, normalizeIban } =
           await import('@/lib/cash-accounts/service')
 
+        // name and the connection's bank name only serve the refusal below:
+        // a conflict names the bank account that holds the ledger.
         const { data: companyCashRows, error: cashReadError } = await supabase
           .from('cash_accounts')
-          .select('id, external_uid, bank_connection_id, ledger_account, iban, currency, enabled')
+          .select('id, external_uid, bank_connection_id, ledger_account, iban, currency, enabled, name, bank_connection:bank_connections(bank_name)')
           .eq('company_id', companyId)
         if (cashReadError) return errorResponse(cashReadError, log)
-        const cashRows = (companyCashRows ?? []) as Array<{
+        // The client types the many-to-one embed as an array; PostgREST returns
+        // one object (lib/reference-data/fetchers.ts casts the same way).
+        const cashRows = (companyCashRows ?? []) as unknown as Array<{
           id: string
           external_uid: string | null
           bank_connection_id: string | null
@@ -1412,6 +1417,8 @@ export const enableBankingExtension: Extension = {
           iban: string | null
           currency: string
           enabled: boolean | null
+          name?: string | null
+          bank_connection?: { bank_name: string | null } | null
         }>
 
         // Rows that already represent one of THIS connection's accounts, matched
@@ -1460,20 +1467,17 @@ export const enableBankingExtension: Extension = {
           companyId,
           foreignConnectionIds
         )
-        const foreignConnectedLedgers = new Set(
-          cashRows
-            .filter(
-              r =>
-                r.bank_connection_id !== null &&
-                r.bank_connection_id !== connection.id &&
-                !revokedConnectionIds.has(r.bank_connection_id) &&
-                r.enabled !== false &&
-                // Same IBAN as one of this connection's accounts: the same
-                // physical account under a stale owner, not a foreign claim.
-                !ownIbanRowIds.has(r.id)
-            )
-            .map(r => r.ledger_account)
+        const foreignConnectedRows = cashRows.filter(
+          r =>
+            r.bank_connection_id !== null &&
+            r.bank_connection_id !== connection.id &&
+            !revokedConnectionIds.has(r.bank_connection_id) &&
+            r.enabled !== false &&
+            // Same IBAN as one of this connection's accounts: the same
+            // physical account under a stale owner, not a foreign claim.
+            !ownIbanRowIds.has(r.id)
         )
+        const foreignConnectedLedgers = new Set(foreignConnectedRows.map(r => r.ledger_account))
 
         const effectiveLedgerByUid = new Map<string, string>()
         const usedLedgers = new Set<string>()
@@ -1539,9 +1543,23 @@ export const enableBankingExtension: Extension = {
           )
         }
         if (conflictingLedgers.size > 0) {
+          // Name the bank account on each contested ledger and the way out
+          // (crm#1021): "used by another connection" alone left the user
+          // guessing which account and where to change it.
+          const holders = [...conflictingLedgers].sort().map(ledger => {
+            const holder = foreignConnectedRows.find(r => r.ledger_account === ledger)
+            return {
+              ledger,
+              label: bankAccountLabel({
+                name: holder?.name,
+                bank_name: holder?.bank_connection?.bank_name,
+                iban_last4: ibanLast4(holder?.iban),
+              }),
+            }
+          })
           return NextResponse.json(
             {
-              error: 'Bokföringskontot används redan av ett bankkonto från en annan bankanslutning.',
+              error: ledgerSyncedElsewhereMessage(holders),
               conflicting_accounts: [...conflictingLedgers],
             },
             { status: 400 }

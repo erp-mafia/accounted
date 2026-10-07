@@ -3462,6 +3462,32 @@ const BANK_SELECTION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bokföringskontot hör till ett annat bankkonto som inte synkas men har transaktioner eller används i fakturor eller avstämningar. Välj ett annat bokföringskonto, eller markera först det andra bankkontot, ge det ett annat bokföringskonto och spara. Inget sparades.',
     message_en: 'The ledger account belongs to another bank account that is not synced but has transactions or is used on invoices or reconciliations. Choose another ledger account, or first select the other bank account, give it another ledger account and save. Nothing was saved.',
   },
+  // Moving an account onto a ledger another row holds adopts that row and
+  // retires the account's own row (promote_psd2_cash_account). These refuse
+  // that retirement. Unregistered, each reached the picker as the generic
+  // "Förfrågan innehåller ogiltiga uppgifter" (crm#1021). The database names
+  // the account in a DETAIL, which lib/cash-accounts/selection-refusal.ts
+  // turns into a sentence; these are the answers without one.
+  CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES: {
+    httpStatus: 409,
+    message_sv: 'Bankkontot kan inte flyttas till det bokföringskontot automatiskt: kontot det bokförs på nu har underlag bifogade till en avstämning eller används i fakturor. Behåll det nuvarande bokföringskontot, eller kontakta supporten så hjälper vi dig att flytta det. Inget sparades.',
+    message_en: 'The bank account cannot be moved to that ledger account automatically: the account it books to now has attachments on a reconciliation or is used on invoices. Keep the current ledger account, or contact support to have it moved. Nothing was saved.',
+  },
+  CASH_ACCOUNT_RETIREMENT_IDENTITY_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Bankkontot kan inte slås ihop med kontot på det bokföringskontot: de har olika IBAN eller valuta. Välj ett annat bokföringskonto, eller kontakta supporten. Inget sparades.',
+    message_en: 'The bank account cannot be merged with the account on that ledger account: they have different IBANs or currencies. Choose another ledger account, or contact support. Nothing was saved.',
+  },
+  CASH_ACCOUNT_RETIREMENT_STILL_LIVE: {
+    httpStatus: 409,
+    message_sv: 'Ett av bankkontona hämtas fortfarande via en annan bankkoppling och kan inte slås ihop automatiskt. Koppla från den andra kopplingen under Inställningar > Kopplingar > Bank och spara sedan igen. Inget sparades.',
+    message_en: 'One of the bank accounts is still fetched through another bank connection and cannot be merged automatically. Disconnect the other connection under Settings > Connections > Bank, then save again. Nothing was saved.',
+  },
+  BANK_SELECTION_CHART_ACCOUNT_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Ett av de valda bokföringskontona finns inte i kontoplanen. Ladda om sidan, välj konton igen och spara. Inget sparades.',
+    message_en: 'One of the chosen ledger accounts is not in the chart of accounts. Reload the page, choose the accounts again and save. Nothing was saved.',
+  },
 }
 
 const BANK_SYNC: Record<string, StructuredErrorEntry> = {

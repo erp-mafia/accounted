@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { readBankConfiguration, saveBankAccountSelection, readBankCallbackConfiguration, finalizeBankCallback } from '../configuration'
+import { errorResponse } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 function client(data: unknown, error: unknown = null) {
   const rpc = vi.fn().mockResolvedValue({ data, error })
@@ -45,6 +47,39 @@ describe('checked bank configuration calls', () => {
     await expect(save({ code: 'PT409', message: 'BANK_CONFIGURATION_CHANGED' }))
       .rejects.toMatchObject({ code: 'BANK_CONFIGURATION_CHANGED', pgCode: 'PT409' })
     await expect(save({ code: '23514', message: 'some_check_constraint' })).rejects.toMatchObject({ code: '23514' })
+  })
+
+  // crm#1021: the move to 1930 was refused with this name, unregistered, and
+  // the picker said "Förfrågan innehåller ogiltiga uppgifter".
+  it('answers a refusal with its own code instead of the generic validation error', async () => {
+    const error = await saveBankAccountSelection(client(null, { code: '23514', message: 'CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES' }).supabase,
+      'company', 'user', 'connection', 'token', []).catch((e: unknown) => e)
+    const response = errorResponse(error, { error: () => {}, warn: () => {} })
+    expect(response.status).toBe(409)
+    const body = await response.json()
+    expect(body.error.code).toBe('CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES')
+    expect(body.error.message).not.toMatch(/ogiltiga uppgifter/)
+  })
+
+  it('names the bank account a refusal is about when the database says which one', async () => {
+    const details = JSON.stringify({ ledger_account: '1930', dependencies: ['invoice-configuration'],
+      cash_account: { id: 'cash-1', ledger_account: '1931', name: 'Företagskonto', iban_last4: '7466', bank_name: 'SEB', connection_live: true } })
+    const error = await saveBankAccountSelection(client(null, { code: '23514', message: 'CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES', details }).supabase,
+      'company', 'user', 'connection', 'token', []).catch((e: unknown) => e)
+    expect(error).toMatchObject({ code: 'CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES', pgCode: '23514' })
+    const response = errorResponse(error, { error: () => {}, warn: () => {} })
+    expect(response.status).toBe(409)
+    const body = await response.json()
+    expect(body.error).toMatchObject({ code: 'CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES' })
+    expect(body.error.message).toContain('Bankkontot Företagskonto (SEB ••7466) kan inte flyttas från 1931 till 1930 automatiskt')
+    expect(body.error.message).toContain('har betalningsuppgifter för fakturor')
+  })
+
+  it('keeps the registry sentence when the detail is not one it can read', async () => {
+    const error = await saveBankAccountSelection(client(null, { code: '23505', message: 'CASH_ACCOUNT_LEDGER_CLAIMED', details: 'Key (company_id)=(...)' }).supabase,
+      'company', 'user', 'connection', 'token', []).catch((e: unknown) => e)
+    const body = await errorResponse(error, { error: () => {}, warn: () => {} }).json()
+    expect(body.error).toMatchObject({ code: 'CASH_ACCOUNT_LEDGER_CLAIMED', message: getErrorEntry('CASH_ACCOUNT_LEDGER_CLAIMED')!.message_sv })
   })
 
   it('refuses absent read and write receipts', async () => {

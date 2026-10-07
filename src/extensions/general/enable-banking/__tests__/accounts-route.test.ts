@@ -90,6 +90,9 @@ interface SupabaseStub {
     currency?: string
     /** Mirrors the picker's checkbox in that row's connection; absent = live claim. */
     enabled?: boolean
+    name?: string | null
+    /** Embedded bank_connections(bank_name): names the holder in a conflict. */
+    bank_connection?: { bank_name: string | null } | null
   }>
   /** Completed SIE import overlapping the backfill window (renewal-flood guard). */
   sieImportRow?: { id: string } | null
@@ -1490,12 +1493,13 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(stub.selectionCalls).toBeUndefined()
     })
 
-    it('returns 400 when a mapping targets a ledger held by another connection', async () => {
+    it('returns 400 naming the bank account when a mapping targets a ledger another connection syncs onto', async () => {
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
         chartAccountNumbers: ['1935'],
         cashAccountRows: [
-          { external_uid: 'other-acc', bank_connection_id: 'conn-OTHER', ledger_account: '1935' },
+          { external_uid: 'other-acc', bank_connection_id: 'conn-OTHER', ledger_account: '1935',
+            iban: 'SE00 0000 0000 0000 0000 1234', name: 'Sparkonto', bank_connection: { bank_name: 'Swedbank' } },
         ],
         connectionRow: {
           id: 'conn-1',
@@ -1517,8 +1521,11 @@ describe('PATCH /accounts (enable-banking)', () => {
 
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/annan bankanslutning/i)
+      expect(body.error).toBe('Bokföringskonto 1935 används redan av bankkontot Sparkonto (Swedbank ••1234), ett annat bankkonto '
+        + 'som hämtas via en annan bankkoppling. Inget sparades. Välj ett annat bokföringskonto, eller ge först det kontot ett annat '
+        + 'bokföringskonto: Inställningar > Kopplingar > Bank, tre punkter vid den banken, Välj konton.')
       expect(body.conflicting_accounts).toEqual(['1935'])
+      expect(stub.selectionCalls).toBeUndefined()
     })
 
     it('allows a mapping onto a ledger held only by a REVOKED connection (self-heal after disconnect)', async () => {
@@ -1884,6 +1891,74 @@ describe('PATCH /accounts (enable-banking)', () => {
       const body = await res.json()
       expect(body.error).toMatch(/account_mappings/)
       expect(body.unknown_uids).toEqual(['acc-typo'])
+    })
+  })
+  // crm#1021: the account was synced onto 1931 and moving it to 1930, where
+  // the imported history and the seeded manual 1930 row are, answered
+  // "Förfrågan innehåller ogiltiga uppgifter". The payload is the picker's,
+  // with synthetic identifiers.
+  describe('moving an account onto the ledger the books already use (crm#1021)', () => {
+    const accountsData: StoredAccount[] = [
+      { uid: 'acc-main', currency: 'SEK', iban: 'SE00 0000 0000 0000 0000 0001', name: 'Företaget', enabled: true, ledger_account: '1931' },
+      { uid: 'acc-other', currency: 'SEK', iban: 'SE00 0000 0000 0000 0000 0002', name: 'Företaget', enabled: true, ledger_account: '1910' },
+    ]
+    const cashAccountRows: SupabaseStub['cashAccountRows'] = [
+      { id: 'cash-seeded', external_uid: null, bank_connection_id: null, ledger_account: '1930', iban: null, currency: 'SEK', name: 'Företagskonto (SEK)' },
+      { id: 'cash-main', external_uid: 'acc-main', bank_connection_id: 'conn-1', ledger_account: '1931', iban: accountsData[0].iban, currency: 'SEK' },
+      { id: 'cash-other', external_uid: 'acc-other', bank_connection_id: 'conn-1', ledger_account: '1910', iban: accountsData[1].iban, currency: 'SEK' },
+    ]
+    const request = makeRequest({
+      connection_id: 'conn-1',
+      enabled_uids: ['acc-main', 'acc-other'],
+      account_mappings: [{ uid: 'acc-main', ledger_account: '1930' }, { uid: 'acc-other', ledger_account: '1910' }],
+    })
+    const stubFor = (selectionError?: SupabaseStub['selectionError'] & { details?: string }): SupabaseStub => ({
+      authUser: { id: 'user-1' },
+      chartAccountNumbers: ['1930', '1910'],
+      cashAccountRows,
+      selectionError,
+      connectionRow: { id: 'conn-1', status: 'active', accounts_data: accountsData },
+    })
+
+    it('submits the move to the database: the seeded manual 1930 row is no claim of another connection', async () => {
+      const stub = stubFor()
+      const ctx = makeContext(buildSupabase(stub))
+
+      const res = await accountsRoute.handler(request.clone(), ctx)
+
+      expect(res.status).toBe(200)
+      expect(stub.selectionCalls?.[0]?.p_selections).toEqual([
+        { uid: 'acc-main', enabled: true, currency: 'SEK', ledger_account: '1930', reuse_cash_account_id: null },
+        { uid: 'acc-other', enabled: true, currency: 'SEK', ledger_account: '1910', reuse_cash_account_id: 'cash-other' },
+      ])
+      expect(mockedSync).not.toHaveBeenCalled()
+    })
+
+    it('answers a refused move with the refusal itself, naming the bank account, never the generic validation error', async () => {
+      const details = JSON.stringify({ ledger_account: '1930', dependencies: ['reconciliation-attachment'],
+        cash_account: { id: 'cash-main', ledger_account: '1931', name: 'Företaget', iban_last4: '0001', bank_name: 'Test bank', connection_live: true } })
+      const ctx = makeContext(buildSupabase(stubFor({ code: '23514', message: 'CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES', details })))
+
+      const res = await accountsRoute.handler(request.clone(), ctx)
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES')
+      expect(body.error.message).toBe('Bankkontot Företaget (Test bank ••0001) kan inte flyttas från 1931 till 1930 automatiskt, '
+        + 'eftersom kontot på 1931 har underlag bifogade till en avstämning. Inget sparades. '
+        + 'Behåll 1931, eller kontakta supporten så hjälper vi dig att flytta det.')
+      expect(ctx.emit).not.toHaveBeenCalled()
+    })
+
+    it('still answers the refusal by its own code when the database names no account', async () => {
+      const ctx = makeContext(buildSupabase(stubFor({ code: '23514', message: 'CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES' })))
+
+      const res = await accountsRoute.handler(request.clone(), ctx)
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES')
+      expect(body.error.message).not.toMatch(/ogiltiga uppgifter/)
     })
   })
 })

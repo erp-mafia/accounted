@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildSIEAccountRows } from '@/lib/import/account-sync'
 import { bankLedgerName } from '@/lib/cash-accounts/ledger-slots'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
+import { userFacing } from '@/lib/errors/user-facing'
+import { namedSelectionRefusal, parseSelectionRefusalDetail } from '@/lib/cash-accounts/selection-refusal'
 
 export interface BankConfigurationSnapshot {
   token: string
@@ -59,10 +61,16 @@ export async function saveBankAccountSelection(
 /**
  * The RPC raises its refusals by name under a generic SQLSTATE (23514, 23505,
  * PT409). A registered name becomes the code so the route answers with that
- * message instead of a generic validation or conflict error.
+ * message instead of a generic validation or conflict error. A refusal about
+ * a bank account carries a DETAIL naming it, and then the answer is a sentence
+ * naming that account and what to do (lib/cash-accounts/selection-refusal.ts).
  */
-function selectionError(error: { code?: string; message: string }) {
+function selectionError(error: { code?: string; message: string; details?: string | null }) {
   const code = hasErrorEntry(error.message) ? error.message : error.code
+  const named = code && hasErrorEntry(code)
+    ? namedSelectionRefusal(code, parseSelectionRefusalDetail(error.details))
+    : null
+  if (code && named) return userFacing(Object.assign(new Error(named), { code, pgCode: error.code }), code)
   return Object.assign(new Error(error.message), { code, pgCode: error.code })
 }
 

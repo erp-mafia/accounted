@@ -461,4 +461,172 @@ describe('ledger changes keep the bank account row', () => {
         [owner.companyId, '1930'])).rows).toEqual([{ bank_connection_id: connectionId, external_uid: 'selection-a', iban: accounts[0].iban }])
     })
   })
+  // crm#1021: a bank account was allocated 1931 next to the seeded 1930 row
+  // (an allocator rule fixed since, crm#129), and both rows were reconciled
+  // before the user moved the account to 1930, where the imported history
+  // is. The move adopts the 1930 row and retires the account's own row. A
+  // sign-off on that row used to refuse the move under a generic validation
+  // error; sign-offs are append-only history and stay where they are.
+  describe('moving an account onto the ledger a manual or released row holds (crm#1021)', () => {
+    const b = { ...selection[1] }
+    const move = (ledger: string) => [{ ...selection[0], ledger_account: ledger }, b]
+    beforeAll(async () => {
+      // The imported history on 1930: posted lines the move must leave alone.
+      await insertPostedJournalEntry({ ...owner, entryDate: '2026-01-03', lines: [
+        { accountNumber: '1930', debitAmount: 500, creditAmount: 0 },
+        { accountNumber: '2999', debitAmount: 0, creditAmount: 500 },
+      ] })
+    })
+    async function seededRow(iban: string | null = null) {
+      return (await client.query(`INSERT INTO cash_accounts(company_id,ledger_account,currency,iban,name,is_primary,source)
+        VALUES($1,'1930','SEK',$2,'Företagskonto (SEK)',true,'manual') RETURNING id`, [owner.companyId, iban])).rows[0].id as string
+    }
+    async function signOff(cashAccountId: string) {
+      const id = randomUUID()
+      await client.query(`INSERT INTO account_reconciliations(id,company_id,account_key,through_date,signed_by)
+        VALUES($1,$2,$3,'2026-09-30',$4)`, [id, owner.companyId, `bank:${cashAccountId}`, owner.userId])
+      return id
+    }
+    async function signOffs() {
+      return (await client.query(`SELECT id, account_key, through_date::text AS through_date, reopened_at
+        FROM account_reconciliations WHERE company_id=$1 ORDER BY id`, [owner.companyId])).rows
+    }
+    async function onOwnLedger(ledger = '1931') {
+      await save((await snapshot()).token, move(ledger), chartsFor(ledger, b.ledger_account))
+      const own = (await rows()).find(r => r.external_uid === 'selection-a')
+      expect(own).toMatchObject({ ledger_account: ledger, bank_connection_id: connectionId })
+      return own as { id: string }
+    }
+    async function refusal(selections: unknown, chart: unknown) {
+      const before = await state()
+      const token = (await snapshot()).token
+      await client.query('SAVEPOINT refused_move')
+      const error = await save(token, selections, chart).then(() => null, (e: { code: string; message: string; detail?: string }) => e)
+      await client.query('ROLLBACK TO SAVEPOINT refused_move')
+      expect(await state()).toEqual(before)
+      return { code: error?.code, message: error?.message, detail: error?.detail ? JSON.parse(error.detail) : null }
+    }
+
+    it('adopts the seeded 1930 row, takes the account history along and keeps both sign-offs', async () => {
+      const seeded = await seededRow()
+      const own = await onOwnLedger()
+      const history = [await transactionOn(own.id), await transactionOn(own.id)].sort()
+      // Most of the reported account's rows were ignored as already booked by the import.
+      await client.query('UPDATE transactions SET is_ignored = true WHERE id = $1', [history[0]])
+      const before = [await signOff(own.id), await signOff(seeded)]
+      const signedBefore = await signOffs()
+
+      const result = await save((await snapshot()).token, move('1930'), chartsFor('1930', b.ledger_account))
+
+      expect(result.accounts[0]).toMatchObject({ uid: 'selection-a', enabled: true, ledger_account: '1930' })
+      expect(result.mirrors[0]).toEqual({ cashAccountId: seeded, moved: 2,
+        retired: [{ id: own.id, ledger_account: '1931', outcome: 'deleted', moved: 2 }] })
+      const rowsAfter = await rows()
+      expect(rowsAfter[0]).toEqual({ id: seeded, ledger_account: '1930', external_uid: 'selection-a', bank_connection_id: connectionId, is_primary: true })
+      expect(rowsAfter.map(r => r.id)).not.toContain(own.id)
+      expect((await client.query('SELECT iban, source FROM cash_accounts WHERE id=$1', [seeded])).rows[0])
+        .toEqual({ iban: accounts[0].iban, source: 'enable_banking' })
+      expect(await transactionsOf(seeded)).toEqual(history)
+      expect((await client.query('SELECT is_ignored FROM transactions WHERE id = $1', [history[0]])).rows[0].is_ignored).toBe(true)
+      // Sign-offs are append-only history: none rewritten, re-keyed or removed.
+      expect(await signOffs()).toEqual(signedBefore)
+      expect(signedBefore.map(s => s.id).sort()).toEqual(before.sort())
+    })
+
+    it('keeps a row with booked transactions on its old ledger as a manual row, sign-off included', async () => {
+      const seeded = await seededRow()
+      const own = await onOwnLedger()
+      const booked = await transactionOn(own.id, voucherId)
+      const open = await transactionOn(own.id)
+      await signOff(own.id)
+
+      const result = await save((await snapshot()).token, move('1930'), chartsFor('1930', b.ledger_account))
+
+      expect(result.mirrors[0]).toEqual({ cashAccountId: seeded, moved: 1,
+        retired: [{ id: own.id, ledger_account: '1931', outcome: 'demoted-to-manual', moved: 1 }] })
+      expect(await transactionsOf(seeded)).toEqual([open])
+      expect(await transactionsOf(own.id)).toEqual([booked])
+      expect((await client.query('SELECT ledger_account, bank_connection_id, external_uid FROM cash_accounts WHERE id=$1', [own.id])).rows)
+        .toEqual([{ ledger_account: '1931', bank_connection_id: null, external_uid: null }])
+    })
+
+    it('moves an account without an IBAN onto the seeded row as well', async () => {
+      await client.query(`UPDATE bank_connections SET accounts_data=jsonb_set(accounts_data,'{0}',(accounts_data->0)-'iban') WHERE id=$1`, [connectionId])
+      const seeded = await seededRow()
+      const own = await onOwnLedger()
+      const history = [await transactionOn(own.id)]
+      await signOff(own.id)
+
+      const result = await save((await snapshot()).token, move('1930'), chartsFor('1930', b.ledger_account))
+
+      expect(result.mirrors[0]).toMatchObject({ cashAccountId: seeded, retired: [{ id: own.id, outcome: 'deleted' }] })
+      expect(await transactionsOf(seeded)).toEqual(history)
+    })
+
+    it('adopts a reconciled row left on a superseded connection', async () => {
+      const oldConnection = randomUUID()
+      await client.query(`INSERT INTO bank_connections(id,company_id,user_id,status,accounts_data,superseded_by)
+        VALUES($1,$2,$3,'revoked','[]',$4)`, [oldConnection, owner.companyId, owner.userId, connectionId])
+      const released = (await client.query(`INSERT INTO cash_accounts(company_id,bank_connection_id,external_uid,ledger_account,currency,iban)
+        VALUES($1,$2,'old-a','1930','SEK',$3) RETURNING id`, [owner.companyId, oldConnection, accounts[0].iban])).rows[0].id as string
+      await signOff(released)
+      const own = await onOwnLedger()
+      await signOff(own.id)
+
+      const result = await save((await snapshot()).token, move('1930'), chartsFor('1930', b.ledger_account))
+
+      expect(result.mirrors[0]).toMatchObject({ cashAccountId: released, retired: [{ id: own.id, outcome: 'deleted' }] })
+      expect((await rows())[0]).toMatchObject({ id: released, ledger_account: '1930', external_uid: 'selection-a', bank_connection_id: connectionId })
+    })
+
+    it.each([
+      ['a reconciliation attachment', 'reconciliation-attachment'],
+      ['invoice payee details', 'invoice-configuration'],
+    ])('refuses the move and names the account when its own row has %s', async (_label, dependency) => {
+      await seededRow()
+      const own = await onOwnLedger()
+      if (dependency === 'reconciliation-attachment') {
+        await client.query(`INSERT INTO account_reconciliation_attachments(id,company_id,account_key,through_date,uploaded_by,
+          file_name,mime_type,size_bytes,storage_bucket,storage_path,sha256)
+          VALUES($1::uuid,$2,$3,'2026-09-30',$4,'statement.pdf','application/pdf',0,'pg-crm-1021',$1::uuid::text,repeat('a',64))`,
+        [randomUUID(), owner.companyId, `bank:${own.id}`, owner.userId])
+      } else {
+        await client.query("UPDATE cash_accounts SET bankgiro='123-4567' WHERE id=$1", [own.id])
+      }
+
+      const refused = await refusal(move('1930'), chartsFor('1930', b.ledger_account))
+
+      expect(refused).toMatchObject({ code: '23514', message: 'CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES', detail: {
+        ledger_account: '1930', dependencies: [dependency],
+        cash_account: { id: own.id, ledger_account: '1931', iban_last4: '0041', currency: 'SEK', connection_live: true },
+      } })
+    })
+
+    it('names the account and its bank when another live connection syncs the same account onto the ledger', async () => {
+      const otherId = randomUUID()
+      await client.query(`INSERT INTO bank_connections(id,company_id,user_id,session_id,status,bank_name,accounts_data)
+        VALUES($1,$2,$3,'other-session','active','Other bank',$4)`, [otherId, owner.companyId, owner.userId,
+        JSON.stringify([{ uid: 'twin-a', currency: 'SEK', iban: accounts[0].iban, enabled: true, ledger_account: '1930' }])])
+      const twin = (await client.query(`INSERT INTO cash_accounts(company_id,bank_connection_id,external_uid,ledger_account,currency,iban,name)
+        VALUES($1,$2,'twin-a','1930','SEK',$3,'Företagskonto') RETURNING id`, [owner.companyId, otherId, accounts[0].iban])).rows[0].id
+
+      const refused = await refusal(move('1930'), chartsFor('1930', b.ledger_account))
+
+      expect(refused).toMatchObject({ code: '23505', message: 'CASH_ACCOUNT_LEDGER_CLAIMED', detail: {
+        ledger_account: '1930',
+        cash_account: { id: twin, name: 'Företagskonto', bank_name: 'Other bank', iban_last4: '0041', connection_live: true },
+      } })
+    })
+
+    it('names a manual row of another physical account', async () => {
+      const other = await seededRow('SE0000000000000000000049')
+      await client.query("UPDATE cash_accounts SET name='Sparkonto' WHERE id=$1", [other])
+
+      const refused = await refusal(move('1930'), chartsFor('1930', b.ledger_account))
+
+      expect(refused).toMatchObject({ code: '23514', message: 'CASH_ACCOUNT_KEEPER_IDENTITY_CONFLICT', detail: {
+        ledger_account: '1930', cash_account: { id: other, name: 'Sparkonto', iban_last4: '0049', connection_live: false },
+      } })
+    })
+  })
 })
