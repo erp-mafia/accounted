@@ -318,7 +318,8 @@ export default function CustomerForm({
       // NULL means never configured and lets a migration enrich the row.
       // Empty values on an existing row are explicit clears and survive sync.
       contact_person: data.contact_person?.trim() || (isEditing ? '' : null),
-      email: data.email || undefined,
+      // An empty field on an existing customer is a clear; the API stores NULL.
+      email: data.email || (isEditing ? '' : undefined),
       personal_number: data.personal_number || null,
       invoice_email_cc_addresses: ccText
         ? parseInvoiceRecipientText(ccText)

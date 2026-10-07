@@ -1501,7 +1501,9 @@ export const UpdateCustomerSchema = z.object({
   customer_type: CustomerTypeSchema.optional(),
   customer_number: z.string().trim().max(32).nullable().optional(),
   contact_person: z.string().trim().max(200).nullable().optional(),
-  email: z.string().email('Invalid email address').optional(),
+  // Optional on the customer, so a cleared field is a clear: '' and null both
+  // store NULL. MCP and v1 PATCH reuse this shape.
+  email: emptyStringAsNull(z.string().email('Invalid email address')),
   phone: z.string().optional(),
   invoice_email_cc_addresses: invoiceEmailAddressList.nullable().optional(),
   invoice_email_bcc_addresses: invoiceEmailAddressList.nullable().optional(),

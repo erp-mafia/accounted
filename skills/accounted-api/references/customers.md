@@ -392,7 +392,7 @@ Request body:
   customer_type?: "individual" | "swedish_business" | "eu_business" | "non_eu_business",
   customer_number?: string | null,
   contact_person?: string | null,
-  email?: string,
+  email?: string | null,
   phone?: string,
   invoice_email_cc_addresses?: string[] | null,
   invoice_email_bcc_addresses?: string[] | null,

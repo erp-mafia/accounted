@@ -8429,7 +8429,7 @@ export const tools: McpTool[] = [
           description: 'Changing an individual customer to a business type clears its stored personal number.',
         },
         customer_number: { type: ['string', 'null'], maxLength: 32, description: 'Null or empty string clears the customer number.' },
-        email: { type: 'string', format: 'email' },
+        email: { type: ['string', 'null'], format: 'email', description: 'Null clears the email.' },
         phone: { type: 'string' },
         address_line1: { type: 'string' },
         address_line2: { type: 'string' },

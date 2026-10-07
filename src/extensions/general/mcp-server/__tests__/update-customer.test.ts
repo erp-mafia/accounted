@@ -168,6 +168,29 @@ describe('gnubok_update_customer: validation and staging', () => {
     })
     expect(supabase.from).toHaveBeenNthCalledWith(2, 'pending_operations')
   })
+
+  it('exposes email as nullable for clearing', () => {
+    const properties = tool().inputSchema.properties as Record<string, Record<string, unknown>>
+    expect(properties.email).toMatchObject({ type: ['string', 'null'] })
+  })
+
+  it.each([null, ''])('stages %j as an email clear to null', async (email) => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: currentCustomer() })
+    enqueue({ data: { id: 'op-email-clear' } })
+
+    const result = (await tool().execute(
+      { customer_id: CUSTOMER_ID, email },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: { proposed: Record<string, unknown> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.proposed.email).toBeNull()
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: { changes: Record<string, unknown> } }
+    expect(inserted.params.changes).toEqual({ email: null })
+  })
 })
 
 // ── personal_number (#1876) ───────────────────────────────────────────
