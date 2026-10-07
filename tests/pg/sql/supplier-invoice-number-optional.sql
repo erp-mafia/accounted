@@ -73,18 +73,21 @@ BEGIN
   SELECT count(*) INTO n FROM supplier_invoices WHERE company_id=company;
   ASSERT n=2,'a repeated commit inserted the number-less invoice again';
 
-  -- 4. Unchanged: a reused number (an autogiro reference typed as the invoice
-  -- number) imports once, and a later invoice with it is named, not stored.
+  -- 4. A numbered invoice imports with its number, and another record with
+  -- the same number and date but another amount is named, not stored. (The
+  -- same number on another date is covered by
+  -- provider-migration-reused-supplier-number.sql, 20261006184512.)
   rec:=jsonb_build_object('id',ch_c,'party_source_id','sup-1','party',party,
     'row',sup_row||jsonb_build_object('supplier_invoice_number','AG-1234'),'items','[]'::jsonb);
   PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(rec));
   ASSERT (SELECT state='imported' FROM migration_job_chunks WHERE id=ch_c),'numbered supplier invoice was not imported';
   rec:=jsonb_build_object('id',ch_d,'party_source_id','sup-1','party',party,
-    'row',sup_row||jsonb_build_object('supplier_invoice_number','AG-1234','invoice_date','2026-10-01','due_date','2026-10-31'),
+    'row',sup_row||jsonb_build_object('supplier_invoice_number','AG-1234','total',1300,'total_sek',1300,
+      'subtotal',1300,'subtotal_sek',1300,'remaining_amount',1300),
     'items','[]'::jsonb);
   PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(rec));
   ASSERT (SELECT state='needs_attention' AND error_code='MIGRATION_INVOICE_NUMBER_TAKEN' FROM migration_job_chunks
-    WHERE id=ch_d),'a reused supplier number is no longer named MIGRATION_INVOICE_NUMBER_TAKEN';
+    WHERE id=ch_d),'the same supplier number and date is no longer named MIGRATION_INVOICE_NUMBER_TAKEN';
   SELECT count(*) INTO n FROM supplier_invoices WHERE company_id=company;
   ASSERT n=3,'supplier invoices were duplicated or dropped';
   RESET ROLE;

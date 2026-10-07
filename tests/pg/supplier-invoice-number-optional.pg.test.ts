@@ -15,7 +15,7 @@ import { getClient, getPool } from '@/tests/pg/setup'
  *     (idx_supplier_invoices_company_supplier_number): a live duplicate from
  *     the same supplier still collides, number-less invoices never do.
  *   - The provider import RPC stores a number-less supplier invoice (the
- *     crm#1039 records), and keeps naming a reused number
+ *     crm#1039 records), and keeps naming the same number on the same date
  *     MIGRATION_INVOICE_NUMBER_TAKEN.
  */
 
@@ -155,7 +155,7 @@ describe('supplier_invoices.supplier_invoice_number is optional (crm#1039)', () 
 })
 
 describe('provider import of a supplier invoice without a number (crm#1039)', () => {
-  it('stores it with a NULL number and keeps naming a reused number', async () => {
+  it('stores it with a NULL number and keeps naming the same number on the same date', async () => {
     const client = await getClient()
     try {
       const sql = readFileSync(

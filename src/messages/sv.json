@@ -7125,7 +7125,7 @@
     "ext_arcim_review_result_kicker": "Behöver ses över",
     "ext_arcim_review_result_lede": "De här posterna importerades inte eller kunde inte kopplas automatiskt.",
     "ext_arcim_review_result_lede_accepted": "Importen godkändes {date} med de här posterna kvar. De importerades inte eller kunde inte kopplas automatiskt.",
-    "ext_arcim_review_reason_number_taken": "Fakturanumret finns redan på en annan faktura i Accounted, med annat datum eller belopp. Inget skrevs över.",
+    "ext_arcim_review_reason_number_taken": "Fakturanumret finns redan på en annan faktura i Accounted som inte stämmer med den här. Inget skrevs över.",
     "ext_arcim_review_reason_number_missing": "Leverantörsfakturan saknar fakturanummer hos {provider}. Fortsätt importen, så kommer den in utan nummer.",
     "ext_arcim_review_reason_missing_value": "Posten saknar en uppgift som Accounted kräver.",
     "ext_arcim_review_reason_invalid_value": "Posten har ett värde som Accounted inte kan spara.",

@@ -7125,7 +7125,7 @@
     "ext_arcim_review_result_kicker": "Needs review",
     "ext_arcim_review_result_lede": "These records were not imported or could not be linked automatically.",
     "ext_arcim_review_result_lede_accepted": "The import was accepted on {date} with these records left. They were not imported or could not be linked automatically.",
-    "ext_arcim_review_reason_number_taken": "The invoice number is already used by another invoice in Accounted, with a different date or amount. Nothing was overwritten.",
+    "ext_arcim_review_reason_number_taken": "The invoice number is already used by another invoice in Accounted that does not match this one. Nothing was overwritten.",
     "ext_arcim_review_reason_number_missing": "The supplier invoice has no invoice number in {provider}. Continue the import and it comes in without one.",
     "ext_arcim_review_reason_missing_value": "The record lacks a value Accounted requires.",
     "ext_arcim_review_reason_invalid_value": "The record has a value Accounted cannot store.",

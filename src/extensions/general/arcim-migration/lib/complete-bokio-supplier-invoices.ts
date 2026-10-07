@@ -20,6 +20,8 @@ export interface BokioSupplierSnapshot {
 }
 export interface BokioSupplierRow {
   id: string; user_id: string; supplier_id: string; supplier_invoice_number: string | null; invoice_date: string
+  /** An OCR, or the reused source number the import stored here instead of supplier_invoice_number. */
+  payment_reference?: string | null
   total: number; total_sek: number | null; subtotal: number; vat_amount: number; currency: string; is_credit_note: boolean
   status: string; paid_at: string | null; created_at: string; updated_at: string; document_id: string | null
   registration_journal_entry_id: string | null; payment_journal_entry_id: string | null
@@ -74,7 +76,14 @@ export function matchBokioSupplierInvoices(rows: BokioSupplierRow[], invoices: S
     return supplier ? identity(supplier, dto.invoiceNumber, dto.issueDate, dto.currencyCode,
       Math.abs(dto.legalMonetaryTotal.payableAmount.value), dto.invoiceTypeCode === '381') : undefined
   }
-  const localKey = (row: BokioSupplierRow) => identity(row.supplier_id, row.supplier_invoice_number, row.invoice_date, row.currency, row.total, row.is_credit_note)
+  // A supplier number the source reused on every invoice is stored without a
+  // number, the source number kept as payment_reference
+  // (commit_provider_migration_records, crm#1039). Only the exact source map
+  // may vouch for such a row: it never joins on the number alone.
+  const localKey = (row: BokioSupplierRow, mappedSource?: SupplierInvoiceDto) => identity(row.supplier_id,
+    row.supplier_invoice_number ?? (mappedSource?.invoiceNumber && row.payment_reference === mappedSource.invoiceNumber
+      ? mappedSource.invoiceNumber : null),
+    row.invoice_date, row.currency, row.total, row.is_credit_note)
   const sourceByKey = unique(invoices, dto => dto.invoiceNumber ? sourceKey(dto) : undefined)
   const localByKey = unique(rows, row => row.supplier_invoice_number ? localKey(row) : undefined)
   const mappedTargets = new Set(mappings.filter(m => m.resource === 'supplierInvoices').map(m => m.target_id))
@@ -83,8 +92,9 @@ export function matchBokioSupplierInvoices(rows: BokioSupplierRow[], invoices: S
   for (const row of rows) {
     const mapping = mappedByTarget.get(row.id)
     if (mappedTargets.has(row.id) && !mapping) continue
-    const key = localKey(row)
-    const candidate = mapping ? sources.get(mapping.source_id) : key && localByKey.get(key)?.id === row.id ? sourceByKey.get(key) : undefined
+    const mappedSource = mapping ? sources.get(mapping.source_id) : undefined
+    const key = localKey(row, mappedSource)
+    const candidate = mapping ? mappedSource : key && localByKey.get(key)?.id === row.id ? sourceByKey.get(key) : undefined
     if (!key || !candidate || sources.get(candidate.id) !== candidate || sourceKey(candidate) !== key) continue
     if (mappings.some(m => m.resource === 'supplierInvoices' && m.source_id === candidate.id && m.target_id !== row.id)) continue
     result.set(row.id, candidate)
@@ -120,7 +130,7 @@ export async function completeBokioSupplierInvoices(options: CompleteBokioOption
       const accountKey = bokioAccountKey(snapshot.connection, consentId)
       const [rows, suppliers, mappings, progress] = await Promise.all([
         fetchAllRows<BokioSupplierRow>(({ from, to }) => queryInExecutionBudget(supabase.from('supplier_invoices')
-          .select('id,user_id,supplier_id,supplier_invoice_number,invoice_date,total,total_sek,subtotal,vat_amount,currency,is_credit_note,status,paid_at,created_at,updated_at,document_id,registration_journal_entry_id,payment_journal_entry_id,supplier_invoice_items(id,line_total,vat_amount)')
+          .select('id,user_id,supplier_id,supplier_invoice_number,payment_reference,invoice_date,total,total_sek,subtotal,vat_amount,currency,is_credit_note,status,paid_at,created_at,updated_at,document_id,registration_journal_entry_id,payment_journal_entry_id,supplier_invoice_items(id,line_total,vat_amount)')
           .eq('company_id', companyId).order('id').range(from, to))),
         fetchAllRows<Supplier>(({ from, to }) => queryInExecutionBudget(supabase.from('suppliers').select('id,name').eq('company_id', companyId).order('id').range(from, to))),
         fetchAllRows<SourceMapping>(({ from, to }) => queryInExecutionBudget(supabase.from('migration_source_records').select('resource,source_id,target_id')
