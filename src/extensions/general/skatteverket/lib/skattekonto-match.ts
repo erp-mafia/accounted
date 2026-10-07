@@ -37,7 +37,7 @@ import {
 const DATE_WINDOW_DAYS = 14
 /** Most same-day events combined against one verifikat (tax + avgift + a correction or two). */
 const MAX_COMBINED_EVENTS = 4
-/** Same-day, same-sign open events considered for a combination; bounds the subset search. */
+/** Same-day open events considered in one combination search; bounds the subset search. */
 const MAX_COMBINED_POOL = 10
 /**
  * Only a live verifikat carries an event: a reversed one is gone and a
@@ -85,8 +85,10 @@ export interface SkattekontoMatchCandidate {
   matched_via_entry_total?: boolean
   /**
    * Present when this row settles the verifikat only TOGETHER with these
-   * other open Skatteverket rows (same day, same sign, amounts summing
-   * exactly to the 1630 movement, crm#128). Linking links all of them.
+   * other open Skatteverket rows of the same day, their amounts summing
+   * exactly to the 1630 movement: rows of one sign (crm#128), or rows of
+   * both signs whose net it is, under the stricter mixed-group rules
+   * (crm#1004, see unambiguousCombinedMatches). Linking links all of them.
    */
   combined_with?: Array<{
     id: string
@@ -94,7 +96,7 @@ export interface SkattekontoMatchCandidate {
     transaktionstext: string
     belopp_skatteverket: number
   }>
-  /** Absolute sum of this row and combined_with: the 1630 amount the group settles. */
+  /** Absolute net of this row and combined_with: the 1630 amount the group settles. */
   combined_total?: number
   /**
    * Present when the verifikat already carries links to this many other rows
@@ -400,6 +402,79 @@ function subsets<T>(items: T[], minSize: number, maxSize: number): T[][] {
   return out
 }
 
+/** True when the amounts hold both a movement into the skattekonto and one out of it. */
+function mixesSigns(amounts: number[]): boolean {
+  return amounts.some(a => a > 0) && amounts.some(a => a < 0)
+}
+
+/**
+ * True when a proper, non-empty part of the group nets to exactly zero (öre).
+ * That part moves nothing on 1630, so the rest of the group settles the
+ * verifikat without it and the group is never the verifikat's explanation
+ * (crm#1004). On prod most same-day groups of both signs that hit a
+ * verifikat do so only through such a part: an inbetalning and the debit it
+ * paid, or a beslut that reverses a fee, next to the event the verifikat
+ * really carries. A group of one sign never has such a part.
+ */
+function hasZeroSumPart(amounts: number[]): boolean {
+  const ore = amounts.map(a => Math.round(a * 100))
+  const whole = (1 << ore.length) - 1
+  for (let part = 1; part < whole; part++) {
+    let sum = 0
+    for (let i = 0; i < ore.length; i++) if (part & (1 << i)) sum += ore[i]
+    if (sum === 0) return true
+  }
+  return false
+}
+
+type CombinableRow = {
+  id: string
+  transaktionsdatum: string
+  transaktionstext?: string | null
+  belopp_skatteverket: number | string
+}
+
+/**
+ * The groups of 2 to MAX_COMBINED_EVENTS rows of `pool` (open rows of one
+ * day) whose amounts together settle a verifikat `canTake` allows, inside
+ * combinedMatchWindow, keeping only the unambiguous ones: a group is dropped
+ * when another group shares one of its rows or its verifikat. A group with a
+ * part netting to zero (hasZeroSumPart) is never a match, so it never
+ * competes either.
+ */
+function unambiguousCombinedMatches<R extends CombinableRow>(
+  pool: R[],
+  views: EntryView[],
+  canTake: (view: EntryView) => boolean,
+): Array<{ rows: R[]; view: EntryView }> {
+  // A group's window never reaches past the widest window of one of its
+  // rows, so the verifikat a group can settle are read off once per pool.
+  let from = ''
+  let to = ''
+  for (const r of pool) {
+    const w = combinedMatchWindow(r.transaktionsdatum, [r])
+    if (!from || w.from < from) from = w.from
+    if (!to || w.to > to) to = w.to
+  }
+  const reachable = views.filter(v => canTake(v) && v.entry.entry_date >= from && v.entry.entry_date <= to)
+  const found: Array<{ rows: R[]; view: EntryView }> = []
+  for (const subset of subsets(pool, 2, MAX_COMBINED_EVENTS)) {
+    const amounts = subset.map(r => Number(r.belopp_skatteverket))
+    if (hasZeroSumPart(amounts)) continue
+    const window = combinedMatchWindow(subset[0].transaktionsdatum, subset)
+    for (const view of reachable) {
+      if (view.entry.entry_date < window.from || view.entry.entry_date > window.to) continue
+      if (groupSettlesEntry(view.lines, amounts).ok) found.push({ rows: subset, view })
+    }
+  }
+  return found.filter(m => {
+    const rowIds = new Set(m.rows.map(r => r.id))
+    return !found.some(
+      o => o !== m && (o.view.entry.id === m.view.entry.id || o.rows.some(r => rowIds.has(r.id))),
+    )
+  })
+}
+
 /**
  * Bulk-enrich a list of unmatched SKV rows with a `match_suggestion` field
  * pointing to a "high confidence" candidate verifikat.
@@ -419,7 +494,14 @@ function subsets<T>(items: T[], minSize: number, maxSize: number): T[][] {
  *      combinedMatchWindow. A group is proposed only when neither the group's
  *      rows nor the verifikat appear in any other combination. Every row of
  *      the group gets the same suggestion, with `combined_with` naming the
- *      others; accepting it links them together or not at all.
+ *      others; accepting it links them together or not at all. A second
+ *      round then takes each day's remaining rows of BOTH signs (crm#1004:
+ *      an inbetalning booked net of the debits it paid, slutlig skatt net of
+ *      tillgodoförd preliminärskatt, a beslut netted into its AGI line) and
+ *      proposes a group only when it mixes signs, has no part netting to
+ *      zero (hasZeroSumPart) and holds no row that settles a verifikat on
+ *      its own. Same-sign groups still compete in that round, so a mixed
+ *      group never takes a row or verifikat another group also explains.
  *   4. Interchangeable rows (accounted#1300): rows still without a
  *      suggestion that are identical (same date, amount, sign and text) and
  *      share the same candidates nobody else wants are assigned one to one,
@@ -607,61 +689,58 @@ export async function findMatchSuggestionsBulk(
 
   // Combined pass, one date group at a time in date order so an earlier
   // group's verifikat is taken before a later group's wider window sees it.
-  const groups = new Map<string, typeof ordered>()
-  for (const row of ordered) {
-    if (suggestions.has(row.id)) continue
-    const amount = Number(row.belopp_skatteverket)
-    if (!amount) continue
-    const key = `${row.transaktionsdatum}|${amount > 0 ? '+' : '-'}`
-    const list = groups.get(key) ?? []
-    list.push(row)
-    groups.set(key, list)
-  }
-  for (const pool of groups.values()) {
-    if (pool.length < 2 || pool.length > MAX_COMBINED_POOL) continue
-    const found: Array<{ rows: typeof pool; view: EntryView }> = []
-    for (const subset of subsets(pool, 2, MAX_COMBINED_EVENTS)) {
-      const window = combinedMatchWindow(subset[0].transaktionsdatum, subset)
-      for (const view of entryViews.values()) {
-        if (usedEntries.has(view.entry.id) || view.linked.length > 0) continue
-        if (view.entry.entry_date < window.from || view.entry.entry_date > window.to) continue
-        const settles = groupSettlesEntry(view.lines, subset.map(r => Number(r.belopp_skatteverket)))
-        if (settles.ok) found.push({ rows: subset, view })
-      }
+  // Round one groups each day's rows by sign (crm#128); round two takes each
+  // day's remaining rows of both signs and proposes only the mixed groups
+  // that pass the stricter rules (crm#1004, see the doc comment above).
+  const viewList = Array.from(entryViews.values())
+  const canTake = (view: EntryView) => !usedEntries.has(view.entry.id) && view.linked.length === 0
+  const amountsOf = (rows: typeof ordered) => rows.map(r => Number(r.belopp_skatteverket))
+  // A row with a verifikat of its own is booked separately (or ambiguous):
+  // never part of a net line.
+  const settlesAlone = (row: (typeof ordered)[number]) => (candidatesByRow.get(row.id) ?? []).length > 0
+  for (const mixed of [false, true]) {
+    const groups = new Map<string, typeof ordered>()
+    for (const row of ordered) {
+      if (suggestions.has(row.id)) continue
+      const amount = Number(row.belopp_skatteverket)
+      if (!amount) continue
+      const key = mixed ? row.transaktionsdatum : `${row.transaktionsdatum}|${amount > 0 ? '+' : '-'}`
+      const list = groups.get(key) ?? []
+      list.push(row)
+      groups.set(key, list)
     }
-    for (const m of found) {
-      const rowIds = new Set(m.rows.map(r => r.id))
-      const contested = found.some(
-        o =>
-          o !== m &&
-          (o.view.entry.id === m.view.entry.id || o.rows.some(r => rowIds.has(r.id))),
-      )
-      if (contested) continue
-      const e = m.view.entry
-      const total = roundOre(m.rows.reduce((s, r) => s + Number(r.belopp_skatteverket), 0))
-      for (const row of m.rows) {
-        suggestions.set(row.id, {
-          journal_entry_id: e.id,
-          voucher_number: e.voucher_number,
-          voucher_series: e.voucher_series,
-          entry_date: e.entry_date,
-          description: e.description,
-          status: e.status,
-          matched_amount: roundOre(Math.abs(Number(row.belopp_skatteverket))),
-          matched_side: expectedSide(Number(row.belopp_skatteverket)),
-          matched_via_agi_period: periodIdsByRow.get(row.id)?.has(e.id) ?? false,
-          combined_with: m.rows
-            .filter(o => o.id !== row.id)
-            .map(o => ({
-              id: o.id,
-              transaktionsdatum: o.transaktionsdatum,
-              transaktionstext: o.transaktionstext ?? '',
-              belopp_skatteverket: Number(o.belopp_skatteverket),
-            })),
-          combined_total: Math.abs(total),
-        })
+    for (const pool of groups.values()) {
+      if (pool.length < 2 || pool.length > MAX_COMBINED_POOL) continue
+      // A day of one sign was searched in full by round one.
+      if (mixed && !mixesSigns(amountsOf(pool))) continue
+      for (const m of unambiguousCombinedMatches(pool, viewList, canTake)) {
+        if (mixed && (!mixesSigns(amountsOf(m.rows)) || m.rows.some(settlesAlone))) continue
+        const e = m.view.entry
+        const total = roundOre(m.rows.reduce((s, r) => s + Number(r.belopp_skatteverket), 0))
+        for (const row of m.rows) {
+          suggestions.set(row.id, {
+            journal_entry_id: e.id,
+            voucher_number: e.voucher_number,
+            voucher_series: e.voucher_series,
+            entry_date: e.entry_date,
+            description: e.description,
+            status: e.status,
+            matched_amount: roundOre(Math.abs(Number(row.belopp_skatteverket))),
+            matched_side: expectedSide(Number(row.belopp_skatteverket)),
+            matched_via_agi_period: periodIdsByRow.get(row.id)?.has(e.id) ?? false,
+            combined_with: m.rows
+              .filter(o => o.id !== row.id)
+              .map(o => ({
+                id: o.id,
+                transaktionsdatum: o.transaktionsdatum,
+                transaktionstext: o.transaktionstext ?? '',
+                belopp_skatteverket: Number(o.belopp_skatteverket),
+              })),
+            combined_total: Math.abs(total),
+          })
+        }
+        usedEntries.add(e.id)
       }
-      usedEntries.add(e.id)
     }
   }
 
@@ -748,9 +827,11 @@ function expectedSide(beloppSkatteverket: number): 'debit' | 'credit' {
  *   * a verifikat already linked to other rows that, with this row added,
  *     the group still settles (+/-14 days; crm#104);
  *   * a verifikat whose 1630 movement this row settles TOGETHER with other
- *     open same-day, same-sign rows (combinedMatchWindow; crm#128). The
- *     candidate names those rows in `combined_with` and linking it links all
- *     of them.
+ *     open same-day, same-sign rows (combinedMatchWindow; crm#128), or,
+ *     when no such group does, together with open same-day rows of both
+ *     signs whose net it is, under the mixed-group rules of
+ *     findMatchSuggestionsBulk (crm#1004). The candidate names those rows in
+ *     `combined_with` and linking it links all of them.
  * Cancelled verifikat (storno pairs) are never listed.
  *
  * Returns up to 25 candidates ordered by AGI-period match, then date proximity
@@ -912,6 +993,50 @@ export function clusterProbesByWindow<T extends LedgerTwinProbe>(probes: T[]): T
   return clusters
 }
 
+/**
+ * The mixed-sign groups (crm#1004) of the probes' days, by the rules of the
+ * proposal pass in findMatchSuggestionsBulk: per day, open rows (and the
+ * probes) of both signs whose net settles an unlinked verifikat, with no
+ * part netting to zero, no row that settles a verifikat on its own, and no
+ * other group of the day competing for its rows or its verifikat. Keyed
+ * `${rowId}|${journalEntryId}`; the value is the group's other rows.
+ */
+function mixedGroupCompanions(
+  probes: LedgerTwinProbe[],
+  openByDate: ReadonlyMap<string, readonly LedgerTwinProbe[]>,
+  views: ReadonlyMap<string, EntryView>,
+): Map<string, LedgerTwinProbe[]> {
+  const out = new Map<string, LedgerTwinProbe[]>()
+  const viewList = Array.from(views.values())
+  const amountsOf = (rows: LedgerTwinProbe[]) => rows.map(r => Number(r.belopp_skatteverket))
+  // A row with a verifikat of its own (alone, or joining the rows already
+  // linked to it) is booked separately: never part of a net line.
+  const settlesAlone = (r: LedgerTwinProbe) => {
+    const belopp = Number(r.belopp_skatteverket)
+    const from = addDays(r.transaktionsdatum, -DATE_WINDOW_DAYS)
+    const to = addDays(r.transaktionsdatum, DATE_WINDOW_DAYS)
+    return viewList.some(
+      v =>
+        v.entry.entry_date >= from &&
+        v.entry.entry_date <= to &&
+        groupSettlesEntry(v.lines, [...v.linked, belopp]).ok,
+    )
+  }
+  for (const date of new Set(probes.map(p => p.transaktionsdatum))) {
+    const byId = new Map<string, LedgerTwinProbe>()
+    for (const r of [...(openByDate.get(date) ?? []), ...probes.filter(p => p.transaktionsdatum === date)]) {
+      if (Number(r.belopp_skatteverket)) byId.set(r.id, r)
+    }
+    const pool = Array.from(byId.values())
+    if (pool.length < 2 || pool.length > MAX_COMBINED_POOL || !mixesSigns(amountsOf(pool))) continue
+    for (const m of unambiguousCombinedMatches(pool, viewList, v => v.linked.length === 0)) {
+      if (!mixesSigns(amountsOf(m.rows)) || m.rows.some(settlesAlone)) continue
+      for (const r of m.rows) out.set(`${r.id}|${m.view.entry.id}`, m.rows.filter(o => o.id !== r.id))
+    }
+  }
+  return out
+}
+
 /** findLedgerTwinCandidates for one cluster of probes: one read of their joint window. */
 async function searchLedgerTwinWindow(
   supabase: SupabaseClient,
@@ -1019,6 +1144,7 @@ async function searchLedgerTwinWindow(
   }
 
   const views = buildEntryViews(typedRows, linked, cancelled)
+  const mixedCompanions = mixedGroupCompanions(probes, openByDate, views)
 
   for (const p of probes) {
     const belopp = Number(p.belopp_skatteverket)
@@ -1034,8 +1160,8 @@ async function searchLedgerTwinWindow(
 
     // Open same-day, same-sign rows that may settle a verifikat together
     // with this one: the first MAX_COMBINED_POOL other open same-sign rows of
-    // the day (an opposite-sign row can never be part of the group, so it
-    // must not take a slot).
+    // the day (an opposite-sign row joins a group only through the stricter
+    // mixed-group search, mixedCompanions, so it must not take a slot here).
     const companions = (openByDate.get(p.transaktionsdatum) ?? [])
       .filter(c => c.id !== p.id)
       .filter(c => Math.sign(Number(c.belopp_skatteverket)) === Math.sign(belopp) && belopp !== 0)
@@ -1071,23 +1197,26 @@ async function searchLedgerTwinWindow(
         }
       }
       if (view.linked.length > 0) continue
-      for (const subset of companionSubsets) {
-        const window = combinedMatchWindow(p.transaktionsdatum, [p, ...subset])
-        if (e.entry_date < window.from || e.entry_date > window.to) continue
-        const amounts = [belopp, ...subset.map(c => Number(c.belopp_skatteverket))]
-        if (!groupSettlesEntry(view.lines, amounts).ok) continue
-        candidates.push({
-          ...base,
-          combined_with: subset.map(c => ({
-            id: c.id,
-            transaktionsdatum: c.transaktionsdatum,
-            transaktionstext: c.transaktionstext ?? '',
-            belopp_skatteverket: Number(c.belopp_skatteverket),
-          })),
-          combined_total: Math.abs(roundOre(amounts.reduce((s, a) => s + a, 0))),
-        })
-        break // smallest group first; one proposal per verifikat
-      }
+      // Smallest same-sign group first, else the day's mixed-sign group
+      // (crm#1004); one proposal per verifikat.
+      const group: LedgerTwinProbe[] | undefined =
+        companionSubsets.find(subset => {
+          const window = combinedMatchWindow(p.transaktionsdatum, [p, ...subset])
+          if (e.entry_date < window.from || e.entry_date > window.to) return false
+          return groupSettlesEntry(view.lines, [belopp, ...subset.map(c => Number(c.belopp_skatteverket))]).ok
+        }) ?? mixedCompanions.get(`${p.id}|${e.id}`)
+      if (!group) continue
+      const amounts = [belopp, ...group.map(c => Number(c.belopp_skatteverket))]
+      candidates.push({
+        ...base,
+        combined_with: group.map(c => ({
+          id: c.id,
+          transaktionsdatum: c.transaktionsdatum,
+          transaktionstext: c.transaktionstext ?? '',
+          belopp_skatteverket: Number(c.belopp_skatteverket),
+        })),
+        combined_total: Math.abs(roundOre(amounts.reduce((s, a) => s + a, 0))),
+      })
     }
 
     // Order: AGI-period match first, then date proximity, then voucher number desc.

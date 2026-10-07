@@ -4597,7 +4597,7 @@
     "title": "Match against existing voucher",
     "searching": "Searching candidates…",
     "no_candidates_title": "No vouchers with a matching line on account 1630.",
-    "no_candidates_help": "The candidate must have the same amount and side on 1630 within ±14 days of the transaction date. Several events on the same day can be linked to one voucher when their sum exactly equals the 1630 line; for the employer declaration, vouchers dated in the declaration month also count. Vouchers reversed by an opposite voucher are not shown. Use <strong>Post</strong> to create a new voucher instead.",
+    "no_candidates_help": "The candidate must have the same amount and side on 1630 within ±14 days of the transaction date. Several events on the same day can be linked to one voucher when their sum exactly equals the 1630 line, also when positive and negative amounts offset each other; for the employer declaration, vouchers dated in the declaration month also count. Vouchers reversed by an opposite voucher are not shown. Use <strong>Post</strong> to create a new voucher instead.",
     "th_date": "Date",
     "th_voucher": "Voucher",
     "th_description": "Description",

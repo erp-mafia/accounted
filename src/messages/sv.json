@@ -4597,7 +4597,7 @@
     "title": "Matcha mot befintligt verifikat",
     "searching": "Söker kandidater…",
     "no_candidates_title": "Hittade inga verifikat med en matchande rad på konto 1630.",
-    "no_candidates_help": "Kandidaten måste ha samma belopp och sida på 1630 inom ±14 dagar från transaktionsdatumet. Flera händelser samma dag kan kopplas till ett verifikat när summan exakt motsvarar 1630-raden; för arbetsgivardeklarationen räknas även verifikat daterade i deklarationsmånaden. Verifikat som har återförts med ett motsatt verifikat visas inte. Använd <strong>Bokför</strong> för att skapa ett nytt verifikat istället.",
+    "no_candidates_help": "Kandidaten måste ha samma belopp och sida på 1630 inom ±14 dagar från transaktionsdatumet. Flera händelser samma dag kan kopplas till ett verifikat när summan exakt motsvarar 1630-raden, även när plus- och minusbelopp räknas mot varandra; för arbetsgivardeklarationen räknas även verifikat daterade i deklarationsmånaden. Verifikat som har återförts med ett motsatt verifikat visas inte. Använd <strong>Bokför</strong> för att skapa ett nytt verifikat istället.",
     "th_date": "Datum",
     "th_voucher": "Verifikat",
     "th_description": "Beskrivning",

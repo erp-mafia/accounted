@@ -64,6 +64,12 @@ describe('groupSettlesEntry', () => {
   it('maps several rows onto several lines (a combined AGI line plus a payment)', () => {
     expect(groupSettlesEntry([l(12225, 0), l(0, 12225)], [12225, -4521, -7704])).toEqual({ ok: true, via: 'lines' })
   })
+  it('settles a net line from rows of both signs, on the side of the net, to the öre (crm#1004)', () => {
+    expect(groupSettlesEntry([l(7775, 0), l(0, 20000, '1930')], [20000, -4521, -7704])).toEqual({ ok: true, via: 'line' })
+    expect(groupSettlesEntry([l(0, 3234.56)], [-61234.56, 58000])).toEqual({ ok: true, via: 'line' })
+    expect(groupSettlesEntry([l(0, 7775)], [20000, -4521, -7704]).ok).toBe(false)
+    expect(groupSettlesEntry([l(7775.01, 0)], [20000, -4521, -7704]).ok).toBe(false)
+  })
   it('rejects an empty group and rows with an unreadable amount', () => {
     expect(groupSettlesEntry([l(5000, 0)], []).ok).toBe(false)
     expect(groupSettlesEntry([l(5000, 0)], [Number.NaN, 5000]).ok).toBe(false)
