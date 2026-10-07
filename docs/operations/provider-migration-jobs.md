@@ -29,6 +29,15 @@ candidates in different batches cannot each consume the same voucher.
 - `POST .../run` nudges a job. `POST .../retry` resumes records needing attention.
   Both take `jobId`. Retry can also take a renewed `consentId`; the source account
   must match. These routes use the extension dispatcher’s normal authorization.
+- A finished job whose records did not all succeed stops for review: phase
+  `completed`, state `needs_attention`. The wizard lists each record with its
+  reason, read from the record's own snapshot and receipt. `POST .../accept`
+  (`jobId`) finishes it through `accept_provider_migration_job`: the job becomes
+  `completed`, `review_accepted_at`/`review_accepted_by` say who accepted it, and
+  the records keep their state and code, so the result keeps listing them.
+  Retry re-queues only the failed records and notes each one's code in
+  `receipt.previous_error_code`; once every record fails again the same way the
+  wizard stops offering it. A job paused mid-run is resumed, never accepted.
 - The authenticated worker cron runs every minute in the hosted and generated
   self-hosted schedules. Each invocation stops at a 210-second budget. Its
   five-minute lease is reclaimed after a crash. Each record write is fenced by

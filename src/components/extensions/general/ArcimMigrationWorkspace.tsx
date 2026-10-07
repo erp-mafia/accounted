@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/use-toast'
-import { cn } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { AttnLine } from '@/components/ui/attn-line'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
@@ -273,7 +273,8 @@ import {
 import { canSkipMappingStep } from '@/extensions/general/arcim-migration/lib/mapping-step'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ProviderMigrationProgress from './ProviderMigrationProgress'
-import { MIGRATION_RESOURCES, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
+import ProviderMigrationIssues from './ProviderMigrationIssues'
+import { MIGRATION_RESOURCES, type ProviderMigrationIssue, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
 import {
@@ -2075,6 +2076,15 @@ const NEXT_STEPS: { title: string; sub: string }[] = [
   { title: 'Kontrollera kunder och leverantörer', sub: 'Verifiera kontaktuppgifter, organisationsnummer och bankinfo' },
 ]
 
+/** What an accepted provider import left for review, as its result lists it. */
+interface ProviderReviewResult {
+  issues: ProviderMigrationIssue[]
+  total: number
+  truncated: boolean
+  provider: string
+  acceptedAt: string | null
+}
+
 function ResultStep({
   provider,
   results,
@@ -2084,6 +2094,7 @@ function ResultStep({
   documentImportState,
   documentsOnly,
   theaterModel,
+  review,
   onDone,
   onRetry,
   onDiscoverDocuments,
@@ -2094,6 +2105,11 @@ function ResultStep({
   /** The source system, for the copy that differs per provider. */
   provider: string | null
   results: MigrationResults | null
+  /**
+   * Records an accepted provider import left out or could not link: listed
+   * here with their reasons, so finishing the import never hides them.
+   */
+  review: ProviderReviewResult | null
   sieResults: ImportResult[]
   /** Source fiscal years outside the selection: not fetched in this run. */
   omittedYears: SourceFiscalYear[]
@@ -2220,7 +2236,8 @@ function ResultStep({
   // real subscription problem to the bug tracker as a sync bug.
   const stepErrors = results?.stepErrors ?? []
   const apiFailed = stepErrors.length > 0
-  const nothingNew = sieResults.length === 0 && !entityImported && !apiFailed
+  const reviewCount = review?.issues.length ?? 0
+  const nothingNew = sieResults.length === 0 && !entityImported && !apiFailed && reviewCount === 0
 
   // ── The reveal: a serif verdict derived from the real results ──
   const fyCount = sieResults.length
@@ -2232,7 +2249,7 @@ function ResultStep({
         ? fyCount === 1
           ? `${totalJournalEntries.toLocaleString('sv-SE')} verifikationer är på plats.`
           : `${totalJournalEntries.toLocaleString('sv-SE')} verifikationer över ${fyCount} räkenskapsår är på plats.`
-        : (sieResults.length > 0 && !allSieSucceeded) || totalErrors > 0
+        : (sieResults.length > 0 && !allSieSucceeded) || totalErrors > 0 || reviewCount > 0
           ? 'Migreringen är klar, med anmärkningar.'
           : 'Migreringen är klar.'
 
@@ -2495,6 +2512,20 @@ function ResultStep({
         </section>
       )}
 
+      {/* ── Records the accepted provider import left for review ── */}
+      {review && reviewCount > 0 && (
+        <section className="space-y-3">
+          <SectionKicker>{t('ext_arcim_review_result_kicker')}</SectionKicker>
+          <p className="text-[13px] text-muted-foreground">
+            {review.acceptedAt
+              ? t('ext_arcim_review_result_lede_accepted', { date: formatDate(review.acceptedAt) })
+              : t('ext_arcim_review_result_lede')}
+          </p>
+          <ProviderMigrationIssues issues={review.issues} provider={review.provider}
+            total={review.total} truncated={review.truncated} />
+        </section>
+      )}
+
       <DocumentImportFollowUp
         state={documentImportState}
         onDiscover={onDiscoverDocuments}
@@ -2703,6 +2734,7 @@ export default function ArcimMigrationWorkspace({
   const reconnectJobRef = useRef<string | null>(null)
   const [latestJobId, setLatestJobId] = useState<string | null>(null)
   const [providerJobId, setProviderJobId] = useState<string | null>(null)
+  const [providerReview, setProviderReview] = useState<ProviderReviewResult | null>(null)
   const [migrationStep, setMigrationStep] = useState('')
   const [migrationProgress, setMigrationProgress] = useState(0)
   const [migrationResults, setMigrationResults] = useState<MigrationResults | null>(null)
@@ -2890,6 +2922,7 @@ export default function ArcimMigrationWorkspace({
     setConsentId(existingConsentId)
     setMigrationOptions(DEFAULT_OPTIONS)
     setMigrationResults(null)
+    setProviderReview(null)
     setSieImportResults([])
     setSieData(null)
     await loadPreview(existingConsentId)
@@ -3110,6 +3143,7 @@ export default function ArcimMigrationWorkspace({
     setConsentId(existingConsentId)
     setError(null)
     setMigrationResults(null)
+    setProviderReview(null)
     setSieImportResults([])
     setSieData(null)
     setTheaterModel(null)
@@ -3715,6 +3749,7 @@ export default function ArcimMigrationWorkspace({
     setSieData(null)
     setMigrationOptions(DEFAULT_OPTIONS)
     setMigrationResults(null)
+    setProviderReview(null)
     setSieImportResults([])
     dispatchDocumentImport({ type: 'reset' })
     setDocumentsOnly(false)
@@ -3747,6 +3782,10 @@ export default function ArcimMigrationWorkspace({
         }
       }
       setMigrationResults(previous => mergeMigrationResults(previous ?? {}, results))
+      setProviderReview(status.issues.length ? {
+        issues: status.issues, total: status.review.total, truncated: status.review.truncated,
+        provider: status.job.provider, acceptedAt: status.job.review_accepted_at ?? null,
+      } : null)
       setLatestJobId(status.job.id)
       setProviderJobId(null)
       setMigrationProgress(100)
@@ -3866,6 +3905,7 @@ export default function ArcimMigrationWorkspace({
           documentImportState={documentImportState}
           documentsOnly={documentsOnly}
           theaterModel={theaterModel}
+          review={providerReview}
           onDone={handleDone}
           onRetry={() => {
             setError(null)

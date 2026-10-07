@@ -96,6 +96,7 @@ const RETAINED = new Set([
   'sie_imports.user_id',
   'sie_imports.execution_actor_id',
   'migration_jobs.user_id', // Company import provenance and recovery.
+  'migration_jobs.review_accepted_by', // Who accepted an import with records left for review.
   'register_import_runs.user_id', // Who ran a customer/supplier/article import.
   'register_import_runs.undone_by', // Who undid it.
   'invoice_completion_work.user_id', // Company invoice recovery, no personal payloads.

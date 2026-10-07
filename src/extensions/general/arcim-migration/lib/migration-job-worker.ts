@@ -134,16 +134,36 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     && await hasPreNormalisationCreditNote(supabase, job, mapped.invoice, deadline)) {
     return { id: c.id, skip: 'creditNoteInOldShape' }
   }
+  // supplier_invoices.supplier_invoice_number is NOT NULL, so a new source
+  // invoice without a number (Bokio requires none) was refused by Postgres as
+  // a bare 23502 that no retry could change. Refuse it here by name instead,
+  // before the write, so the review can say what is missing and where to add
+  // it. One an earlier import already holds is adopted through its source
+  // record and never inserted, so it goes on as before.
+  if (c.resource === 'supplierInvoices' && !String(mapped.invoice.supplier_invoice_number ?? '').trim()
+    && !await sourceRecordExists(supabase, job, c, deadline)) {
+    return { id: c.id, error: 'MIGRATION_SUPPLIER_INVOICE_NUMBER_MISSING' }
+  }
   // The supplier mapper holds its rows to the header whether or not VAT was
   // established, and hands back none when they disagree: the same refusal as
   // the check below, which a supplier invoice with no established VAT used to
   // pass with the voucher's own 2440 row among its items.
   if (mapped.rowsMismatch) return { id: c.id, error: 'MIGRATION_ROWS_MISMATCH' }
+  // A sales invoice that arrives with no rows at all (its detail form has
+  // none, or the provider serves no detail form) is imported as its header,
+  // the shape the register import and the completion pass already handle:
+  // the invoice belongs in the customer register, nothing is fabricated, and
+  // the hourly completion pass fills rows the provider can still serve (one
+  // it cannot is its noLinesAtProvider). It used to be refused as missing
+  // lines, and every retry refused it again (PH 145). A row set the mapper
+  // dropped is still refused below.
+  const rowlessAtSource = c.resource === 'salesInvoices' && invoice.lines.length === 0
   // Bokio preview rows may be absent, carry no account (Bokio sends none), or
   // lack a defensible VAT allocation. Keep the invoice and let completion
   // revisit it without fabricating rows. Another provider's row set dropped
   // for a row with no account is refused here as missing lines.
-  if (!mapped.items.length && !(c.resource === 'supplierInvoices' && (invoice as SupplierInvoiceDto).supplierEvidence)) {
+  if (!mapped.items.length && !rowlessAtSource
+    && !(c.resource === 'supplierInvoices' && (invoice as SupplierInvoiceDto).supplierEvidence)) {
     return { id: c.id, error: 'MIGRATION_SOURCE_LINES_MISSING' }
   }
   // Use the same tolerance as the existing completion pass. Store no row set
@@ -175,7 +195,8 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     // cannot resolve is counted too, by provider_migration_counts, from the
     // row itself: credited_invoice_id still NULL once the link phase has run.
     warnings: { fxUnresolved: !!mapped.fxUnresolved, vatUnresolved: mapped.vatUnresolved,
-      creditNoteUnlinked: mapped.creditNoteUnlinked && !mapped.creditedInvoiceRef },
+      creditNoteUnlinked: mapped.creditNoteUnlinked && !mapped.creditedInvoiceRef,
+      ...(rowlessAtSource ? { linesMissing: true } : {}) },
   }
 }
 
@@ -206,6 +227,16 @@ async function hasPreNormalisationCreditNote(supabase: SupabaseClient, job: Prov
   if (!data?.length) return false
   log.warn('supplier credit note already imported in the pre-normalisation shape: left as is', { jobId: job.id, targetId: (data[0] as { id: string }).id })
   return true
+}
+
+/** Whether an earlier import already maps this source record to a row of ours. */
+async function sourceRecordExists(supabase: SupabaseClient, job: ProviderMigrationJob, c: MigrationChunk,
+  deadline: number): Promise<boolean> {
+  const { data, error } = await withinMigrationDeadline(supabase.from('migration_source_records').select('id')
+    .eq('company_id', job.company_id).eq('provider', job.provider).eq('account_key', job.account_key)
+    .eq('resource', c.resource).eq('source_id', c.source_id).limit(1), deadline)
+  if (error) throw new Error(error.message)
+  return !!data?.length
 }
 
 /** Where each register keeps a credit note's pointer at the invoice it credits. */
@@ -348,13 +379,20 @@ async function followupBatch(supabase: SupabaseClient, job: ProviderMigrationJob
       const report = linked.reports.find(r => r.invoiceId === c.target_id)
       if (!report) return { id: c.id, error: 'MIGRATION_LINK_RESULT_MISSING' }
       return { id: c.id, report, journal_entry_id: report.outcome === 'linked' ? report.journalEntryId : null,
-        ...(['ambiguous', 'amountMismatch'].includes(report.outcome) ? { error: 'MIGRATION_REGISTRATION_REVIEW' } : {}) }
+        // The review keeps what was found (receipt.review), so the wizard can
+        // say why the voucher was not linked instead of only that it was not.
+        ...(['ambiguous', 'amountMismatch'].includes(report.outcome) ? { error: 'MIGRATION_REGISTRATION_REVIEW',
+          review: { kind: 'registration', outcome: report.outcome,
+            bookedSek: report.bookedSek ?? null, expectedSek: report.expectedSek ?? null } } : {}) }
     })
   } else if (job.phase === 'reconcile') {
     const result = await reconcileSupplierInvoiceVouchers({ supabase, companyId: job.company_id, userId: job.user_id,
       dryRun: true, invoiceIds: chunks.map(c => c.target_id!), maxInvoices: BATCH_SIZE })
-    records = chunks.map(c => ({ id: c.id, payment: result.links.find(link => link.supplier_invoice_id === c.target_id) ?? null,
-      ...(result.review.some(review => review.supplier_invoice_id === c.target_id) ? { error: 'MIGRATION_PAYMENT_REVIEW' } : {}) }))
+    records = chunks.map(c => {
+      const review = result.review.find(item => item.supplier_invoice_id === c.target_id)
+      return { id: c.id, payment: result.links.find(link => link.supplier_invoice_id === c.target_id) ?? null,
+        ...(review ? { error: 'MIGRATION_PAYMENT_REVIEW', review: { kind: 'payment', reason: review.reason } } : {}) }
+    })
   } else records = chunks.map(c => ({ id: c.id }))
   await migrationRpc(supabase, job, 'commit_provider_migration_followup', { p_records: records }, deadline)
 }

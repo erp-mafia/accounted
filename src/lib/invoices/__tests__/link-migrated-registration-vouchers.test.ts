@@ -459,6 +459,9 @@ describe('linkMigratedRegistrationVouchers', () => {
     expect(result.linked).toBe(0)
     expect(result.reports[0].reason).toContain('EUR')
     expect(result.reports[0].reason).toContain('rate')
+    // The two amounts travel with the report, so the import review can show
+    // the difference without parsing the reason text.
+    expect(result.reports[0]).toMatchObject({ bookedSek: 11240, expectedSek: 11200 })
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
   })
 
@@ -512,6 +515,7 @@ describe('linkMigratedRegistrationVouchers', () => {
 
     expect(result.amountMismatch).toBe(1)
     expect(result.reports[0].reason).toContain('no SEK total')
+    expect(result.reports[0].bookedSek).toBeUndefined()
   })
 
   it('tolerates half an öre and sums several 244x lines (2440 + 2441)', async () => {

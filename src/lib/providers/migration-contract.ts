@@ -23,6 +23,14 @@ export interface ProviderMigrationJob {
   failures: number
   error_code: string | null
   fiscal_year_scope: { start: string; end: string } | null
+  /**
+   * When a member accepted the finished job with the records that still need
+   * attention (accept_provider_migration_job). Those records keep their
+   * state and code, so the result lists them. Absent before migration
+   * 20261005193000.
+   */
+  review_accepted_at?: string | null
+  review_accepted_by?: string | null
   created_at: string
   updated_at: string
 }
@@ -48,10 +56,78 @@ export interface MigrationResourceCounts {
   credit_notes_linked?: number
 }
 
+/** The phase a record stopped in. 'import' means it is not in Accounted at all. */
+export type MigrationIssuePhase = 'import' | 'link' | 'reconcile' | 'settle'
+
+/**
+ * How the user recognises a record: read from the record's own source
+ * snapshot or receipt when the status is read, never stored separately.
+ */
+export interface MigrationIssueLabel {
+  /** Invoice number, or the customer or supplier number. */
+  number: string | null
+  /** Invoice date, ISO day. */
+  date: string | null
+  /** Invoice total in its own currency. */
+  amount: number | null
+  currency: string | null
+  /** Customer or supplier name. */
+  party: string | null
+}
+
+/**
+ * What a review outcome found, as the worker stored it with the record
+ * (receipt.review, migration 20261005193000). Older records carry none.
+ */
+export interface MigrationIssueReview {
+  kind: 'registration' | 'payment'
+  /** Registration: 'ambiguous' or 'amountMismatch'. */
+  outcome?: string | null
+  /** Payment: the reconciliation's review reason. */
+  reason?: string | null
+  /** Registration amountMismatch: the voucher's AR/AP amount and the invoice's SEK total. */
+  bookedSek?: number | null
+  expectedSek?: number | null
+}
+
+/** One record that needs attention, with what the review needs to explain it. */
+export interface ProviderMigrationIssue {
+  id: string
+  resource: MigrationResource
+  source_id: string
+  error_code: string
+  error_phase: MigrationIssuePhase | null
+  /** The record is in Accounted: only its voucher link or payment check stopped. */
+  imported: boolean
+  /** The last retry ended with this same code: retrying again alone changes nothing. */
+  repeated: boolean
+  label: MigrationIssueLabel | null
+  /** The booking voucher the provider named, for a voucher-link review. */
+  voucher: { series: string | null; number: number } | null
+  review: MigrationIssueReview | null
+}
+
+/** Whole-job facts for the review: what the user can do next. */
+export interface ProviderMigrationReview {
+  /** Records that need attention in the whole job. */
+  total: number
+  /** Every record has an outcome and no worker holds the job: it can be accepted. */
+  acceptable: boolean
+  /**
+   * The last retry changed nothing: every record that needs attention failed
+   * again with the same code, and none of them failed for a passing reason.
+   * A further retry would loop, so the wizard offers acceptance instead.
+   */
+  unchanged: boolean
+  /** Fewer records are listed than need attention. */
+  truncated: boolean
+}
+
 export interface ProviderMigrationStatus {
   job: ProviderMigrationJob
   counts: MigrationResourceCounts[]
-  issues: { id: string; resource: MigrationResource; source_id: string; error_code: string }[]
+  issues: ProviderMigrationIssue[]
+  review: ProviderMigrationReview
 }
 
 export function migrationProgress(status: ProviderMigrationStatus): number {
@@ -79,4 +155,109 @@ export function migrationIssueKind(code: string | null): 'connection' | 'access'
   if (code?.includes('ROWS') || code?.includes('LINES')) return 'lines'
   if (code?.includes('TOO_LARGE')) return 'size'
   return 'retry'
+}
+
+/**
+ * Record-level codes a plain retry can clear on its own: a provider detail
+ * fetch that ran out of attempts, or a write that lost to a concurrent one
+ * (serialization failure, deadlock, lock or statement timeout). Every other
+ * code is a verdict on the record's data, and the same data gets the same
+ * verdict on every retry.
+ */
+const TRANSIENT_ISSUE_CODES = new Set([
+  'MIGRATION_DETAIL_RETRY', 'MIGRATION_RETRY', 'MIGRATION_LINK_RESULT_MISSING',
+  '40001', '40P01', '55P03', '57014',
+])
+
+export function isTransientIssueCode(code: string | null | undefined): boolean {
+  return !!code && TRANSIENT_ISSUE_CODES.has(code)
+}
+
+/** Why one record needs attention, in the terms the review explains it in. */
+export type MigrationIssueReason =
+  | 'number_taken'
+  | 'number_missing'
+  | 'missing_value'
+  | 'invalid_value'
+  | 'ambiguous_match'
+  | 'party_ambiguous'
+  | 'party_changed'
+  | 'source_id_missing'
+  | 'changed'
+  | 'rows_mismatch'
+  | 'lines_missing'
+  | 'too_large'
+  | 'temporary'
+  | 'registration_amount'
+  | 'registration_ambiguous'
+  | 'registration_review'
+  | 'voucher_unavailable'
+  | 'payment_review'
+  | 'source_check'
+  | 'connection'
+  | 'unknown'
+
+/**
+ * Map a record's stored code (and the review detail stored with it) to the
+ * reason the wizard explains. Codes are what the worker and its RPCs write
+ * into migration_job_chunks.error_code: a named MIGRATION_ code, a named
+ * provider code, or a bare SQLSTATE when Postgres refused the row.
+ */
+export function migrationIssueReason(issue: Pick<ProviderMigrationIssue, 'error_code' | 'review'>): MigrationIssueReason {
+  const code = issue.error_code
+  if (isTransientIssueCode(code)) return 'temporary'
+  switch (code) {
+    case 'MIGRATION_INVOICE_NUMBER_TAKEN':
+    case '23505':
+      return 'number_taken'
+    case 'MIGRATION_SUPPLIER_INVOICE_NUMBER_MISSING':
+      return 'number_missing'
+    // A NOT NULL column the source left empty (until 2026-10 the most common
+    // one: a supplier invoice without a number) and other refused values.
+    case '23502':
+      return 'missing_value'
+    case '23514':
+    case '22001':
+    case '22003':
+    case '22007':
+    case '22008':
+    case '22P02':
+      return 'invalid_value'
+    case 'MIGRATION_INVOICE_AMBIGUOUS':
+      return 'ambiguous_match'
+    case 'MIGRATION_PARTY_AMBIGUOUS':
+      return 'party_ambiguous'
+    case 'MIGRATION_PARTY_CHANGED':
+      return 'party_changed'
+    case 'MIGRATION_PARTY_ID_MISSING':
+    case 'MIGRATION_SOURCE_ID_MISSING':
+      return 'source_id_missing'
+    case 'MIGRATION_INVOICE_CHANGED':
+    case 'MIGRATION_SOURCE_ID_CHANGED':
+      return 'changed'
+    case 'MIGRATION_ROWS_MISMATCH':
+      return 'rows_mismatch'
+    case 'MIGRATION_SOURCE_LINES_MISSING':
+      return 'lines_missing'
+    case 'MIGRATION_INVOICE_TOO_LARGE':
+      return 'too_large'
+    case 'MIGRATION_REGISTRATION_REVIEW':
+      if (issue.review?.outcome === 'amountMismatch') return 'registration_amount'
+      if (issue.review?.outcome === 'ambiguous') return 'registration_ambiguous'
+      return 'registration_review'
+    case 'MIGRATION_REGISTRATION_AMBIGUOUS':
+      return 'registration_ambiguous'
+    case 'MIGRATION_VOUCHER_UNAVAILABLE':
+      return 'voucher_unavailable'
+    case 'MIGRATION_PAYMENT_REVIEW':
+    case 'MIGRATION_PAYMENT_AMBIGUOUS':
+    case 'MIGRATION_PAYMENT_REJECTED':
+      return 'payment_review'
+    case 'MIGRATION_BOKIO_COMPLETION_REJECTED':
+      return 'source_check'
+    case 'PROVIDER_AUTH_EXPIRED':
+      return 'connection'
+  }
+  if (code.startsWith('BOKIO_')) return 'source_check'
+  return 'unknown'
 }

@@ -80,6 +80,13 @@ export interface RegistrationLinkReport {
   /** Set for `linked` and `alreadyLinked`, when the entry is known. */
   journalEntryId?: string
   linkType?: 'registration' | 'settlement'
+  /**
+   * Set for `amountMismatch` when both sides are known: what the verifikat
+   * books on 151x/244x (or the bank, for a cash purchase) and the invoice's
+   * SEK total. Lets a reviewer see the difference without parsing `reason`.
+   */
+  bookedSek?: number
+  expectedSek?: number
   /** Machine-readable one-liner for logs and the migration report. */
   reason: string
 }
@@ -280,7 +287,8 @@ export async function linkMigratedRegistrationVouchers(
   const counts = emptyCounts()
   const reports: RegistrationLinkReport[] = []
 
-  const report = (input: MigratedInvoiceLinkInput, outcome: RegistrationLinkOutcome, reason: string, journalEntryId?: string) => {
+  const report = (input: MigratedInvoiceLinkInput, outcome: RegistrationLinkOutcome, reason: string, journalEntryId?: string,
+    amounts?: { bookedSek: number; expectedSek: number }) => {
     counts[outcome]++
     reports.push({
       invoiceId: input.invoiceId,
@@ -289,6 +297,7 @@ export async function linkMigratedRegistrationVouchers(
       outcome,
       reason,
       ...(journalEntryId ? { journalEntryId } : {}),
+      ...(amounts ?? {}),
     })
   }
 
@@ -473,7 +482,8 @@ export async function linkMigratedRegistrationVouchers(
           continue
         }
         if (input.currencyCode !== 'SEK' || expected <= 0 || cash === undefined || Math.abs(cash - expected) > ORE_TOLERANCE) {
-          report(input, 'amountMismatch', 'cash-purchase voucher does not corroborate the SEK invoice total')
+          report(input, 'amountMismatch', 'cash-purchase voucher does not corroborate the SEK invoice total', undefined,
+            cash === undefined ? undefined : { bookedSek: cash, expectedSek: expected })
           continue
         }
         const attached = await attachSupplierInvoiceSettlementVoucher(supabase, {
@@ -502,6 +512,8 @@ export async function linkMigratedRegistrationVouchers(
         currency !== 'SEK'
           ? `${side} is ${booked} but the invoice total is ${expected} SEK; the invoice is in ${currency}, its SEK total uses our rate index and the source booked at its own rate, so the amounts are not corroborated`
           : `${side} is ${booked} but the invoice total is ${expected} SEK`,
+        undefined,
+        { bookedSek: booked, expectedSek: expected },
       )
       continue
     }

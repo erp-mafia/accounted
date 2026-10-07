@@ -17,7 +17,7 @@ vi.mock('../entity-mapper', () => ({
   mapSupplier: (dto: { party: { name: string } }) => ({ name: dto.party.name }),
   buildFxRateIndex: vi.fn().mockResolvedValue(new Map()),
   mapSalesInvoice: vi.fn(() => ({ invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
-  mapSupplierInvoice: vi.fn(() => ({ invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
+  mapSupplierInvoice: vi.fn(() => ({ invoice: { supplier_invoice_number: 'S-1', subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
 }))
 import { mapSalesInvoice, mapSupplierInvoice } from '../entity-mapper'
 import { invoicePartySourceId, migrationRpc, pairMigratedCreditNotes, runProviderMigrationWorker, withinMigrationDeadline, type MigrationChunk } from '../migration-job-worker'
@@ -108,7 +108,7 @@ describe('bounded durable worker', () => {
     const dto = resource === 'salesInvoices' ? mapBokioToSalesInvoice(raw) : mapBokioToSupplierInvoice(raw)
     const mapper = resource === 'salesInvoices' ? mapSalesInvoice : mapSupplierInvoice
     vi.mocked(mapper).mockReturnValueOnce({
-      invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 },
+      invoice: { supplier_invoice_number: 'S-1', subtotal: 100, vat_amount: 25, total_sek: 125 },
       items: [{ line_total: 100, vat_amount: 0 }],
       fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null,
     })
@@ -128,7 +128,7 @@ describe('bounded durable worker', () => {
     const dto = mapBokioToSupplierInvoice({ id: 'invoice', supplierRef: { id: 'supplier', name: 'Supplier' }, totalAmount: 125,
       lineItems: [{ description: 'Test', quantity: 1, unitPrice: 100 }] })
     vi.mocked(mapSupplierInvoice).mockReturnValueOnce({
-      invoice: { subtotal: 125, vat_amount: 0, total_sek: 125 },
+      invoice: { supplier_invoice_number: 'S-1', subtotal: 125, vat_amount: 0, total_sek: 125 },
       items: [], rowsMismatch: true,
       fxUnresolved: null, vatUnresolved: true, creditNoteUnlinked: false, creditedInvoiceRef: null,
     })
@@ -153,7 +153,7 @@ describe('bounded durable worker', () => {
       lineItems: [{ description: 'Test', quantity: 1, unitPrice: 1000, taxRate: 25 }] })
     const dto = provider === 'bokio' ? enrichBokioSupplierInvoice(listed) : listed
     vi.mocked(mapSupplierInvoice).mockReturnValueOnce({
-      invoice: { subtotal: 1000, vat_amount: 250, total_sek: 1250 },
+      invoice: { supplier_invoice_number: '1001', subtotal: 1000, vat_amount: 250, total_sek: 1250 },
       items: [], rowsMismatch: false, rowsUnaccounted: true,
       fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null,
     })
@@ -652,6 +652,130 @@ describe('supplier credit notes in the import phase', () => {
     expect(reads).toEqual([])
     expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
       p_records: [expect.objectContaining({ id: 'si-1', link: expect.objectContaining({ totalSek: 125 }) })],
+    }))
+  })
+})
+
+/**
+ * The review a finished job stops for (PH 143, PH 145, PH 149): which records
+ * fail, and what the worker keeps with them so the wizard can say why.
+ */
+describe('records the review lists', () => {
+  /** Mark follow-up outcomes the way commit_provider_migration_followup does. */
+  function withFollowup(db: ReturnType<typeof database>, next: string) {
+    const original = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      if (name === 'commit_provider_migration_followup') {
+        for (const r of args.p_records as { id: string; error?: string }[]) {
+          db.rows.find(row => row.id === r.id)!.state = r.error ? 'needs_attention' : next
+        }
+        return { data: null, error: null }
+      }
+      return original(name, args)
+    })
+  }
+  /** migration_source_records answers with the given rows; every other table as before. */
+  function withSourceRecords(db: ReturnType<typeof database>, existing: { id: string }[]) {
+    const reads: unknown[][][] = []
+    const original = db.supabase.from.bind(db.supabase)
+    ;(db.supabase as unknown as { from: unknown }).from = (table: string) => {
+      if (table !== 'migration_source_records') return original(table)
+      const filters: unknown[][] = []
+      const chain: Record<string, unknown> = {}
+      for (const name of ['select', 'eq', 'limit']) chain[name] = (...args: unknown[]) => { filters.push([name, ...args]); return chain }
+      chain.then = (resolve: (value: unknown) => void) => { reads.push(filters); return resolve({ data: existing, error: null }) }
+      return chain
+    }
+    return reads
+  }
+  const numberless = () => mapBokioToSupplierInvoice({ id: 'si-nonumber', invoiceDate: '2026-02-10', currency: 'SEK',
+    totalAmount: 450, remainingAmount: 0, supplierRef: { id: 'supplier', name: 'Supplier' },
+    lineItems: [{ description: 'Abonnemang', quantity: 1, unitPrice: 450, taxRate: 0 }] })
+
+  it('imports a sales invoice with no rows at the source as its header instead of refusing it', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'] })
+    const dto = { id: 'rowless', invoiceNumber: '1002', issueDate: '2026-02-01', currencyCode: 'SEK', _raw: { CustomerId: 'customer' },
+      customer: { name: 'Customer', identifications: [] }, lines: [] }
+    vi.mocked(mapSalesInvoice).mockReturnValueOnce({ invoice: { subtotal: 1000, vat_amount: 250, total_sek: 1250 }, items: [],
+      fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [expect.objectContaining({ id: 'rowless', items: [], warnings: expect.objectContaining({ linesMissing: true }) })],
+    }))
+    expect(db.job.state).toBe('completed')
+  })
+  it('still refuses a sales invoice whose rows the mapper could not keep', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'] })
+    const dto = { id: 'dropped', issueDate: '2026-01-01', currencyCode: 'SEK', _raw: { CustomerId: 'customer' },
+      customer: { name: 'Customer', identifications: [] }, lines: [{}] }
+    vi.mocked(mapSalesInvoice).mockReturnValueOnce({ invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [],
+      fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [{ id: 'dropped', error: 'MIGRATION_SOURCE_LINES_MISSING' }],
+    }))
+  })
+  it('names a new supplier invoice without a number instead of letting Postgres refuse it as 23502', async () => {
+    const db = database({ phase: 'import', resources: ['supplierInvoices'], provider: 'bokio' })
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'bokio', org_number: '556000-0000' } })
+    const reads = withSourceRecords(db, [])
+    const dto = numberless()
+    expect(dto.invoiceNumber).toBe('')
+    vi.mocked(mapSupplierInvoice).mockReturnValueOnce({ invoice: { supplier_invoice_number: null, subtotal: 450, vat_amount: 0, total_sek: 450 },
+      items: [{ line_total: 450, vat_amount: 0 }], fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [{ id: 'si-nonumber', error: 'MIGRATION_SUPPLIER_INVOICE_NUMBER_MISSING' }],
+    }))
+    expect(reads[0]).toEqual(expect.arrayContaining([['eq', 'company_id', 'company'], ['eq', 'provider', 'bokio'],
+      ['eq', 'account_key', '5560000000'], ['eq', 'resource', 'supplierInvoices'], ['eq', 'source_id', 'si-nonumber']]))
+  })
+  it('lets a number-less supplier invoice an earlier import holds through, to be adopted by its source record', async () => {
+    const db = database({ phase: 'import', resources: ['supplierInvoices'], provider: 'bokio' })
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'bokio', org_number: '556000-0000' } })
+    withSourceRecords(db, [{ id: 'earlier-import' }])
+    const dto = numberless()
+    vi.mocked(mapSupplierInvoice).mockReturnValueOnce({ invoice: { supplier_invoice_number: null, subtotal: 450, vat_amount: 0, total_sek: 450 },
+      items: [{ line_total: 450, vat_amount: 0 }], fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    const records = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')?.[1].p_records as { id: string; error?: string }[]
+    expect(records).toEqual([expect.objectContaining({ id: 'si-nonumber', row: expect.anything() })])
+    expect(records[0].error).toBeUndefined()
+  })
+  it('keeps what a voucher-link review found, so the review can say why', async () => {
+    const db = database({ phase: 'link', resources: ['salesInvoices'] })
+    withFollowup(db, 'done')
+    db.rows.push({ id: 'chunk', source_id: 'inv-1', resource: 'salesInvoices', state: 'imported', target_id: 'invoice-1',
+      payload: '', receipt: { link: { kind: 'customer', invoiceDate: '2026-02-03', totalSek: 11200, currencyCode: 'EUR',
+        sourceVoucher: { series: 'K', number: 4 } } } })
+    mocks.link.mockResolvedValueOnce({ reports: [{ invoiceId: 'invoice-1', kind: 'customer', invoiceNumber: '1001',
+      outcome: 'amountMismatch', reason: 'net debit on 151x is 11240', bookedSek: 11240, expectedSek: 11200 }] })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_followup', expect.objectContaining({
+      p_records: [expect.objectContaining({ id: 'chunk', error: 'MIGRATION_REGISTRATION_REVIEW',
+        review: { kind: 'registration', outcome: 'amountMismatch', bookedSek: 11240, expectedSek: 11200 } })],
+    }))
+    expect(db.job.state).toBe('needs_attention')
+  })
+  it('keeps why a payment needs review', async () => {
+    const db = database({ phase: 'reconcile', resources: ['supplierInvoices'] })
+    withFollowup(db, 'planned')
+    db.rows.push({ id: 'chunk', source_id: 'si-1', resource: 'supplierInvoices', state: 'linked', target_id: 'supplier-invoice-1',
+      payload: '', receipt: {} })
+    mocks.reconcile.mockResolvedValueOnce({ links: [], review: [{ supplier_invoice_id: 'supplier-invoice-1',
+      supplier_invoice_number: '1', reason: 'multiple_candidates', candidates: [] }] })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_followup', expect.objectContaining({
+      p_records: [{ id: 'chunk', payment: null, error: 'MIGRATION_PAYMENT_REVIEW',
+        review: { kind: 'payment', reason: 'multiple_candidates' } }],
     }))
   })
 })

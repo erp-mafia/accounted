@@ -557,6 +557,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/arcim-migration/migration-jobs': gap('P3', 'migration wizard steps run in the browser after gnubok_connect_migration'),
   'POST /api/extensions/ext/arcim-migration/migration-jobs/run': gap('P3'),
   'POST /api/extensions/ext/arcim-migration/migration-jobs/retry': gap('P3'),
+  'POST /api/extensions/ext/arcim-migration/migration-jobs/accept': gap('P3', 'finish a reviewed import with the records it could not complete'),
   'POST /api/extensions/ext/arcim-migration/invoice-completion/retry': gap('P3'),
   'POST /api/extensions/ext/arcim-migration/import-sie': gap('P3'),
   'POST /api/extensions/ext/arcim-migration/migrate': gap('P3'),
@@ -684,4 +685,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 134
+export const GAP_CEILING = 135
