@@ -82,7 +82,8 @@ const AP_ACCOUNT_PREFIX = '244'
 // Same 10% band as match_batch_allocate and link_supplier_invoice_to_voucher:
 // outside it the SEK is not the invoice's skuld at another rate, it is a
 // different skuld (the registration was corrected for something else).
-const LEDGER_RATE_BAND = 0.1
+// The migration voucher linker reads a rate difference by the same band.
+export const LEDGER_RATE_BAND = 0.1
 // Keeps an `in (...)` list well inside PostgREST's URL limit.
 const ID_CHUNK = 100
 // Fail-closed bounds on the work one resolution does, so a read-only preview

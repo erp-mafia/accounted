@@ -73,6 +73,19 @@ not among the imported ones. These warnings do not by themselves put
 every record into `needs_attention` and must be reviewed before later accounting
 actions. The existing mapper is reused without changing its VAT rules.
 
+A foreign-currency invoice is converted at import with our own rate index, but
+the source booked its verifikat at its own rate (crm#1039). When the verifikat
+its reference singles out books within 10% of the invoice's SEK total on
+151x/244x, the invoice links and takes that amount: `exchange_rate` becomes the
+SEK total over the invoice total (the source's rate), `exchange_rate_date` the
+verifikat's date, and the `*_sek` columns follow. The reskontra then agrees with
+1510/2440, and a payment clears them exactly with the kursdifferens on
+3960/7960. The worker commits such a batch through
+`commit_provider_migration_source_rate_links` (migration 20261005230200), which
+writes the amounts only onto invoices the followup linked; the receipt keeps
+the previous values in `registration.sourceRate`. Further apart than 10%, the
+record stays in review as an amount mismatch.
+
 A supplier credit note (#2838) is stored the way Kreditera writes one: the
 magnitudes of the invoice it reverses beside `is_credit_note`, status `credited`,
 nothing paid and nothing remaining, whatever sign the provider states. It is

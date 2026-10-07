@@ -574,6 +574,83 @@ describe('pairMigratedCreditNotes', () => {
 })
 
 /**
+ * crm#1039: a foreign-currency invoice the linker links at the source's rate
+ * commits through the function that also writes the SEK amount its verifikat
+ * books. Until that migration is applied the invoice stops for review.
+ */
+describe('link phase at the source rate', () => {
+  const sourceRate = { total: 1000, totalSek: 11234.5, subtotalSek: 11234.5, vatAmountSek: 0, exchangeRate: 11.2345,
+    exchangeRateDate: '2026-05-04', previousTotalSek: 11200, previousExchangeRate: 11.2 }
+  /** One imported EUR invoice in the link phase; follow-up commits settle its chunk. */
+  function linkPhase(rpcFailure?: { code: string; message: string }) {
+    const db = database({ phase: 'link', resources: ['salesInvoices'] })
+    db.rows.push({ id: 'chunk', resource: 'salesInvoices', source_id: 'source', payload: '', state: 'imported', target_id: 'invoice',
+      receipt: { link: { kind: 'customer', sourceVoucher: { series: 'B', number: 501 }, invoiceDate: '2026-05-04', totalSek: 11200,
+        currencyCode: 'EUR' } } })
+    mocks.link.mockResolvedValue({ reports: [{ invoiceId: 'invoice', kind: 'customer', invoiceNumber: 'F-1', outcome: 'linked',
+      journalEntryId: 'entry', reason: 'would link at the source rate (dry run)', sourceRate }] })
+    const original = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      // A rejection in the shape supabase-js hands back, outside the helper's happy-path union.
+      if (name === 'commit_provider_migration_source_rate_links' && rpcFailure) return { data: null, error: rpcFailure } as never
+      if (name === 'commit_provider_migration_source_rate_links' || name === 'commit_provider_migration_followup') {
+        for (const r of args.p_records as { id: string; error?: string }[]) {
+          db.rows.find(row => row.id === r.id)!.state = r.error ? 'needs_attention' : 'done'
+        }
+        return { data: null, error: null }
+      }
+      return original(name, args)
+    })
+    return db
+  }
+  const commits = (db: ReturnType<typeof database>) => db.rpc.mock.calls
+    .filter(([name]) => String(name).startsWith('commit_provider_migration_'))
+
+  it('commits the batch through commit_provider_migration_source_rate_links, with the values the invoice takes', async () => {
+    const db = linkPhase()
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(commits(db)).toEqual([['commit_provider_migration_source_rate_links', expect.objectContaining({
+      p_records: [{ id: 'chunk', journal_entry_id: 'entry', report: expect.objectContaining({ outcome: 'linked', sourceRate }) }],
+    })]])
+    expect(db.rows[0].state).toBe('done')
+  })
+
+  it('leaves the invoice for review through the plain follow-up while the function is not deployed', async () => {
+    const db = linkPhase({ code: 'PGRST202', message: 'Could not find the function' })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(commits(db).map(([name]) => name)).toEqual([
+      'commit_provider_migration_source_rate_links', 'commit_provider_migration_followup',
+    ])
+    expect(commits(db)[1][1]).toEqual(expect.objectContaining({ p_records: [{ id: 'chunk', error: 'MIGRATION_REGISTRATION_REVIEW' }] }))
+    expect(db.rows[0].state).toBe('needs_attention')
+  })
+
+  it('does not swallow any other failure of the function', async () => {
+    const db = linkPhase({ code: '40001', message: 'could not serialize access' })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(commits(db).map(([name]) => name)).toEqual(['commit_provider_migration_source_rate_links'])
+    expect(db.rows[0].state).toBe('imported')
+    expect(db.job.state).toBe('retry_wait')
+  })
+
+  it('keeps a batch without source-rate links on the plain follow-up', async () => {
+    const db = linkPhase()
+    mocks.link.mockResolvedValue({ reports: [{ invoiceId: 'invoice', kind: 'customer', invoiceNumber: 'F-1', outcome: 'linked',
+      journalEntryId: 'entry', reason: 'would link (dry run)' }] })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(commits(db).map(([name]) => name)).toEqual(['commit_provider_migration_followup'])
+  })
+})
+
+/**
  * A supplier kreditfaktura through the import phase (#2838): the receipt
  * carries what the registration voucher must show (a credit note DEBITS
  * 2440), and a credit note the company already holds in the shape written

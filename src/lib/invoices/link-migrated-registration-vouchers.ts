@@ -11,6 +11,16 @@
  * short of one survivor stays ambiguous.
  * Duplicate, reversed, open-source cash and amount-mismatched evidence is
  * reported for review. No journal entry or line is written here.
+ *
+ * A foreign-currency invoice is the one exception to an exact AP/AR match
+ * (crm#1039, founder decision 2026-10-06). Its SEK total came from our rate
+ * index, while the source booked the verifikat at its own rate. When the
+ * verifikat its ref singles out books within LEDGER_RATE_BAND of that total,
+ * it is this invoice at the source's rate: the invoice links and takes the
+ * SEK amount the verifikat books (`sourceRate`), so the reskontra agrees with
+ * 151x/244x and a later payment clears them exactly. Further apart it is a
+ * different receivable or skuld and stays amountMismatch. The band never
+ * picks between several candidates for a series-less ref: that stays exact.
  */
 
 import { chunk } from '@/lib/utils'
@@ -19,6 +29,7 @@ import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
+import { LEDGER_RATE_BAND } from '@/lib/bookkeeping/supplier-payment-amounts'
 import {
   buildVoucherIndex,
   fetchFiscalPeriods,
@@ -89,6 +100,32 @@ export interface RegistrationLinkReport {
   expectedSek?: number
   /** Machine-readable one-liner for logs and the migration report. */
   reason: string
+  /**
+   * Set for `linked` when a foreign-currency invoice takes the SEK amount its
+   * verifikat books at the source's rate (see the module header). A dry run
+   * reports it for the caller to write; a real run writes it with the link.
+   */
+  sourceRate?: SourceRateValues
+}
+
+/**
+ * What a foreign-currency invoice takes from the verifikat that booked it.
+ * Its own currency amounts, status and payments are never touched.
+ */
+export interface SourceRateValues {
+  /** The invoice total in its own currency that the rate is derived from. */
+  total: number
+  /** The amount the verifikat books on 151x/244x (a supplier credit note's magnitude). */
+  totalSek: number
+  subtotalSek: number
+  vatAmountSek: number
+  /** totalSek / total, the source's own rate where four or six decimals give totalSek back. */
+  exchangeRate: number
+  /** The verifikat's date: the day the source booked it at that rate. */
+  exchangeRateDate: string
+  /** What the invoice carried before, at the rate the import found. */
+  previousTotalSek: number | null
+  previousExchangeRate: number | null
 }
 
 export interface RegistrationLinkCounts {
@@ -167,6 +204,141 @@ function emptyCounts(): RegistrationLinkCounts {
     amountMismatch: 0,
     alreadyLinked: 0,
   }
+}
+
+/** The row a source-rate link derives its values from. */
+interface ForeignInvoiceRow {
+  id: string
+  currency: string | null
+  total: number | null
+  subtotal: number | null
+  vat_amount: number | null
+  total_sek: number | null
+  exchange_rate: number | null
+  is_credit_note?: boolean | null
+}
+
+/** invoices_exchange_rate_check and supplier_invoices_exchange_rate_check. */
+const MAX_EXCHANGE_RATE = 100000
+
+function isForeignCurrency(code: string | null | undefined): boolean {
+  return !!code && code.toUpperCase() !== 'SEK'
+}
+
+/**
+ * Whether the verifikat books the invoice's SEK total at another rate: within
+ * LEDGER_RATE_BAND of it, the band match_batch_allocate,
+ * link_supplier_invoice_to_voucher and the manual supplier payment read a rate
+ * difference by. Further apart it is a different receivable or skuld.
+ */
+function withinRateBand(booked: number, expected: number): boolean {
+  return Math.abs(booked - expected) <= Math.abs(expected) * LEDGER_RATE_BAND
+}
+
+/**
+ * The SEK values a foreign-currency invoice takes from its verifikat, or null
+ * when its row cannot carry them (not foreign-currency now, a zero total, a
+ * rate the column refuses). `booked` is the verifikat's net debit on 151x or
+ * net credit on 244x; a supplier credit note debits 2440 but is stored in
+ * magnitudes.
+ */
+function sourceRateValues(row: ForeignInvoiceRow | undefined, kind: MigratedInvoiceKind, booked: number,
+  entryDate: string | undefined): SourceRateValues | null {
+  if (!row || !isForeignCurrency(row.currency) || !entryDate) return null
+  const total = Number(row.total)
+  const totalSek = roundOre(kind === 'supplier' && row.is_credit_note ? -booked : booked)
+  const quotient = totalSek / total
+  if (!Number.isFinite(quotient) || quotient <= 0 || quotient >= MAX_EXCHANGE_RATE) return null
+  // The source's own rate usually has four decimals. Take the shortest rate
+  // whose product lies within 0.004 kr of the booked amount: every öre
+  // rounding then gives that amount back, roundOre as well as the plain one
+  // the reskontra and the payment lines use.
+  const exchangeRate = [4, 6]
+    .map((places) => Math.round(quotient * 10 ** places) / 10 ** places)
+    .find((rate) => Math.abs(total * rate - totalSek) <= 0.004) ?? quotient
+  return {
+    total,
+    totalSek,
+    subtotalSek: roundOre(Number(row.subtotal ?? 0) * exchangeRate),
+    vatAmountSek: roundOre(Number(row.vat_amount ?? 0) * exchangeRate),
+    exchangeRate,
+    exchangeRateDate: entryDate,
+    previousTotalSek: row.total_sek == null ? null : Number(row.total_sek),
+    previousExchangeRate: row.exchange_rate == null ? null : Number(row.exchange_rate),
+  }
+}
+
+/** The rows of the invoices that may link at the source's rate, company-scoped. */
+async function fetchForeignInvoiceRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  kind: MigratedInvoiceKind,
+  ids: string[],
+): Promise<ForeignInvoiceRow[]> {
+  const rows: ForeignInvoiceRow[] = []
+  for (const part of chunk(ids, ID_CHUNK)) {
+    rows.push(...await fetchAllRows<ForeignInvoiceRow>(({ from, to }) => kind === 'supplier'
+      ? supabase
+          .from('supplier_invoices')
+          .select('id, currency, total, subtotal, vat_amount, total_sek, exchange_rate, is_credit_note')
+          .eq('company_id', companyId)
+          .in('id', part)
+          .order('id', { ascending: true })
+          .range(from, to)
+      : supabase
+          .from('invoices')
+          .select('id, currency, total, subtotal, vat_amount, total_sek, exchange_rate')
+          .eq('company_id', companyId)
+          .in('id', part)
+          .order('id', { ascending: true })
+          .range(from, to)))
+  }
+  return rows
+}
+
+/**
+ * The link and the SEK values in one write: from NULL only, and only while
+ * the invoice still has the total the rate was derived from.
+ */
+async function writeSourceRateLink(
+  supabase: SupabaseClient,
+  companyId: string,
+  input: MigratedInvoiceLinkInput,
+  entryId: string,
+  values: SourceRateValues,
+) {
+  if (input.kind === 'supplier') {
+    return supabase
+      .from('supplier_invoices')
+      .update({
+        registration_journal_entry_id: entryId,
+        exchange_rate: values.exchangeRate,
+        exchange_rate_date: values.exchangeRateDate,
+        total_sek: values.totalSek,
+        subtotal_sek: values.subtotalSek,
+        vat_amount_sek: values.vatAmountSek,
+      })
+      .eq('id', input.invoiceId)
+      .eq('company_id', companyId)
+      .is('registration_journal_entry_id', null)
+      .eq('total', values.total)
+      .select('id')
+  }
+  return supabase
+    .from('invoices')
+    .update({
+      journal_entry_id: entryId,
+      exchange_rate: values.exchangeRate,
+      exchange_rate_date: values.exchangeRateDate,
+      total_sek: values.totalSek,
+      subtotal_sek: values.subtotalSek,
+      vat_amount_sek: values.vatAmountSek,
+    })
+    .eq('id', input.invoiceId)
+    .eq('company_id', companyId)
+    .is('journal_entry_id', null)
+    .eq('total', values.total)
+    .select('id')
 }
 
 type Resolution =
@@ -433,6 +605,26 @@ export async function linkMigratedRegistrationVouchers(
     for (const row of customerRows) noteReference(row.journal_entry_id, row.id)
   }
 
+  // 3c. A foreign-currency invoice whose verifikat books its SEK total at the
+  //     source's rate takes that amount (see the module header). Its row is
+  //     what the rate is derived from, so it is read for those invoices only.
+  const bookedOn = (input: MigratedInvoiceLinkInput, entryId: string) =>
+    (input.kind === 'supplier' ? apNetCreditByEntry : arNetDebitByEntry).get(entryId)
+  const atSourceRate = (input: MigratedInvoiceLinkInput, booked: number, expected: number) =>
+    isForeignCurrency(input.currencyCode) && Math.abs(booked - expected) > ORE_TOLERANCE && withinRateBand(booked, expected)
+  const entryDates = new Map(vouchers.map((v) => [v.id, v.entry_date]))
+  const foreignRows = new Map<string, ForeignInvoiceRow>()
+  for (const kind of ['customer', 'supplier'] as const) {
+    const ids = [...new Set(resolved.flatMap(({ input, entryId }) => {
+      const booked = bookedOn(input, entryId)
+      return input.kind === kind && booked !== undefined && typeof input.totalSek === 'number'
+        && Number.isFinite(input.totalSek) && atSourceRate(input, booked, roundOre(input.totalSek)) ? [input.invoiceId] : []
+    }))]
+    if (ids.length === 0) continue
+    for (const row of await fetchForeignInvoiceRows(supabase, companyId, kind, ids)) foreignRows.set(row.id, row)
+  }
+  let sourceRated = 0
+
   // 4. Decide and write, one invoice at a time, from NULL only.
   for (const { input, entryId } of resolved) {
     const contest = claimants.get(entryId) ?? []
@@ -504,13 +696,16 @@ export async function linkMigratedRegistrationVouchers(
       report(input, 'unresolved', `verifikat has no ${input.kind === 'supplier' ? '244x' : '151x'} line: not a registration voucher (kontantmetod or payment voucher)`)
       continue
     }
-    if (Math.abs(booked - expected) > ORE_TOLERANCE) {
+    const sourceRate = atSourceRate(input, booked, expected)
+      ? sourceRateValues(foreignRows.get(input.invoiceId), input.kind, booked, entryDates.get(entryId))
+      : null
+    if (!sourceRate && Math.abs(booked - expected) > ORE_TOLERANCE) {
       const currency = (input.currencyCode ?? 'SEK').toUpperCase()
       report(
         input,
         'amountMismatch',
         currency !== 'SEK'
-          ? `${side} is ${booked} but the invoice total is ${expected} SEK; the invoice is in ${currency}, its SEK total uses our rate index and the source booked at its own rate, so the amounts are not corroborated`
+          ? `${side} is ${booked} but the invoice total is ${expected} SEK; the invoice is in ${currency} and ${withinRateBand(booked, expected) ? 'its row cannot take the source rate' : `the two are more than ${LEDGER_RATE_BAND * 100}% apart, so the verifikat is not this invoice at another rate`}`
           : `${side} is ${booked} but the invoice total is ${expected} SEK`,
         undefined,
         { bookedSek: booked, expectedSek: expected },
@@ -519,13 +714,19 @@ export async function linkMigratedRegistrationVouchers(
     }
 
     if (dryRun) {
-      report(input, 'linked', 'would link (dry run)', entryId)
+      report(input, 'linked', sourceRate ? 'would link at the source rate (dry run)' : 'would link (dry run)', entryId)
+      if (sourceRate) {
+        reports[reports.length - 1].sourceRate = sourceRate
+        sourceRated++
+      }
       continue
     }
 
     // `.is(null)` makes the write a no-op when the row gained a link since it
     // was read; `.select('id')` is how that no-op becomes visible.
-    const { data, error } = input.kind === 'supplier'
+    const { data, error } = sourceRate
+      ? await writeSourceRateLink(supabase, companyId, input, entryId, sourceRate)
+      : input.kind === 'supplier'
       ? await supabase
           .from('supplier_invoices')
           .update({ registration_journal_entry_id: entryId })
@@ -545,10 +746,16 @@ export async function linkMigratedRegistrationVouchers(
       throw new Error(`Failed to link ${input.kind} invoice ${input.invoiceId} to verifikat ${entryId}: ${error.message}`)
     }
     if (!data || data.length === 0) {
-      report(input, 'alreadyLinked', 'invoice already carried a registration link', entryId)
+      report(input, 'alreadyLinked', sourceRate
+        ? 'invoice already carried a registration link, or its total changed since it was read'
+        : 'invoice already carried a registration link', entryId)
       continue
     }
-    report(input, 'linked', 'registration voucher linked', entryId)
+    report(input, 'linked', sourceRate ? 'registration voucher linked at the source rate' : 'registration voucher linked', entryId)
+    if (sourceRate) {
+      reports[reports.length - 1].sourceRate = sourceRate
+      sourceRated++
+    }
   }
 
   log.info('registration voucher linking complete', {
@@ -562,6 +769,7 @@ export async function linkMigratedRegistrationVouchers(
     ambiguous: counts.ambiguous,
     amountMismatch: counts.amountMismatch,
     alreadyLinked: counts.alreadyLinked,
+    linkedAtSourceRate: sourceRated,
   })
 
   return { ...counts, reports }

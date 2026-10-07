@@ -76,6 +76,8 @@ interface Queue {
   lines?: unknown[]
   supplierRefs?: unknown[]
   customerRefs?: unknown[]
+  /** The invoice rows a source-rate link reads: the customer read first, then the supplier read. */
+  foreignRows?: unknown[][]
   updates?: { data?: unknown; error?: unknown }[]
 }
 
@@ -88,6 +90,7 @@ function queue(q: Queue) {
   if (q.lines !== undefined) mock.enqueue({ data: q.lines })
   if (q.supplierRefs !== undefined) mock.enqueue({ data: q.supplierRefs })
   if (q.customerRefs !== undefined) mock.enqueue({ data: q.customerRefs })
+  for (const rows of q.foreignRows ?? []) mock.enqueue({ data: rows })
   for (const u of q.updates ?? []) mock.enqueue(u)
 }
 
@@ -441,16 +444,18 @@ describe('linkMigratedRegistrationVouchers', () => {
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
   })
 
-  it('explains a foreign-currency mismatch as a rate difference, and still does not link', async () => {
+  it('does not link a foreign-currency invoice at the source rate when its row cannot be read', async () => {
     // total_sek comes from our Riksbanken index; the source booked 2440 at its
-    // own rate. The amounts differ, so the bucket is amountMismatch, but the
-    // reason must say why instead of implying a bookkeeping discrepancy.
+    // own rate. Within the band the invoice takes the booked amount instead
+    // (crm#1039), but the rate is derived from its row, and this row is gone:
+    // the bucket stays amountMismatch, and the reason says why.
     queue({
       vouchers: [voucher({ id: 'je-1' })],
       entries: [{ id: 'je-1', status: 'posted' }],
       lines: supplierLines('je-1', 11240),
       supplierRefs: [],
       customerRefs: [],
+      foreignRows: [[]],
     })
 
     const result = await run([input({ invoiceId: 'si-1', totalSek: 11200, currencyCode: 'EUR' })])
@@ -731,5 +736,155 @@ describe('Bokio cash-purchase source references', () => {
     mock = createQueuedMockSupabase(); cashQueue()
     expect((await run([{ ...cashInput(), sourceVoucher: { series: 'A', number: 329, date: '2025-03-15' } }])).linked).toBe(0)
     expect(attachSupplierInvoiceSettlementVoucher).not.toHaveBeenCalled()
+  })
+})
+
+describe('foreign-currency invoices at the source rate (crm#1039)', () => {
+  beforeEach(() => {
+    mock = createQueuedMockSupabase()
+  })
+
+  // 1 000 EUR imported at our 11.20 (11 200.00 kr); the source booked 1510
+  // at its own 11.2345 (11 234.50 kr), dated with the invoice.
+  const eurCustomerInput = () => input({ invoiceId: 'inv-eur', kind: 'customer', sourceVoucher: { series: 'B', number: 501 },
+    totalSek: 11200, currencyCode: 'EUR' })
+  const eurCustomerRow = { id: 'inv-eur', currency: 'EUR', total: 1000, subtotal: 1000, vat_amount: 0, total_sek: 11200, exchange_rate: 11.2 }
+  function eurCustomerQueue(updates?: { data?: unknown }[]) {
+    queue({
+      vouchers: [voucher({ id: 'je-eur', series: 'B', number: 501 })],
+      entries: [{ id: 'je-eur', status: 'posted' }],
+      lines: [line('je-eur', '1510', 11234.5, 0), line('je-eur', '3105', 0, 11234.5)],
+      supplierRefs: [],
+      customerRefs: [],
+      foreignRows: [[eurCustomerRow]],
+      updates,
+    })
+  }
+  const eurSourceRate = {
+    total: 1000, totalSek: 11234.5, subtotalSek: 11234.5, vatAmountSek: 0, exchangeRate: 11.2345,
+    exchangeRateDate: '2025-03-14', previousTotalSek: 11200, previousExchangeRate: 11.2,
+  }
+
+  it('links the invoice and reports the SEK amount the verifikat books, writing nothing in a dry run', async () => {
+    eurCustomerQueue()
+
+    const result = await run([eurCustomerInput()], true)
+
+    expect(result.linked).toBe(1)
+    expect(result.amountMismatch).toBe(0)
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-eur', sourceRate: eurSourceRate })
+    // The rate gives the 1510 debit back the way the reskontra and the
+    // payment lines round it, so a payment of the 8 800 EUR clears 1510.
+    expect(Math.round(1000 * result.reports[0].sourceRate!.exchangeRate * 100) / 100).toBe(11234.5)
+    expect(mock.calls.filter((c) => c.method === 'update' || c.method === 'insert')).toHaveLength(0)
+  })
+
+  it('writes the link and the SEK amount in one update, from NULL and only for the total it was derived from', async () => {
+    eurCustomerQueue([{ data: [{ id: 'inv-eur' }] }])
+
+    const result = await run([eurCustomerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', reason: 'registration voucher linked at the source rate' })
+    const [update] = updateCalls('invoices')
+    expect(update.args[0]).toEqual({
+      journal_entry_id: 'je-eur', exchange_rate: 11.2345, exchange_rate_date: '2025-03-14',
+      total_sek: 11234.5, subtotal_sek: 11234.5, vat_amount_sek: 0,
+    })
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([
+      ['eq', ['id', 'inv-eur']],
+      ['eq', ['company_id', COMPANY]],
+      ['is', ['journal_entry_id', null]],
+      ['eq', ['total', 1000]],
+      ['select', ['id']],
+    ]))
+  })
+
+  it('takes a supplier credit note\'s magnitude from the 2440 debit', async () => {
+    // 250 EUR, imported at 11.30 (2 825.00 kr); the verifikat debits 2440
+    // with 2 811.25 kr, the source's 11.245.
+    queue({
+      vouchers: [voucher({ id: 'je-cn' })],
+      entries: [{ id: 'je-cn', status: 'posted' }],
+      lines: [line('je-cn', '2440', 2811.25, 0), line('je-cn', '4010', 0, 2811.25)],
+      supplierRefs: [],
+      customerRefs: [],
+      foreignRows: [[{ id: 'scn-eur', currency: 'EUR', total: 250, subtotal: 250, vat_amount: 0, total_sek: 2825,
+        exchange_rate: 11.3, is_credit_note: true }]],
+    })
+
+    const result = await run([input({ invoiceId: 'scn-eur', currencyCode: 'EUR', totalSek: supplierPayableEffectSek(2825, true) })], true)
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-cn',
+      sourceRate: { total: 250, totalSek: 2811.25, subtotalSek: 2811.25, exchangeRate: 11.245 } })
+  })
+
+  it('keeps a verifikat more than 10% from the SEK total as amountMismatch, and reads no invoice row', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-1' })],
+      entries: [{ id: 'je-1', status: 'posted' }],
+      lines: supplierLines('je-1', 12500),
+      supplierRefs: [],
+      customerRefs: [],
+    })
+
+    const result = await run([input({ invoiceId: 'si-1', totalSek: 11200, currencyCode: 'EUR' })])
+
+    expect(result.amountMismatch).toBe(1)
+    expect(result.reports[0].reason).toContain('more than 10% apart')
+    expect(result.reports[0].sourceRate).toBeUndefined()
+    expect(mock.calls.filter((c) => c.table === 'supplier_invoices' && c.method === 'select')).toHaveLength(1)
+    expect(updateCalls('supplier_invoices')).toHaveLength(0)
+  })
+
+  it('never re-rates a SEK invoice, whatever the difference', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-1' })],
+      entries: [{ id: 'je-1', status: 'posted' }],
+      lines: supplierLines('je-1', 1001),
+      supplierRefs: [],
+      customerRefs: [],
+    })
+
+    const result = await run([input({ invoiceId: 'si-1', totalSek: 1000, currencyCode: 'SEK' })])
+
+    expect(result.amountMismatch).toBe(1)
+    expect(result.reports[0].sourceRate).toBeUndefined()
+    expect(mock.calls.filter((c) => c.table === 'supplier_invoices' && c.method === 'select')).toHaveLength(1)
+  })
+
+  it('falls back to the plain quotient when no four- or six-decimal rate gives the booked amount back', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-big' })],
+      entries: [{ id: 'je-big', status: 'posted' }],
+      lines: [line('je-big', '1510', 1688215.44, 0), line('je-big', '3105', 0, 1688215.44)],
+      supplierRefs: [],
+      customerRefs: [],
+      foreignRows: [[{ id: 'inv-big', currency: 'EUR', total: 162973.57, subtotal: 162973.57, vat_amount: 0,
+        total_sek: 1688000, exchange_rate: 10.3575 }]],
+    })
+
+    const result = await run([input({ invoiceId: 'inv-big', kind: 'customer', totalSek: 1688000, currencyCode: 'EUR' })], true)
+
+    const rate = result.reports[0].sourceRate!.exchangeRate
+    expect(rate).toBe(1688215.44 / 162973.57)
+    expect(roundOre(162973.57 * rate)).toBe(1688215.44)
+    expect(Math.round(162973.57 * rate * 100) / 100).toBe(1688215.44)
+  })
+
+  it('never uses the band to choose between several candidates for a series-less ref', async () => {
+    // Two series carry number 329 dated with the invoice, both within 10% of
+    // its SEK total: only an exact amount may pick one, so it stays ambiguous.
+    queue({
+      vouchers: [voucher({ id: 'je-a', series: 'A' }), voucher({ id: 'je-b', series: 'B' })],
+      entries: [{ id: 'je-a', status: 'posted' }, { id: 'je-b', status: 'posted' }],
+      lines: [...supplierLines('je-a', 11240), ...supplierLines('je-b', 11180)],
+    })
+
+    const result = await run([input({ invoiceId: 'si-1', sourceVoucher: { series: null, number: 329 }, totalSek: 11200,
+      currencyCode: 'EUR' })])
+
+    expect(result.ambiguous).toBe(1)
+    expect(result.linked).toBe(0)
+    expect(mock.calls.filter((c) => c.method === 'update')).toHaveLength(0)
   })
 })

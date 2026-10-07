@@ -10,7 +10,7 @@ import { migrationRetrySeconds, type ProviderMigrationJob, type MigrationResourc
 import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
 import type { ProviderName } from '@/lib/providers/types'
 import type { CreditedInvoiceRefDto, CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
-import { linkMigratedRegistrationVouchers, type MigratedInvoiceLinkInput } from '@/lib/invoices/link-migrated-registration-vouchers'
+import { linkMigratedRegistrationVouchers, type MigratedInvoiceLinkInput, type RegistrationLinkReport } from '@/lib/invoices/link-migrated-registration-vouchers'
 import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
 import { ORE_TOLERANCE } from '@/lib/money'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
@@ -394,7 +394,34 @@ async function followupBatch(supabase: SupabaseClient, job: ProviderMigrationJob
         ...(review ? { error: 'MIGRATION_PAYMENT_REVIEW', review: { kind: 'payment', reason: review.reason } } : {}) }
     })
   } else records = chunks.map(c => ({ id: c.id }))
-  await migrationRpc(supabase, job, 'commit_provider_migration_followup', { p_records: records }, deadline)
+  await commitFollowup(supabase, job, records, deadline)
+}
+
+/**
+ * A link batch in which a foreign-currency invoice takes the SEK amount its
+ * verifikat books (report.sourceRate, crm#1039) commits through
+ * commit_provider_migration_source_rate_links: the followup itself, then that
+ * amount onto each invoice the followup linked, in one transaction. Until
+ * migration 20261005230200 is applied the function is missing (PGRST202):
+ * such an invoice then stops for review as it did before, and a retry links
+ * it once the function exists.
+ */
+async function commitFollowup(supabase: SupabaseClient, job: ProviderMigrationJob, records: Record<string, unknown>[],
+  deadline: number): Promise<void> {
+  const atSourceRate = (r: Record<string, unknown>) => !!(r.report as RegistrationLinkReport | undefined)?.sourceRate
+  if (job.phase !== 'link' || !records.some(atSourceRate)) {
+    await migrationRpc(supabase, job, 'commit_provider_migration_followup', { p_records: records }, deadline)
+    return
+  }
+  try {
+    await migrationRpc(supabase, job, 'commit_provider_migration_source_rate_links', { p_records: records }, deadline)
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== 'PGRST202') throw error
+    log.warn('source-rate links left for review: commit_provider_migration_source_rate_links is not deployed', { jobId: job.id })
+    await migrationRpc(supabase, job, 'commit_provider_migration_followup', {
+      p_records: records.map(r => atSourceRate(r) ? { id: r.id, error: 'MIGRATION_REGISTRATION_REVIEW' } : r),
+    }, deadline)
+  }
 }
 
 export function failureCode(error: unknown): string {
