@@ -545,6 +545,37 @@ describe('computeProposalLines', () => {
       }
     })
 
+    it('previews a learned reverse-charge basis pair line for line like the engine, balanced', () => {
+      // The shape SIE learning stores for 5420 + 4531/4598 + fiktiv moms.
+      const pattern: LinePatternEntry[] = [
+        { account: '4531', type: 'business', side: 'debit', ratio: 0.3334 },
+        { account: '4598', type: 'business', side: 'credit', ratio: 0.3333 },
+        { account: '5420', type: 'business', side: 'debit', ratio: 0.3333 },
+      ]
+      const template = makeCategorizationTemplate({ debit_account: '5420', credit_account: '1930', line_pattern: pattern })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      for (const amount of [-250, -0.01, -99.99, -1234.56, 250, 0.03]) {
+        const engine = buildMappingResultFromCounterpartyTemplate(match, makeTransaction({ amount }), 'enskild_firma')
+        const proposal = computeProposalLines({ amount, linePattern: pattern })
+        expect(proposal.filter((l) => !l.settlement), `amount ${amount}`).toEqual(
+          engine.vat_lines.map((l) => ({
+            side: l.debit_amount > 0 ? 'debet' : 'kredit',
+            account: l.account_number,
+            amount: l.debit_amount || l.credit_amount,
+          })),
+        )
+        expect(sumSide(proposal, 'debet'), `amount ${amount}`).toBe(sumSide(proposal, 'kredit'))
+      }
+      expect(computeProposalLines({ amount: -250, linePattern: pattern })).toEqual([
+        { side: 'kredit', account: '1930', amount: 250, settlement: true },
+        { side: 'debet', account: '5420', amount: 250 },
+        { side: 'debet', account: '2645', amount: 62.5 },
+        { side: 'kredit', account: '2614', amount: 62.5 },
+        { side: 'debet', account: '4531', amount: 250 },
+        { side: 'kredit', account: '4598', amount: 250 },
+      ])
+    })
+
     it('handles income patterns with the settlement on the debit side', () => {
       const incomePattern: LinePatternEntry[] = [
         { account: '2611', type: 'vat', side: 'credit', vat_rate: 0.25 },

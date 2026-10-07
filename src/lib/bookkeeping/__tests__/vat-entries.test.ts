@@ -7,6 +7,7 @@ import {
   costAccountReportsRcBasis,
   reverseChargeKindForSupplierType,
   reverseChargeKindRuta,
+  reverseChargeKindForBasisAccount,
   REVERSE_CHARGE_KINDS,
   generateInputVatLine,
   extractNetAmount,
@@ -203,6 +204,20 @@ describe('generateReverseChargePurchaseLines: basis pair and invariants', () => 
     expect(reverseChargeKindRuta('eu_services')).toBe('ruta21')
     expect(reverseChargeKindRuta('non_eu_services')).toBe('ruta22')
     expect(reverseChargeKindRuta('domestic_services')).toBe('ruta24')
+  })
+
+  it('reads the kind and rate back off a basis account, the inverse of the account it books', () => {
+    for (const kind of REVERSE_CHARGE_KINDS) {
+      for (const rate of [0.25, 0.12, 0.06]) {
+        const basis = rc(1000, rate, kind)[2].account_number
+        expect(reverseChargeKindForBasisAccount(basis), basis).toEqual({ kind, rate })
+      }
+    }
+    expect(reverseChargeKindForBasisAccount('4531')).toEqual({ kind: 'non_eu_services', rate: 0.25 })
+    // The offset, a cost account and domestic goods (no kind) are not basis accounts of a kind.
+    for (const account of ['4598', '5420', '4415']) {
+      expect(reverseChargeKindForBasisAccount(account), account).toBeNull()
+    }
   })
 
   it('emits the basis only for basisBase: none at 0, a share when part is already on a basis account', () => {

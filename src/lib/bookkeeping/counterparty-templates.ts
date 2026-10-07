@@ -11,6 +11,9 @@ import {
   getVatRate,
   isReverseChargeBasisAccount,
   isReverseChargeVatAccount,
+  RC_BASIS_OFFSET_ACCOUNT,
+  reverseChargeKindForBasisAccount,
+  type ReverseChargeKind,
 } from './vat-entries'
 import {
   isNotVatRegistered,
@@ -635,10 +638,88 @@ export function legacyTemplateDirection(debitAccount: string, creditAccount: str
   return 'unknown'
 }
 
+/**
+ * A reverse-charge basis pair inside a learned line pattern: the basis leg
+ * (4531, 4535, 4515 and so on; ruta 20-24) and its offset (4598, or a
+ * company's own 4599) on opposite sides with the same ratio, beside the cost
+ * lines. SIE learning keeps both legs as business lines, since the basis
+ * account is what tells EU from non-EU, and drops the fiktiv moms. Shared out
+ * like cost lines they shrank every real line to a fraction of the purchase
+ * and left the entry unbalanced, so a replay books them apart
+ * (patternReverseChargeLines).
+ */
+export interface PatternReverseChargePair {
+  basis: LinePatternEntry
+  offset: LinePatternEntry
+  kind: ReverseChargeKind
+  rate: number
+}
+
+/** What a replay shares the payment over, and the basis pair it books apart. */
+export interface PatternReplayPlan {
+  /** The VAT, business and tax entries of the pattern, without the basis pair. */
+  entries: LinePatternEntry[]
+  /** Scales each business/tax ratio so the remaining ones sum to one again; 1 without a pair. */
+  ratioScale: number
+  rcPair: PatternReverseChargePair | null
+}
+
+export function patternReplayPlan(pattern: readonly LinePatternEntry[]): PatternReplayPlan {
+  for (const basis of pattern) {
+    const basisRatio = basis.ratio
+    if (basis.type !== 'business' || basisRatio === undefined) continue
+    const kindAndRate = reverseChargeKindForBasisAccount(basis.account)
+    if (!kindAndRate) continue
+    const offset = pattern.find((e) =>
+      e !== basis &&
+      e.type === 'business' &&
+      e.side !== basis.side &&
+      e.ratio !== undefined &&
+      Math.abs(e.ratio - basisRatio) <= 0.0002 &&
+      // 4598 (BAS) or a company's own 4599; no basis account ends in 9x.
+      /^4[45]9\d$/.test(e.account),
+    )
+    if (!offset) continue
+    const entries = pattern.filter((e) => e !== basis && e !== offset)
+    const shared = entries
+      .filter((e) => e.type === 'business' || e.type === 'tax')
+      .reduce((sum, e) => sum + (e.ratio ?? 0), 0)
+    // A pair with no cost line beside it has nothing to book the payment on.
+    if (shared <= 0) break
+    return { entries, ratioScale: 1 / shared, rcPair: { basis, offset, ...kindAndRate } }
+  }
+  return { entries: [...pattern], ratioScale: 1, rcPair: null }
+}
+
+/**
+ * The complete reverse-charge set a pattern's basis pair stands for, on the
+ * purchase amount: fiktiv moms on 2645 (2647 for domestic) and 2614, 2624 or
+ * 2634 (rutor 48 and 30-32) plus the basis pair on the learned basis and
+ * offset accounts (ruta 20-24), all from generateReverseChargePurchaseLines.
+ * Oriented like the learned basis leg, so a pattern learned from a credit note
+ * reverses it; a caller's mirror applies on top.
+ */
+export function patternReverseChargeLines(
+  pair: PatternReverseChargePair,
+  base: number,
+): { account: string; side: 'debit' | 'credit'; amount: number; description: string }[] {
+  const asLearned = pair.basis.side === 'debit'
+  return generateReverseChargePurchaseLines({ base, rate: pair.rate, kind: pair.kind }).map((line) => {
+    const isDebit = line.debit_amount > 0
+    return {
+      account: line.account_number === RC_BASIS_OFFSET_ACCOUNT ? pair.offset.account : line.account_number,
+      side: isDebit === asLearned ? 'debit' : 'credit',
+      amount: isDebit ? line.debit_amount : line.credit_amount,
+      description: line.line_description || '',
+    }
+  })
+}
+
 /** Learned direction of a multi-line pattern: read off the business sides. */
 export function patternDirection(pattern: LinePatternEntry[]): TemplateDirection {
-
-  const business = pattern.filter((e) => e.type === 'business')
+  // A reverse-charge basis pair has a leg on each side; the cost lines beside
+  // it carry the direction.
+  const business = patternReplayPlan(pattern).entries.filter((e) => e.type === 'business')
   if (business.length === 0) return 'unknown'
   const debitCount = business.filter((b) => b.side === 'debit').length
   if (debitCount === business.length) return 'expense'
@@ -837,7 +918,9 @@ function buildLegacyMismatchResult(
  * VAT is computed from rate (exact), business/tax from ratio against non-VAT subtotal.
  * Rounding difference goes to 3740 (Öresutjämning): on the business side when
  * the ratios under-allocate, on the opposite side when they over-allocate (#1898).
- * Settlement line always equals the exact transaction amount.
+ * A reverse-charge basis pair is not shared out: the cost lines take the
+ * payment and the complete reverse-charge set is booked on it
+ * (patternReplayPlan). Settlement line always equals the exact transaction amount.
  */
 function buildMultiLineMappingResult(
   tmpl: CategorizationTemplate,
@@ -847,6 +930,7 @@ function buildMultiLineMappingResult(
   vatRegistered?: VatRegistration
 ): MappingResult {
   const pattern = tmpl.line_pattern!
+  const plan = patternReplayPlan(pattern)
   // Journal lines are always booked in SEK (see legacy path).
   const absAmount = Math.abs(resolveSekAmount(
     transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
@@ -868,7 +952,7 @@ function buildMultiLineMappingResult(
 
   // 1. Compute VAT lines first (from rate, exact)
   let totalVat = 0
-  for (const entry of pattern) {
+  for (const entry of plan.entries) {
     if (entry.type === 'vat' && entry.vat_rate && keepsVatEntry(entry.account)) {
       const vatAmount = Math.round(absAmount * entry.vat_rate / (1 + entry.vat_rate) * 100) / 100
       totalVat += vatAmount
@@ -886,9 +970,9 @@ function buildMultiLineMappingResult(
 
   // 3. Compute business/tax lines from ratios against nonVatAmount
   let nonVatAllocated = 0
-  for (const entry of pattern) {
+  for (const entry of plan.entries) {
     if ((entry.type === 'business' || entry.type === 'tax') && entry.ratio !== undefined) {
-      const amount = Math.round(nonVatAmount * entry.ratio * 100) / 100
+      const amount = Math.round(nonVatAmount * entry.ratio * plan.ratioScale * 100) / 100
       nonVatAllocated += amount
       allLines.push({
         account_number: entry.account,
@@ -907,6 +991,19 @@ function buildMultiLineMappingResult(
     }
   }
 
+  // 3b. The reverse-charge set on the purchase, in place of the learned pair.
+  // It nets to zero, so it plays no part in the rounding below.
+  if (plan.rcPair) {
+    for (const line of patternReverseChargeLines(plan.rcPair, nonVatAmount)) {
+      allLines.push({
+        account_number: line.account,
+        debit_amount: side(line.side) === 'debit' ? line.amount : 0,
+        credit_amount: side(line.side) === 'credit' ? line.amount : 0,
+        description: line.description,
+      })
+    }
+  }
+
   // 4. Check for rounding difference → 3740
   const totalAllocated = Math.round((totalVat + nonVatAllocated) * 100) / 100
   const roundingDiff = Math.round((absAmount - totalAllocated) * 100) / 100
@@ -916,7 +1013,7 @@ function buildMultiLineMappingResult(
     // 0.3334 ratios on 100.00 kr give 3 x 33.34 = 100.02): 3740 offsets on
     // the OPPOSITE side so the non-settlement lines net to absAmount (#1898).
     // businessSide is already mirror-applied via side(), so flip after it.
-    const businessSide = side(pattern.find(e => e.type === 'business')?.side ?? 'credit')
+    const businessSide = side(plan.entries.find(e => e.type === 'business')?.side ?? 'credit')
     const roundingSide: 'debit' | 'credit' =
       roundingDiff > 0 ? businessSide : (businessSide === 'debit' ? 'credit' : 'debit')
     allLines.push({

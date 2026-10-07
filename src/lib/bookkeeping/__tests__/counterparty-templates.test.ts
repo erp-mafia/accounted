@@ -16,6 +16,8 @@ import {
   resolveSource,
   insertOrUpdateTemplate,
   populateTemplatesFromSieVouchers,
+  patternDirection,
+  patternReplayPlan,
 } from '../counterparty-templates'
 import { buildTransactionEntryLines } from '../transaction-entries'
 import { buildMappingResultFromCategory } from '../category-mapping'
@@ -24,6 +26,7 @@ import { roundOre } from '@/lib/money'
 import type { TemplateUpsertParams } from '../counterparty-templates'
 import type { LinePatternEntry } from '@/types'
 import type { SIETransactionLine } from '@/lib/import/types'
+import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 
 describe('counterparty-templates', () => {
   // ── Normalization ──────────────────────────────────────────
@@ -2365,5 +2368,240 @@ describe('counterparty template default_dimensions', () => {
 
     expect(result.direction_mismatch).toBe(true)
     expect(result.dimensions).toEqual({ '6': 'P001' })
+  })
+})
+
+// ============================================================
+// Reverse-charge basis pair in a SIE-learned line pattern
+// ============================================================
+
+describe('reverse-charge basis pair in a learned line pattern', () => {
+  // What SIE learning stores for a purchase booked 5420 + 4531/4598 + fiktiv
+  // moms: the pair kept as business lines, the fiktiv moms dropped, and every
+  // ratio normalised over all three lines.
+  const supabaseShape: LinePatternEntry[] = [
+    { account: '4531', type: 'business', side: 'debit', ratio: 0.3334 },
+    { account: '4598', type: 'business', side: 'credit', ratio: 0.3333 },
+    { account: '5420', type: 'business', side: 'debit', ratio: 0.3333 },
+  ]
+
+  function replay(pattern: LinePatternEntry[], amount: number, legacy = { debit: '5420', credit: '1930' }) {
+    const template = makeCategorizationTemplate({
+      debit_account: legacy.debit,
+      credit_account: legacy.credit,
+      vat_treatment: null,
+      line_pattern: pattern,
+    })
+    const tx = makeTransaction({ amount })
+    const result = buildMappingResultFromCounterpartyTemplate(
+      { template, matchMethod: 'exact_alias', confidence: 0.9 }, tx, 'aktiebolag',
+    )
+    const entry = buildTransactionEntryLines(tx, result)
+    return {
+      result,
+      lines: entry.map((l) => ({ account: l.account_number, debit: l.debit_amount, credit: l.credit_amount })),
+      debits: roundOre(entry.reduce((s, l) => s + l.debit_amount, 0)),
+      credits: roundOre(entry.reduce((s, l) => s + l.credit_amount, 0)),
+    }
+  }
+
+  /** A client that answers the existing-templates read with none and captures the insert. */
+  function capturingClient() {
+    const inserted: Record<string, unknown>[] = []
+    const queue = [{ data: [] as unknown[] }, { data: null }]
+    const from = vi.fn(() => {
+      const result = { data: queue.shift()?.data ?? null, error: null }
+      const chain: object = new Proxy({}, {
+        get(_target, prop) {
+          if (prop === 'then') return (resolve: (v: unknown) => void) => resolve(result)
+          if (prop === 'insert') {
+            return (payload: Record<string, unknown>) => {
+              inserted.push(payload)
+              return chain
+            }
+          }
+          return () => chain
+        },
+      })
+      return chain
+    })
+    return { supabase: { from } as never, inserted }
+  }
+
+  it('replays the 250 kr Supabase shape balanced: cost, fiktiv moms and the ruta 22 basis on 4531/4598', () => {
+    const { lines, debits, credits } = replay(supabaseShape, -250)
+    expect(lines).toEqual([
+      { account: '5420', debit: 250, credit: 0 },
+      { account: '2645', debit: 62.5, credit: 0 },
+      { account: '2614', debit: 0, credit: 62.5 },
+      { account: '4531', debit: 250, credit: 0 },
+      { account: '4598', debit: 0, credit: 250 },
+      { account: '1930', debit: 0, credit: 250 },
+    ])
+    expect(debits).toBe(562.5)
+    expect(credits).toBe(562.5)
+    // The declaration reads the basis in ruta 22, the output VAT in ruta 30
+    // and the deduction in ruta 48.
+    expect(ACCOUNT_RUTA['4531'].box).toBe('ruta22')
+    expect(ACCOUNT_RUTA['2614'].box).toBe('ruta30')
+    expect(ACCOUNT_RUTA['2645'].box).toBe('ruta48')
+  })
+
+  it('keeps the learned accounts: an EU-services basis on 4535 and a company offset on 4599', () => {
+    const { lines, debits, credits } = replay([
+      { account: '4535', type: 'business', side: 'debit', ratio: 0.3334 },
+      { account: '4599', type: 'business', side: 'credit', ratio: 0.3333 },
+      { account: '6540', type: 'business', side: 'debit', ratio: 0.3333 },
+    ], -1000)
+    expect(lines).toEqual([
+      { account: '6540', debit: 1000, credit: 0 },
+      { account: '2645', debit: 250, credit: 0 },
+      { account: '2614', debit: 0, credit: 250 },
+      { account: '4535', debit: 1000, credit: 0 },
+      { account: '4599', debit: 0, credit: 1000 },
+      { account: '1930', debit: 0, credit: 1000 },
+    ])
+    expect(debits).toBe(credits)
+  })
+
+  it('learns the shape from SIE vouchers and replays it balanced on a new amount', async () => {
+    const vouchers = Array.from({ length: 3 }, (_, i) =>
+      makeSIEVoucher({
+        description: 'Supabase',
+        number: i + 1,
+        lines: [
+          { account: '1930', amount: -250 },
+          { account: '5420', amount: 250 },
+          { account: '4531', amount: 250 },
+          { account: '4598', amount: -250 },
+          { account: '2645', amount: 62.5 },
+          { account: '2614', amount: -62.5 },
+        ],
+      })
+    )
+    const { supabase, inserted } = capturingClient()
+    expect(await populateTemplatesFromSieVouchers(supabase, 'company-1', vouchers)).toBe(1)
+    const learned = inserted[0].line_pattern as LinePatternEntry[]
+    expect(learned.map((e) => e.account).sort()).toEqual(['4531', '4598', '5420'])
+
+    const { lines, debits, credits } = replay(learned, -1234.56)
+    expect(lines).toEqual(expect.arrayContaining([
+      { account: '5420', debit: 1234.56, credit: 0 },
+      { account: '2645', debit: 308.64, credit: 0 },
+      { account: '2614', debit: 0, credit: 308.64 },
+      { account: '4531', debit: 1234.56, credit: 0 },
+      { account: '4598', debit: 0, credit: 1234.56 },
+      { account: '1930', debit: 0, credit: 1234.56 },
+    ]))
+    expect(lines).toHaveLength(6)
+    expect(debits).toBe(credits)
+  })
+
+  it('shares the payment over two cost lines by their learned split', async () => {
+    const vouchers = Array.from({ length: 3 }, (_, i) =>
+      makeSIEVoucher({
+        description: 'Hosting Co',
+        number: i + 1,
+        lines: [
+          { account: '1930', amount: -250 },
+          { account: '5420', amount: 150 },
+          { account: '6540', amount: 100 },
+          { account: '4535', amount: 250 },
+          { account: '4598', amount: -250 },
+          { account: '2645', amount: 62.5 },
+          { account: '2614', amount: -62.5 },
+        ],
+      })
+    )
+    const { supabase, inserted } = capturingClient()
+    await populateTemplatesFromSieVouchers(supabase, 'company-1', vouchers)
+    const { lines, debits, credits } = replay(inserted[0].line_pattern as LinePatternEntry[], -250)
+
+    const debitOn = (account: string) => lines.find((l) => l.account === account)?.debit ?? 0
+    // The stored ratios carry four decimals, so the split may move an öre or two.
+    expect(roundOre(Math.abs(debitOn('5420') - 150))).toBeLessThanOrEqual(0.02)
+    expect(roundOre(Math.abs(debitOn('6540') - 100))).toBeLessThanOrEqual(0.02)
+    expect(debitOn('4535')).toBe(250)
+    expect(debitOn('2645')).toBe(62.5)
+    expect(debits).toBe(credits)
+  })
+
+  it('mirrors the whole set for a refund against a purchase-learned pair', () => {
+    const { result, lines, debits, credits } = replay(supabaseShape, 250)
+    expect(result.direction_mismatch).toBe(true)
+    expect(lines).toEqual([
+      { account: '1930', debit: 250, credit: 0 },
+      { account: '5420', debit: 0, credit: 250 },
+      { account: '2645', debit: 0, credit: 62.5 },
+      { account: '2614', debit: 62.5, credit: 0 },
+      { account: '4531', debit: 0, credit: 250 },
+      { account: '4598', debit: 250, credit: 0 },
+    ])
+    expect(debits).toBe(credits)
+  })
+
+  it('reverses the set for an incoming row against a pair learned from a credit note', () => {
+    const { result, lines, debits, credits } = replay([
+      { account: '4515', type: 'business', side: 'credit', ratio: 0.3334 },
+      { account: '4598', type: 'business', side: 'debit', ratio: 0.3333 },
+      { account: '4010', type: 'business', side: 'credit', ratio: 0.3333 },
+    ], 500, { debit: '1930', credit: '4010' })
+    expect(result.direction_mismatch).toBeUndefined()
+    expect(lines).toEqual([
+      { account: '1930', debit: 500, credit: 0 },
+      { account: '4010', debit: 0, credit: 500 },
+      { account: '2645', debit: 0, credit: 125 },
+      { account: '2614', debit: 125, credit: 0 },
+      { account: '4515', debit: 0, credit: 500 },
+      { account: '4598', debit: 500, credit: 0 },
+    ])
+    expect(debits).toBe(credits)
+  })
+
+  it('reads the direction off the cost lines beside the pair', () => {
+    expect(patternDirection(supabaseShape)).toBe('expense')
+  })
+
+  it('takes only a pair of equal legs beside a cost line as a basis pair', () => {
+    expect(patternReplayPlan(supabaseShape).rcPair).toMatchObject({ kind: 'non_eu_services', rate: 0.25 })
+    for (const pattern of [
+      // No cost line beside the pair: nothing to book the payment on.
+      [
+        { account: '4531', type: 'business', side: 'debit', ratio: 0.5 },
+        { account: '4599', type: 'business', side: 'credit', ratio: 0.5 },
+      ],
+      // A cost booked straight on a basis account, with no offset.
+      [
+        { account: '4531', type: 'business', side: 'debit', ratio: 0.6 },
+        { account: '6570', type: 'business', side: 'debit', ratio: 0.4 },
+      ],
+      // Legs of different size are not a statistic pair.
+      [
+        { account: '4531', type: 'business', side: 'debit', ratio: 0.5 },
+        { account: '4598', type: 'business', side: 'credit', ratio: 0.2 },
+        { account: '5420', type: 'business', side: 'debit', ratio: 0.3 },
+      ],
+    ] as LinePatternEntry[][]) {
+      const plan = patternReplayPlan(pattern)
+      expect(plan.rcPair).toBeNull()
+      expect(plan.ratioScale).toBe(1)
+      expect(plan.entries).toEqual(pattern)
+    }
+  })
+
+  it('leaves an ordinary multi-line pattern exactly as before', () => {
+    const domestic: LinePatternEntry[] = [
+      { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+      { account: '6540', type: 'business', side: 'debit', ratio: 0.6 },
+      { account: '5420', type: 'business', side: 'debit', ratio: 0.4 },
+    ]
+    expect(patternReplayPlan(domestic)).toEqual({ entries: domestic, ratioScale: 1, rcPair: null })
+    const { lines } = replay(domestic, -1250)
+    expect(lines).toEqual([
+      { account: '2641', debit: 250, credit: 0 },
+      { account: '6540', debit: 600, credit: 0 },
+      { account: '5420', debit: 400, credit: 0 },
+      { account: '1930', debit: 0, credit: 1250 },
+    ])
   })
 })

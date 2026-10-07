@@ -50,6 +50,8 @@ import { templateAccountForForm } from '@/lib/company/entity-type'
 import {
   legacyTemplateDirection as legacyDirection,
   patternDirection,
+  patternReplayPlan,
+  patternReverseChargeLines,
 } from '@/lib/bookkeeping/counterparty-templates'
 
 
@@ -250,6 +252,9 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
 
   // ---- Multi-line counterparty template (buildMultiLineMappingResult) ----
   if (linePattern && linePattern.length > 0) {
+    // ENGINE PARITY: the same plan decides what is shared out and which
+    // reverse-charge basis pair is booked apart.
+    const plan = patternReplayPlan(linePattern)
     // Sign mismatch (refund/repayment): the engine flips every learned side
     // so the mirrored entry reduces what the original pattern built up.
     const learned = patternDirection(linePattern)
@@ -281,7 +286,7 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
 
     // VAT lines first (from rate, exact)
     let totalVat = 0
-    for (const entry of linePattern) {
+    for (const entry of plan.entries) {
       if (entry.type === 'vat' && entry.vat_rate) {
         const vatAmt = engineRound(absAmount * entry.vat_rate / (1 + entry.vat_rate))
         totalVat += vatAmt
@@ -292,11 +297,18 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
     // Business/tax lines (from ratio against non-VAT amount)
     const nonVatAmt = engineRound(absAmount - totalVat)
     let allocated = 0
-    for (const entry of linePattern) {
+    for (const entry of plan.entries) {
       if ((entry.type === 'business' || entry.type === 'tax') && entry.ratio !== undefined) {
-        const amt = engineRound(nonVatAmt * entry.ratio)
+        const amt = engineRound(nonVatAmt * entry.ratio * plan.ratioScale)
         allocated += amt
         result.push({ side: side(entry.side), account: entry.account, amount: amt })
+      }
+    }
+
+    // The reverse-charge set on the purchase (engine step 3b)
+    if (plan.rcPair) {
+      for (const line of patternReverseChargeLines(plan.rcPair, nonVatAmt)) {
+        result.push({ side: side(line.side), account: line.account, amount: line.amount })
       }
     }
 
@@ -308,7 +320,7 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
       // diff (under-allocation) lands on the mirrored business side, a
       // negative diff (over-allocation) on the opposite side. The flip is
       // applied AFTER the mirror, exactly as the engine does it.
-      const businessSide = linePattern.find(e => e.type === 'business')?.side ?? 'credit'
+      const businessSide = plan.entries.find(e => e.type === 'business')?.side ?? 'credit'
       const effectiveBusinessSide = side(businessSide)
       const roundingSide: 'debet' | 'kredit' =
         diff > 0 ? effectiveBusinessSide : (effectiveBusinessSide === 'debet' ? 'kredit' : 'debet')

@@ -243,6 +243,21 @@ export function reverseChargeKindRuta(kind: ReverseChargeKind): 'ruta20' | 'ruta
   return 'ruta21'
 }
 
+/**
+ * The kind and rate a basis account stands for: the inverse of the account
+ * generateReverseChargePurchaseLines picks (4531 is non-EU services at 25 %).
+ * Null for any other account, and for domestic goods (4415-4417), which have
+ * no kind.
+ */
+export function reverseChargeKindForBasisAccount(account: string): { kind: ReverseChargeKind; rate: number } | null {
+  for (const kind of REVERSE_CHARGE_KINDS) {
+    for (const rate of [0.25, 0.12, 0.06]) {
+      if (pickBasisAccount(rate, kind)?.account === account) return { kind, rate }
+    }
+  }
+  return null
+}
+
 const RC_BASIS_BOXES: ReadonlySet<string> = new Set(['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24'])
 
 /**
