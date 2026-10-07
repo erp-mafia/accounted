@@ -210,6 +210,8 @@ export function migrationIssueReason(issue: Pick<ProviderMigrationIssue, 'error_
     case 'MIGRATION_INVOICE_NUMBER_TAKEN':
     case '23505':
       return 'number_taken'
+    // No longer raised: a supplier invoice without a number is stored with a
+    // NULL number (20261005225009). Kept for records that still carry it.
     case 'MIGRATION_SUPPLIER_INVOICE_NUMBER_MISSING':
       return 'number_missing'
     // A NOT NULL column the source left empty (until 2026-10 the most common

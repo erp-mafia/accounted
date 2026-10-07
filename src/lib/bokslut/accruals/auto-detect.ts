@@ -70,7 +70,7 @@ interface InvoiceRow {
 
 interface SupplierInvoiceRow {
   id: string
-  supplier_invoice_number: string
+  supplier_invoice_number: string | null
   invoice_date: string
   subtotal: number
   currency: string | null
@@ -331,7 +331,9 @@ export async function detectPeriodisering(
       .map((i) => i.account_number)
       .filter(Boolean)
     const supplierName = row.suppliers?.name ?? 'Okänd leverantör'
-    const sourceLabel = `${supplierName} (lev.faktura ${row.supplier_invoice_number})`
+    const sourceLabel = row.supplier_invoice_number
+      ? `${supplierName} (lev.faktura ${row.supplier_invoice_number})`
+      : supplierName
     const s = buildSuggestion({
       sourceId: row.id,
       sourceType: 'supplier_invoice',

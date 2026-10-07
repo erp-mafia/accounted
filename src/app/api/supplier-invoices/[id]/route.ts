@@ -39,7 +39,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   // `credited_original:supplier_invoices!credited_invoice_id(...)` resolved to
   // the one-to-many side and came back as an empty array, which the detail
   // page rendered as "Krediterar: Ankomst #" with no number.
-  let creditedOriginal: { id: string; supplier_invoice_number: string; arrival_number: number } | null = null
+  let creditedOriginal: { id: string; supplier_invoice_number: string | null; arrival_number: number } | null = null
   if (invoice.credited_invoice_id) {
     const { data: original } = await supabase
       .from('supplier_invoices')

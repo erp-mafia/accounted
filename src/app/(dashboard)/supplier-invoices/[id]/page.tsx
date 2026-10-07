@@ -730,7 +730,7 @@ export default function SupplierInvoiceDetailPage() {
   const payments = (invoice.payments || []) as SupplierInvoicePayment[]
   const creditedOriginal =
     (invoice as SupplierInvoice & {
-      credited_original?: { id: string; supplier_invoice_number: string; arrival_number: number } | null
+      credited_original?: { id: string; supplier_invoice_number: string | null; arrival_number: number } | null
     }).credited_original ?? null
 
   // Display-only öresavrundning: the same figures the editor and the review

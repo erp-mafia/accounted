@@ -134,16 +134,8 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     && await hasPreNormalisationCreditNote(supabase, job, mapped.invoice, deadline)) {
     return { id: c.id, skip: 'creditNoteInOldShape' }
   }
-  // supplier_invoices.supplier_invoice_number is NOT NULL, so a new source
-  // invoice without a number (Bokio requires none) was refused by Postgres as
-  // a bare 23502 that no retry could change. Refuse it here by name instead,
-  // before the write, so the review can say what is missing and where to add
-  // it. One an earlier import already holds is adopted through its source
-  // record and never inserted, so it goes on as before.
-  if (c.resource === 'supplierInvoices' && !String(mapped.invoice.supplier_invoice_number ?? '').trim()
-    && !await sourceRecordExists(supabase, job, c, deadline)) {
-    return { id: c.id, error: 'MIGRATION_SUPPLIER_INVOICE_NUMBER_MISSING' }
-  }
+  // A supplier invoice without a number (Bokio requires none) goes on to the
+  // commit, which stores it with a NULL number (20261005225009, crm#1039).
   // The supplier mapper holds its rows to the header whether or not VAT was
   // established, and hands back none when they disagree: the same refusal as
   // the check below, which a supplier invoice with no established VAT used to
@@ -227,16 +219,6 @@ async function hasPreNormalisationCreditNote(supabase: SupabaseClient, job: Prov
   if (!data?.length) return false
   log.warn('supplier credit note already imported in the pre-normalisation shape: left as is', { jobId: job.id, targetId: (data[0] as { id: string }).id })
   return true
-}
-
-/** Whether an earlier import already maps this source record to a row of ours. */
-async function sourceRecordExists(supabase: SupabaseClient, job: ProviderMigrationJob, c: MigrationChunk,
-  deadline: number): Promise<boolean> {
-  const { data, error } = await withinMigrationDeadline(supabase.from('migration_source_records').select('id')
-    .eq('company_id', job.company_id).eq('provider', job.provider).eq('account_key', job.account_key)
-    .eq('resource', c.resource).eq('source_id', c.source_id).limit(1), deadline)
-  if (error) throw new Error(error.message)
-  return !!data?.length
 }
 
 /** Where each register keeps a credit note's pointer at the invoice it credits. */

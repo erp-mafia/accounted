@@ -13,6 +13,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, InvoiceItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { createAccrualSchedule } from '@/lib/bookkeeping/accruals/service'
 import {
   coerceDimensionsBag,
@@ -86,7 +87,7 @@ export async function createSchedulesForSupplierInvoice(
           totalAmountSek: totalSek,
           periodStart: item.accrual_period_start as string,
           periodEnd: item.accrual_period_end as string,
-          description: `${toSingleLine(item.description)} (leverantörsfaktura ${invoice.supplier_invoice_number})`,
+          description: `${toSingleLine(item.description)} (leverantörsfaktura ${supplierInvoiceReference(invoice.supplier_invoice_number, invoice.arrival_number)})`,
           dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
         },
         {

@@ -157,7 +157,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
     doNotUseFor:
       'Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).',
     pitfalls: [
-      'Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier\'s bankgiro, plusgiro or clearing + account number), not_found.',
+      'Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier\'s bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), not_found.',
       'debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic or org_number).',
       'already_batched is a warning here but a refusal at create unless confirm_already_batched is true: paying the same invoice twice is the risk.',
       'Only SEK invoices; at most 100 per call.',
@@ -202,7 +202,8 @@ export const supplierPaymentBatchesPreview = defineOperation({
       z.object({
         supplier_invoice_id: z.string().uuid(),
         supplier_name: z.string(),
-        supplier_invoice_number: z.string(),
+        // NULL when the invoice has no supplier number; it then pays by its OCR.
+        supplier_invoice_number: z.string().nullable(),
         amount: z.number(),
         payment_date: z.string(),
         payee: Payee,
@@ -221,6 +222,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
           'foreign_currency',
           'payee_missing',
           'payee_invalid',
+          'reference_missing',
           'not_found',
         ]),
       }),

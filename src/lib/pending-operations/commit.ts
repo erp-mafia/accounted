@@ -4522,11 +4522,13 @@ async function commitCreateSupplierInvoiceFromInbox(
   // due_date is NOT NULL on supplier_invoices: a null here used to reach the
   // INSERT and surface as a bare 500 (feedback 395405). Staging defaults it
   // now; this guard catches a stale or tampered op before an ankomstnummer
-  // is burnt.
+  // is burnt. A blank number is refused the same way: the column refuses it
+  // (supplier_invoices_number_not_blank), and this door still needs one.
   if (
     !inboxItemId ||
     !supplierId ||
-    !supplierInvoiceNumber ||
+    typeof supplierInvoiceNumber !== 'string' ||
+    !supplierInvoiceNumber.trim() ||
     !invoiceDate ||
     !dueDate ||
     rawItems.length === 0

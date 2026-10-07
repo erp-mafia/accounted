@@ -27,7 +27,7 @@ export const SUPPLIER_CREDIT_NOTE_STATUS = 'credited' as const
 export interface SupplierCreditNoteSource {
   id: string
   supplier_id: string
-  supplier_invoice_number: string
+  supplier_invoice_number: string | null
   currency: string
   exchange_rate: number | null
   vat_treatment: string
@@ -57,13 +57,19 @@ export interface SupplierCreditNoteContext {
   documentId?: string | null
 }
 
-/** The number a credit note row carries: the supplier's own, else KREDIT-<original>. */
+/**
+ * The number a credit note row carries: the supplier's own, else
+ * KREDIT-<original>. An original without a number gives a credit note
+ * without one (NULL, never "KREDIT-" or "KREDIT-null"): credited_invoice_id
+ * already ties the two together.
+ */
 export function supplierCreditNoteNumber(
-  originalNumber: string,
+  originalNumber: string | null,
   supplierNumber: string | null | undefined,
-): string {
+): string | null {
   const own = supplierNumber?.trim()
-  return own ? own : `KREDIT-${originalNumber}`
+  if (own) return own
+  return originalNumber?.trim() ? `KREDIT-${originalNumber}` : null
 }
 
 /**

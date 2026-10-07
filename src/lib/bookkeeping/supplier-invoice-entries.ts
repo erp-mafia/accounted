@@ -2,7 +2,7 @@ import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { resolveBookingAccount } from './accruals/account-suggestions'
-import { buildSupplierDescription } from './supplier-invoice-description'
+import { buildSupplierDescription, supplierInvoiceReference } from './supplier-invoice-description'
 import {
   generateReverseChargePurchaseLines,
   generateReverseChargeBasisLines,
@@ -582,7 +582,13 @@ export function buildSupplierInvoiceCashLines(
     ? settledBankSek / invoice.total
     : invoice.exchange_rate
 
-  const desc = buildSupplierDescription('Kontantbetalning leverantörsfaktura', invoice.supplier_invoice_number, supplierName)
+  // A number-less invoice is named by its ankomstnummer, so the verifikat
+  // still identifies which invoice it pays (BFL 5 kap 7 §).
+  const desc = buildSupplierDescription(
+    'Kontantbetalning leverantörsfaktura',
+    supplierInvoiceReference(invoice.supplier_invoice_number, invoice.arrival_number),
+    supplierName,
+  )
   const lines: CreateJournalEntryLineInput[] = []
   // Dimensions PR7: kontantmetoden books the expense at payment, same merge
   // rules as the registration entry.

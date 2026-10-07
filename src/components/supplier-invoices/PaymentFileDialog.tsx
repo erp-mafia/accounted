@@ -24,7 +24,8 @@ import { formatCurrency } from '@/lib/utils'
 interface PreviewLine {
   id: string
   supplier_name: string
-  invoice_number: string
+  /** NULL when the invoice has no supplier number; the line then pays by OCR. */
+  invoice_number: string | null
   amount: number
   payment_date: string
   payee: { type: string; label: string }
@@ -60,6 +61,7 @@ export default function PaymentFileDialog({
   invoiceLabelById,
 }: PaymentFileDialogProps) {
   const t = useTranslations('supplier_payment_files')
+  const tInvoices = useTranslations('supplier_invoices')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
 
@@ -253,7 +255,7 @@ export default function PaymentFileDialog({
                         <td className="max-w-0 w-1/3 py-2 pr-3">
                           <span className="block truncate">{line.supplier_name}</span>
                           <span className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
-                            <span className="tabular-nums">{line.invoice_number}</span>
+                            <span className="tabular-nums">{line.invoice_number ?? tInvoices('number_missing')}</span>
                             {line.warnings.map((warning) => (
                               <Badge
                                 key={warning}

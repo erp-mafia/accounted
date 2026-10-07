@@ -41,6 +41,9 @@ export type BatchExclusionReason =
   | 'foreign_currency'
   | 'payee_missing'
   | 'payee_invalid'
+  // No valid OCR and no supplier invoice number: the payment would reach the
+  // supplier with nothing to match it by (resolvePaymentReference).
+  | 'reference_missing'
 
 export type BatchItemWarning =
   | 'unattested'
@@ -60,7 +63,7 @@ export interface BatchInvoiceFacts {
   currency: string
   is_credit_note: boolean
   payment_reference: string | null
-  supplier_invoice_number: string
+  supplier_invoice_number: string | null
 }
 
 export interface BatchEvaluationOptions {
@@ -99,6 +102,7 @@ export function evaluateInvoiceForBatch(
   if (!resolution.ok) return { eligible: false, reason: resolution.reason }
 
   const { reference, ocrInvalid } = resolvePaymentReference(invoice)
+  if (!reference) return { eligible: false, reason: 'reference_missing' }
 
   const warnings: BatchItemWarning[] = []
   if (!invoice.approved_at) warnings.push('unattested')

@@ -38,6 +38,11 @@ describe('supplier invoice identity', () => {
     expect(listedInvoiceKeys(SUPPLIER, listed())).toContain(legacy)
   })
 
+  it('treats a whitespace-only provider number as none, the way the mapper stores it (NULL)', () => {
+    const key = existingInvoiceKey({ supplier_id: SUPPLIER, supplier_invoice_number: null, invoice_date: '2026-03-27', total: 150 })
+    expect(listedInvoiceKeys(SUPPLIER, listed({ invoiceNumber: '   ' }))).toContain(key)
+  })
+
   it('gives a row without a supplier no key', () => {
     expect(existingInvoiceKey({ supplier_id: null, supplier_invoice_number: 'F-1', invoice_date: null, total: null })).toBeNull()
   })

@@ -52,7 +52,8 @@ const SupplierInvoiceSummary = z.object({
   supplier_id: z.string().uuid(),
   supplier_name: z.string(),
   arrival_number: z.number().int(),
-  supplier_invoice_number: z.string(),
+  // NULL when the supplier's invoice carries no number (never a stand-in).
+  supplier_invoice_number: z.string().nullable(),
   invoice_date: z.string(),
   due_date: z.string(),
   status: SupplierInvoiceStatus,

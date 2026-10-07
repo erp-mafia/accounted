@@ -55,6 +55,7 @@ export default function SupplierDetailPage() {
   const { toast } = useToast()
   const t = useTranslations('supplier_detail')
   const tParties = useTranslations('parties')
+  const tInvoices = useTranslations('supplier_invoices')
   const [supplier, setSupplier] = useState<Supplier & { stats?: SupplierStats } | null>(null)
   const partyId = (supplier as { party_id?: string | null } | null)?.party_id ?? null
   const party = usePartyDossier(partyId)
@@ -381,7 +382,11 @@ export default function SupplierDetailPage() {
                     href={`/supplier-invoices/${inv.id}`}
                     className="flex items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-secondary/35"
                   >
-                    <span className="min-w-0 truncate">{inv.supplier_invoice_number}</span>
+                    <span className="min-w-0 truncate">
+                      {inv.supplier_invoice_number ?? (
+                        <span className="text-muted-foreground">{tInvoices('number_missing')}</span>
+                      )}
+                    </span>
                     <span className="hidden shrink-0 text-muted-foreground tabular-nums sm:inline">
                       {formatDate(inv.due_date)}
                     </span>

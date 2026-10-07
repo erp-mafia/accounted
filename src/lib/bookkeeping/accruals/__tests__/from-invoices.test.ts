@@ -119,6 +119,39 @@ describe('createSchedulesForSupplierInvoice', () => {
     const spec = mockCreateAccrualSchedule.mock.calls[0][3]
     expect(spec.dimensions).toBeUndefined()
   })
+
+  it('names the invoice by its supplier number in the schedule text', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: [] }])
+
+    await createSchedulesForSupplierInvoice(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      makeSupplierInvoice({ id: 'si-1', supplier_invoice_number: 'LF-77', arrival_number: 9 }),
+      [makeSupplierItem()],
+      'je-origin',
+    )
+
+    expect(mockCreateAccrualSchedule.mock.calls[0][3].description).toBe('Försäkring 2026 (leverantörsfaktura LF-77)')
+  })
+
+  // crm#1039: never "(leverantörsfaktura null)" in a periodisering text.
+  it('names a number-less invoice by its ankomstnummer', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: [] }])
+
+    await createSchedulesForSupplierInvoice(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      makeSupplierInvoice({ id: 'si-1', supplier_invoice_number: null, arrival_number: 9 }),
+      [makeSupplierItem()],
+      'je-origin',
+    )
+
+    expect(mockCreateAccrualSchedule.mock.calls[0][3].description).toBe('Försäkring 2026 (leverantörsfaktura ankomstnr 9)')
+  })
 })
 
 describe('createSchedulesForCustomerInvoice', () => {

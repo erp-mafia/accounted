@@ -449,7 +449,7 @@ Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newes
 Response `200`:
 ```ts
 {
-  data: { id: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, paid_at: string | null, created_at: string }[],
+  data: { id: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string | null, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, paid_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -653,7 +653,7 @@ Response `200`:
     id: string,
     supplier_id: string,
     arrival_number: number,
-    supplier_invoice_number: string,
+    supplier_invoice_number: string | null,
     invoice_date: string,
     due_date: string,
     received_date: string,
@@ -760,7 +760,7 @@ Response `200`:
     id: string,
     supplier_id: string,
     arrival_number: number,
-    supplier_invoice_number: string,
+    supplier_invoice_number: string | null,
     invoice_date: string,
     due_date: string,
     received_date: string,
@@ -893,7 +893,7 @@ Response `200`:
     id: string,
     status: "approved" | "overdue",
     arrival_number: number,
-    supplier_invoice_number: string
+    supplier_invoice_number: string | null
   },
   meta: {
     request_id: string,
@@ -1105,7 +1105,7 @@ Response `200`:
     credit_note_id: string,
     original_id: string,
     arrival_number: number,
-    supplier_invoice_number: string,
+    supplier_invoice_number: string | null,
     invoice_date: string,
     registration_journal_entry_id: string | null,
     document_id: string | null,
@@ -1805,7 +1805,7 @@ Evaluates the given supplier invoices exactly as create will: eligible lines wit
 **Do not use for:** Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).
 
 **Pitfalls:**
-- Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier's bankgiro, plusgiro or clearing + account number), not_found.
+- Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier's bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), not_found.
 - debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic or org_number).
 - already_batched is a warning here but a refusal at create unless confirm_already_batched is true: paying the same invoice twice is the risk.
 - Only SEK invoices; at most 100 per call.
@@ -1832,8 +1832,8 @@ Response `200`:
 ```ts
 {
   data: {
-    eligible: { supplier_invoice_id: string, supplier_name: string, supplier_invoice_number: string, amount: number, payment_date: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account", label: string }, reference: { type: "ocr" | "invoice_number", value: string }, warnings: ("unattested" | "already_batched" | "ocr_invalid" | "payee_city_missing")[], active_supplier_payment_batch_id: string | null }[],
-    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "not_found" }[],
+    eligible: { supplier_invoice_id: string, supplier_name: string, supplier_invoice_number: string | null, amount: number, payment_date: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account", label: string }, reference: { type: "ocr" | "invoice_number", value: string }, warnings: ("unattested" | "already_batched" | "ocr_invalid" | "payee_city_missing")[], active_supplier_payment_batch_id: string | null }[],
+    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "not_found" }[],
     total_amount: number,
     currency: "SEK",
     debtor_ok: boolean,

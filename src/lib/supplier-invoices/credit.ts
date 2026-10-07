@@ -357,6 +357,8 @@ export async function creditSupplierInvoice(
         },
         original_id: original.id,
         original_supplier_invoice_number: original.supplier_invoice_number,
+        // Names the original when it has no supplier number.
+        original_arrival_number: original.arrival_number ?? null,
         supplier_name: supplier?.name ?? null,
         credit_date: creditDate,
         date_source: dateSource,

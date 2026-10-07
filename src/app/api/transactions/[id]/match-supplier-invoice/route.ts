@@ -5,6 +5,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planSupplierBankMatch } from '@/lib/invoices/apply-supplier-payment'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { buildSupplierDescription, supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -122,9 +123,11 @@ export const POST = withRouteContext(
 
     // Verifikat header description for user-edited lines; the entry generators
     // below write their own.
-    const desc = invoice.supplier?.name
-      ? `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}, ${invoice.supplier.name}`
-      : `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}`
+    const desc = buildSupplierDescription(
+      'Utbetalning leverantörsfaktura',
+      supplierInvoiceReference(invoice.supplier_invoice_number, invoice.arrival_number),
+      invoice.supplier?.name || undefined,
+    )
 
     // One open-period gate for every booking shape below: the entry generators
     // only return null for a date outside an open period, which this route

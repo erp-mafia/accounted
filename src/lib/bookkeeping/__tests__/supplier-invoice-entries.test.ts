@@ -720,6 +720,19 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     expect(input.description).toBe('Leverantörsfaktura LF-100 (ankomstnr 5)')
   })
 
+  it('leaves a missing supplier number out of the verifikat text (crm#1039)', async () => {
+    const invoice = makeSupplierInvoice({ supplier_invoice_number: null, arrival_number: 5 })
+    const items = [makeItem()]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business', 'Leverantör AB'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.description).toBe('Leverantörsfaktura, Leverantör AB (ankomstnr 5)')
+    expect(input.description).not.toContain('null')
+  })
+
   it('handles non-EU reverse charge (services)', async () => {
     const invoice = makeSupplierInvoice({
       subtotal: 5000,
@@ -1449,6 +1462,18 @@ describe('createSupplierInvoiceCashEntry', () => {
     expect(input.description).toBe('Kontantbetalning leverantörsfaktura LF-300')
   })
 
+  it('names a number-less invoice by its ankomstnummer (crm#1039)', async () => {
+    const invoice = makeSupplierInvoice({ supplier_invoice_number: null, arrival_number: 12 })
+    const items = [makeItem()]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'swedish_business', 'Leverantör AB'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.description).toBe('Kontantbetalning leverantörsfaktura ankomstnr 12, Leverantör AB')
+  })
+
   it('carries the invoice dimensions onto every leg, the bank fee and the öre included', async () => {
     // A matched bank row paying 10 012 kr for a 10 012,40 kr invoice plus a
     // 25 kr fee on top: expense + moms, the bank credit, 3740 and 6570 all
@@ -1777,6 +1802,24 @@ describe('createSupplierCreditNoteEntry', () => {
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.description).toBe('Kreditfaktura leverantör LF-400, Leverantör AB (ankomstnr 7)')
+  })
+
+  it('leaves a missing number out of the credit note verifikat text (crm#1039)', async () => {
+    const creditNote = makeSupplierInvoice({
+      is_credit_note: true,
+      supplier_invoice_number: null,
+      arrival_number: 7,
+      total: -10000,
+      vat_amount: -2000,
+    })
+    const items = [makeItem({ line_total: -8000, account_number: '6200', vat_rate: 0.25 })]
+
+    await createSupplierCreditNoteEntry(
+      null as never, 'company-1', 'user-1', creditNote, items, 'swedish_business', 'Leverantör AB'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.description).toBe('Kreditfaktura leverantör, Leverantör AB (ankomstnr 7)')
   })
 
   it('sets source_type to supplier_credit_note', async () => {

@@ -54,6 +54,7 @@ import type { BatchDuplicateRow } from '@/components/transactions/BatchDuplicate
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { categorizeBodyFor, proposalFromTemplate, proposalHue, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { useProposalWhy } from '@/components/transactions/proposal-why'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type {
@@ -591,7 +592,7 @@ export default function TransactionsPage() {
     retry: () => Promise<unknown>
     candidates: Array<{
       supplier_invoice_id: string
-      invoice_number: string
+      invoice_number: string | null
       invoice_date: string
       remaining_amount: number
       currency: string
@@ -2495,7 +2496,10 @@ export default function TransactionsPage() {
       }
 
       const label = isSupplier
-        ? `Leverantörsfaktura ${selectedTransaction.potential_supplier_invoice!.supplier_invoice_number} markerad som betald`
+        ? `Leverantörsfaktura ${supplierInvoiceReference(
+            selectedTransaction.potential_supplier_invoice!.supplier_invoice_number,
+            selectedTransaction.potential_supplier_invoice!.arrival_number,
+          )} markerad som betald`
         : `Faktura ${selectedTransaction.potential_invoice!.invoice_number} markerad som betald`
       toast({ title: isSupplier ? 'Leverantörsfaktura matchad' : 'Faktura matchad', description: label })
       setMatchDialogOpen(false)
@@ -5049,7 +5053,8 @@ export default function TransactionsPage() {
                 <div key={c.supplier_invoice_id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
                     <div className="font-medium">
-                      {c.supplier_name || 'Leverantör'} · {c.invoice_number}
+                      {c.supplier_name || 'Leverantör'}
+                      {c.invoice_number ? ` · ${c.invoice_number}` : null}
                     </div>
                     <div className="text-xs text-muted-foreground tabular-nums">
                       {formatDate(c.invoice_date)} · kvar {formatCurrency(c.remaining_amount, c.currency)}

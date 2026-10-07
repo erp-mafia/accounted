@@ -38,7 +38,7 @@ const SupplierInvoiceApproved = z.object({
   // 'overdue' when the attested invoice is still past its due date.
   status: z.enum(['approved', 'overdue']),
   arrival_number: z.number().int(),
-  supplier_invoice_number: z.string(),
+  supplier_invoice_number: z.string().nullable(),
 })
 
 registerEndpoint({

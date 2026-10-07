@@ -1063,6 +1063,28 @@ describe('CreateSupplierInvoiceSchema', () => {
     expect(result.success).toBe(false)
   })
 
+  // crm#1039: the column refuses a value with no visible character
+  // (supplier_invoices_number_not_blank); registering by hand still needs a
+  // number, so a blank one is a 400 here, not a database error later.
+  it('rejects a whitespace-only supplier invoice number with the required message', () => {
+    for (const number of ['   ', '\t\n']) {
+      const result = CreateSupplierInvoiceSchema.safeParse(validSupplierInvoice({ supplier_invoice_number: number }))
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0]?.message).toBe('Supplier invoice number is required')
+    }
+  })
+
+  it('keeps a real number exactly as typed', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(validSupplierInvoice({ supplier_invoice_number: ' 4711 ' }))
+    expect(result.success && result.data.supplier_invoice_number).toBe(' 4711 ')
+  })
+
+  it('UpdateSupplierInvoiceSchema refuses a blank number and accepts an omitted one', () => {
+    expect(UpdateSupplierInvoiceSchema.safeParse({ supplier_invoice_number: '  ' }).success).toBe(false)
+    expect(UpdateSupplierInvoiceSchema.safeParse({ notes: 'x' }).success).toBe(true)
+    expect(UpdateSupplierInvoiceSchema.safeParse({ supplier_invoice_number: 'LF-2' }).success).toBe(true)
+  })
+
   it('rejects empty items array', () => {
     const result = CreateSupplierInvoiceSchema.safeParse(
       validSupplierInvoice({ items: [] })

@@ -34,6 +34,7 @@ import {
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { buildSupplierDescription, supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import {
@@ -211,7 +212,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       total: number
       paid_amount: number
       remaining_amount: number
-      supplier_invoice_number: string
+      supplier_invoice_number: string | null
       arrival_number: number
       invoice_date: string
       is_credit_note: boolean
@@ -477,9 +478,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           })
         }
         const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
-        const desc = supplierRow?.name
-          ? `Utbetalning leverantörsfaktura ${typed.supplier_invoice_number}, ${supplierRow.name}`
-          : `Utbetalning leverantörsfaktura ${typed.supplier_invoice_number}`
+        const desc = buildSupplierDescription(
+          'Utbetalning leverantörsfaktura',
+          supplierInvoiceReference(typed.supplier_invoice_number, typed.arrival_number),
+          supplierRow?.name || undefined,
+        )
         const entry = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
           fiscal_period_id: fiscalPeriodId,
           entry_date: paymentDate,

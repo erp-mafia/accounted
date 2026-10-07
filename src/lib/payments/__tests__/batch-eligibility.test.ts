@@ -153,4 +153,23 @@ describe('evaluateInvoiceForBatch', () => {
     expect(result.eligible && result.reference).toEqual({ type: 'ocr', value: VALID_OCR })
     expect(result.eligible && result.warnings).toEqual([])
   })
+
+  // crm#1039: a supplier invoice may lack the supplier's number.
+  it('pays a number-less invoice by its OCR', () => {
+    const result = evaluateInvoiceForBatch(invoice({ supplier_invoice_number: null }), supplier, {
+      today: TODAY,
+    })
+    expect(result.eligible && result.reference).toEqual({ type: 'ocr', value: VALID_OCR })
+  })
+
+  it('leaves out an invoice with neither a valid OCR nor a number (reference_missing)', () => {
+    for (const payment_reference of [null, '1234568']) {
+      const result = evaluateInvoiceForBatch(
+        invoice({ supplier_invoice_number: null, payment_reference }),
+        supplier,
+        { today: TODAY },
+      )
+      expect(result).toEqual({ eligible: false, reason: 'reference_missing' })
+    }
+  })
 })

@@ -24,9 +24,10 @@ export interface UnderlagReference {
   id: string
   /**
    * invoice_number / supplier_invoice_number, or the salary run's period as
-   * `YYYY-MM`: the UI builds the label from this.
+   * `YYYY-MM`: the UI builds the label from this. NULL for a supplier invoice
+   * without the supplier's number.
    */
-  number: string
+  number: string | null
   /**
    * Retained source document owned by a referenced supplier invoice, if any.
    *
@@ -59,7 +60,7 @@ interface InvoiceRow {
 
 interface SupplierInvoiceRow {
   id: string
-  supplier_invoice_number: string
+  supplier_invoice_number: string | null
   document_id?: string | null
   /** Embedded document row; see UnderlagReference.document_id for why. */
   document?: { journal_entry_id: string | null } | { journal_entry_id: string | null }[] | null
@@ -145,7 +146,7 @@ export async function getJournalEntryUnderlagReferences(
   }
 
   // --- Supplier invoices ---------------------------------------------------
-  const supplierInvoices = new Map<string, { number: string; documentId?: string }>()
+  const supplierInvoices = new Map<string, { number: string | null; documentId?: string }>()
 
   // Registration booking (accrual) on the invoice itself.
   const registrationLinks = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>

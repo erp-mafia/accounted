@@ -440,11 +440,12 @@ export default function SupplierInvoicesPage() {
   }
 
   // Labels the excluded rows in the payment dialog ("Derome CD3014794407"),
-  // so a server-side exclusion never reads as a bare UUID.
+  // so a server-side exclusion never reads as a bare UUID. An invoice without
+  // a supplier number is labelled by its supplier alone.
   const invoiceLabelById = new Map(
     invoices.map((inv) => [
       inv.id,
-      `${inv.supplier?.name ?? ''} ${inv.supplier_invoice_number}`.trim(),
+      `${inv.supplier?.name ?? ''} ${inv.supplier_invoice_number ?? ''}`.trim(),
     ]),
   )
 
@@ -833,7 +834,9 @@ export default function SupplierInvoicesPage() {
                           rememberListContext()
                         }}
                       >
-                        {inv.supplier_invoice_number}
+                        {inv.supplier_invoice_number ?? (
+                          <span className="text-muted-foreground">{t('number_missing')}</span>
+                        )}
                       </Link>
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>

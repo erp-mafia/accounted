@@ -40,7 +40,7 @@ type BatchItemWithInvoice = SupplierPaymentBatchItem & {
     id: string
     status: string
     remaining_amount: number
-    supplier_invoice_number: string
+    supplier_invoice_number: string | null
     arrival_number: number
   } | null
 }

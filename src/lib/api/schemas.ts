@@ -1696,12 +1696,22 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   }
 })
 
+// The supplier's own invoice number, stored exactly as given. A value with no
+// visible character is refused here as the database refuses it
+// (supplier_invoices_number_not_blank): a missing number is NULL, never ''.
+// Registering by hand or through the API still needs a number; only the
+// provider import stores an invoice without one (crm#1039).
+const supplierInvoiceNumber = z
+  .string()
+  .min(1, 'Supplier invoice number is required')
+  .regex(/\S/, 'Supplier invoice number is required')
+
 export const CreateSupplierInvoiceSchema = z.object({
   supplier_id: uuid,
   // Optional invoice PDF/image already stored in the WORM document archive.
   // The route verifies company ownership and that the document is unused.
   document_id: uuid.optional(),
-  supplier_invoice_number: z.string().min(1, 'Supplier invoice number is required'),
+  supplier_invoice_number: supplierInvoiceNumber,
   invoice_date: isoDate,
   due_date: isoDate,
   delivery_date: optionalIsoDate,
@@ -1841,7 +1851,7 @@ export const SupplierInvoiceBankEnteredSchema = z.object({
 })
 
 export const UpdateSupplierInvoiceSchema = z.object({
-  supplier_invoice_number: z.string().min(1).optional(),
+  supplier_invoice_number: supplierInvoiceNumber.optional(),
   invoice_date: isoDate.optional(),
   due_date: isoDate.optional(),
   delivery_date: optionalIsoDate,

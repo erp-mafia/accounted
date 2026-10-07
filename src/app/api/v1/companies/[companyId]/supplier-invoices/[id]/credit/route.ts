@@ -27,7 +27,8 @@ const SupplierInvoiceCredited = z.object({
   credit_note_id: z.string().uuid(),
   original_id: z.string().uuid(),
   arrival_number: z.number().int(),
-  supplier_invoice_number: z.string(),
+  // NULL when neither the credit note nor the invoice it credits has a number.
+  supplier_invoice_number: z.string().nullable(),
   invoice_date: z.string(),
   registration_journal_entry_id: z.string().uuid().nullable(),
   document_id: z.string().uuid().nullable(),

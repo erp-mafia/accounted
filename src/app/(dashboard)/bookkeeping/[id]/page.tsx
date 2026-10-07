@@ -1008,12 +1008,15 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                     : ref.type === 'supplier_invoice'
                       ? `/supplier-invoices/${ref.id}`
                       : `/salary/runs/${ref.id}`
+                // A supplier invoice without the supplier's number (NULL)
+                // reads as plain "Leverantörsfaktura" and still links to it.
+                const number = ref.number ?? ''
                 const label =
                   ref.type === 'invoice'
-                    ? t('reference_invoice', { number: ref.number })
+                    ? t('reference_invoice', { number })
                     : ref.type === 'supplier_invoice'
-                      ? t('reference_supplier_invoice', { number: ref.number })
-                      : t('reference_salary_run', { number: ref.number })
+                      ? t('reference_supplier_invoice', { number })
+                      : t('reference_salary_run', { number })
                 const Icon = ref.type === 'salary_run' ? Users : FileText
                 return (
                   <li key={`${ref.type}-${ref.id}`} className="py-1 first:pt-0 last:pb-0">

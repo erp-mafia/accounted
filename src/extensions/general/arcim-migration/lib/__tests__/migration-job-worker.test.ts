@@ -796,7 +796,9 @@ describe('records the review lists', () => {
       p_records: [{ id: 'dropped', error: 'MIGRATION_SOURCE_LINES_MISSING' }],
     }))
   })
-  it('names a new supplier invoice without a number instead of letting Postgres refuse it as 23502', async () => {
+  // crm#1039: supplier_invoice_number takes NULL since 20261005225009, so a
+  // supplier invoice without a number goes to the commit like any other.
+  it('sends a new supplier invoice without a number on to the commit with a NULL number', async () => {
     const db = database({ phase: 'import', resources: ['supplierInvoices'], provider: 'bokio' })
     mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'bokio', org_number: '556000-0000' } })
     const reads = withSourceRecords(db, [])
@@ -807,25 +809,12 @@ describe('records the review lists', () => {
     db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto) })
     mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
-    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
-      p_records: [{ id: 'si-nonumber', error: 'MIGRATION_SUPPLIER_INVOICE_NUMBER_MISSING' }],
-    }))
-    expect(reads[0]).toEqual(expect.arrayContaining([['eq', 'company_id', 'company'], ['eq', 'provider', 'bokio'],
-      ['eq', 'account_key', '5560000000'], ['eq', 'resource', 'supplierInvoices'], ['eq', 'source_id', 'si-nonumber']]))
-  })
-  it('lets a number-less supplier invoice an earlier import holds through, to be adopted by its source record', async () => {
-    const db = database({ phase: 'import', resources: ['supplierInvoices'], provider: 'bokio' })
-    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'bokio', org_number: '556000-0000' } })
-    withSourceRecords(db, [{ id: 'earlier-import' }])
-    const dto = numberless()
-    vi.mocked(mapSupplierInvoice).mockReturnValueOnce({ invoice: { supplier_invoice_number: null, subtotal: 450, vat_amount: 0, total_sek: 450 },
-      items: [{ line_total: 450, vat_amount: 0 }], fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null })
-    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto) })
-    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
-    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
-    const records = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')?.[1].p_records as { id: string; error?: string }[]
-    expect(records).toEqual([expect.objectContaining({ id: 'si-nonumber', row: expect.anything() })])
+    const records = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')?.[1].p_records as
+      { id: string; error?: string; row?: { supplier_invoice_number?: string | null } }[]
+    expect(records).toEqual([expect.objectContaining({ id: 'si-nonumber', row: expect.objectContaining({ supplier_invoice_number: null }) })])
     expect(records[0].error).toBeUndefined()
+    // No up-front check of earlier imports: the commit adopts by source record.
+    expect(reads).toEqual([])
   })
   it('keeps what a voucher-link review found, so the review can say why', async () => {
     const db = database({ phase: 'link', resources: ['salesInvoices'] })

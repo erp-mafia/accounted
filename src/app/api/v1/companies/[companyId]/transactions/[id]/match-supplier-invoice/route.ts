@@ -19,6 +19,7 @@ import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-en
 import { createSupplierBankMatchEntry } from '@/lib/bookkeeping/supplier-bank-match-entry'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { buildSupplierDescription, supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
@@ -285,9 +286,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     try {
       if (customLines) {
         const sourceType = plan.booking.kind === 'cash' ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
-        const desc = invoice.supplier?.name
-          ? `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}, ${invoice.supplier.name}`
-          : `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}`
+        const desc = buildSupplierDescription(
+          'Utbetalning leverantörsfaktura',
+          supplierInvoiceReference(invoice.supplier_invoice_number, invoice.arrival_number),
+          invoice.supplier?.name || undefined,
+        )
         const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
           fiscal_period_id: fiscalPeriodId,
           entry_date: transaction.date,

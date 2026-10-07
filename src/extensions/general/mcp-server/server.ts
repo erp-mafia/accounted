@@ -109,6 +109,7 @@ import { codedRefusal, fieldValidationError, serviceRefusal, zodFieldIssues } fr
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
@@ -16026,7 +16027,9 @@ export const tools: McpTool[] = [
       const invoiceDate = (args.invoice_date_override as string | undefined) ?? (invoiceExt?.invoiceDate as string) ?? null
       const supplierInvoiceNumber = (invoiceExt?.invoiceNumber as string) || ''
       if (!invoiceDate) throw new Error('Extracted invoice has no invoice date')
-      if (!supplierInvoiceNumber) throw new Error('Extracted invoice has no invoice number')
+      // A blank extracted number is none: the column refuses it
+      // (supplier_invoices_number_not_blank) and this door still needs one.
+      if (!supplierInvoiceNumber.trim()) throw new Error('Extracted invoice has no invoice number')
 
       // supplier_invoices.due_date is NOT NULL. A bank fee or a kvitto has no
       // förfallodatum printed on it, and the old code staged null straight
@@ -21500,7 +21503,7 @@ export const tools: McpTool[] = [
 
       const { data: inv } = await supabase
         .from('supplier_invoices')
-        .select('id, supplier_invoice_number, invoice_date, total, currency, status, approved_at, supplier:suppliers(name)')
+        .select('id, arrival_number, supplier_invoice_number, invoice_date, total, currency, status, approved_at, supplier:suppliers(name)')
         .eq('id', id).eq('company_id', companyId).single()
       if (!inv) throw new Error('Supplier invoice not found')
       // 'overdue' is approvable: the daily cron puts unbooked invoices there
@@ -21510,7 +21513,7 @@ export const tools: McpTool[] = [
       }
 
       return stagePendingOperation(supabase, companyId, userId, 'approve_supplier_invoice',
-        `Godkänn leverantörsfaktura ${inv.supplier_invoice_number}`,
+        `Godkänn leverantörsfaktura ${supplierInvoiceReference(inv.supplier_invoice_number, inv.arrival_number)}`,
         { supplier_invoice_id: id },
         {
           supplier_invoice_number: inv.supplier_invoice_number,
@@ -21563,8 +21566,9 @@ export const tools: McpTool[] = [
       if (!preview.ok) throwOutcomeFailure(preview)
       if (!preview.dryRun) throw new Error('credit preview did not run as a dry run')
       const p = preview.preview as {
-        credit_note: { supplier_invoice_number: string; total: number; currency: string }
-        original_supplier_invoice_number: string
+        credit_note: { supplier_invoice_number: string | null; total: number; currency: string }
+        original_supplier_invoice_number: string | null
+        original_arrival_number?: number | null
         supplier_name: string | null
         credit_date: string
         date_source: string
@@ -21572,7 +21576,7 @@ export const tools: McpTool[] = [
       }
 
       return stagePendingOperation(supabase, companyId, userId, 'credit_supplier_invoice',
-        `Kreditera leverantörsfaktura ${p.original_supplier_invoice_number}`,
+        `Kreditera leverantörsfaktura ${supplierInvoiceReference(p.original_supplier_invoice_number, p.original_arrival_number)}`,
         { supplier_invoice_id: id, ...parsed.data },
         {
           supplier_invoice_number: p.original_supplier_invoice_number,

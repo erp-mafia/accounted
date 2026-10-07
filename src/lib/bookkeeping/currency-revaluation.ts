@@ -353,7 +353,7 @@ export async function previewCurrencyRevaluation(
       unconvertedFx.push({
         type: 'payable',
         source_id: si.id,
-        reference: si.supplier_invoice_number,
+        reference: si.supplier_invoice_number ?? '',
         currency: si.currency as Currency,
         amount_in_currency: outstanding,
       })
@@ -440,7 +440,7 @@ export async function previewCurrencyRevaluation(
     items.push({
       type: 'payable',
       source_id: si.id,
-      reference: si.supplier_invoice_number,
+      reference: si.supplier_invoice_number ?? '',
       currency: si.currency as Currency,
       amount_in_currency: amountInCurrency,
       original_rate: si.exchange_rate,

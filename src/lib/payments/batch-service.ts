@@ -148,7 +148,8 @@ export async function loadActiveBatchMap(
 export interface BatchPreviewLine {
   id: string
   supplier_name: string
-  invoice_number: string
+  /** NULL for an invoice without the supplier's number; it then pays by its OCR. */
+  invoice_number: string | null
   amount: number
   payment_date: string
   payee: { type: string; label: string }

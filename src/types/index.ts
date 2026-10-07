@@ -1244,7 +1244,14 @@ export interface SupplierInvoice {
   supplier_id: string
 
   arrival_number: number
-  supplier_invoice_number: string
+  /**
+   * The supplier's own number as printed on its invoice. NULL when the
+   * document carries none (a förenklad faktura, a receipt, an autogiro notice,
+   * or a provider import without one), never a stand-in and never a blank
+   * string (supplier_invoices_number_not_blank). arrival_number still
+   * identifies the invoice in the leverantörsreskontra.
+   */
+  supplier_invoice_number: string | null
 
   invoice_date: string
   due_date: string

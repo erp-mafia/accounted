@@ -326,7 +326,7 @@ export const supplierInvoiceReview = defineAgentIntent<
     lines.push(renderAgentGroundRules())
     lines.push('')
     lines.push('Granska denna leverantörsfaktura innan attestering:')
-    lines.push(`- Ankomst #${inv.arrival_number ?? '?'} / Fakturanummer ${inv.supplier_invoice_number ?? '?'}`)
+    lines.push(`- Ankomst #${inv.arrival_number ?? '?'} / Fakturanummer ${inv.supplier_invoice_number ?? 'saknas'}`)
     if (captured.supplier) {
       const s = captured.supplier
       const supplierLine: string[] = []

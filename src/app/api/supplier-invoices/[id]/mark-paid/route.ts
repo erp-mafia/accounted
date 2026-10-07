@@ -6,6 +6,7 @@ import {
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { buildSupplierDescription, supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -200,9 +201,11 @@ export const POST = withRouteContext(
           })
         }
         const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
-        const desc = invoice.supplier?.name
-          ? `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}, ${invoice.supplier.name}`
-          : `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}`
+        const desc = buildSupplierDescription(
+          'Utbetalning leverantörsfaktura',
+          supplierInvoiceReference(invoice.supplier_invoice_number, invoice.arrival_number),
+          invoice.supplier?.name || undefined,
+        )
         const je = await createJournalEntry(supabase, companyId!, user.id, {
           fiscal_period_id: fiscalPeriodId,
           entry_date: paymentDate,

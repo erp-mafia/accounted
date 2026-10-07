@@ -46,9 +46,12 @@ export function existingInvoiceKey(row: ExistingSupplierInvoiceIdentity): string
   return numberlessKey(row.supplier_id, row.invoice_date, row.total)
 }
 
-/** Every key a listed provider invoice may already be stored under. */
+/**
+ * Every key a listed provider invoice may already be stored under. A
+ * whitespace-only number counts as none: the mapper stores it as NULL.
+ */
 export function listedInvoiceKeys(supplierId: string, dto: ListedSupplierInvoiceIdentity): string[] {
-  if (dto.invoiceNumber) return [`${supplierId}::${dto.invoiceNumber}`]
+  if (dto.invoiceNumber?.trim()) return [`${supplierId}::${dto.invoiceNumber}`]
   const keys: string[] = []
   const numberless = numberlessKey(supplierId, dto.issueDate, dto.legalMonetaryTotal?.payableAmount?.value)
   if (numberless) keys.push(numberless)

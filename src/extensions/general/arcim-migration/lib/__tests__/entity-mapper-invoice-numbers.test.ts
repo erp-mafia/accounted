@@ -71,6 +71,16 @@ describe('invoice number nulling', () => {
     const real = mapSupplierInvoice(makeSupplierDto('LF-9'), 'u', 'c', 'sup').invoice
     expect(real.supplier_invoice_number).toBe('LF-9')
   })
+
+  // crm#1039: supplier_invoices_number_not_blank refuses a value with no
+  // visible character, so a whitespace-only number is a missing one.
+  it('supplier invoice: a whitespace-only invoiceNumber becomes NULL, a real one keeps its exact characters', () => {
+    const blank = mapSupplierInvoice(makeSupplierDto('  \t'), 'u', 'c', 'sup').invoice
+    expect(blank.supplier_invoice_number).toBeNull()
+
+    const padded = mapSupplierInvoice(makeSupplierDto(' LF-9 '), 'u', 'c', 'sup').invoice
+    expect(padded.supplier_invoice_number).toBe(' LF-9 ')
+  })
 })
 
 describe('sales invoice remaining_amount', () => {
