@@ -7603,6 +7603,8 @@
     "period_empty": "Den valda perioden har inga transaktioner. Välj Alla räkenskapsår för att visa allt.",
     "period_pending_outside": "{count, plural, one {# transaktion att bokföra utanför vald period.} other {# transaktioner att bokföra utanför vald period.}}",
     "period_show_all": "Visa alla",
+    "source_pending_hidden": "{count, plural, one {# transaktion att bokföra i andra källor.} other {# transaktioner att bokföra i andra källor.}}",
+    "source_show_all": "Visa alla källor",
     "skv_reconnect_body": "Skattekontots transaktioner hämtas inte förrän du anslutit igen med BankID och godkänt alla behörigheter.",
     "skv_reconnect_cta": "Anslut igen",
     "dialog_match_invoice": "Matcha med faktura",

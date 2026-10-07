@@ -7603,6 +7603,8 @@
     "period_empty": "The selected period has no transactions. Choose All fiscal years to show everything.",
     "period_pending_outside": "{count, plural, one {# transaction to record outside the selected period.} other {# transactions to record outside the selected period.}}",
     "period_show_all": "Show all",
+    "source_pending_hidden": "{count, plural, one {# transaction to record in other sources.} other {# transactions to record in other sources.}}",
+    "source_show_all": "Show all sources",
     "skv_reconnect_body": "Tax account transactions are not fetched until you reconnect with BankID and approve all permissions.",
     "skv_reconnect_cta": "Reconnect",
     "dialog_match_invoice": "Match with invoice",

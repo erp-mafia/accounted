@@ -125,6 +125,7 @@ import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
 import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
 import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
+import { bankRowInSource, countInboxScope, skattekontoInSource } from '@/lib/transactions/inbox-scope'
 import type { FiscalPeriod } from '@/types'
 
 // Every list fetch embeds the junction so a row split over several verifikat
@@ -678,9 +679,6 @@ export default function TransactionsPage() {
   // active period scope's window and paging state with stale rows.
   const fetchGenerationRef = useRef(0)
 
-  // True uncategorized count from DB (not limited by pagination)
-  const [totalUncategorizedCount, setTotalUncategorizedCount] = useState<number | null>(null)
-
   // Set of transaction IDs that are animating out (just categorized)
   const [exitingIds, setExitingIds] = useState<Set<string>>(new Set())
 
@@ -928,31 +926,6 @@ export default function TransactionsPage() {
     [skvRows, periodBounds],
   )
 
-  // Tab badge: DB-true pending count normally; with a period filter active,
-  // the pending rows inside the scope (complete, since the pending backlog
-  // fetch is unscoped and fully in state).
-  const inboxBadgeCount = useMemo(() => {
-    if (!periodBounds) return totalUncategorizedCount ?? uncategorizedTransactions.length
-    return uncategorizedTransactions.filter((tx) => isWithinBounds(tx.date, periodBounds)).length
-  }, [periodBounds, totalUncategorizedCount, uncategorizedTransactions])
-
-  // Pending work the active period filter hides (bank + skattekonto). BFL
-  // 5 kap: pending affarshandelser must never disappear silently, so the
-  // footer names this count and offers a one-click way back to everything.
-  const pendingOutsideCount = useMemo(() => {
-    if (!periodBounds) return 0
-    const bankOutside = uncategorizedTransactions.filter(
-      (tx) => !isWithinBounds(tx.date, periodBounds),
-    ).length
-    const skvOutside = skvRows.filter(
-      (r) =>
-        !r.journal_entry_id &&
-        !r.is_ignored &&
-        !isWithinBounds(r.transaktionsdatum, periodBounds),
-    ).length
-    return bankOutside + skvOutside
-  }, [periodBounds, skvRows, uncategorizedTransactions])
-
   // Account chooser (concept scene 10): the source picker doubles as a
   // balance readout. The total sums only SEK ledgers (mixing currencies into
   // one figure would be a lie); null hides the annotation entirely.
@@ -1021,6 +994,26 @@ export default function TransactionsPage() {
     [sourceFilter, sourceItems],
   )
 
+  // Every pending row (bank + skattekonto) in exactly one bucket: shown by
+  // the active source and period (the tab badge), hidden by the source, or
+  // outside the period. The badge reads the same source predicate as the
+  // list below (lib/transactions/inbox-scope), so it counts what the list
+  // shows: before, it counted bank rows only, from a separate DB head count
+  // that ignored the source picker (crm#1056, crm#1043). BFL 5 kap: pending
+  // affarshandelser must never disappear silently, so the footer names each
+  // hidden count with a one-click way back.
+  const inboxScope = useMemo(
+    () =>
+      countInboxScope({
+        bankRows: uncategorizedTransactions,
+        skattekontoRows: skvUnmatched,
+        source: effectiveSourceFilter,
+        period: periodBounds,
+        leaving: exitingIds,
+      }),
+    [effectiveSourceFilter, exitingIds, periodBounds, skvUnmatched, uncategorizedTransactions],
+  )
+
   // Declared after sourceItems/effectiveSourceFilter because the inbox must
   // filter by the EFFECTIVE source, never the raw wanted one.
   const inboxItems = useMemo<InboxItem[]>(() => {
@@ -1031,13 +1024,7 @@ export default function TransactionsPage() {
         // The refetch already narrows state server-side; this check makes the
         // filter correct immediately on change, before the refetch lands.
         if (!isWithinBounds(tx.date, periodBounds)) continue
-        if (
-          effectiveSourceFilter.startsWith('acct:') &&
-          tx.cash_account_id !== effectiveSourceFilter.slice('acct:'.length)
-        ) {
-          continue
-        }
-        if (effectiveSourceFilter === 'bank:other' && tx.cash_account_id != null) continue
+        if (!bankRowInSource(tx.cash_account_id, effectiveSourceFilter)) continue
         if (
           query &&
           !tx.description?.toLowerCase().includes(query) &&
@@ -1049,7 +1036,7 @@ export default function TransactionsPage() {
         items.push({ source: 'bank', date: tx.date, data: tx })
       }
     }
-    if (effectiveSourceFilter === 'all' || effectiveSourceFilter === 'skatteverket') {
+    if (skattekontoInSource(effectiveSourceFilter)) {
       // Inbox only shows SKV rows that need action (no verifikat yet).
       for (const r of skvRows) {
         // Exiting rows stay rendered for the exit animation, even if a
@@ -1250,7 +1237,7 @@ export default function TransactionsPage() {
         windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
       }
 
-      const [{ data: txData, error: txError }, { count: uncatCount }, pendingRows] = await Promise.all([
+      const [{ data: txData, error: txError }, pendingRows] = await Promise.all([
         // The id tie-breaker keeps offset paging deterministic when many
         // rows share a date; without it .range() pages can skip or repeat
         // same-date rows.
@@ -1258,14 +1245,6 @@ export default function TransactionsPage() {
           .order('date', { ascending: false })
           .order('id', { ascending: true })
           .range(0, windowSize - 1),
-        supabase
-          .from('transactions')
-          .select('*', { count: 'exact', head: true })
-          .eq('company_id', companyId)
-          .is('is_business', null)
-          // Same predicate as lib/worklist countUnbookedTransactions: ignored
-          // rows are handled, not pending.
-          .eq('is_ignored', false),
         // The inbox is a worklist: it must contain every pending row, even ones
         // older than the newest-first window above. Falls back to null so the
         // page still renders the windowed rows if this fetch dies; the failure
@@ -1332,7 +1311,6 @@ export default function TransactionsPage() {
       }))
 
       setTransactions(transactionsWithInvoices)
-      setTotalUncategorizedCount(uncatCount ?? 0)
       pagedCountRef.current = rows.length
       setPagedThroughDate(rows.length >= windowSize ? rows[rows.length - 1].date : null)
       setHasMore(rows.length >= windowSize)
@@ -1706,7 +1684,6 @@ export default function TransactionsPage() {
     // they reset with them.
     setTransactions([])
     setSkvRows([])
-    setTotalUncategorizedCount(null)
     setPagedThroughDate(null)
     setHasMore(false)
     pagedCountRef.current = 0
@@ -1894,7 +1871,6 @@ export default function TransactionsPage() {
     undoneIdsRef.current.delete(id)
 
     setExitingIds((prev) => new Set(prev).add(id))
-    setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
 
     if (silent) {
       // No per-row toast: fall through to the delayed state patch below.
@@ -1916,7 +1892,6 @@ export default function TransactionsPage() {
                       : t
                   )
                 )
-                setTotalUncategorizedCount((prev) => (prev ?? 0) + 1)
                 toast({ title: t('undone_title'), description: t('undone_description') })
               } else {
                 const errData = await undoRes.json()
@@ -2300,7 +2275,6 @@ export default function TransactionsPage() {
       toast({ title: t('customer_invoice_matched_title'), description: t('customer_invoice_matched_description') })
       setCiMatchSuggestion(null)
       setExitingIds((prev) => new Set(prev).add(transactionId))
-      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
       setTimeout(() => {
         setTransactions((prev) =>
           prev.map((t) =>
@@ -2349,7 +2323,6 @@ export default function TransactionsPage() {
       toast({ title: t('supplier_invoice_matched_title'), description: t('supplier_invoice_matched_description') })
       setSiMatchSuggestion(null)
       setExitingIds((prev) => new Set(prev).add(transactionId))
-      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
       setTimeout(() => {
         setTransactions((prev) =>
           prev.map((t) =>
@@ -2404,7 +2377,6 @@ export default function TransactionsPage() {
         return
       }
       setExitingIds((prev) => new Set(prev).add(tx.id))
-      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
       setTimeout(() => {
         setTransactions((prev) =>
           prev.map((t) => (t.id === tx.id ? { ...t, is_ignored: true } : t))
@@ -2440,7 +2412,6 @@ export default function TransactionsPage() {
       setTransactions((prev) =>
         prev.map((t) => (t.id === transactionId ? { ...t, is_ignored: false } : t))
       )
-      setTotalUncategorizedCount((prev) => (prev ?? 0) + 1)
     } catch {
       toast({ title: 'Kunde inte återställa transaktionen', variant: 'destructive' })
     }
@@ -2606,7 +2577,6 @@ export default function TransactionsPage() {
   // same person drops its suggestion, since that person is now paid.
   function applyExpensePayoutBooked(transactionId: string, journalEntryId: string, personKey: string) {
     setExitingIds((prev) => new Set(prev).add(transactionId))
-    setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
     setTimeout(() => {
       setTransactions((prev) =>
         prev.map((tx) => {
@@ -3132,11 +3102,6 @@ export default function TransactionsPage() {
           next.delete(id)
           return next
         })
-        // The realtime echo is not guaranteed for DELETE on a filtered
-        // subscription, so the pending badge must decrement locally.
-        if (transaction.is_business === null && !transaction.is_ignored) {
-          setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
-        }
         toast({ title: t('deleted_title'), description: t('deleted_description') })
         setTimeout(() => {
           setTransactions((prev) => prev.filter((t) => t.id !== id))
@@ -3534,10 +3499,6 @@ export default function TransactionsPage() {
     matched?: boolean,
   ) {
     setExitingIds((prev) => new Set(prev).add(transactionId))
-    // The row leaves the unbooked inbox either way (booked, or linked to an
-    // existing voucher), so the header count has to follow: every other path
-    // that removes a row decrements, this one did not.
-    setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
     setTimeout(() => {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -3832,9 +3793,6 @@ export default function TransactionsPage() {
         for (const id of ignoredSkv) next.add(id)
         return next
       })
-      if (ignoredBank.size > 0) {
-        setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? ignoredBank.size) - ignoredBank.size))
-      }
       setTimeout(() => {
         if (ignoredBank.size > 0) {
           setTransactions((prev) =>
@@ -4035,7 +3993,6 @@ export default function TransactionsPage() {
             : tx,
         ),
       )
-      setTotalUncategorizedCount((prev) => (prev ?? 0) + undoneIds.size)
     }
     const failed = ids.length - undoneIds.size
     if (failed === 0) {
@@ -4326,7 +4283,7 @@ export default function TransactionsPage() {
           value={mode}
           onChange={setMode}
           options={[
-            { value: 'inbox', label: t('mode_inbox'), count: inboxBadgeCount },
+            { value: 'inbox', label: t('mode_inbox'), count: inboxScope.inScope },
             { value: 'history', label: t('mode_all') },
             // Review tab exists only while suggestions do (or while the user is
             // standing in it after emptying the list): a permanent third tab
@@ -4682,11 +4639,23 @@ export default function TransactionsPage() {
         {mode === 'inbox' && inboxItems.length > 0 && (
           <span className="tabular-nums">{t('footer_to_handle', { count: inboxItems.length })}</span>
         )}
-        {mode === 'inbox' && pendingOutsideCount > 0 && (
+        {mode === 'inbox' && inboxScope.outsidePeriod > 0 && (
           <span className="tabular-nums">
-            {t('period_pending_outside', { count: pendingOutsideCount })}{' '}
+            {t('period_pending_outside', { count: inboxScope.outsidePeriod })}{' '}
             <button type="button" className={QUIET_LINK_CLASS} onClick={clearPeriodFilter}>
               {t('period_show_all')}
+            </button>
+          </span>
+        )}
+        {mode === 'inbox' && inboxScope.hiddenBySource > 0 && (
+          <span className="tabular-nums">
+            {t('source_pending_hidden', { count: inboxScope.hiddenBySource })}{' '}
+            <button
+              type="button"
+              className={QUIET_LINK_CLASS}
+              onClick={() => handleSourceFilterChange('all')}
+            >
+              {t('source_show_all')}
             </button>
           </span>
         )}
@@ -5194,7 +5163,6 @@ export default function TransactionsPage() {
           setDuplicateWarning(null)
           const ignoredTx = transactions.find((t) => t.id === transactionId)
           setExitingIds((prev) => new Set(prev).add(transactionId))
-          setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
           setTimeout(() => {
             setTransactions((prev) =>
               prev.map((t) => (t.id === transactionId ? { ...t, is_ignored: true } : t))
