@@ -6,7 +6,6 @@ import { useTranslations } from 'next-intl'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { useCashAccounts } from '@/lib/reference-data/hooks'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
 
 async function fetchAccounts(url: string): Promise<ReconciliationAccount[]> {
@@ -36,29 +35,23 @@ function Mark({ account }: { account: ReconciliationAccount }) {
 /**
  * Konton (UI v2 PR 8): every account with an outside truth on one page,
  * bank accounts and the skattekonto alike. Rows come from the reconciliation
- * service (the same list the Avstämning workspace shows), joined with the
- * cash-account balances. Each row says when it was last read, through which
- * date it is signed off, and how many rows still need a look. The mark in
- * front of the name says where the money comes from, so there is no source
- * column.
+ * service (the same list the Avstämning workspace shows), each carrying the
+ * balance its outside source last reported: the bank's, or Skatteverket's
+ * saldo. Each row says when it was last read, through which date it is
+ * signed off, and how many rows still need a look. The mark in front of the
+ * name says where the money comes from, so there is no source column.
  */
 export default function AccountsOverview() {
   const t = useTranslations('accounts_v2')
   const { data, isLoading, error } = useSWR<ReconciliationAccount[]>('/api/reconciliation/accounts', fetchAccounts)
-  const { cashAccounts } = useCashAccounts({ enabledOnly: true })
   // Accounts with money in them: bank accounts and the skattekonto. Ledger
   // accounts reconciled by hand (2081, 2641 ...) belong to Avstämning.
   const rows = (data ?? []).filter((a) => !a.superseded_by && a.kind !== 'manual')
 
-  const cashFor = (a: ReconciliationAccount) =>
-    cashAccounts.find((c) => c.ledger_account === a.account_number && c.currency === a.currency)
-  const balanceFor = (a: ReconciliationAccount) => cashFor(a)?.balance ?? null
-  // "Senast läst": when the bank last reported a balance; the status as_of is
-  // the moment the row was computed and says nothing about the feed.
-  const lastReadFor = (a: ReconciliationAccount) => {
-    if (a.kind === 'bank') return cashFor(a)?.balance_updated_at ?? null
-    return a.status?.as_of ?? null
-  }
+  const balanceFor = (a: ReconciliationAccount) => a.balance ?? null
+  // "Senast läst": when the outside last reported the balance; the status
+  // as_of is the moment the row was computed and says nothing about the feed.
+  const lastReadFor = (a: ReconciliationAccount) => a.balance_at ?? null
   const toReview = (a: ReconciliationAccount) => {
     const c = a.status?.open_counts
     return c ? c.proposed + c.unmatched_external + c.unmatched_ledger : 0

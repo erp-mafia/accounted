@@ -148,6 +148,10 @@ export const ReconciliationAccountSchema = z.object({
   superseded_by: AccountKeySchema.nullable(),
   /** through_date of the latest active sign-off, null when the account was never signed off. */
   signed_off_through: z.string().nullable().optional(),
+  /** Balance the outside last reported (bank or Skatteverket saldo); null when unknown, absent for manual accounts. */
+  balance: z.number().nullable().optional(),
+  /** ISO timestamp of that balance; null when unknown. */
+  balance_at: z.string().nullable().optional(),
 })
 export type ReconciliationAccount = z.infer<typeof ReconciliationAccountSchema>
 
