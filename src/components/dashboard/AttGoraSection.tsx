@@ -199,6 +199,17 @@ export default function AttGoraSection({
   // A confirmed match books a journal entry, so the server-derived
   // emptyLedger flag goes stale the moment one succeeds in this session.
   const [postedSinceLoad, setPostedSinceLoad] = useState(false)
+  // A router.refresh() (RefreshWhenRestored) hands this mounted section a new
+  // server render: take its numbers instead of keeping the first ones. Same
+  // adjust-state-during-render pattern as DashboardNav.
+  const [renderedWorklist, setRenderedWorklist] = useState(worklist)
+  if (worklist !== renderedWorklist) {
+    setRenderedWorklist(worklist)
+    setCounts(worklist.counts)
+    setTotal(worklist.total)
+    setMatches(suggestedMatches)
+    setPostedSinceLoad(false)
+  }
 
   async function refetchCounts() {
     try {
