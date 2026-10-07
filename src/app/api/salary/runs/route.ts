@@ -8,7 +8,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createSalaryRunWithEmployees } from '@/lib/salary/create-run'
 import { SalaryDeviationPeriodError } from '@/lib/salary/deviation-period'
-import { nextRunPeriod } from '@/lib/salary/next-run-period'
+import { defaultRunPaymentDate, formatRunPeriod, nextRunPeriod } from '@/lib/salary/next-run-period'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 
@@ -57,6 +57,8 @@ export const GET = withRouteContext(
  * The run is seeded with every active employee (shared lib — same behavior as
  * the MCP tool) and calculated immediately; a calculation failure is
  * non-fatal (201 with calculation.ok=false, user lands on the draft).
+ * A month that already has a live run answers 409 SALARY_RUN_DUPLICATE_PERIOD
+ * (the v1 route's code) naming the month, with the existing run's id.
  */
 export const POST = withRouteContext(
   'salary_run.create',
@@ -97,14 +99,25 @@ export const POST = withRouteContext(
       periodMonth = next.period_month
     }
 
-    // salary_pay_day is 1–28 by CHECK, so the date exists in every month.
-    const payDay = settings?.salary_pay_day ?? 25
+    // Shared with the Löner page, which shows this date before the click.
     const paymentDate =
       body.payment_date ??
-      `${periodYear}-${String(periodMonth).padStart(2, '0')}-${String(payDay).padStart(2, '0')}`
+      defaultRunPaymentDate({ period_year: periodYear, period_month: periodMonth }, settings?.salary_pay_day)
 
     const voucherSeries =
       body.voucher_series ?? resolveDefaultSeriesForSource(settings ?? null, 'salary_payment')
+
+    // A clear refusal for a month that already has a live run: the registered
+    // code reads the same in every surface (v1 sends it too), and the Swedish
+    // sentence names the month so the page can show it as is.
+    const periodLabel = formatRunPeriod({ period_year: periodYear, period_month: periodMonth })
+    const duplicatePeriod = (details: Record<string, unknown>) =>
+      errorResponseFromCode('SALARY_RUN_DUPLICATE_PERIOD', log, {
+        requestId,
+        messageSv: `Det finns redan en lönekörning för ${periodLabel}.`,
+        messageEn: `A salary run for ${periodLabel} already exists.`,
+        details: { reason: 'salary_run_exists_for_period', periodYear, periodMonth, ...details },
+      })
 
     // Corrected runs coexist with their correction in the same period (the
     // unique index is partial), so exclude them — and use maybeSingle():
@@ -120,15 +133,7 @@ export const POST = withRouteContext(
       .maybeSingle()
 
     if (existing) {
-      return errorResponseFromCode('CONFLICT', log, {
-        requestId,
-        details: {
-          reason: 'salary_run_exists_for_period',
-          existingId: existing.id,
-          periodYear,
-          periodMonth,
-        },
-      })
+      return duplicatePeriod({ existingId: existing.id })
     }
 
     let run: Record<string, unknown>
@@ -158,17 +163,11 @@ export const POST = withRouteContext(
           ? (err as Error & { existingId?: string | null; existingStatus?: string | null })
           : null
       if (existsErr || message.includes('already exists')) {
-        return errorResponseFromCode('CONFLICT', log, {
-          requestId,
-          details: {
-            reason: 'salary_run_exists_for_period',
-            periodYear,
-            periodMonth,
-            ...(existsErr?.existingId
-              ? { existingId: existsErr.existingId, existingStatus: existsErr.existingStatus ?? null }
-              : {}),
-          },
-        })
+        return duplicatePeriod(
+          existsErr?.existingId
+            ? { existingId: existsErr.existingId, existingStatus: existsErr.existingStatus ?? null }
+            : {},
+        )
       }
       log.error('salary run create failed', err as Error)
       return errorResponseFromCode('SALARY_RUN_CREATE_FAILED', log, {

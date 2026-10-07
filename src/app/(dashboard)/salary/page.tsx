@@ -3,19 +3,28 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
+import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { HandCoins, Plus, Users } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { nextRunPeriod, type RunPeriod } from '@/lib/salary/next-run-period'
+import { agiReportingPeriod, formatAgiPeriodDashed } from '@/lib/salary/agi/reporting-period'
+import {
+  defaultRunPaymentDate,
+  formatRunPeriod,
+  runPeriodChoices,
+  type RunPeriod,
+  type RunPeriodChoice,
+} from '@/lib/salary/next-run-period'
 import type { EmployeeMasked, SalaryRun } from '@/types'
 
 const STATUS_LABEL_KEYS: Record<string, string> = {
@@ -51,14 +60,19 @@ export default function SalaryPage() {
   const [runs, setRuns] = useState<SalaryRun[]>([])
   const [employees, setEmployees] = useState<EmployeeMasked[]>([])
   const [loading, setLoading] = useState(true)
-  const [starting, setStarting] = useState(false)
-  // The pay month a click on "Starta lönekörning" creates. Known only once
+  // The month being created (formatRunPeriod), 'default' when the server
+  // picks it; null when nothing is being started.
+  const [startingKey, setStartingKey] = useState<string | null>(null)
+  // The months "Starta lönekörning" offers: the default month (one click on
+  // the button face) and the recent months behind its caret. Known only once
   // the run list has loaded; null means "let the server decide" and the
   // button keeps its plain label rather than naming a month it cannot know.
-  const [nextPeriod, setNextPeriod] = useState<RunPeriod | null>(null)
+  const [choices, setChoices] = useState<RunPeriodChoice[] | null>(null)
   const { canWrite } = useCanWrite()
+  const { settings } = useCompanySettings()
   const { toast } = useToast()
   const router = useRouter()
+  const locale = useLocale() as ErrorLocale
   const t = useTranslations('salary')
   const tStart = useTranslations('start_cards')
 
@@ -70,9 +84,9 @@ export default function SalaryPage() {
     if (runsRes?.ok) {
       const { data } = await runsRes.json()
       setRuns(data || [])
-      setNextPeriod(nextRunPeriod(data || [], new Date()))
+      setChoices(runPeriodChoices(data || [], new Date()))
     } else {
-      setNextPeriod(null)
+      setChoices(null)
     }
     if (empRes?.ok) {
       const { data } = await empRes.json()
@@ -87,40 +101,77 @@ export default function SalaryPage() {
 
   // One-click run creation: the API seeds all active employees, calculates,
   // and resolves pay-date/series defaults from settings. The period is the one
-  // the button names, sent explicitly so the click creates exactly that month
-  // (a run someone else started meanwhile answers 409 and is opened instead).
-  async function startRun() {
-    setStarting(true)
+  // the button or its menu names, sent explicitly so the click creates exactly
+  // that month; null lets the server pick. A month that has a run by now
+  // (someone else started it meanwhile) answers 409 and is opened instead.
+  async function startRun(period: RunPeriod | null) {
+    setStartingKey(period ? formatRunPeriod(period) : 'default')
     try {
       const res = await fetch('/api/salary/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(nextPeriod ?? {}),
+        body: JSON.stringify(
+          period ? { period_year: period.period_year, period_month: period.period_month } : {},
+        ),
       })
       const json = await res.json().catch(() => null)
       if (res.status === 201 && json?.data?.id) {
         router.push(`/salary/runs/${json.data.id}`)
         return
       }
+      // The route names the month in Swedish (SALARY_RUN_DUPLICATE_PERIOD),
+      // so the refusal reads the same here as in every other surface.
+      const message = getErrorMessage(json, { context: 'salary', statusCode: res.status, locale })
       const existingId = json?.error?.details?.existingId
       if (res.status === 409 && existingId) {
-        toast({ title: t('run_exists_opening') })
+        toast({ title: message, description: t('run_exists_opening') })
         router.push(`/salary/runs/${existingId}`)
         return
       }
       toast({
         title: t('start_run_failed'),
-        description: getErrorMessage(json, { context: 'salary', statusCode: res.status }),
+        description: message,
         variant: 'destructive',
       })
     } finally {
-      setStarting(false)
+      setStartingKey(null)
     }
   }
 
-  const periodOf = (r: RunPeriod) => `${r.period_year}-${String(r.period_month).padStart(2, '0')}`
-  // Same YYYY-MM the new run gets in the table below and in its own title.
-  const startRunLabel = nextPeriod ? t('start_run_for_period', { period: periodOf(nextPeriod) }) : t('start_run')
+  const defaultChoice = choices?.find((choice) => choice.isDefault) ?? null
+  // Each month says what the route will write before the click: the payment
+  // date (the pay day setting in that month, the same rule the route uses)
+  // and the AGI month it falls in, since the declaration follows the payout
+  // month. Without a settings row the date is left out rather than guessed.
+  const startOptions: SplitButtonOption[] = (choices ?? []).map((choice) => {
+    const key = formatRunPeriod(choice)
+    const paymentDate = settings ? defaultRunPaymentDate(choice, settings.salary_pay_day) : null
+    const agiPeriod = paymentDate
+      ? agiReportingPeriod({
+          payment_date: paymentDate,
+          period_year: choice.period_year,
+          period_month: choice.period_month,
+        })
+      : null
+    return {
+      key,
+      // Same YYYY-MM the new run gets in the table below and in its own title.
+      label: t('start_run_for_period', { period: key }),
+      icon: Plus,
+      description: choice.hasRun
+        ? t('start_run_choice_exists')
+        : paymentDate && agiPeriod
+          ? t('start_run_choice_payout', {
+              date: formatDate(paymentDate),
+              agi_period: formatAgiPeriodDashed(agiPeriod),
+            })
+          : undefined,
+      disabled: choice.hasRun || (startingKey !== null && startingKey !== key),
+      disabledTitle: choice.hasRun ? t('start_run_choice_exists') : undefined,
+      busy: startingKey === key,
+      onSelect: () => startRun(choice),
+    }
+  })
 
   const header = (
     <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -129,12 +180,18 @@ export default function SalaryPage() {
         <Link href="/salary/employees" className={QUIET_LINK_CLASS}>
           {t('employees')}
         </Link>
-        {canWrite && (
-          <Button size="sm" onClick={startRun} disabled={loading} loading={starting}>
-            {!starting && <Plus className="mr-2 h-4 w-4" />}
-            {startRunLabel}
-          </Button>
-        )}
+        {canWrite &&
+          (choices ? (
+            <SplitButton
+              options={startOptions}
+              initialModeKey={defaultChoice ? formatRunPeriod(defaultChoice) : undefined}
+            />
+          ) : (
+            <Button size="sm" onClick={() => startRun(null)} disabled={loading} loading={startingKey !== null}>
+              {startingKey === null && <Plus className="mr-2 h-4 w-4" />}
+              {t('start_run')}
+            </Button>
+          ))}
       </div>
     </div>
   )
@@ -182,7 +239,7 @@ export default function SalaryPage() {
                   eyebrow={tStart('salary_eyebrow_next')}
                   title={tStart('salary_title')}
                   body={tStart('salary_body_ready', { count: employees.length })}
-                  primary={{ label: tStart('salary_primary_run'), onClick: startRun }}
+                  primary={{ label: tStart('salary_primary_run'), onClick: () => startRun(defaultChoice) }}
                 />
               </div>
             ) : (
@@ -219,7 +276,7 @@ export default function SalaryPage() {
                             className="hover:underline"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            {periodOf(run)}
+                            {formatRunPeriod(run)}
                           </Link>
                         </td>
                         {/* overflow-hidden: see #2003, nothing in this cell

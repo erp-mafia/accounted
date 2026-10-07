@@ -26,6 +26,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { createSalaryRunWithEmployees } from '@/lib/salary/create-run'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
 import { SalaryDeviationPeriodError } from '@/lib/salary/deviation-period'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -194,6 +195,30 @@ describe('POST /api/salary/runs — one-click creation', () => {
     )
   })
 
+  it('creates a chosen earlier month with the pay day in that month (crm#1001)', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: { salary_pay_day: 27, default_voucher_series_per_source_type: null } },
+      // no latest-run lookup: the period was chosen
+      { data: null }, // conflict pre-check: the month is free
+    ])
+
+    const response = await POST(post({ period_year: 2026, period_month: 8 }), {
+      params: Promise.resolve({}),
+    } as never)
+    expect(response.status).toBe(201)
+    // The payment date follows the chosen month, so the AGI period and the
+    // verifikat date (both read from payment_date) land in that month too.
+    expect(createSalaryRunWithEmployees).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ periodYear: 2026, periodMonth: 8, paymentDate: '2026-08-27' }),
+    )
+  })
+
   it('passes explicit deviation_period dates through to the lib', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     authed(supabase)
@@ -258,13 +283,23 @@ describe('POST /api/salary/runs — one-click creation', () => {
       { params: Promise.resolve({}) } as never,
     )
     const { status, body } = await parseJsonResponse<{
-      error: { code: string; details: { existingId: string } }
+      error: { code: string; message: string; details: { existingId: string; reason: string } }
     }>(response)
 
     expect(status).toBe(409)
-    expect(body.error.code).toBe('CONFLICT')
+    expect(body.error.code).toBe('SALARY_RUN_DUPLICATE_PERIOD')
+    expect(body.error.message).toBe('Det finns redan en lönekörning för 2026-06.')
     expect(body.error.details.existingId).toBe('run-existing')
+    expect(body.error.details.reason).toBe('salary_run_exists_for_period')
     expect(createSalaryRunWithEmployees).not.toHaveBeenCalled()
+
+    // The page shows the refusal through the shared error mapping.
+    expect(getErrorMessage(body, { context: 'salary', statusCode: 409, locale: 'sv' })).toBe(
+      'Det finns redan en lönekörning för 2026-06.',
+    )
+    expect(getErrorMessage(body, { context: 'salary', statusCode: 409, locale: 'en' })).toBe(
+      'A salary run for that period already exists.',
+    )
   })
 
   it('maps a create race (lib 23505 message) to 409', async () => {
@@ -283,7 +318,13 @@ describe('POST /api/salary/runs — one-click creation', () => {
       post({ period_year: 2026, period_month: 6, payment_date: '2026-06-25' }),
       { params: Promise.resolve({}) } as never,
     )
-    expect(response.status).toBe(409)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: { existingId?: string } }
+    }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALARY_RUN_DUPLICATE_PERIOD')
+    expect(body.error.message).toBe('Det finns redan en lönekörning för 2026-06.')
+    expect(body.error.details.existingId).toBeUndefined()
   })
 
   it('puts the existing run id in the 409 when the lib names the race winner', async () => {
@@ -308,7 +349,7 @@ describe('POST /api/salary/runs — one-click creation', () => {
       error: { code: string; details: { existingId?: string; existingStatus?: string } }
     }>(response)
     expect(status).toBe(409)
-    expect(body.error.code).toBe('CONFLICT')
+    expect(body.error.code).toBe('SALARY_RUN_DUPLICATE_PERIOD')
     expect(body.error.details.existingId).toBe('run-winner')
     expect(body.error.details.existingStatus).toBe('draft')
   })
