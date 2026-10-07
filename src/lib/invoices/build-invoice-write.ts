@@ -15,8 +15,8 @@ import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import {
-  computeDeduction,
   computeInvoiceDeductionTotal,
+  computeLineDeductions,
   validateInvoice as validateRotRut,
 } from '@/lib/invoices/rot-rut-rules'
 import {
@@ -468,6 +468,8 @@ export async function buildInvoiceWriteData(params: {
   // entirely for proformas, delivery notes, and quotes: those documents don't
   // post journal entries and have no deduction model.
   let deductionTotal = 0
+  // Per line, aligned with `items`: what each deduction row stores and books.
+  let lineDeductions: number[] = []
   let deductionPersonnummerEncrypted: string | null = null
   let deductionPersonnummerLast4: string | null = null
   if (documentType === 'invoice') {
@@ -562,7 +564,10 @@ export async function buildInvoiceWriteData(params: {
     // Compute and (when present) encrypt the personnummer. The plaintext value
     // never touches the DB: only the AES-256-GCM ciphertext + the last four
     // digits go into invoices columns.
-    deductionTotal = computeInvoiceDeductionTotal(validateInput)
+    // SEK: whole kronor per claim, the amount Skatteverket pays (see
+    // computeLineDeductions), so "Att betala" and the 1510 share agree.
+    deductionTotal = computeInvoiceDeductionTotal(validateInput, { currency: input.currency })
+    lineDeductions = computeLineDeductions(validateInput, { currency: input.currency })
     if (keepStoredPersonnummer && existingPersonnummer) {
       deductionPersonnummerEncrypted = existingPersonnummer.encrypted
       deductionPersonnummerLast4 = existingPersonnummer.last4
@@ -741,21 +746,11 @@ export async function buildInvoiceWriteData(params: {
     const itemVat = documentType === 'delivery_note' ? 0 : Math.round(lineTotal * itemRate / 100 * 100) / 100
     // ROT/RUT deduction is recomputed server-side so a tampered client can't
     // expand the 1513 receivable beyond the rules. Non-invoice document types
-    // never carry deduction_type.
+    // never carry deduction_type. The amounts come from the same
+    // computeLineDeductions call as deduction_total, so the header and the
+    // rows (and the 1513 lines booked from them) can never disagree.
     const deductionType = documentType === 'invoice' ? (item.deduction_type ?? null) : null
-    const deductionAmount = deductionType
-      ? computeDeduction({
-          unit_price: item.unit_price,
-          quantity: item.quantity,
-          discount_percent: discountPercent,
-          deduction_type: deductionType,
-          // Grön teknik's rate follows the installation type: the same
-          // work_type validateInput carried, so deduction_total and the
-          // per-line deduction_amount can never disagree.
-          work_type: item.work_type ?? null,
-          vat_rate: itemRate,
-        })
-      : 0
+    const deductionAmount = deductionType ? (lineDeductions[index] ?? 0) : 0
     return {
       sort_order: index,
       line_type: 'product',

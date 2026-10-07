@@ -117,12 +117,15 @@ describe('buildInvoiceCashLines with a known bank amount', () => {
 
   it('ROT: the customer share is what is owed, 1513 and the credits stay put', () => {
     // 1 002 labor + 250,50 moms = 1 252,50; ROT 30 % = 375,75; share 876,75.
+    // Saved before the whole-krona rule: the stored öre amount is what books.
     const rot = invoice({
       total: 1252.5,
       subtotal: 1002,
       vat_amount: 250.5,
       deduction_total: 375.75,
-      items: [item({ unit_price: 1002, line_total: 1002, vat_amount: 250.5, deduction_type: 'rot' })],
+      items: [
+        item({ unit_price: 1002, line_total: 1002, vat_amount: 250.5, deduction_type: 'rot', deduction_amount: 375.75 }),
+      ],
     })
     const before = buildInvoiceCashLines(rot, 'aktiebolag').lines
     expect(before[0]).toMatchObject({ account_number: '1930', debit_amount: 876.75 })

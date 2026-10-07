@@ -141,7 +141,7 @@ describe('computeDeduction: grön teknik on arbete och material incl. moms', () 
         { unit_price: 10000, quantity: 1, vat_rate: 25, deduction_type: 'rot', work_type: 'EL' },
         { unit_price: 4000, quantity: 1, vat_rate: 25, deduction_type: 'rut', work_type: 'STAD' },
         { unit_price: 2000, quantity: 1, vat_rate: 25 },
-      ]),
+      ], { currency: 'SEK' }),
     ).toBe(6250)
   })
 })
@@ -159,7 +159,7 @@ describe("Skatteverket's worked example (Sol AB, solceller)", () => {
       { unit_price: 4800, quantity: 1, vat_rate: 25, deduction_type: null },
     ]
     const totalInclVat = lines.reduce((sum, line) => sum + line.unit_price * line.quantity * 1.25, 0)
-    const reduction = computeInvoiceDeductionTotal(lines)
+    const reduction = computeInvoiceDeductionTotal(lines, { currency: 'SEK' })
     expect(totalInclVat).toBe(200000)
     expect(reduction).toBe(29100)
     expect(totalInclVat - reduction).toBe(170900)

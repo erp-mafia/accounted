@@ -1,4 +1,4 @@
-import { roundOre } from '@/lib/money'
+import { roundOre, truncateToWholeKronor } from '@/lib/money'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import type { ArticleType, DeductionType } from '@/types'
 
@@ -484,9 +484,7 @@ export function computeDeduction(item: ItemForDeduction): number {
   // Net of any line discount: the deduction follows what the customer pays.
   const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
   if (lineTotal <= 0) return 0
-  const rate = item.vat_rate ?? 0
-  const lineVat = rate > 0 ? Math.round(lineTotal * rate / 100 * 100) / 100 : 0
-  const lineTotalInclVat = lineTotal + lineVat
+  const lineTotalInclVat = lineTotal + lineVatAmount(item.vat_rate, lineTotal)
   const raw = lineTotalInclVat * percent
   // Cap at line total incl. VAT: defensive against future rule changes that
   // would push percent past 1.0.
@@ -494,16 +492,83 @@ export function computeDeduction(item: ItemForDeduction): number {
   return Math.round(capped * 100) / 100
 }
 
+/** The stored invoice_items.vat_amount of a line with this net total. */
+function lineVatAmount(vatRate: number | null | undefined, lineTotal: number): number {
+  const rate = vatRate ?? 0
+  return rate > 0 ? Math.round(lineTotal * rate / 100 * 100) / 100 : 0
+}
+
 /**
- * Sum the per-item deduction over an invoice. Returns the total to store
- * on invoices.deduction_total and to use as the 1513 debit amount.
+ * The deduction each line carries, as the invoice stores, prints and books
+ * it (invoice_items.deduction_amount, and the 1513 lines of the verifikat;
+ * the header deduction_total is their sum). Aligned with `items`.
+ *
+ * SEK: every claim is rounded DOWN to whole kronor, the amount Skatteverket
+ * is asked for and pays: BegartBelopp per ROT or RUT claim (rot-rut-file.ts),
+ * and per grön teknik installation type the same amount capped at the type's
+ * rate of its whole-krona cost (gron-teknik-claim.ts). The öre come off the
+ * claim's largest lines, so the lines still add up to it. Before this the
+ * invoice kept the öre (418,75) while Skatteverket paid 418: "Att betala"
+ * (838 - 418,75 = 419,25) was not a whole-krona amount, a customer who rounded
+ * it up paid 1,25 kr more than the books expected, the bank match refused it,
+ * and every payout left an öre remainder on 1513.
+ *
+ * Other currencies keep the per-line öre amounts: their claim converts each
+ * line to SEK first and is rounded at the payout.
  */
-export function computeInvoiceDeductionTotal(items: ItemForDeduction[]): number {
-  let total = 0
-  for (const item of items) {
-    total += computeDeduction(item)
+export function computeLineDeductions(
+  items: readonly ItemForDeduction[],
+  options: { currency: string | null | undefined },
+): number[] {
+  const amounts = items.map((item) => computeDeduction(item))
+  if ((options.currency ?? 'SEK') !== 'SEK') return amounts
+
+  // One claim per ROT or RUT invoice, one per grön teknik installation type.
+  const claims = new Map<string, number[]>()
+  items.forEach((item, index) => {
+    if (!item.deduction_type) return
+    const key = item.deduction_type === 'gron_teknik'
+      ? `gron_teknik:${item.work_type?.trim() ?? ''}`
+      : item.deduction_type
+    claims.set(key, [...(claims.get(key) ?? []), index])
+  })
+
+  for (const [key, indexes] of claims) {
+    const sum = roundOre(indexes.reduce((total, i) => total + amounts[i], 0))
+    let claim = truncateToWholeKronor(sum)
+    if (key.startsWith('gron_teknik:')) {
+      const percent = deductionPercent('gron_teknik', items[indexes[0]].work_type)
+      if (percent !== null) {
+        const cost = Math.round(indexes.reduce((total, i) => {
+          const item = items[i]
+          const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
+          return total + lineTotal + lineVatAmount(item.vat_rate, lineTotal)
+        }, 0))
+        claim = Math.min(claim, truncateToWholeKronor(percent * cost))
+      }
+    }
+    let excess = roundOre(sum - claim)
+    // Largest lines first, ties in line order, so the split is deterministic.
+    const order = [...indexes].sort((a, b) => amounts[b] - amounts[a] || a - b)
+    for (const i of order) {
+      if (excess <= 0) break
+      const take = Math.min(amounts[i], excess)
+      amounts[i] = roundOre(amounts[i] - take)
+      excess = roundOre(excess - take)
+    }
   }
-  return Math.round(total * 100) / 100
+  return amounts
+}
+
+/**
+ * Sum the per-line deductions (computeLineDeductions) over an invoice: the
+ * total to store on invoices.deduction_total, which the 1513 lines add up to.
+ */
+export function computeInvoiceDeductionTotal(
+  items: readonly ItemForDeduction[],
+  options: { currency: string | null | undefined },
+): number {
+  return roundOre(computeLineDeductions(items, options).reduce((total, amount) => total + amount, 0))
 }
 
 /**

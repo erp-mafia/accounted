@@ -819,7 +819,8 @@ describe('commitPendingOperation: match_transaction_invoice with overpayment_acc
       items: [{
         id: 'item-1', invoice_id: 'inv-1', description: 'Städning', quantity: 1, unit: 'tim',
         unit_price: 540, line_total: 540, vat_rate: 25, vat_amount: 135, sort_order: 0,
-        deduction_type: 'rut', work_type: 'STAD',
+        // Saved before the whole-krona rule: the stored öre amount is what books.
+        deduction_type: 'rut', work_type: 'STAD', deduction_amount: 337.5,
       }],
     }, 'cash')
 

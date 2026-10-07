@@ -169,7 +169,7 @@ describe('createInvoiceJournalEntry: grön teknik', () => {
         vat_amount: 4000,
         total: 20000,
         deduction_total: 10000,
-        items: [item({ unit_price: 16000, line_total: 16000, vat_amount: 4000, work_type: 'INSTALLATION_LADDPUNKT' })],
+        items: [item({ unit_price: 16000, line_total: 16000, vat_amount: 4000, work_type: 'INSTALLATION_LADDPUNKT', deduction_amount: 10000 })],
       }),
     )
     const input = mockedCreateEntry.mock.calls[0][3]

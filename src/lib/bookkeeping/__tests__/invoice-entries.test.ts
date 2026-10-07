@@ -43,6 +43,7 @@ const {
   createCreditNoteJournalEntry,
   createInvoiceCashEntry,
 } = await import('../invoice-entries')
+const { generateRotRutLines } = await import('../invoice-lines')
 
 // Helper to build a minimal Invoice with items
 function makeInvoice(overrides: Partial<Invoice> & { items?: InvoiceItem[] }): Invoice {
@@ -1361,7 +1362,7 @@ describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
           vat_rate: 25,
           vat_amount: 2500,
           deduction_type: 'rot',
-          deduction_amount: 3000,
+          deduction_amount: 3750,
         }),
       ],
     })
@@ -1432,6 +1433,69 @@ describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
     expect(totalDebit).toBe(totalCredit)
   })
 
+  it('books the deduction the invoice stores: a whole-krona RUT claim leaves 419,50 on 1510', async () => {
+    // 670 + 25 % moms = 837,50; RUT 50 % = 418,75, saved as the 418 kr
+    // Skatteverket pays. The customer owes 419,50 and pays "Att betala" 420.
+    const invoice = makeInvoice({
+      subtotal: 670,
+      vat_amount: 167.5,
+      total: 837.5,
+      vat_treatment: 'standard_25',
+      deduction_total: 418,
+      items: [
+        makeItem({
+          unit_price: 670,
+          line_total: 670,
+          vat_amount: 167.5,
+          deduction_type: 'rut',
+          deduction_amount: 418,
+        }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '1513')?.debit_amount).toBe(418)
+    expect(input.lines.find((l) => l.account_number === '1510')?.debit_amount).toBe(419.5)
+    const totalDebit = roundOre(input.lines.reduce((sum, l) => sum + l.debit_amount, 0))
+    const totalCredit = roundOre(input.lines.reduce((sum, l) => sum + l.credit_amount, 0))
+    expect(totalDebit).toBe(totalCredit)
+  })
+
+  it('an invoice saved with an öre deduction keeps booking the öre it was issued with', async () => {
+    const invoice = makeInvoice({
+      subtotal: 670,
+      vat_amount: 167.5,
+      total: 837.5,
+      vat_treatment: 'standard_25',
+      deduction_total: 418.75,
+      items: [
+        makeItem({
+          unit_price: 670,
+          line_total: 670,
+          vat_amount: 167.5,
+          deduction_type: 'rut',
+          deduction_amount: 418.75,
+        }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '1513')?.debit_amount).toBe(418.75)
+    expect(input.lines.find((l) => l.account_number === '1510')?.debit_amount).toBe(418.75)
+  })
+
+  it('rows never saved carry no amount and book what saving would store', () => {
+    const draftRow = makeItem({ unit_price: 670, line_total: 670, vat_amount: 167.5, deduction_type: 'rut' })
+    delete draftRow.deduction_amount
+    const { lines, totalSek } = generateRotRutLines([draftRow], 'F-1', 'SEK')
+    expect(totalSek).toBe(418)
+    expect(lines.map((l) => [l.account_number, l.debit_amount])).toEqual([['1513', 418]])
+  })
+
   it('mixed invoice: ROT line + non-deduction line, per-item handling', async () => {
     // ROT line 10 000 (deduction 30% of 12 500 inkl. moms = 3 750) +
     // non-deduction materials line 4 000.
@@ -1449,7 +1513,7 @@ describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
           vat_rate: 25,
           vat_amount: 2500,
           deduction_type: 'rot',
-          deduction_amount: 3000,
+          deduction_amount: 3750,
         }),
         makeItem({
           id: 'item-2',
@@ -1499,7 +1563,7 @@ describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
           vat_rate: 25,
           vat_amount: 1250,
           deduction_type: 'rut',
-          deduction_amount: 2500,
+          deduction_amount: 3125,
         }),
       ],
     })
@@ -1556,7 +1620,7 @@ describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
           vat_rate: 25,
           vat_amount: 1500,
           deduction_type: 'rot',
-          deduction_amount: 1800,
+          deduction_amount: 2250,
         }),
         makeItem({
           id: 'item-2',
@@ -1566,7 +1630,7 @@ describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
           vat_rate: 25,
           vat_amount: 1000,
           deduction_type: 'rot',
-          deduction_amount: 1200,
+          deduction_amount: 1500,
         }),
       ],
     })
@@ -1699,7 +1763,7 @@ describe('dimensions propagation (PR7): createInvoiceJournalEntry', () => {
           vat_rate: 25,
           vat_amount: 2500,
           deduction_type: 'rot',
-          deduction_amount: 3000,
+          deduction_amount: 3750,
           dimensions: { '6': 'P001' },
         }),
       ],
@@ -1921,7 +1985,7 @@ describe('createInvoiceCashEntry: ROT/RUT-avdrag', () => {
           vat_rate: 25,
           vat_amount: 2500,
           deduction_type: 'rot',
-          deduction_amount: 3000,
+          deduction_amount: 3750,
         }),
       ],
     })
@@ -1956,7 +2020,7 @@ describe('createInvoiceCashEntry: ROT/RUT-avdrag', () => {
           vat_rate: 25,
           vat_amount: 2500,
           deduction_type: 'rot',
-          deduction_amount: 3000,
+          deduction_amount: 3750,
         }),
       ],
     })

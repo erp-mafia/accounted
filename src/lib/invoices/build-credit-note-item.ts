@@ -20,8 +20,9 @@ export function buildCreditNoteItem(invoiceId: string, item: InvoiceItem) {
     article_id: item.article_id ?? null,
     deduction_type: item.deduction_type ?? null,
     // Positive magnitude, unlike the negated amounts above: invoice_items has
-    // CHECK (deduction_amount >= 0), and the reversing verifikat recomputes
-    // the ROT/RUT amount from quantity/unit_price rather than reading this.
+    // CHECK (deduction_amount >= 0). The reversing verifikat books 1513 from
+    // this (generateRotRutLines), so the kreditfaktura reverses exactly the
+    // amount the original booked.
     deduction_amount: item.deduction_amount
       ? Math.abs(item.deduction_amount)
       : 0,

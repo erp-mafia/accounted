@@ -7,6 +7,7 @@ import {
   computeDeduction,
   computeInvoiceDeductionTotal,
   computeDeductionTotalsByKind,
+  computeLineDeductions,
   validateInvoice,
   deductionSekConverter,
   deductionToSek,
@@ -182,7 +183,7 @@ describe('computeInvoiceDeductionTotal', () => {
       { unit_price: 1000, quantity: 1, deduction_type: 'rut', vat_rate: 25 }, // 625
       { unit_price: 2000, quantity: 1, vat_rate: 25 }, // not flagged
     ]
-    expect(computeInvoiceDeductionTotal(items)).toBe(7375)
+    expect(computeInvoiceDeductionTotal(items, { currency: 'SEK' })).toBe(7375)
   })
 
   it('mixed: ROT line + non-eligible line: only ROT generates deduction', () => {
@@ -190,7 +191,7 @@ describe('computeInvoiceDeductionTotal', () => {
       { unit_price: 10000, quantity: 1, deduction_type: 'rot' },
       { unit_price: 2000, quantity: 1 }, // not flagged
     ]
-    expect(computeInvoiceDeductionTotal(items)).toBe(3000)
+    expect(computeInvoiceDeductionTotal(items, { currency: 'SEK' })).toBe(3000)
   })
 
   it('mixed ROT + RUT lines sum independently', () => {
@@ -198,7 +199,7 @@ describe('computeInvoiceDeductionTotal', () => {
       { unit_price: 10000, quantity: 1, deduction_type: 'rot' }, // 3 000
       { unit_price: 4000, quantity: 1, deduction_type: 'rut' }, // 2 000
     ]
-    expect(computeInvoiceDeductionTotal(items)).toBe(5000)
+    expect(computeInvoiceDeductionTotal(items, { currency: 'SEK' })).toBe(5000)
   })
 
   it('all non-eligible → 0', () => {
@@ -206,7 +207,75 @@ describe('computeInvoiceDeductionTotal', () => {
       { unit_price: 1000, quantity: 1 },
       { unit_price: 2000, quantity: 1 },
     ]
-    expect(computeInvoiceDeductionTotal(items)).toBe(0)
+    expect(computeInvoiceDeductionTotal(items, { currency: 'SEK' })).toBe(0)
+  })
+})
+
+describe('computeLineDeductions (whole kronor per claim, as Skatteverket pays)', () => {
+  // 670 kr + 25 % moms = 837,50; RUT 50 % = 418,75 per line.
+  const rut670: ItemForDeduction = { unit_price: 670, quantity: 1, deduction_type: 'rut', vat_rate: 25 }
+
+  it('a RUT invoice of 837,50 claims 418 kr, so Att betala is 838 - 418 = 420', () => {
+    expect(computeDeduction(rut670)).toBe(418.75)
+    expect(computeLineDeductions([rut670], { currency: 'SEK' })).toEqual([418])
+    expect(computeInvoiceDeductionTotal([rut670], { currency: 'SEK' })).toBe(418)
+  })
+
+  it('takes the öre off the largest line, so the lines add up to the claim', () => {
+    const items: ItemForDeduction[] = [
+      rut670, // 418,75
+      { unit_price: 100, quantity: 1, deduction_type: 'rut', vat_rate: 25 }, // 62,50
+    ]
+    expect(computeLineDeductions(items, { currency: 'SEK' })).toEqual([418.5, 62.5])
+    expect(computeInvoiceDeductionTotal(items, { currency: 'SEK' })).toBe(481)
+  })
+
+  it('spreads the öre over several lines when the largest is too small to take them all', () => {
+    const items: ItemForDeduction[] = [
+      { unit_price: 0.8, quantity: 1, deduction_type: 'rut', vat_rate: 25 }, // 0,50
+      { unit_price: 0.4, quantity: 1, deduction_type: 'rut', vat_rate: 25 }, // 0,25
+    ]
+    // 0,75 kr claims 0 kr: every line ends at 0, none below.
+    expect(computeLineDeductions(items, { currency: 'SEK' })).toEqual([0, 0])
+  })
+
+  it('rounds ROT and RUT as separate claims and leaves other lines at 0', () => {
+    const items: ItemForDeduction[] = [
+      { unit_price: 1001, quantity: 1, deduction_type: 'rot', vat_rate: 25 }, // 375,375 -> 375,38
+      rut670,
+      { unit_price: 2000, quantity: 1, vat_rate: 25 },
+    ]
+    expect(computeLineDeductions(items, { currency: 'SEK' })).toEqual([375, 418, 0])
+  })
+
+  it('keeps a whole-krona deduction as it is', () => {
+    const items: ItemForDeduction[] = [{ unit_price: 10000, quantity: 1, deduction_type: 'rot', vat_rate: 25 }]
+    expect(computeLineDeductions(items, { currency: 'SEK' })).toEqual([3750])
+  })
+
+  it('keeps the öre on a foreign-currency invoice (its claim is converted per line)', () => {
+    expect(computeLineDeductions([rut670], { currency: 'EUR' })).toEqual([418.75])
+  })
+
+  it('grön teknik: per installation type, capped at its rate of the whole-krona cost', () => {
+    // 810,72 + 25 % moms = 1 013,40 kr; 15 % = 152,01. The claim takes 15 %
+    // of the kostnad rounded to 1 013 kr = 151,95, so it requests 151.
+    const solar: ItemForDeduction = {
+      unit_price: 810.72,
+      quantity: 1,
+      vat_rate: 25,
+      deduction_type: 'gron_teknik',
+      work_type: 'INSTALLATION_SOLCELLER',
+    }
+    const charger: ItemForDeduction = {
+      unit_price: 670,
+      quantity: 1,
+      vat_rate: 25,
+      deduction_type: 'gron_teknik',
+      work_type: 'INSTALLATION_LADDPUNKT',
+    }
+    expect(computeDeduction(solar)).toBe(152.01)
+    expect(computeLineDeductions([solar, charger], { currency: 'SEK' })).toEqual([151, 418])
   })
 })
 

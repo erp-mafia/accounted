@@ -22,7 +22,7 @@ import {
 } from './dimension-resolver'
 import { generateSalesVatLines } from './vat-entries'
 import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from '@/lib/invoices/vat-rules'
-import { computeDeduction, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
+import { computeLineDeductions, DEDUCTION_TYPE_LABELS } from '@/lib/invoices/rot-rut-rules'
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
 import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
@@ -301,14 +301,14 @@ export function generatePerRateLines(
  * invoice items.
  *
  * For each item flagged with `deduction_type`, produces a debit on BAS 1513
- * (Övriga kortfristiga fordringar, Skatteverket) for the computed
- * deduction amount. The caller must REDUCE the 1510 debit (kundfordringar)
- * by the same total: the customer only owes the post-deduction amount;
- * Skatteverket pays the rest (Husavdragstjänsten for ROT/RUT, the e-tjänst
- * Grön teknik: företag for grön teknik). Revenue and utgående moms stay on
- * the full amount: the reduction is a claim on Skatteverket, not a price
- * reduction. Returns both the lines and the total so callers can apply both
- * adjustments atomically.
+ * (Övriga kortfristiga fordringar, Skatteverket) for the line's deduction
+ * amount as the invoice stores it. The caller must REDUCE the 1510 debit
+ * (kundfordringar) by the same total: the customer only owes the
+ * post-deduction amount; Skatteverket pays the rest (Husavdragstjänsten for
+ * ROT/RUT, the e-tjänst Grön teknik: företag for grön teknik). Revenue and
+ * utgående moms stay on the full amount: the reduction is a claim on
+ * Skatteverket, not a price reduction. Returns both the lines and the total
+ * so callers can apply both adjustments atomically.
  *
  * Foreign-currency invoices: ROT/RUT-avdrag is a Sweden-only rule, so
  * receivables on 1513 are always recorded in SEK. We use the same SEK
@@ -332,22 +332,36 @@ export function generateRotRutLines(
 
   let totalSek = 0
 
-  for (const item of items) {
+  // The amounts the invoice stores (invoice_items.deduction_amount, computed
+  // server-side by computeLineDeductions when it was saved, never taken from
+  // the client): the figures its header, its PDF and the Skatteverket claim
+  // carry, so 1513 and the 1510 share follow them exactly. An invoice saved
+  // before the whole-krona rule keeps booking the öre amounts it was issued
+  // with, and a kreditfaktura (buildCreditNoteItem copies the original's
+  // amounts) reverses exactly what the original booked. Rows never saved
+  // (the editor's draft voucher preview) carry none and get what saving
+  // would store.
+  const stored = items.every((item) => !item.deduction_type || item.deduction_amount != null)
+  const amounts = stored
+    ? items.map((item) => Number(item.deduction_amount ?? 0))
+    : computeLineDeductions(
+        items.map((item) => ({
+          unit_price: side === 'credit' ? Math.abs(item.unit_price) : item.unit_price,
+          quantity: side === 'credit' ? Math.abs(item.quantity) : item.quantity,
+          // The deduction base is the NET line total (rabatt reduces what the
+          // customer pays).
+          discount_percent: item.discount_percent ?? 0,
+          deduction_type: item.deduction_type ?? null,
+          // Grön teknik's rate follows the installation type.
+          work_type: item.work_type,
+          vat_rate: item.vat_rate,
+        })),
+        { currency },
+      )
+
+  for (const [index, item] of items.entries()) {
     if (!item.deduction_type) continue
-    // Recompute server-side to defend against tampered client values.
-    const amount = computeDeduction({
-      unit_price: side === 'credit' ? Math.abs(item.unit_price) : item.unit_price,
-      quantity: side === 'credit' ? Math.abs(item.quantity) : item.quantity,
-      // The deduction base is the NET line total (rabatt reduces what the
-      // customer pays); omitting this books 1513 on the gross while the
-      // stored deduction_total and the Skatteverket claim carry the net.
-      discount_percent: item.discount_percent ?? 0,
-      deduction_type: item.deduction_type,
-      // Grön teknik's rate follows the installation type: the same input the
-      // stored deduction_total was computed from.
-      work_type: item.work_type,
-      vat_rate: item.vat_rate,
-    })
+    const amount = amounts[index]
     if (amount <= 0) continue
     const amountSek = Math.round(toSek(amount) * 100) / 100
     if (amountSek <= 0) continue

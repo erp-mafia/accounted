@@ -19,7 +19,7 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { buildInvoicePaymentRows, printsPayableRow } from '@/lib/invoices/payment-rows'
-import { computeDeduction, computeInvoiceDeductionTotal } from '@/lib/invoices/rot-rut-rules'
+import { computeLineDeductions } from '@/lib/invoices/rot-rut-rules'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
 import {
@@ -370,6 +370,27 @@ async function buildDraftPreview(params: {
     ? input.items
     : [{ line_type: 'text', description: PREVIEW_PLACEHOLDER_ROW_TEXT[language], quantity: 0, unit: '', unit_price: 0 }]
 
+  // The deduction each row stores, as the write path computes it
+  // (computeLineDeductions): whole kronor per claim on a SEK invoice.
+  const lineDeductions = deductionsApply
+    ? computeLineDeductions(
+        rows.map((item) =>
+          item.line_type === 'text'
+            ? { unit_price: 0, quantity: 0, deduction_type: null }
+            : {
+                unit_price: item.unit_price,
+                quantity: item.quantity,
+                discount_percent: item.discount_percent ?? 0,
+                deduction_type: item.deduction_type ?? null,
+                work_type: item.deduction_type ? (item.work_type?.trim() || null) : null,
+                // The base is the NET line total inkl. moms at the line's rate (HUSFL 6-9 §§).
+                vat_rate: zeroVat ? 0 : (item.vat_rate ?? vatRules.rate),
+              },
+        ),
+        { currency },
+      )
+    : []
+
   const nowIso = new Date().toISOString()
   const items = rows.map((item, index): InvoiceItem => {
     const base = { id: `preview-${index}`, invoice_id: 'preview', sort_order: index, created_at: nowIso }
@@ -400,17 +421,7 @@ async function buildDraftPreview(params: {
     const rate = zeroVat ? 0 : (item.vat_rate ?? vatRules.rate)
     const deductionType = deductionsApply ? (item.deduction_type ?? null) : null
     const workType = deductionType ? (item.work_type?.trim() || null) : null
-    // The base is the NET line total inkl. moms at the line's rate (HUSFL 6-9 §§).
-    const deductionAmount = deductionType
-      ? computeDeduction({
-          unit_price: item.unit_price,
-          quantity: item.quantity,
-          discount_percent: discountPercent,
-          deduction_type: deductionType,
-          work_type: workType,
-          vat_rate: rate,
-        })
-      : 0
+    const deductionAmount = deductionType ? (lineDeductions[index] ?? 0) : 0
     return {
       ...base,
       line_type: 'product',
@@ -440,17 +451,9 @@ async function buildDraftPreview(params: {
   const vatAmount = isDeliveryNote ? 0 : roundOre(billable.reduce((sum, item) => sum + item.vat_amount, 0))
   const total = isDeliveryNote ? 0 : roundOre(subtotal + vatAmount)
 
+  // The header is the sum of its rows, as on the write path.
   const deductionTotal = deductionsApply
-    ? computeInvoiceDeductionTotal(
-        billable.map((item) => ({
-          unit_price: item.unit_price,
-          quantity: item.quantity,
-          discount_percent: item.discount_percent ?? 0,
-          deduction_type: item.deduction_type ?? null,
-          work_type: item.work_type ?? null,
-          vat_rate: item.vat_rate,
-        })),
-      )
+    ? roundOre(billable.reduce((sum, item) => sum + (item.deduction_amount ?? 0), 0))
     : 0
 
   // Header treatment, ruta and statutory notice from the rates the lines

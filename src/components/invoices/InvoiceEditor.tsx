@@ -90,7 +90,7 @@ import {
   ROT_WORK_TYPES,
   RUT_WORK_TYPES,
   articleDeductionPrefill,
-  computeDeduction,
+  computeLineDeductions,
   deductionCapWarnings,
   deductionLineIssues,
   deductionTypeForWorkType,
@@ -1958,25 +1958,34 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // supabase client is stable; initial?.id only changes with the invoice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isInvoiceDoc, company?.id, watchCustomerId, invoiceYear, initial?.id])
+  // What saving stores per row (computeLineDeductions, the write path's
+  // rule): whole kronor per claim on a SEK invoice, so the deduction and
+  // "Att betala" shown here are the ones the invoice gets.
+  const lineDeductions = isInvoiceDoc
+    ? computeLineDeductions(
+        watchItems.map((item) => ({
+          unit_price: item.unit_price || 0,
+          quantity: item.quantity || 0,
+          discount_percent: item.discount_percent,
+          deduction_type: item.deduction_type,
+          // Grön teknik's rate follows the installation type.
+          work_type: item.work_type,
+          // Same rate resolution as the VAT totals loop above: the deduction
+          // base is the line total inkl. moms (HUSFL 6-9 §§).
+          vat_rate: vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0,
+        })),
+        { currency: watchCurrency },
+      )
+    : []
   const deductionByKind = { rot: 0, rut: 0, gron_teknik: 0 }
   if (isInvoiceDoc) {
-    for (const item of watchItems) {
-      if (!item.deduction_type) continue
-      const amount = computeDeduction({
-        unit_price: item.unit_price || 0,
-        quantity: item.quantity || 0,
-        discount_percent: item.discount_percent,
-        deduction_type: item.deduction_type,
-        // Grön teknik's rate follows the installation type.
-        work_type: item.work_type,
-        // Same rate resolution as the VAT totals loop above: the deduction
-        // base is the line total inkl. moms (HUSFL 6-9 §§).
-        vat_rate: vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0,
-      })
+    watchItems.forEach((item, index) => {
+      if (!item.deduction_type) return
+      const amount = lineDeductions[index] ?? 0
       if (item.deduction_type === 'rot') deductionByKind.rot += amount
       else if (item.deduction_type === 'gron_teknik') deductionByKind.gron_teknik += amount
       else deductionByKind.rut += amount
-    }
+    })
   }
   // (x + 0 is exact, so a ROT/RUT-only form sums exactly as before.)
   const deductionTotal =
@@ -4733,14 +4742,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 const workPlaceholder = isGronTeknik
                   ? t('deduction_gron_teknik_work_type_placeholder')
                   : t('deduction_work_type_placeholder')
-                const amount = computeDeduction({
-                  unit_price: item?.unit_price || 0,
-                  quantity: item?.quantity || 0,
-                  discount_percent: item?.discount_percent,
-                  deduction_type: item?.deduction_type,
-                  work_type: item?.work_type,
-                  vat_rate: vatRegistered ? (item?.vat_rate ?? (vatRules?.rate || 25)) : 0,
-                })
+                const amount = lineDeductions[index] ?? 0
                 const hoursFromQuantity =
                   item?.labor_hours != null && defaultLaborHours(item) === item.labor_hours
                 const rowErr = errors.items?.[index]

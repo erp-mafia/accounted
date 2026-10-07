@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase, makeCustomer } from '@/tests/helpers'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
 import { encryptPersonnummer, decryptPersonnummer } from '@/lib/salary/personnummer'
+import { getAmountToPay } from '@/lib/invoices/rounding'
 import type { Customer, InvoiceDocumentType } from '@/types'
 
 // Uses the REAL getVatRules / rot-rut-rules / personnummer helpers (only the
@@ -382,6 +383,57 @@ describe('buildInvoiceWriteData stored ROT/RUT personnummer (edit path)', () => 
     if (!result.ok) return
     expect(result.invoiceFields.deduction_personnummer_encrypted).toBeNull()
     expect(result.invoiceFields.deduction_personnummer_last4).toBeNull()
+  })
+})
+
+describe('buildInvoiceWriteData whole-krona ROT/RUT deduction', () => {
+  const rut = (unitPrice: number) => ({
+    description: 'Städning',
+    quantity: 1,
+    unit: 'st',
+    unit_price: unitPrice,
+    vat_rate: 25,
+    deduction_type: 'rut' as const,
+    work_type: 'STAD',
+    labor_hours: 1,
+  })
+  const customer = makeCustomer({
+    customer_type: 'individual',
+    personal_number: encryptPersonnummer('199001019802'),
+  })
+
+  async function write(items: ReturnType<typeof rut>[]) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+    return buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: { ...baseHeader, items },
+    })
+  }
+
+  it('stores the 418 kr Skatteverket pays, not 418,75, so Att betala is 420', async () => {
+    const result = await write([rut(670)])
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.total).toBe(837.5)
+    expect(result.invoiceFields.deduction_total).toBe(418)
+    expect(result.items[0].deduction_amount).toBe(418)
+    // 837,50 rounds to 838 (öresavrundning); 838 - 418 = 420, a whole-krona
+    // amount within the öre band of the 419,50 the books expect.
+    expect(getAmountToPay({ ...result.invoiceFields, ore_rounding: true }, null).toPay).toBe(420)
+  })
+
+  it('stores per-line amounts that add up to the whole-krona header', async () => {
+    const result = await write([rut(670), rut(100)])
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items.map((item) => item.deduction_amount)).toEqual([418.5, 62.5])
+    expect(result.invoiceFields.deduction_total).toBe(481)
   })
 })
 
