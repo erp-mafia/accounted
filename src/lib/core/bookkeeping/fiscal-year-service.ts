@@ -20,8 +20,12 @@
  *     the day after it ends) and, when it fills a gap, ends the day before
  *     its successor; a year prepended before the earliest ends the day before
  *     it; years never overlap (409, also the DB exclusion constraint);
- *   - a closed or locked year is never edited, and its dates never move
- *     while posted or reversed verifikat exist in it (the name may);
+ *   - a closed or locked year is never edited (the name may change on an
+ *     open one at any time); its dates move only through the guarded
+ *     redate_fiscal_period RPC, which refuses whenever a verifikat, an
+ *     opening balance, a lock, year-end work, a filing or an SIE hold would
+ *     be affected (crm#1010: a year that already holds verifikat may still
+ *     move a boundary over days that hold nothing);
  *   - an enskild firma uses the calendar year (BFL 3 kap.);
  *   - an open prior year is information, never a gate: the create succeeds
  *     with the PRIOR_FISCAL_YEAR_STILL_OPEN warning (BFL 5 kap. 2 § and
@@ -350,11 +354,31 @@ export interface UpdateFiscalPeriodInput {
   period_end?: string
 }
 
+/** One reason redate_fiscal_period refused, in the RPC's own words. */
+interface FiscalPeriodRedateBlocker {
+  code: string
+  message_sv: string
+  [fact: string]: unknown
+}
+
+/** What redate_fiscal_period answers (migration 20261005211012). */
+interface RedateRpcResult {
+  ok: boolean
+  code?: string
+  blockers?: FiscalPeriodRedateBlocker[]
+  period?: FiscalPeriod
+}
+
 /**
  * Rename or re-date an open, unlocked räkenskapsår. The name may change at
- * any time on an open year; the dates only while no posted or reversed
- * verifikat exist in it (moving the year under a verifikat would reassign
- * booked history). A request that changes nothing answers the period as is.
+ * any time on an open year. New dates must keep the BFL 3 kap. shape and the
+ * chain to the neighbouring years (checked here first, with the codes every
+ * door already knows), and are then written by redate_fiscal_period, which
+ * re-checks all of that under a row lock together with everything the year
+ * holds: no verifikat or draft may fall outside the new dates, posted
+ * opening balances pin the start, and a lock, year-end work, a filing or an
+ * SIE hold refuses the move. Its refusal names every blocker in Swedish. A
+ * request that changes nothing answers the period as is.
  */
 export async function updateFiscalPeriod(
   ctx: OperationContext,
@@ -375,25 +399,10 @@ export async function updateFiscalPeriod(
   if (period.is_closed) return { ok: false, code: 'FISCAL_PERIOD_UPDATE_CLOSED' }
   if (period.locked_at) return { ok: false, code: 'FISCAL_PERIOD_UPDATE_LOCKED' }
 
-  if (input.period_start || input.period_end) {
-    const { count: entryCount } = await supabase
-      .from('journal_entries')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .eq('fiscal_period_id', fiscalPeriodId)
-      .in('status', ['posted', 'reversed'])
-    if (entryCount && entryCount > 0) {
-      return {
-        ok: false,
-        code: 'FISCAL_PERIOD_HAS_POSTED_ENTRIES',
-        details: { entry_count: entryCount },
-        messageSv: `Datumen kan inte ändras: ${entryCount} bokförda verifikationer finns i räkenskapsåret. Namnet kan fortfarande ändras.`,
-      }
-    }
+  const newStart = input.period_start || (period.period_start as string)
+  const newEnd = input.period_end || (period.period_end as string)
 
-    const newStart = input.period_start || (period.period_start as string)
-    const newEnd = input.period_end || (period.period_end as string)
-
+  if (newStart !== period.period_start || newEnd !== period.period_end) {
     // The first period may start on any day (BFL 3 kap. 3 §); an enskild
     // firma's first year may also run to 31 dec next year (förlängt
     // räkenskapsår, max 18 months).
@@ -482,44 +491,82 @@ export async function updateFiscalPeriod(
         messageSv: `Räkenskapsåret måste sluta ${expectedEnd}, dagen innan nästa räkenskapsår börjar.`,
       }
     }
+
+    // What the year holds (verifikat, drafts, opening balances, year-end
+    // work, filings, holds, the lock date) is checked by the RPC in the same
+    // transaction that moves the dates, so nothing can land in between.
+    const { data, error: rpcError } = await supabase.rpc('redate_fiscal_period', {
+      p_company_id: companyId,
+      p_period_id: fiscalPeriodId,
+      p_period_start: newStart,
+      p_period_end: newEnd,
+      p_name: input.name ?? null,
+      p_dry_run: options.dryRun === true,
+      p_user_id: ctx.userId,
+    })
+    if (rpcError || !data) return writeFailure(rpcError, log)
+
+    const result = data as RedateRpcResult
+    if (!result.ok) return redateFailure(result)
+
+    if (options.dryRun) {
+      const changes: UpdateFiscalPeriodInput = {}
+      if (input.name) changes.name = input.name
+      if (input.period_start) changes.period_start = input.period_start
+      if (input.period_end) changes.period_end = input.period_end
+      return { ok: true, dryRun: true, preview: { fiscal_period_id: fiscalPeriodId, changes } }
+    }
+    return { ok: true, data: result.period as FiscalPeriod }
   }
 
-  const updates: { name?: string; period_start?: string; period_end?: string } = {}
-  if (input.name) updates.name = input.name
-  if (input.period_start) updates.period_start = input.period_start
-  if (input.period_end) updates.period_end = input.period_end
-
-  if (Object.keys(updates).length === 0) return { ok: true, data: period as FiscalPeriod }
+  // Name only (dates sent unchanged are not a change).
+  if (!input.name) return { ok: true, data: period as FiscalPeriod }
 
   if (options.dryRun) {
-    return { ok: true, dryRun: true, preview: { fiscal_period_id: fiscalPeriodId, changes: updates } }
+    return { ok: true, dryRun: true, preview: { fiscal_period_id: fiscalPeriodId, changes: { name: input.name } } }
   }
 
   const { data: updated, error: updateError } = await supabase
     .from('fiscal_periods')
-    .update(updates)
+    .update({ name: input.name })
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
     .select('*')
     .single()
 
-  if (updateError || !updated) {
-    const msg = updateError?.message ?? ''
-    // The enforce_period_start_day trigger (and the month-end CHECK) refuse
-    // boundaries the checks above let through only on a race.
-    if (/period_start|period_end|first of a month|1st of a month/.test(msg)) {
-      return {
-        ok: false,
-        code: 'FISCAL_PERIOD_INVALID_DATES',
-        details: { rule: 'database_boundary' },
-        messageSv: 'Perioden måste sluta sista dagen i en månad. Efterföljande perioder måste börja den 1:a.',
-      }
-    }
-    log.error('fiscal period update failed', updateError ?? new Error('no row returned'))
-    return { ok: false, code: 'FISCAL_PERIOD_UPDATE_FAILED', details: { reason: msg || undefined } }
-  }
+  if (updateError || !updated) return writeFailure(updateError, log)
 
   return { ok: true, data: updated as FiscalPeriod }
+}
+
+/** A failed fiscal_periods write as a code, for the update and the re-date. */
+function writeFailure(error: { message?: string } | null, log: OperationContext['log']): Failure {
+  const msg = error?.message ?? ''
+  // The enforce_period_start_day trigger (and the month-end CHECK) refuse
+  // boundaries the checks above let through only on a race.
+  if (/period_start|period_end|first of a month|1st of a month/.test(msg)) {
+    return {
+      ok: false,
+      code: 'FISCAL_PERIOD_INVALID_DATES',
+      details: { rule: 'database_boundary' },
+      messageSv: 'Perioden måste sluta sista dagen i en månad. Efterföljande perioder måste börja den 1:a.',
+    }
+  }
+  log.error('fiscal period update failed', error ?? new Error('no row returned'))
+  return { ok: false, code: 'FISCAL_PERIOD_UPDATE_FAILED', details: { reason: msg || undefined } }
+}
+
+/** redate_fiscal_period's refusal as a code, every blocker named in Swedish. */
+function redateFailure(result: RedateRpcResult): Failure {
+  if (result.code === 'PERIOD_NOT_FOUND') return { ok: false, code: 'PERIOD_NOT_FOUND' }
+  if (result.code === 'FORBIDDEN') return { ok: false, code: 'FORBIDDEN' }
+  const blockers = result.blockers ?? []
+  return {
+    ok: false,
+    code: 'FISCAL_PERIOD_DATES_BLOCKED',
+    details: { blockers },
+    messageSv: ['Datumen kan inte ändras.', ...blockers.map((b) => b.message_sv)].join(' '),
+  }
 }
 
 /** Load one period of the company, or the PERIOD_NOT_FOUND failure. */

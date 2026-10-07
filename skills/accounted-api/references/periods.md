@@ -1697,15 +1697,15 @@ Example response `200`:
 **Rename or re-date an open fiscal year.**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
 
-Sparse update of an open, unlocked räkenskapsår: name, period_start, period_end. The name can change at any time on an open year; the dates only while no posted or reversed verifikat exist in it. New dates follow the same BFL 3 kap. rules as create (18-month cap, month-end end, 1st-of-month start unless it is the earliest year, calendar year for an enskild firma) and may not overlap another year. Idempotent. Dry-runnable.
+Sparse update of an open, unlocked räkenskapsår: name, period_start, period_end. The name can change at any time on an open year. The dates can move also when the year already holds verifikat, as long as nothing it holds is affected: every verifikat and draft stays inside the new dates, posted opening balances keep the start, and no lock, year-end work, filing or SIE hold covers the change. New dates follow the same BFL 3 kap. rules as create (18-month cap, month-end end, 1st-of-month start unless it is the earliest year, calendar year for an enskild firma), may not overlap another year and keep the chain to the neighbouring years. Idempotent. Dry-runnable.
 
-**Use when:** A year was created with the wrong dates or name and nothing has been booked in it yet.
-**Do not use for:** Moving verifikat between years, changing a locked or closed year, or lengthening a year that already has bookings.
+**Use when:** A year was created with the wrong dates or name, for example a first year that starts a day after the registration date at Bolagsverket.
+**Do not use for:** Moving verifikat between years, changing a locked or closed year, or re-dating a year whose annual report or declaration is already filed.
 
 **Pitfalls:**
-- Any posted or reversed verifikat in the year answers 409 FISCAL_PERIOD_HAS_POSTED_ENTRIES when dates are sent: send only name to rename.
+- A re-date that would affect what the year holds answers 409 FISCAL_PERIOD_DATES_BLOCKED; details.blockers names every reason (for example entries_outside with the first and last date outside the new dates). Send only name to rename.
 - A locked year answers 409 FISCAL_PERIOD_UPDATE_LOCKED, a closed one 409 FISCAL_PERIOD_UPDATE_CLOSED.
-- Re-dating does not re-chain previous_period_id: keep the years contiguous yourself.
+- Only the earliest year can move its start and only the latest year its end: a boundary shared with a neighbouring year answers 400 FISCAL_PERIOD_NOT_CONTIGUOUS.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

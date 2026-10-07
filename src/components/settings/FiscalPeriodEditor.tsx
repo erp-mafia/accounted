@@ -59,7 +59,9 @@ export function FiscalPeriodEditor() {
   // Periods come from the session cache (lib/reference-data). The editor
   // snapshots the FIRST period once per company (a background revalidation
   // must not reset the dates the user is editing), then loads that period's
-  // posted-entry count, which is what gates editing.
+  // posted-entry count. The count informs, it does not gate: the dates may
+  // move over days that hold nothing, and the server refuses (naming what
+  // blocks) anything that would affect a posted voucher (crm#1010).
   const { periods, isLoading: periodsLoading, error: periodsError } = useFiscalPeriods()
   const periodsRef = useRef(periods)
   useEffect(() => {
@@ -119,8 +121,7 @@ export function FiscalPeriodEditor() {
     company?.entity_type,
   )
 
-  const isBlocked =
-    !!period && (period.locked_at || period.is_closed || (postedCount ?? 0) > 0)
+  const isBlocked = !!period && (!!period.locked_at || !!period.is_closed)
 
   const isDirty =
     period !== null && (startDate !== period.period_start || endDate !== period.period_end)
@@ -206,7 +207,7 @@ export function FiscalPeriodEditor() {
         ) : !period ? (
           <p className="px-1 py-3 text-sm text-muted-foreground">{t('fp_none')}</p>
         ) : isBlocked ? (
-          <BlockedRow period={period} postedCount={postedCount ?? 0} />
+          <BlockedRow period={period} />
         ) : (
           <>
             {/* Consequential warning: stays visible as one quiet ochre sentence. */}
@@ -214,6 +215,11 @@ export function FiscalPeriodEditor() {
               {t('fp_warning_title')} {t('fp_warning_body')}
               {isEF ? t('fp_warning_ef_suffix') : null}
             </p>
+            {(postedCount ?? 0) > 0 && (
+              <p className="px-1 pb-3 text-xs text-muted-foreground">
+                {t('fp_posted_note', { count: postedCount ?? 0 })}
+              </p>
+            )}
 
             <SettingsRow
               label={t('fp_start_date_label')}
@@ -292,19 +298,9 @@ export function FiscalPeriodEditor() {
   )
 }
 
-function BlockedRow({
-  period,
-  postedCount,
-}: {
-  period: FiscalPeriod
-  postedCount: number
-}) {
+function BlockedRow({ period }: { period: FiscalPeriod }) {
   const t = useTranslations('settings_company')
-  const reason = period.locked_at
-    ? t('fp_blocked_reason_locked')
-    : period.is_closed
-      ? t('fp_blocked_reason_closed')
-      : t('fp_blocked_reason_posted', { count: postedCount })
+  const reason = period.locked_at ? t('fp_blocked_reason_locked') : t('fp_blocked_reason_closed')
 
   return (
     <SettingsRow

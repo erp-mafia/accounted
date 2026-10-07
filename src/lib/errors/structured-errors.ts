@@ -2757,13 +2757,16 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_unlock_period',
     },
   },
-  FISCAL_PERIOD_HAS_POSTED_ENTRIES: {
+  // redate_fiscal_period (crm#1010): a year that holds verifikat may move a
+  // boundary over days that hold nothing; anything the move would affect
+  // refuses it. The Swedish sentence names every blocker.
+  FISCAL_PERIOD_DATES_BLOCKED: {
     httpStatus: 409,
     thrown_message_sv: true,
     message_sv:
-      'Datumen kan inte ändras eftersom det finns bokförda verifikationer i räkenskapsåret. Namnet kan fortfarande ändras.',
+      'Datumen kan inte ändras: något i räkenskapsåret skulle påverkas. Namnet kan fortfarande ändras.',
     message_en:
-      'The dates cannot change while posted or reversed vouchers exist in the fiscal year (details.entry_count). The name can still be changed.',
+      'The new dates would affect what the fiscal year holds. details.blockers lists each reason (code, message_sv and its facts): entries_outside / drafts_outside (verifikat or drafts dated outside the new dates), other_year_entries, opening_balance (posted opening balances pin the start), period_locked, period_closed, company_lock_date, sie_import_hold, opening_balance_review, year_end_entries, kontantmetod_cutoff, depreciation_posted, tax_depreciation, annual_report, tax_assessment, annual_filing, plus the BFL 3 kap. shape and chain rules. The name can still be changed.',
   },
   FISCAL_PERIOD_CREATE_FAILED: {
     httpStatus: 500,

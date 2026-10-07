@@ -150,14 +150,15 @@ export const fiscalPeriodsUpdate = defineOperation({
   docs: {
     summary: 'Rename or re-date an open fiscal year.',
     description:
-      'Sparse update of an open, unlocked räkenskapsår: name, period_start, period_end. The name can change at any time on an open year; the dates only while no posted or reversed verifikat exist in it. New dates follow the same BFL 3 kap. rules as create (18-month cap, month-end end, 1st-of-month start unless it is the earliest year, calendar year for an enskild firma) and may not overlap another year. Idempotent. Dry-runnable.',
-    useWhen: 'A year was created with the wrong dates or name and nothing has been booked in it yet.',
+      'Sparse update of an open, unlocked räkenskapsår: name, period_start, period_end. The name can change at any time on an open year. The dates can move also when the year already holds verifikat, as long as nothing it holds is affected: every verifikat and draft stays inside the new dates, posted opening balances keep the start, and no lock, year-end work, filing or SIE hold covers the change. New dates follow the same BFL 3 kap. rules as create (18-month cap, month-end end, 1st-of-month start unless it is the earliest year, calendar year for an enskild firma), may not overlap another year and keep the chain to the neighbouring years. Idempotent. Dry-runnable.',
+    useWhen:
+      'A year was created with the wrong dates or name, for example a first year that starts a day after the registration date at Bolagsverket.',
     doNotUseFor:
-      'Moving verifikat between years, changing a locked or closed year, or lengthening a year that already has bookings.',
+      'Moving verifikat between years, changing a locked or closed year, or re-dating a year whose annual report or declaration is already filed.',
     pitfalls: [
-      'Any posted or reversed verifikat in the year answers 409 FISCAL_PERIOD_HAS_POSTED_ENTRIES when dates are sent: send only name to rename.',
+      'A re-date that would affect what the year holds answers 409 FISCAL_PERIOD_DATES_BLOCKED; details.blockers names every reason (for example entries_outside with the first and last date outside the new dates). Send only name to rename.',
       'A locked year answers 409 FISCAL_PERIOD_UPDATE_LOCKED, a closed one 409 FISCAL_PERIOD_UPDATE_CLOSED.',
-      'Re-dating does not re-chain previous_period_id: keep the years contiguous yourself.',
+      'Only the earliest year can move its start and only the latest year its end: a boundary shared with a neighbouring year answers 400 FISCAL_PERIOD_NOT_CONTIGUOUS.',
     ],
     example: {
       request: { period_end: '2027-06-30' },
@@ -179,11 +180,12 @@ export const fiscalPeriodsUpdate = defineOperation({
     'PERIOD_NOT_FOUND',
     'FISCAL_PERIOD_UPDATE_CLOSED',
     'FISCAL_PERIOD_UPDATE_LOCKED',
-    'FISCAL_PERIOD_HAS_POSTED_ENTRIES',
+    'FISCAL_PERIOD_DATES_BLOCKED',
     'FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR',
     'FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH',
     'FISCAL_PERIOD_END_NOT_MONTH_END',
     'FISCAL_PERIOD_TOO_LONG',
+    'FISCAL_PERIOD_NOT_CONTIGUOUS',
     'FISCAL_PERIOD_OVERLAP',
     'FISCAL_PERIOD_UPDATE_FAILED',
   ],
@@ -196,7 +198,7 @@ export const fiscalPeriodsUpdate = defineOperation({
     name: 'gnubok_update_fiscal_period',
     title: 'Update Fiscal Period',
     description:
-      'Stage a rename or re-date of an open, unlocked räkenskapsår. Dates can only move while no posted verifikat exist in the year; the name can always change.',
+      'Stage a rename or re-date of an open, unlocked räkenskapsår. Dates may move while every verifikat stays inside them; the name can always change.',
     keywords: ['ändra räkenskapsår', 'byt namn räkenskapsår', 'förläng räkenskapsår', 'förkorta räkenskapsår'],
     stage: { pendingType: 'update_fiscal_period', title: () => 'Ändra räkenskapsår' },
   },

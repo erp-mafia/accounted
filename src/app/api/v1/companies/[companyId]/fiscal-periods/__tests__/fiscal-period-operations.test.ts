@@ -327,11 +327,35 @@ describe('PATCH /api/v1/companies/:companyId/fiscal-periods/:id', () => {
     expect((await res.json()).error.code).toBe('FISCAL_PERIOD_UPDATE_CLOSED')
   })
 
-  it('409 FISCAL_PERIOD_HAS_POSTED_ENTRIES when dates move under posted verifikat', async () => {
+  // crm#1010: posted verifikat no longer freeze the dates. What the year
+  // holds is decided by redate_fiscal_period (tests/pg/redate-fiscal-period
+  // .pg.test.ts), named per blocker; the door only maps its verdict.
+  it('409 FISCAL_PERIOD_DATES_BLOCKED when the re-date would leave posted verifikat outside', async () => {
     const client = makeClient({
       company_members: MEMBER,
-      fiscal_periods: { data: periodRow(), error: null },
-      journal_entries: { count: 3, data: null, error: null },
+      fiscal_periods: [
+        { data: periodRow(), error: null }, // the period
+        { count: 1, data: null, error: null }, // earlier periods
+        { data: [], error: null }, // overlap, then neighbours
+      ],
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      rpc: {
+        data: {
+          ok: false,
+          code: 'FISCAL_PERIOD_DATES_BLOCKED',
+          blockers: [
+            {
+              code: 'entries_outside',
+              message_sv:
+                '3 bokförda verifikationer ligger utanför de nya datumen: A12 (2027-07-02), A13 (2027-08-15), A14 (2027-12-20).',
+              count: 3,
+              first_date: '2027-07-02',
+              last_date: '2027-12-20',
+            },
+          ],
+        },
+        error: null,
+      },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await updatePeriod(
@@ -340,21 +364,29 @@ describe('PATCH /api/v1/companies/:companyId/fiscal-periods/:id', () => {
     )
     expect(res.status).toBe(409)
     const json = await res.json()
-    expect(json.error.code).toBe('FISCAL_PERIOD_HAS_POSTED_ENTRIES')
-    expect(json.error.details.entry_count).toBe(3)
+    expect(json.error.code).toBe('FISCAL_PERIOD_DATES_BLOCKED')
+    // The v1 envelope keeps the registry sentence as message and carries the
+    // specific Swedish refusal in details.reason.
+    expect(json.error.details.reason).toContain('A12 (2027-07-02)')
+    expect(json.error.details.blockers[0]).toMatchObject({ code: 'entries_outside', count: 3 })
+    // Service-role door: the API key's user is named as the actor.
+    expect(client.rpc).toHaveBeenCalledWith(
+      'redate_fiscal_period',
+      expect.objectContaining({ p_period_end: '2027-06-30', p_dry_run: false, p_user_id: 'user-1' }),
+    )
     expect(writesTo(client, ['fiscal_periods'])).toHaveLength(0)
   })
 
-  it('a dry run of a re-date runs every check and writes nothing', async () => {
+  it('a dry run of a re-date asks the RPC in dry-run mode and writes nothing', async () => {
     const client = makeClient({
       company_members: MEMBER,
       fiscal_periods: [
         { data: periodRow(), error: null }, // the period
         { count: 1, data: null, error: null }, // earlier periods
-        { data: [], error: null }, // overlap
+        { data: [], error: null }, // overlap, then neighbours
       ],
-      journal_entries: { count: 0, data: null, error: null },
       companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      rpc: { data: { ok: true, changed: true, dry_run: true }, error: null },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await updatePeriod(
@@ -364,6 +396,7 @@ describe('PATCH /api/v1/companies/:companyId/fiscal-periods/:id', () => {
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.data.preview).toMatchObject({ fiscal_period_id: PERIOD_ID, changes: { period_end: '2027-06-30' } })
+    expect(client.rpc).toHaveBeenCalledWith('redate_fiscal_period', expect.objectContaining({ p_dry_run: true }))
     expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
   })
 })

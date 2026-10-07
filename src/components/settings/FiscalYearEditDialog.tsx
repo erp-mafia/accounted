@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -43,14 +42,16 @@ function readApiError(body: unknown, fallback: string): string {
 
 /**
  * Edit the name and dates of one OPEN fiscal year (issue #2287). A thin
- * surface over PATCH /api/bookkeeping/fiscal-periods/[id], which already
- * allows a rename at any time on an open year and a re-date only while the
- * year has no posted vouchers. The dialog mirrors those two rules with the
- * route's own reasons: the posted count comes from the entry-count endpoint
- * on open (dates read-only above zero), and every refusal from the route is
- * shown verbatim so the user can correct and retry without leaving the
- * dialog. Only changed fields are sent, so a pure rename never trips the
- * voucher check. Every guard is re-enforced server-side.
+ * surface over PATCH /api/bookkeeping/fiscal-periods/[id], which allows a
+ * rename at any time on an open year and a re-date as long as nothing the
+ * year holds is affected (crm#1010: a first year recorded one day late is
+ * corrected here even with vouchers posted). The posted count from the
+ * entry-count endpoint is shown as information, not a gate: whether the new
+ * dates are allowed is decided server-side, by the guarded
+ * redate_fiscal_period RPC, and every refusal (which names what blocks, for
+ * example the vouchers that would end up outside) is shown verbatim so the
+ * user can correct and retry without leaving the dialog. Only changed fields
+ * are sent, so a pure rename never runs the date checks.
  */
 export function FiscalYearEditDialog({
   period,
@@ -72,8 +73,6 @@ export function FiscalYearEditDialog({
   const [periodStart, setPeriodStart] = useState(period.period_start)
   const [periodEnd, setPeriodEnd] = useState(period.period_end)
   const [postedCount, setPostedCount] = useState<number | null>(null)
-  const [countFailed, setCountFailed] = useState(false)
-  const [isChecking, setIsChecking] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
@@ -82,20 +81,16 @@ export function FiscalYearEditDialog({
 
     let cancelled = false
     async function loadPostedCount() {
-      setIsChecking(true)
-      setCountFailed(false)
       try {
         const response = await fetch(
           `/api/bookkeeping/fiscal-periods/${period.id}/entry-count`,
           { cache: 'no-store' },
         )
-        if (!response.ok) throw new Error('entry-count failed')
+        if (!response.ok) return
         const body = (await response.json()) as { data?: { posted_count?: number } }
         if (!cancelled) setPostedCount(body.data?.posted_count ?? 0)
       } catch {
-        if (!cancelled) setCountFailed(true)
-      } finally {
-        if (!cancelled) setIsChecking(false)
+        // Information only: the dates are checked server-side on save.
       }
     }
 
@@ -104,11 +99,6 @@ export function FiscalYearEditDialog({
       cancelled = true
     }
   }, [open, period.id])
-
-  // Dates open up only once the check has come back with zero posted
-  // vouchers; while checking, or if the check failed, they stay read-only
-  // and the sentence below the fields says why. The name is always editable.
-  const datesEditable = !isChecking && !countFailed && postedCount === 0
 
   // A date input yields '' while incomplete and a full YYYY-MM-DD otherwise:
   // only derive a name once both ends are known.
@@ -125,12 +115,10 @@ export function FiscalYearEditDialog({
   // is what gets sent once the user has actually edited it.
   const nameChanged = name !== period.name
   if (nameChanged && trimmedName) payload.name = trimmedName
-  if (datesEditable) {
-    if (periodStart && periodStart !== period.period_start) payload.period_start = periodStart
-    if (periodEnd && periodEnd !== period.period_end) payload.period_end = periodEnd
-  }
-  const endBeforeStart = datesEditable && !!periodStart && !!periodEnd && periodEnd <= periodStart
-  const datesIncomplete = datesEditable && (!periodStart || !periodEnd)
+  if (periodStart && periodStart !== period.period_start) payload.period_start = periodStart
+  if (periodEnd && periodEnd !== period.period_end) payload.period_end = periodEnd
+  const endBeforeStart = !!periodStart && !!periodEnd && periodEnd <= periodStart
+  const datesIncomplete = !periodStart || !periodEnd
   const isDirty = Object.keys(payload).length > 0
   const canSave =
     isDirty && trimmedName.length > 0 && !endBeforeStart && !datesIncomplete && !isSaving
@@ -152,8 +140,9 @@ export function FiscalYearEditDialog({
       })
       const body = await response.json().catch(() => ({}))
       if (!response.ok) {
-        // The route's refusals (BFL 3 kap. shapes, overlap, posted vouchers)
-        // are Swedish domain copy and stay verbatim in both locales.
+        // The route's refusals (BFL 3 kap. shapes, overlap, and every blocker
+        // redate_fiscal_period names) are Swedish domain copy and stay
+        // verbatim in both locales.
         setSubmitError(readApiError(body, t('fy_edit_failed_default')))
         return
       }
@@ -198,7 +187,6 @@ export function FiscalYearEditDialog({
                 id="fy-edit-start"
                 type="date"
                 value={periodStart}
-                disabled={!datesEditable}
                 aria-describedby="fy-edit-dates-note"
                 onChange={(event) => updateDates(event.target.value, periodEnd)}
                 className="tabular-nums"
@@ -210,7 +198,6 @@ export function FiscalYearEditDialog({
                 id="fy-edit-end"
                 type="date"
                 value={periodEnd}
-                disabled={!datesEditable}
                 aria-describedby="fy-edit-dates-note"
                 onChange={(event) => updateDates(periodStart, event.target.value)}
                 className="tabular-nums"
@@ -218,19 +205,11 @@ export function FiscalYearEditDialog({
             </div>
           </div>
 
-          {/* One quiet sentence on why the dates are read-only, in the
-              route's own terms (posted vouchers). */}
+          {/* One quiet sentence on what posted vouchers mean for the dates. */}
           <p id="fy-edit-dates-note" className="text-xs text-muted-foreground">
-            {isChecking ? (
-              <span className="inline-flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {t('fy_edit_dates_checking')}
-              </span>
-            ) : countFailed ? (
-              t('fy_edit_dates_check_failed')
-            ) : postedCount !== null && postedCount > 0 ? (
-              t('fy_edit_dates_blocked_posted', { count: postedCount })
-            ) : null}
+            {postedCount !== null && postedCount > 0
+              ? t('fy_edit_dates_posted_note', { count: postedCount })
+              : null}
           </p>
 
           {endBeforeStart ? (
