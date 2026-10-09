@@ -2252,7 +2252,7 @@ async function categorizeTransactionCore(
     log,
     transaction.currency,
   )
-  mappingResult = applySettlementAccount(mappingResult, settlementAccount)
+  mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
 
   // Applied at staging so the agent gets the tight rejection (unknown or
   // inactive account) BEFORE anything is queued for approval, and the staged

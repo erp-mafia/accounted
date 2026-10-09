@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getSuggestedTemplates, buildCounterpartySuggestion, rowProposal } from './category-suggestions'
-import { findCounterpartyTemplatesBatch } from '@/lib/bookkeeping/counterparty-templates'
+import { bindTemplateToSettlementAccount, findCounterpartyTemplatesBatch } from '@/lib/bookkeeping/counterparty-templates'
 import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
+import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { loadReads, readIsFresh, assistantSuggestionFromRead, mergeAssistantSuggestion, type AssistantRead } from '@/lib/agent/categorize/read'
 import type { BookingProposal } from '@/lib/bookkeeping/proposal'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
@@ -70,10 +71,14 @@ export async function proposeForTransactions(
   }
 
   // Inject counterparty template matches as top suggestions. A learned
-  // template can carry the ledger it was learned on. The same rules
-  // guardCounterLegs applies at commit (issue #1643 problem 4) decide what
-  // the transactions page is offered, so a suggestion is never shown that
-  // the commit guard would refuse, and never withheld that it would book:
+  // template can carry the ledger it was learned on. Its bank leg is first
+  // put on the transaction's own settlement ledger, the rewrite
+  // applySettlementAccount makes at booking (crm#1046: a fee learned on one
+  // currency account, offered on another), so the review shows the account
+  // the verifikat will carry. Then the same rules guardCounterLegs applies
+  // at commit (issue #1643 problem 4) decide what the transactions page is
+  // offered, so a suggestion is never shown that the commit guard would
+  // refuse, and never withheld that it would book:
   //   - a 19xx leg that is a TWIN of the transaction's own row (same IBAN,
   //     same currency: the stale bank leg of a template learned before a
   //     reconnect moved the account, or the other enabled ledger of one
@@ -92,7 +97,6 @@ export async function proposeForTransactions(
     tmpl: CategorizationTemplate,
     tx: Transaction,
   ): Promise<CategorizationTemplate | null> => {
-    const isCashLedger = (a: string | null | undefined): a is string => !!a && /^19\d{2}$/.test(a)
     const accounts = [
       tmpl.debit_account,
       tmpl.credit_account,
@@ -105,16 +109,21 @@ export async function proposeForTransactions(
     if (!counterLegTopology) return tmpl
     const { settlementLedger, twins } = counterLegTopology.contextFor(tx.cash_account_id)
 
-    let guarded = tmpl
-    if (settlementLedger && accounts.some((a) => twins.has(a))) {
+    const bound = settlementLedger ? bindTemplateToSettlementAccount(tmpl, tx.amount, settlementLedger) : tmpl
+    let guarded = bound
+    if (
+      settlementLedger &&
+      [bound.debit_account, bound.credit_account, ...(bound.line_pattern ?? []).map((entry) => entry.account)]
+        .some((a) => twins.has(a))
+    ) {
       const rewrite = (a: string): string => (twins.has(a) ? settlementLedger : a)
       guarded = {
-        ...tmpl,
-        debit_account: rewrite(tmpl.debit_account),
-        credit_account: rewrite(tmpl.credit_account),
-        line_pattern: tmpl.line_pattern
-          ? tmpl.line_pattern.map((entry) => ({ ...entry, account: rewrite(entry.account) }))
-          : tmpl.line_pattern,
+        ...bound,
+        debit_account: rewrite(bound.debit_account),
+        credit_account: rewrite(bound.credit_account),
+        line_pattern: bound.line_pattern
+          ? bound.line_pattern.map((entry) => ({ ...entry, account: rewrite(entry.account) }))
+          : bound.line_pattern,
       }
       if (guarded.debit_account === settlementLedger && guarded.credit_account === settlementLedger) {
         return null

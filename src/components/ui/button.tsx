@@ -80,20 +80,29 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         {...props}
       >
         {/* Slot needs exactly one child, so asChild buttons skip the spinner.
-            An icon-only button has no label to space the spinner from. */}
-        {loading && !asChild ? (
+            An icon-only button has no label to space the spinner from.
+            The spinner is always mounted and only hidden, so toggling
+            `loading` never adds or removes a DOM node next to the label.
+            Browser page translation (Chrome's Google Translate) replaces
+            the label's text node with its own; when the toggle re-parented
+            the label, React removed a text node that was no longer there
+            and the page fell into the error boundary the moment a booking
+            was refused and the row's Bokför button stopped loading
+            (NotFoundError on removeChild, crm#1046). */}
+        {asChild ? (
+          children
+        ) : (
           <>
             <Loader2
               className={cn(
                 "h-3.5 w-3.5 shrink-0 animate-spin",
-                React.Children.toArray(children).length > 0 && "mr-2"
+                !loading && "hidden",
+                loading && React.Children.toArray(children).length > 0 && "mr-2"
               )}
               aria-hidden="true"
             />
             {children}
           </>
-        ) : (
-          children
         )}
       </Comp>
     )

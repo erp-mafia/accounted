@@ -311,14 +311,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
-    // Book the bank leg against the transaction's ACTUAL settlement account
-    // rather than the hardcoded 1930 in the templates. Without this, interest
-    // or fees that landed on a savings/EUR account mis-book to 1930 and the
-    // real bank line never reconciles. applySettlementAccount only rewrites a
-    // 1930 leg and is a no-op when the settlement account is 1930, so legacy
-    // rows with no cash_account_id behave exactly as before. Mirrors the
-    // internal dashboard route (app/api/transactions/[id]/categorize); this
-    // v1 surface previously never called applySettlementAccount at all.
+    // Book the bank leg against the transaction's ACTUAL settlement account,
+    // whichever cash ledger the proposal named (the 1930 placeholder, or the
+    // ledger a counterparty template was learned on, crm#1046). Without this
+    // the verifikat misses the real bank line and the real bank line never
+    // reconciles. The counter leg is never rewritten. Mirrors the internal
+    // dashboard route (app/api/transactions/[id]/categorize).
     const settlementAccount = await resolveSettlementAccount(
       ctx.supabase,
       ctx.companyId!,
@@ -326,7 +324,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       txLog,
       transaction.currency,
     )
-    mappingResult = applySettlementAccount(mappingResult, settlementAccount)
+    mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
 
     if (
       is_business &&

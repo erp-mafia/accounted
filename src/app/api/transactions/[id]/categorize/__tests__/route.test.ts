@@ -60,21 +60,11 @@ vi.mock('@/lib/processing-history/append', () => ({
 }))
 
 const mockSaveUserMappingRule = vi.fn()
-vi.mock('@/lib/bookkeeping/mapping-engine', () => ({
+// The real applySettlementAccount: it is the pure bank-leg rewrite these tests
+// exercise (crm#1046). Only the learning write is stubbed.
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
   saveUserMappingRule: (...args: unknown[]) => mockSaveUserMappingRule(...args),
-  // Mirror the real implementation: rewrite a 1930 bank leg to the settlement
-  // account, no-op when the settlement account is 1930.
-  applySettlementAccount: (
-    result: { debit_account?: string; credit_account?: string },
-    bankAccount: string,
-  ) =>
-    bankAccount === '1930'
-      ? result
-      : {
-          ...result,
-          debit_account: result.debit_account === '1930' ? bankAccount : result.debit_account,
-          credit_account: result.credit_account === '1930' ? bankAccount : result.credit_account,
-        },
 }))
 
 // Spread the real module so buildMappingResultFromCounterpartyTemplate (pure)
@@ -1862,14 +1852,8 @@ describe('POST /api/transactions/[id]/categorize', () => {
       error: null,
     })
     enqueue({ data: { ledger_account: '1940', currency: 'SEK' }, error: null }) // resolveSettlementAccount
-    enqueue({
-      data: [
-        { id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-new', iban: 'SE455', enabled: true, currency: 'SEK' },
-        { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: null, iban: 'SE455', enabled: true, currency: 'SEK' },
-      ],
-      error: null,
-    })
-    enqueue({ data: [{ id: 'conn-new', status: 'active' }], error: null })
+    // No topology lookup: applySettlementAccount already put the stale 1931
+    // bank leg on 1940, so guardCounterLegs sees no foreign 19xx leg (crm#1046).
     // ensureFiscalPeriod: existing period
     enqueue({ data: [{ id: 'period-1' }], error: null })
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
@@ -1892,6 +1876,120 @@ describe('POST /api/transactions/[id]/categorize', () => {
     }
     expect(mapping.debit_account).toBe('5010')
     expect(mapping.credit_account).toBe('1940')
+  })
+
+  // crm#1046: a user with several currency accounts learned a card-fee
+  // template on the GBP ledger (6570 / 1934). Replayed on the EUR ledger it
+  // must credit 1932: commit_journal_entry refuses a verifikat that does not
+  // move the transaction's own ledger on the bank side.
+  const cardFeeLearnedOnGbp = (overrides: Record<string, unknown> = {}) => ({
+    id: '11111111-1111-4111-8111-111111111111',
+    company_id: 'company-1',
+    counterparty_name: 'wise card fee',
+    counterparty_aliases: [],
+    debit_account: '6570',
+    credit_account: '1934',
+    vat_treatment: null,
+    vat_account: null,
+    category: 'expense_bank_fees',
+    line_pattern: null,
+    occurrence_count: 6,
+    confidence: 0.9,
+    source: 'user_approved',
+    is_active: true,
+    ...overrides,
+  })
+
+  it('books a learned template on the transaction\'s own currency account, not the one it was learned on (crm#1046)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -0.5,
+      currency: 'EUR',
+      amount_sek: -5.48,
+      exchange_rate: 10.96,
+      merchant_name: 'Wise',
+      journal_entry_id: null,
+      cash_account_id: 'ca-eur',
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: cardFeeLearnedOnGbp(), error: null }) // categorization_templates
+    enqueue({ data: { ledger_account: '1932', currency: 'EUR' }, error: null }) // resolveSettlementAccount
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, counterparty_template_id: '11111111-1111-4111-8111-111111111111' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(mockCreateTransactionJournalEntry).toHaveBeenCalledTimes(1)
+    const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as {
+      debit_account: string
+      credit_account: string
+    }
+    expect(mapping.debit_account).toBe('6570')
+    expect(mapping.credit_account).toBe('1932')
+  })
+
+  it('keeps the counter leg of a learned transfer between two own accounts (crm#1046)', async () => {
+    // Learned on the EUR ledger: money moved from 1932 to the GBP ledger 1934.
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -200,
+      currency: 'EUR',
+      amount_sek: -2192,
+      exchange_rate: 10.96,
+      merchant_name: 'Wise',
+      journal_entry_id: null,
+      cash_account_id: 'ca-eur',
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({
+      data: cardFeeLearnedOnGbp({ counterparty_name: 'wise transfer', debit_account: '1934', credit_account: '1932', category: null }),
+      error: null,
+    })
+    enqueue({ data: { ledger_account: '1932', currency: 'EUR' }, error: null }) // resolveSettlementAccount
+    // guardCounterLegs: 1934 is a live account of its own (another IBAN, another currency)
+    enqueue({
+      data: [
+        { id: 'ca-eur', ledger_account: '1932', bank_connection_id: 'conn-1', iban: 'BE001', enabled: true, currency: 'EUR' },
+        { id: 'ca-gbp', ledger_account: '1934', bank_connection_id: 'conn-1', iban: 'GB002', enabled: true, currency: 'GBP' },
+      ],
+      error: null,
+    })
+    enqueue({ data: [{ id: 'conn-1', status: 'active' }], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, counterparty_template_id: '11111111-1111-4111-8111-111111111111' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+
+    expect(status, JSON.stringify(body)).toBe(200)
+    const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as {
+      debit_account: string
+      credit_account: string
+    }
+    expect(mapping.debit_account).toBe('1934')
+    expect(mapping.credit_account).toBe('1932')
   })
 
   // Learned dimension bags (D5): a learned code whose value was archived since

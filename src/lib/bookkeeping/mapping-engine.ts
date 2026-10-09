@@ -15,6 +15,7 @@ import {
 } from './counterparty-templates'
 import { coerceDimensionsBag, dimensionsBagKey } from './dimension-resolver'
 import { detectOwnAccountTransfer } from './own-account-detector'
+import { bankSideOf, settleBankLeg } from './bank-leg'
 import type {
   MappingRule,
   MappingResult,
@@ -151,10 +152,10 @@ export async function evaluateMappingRules(
     const counterpartyResult = await evaluateCounterpartyTemplates(
       supabase, companyId, transaction, entityType, vatRegistered,
     )
-    if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount)
+    if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount, transaction.amount)
 
     const templateResult = evaluateTemplateRules(transaction, entityType, vatRegistered)
-    if (templateResult) return applySettlementAccount(templateResult, bankAccount)
+    if (templateResult) return applySettlementAccount(templateResult, bankAccount, transaction.amount)
     return getDefaultResult(transaction, bankAccount)
   }
 
@@ -165,6 +166,7 @@ export async function evaluateMappingRules(
       return applySettlementAccount(
         await withLearnedDimensions(supabase, companyId, transaction, entityType, ruleResult, vatRegistered),
         bankAccount,
+        transaction.amount,
       )
     }
   }
@@ -173,11 +175,11 @@ export async function evaluateMappingRules(
   const counterpartyResult = await evaluateCounterpartyTemplates(
     supabase, companyId, transaction, entityType, vatRegistered,
   )
-  if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount)
+  if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount, transaction.amount)
 
   // Try template-based matching before default fallback
   const templateResult = evaluateTemplateRules(transaction, entityType, vatRegistered)
-  if (templateResult) return applySettlementAccount(templateResult, bankAccount)
+  if (templateResult) return applySettlementAccount(templateResult, bankAccount, transaction.amount)
 
   return getDefaultResult(transaction, bankAccount)
 }
@@ -552,17 +554,20 @@ function buildOwnAccountTransferResult(
 }
 
 /**
- * Replace any default 1930 references in a mapping result with the actual settlement account.
- * This allows mapping rules and templates that don't explicitly set a bank account
- * to work correctly with secondary bank accounts (e.g. 1931).
+ * Book a mapping result's bank leg on the transaction's actual settlement
+ * account. The bank leg is the side buildTransactionEntryLines settles the
+ * full amount on (credit for an outflow, debit for an inflow); when it names
+ * any cash ledger (the 1930 placeholder of the catalog and categories, or the
+ * ledger a counterparty template or mapping rule was learned on) it moves to
+ * the settlement account. The counter leg is never rewritten, so a transfer
+ * to another own account keeps its other end (see settleBankLeg).
  */
-export function applySettlementAccount(result: MappingResult, bankAccount: string): MappingResult {
-  if (bankAccount === '1930') return result
-  return {
-    ...result,
-    debit_account: result.debit_account === '1930' ? bankAccount : result.debit_account,
-    credit_account: result.credit_account === '1930' ? bankAccount : result.credit_account,
-  }
+export function applySettlementAccount(
+  result: MappingResult,
+  bankAccount: string,
+  transactionAmount: number,
+): MappingResult {
+  return settleBankLeg(result, bankSideOf(transactionAmount), bankAccount)
 }
 
 /**

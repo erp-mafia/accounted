@@ -191,7 +191,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
         log,
         (tx as Transaction).currency,
       )
-      mapping = applySettlementAccount(mapping, settlementAccount)
+      mapping = applySettlementAccount(mapping, settlementAccount, (tx as Transaction).amount)
     } catch (err) {
       log.error('pending-operation edit: settlement account lookup failed', err as Error, {
         operationId: id,

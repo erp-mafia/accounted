@@ -302,7 +302,7 @@ async function categorizeOne(
       log,
       transaction.currency,
     )
-    mappingResult = applySettlementAccount(mappingResult, settlementAccount)
+    mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
   } catch (err) {
     log.error('batch-categorize: settlement account lookup failed', err as Error, {
       request_index: index,

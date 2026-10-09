@@ -46,6 +46,7 @@ import {
 import { getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
 import { buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
+import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { templateAccountForForm } from '@/lib/company/entity-type'
 import {
   legacyTemplateDirection as legacyDirection,
@@ -77,9 +78,10 @@ export interface ProposalLine {
   /**
    * True for the bank/settlement leg (the money side). The prefill stamps
    * currency metadata on this leg, and swaps in the transaction's resolved
-   * cash account ONLY when the leg is the literal default '1930': the same
-   * contract as the engine's applySettlementAccount (mapping-engine.ts),
-   * which never rewrites a learned non-1930 money account.
+   * cash account when the leg is any cash ledger (the 1930 default or the
+   * ledger a template was learned on): the same contract as the engine's
+   * applySettlementAccount (mapping-engine.ts). A learned non-cash money
+   * leg (1510, 2440, 2890) is never rewritten.
    */
   settlement?: boolean
 }
@@ -270,8 +272,9 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
     // books it on mappingResult.credit_account for an expense and
     // debit_account for an income, and buildMultiLineMappingResult fills that
     // pair from the template's learned legacy accounts, swapped under mirror
-    // (a pattern learned from vouchers settling on 2440/1510/19xx keeps that
-    // account; applySettlementAccount only ever rewrites a literal 1930).
+    // (a pattern learned from vouchers settling on 2440/1510 keeps that
+    // account; applySettlementAccount, and the prefill after it, move only a
+    // cash-ledger leg onto the transaction's own bank account).
     // The caller passes the learned pair via templateDebitAccount /
     // templateCreditAccount; without it we fall back to the swappable 1930
     // default exactly like the engine's `|| '1930'`.
@@ -511,10 +514,11 @@ export function proposalLinesToFormLines(
   lines: ProposalLine[],
   opts: {
     /**
-     * Resolved cash account: replaces the settlement leg's account ONLY when
-     * that leg is the literal default '1930', mirroring the engine's
-     * applySettlementAccount. A learned non-1930 money leg (1510, 2440,
-     * 2890, another 19xx) is authoritative and is never rewritten.
+     * Resolved cash account: replaces the settlement leg's account when that
+     * leg is a cash ledger (the 1930 default, or the 19xx ledger a template
+     * was learned on), mirroring the engine's applySettlementAccount. A
+     * learned non-cash money leg (1510, 2440, 2890) is authoritative and is
+     * never rewritten.
      */
     settlementAccount?: string
     currency?: string | null
@@ -535,7 +539,7 @@ export function proposalLinesToFormLines(
     const amount = roundOre(line.amount)
     const amountStr = amount.toFixed(2)
     const isSettlement = line.settlement === true
-    const swapAccount = isSettlement && line.account === '1930' && !!opts.settlementAccount
+    const swapAccount = isSettlement && isCashLedger(line.account) && !!opts.settlementAccount
     // The line that says what the money was for: not the money leg, not a
     // moms or reverse-charge basis leg.
     const isBusinessLine =

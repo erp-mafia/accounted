@@ -310,12 +310,12 @@ export const POST = withRouteContext(
       }
     }
 
-    // Book the bank leg against the transaction's ACTUAL settlement account
-    // rather than the hardcoded 1930 in the templates. Without this, interest
-    // or fees that landed on a savings/EUR account mis-book to 1930 and the
-    // real bank line never reconciles. applySettlementAccount only rewrites a
-    // 1930 leg and is a no-op when the settlement account is 1930, so legacy
-    // rows with no cash_account_id behave exactly as before.
+    // Book the bank leg against the transaction's ACTUAL settlement account,
+    // whichever cash ledger the proposal named: the 1930 placeholder of the
+    // templates and categories, or the ledger a counterparty template was
+    // learned on (a fee learned on the GBP account and booked on the EUR one,
+    // crm#1046). Without this the verifikat misses the real bank line and
+    // commit_journal_entry refuses it. The counter leg is never rewritten.
     const settlementAccount = await resolveSettlementAccount(
       supabase,
       companyId!,
@@ -323,7 +323,7 @@ export const POST = withRouteContext(
       txLog,
       transaction.currency,
     )
-    mappingResult = applySettlementAccount(mappingResult, settlementAccount)
+    mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
 
     txLog.info('mapping resolved', {
       debit: mappingResult.debit_account,

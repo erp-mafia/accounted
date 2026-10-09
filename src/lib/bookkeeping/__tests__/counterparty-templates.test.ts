@@ -1059,6 +1059,103 @@ describe('counterparty-templates', () => {
       const payload = findCall('categorization_templates', 'update')?.[0] as { occurrence_count: number }
       expect(payload.occurrence_count).toBe(6)
     })
+
+    // crm#1046: which of the company's cash ledgers the money settled on is a
+    // fact of the transaction (applySettlementAccount books the bank leg on the
+    // transaction's own ledger), not something the template learns.
+    it('treats the same fee booked from another own cash account as a re-approval, not a correction', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      const learnedOnGbp = makeCategorizationTemplate({
+        debit_account: '6570',
+        credit_account: '1934',
+        occurrence_count: 6,
+        corrections: 0,
+      })
+      enqueue({ data: null }) // update
+
+      await insertOrUpdateTemplate(supabase as never, 'company-1', {
+        ...baseParams,
+        debitAccount: '6570',
+        creditAccount: '1932',
+        occurrenceCount: 1,
+        source: 'user_approved',
+      }, learnedOnGbp)
+
+      const payload = findCall('categorization_templates', 'update')?.[0] as Record<string, unknown>
+      expect(payload.occurrence_count).toBe(7)
+      expect(payload).not.toHaveProperty('corrections')
+      expect(payload).not.toHaveProperty('credit_account')
+    })
+
+    it('treats an income booked into another own cash account as a re-approval', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      const learned = makeCategorizationTemplate({ debit_account: '1934', credit_account: '3044', occurrence_count: 2 })
+      enqueue({ data: null }) // update
+
+      await insertOrUpdateTemplate(supabase as never, 'company-1', {
+        ...baseParams,
+        debitAccount: '1932',
+        creditAccount: '3044',
+        occurrenceCount: 1,
+      }, learned)
+
+      const payload = findCall('categorization_templates', 'update')?.[0] as Record<string, unknown>
+      expect(payload.occurrence_count).toBe(3)
+      expect(payload).not.toHaveProperty('debit_account')
+    })
+
+    it('still counts a changed business account as a correction', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      const learned = makeCategorizationTemplate({ debit_account: '6570', credit_account: '1934', occurrence_count: 6, corrections: 0 })
+      enqueue({ data: null }) // update
+
+      await insertOrUpdateTemplate(supabase as never, 'company-1', {
+        ...baseParams,
+        debitAccount: '6991',
+        creditAccount: '1932',
+        occurrenceCount: 1,
+      }, learned)
+
+      const payload = findCall('categorization_templates', 'update')?.[0] as Record<string, unknown>
+      expect(payload.debit_account).toBe('6991')
+      expect(payload.corrections).toBe(1)
+    })
+
+    it('still counts a changed money leg that is not a cash ledger (2440 to 1932) as a correction', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      const learned = makeCategorizationTemplate({ debit_account: '6570', credit_account: '2440', occurrence_count: 6, corrections: 0 })
+      enqueue({ data: null }) // update
+
+      await insertOrUpdateTemplate(supabase as never, 'company-1', {
+        ...baseParams,
+        debitAccount: '6570',
+        creditAccount: '1932',
+        occurrenceCount: 1,
+      }, learned)
+
+      const payload = findCall('categorization_templates', 'update')?.[0] as Record<string, unknown>
+      expect(payload.credit_account).toBe('1932')
+      expect(payload.corrections).toBe(1)
+    })
+
+    it('compares an own-account transfer pair as stored: another counter account is a correction', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      const learned = makeCategorizationTemplate({ debit_account: '1934', credit_account: '1932', occurrence_count: 3, corrections: 0 })
+      enqueue({ data: null }) // update
+
+      await insertOrUpdateTemplate(supabase as never, 'company-1', {
+        ...baseParams,
+        debitAccount: '1935',
+        creditAccount: '1932',
+        occurrenceCount: 1,
+        vatTreatment: null,
+        vatAccount: null,
+      }, learned)
+
+      const payload = findCall('categorization_templates', 'update')?.[0] as Record<string, unknown>
+      expect(payload.debit_account).toBe('1935')
+      expect(payload.corrections).toBe(1)
+    })
   })
 
   // ── findCounterpartyTemplate after a rename ──────────────────

@@ -419,7 +419,7 @@ describe('computeProposalLines', () => {
     it("books an expense settlement on the template's learned credit account (engine parity)", () => {
       // SIE-learned pattern settling on leverantorsskulder: the engine books
       // the money leg on tmpl.credit_account (buildTransactionEntryLines),
-      // and applySettlementAccount never rewrites a non-1930 leg. The prefill
+      // and applySettlementAccount never rewrites a non-cash leg. The prefill
       // must show 2440, not a default 1930.
       const lines = computeProposalLines({
         amount: -1250,
@@ -643,10 +643,22 @@ describe('proposalLinesToFormLines', () => {
     expect(formLines[0].account_number).toBe('5420')
   })
 
-  it('never rewrites a learned non-1930 settlement leg (applySettlementAccount parity)', () => {
+  it('swaps a learned 19xx settlement leg to the resolved cash account (applySettlementAccount parity, crm#1046)', () => {
+    // A counterparty template learned on another of the company's cash
+    // accounts: the engine books the bank leg on the transaction's own ledger.
+    const learned: ProposalLine[] = [
+      { side: 'debet', account: '6570', amount: 5.48 },
+      { side: 'kredit', account: '1934', amount: 5.48, settlement: true },
+    ]
+    const formLines = proposalLinesToFormLines(learned, { settlementAccount: '1932' })
+    expect(formLines[1].account_number).toBe('1932')
+    expect(formLines[0].account_number).toBe('6570')
+  })
+
+  it('never rewrites a learned non-cash settlement leg (applySettlementAccount parity)', () => {
     // A legacy counterparty template can settle against 2440 (payables):
-    // the engine's applySettlementAccount substitutes only the literal 1930
-    // default, so the prefill must keep the learned account too.
+    // the engine's applySettlementAccount moves only a cash-ledger bank leg,
+    // so the prefill must keep the learned account too.
     const learned: ProposalLine[] = [
       { side: 'debet', account: '6212', amount: 100 },
       { side: 'kredit', account: '2440', amount: 100, settlement: true },

@@ -29,6 +29,7 @@ import {
 import { DimensionValidationError, type DimensionValidationIssue } from './dimension-errors'
 import { resolveSekAmount } from './currency-utils'
 import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
+import { bankSideOf, isCashLedger, settleBankLeg, type BankSide } from './bank-leg'
 import { createLogger } from '@/lib/logger'
 import type {
   CategorizationTemplate,
@@ -728,6 +729,39 @@ export function patternDirection(pattern: LinePatternEntry[]): TemplateDirection
 }
 
 /**
+ * The side of a learned template that holds its bank leg when it is replayed
+ * on a transaction of this sign: what buildMappingResultFromCounterpartyTemplate
+ * books on the bank side, read off the stored pair before any mirroring. An
+ * expense-learned template settled on its credit account and an
+ * income-learned one on its debit account, also when a refund mirrors it; a
+ * template of unknown direction (a transfer between two cash ledgers) is not
+ * mirrored, so its bank leg follows the transaction's sign.
+ */
+function templateBankSide(tmpl: CategorizationTemplate, transactionAmount: number): BankSide {
+  const learned = tmpl.line_pattern && tmpl.line_pattern.length > 0
+    ? patternDirection(tmpl.line_pattern)
+    : legacyTemplateDirection(tmpl.debit_account, tmpl.credit_account)
+  if (learned === 'expense') return 'credit'
+  if (learned === 'income') return 'debit'
+  return bankSideOf(transactionAmount)
+}
+
+/**
+ * A learned template as it books on this transaction: its bank leg on the
+ * transaction's own settlement ledger instead of the cash ledger it happened
+ * to be learned on (crm#1046: a card fee learned on the GBP account, offered
+ * on the EUR one). The same rewrite applySettlementAccount makes at booking
+ * (settleBankLeg), so a proposal shows the accounts the verifikat will carry.
+ */
+export function bindTemplateToSettlementAccount(
+  tmpl: CategorizationTemplate,
+  transactionAmount: number,
+  settlementAccount: string,
+): CategorizationTemplate {
+  return settleBankLeg(tmpl, templateBankSide(tmpl, transactionAmount), settlementAccount)
+}
+
+/**
  * The reverse-charge lines a legacy (single-pair) template replays: the
  * complete set from generateReverseChargePurchaseLines, so a learned
  * reverse-charge counterparty books the basis pair (ruta 20-24) too. The
@@ -1102,6 +1136,35 @@ async function findTemplateByKey(
 }
 
 /**
+ * Whether a booking teaches the same pair the template already holds. Which
+ * of the company's cash ledgers the money settled on is a fact of the
+ * transaction, not of the counterparty (applySettlementAccount books the bank
+ * leg on the transaction's own ledger whatever the template stores), so a
+ * pair that differs only in that bank leg is a re-approval. Counted as a
+ * correction, every booking on another of the company's accounts reset the
+ * template's occurrence count and flipped its stored ledger back and forth
+ * (crm#1046). A pair of unknown direction (a transfer between two cash
+ * ledgers) is compared as stored: both legs are what it learned.
+ */
+function samePairButBankLedger(
+  existing: Pick<CategorizationTemplate, 'debit_account' | 'credit_account'>,
+  debitAccount: string,
+  creditAccount: string,
+): boolean {
+  if (existing.debit_account === debitAccount && existing.credit_account === creditAccount) return true
+  const direction = legacyTemplateDirection(debitAccount, creditAccount)
+  if (direction === 'expense') {
+    return existing.debit_account === debitAccount &&
+      isCashLedger(existing.credit_account) && isCashLedger(creditAccount)
+  }
+  if (direction === 'income') {
+    return existing.credit_account === creditAccount &&
+      isCashLedger(existing.debit_account) && isCashLedger(debitAccount)
+  }
+  return false
+}
+
+/**
  * Low-level insert-or-update for a counterparty template.
  *
  * - existingTemplate undefined → DB lookup by (companyId, counterpartyName)
@@ -1142,9 +1205,7 @@ export async function insertOrUpdateTemplate(
   }
 
   if (existing) {
-    const isCorrection =
-      existing.debit_account !== params.debitAccount ||
-      existing.credit_account !== params.creditAccount
+    const isCorrection = !samePairButBankLedger(existing, params.debitAccount, params.creditAccount)
 
     // Merge aliases (deduplicated)
     const mergedAliases = [...(existing.counterparty_aliases || [])]

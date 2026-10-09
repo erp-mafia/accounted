@@ -215,6 +215,47 @@ describe('POST /api/transactions/suggest-categories', () => {
     expect(suggestions.some((s) => s.debit_account === '5010' && s.credit_account === '1931')).toBe(true)
   })
 
+  it('offers a template learned on another own currency account on the transaction\'s own ledger (crm#1046)', async () => {
+    // A card fee learned on the GBP ledger 1934, matched on the EUR row: the
+    // booking credits 1932 (applySettlementAccount), so the review must show 1932.
+    enqueue({ data: [{ id: TX_ID, amount: -0.5, currency: 'EUR', description: 'Card fee', cash_account_id: 'ca-eur' }] })
+    enqueue({ data: [] }) // mapping_rules (company)
+    enqueue({ data: [] }) // mapping_rules (global defaults)
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // company_settings
+    findCounterpartyTemplatesBatchMock.mockResolvedValue(
+      new Map([[TX_ID, { template: makeTemplate({ debit_account: '6570', credit_account: '1934' }), confidence: 0.9 }]]),
+    )
+    loadCounterLegTopologyMock.mockResolvedValue(
+      topology([], { 'ca-eur': { settlementLedger: '1932', twins: [] } }),
+    )
+
+    const response = await POST(request(), emptyParams)
+    const { status, body } = await parseJsonResponse<Body>(response)
+
+    expect(status).toBe(200)
+    const suggestions = body.template_suggestions[TX_ID] ?? []
+    expect(suggestions.some((s) => s.debit_account === '6570' && s.credit_account === '1932')).toBe(true)
+    expect(suggestions.some((s) => s.credit_account === '1934')).toBe(false)
+  })
+
+  it('keeps an own-account transfer suggestion\'s counter ledger (crm#1046)', async () => {
+    enqueue({ data: [{ id: TX_ID, amount: -200, currency: 'EUR', description: 'To GBP', cash_account_id: 'ca-eur' }] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: { entity_type: 'enskild_firma' } })
+    findCounterpartyTemplatesBatchMock.mockResolvedValue(
+      new Map([[TX_ID, { template: makeTemplate({ debit_account: '1934', credit_account: '1932' }), confidence: 0.9 }]]),
+    )
+    loadCounterLegTopologyMock.mockResolvedValue(
+      topology([], { 'ca-eur': { settlementLedger: '1932', twins: [] } }),
+    )
+
+    const response = await POST(request(), emptyParams)
+    const { body } = await parseJsonResponse<Body>(response)
+    const suggestions = body.template_suggestions[TX_ID] ?? []
+    expect(suggestions.some((s) => s.debit_account === '1934' && s.credit_account === '1932')).toBe(true)
+  })
+
   it('keeps a counterparty suggestion whose accounts are clean', async () => {
     enqueueBaseQueries()
     findCounterpartyTemplatesBatchMock.mockResolvedValue(

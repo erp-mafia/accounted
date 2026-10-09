@@ -401,7 +401,7 @@ export async function categorizeMatchedTransaction(
     log,
     transaction.currency,
   )
-  mappingResult = applySettlementAccount(mappingResult, settlementAccount)
+  mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
   // Re-validated here (not only at staging): the account can be deactivated
   // between MCP staging and the user's approval, and the posted entry must
   // never land on an account the chart no longer offers.
