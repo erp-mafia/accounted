@@ -90,13 +90,14 @@ Example response `200`:
 **Register an expense claim (utlägg) and post its verifikat.**
 `scope:suppliers:write · risk:medium · idempotent · dry-run · reversible`
 
-Books a business cost someone paid privately: Debit the cost account (net), Debit 2641 (vat_amount), Credit the person's liability account (gross), in one verifikat posted immediately. The liability account follows the claimant: employee_id books 2820; otherwise the owner's account for the legal form (2893 aktiebolag, 2018 enskild firma as egen insättning, 2890 förening member) with claimant_name. Foreign currency converts at exchange_rate or Riksbanken's rate for expense_date. lines replaces the generated rows (reverse charge, templates) and must credit the liability account with exactly amount. dimensions ({sie_dim_no: code}, kostnadsställe/projekt) tags the cost line, or with lines every class 3-8 line, where a line's own dimensions win per key. document_id attaches the receipt to the verifikat; inbox_item_id marks the inbox item booked. Idempotent. Dry-runnable.
+Books a business cost someone paid privately: Debit the cost account (net), Debit 2641 (vat_amount), Credit the person's liability account (gross), in one verifikat posted immediately. The liability account follows the claimant: employee_id books 2820; otherwise the owner's account for the legal form (2893 aktiebolag, 2018 enskild firma as egen insättning, 2890 förening member) with claimant_name. Foreign currency converts at exchange_rate or Riksbanken's rate for expense_date. reverse_charge (eu_services or non_eu_services) books omvänd skattskyldighet for a service under huvudregeln (SaaS, licences, ads, consulting) from a seller abroad that charged no VAT: the fiktiv moms 2645/2614 and the 4535|4531/4598 basis pair join the generated rows. lines replaces the generated rows (templates, hand-built rows) and must credit the liability account with exactly amount. dimensions ({sie_dim_no: code}, kostnadsställe/projekt) tags the cost line, or with lines every class 3-8 line, where a line's own dimensions win per key. document_id attaches the receipt to the verifikat; inbox_item_id marks the inbox item booked. Idempotent. Dry-runnable.
 
 **Use when:** A receipt was paid with a private card or cash: the answer to "Vem betalade?" is the owner or an employee, not the company account.
 **Do not use for:** A purchase the company paid itself (categorize the bank transaction or register a supplier invoice), an unpaid supplier invoice (POST /supplier-invoices) or mileage (körjournal).
 
 **Pitfalls:**
-- amount is gross incl. VAT and vat_amount must be below it; foreign VAT is not deductible on 2641, so send vat_amount 0 for a foreign receipt.
+- amount is gross incl. VAT and vat_amount must be below it. Foreign VAT is not deductible on 2641: for a receipt from a seller abroad send vat_amount 0. Add reverse_charge only for a service under huvudregeln (SaaS, licences, ads, consulting) bought from a seller abroad that charged no VAT. Hotel, restaurant, taxi, passenger transport and event admission abroad are taxed where performed, and a VAT-exempt service (e.g. a bank fee) carries none: no reverse_charge, the whole amount is cost.
+- With reverse_charge, an expense_account that reports a momsruta of its own that does not match the kind (4512, 4545-4547, 4531 with eu_services, a kontoplan momskod for another purchase, a reverse-charge momskod without a 25/12/6 % rate) or is 4598 answers 400 EXPENSE_CLAIM_INVALID_LINES: book on an ordinary cost account.
 - The verifikat is posted at once and is immutable: undo it with DELETE /expense-claims/{id}, which posts a storno.
 - employee_id wins over claimant_name: the employee's own name is stored.
 - A date in a locked period or behind the company lock date returns 400 PERIOD_LOCKED; no open fiscal year returns EXPENSE_CLAIM_NO_FISCAL_PERIOD.
@@ -122,6 +123,7 @@ Request body:
   document_id?: string | null,
   inbox_item_id?: string | null,
   dimensions?: Record<string, string>,
+  reverse_charge?: "eu_services" | "non_eu_services",
   lines?: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string | null, dimensions?: Record<string, string> }[]
 }
 ```

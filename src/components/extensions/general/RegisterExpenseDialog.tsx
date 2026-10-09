@@ -13,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
@@ -24,6 +25,13 @@ import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE, ISO_DATE_RE } from '@/lib/invariants'
 import { ownerFallbackName, resolveExpenseLiabilityAccount, type ExpensePayer } from '@/lib/expenses/payer'
+import {
+  expenseClaimReverseChargeLines,
+  expenseVatCasesForReceipt,
+  reverseChargeForVatCase,
+  vatCaseFromReceipt,
+  type ExpenseVatCase,
+} from '@/lib/expenses/expense-claim-vat'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import type { InvoiceExtractionResult } from '@/types'
 
@@ -64,10 +72,11 @@ function parseAmount(raw: string): number {
 /**
  * RegisterExpenseDialog: the confirm step behind "Vem betalade? Jag, privat /
  * En anställd" in the Underlag pane. One screen, prefilled from the
- * extraction: who, cost account, amount and VAT, then the outcome spelled out
- * before anything posts (design convention 10). Posts through
- * POST /api/expense-claims, which books cost + moms against the person's
- * liability account and stamps the inbox item as booked.
+ * extraction: who, where the seller is, cost account, amount and VAT, then
+ * the outcome spelled out before anything posts (design convention 10).
+ * Posts through POST /api/expense-claims, which books cost + moms (or, for a
+ * service bought abroad without VAT, omvänd skattskyldighet) against the
+ * person's liability account and stamps the inbox item as booked.
  */
 export default function RegisterExpenseDialog({ open, onOpenChange, item, payer, onSuccess }: Props) {
   const t = useTranslations('inbox_workspace')
@@ -81,6 +90,9 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
   const [expenseDate, setExpenseDate] = useState(todayIso())
   const [amountInput, setAmountInput] = useState('')
   const [vatInput, setVatInput] = useState('')
+  // Where the seller is and what the receipt shows (lib/expenses/
+  // expense-claim-vat.ts); null until the receipt or the user answers.
+  const [vatCase, setVatCase] = useState<ExpenseVatCase | null>(null)
   const [expenseAccount, setExpenseAccount] = useState('')
   const [ownerName, setOwnerName] = useState('')
   const [employeeId, setEmployeeId] = useState('')
@@ -92,10 +104,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
   const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const [dimensions, setDimensions] = useState<Record<string, string>>({})
   const currency = (data?.invoice?.currency ?? 'SEK').toUpperCase()
-  // A foreign receipt carries VAT the company cannot deduct on 2641: the whole
-  // amount is cost. The wizard asked for the seller's country; here the
-  // currency is the signal, and the note under the preview says so.
-  const isForeign = currency !== 'SEK'
+  const vatCaseOptions = expenseVatCasesForReceipt({ merchantCategory: data?.merchantCategory })
   // A form whose org number is the owner's personnummer has no separate
   // legal person to owe the owner: the money is an egen insättning, not a
   // debt, so the help and the outcome line say so instead of naming a
@@ -110,12 +119,16 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
     const total = data?.totals?.total
     const vat = data?.totals?.vatAmount
     setAmountInput(total != null && total > 0 ? String(roundOre(total)).replace('.', ',') : '')
-    setVatInput(!isForeign && vat != null && vat > 0 ? String(roundOre(vat)).replace('.', ',') : '0')
+    // VAT the extraction did not read stays empty: a Swedish receipt's moms
+    // is typed, never assumed to be 0.
+    setVatInput(vat != null && vat > 0 ? String(roundOre(vat)).replace('.', ',') : vat === 0 ? '0' : '')
+    // Prefilled only from VAT the receipt shows; otherwise the user answers.
+    setVatCase(vatCaseFromReceipt({ currency, vatAmount: vat, sellerVatNumber: data?.supplier?.vatNumber }))
     setExpenseAccount('')
     setEmployeeId('')
     setEmployeeName('')
     setDimensions({})
-  }, [open, item.id, data, isForeign])
+  }, [open, item.id, data, currency])
 
   function setDimension(dimNo: string, code: string | null) {
     setDimensions((prev) => {
@@ -128,27 +141,62 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
   }
 
   const amount = parseAmount(amountInput)
-  // Foreign VAT is never deductible here: the field is locked and 0 is what
-  // gets submitted, whatever the extraction said.
-  const vatAmount = isForeign ? 0 : parseAmount(vatInput)
+  // Only a Swedish seller's moms is deductible. Abroad the field is locked
+  // and 0 is what gets submitted, whatever the extraction said: foreign VAT
+  // is cost, and a receipt under omvänd skattskyldighet carries none.
+  const vatDeductible = vatCase === 'domestic'
+  const vatLocked = vatCase !== null && !vatDeductible
+  const vatAmount = vatDeductible ? parseAmount(vatInput) : 0
+  const reverseCharge = vatCase ? reverseChargeForVatCase(vatCase) : undefined
   const net = roundOre(amount - vatAmount)
   const claimantName = payer === 'owner' ? ownerName.trim() || ownerFallbackName(entityType) : employeeName
 
+  const accountRow = useMemo(
+    () => accounts.find((a) => a.account_number === expenseAccount) ?? null,
+    [accounts, expenseAccount],
+  )
+  const accountName = accountRow?.account_name ?? ''
+
+  // The reverse-charge lines from the function the service books them with,
+  // so the preview cannot drift; null when the cost account reports a box of
+  // its own that the answer cannot join, which the service refuses too.
+  const reverseChargeLines = useMemo(
+    () => (reverseCharge ? expenseClaimReverseChargeLines(amount, reverseCharge, expenseAccount, accountRow) : []),
+    [reverseCharge, amount, expenseAccount, accountRow],
+  )
+
   const canSubmit =
     !isSubmitting &&
+    vatCase !== null &&
+    reverseChargeLines !== null &&
     description.trim().length > 0 &&
     ISO_DATE_RE.test(expenseDate) &&
     amount > 0 &&
+    (!vatDeductible || vatInput.trim().length > 0) &&
     vatAmount >= 0 &&
     vatAmount < amount &&
     ACCOUNT_NUMBER_RE.test(expenseAccount) &&
     /^[4-8]/.test(expenseAccount) &&
     (payer === 'owner' || !!employeeId)
 
-  const accountName = useMemo(
-    () => accounts.find((a) => a.account_number === expenseAccount)?.account_name ?? '',
-    [accounts, expenseAccount],
-  )
+  // The verifikat the answer books, in the receipt's currency (the service
+  // converts at the date's rate).
+  const previewLines = useMemo(() => {
+    if (vatCase === null || reverseChargeLines === null || !(amount > 0) || vatAmount >= amount) return []
+    const lines: Array<{ account: string; side: 'D' | 'K'; amount: number }> = [
+      { account: expenseAccount || '____', side: 'D', amount: net },
+    ]
+    if (vatAmount > 0) lines.push({ account: '2641', side: 'D', amount: vatAmount })
+    for (const line of reverseChargeLines) {
+      lines.push(
+        line.debit_amount > 0
+          ? { account: line.account_number, side: 'D', amount: line.debit_amount }
+          : { account: line.account_number, side: 'K', amount: line.credit_amount },
+      )
+    }
+    lines.push({ account: liabilityAccount, side: 'K', amount })
+    return lines
+  }, [vatCase, reverseChargeLines, amount, vatAmount, net, expenseAccount, liabilityAccount])
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return
@@ -164,6 +212,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
         inbox_item_id: item.id,
         document_id: item.document_id ?? undefined,
       }
+      if (reverseCharge) body.reverse_charge = reverseCharge
       if (payer === 'owner') body.claimant_name = claimantName
       else body.employee_id = employeeId
       if (dimensionsEnabled && Object.keys(dimensions).length > 0) body.dimensions = dimensions
@@ -203,6 +252,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
     expenseAccount,
     item.id,
     item.document_id,
+    reverseCharge,
     payer,
     claimantName,
     employeeId,
@@ -252,6 +302,38 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
             />
           </div>
 
+          {/* Where the seller is and what was bought decide the moms, not the
+              currency (crm#1028). Asked before the amounts so the Moms field
+              follows the answer; unanswered blocks Bokför, each option
+              carries its consequence. */}
+          <div className="space-y-1.5">
+            <Label htmlFor="re-vat-case">{t('expense_vat_case')}</Label>
+            <Select
+              value={vatCase ?? ''}
+              onValueChange={(next) => setVatCase(next as ExpenseVatCase)}
+              disabled={isSubmitting}
+            >
+              <SelectTrigger id="re-vat-case">
+                {/* Explicit children: the items render label + help, and the
+                    trigger shows the label alone. */}
+                <SelectValue placeholder={t('expense_vat_case_placeholder')}>
+                  {vatCase ? t(`expense_vat_case_${vatCase}`) : null}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent align="start" className="w-[var(--radix-select-trigger-width)]">
+                {vatCaseOptions.map((option) => (
+                  <SelectItem key={option} value={option} className="py-2">
+                    <span className="block">{t(`expense_vat_case_${option}`)}</span>
+                    <span className="block text-xs text-muted-foreground">{t(`expense_vat_case_help_${option}`)}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {vatCase ? t(`expense_vat_case_help_${vatCase}`) : t('expense_vat_case_required')}
+            </p>
+          </div>
+
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="re-date">{t('expense_date')}</Label>
@@ -279,9 +361,9 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
               <Input
                 id="re-vat"
                 inputMode="decimal"
-                value={isForeign ? '0' : vatInput}
+                value={vatLocked ? '0' : vatInput}
                 onChange={(e) => setVatInput(e.target.value)}
-                disabled={isSubmitting || isForeign}
+                disabled={isSubmitting || vatLocked}
                 className="tabular-nums"
               />
             </div>
@@ -296,6 +378,9 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
               disabled={isSubmitting}
               selectedName={accountName}
             />
+            {reverseChargeLines === null && (
+              <p className="attn text-[12.5px]">{t('expense_reverse_charge_account', { account: expenseAccount })}</p>
+            )}
           </div>
 
           {/* Kostnadsställe/projekt on the cost line (VAT and the liability
@@ -304,19 +389,19 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
             <LineDimensionFields dimensions={dimensions} onChange={setDimension} disabled={isSubmitting} />
           )}
 
-          {amount > 0 && vatAmount < amount && (
+          {previewLines.length > 0 && (
             <div className="rounded-lg border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
               <p className="tabular-nums">
-                {expenseAccount || '____'} D {formatCurrency(net, currency)}
-                {vatAmount > 0 ? ` · 2641 D ${formatCurrency(vatAmount, currency)}` : ''}
-                {` · ${liabilityAccount} K ${formatCurrency(amount, currency)}`}
+                {previewLines
+                  .map((line) => `${line.account} ${line.side} ${formatCurrency(line.amount, currency)}`)
+                  .join(' · ')}
               </p>
               {payer === 'owner' && ownerIsTheCompany ? (
                 <p>{t('expense_outcome_ef')}</p>
               ) : (
                 claimantName && <p>{t('expense_outcome_att_gora', { name: claimantName })}</p>
               )}
-              {isForeign && <p>{t('expense_fx_note')}</p>}
+              {currency !== 'SEK' && <p>{t('expense_fx_note')}</p>}
             </div>
           )}
         </div>

@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Expense claims (2026-10)
+
+- **Reverse charge on an utlägg** (crm#1028, 2026-10-09): \`POST /expense-claims\` accepts \`reverse_charge\` (\`eu_services\` | \`non_eu_services\`) for a service under huvudregeln (SaaS, licences, ads, consulting) from a seller abroad that charged no VAT. Hotel, restaurant, taxi, travel and event costs abroad are taxed where performed and take no \`reverse_charge\`. The verifikat then also carries the fiktiv moms 2645 D / 2614 K on the SEK amount and the basis pair 4535 (ruta 21) or 4531 (ruta 22) D / 4598 K, left out when \`expense_account\` reports that ruta itself. It needs \`vat_amount\` 0, no \`lines\` and an \`expense_account\` that reports no other box (\`400\` otherwise). Additive: nothing changes for a request without it.
+
 ### API keys: inspect a key's grant (2026-10)
 
 - **\`GET /api/v1/api-key\`** (2026-10-07): returns the calling key's \`mode\` (\`live\` | \`test\`), its \`scopes\`, \`company_access\` (\`all_memberships\` or \`allowlist\`) and every company it reaches with \`role\`, \`access\` (\`read_write\` | \`read_only\`) and \`read_only_code\` (\`ROLE_READ_ONLY\` | \`CONNECTION_READ_ONLY\`, the codes a refused write answers with). Any valid key may call it, whatever its scopes, including keys issued through MCP OAuth; no key gives \`401\`. Check a key when a customer connects it instead of waiting for the first \`403\`: a document upload to company X needs \`documents:write\` in \`scopes\`, X with \`access\` \`read_write\`, and \`mode\` \`live\` (a test key gets \`403 TEST_KEY_WRITE_BLOCKED\` on uploads, which cannot be dry-run). Additive.

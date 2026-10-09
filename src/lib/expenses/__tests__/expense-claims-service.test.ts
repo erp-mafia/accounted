@@ -29,7 +29,7 @@ vi.mock('@/lib/salary/expense-claim-lines', () => ({
 
 import { registerExpenseClaim, createPayoutBatch, deleteExpenseClaim } from '../expense-claims-service'
 
-const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 // The queued mock is structurally sufficient for the service; the cast keeps
 // the test honest about not being a real client.
 const sb = supabase as unknown as import('@supabase/supabase-js').SupabaseClient
@@ -729,5 +729,132 @@ describe('registerExpenseClaim: custom lines from a supplier invoice', () => {
 
     const input = createJournalEntryMock.mock.calls[0][3]
     for (const line of input.lines) expect(line).not.toHaveProperty('dimensions')
+  })
+})
+
+describe('registerExpenseClaim: omvänd skattskyldighet on a receipt from abroad (crm#1028)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    findFiscalPeriodMock.mockResolvedValue('period-1')
+    createJournalEntryMock.mockResolvedValue({ id: 'je-1' })
+  })
+
+  const saas = {
+    description: 'SaaS-abonnemang',
+    expense_date: '2026-09-01',
+    amount: 25,
+    vat_amount: 0,
+    currency: 'USD' as const,
+    exchange_rate: 10.5,
+    expense_account: '6540',
+    claimant_name: 'Ägare',
+  }
+
+  it('books the fiktiv moms and the ruta 22 basis pair on the SEK amount, balanced', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { default_vat_treatment: null, default_vat_rate: null } }) // chart row of 6540
+    enqueue({ data: { id: 'claim-rc' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, { ...saas, reverse_charge: 'non_eu_services' })
+
+    expect(result.ok).toBe(true)
+    const lines = createJournalEntryMock.mock.calls[0][3].lines as Array<{
+      account_number: string
+      debit_amount: number
+      credit_amount: number
+    }>
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['6540', 262.5, 0],
+      ['2645', 65.63, 0],
+      ['2614', 0, 65.63],
+      ['4531', 262.5, 0],
+      ['4598', 0, 262.5],
+      ['2893', 0, 262.5],
+    ])
+    expect(lines[0]).toMatchObject({ currency: 'USD', amount_in_currency: 25, exchange_rate: 10.5 })
+    const debit = lines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = lines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.round(debit * 100)).toBe(Math.round(credit * 100))
+    expect(findCalls('chart_of_accounts', 'eq')).toEqual([
+      ['company_id', COMPANY],
+      ['account_number', '6540'],
+    ])
+    // Nothing is deductible on 2641: the claim owes the gross and shows no VAT.
+    expect(findCall('expense_claims', 'insert')?.[0]).toMatchObject({ amount_sek: 262.5, vat_sek: 0 })
+  })
+
+  it('adds no basis pair when the cost account reports the ruta itself', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { default_vat_treatment: null, default_vat_rate: null } }) // chart row of 4535
+    enqueue({ data: { id: 'claim-rc' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+
+    await registerExpenseClaim(sb, COMPANY, USER, {
+      ...saas,
+      currency: 'EUR',
+      exchange_rate: 11,
+      amount: 10,
+      expense_account: '4535',
+      reverse_charge: 'eu_services',
+    })
+
+    const lines = createJournalEntryMock.mock.calls[0][3].lines as Array<{ account_number: string }>
+    expect(lines.map((l) => l.account_number)).toEqual(['4535', '2645', '2614', '2893'])
+  })
+
+  it.each([
+    ['the import basis (ruta 50)', '4545', { default_vat_treatment: null, default_vat_rate: null }],
+    ['a reverse-charge momskod without a rate', '6541', { default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0 }],
+    ['the other region (4535 is ruta 21)', '4535', { default_vat_treatment: null, default_vat_rate: null }],
+  ])('refuses reverse_charge on %s before writing anything (crm#1028 review)', async (_case, account, row) => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: row }) // chart row of the cost account
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      ...saas,
+      expense_account: account,
+      reverse_charge: 'non_eu_services',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_LINES' })
+    expect(findCall('expense_claims', 'insert')).toBeUndefined()
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('books a receipt from abroad without reverse_charge gross, with no moms lines', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { id: 'claim-gross' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+
+    await registerExpenseClaim(sb, COMPANY, USER, saas)
+
+    const lines = createJournalEntryMock.mock.calls[0][3].lines as Array<{ account_number: string }>
+    expect(lines.map((l) => l.account_number)).toEqual(['6540', '2893'])
+    expect(findCall('chart_of_accounts', 'select')).toBeUndefined()
+  })
+
+  it.each([
+    ['with VAT on the receipt', { vat_amount: 5 }],
+    [
+      'beside custom lines',
+      {
+        lines: [
+          { account_number: '6540', debit_amount: 25, credit_amount: 0 },
+          { account_number: '2893', debit_amount: 0, credit_amount: 25 },
+        ],
+      },
+    ],
+  ])('refuses reverse_charge %s before touching the database', async (_case, extra) => {
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      ...saas,
+      ...extra,
+      reverse_charge: 'eu_services',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_LINES' })
+    expect(findCall('companies', 'select')).toBeUndefined()
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
   })
 })

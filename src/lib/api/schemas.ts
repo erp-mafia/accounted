@@ -27,6 +27,7 @@ import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
 import { VACATION_DAYS_MINIMUM, vacationDaysBelowMinimum } from '@/lib/salary/employee-update-rules'
 import { SalaryCalculationPolicySchema } from '@/lib/salary/calculation-policy'
+import { EXPENSE_CLAIM_REVERSE_CHARGE_KINDS } from '@/lib/expenses/expense-claim-vat'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
@@ -4701,6 +4702,10 @@ export const CreateExpenseClaimSchema = z
     dimensions: DimensionsBagSchema.optional().describe(
       'Dimensions bag {sie_dim_no: code}, e.g. {"6":"P001"}, for the cost line(s). With lines, it is the default for every class 3-8 line; per-line dimensions win per key.',
     ),
+    /** Omvänd skattskyldighet on the generated lines (crm#1028). */
+    reverse_charge: z.enum(EXPENSE_CLAIM_REVERSE_CHARGE_KINDS).optional().describe(
+      'Omvänd skattskyldighet for a service under huvudregeln (SaaS, licences, ads, consulting) from a seller abroad that charged no VAT: eu_services (seller in another EU country, ruta 21) or non_eu_services (outside the EU, ruta 22). Never for hotel, restaurant, taxi, travel or event tickets abroad (taxed where performed) or a VAT-exempt service: those are booked gross without it. Adds the fiktiv moms 2645 D / 2614 K and the basis pair 4535|4531 D / 4598 K on the SEK amount (no pair when expense_account reports that ruta itself; an expense_account that reports another box, or carries a reverse-charge momskod without a 25/12/6 % rate, is refused). Needs vat_amount 0 and no lines.',
+    ),
     /** Advanced booking: full verifikat lines in claim currency. Deep
      *  validation (balance, liability line) happens in the service. */
     lines: z
@@ -4725,6 +4730,20 @@ export const CreateExpenseClaimSchema = z
         code: z.ZodIssueCode.custom,
         message: 'Momsen måste vara mindre än totalbeloppet.',
         path: ['vat_amount'],
+      })
+    }
+    if (data.reverse_charge && data.vat_amount > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Vid omvänd skattskyldighet har kvittot ingen moms: ange momsen 0.',
+        path: ['vat_amount'],
+      })
+    }
+    if (data.reverse_charge && data.lines) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Omvänd skattskyldighet bokförs på de genererade raderna: skicka antingen reverse_charge eller lines.',
+        path: ['reverse_charge'],
       })
     }
     if (!data.employee_id && !data.claimant_name?.trim()) {

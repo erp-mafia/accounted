@@ -8,6 +8,10 @@
  *   Debit  2641 Ingående moms     (VAT, when > 0)
  *   Credit liability              (gross)  2893 owner / 2820 employee / 2018 EF
  *
+ * With reverse_charge (a service bought abroad without VAT) the verifikat
+ * also carries the fiktiv moms 2645 D / 2614 K and the 45xx D / 4598 K basis
+ * pair.
+ *
  * A payout batch reimburses N registered claims for ONE claimant in one bank
  * transfer:
  *
@@ -32,6 +36,7 @@ import { ownerSettlementAccount, parseEntityType } from '@/lib/company/entity-ty
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 import { mergeDimensionBags } from '@/lib/bookkeeping/dimension-resolver'
+import { expenseClaimReverseChargeLines, type ExpenseClaimReverseCharge } from '@/lib/expenses/expense-claim-vat'
 
 const log = createLogger('expenses/claims')
 
@@ -86,6 +91,13 @@ export interface RegisterExpenseClaimInput {
    * liability legs stay untagged, like every other producer.
    */
   dimensions?: Record<string, string>
+  /**
+   * Omvänd skattskyldighet on the generated lines (crm#1028): a service under
+   * huvudregeln from a seller abroad that charged no VAT, so vat_amount is 0
+   * and the fiktiv moms and the basis pair are added on the SEK amount
+   * (expense-claim-vat.ts). Custom `lines` carry their own instead.
+   */
+  reverse_charge?: ExpenseClaimReverseCharge
   /**
    * Custom verifikat lines in claim currency (the advanced booking step:
    * reverse charge, templates, manual rows). When present they replace the
@@ -150,6 +162,9 @@ export async function planExpenseClaim(
 ): Promise<{ ok: true; plan: ExpenseClaimPlan } | RegisterExpenseClaimFailure> {
   if (!input.lines && (input.vat_amount < 0 || input.vat_amount >= input.amount)) {
     return { ok: false, code: 'VAT_EXCEEDS_AMOUNT' }
+  }
+  if (input.reverse_charge && (input.lines || input.vat_amount !== 0)) {
+    return { ok: false, code: 'INVALID_LINES', detail: 'reverse_charge books a receipt without VAT on the generated lines' }
   }
 
   // Resolve claimant + liability account. Entity type drives the owner
@@ -337,6 +352,26 @@ export async function planExpenseClaim(
       credit_amount: 0,
       line_description: `Ingående moms, ${desc}`,
     })
+  }
+  if (input.reverse_charge) {
+    // The cost account's chart row decides whether it reports ruta 20-24
+    // itself, read as the declaration reads it.
+    const { data: costRow, error: costRowError } = await supabase
+      .from('chart_of_accounts')
+      .select('default_vat_treatment, default_vat_rate')
+      .eq('company_id', companyId)
+      .eq('account_number', input.expense_account)
+      .maybeSingle()
+    if (costRowError) throw new Error(`Failed to read account ${input.expense_account}: ${costRowError.message}`)
+    const reverseChargeLines = expenseClaimReverseChargeLines(amountSek, input.reverse_charge, input.expense_account, costRow)
+    if (!reverseChargeLines) {
+      return {
+        ok: false,
+        code: 'INVALID_LINES',
+        detail: `expense_account ${input.expense_account} reports its own VAT box, which does not match reverse_charge ${input.reverse_charge}: use an ordinary cost account`,
+      }
+    }
+    lines.push(...reverseChargeLines)
   }
   lines.push({
     account_number: liability,

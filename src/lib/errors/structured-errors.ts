@@ -1391,8 +1391,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   EXPENSE_CLAIM_INVALID_LINES: {
     httpStatus: 400,
-    message_sv: 'Verifikatraderna är ogiltiga: kontrollera att raderna balanserar och att skuldraden matchar beloppet.',
-    message_en: 'The voucher lines are invalid: they must balance and carry exactly one credit on the liability account equal to the amount.',
+    message_sv: 'Verifikatraderna är ogiltiga: kontrollera att raderna balanserar och att skuldraden matchar beloppet. Med omvänd skattskyldighet måste kostnadskontot vara ett vanligt kostnadskonto.',
+    message_en: 'The voucher lines are invalid: they must balance and carry exactly one credit on the liability account equal to the amount. With reverse_charge the expense account must be an ordinary cost account.',
   },
   EXPENSE_CLAIM_RATE_UNAVAILABLE: {
     httpStatus: 400,
