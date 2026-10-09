@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { serverErrorMessage, syncSummary, type ShopifySyncPayload } from '../lib/settings-actions'
+import {
+  serverErrorMessage,
+  shippingCountryWithheld,
+  syncSummary,
+  type ShopifySyncPayload,
+} from '../lib/settings-actions'
 
 describe('syncSummary', () => {
   const base = { fetched: 5, refundsFetched: 1, inserted: 4, updated: 1, unchanged: 0, errors: 0 }
@@ -40,6 +45,29 @@ describe('syncSummary', () => {
     expect(syncSummary(null)).toEqual({ reason: 'unknown' })
     expect(syncSummary({} as ShopifySyncPayload)).toEqual({ reason: 'unknown' })
     expect(syncSummary({ transactions: {} })).toEqual({ reason: 'unknown' })
+  })
+})
+
+describe('shippingCountryWithheld', () => {
+  const base = { fetched: 5, inserted: 4, errors: 0 }
+
+  it('reports a store that withholds shipping addresses', () => {
+    expect(shippingCountryWithheld({ transactions: { ...base, shippingCountryWithheld: true } })).toBe(
+      true,
+    )
+  })
+
+  it('reports addresses shared once a run listed orders without a refusal', () => {
+    expect(shippingCountryWithheld({ transactions: base })).toBe(false)
+  })
+
+  it('cannot tell from an empty, revoked or unreadable run', () => {
+    expect(shippingCountryWithheld({ transactions: { ...base, fetched: 0 } })).toBeNull()
+    expect(
+      shippingCountryWithheld({ transactions: { ...base, revoked: true, shippingCountryWithheld: true } }),
+    ).toBeNull()
+    expect(shippingCountryWithheld(null)).toBeNull()
+    expect(shippingCountryWithheld({ transactions: {} })).toBeNull()
   })
 })
 

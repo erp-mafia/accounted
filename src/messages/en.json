@@ -703,7 +703,8 @@
     "backfill_running": "Fetching…",
     "backfill_missing_date": "Pick a start date first.",
     "backfill_done_title": "Older orders fetched",
-    "backfill_failed_title": "Fetch failed"
+    "backfill_failed_title": "Fetch failed",
+    "shipping_country_withheld": "Destination country missing: give the app Protected customer data access with the Address field in Shopify (requires the Grow plan or higher)."
   },
   "zettle": {
     "title": "Zettle",

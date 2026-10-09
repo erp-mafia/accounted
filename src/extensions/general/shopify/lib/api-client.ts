@@ -30,7 +30,9 @@ export const SHOPIFY_API_VERSION = '2026-07'
  * Orders per page. The API caps `first` at 250, but query cost is what binds
  * here: each order carries nested lineItems/shippingLines connections, and a
  * single GraphQL query must stay under the 1000-point ceiling
- * (25 * (~1 + lineItems 25 + shipping 5 + overhead) lands well below it).
+ * (25 * (~1 + lineItems 25 + shipping 5 + shippingAddress 1 + overhead) lands
+ * well below it; shippingAddress is one object with one enum, so it adds 25
+ * points per page).
  */
 export const SHOPIFY_PAGE_SIZE = 25
 /** Line items fetched per order; more than this drops the line snapshot. */
@@ -240,9 +242,22 @@ export async function createShopifySession(
   return { shopDomain: creds.shopDomain, accessToken: await exchangeAccessToken(creds) }
 }
 
+/** GraphQL error code Shopify uses for a missing scope or a protected-data refusal. */
+const ACCESS_DENIED_CODE = 'ACCESS_DENIED'
+
 interface GraphQLErrorShape {
   message?: string
   extensions?: { code?: string }
+  /** Response path of a field-level error, e.g. ['orders', 'nodes', 0, 'shippingAddress']. */
+  path?: Array<string | number>
+}
+
+/** Whether a GraphQL error is scoped to (or below) one of the optional fields. */
+function isOptionalFieldError(error: GraphQLErrorShape, optionalFields: readonly string[]): boolean {
+  return (
+    Array.isArray(error.path) &&
+    error.path.some((segment) => typeof segment === 'string' && optionalFields.includes(segment))
+  )
 }
 
 /**
@@ -256,6 +271,23 @@ export async function shopifyGraphQL<T>(
   query: string,
   variables: Record<string, unknown> = {},
 ): Promise<T> {
+  return (await requestGraphQL<T>(session, query, variables, [])).data
+}
+
+/**
+ * shopifyGraphQL, except that errors scoped to one of `optionalFields` are
+ * returned instead of thrown, provided data came back. Shopify answers a
+ * field the app may not read (protected customer data) with HTTP 200, null
+ * in that field and an `errors` entry whose path points at it; for a field
+ * the caller can do without, that is a degraded answer, not a failed one.
+ * Errors anywhere else still throw exactly as in shopifyGraphQL.
+ */
+async function requestGraphQL<T>(
+  session: ShopifySession,
+  query: string,
+  variables: Record<string, unknown>,
+  optionalFields: readonly string[],
+): Promise<{ data: T; optionalFieldErrors: GraphQLErrorShape[] }> {
   // Throws (non-retryable) when the stored domain is not a myshopify.com host.
   const url = `${shopOriginOf(session.shopDomain)}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`
   let lastError: unknown
@@ -300,19 +332,26 @@ export async function shopifyGraphQL<T>(
         await sleep(RETRY_DELAYS_MS[attempt])
         continue
       }
-      const accessDenied = body.errors.some((e) => e.extensions?.code === 'ACCESS_DENIED')
-      const message = body.errors[0]?.message ?? 'unknown GraphQL error'
+      const fatal = body.errors.filter((e) => !isOptionalFieldError(e, optionalFields))
+      if (fatal.length === 0 && body.data) {
+        return { data: body.data, optionalFieldErrors: body.errors }
+      }
+      // Only errors outside the optional fields decide the classification: a
+      // withheld optional field must never read as revoked credentials.
+      const reported = fatal[0] ?? body.errors[0]
+      const accessDenied = fatal.some((e) => e.extensions?.code === ACCESS_DENIED_CODE)
+      const message = reported?.message ?? 'unknown GraphQL error'
       throw new ShopifyApiError(
         `Shopify GraphQL error: ${message}`,
         accessDenied ? 403 : 0,
-        body.errors[0]?.extensions?.code ?? null,
+        reported?.extensions?.code ?? null,
       )
     }
 
     if (!body?.data) {
       throw new ShopifyApiError('Shopify API returned no data', 0)
     }
-    return body.data
+    return { data: body.data, optionalFieldErrors: [] }
   }
   throw lastError instanceof Error
     ? lastError
@@ -320,15 +359,23 @@ export async function shopifyGraphQL<T>(
 }
 
 /**
- * Order fields for the feed. Deliberately NO customer/PII fields (customer,
- * email, addresses): they are gated behind Shopify's protected customer data
- * program, and the order feed does not need them; the verifikat reference is
- * the order name/id. Tax lines, line items and shipping lines carry the
- * booking underlag (per-rate VAT, line snapshot) for the Orders page.
- * Refunds come inline (plain list, not a connection), so no per-order
- * follow-up requests are needed.
+ * Order fields for the feed. Customer/PII fields stay out (customer, email,
+ * names, street addresses): the order feed does not need them, and the
+ * verifikat reference is the order name/id. The one exception is the
+ * shipping address's country code and nothing else from the address
+ * (crm#1032): the destination decides how a goods sale is taxed (domestic,
+ * EU distance sale under OSS, export), so the Orders page needs it to pick
+ * sales and VAT accounts. Tax lines, line items and shipping lines carry the
+ * booking underlag (per-rate VAT, line snapshot). Refunds come inline (plain
+ * list, not a connection), so no per-order follow-up requests are needed.
+ *
+ * Shopify counts addresses as protected customer data (the protected field
+ * "Address", level 2). A store that withholds it from the app answers with
+ * shippingAddress null plus a field-scoped error; listOrdersPage treats that
+ * as "no destination", never as a failed page.
  */
-const ORDERS_QUERY = `
+function buildOrdersQuery(includeShippingAddress: boolean): string {
+  return `
 query OrdersFeed($first: Int!, $after: String, $query: String) {
   orders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
     pageInfo { hasNextPage endCursor }
@@ -344,6 +391,7 @@ query OrdersFeed($first: Int!, $after: String, $query: String) {
       taxesIncluded
       totalPriceSet { shopMoney { amount currencyCode } }
       taxLines { ratePercentage priceSet { shopMoney { amount currencyCode } } }
+      ${includeShippingAddress ? 'shippingAddress { countryCodeV2 }' : ''}
       lineItems(first: ${SHOPIFY_LINE_ITEMS_PAGE}) {
         pageInfo { hasNextPage }
         nodes {
@@ -369,11 +417,22 @@ query OrdersFeed($first: Int!, $after: String, $query: String) {
     }
   }
 }`
+}
+
+const ORDERS_QUERY = buildOrdersQuery(true)
+const ORDERS_QUERY_WITHOUT_SHIPPING_ADDRESS = buildOrdersQuery(false)
 
 export interface OrdersPage {
   orders: ShopifyOrder[]
   hasNextPage: boolean
   endCursor: string | null
+  /**
+   * The store refused the shipping address on this request (protected
+   * customer data not granted to the app), so no order on the page carries a
+   * destination country. The page is otherwise complete. False when the
+   * address was not asked for.
+   */
+  shippingAddressWithheld: boolean
 }
 
 export interface ListOrdersOptions {
@@ -381,6 +440,27 @@ export interface ListOrdersOptions {
   updatedAtMin: string
   /** Relay cursor from the previous page's endCursor, or null for page one. */
   after: string | null
+  /**
+   * Ask for the destination country (default true). The sync stops asking
+   * for the rest of a run once the store refused it.
+   */
+  includeShippingAddress?: boolean
+}
+
+interface OrdersData {
+  orders: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null }
+    nodes: ShopifyOrder[]
+  }
+}
+
+function toOrdersPage(data: OrdersData, shippingAddressWithheld: boolean): OrdersPage {
+  return {
+    orders: data.orders.nodes,
+    hasNextPage: data.orders.pageInfo.hasNextPage,
+    endCursor: data.orders.pageInfo.endCursor,
+    shippingAddressWithheld,
+  }
 }
 
 /**
@@ -388,25 +468,49 @@ export interface ListOrdersOptions {
  * so the caller's cursor advances chronologically. Relay cursor pagination is
  * stable across same-second ties, so no offset fallback is needed (unlike the
  * WooCommerce client).
+ *
+ * A withheld shipping address never fails the page. The documented answer
+ * (null field plus a field-scoped error) is tolerated in place. Should the
+ * store instead refuse the whole query with ACCESS_DENIED, the page is asked
+ * once more without the address: only if that also fails is read_orders
+ * itself missing, and the error propagates (classified as revoked) exactly as
+ * before the address was added. Without this, adding one optional field
+ * could flip a working connection to revoked and wipe its credentials.
  */
 export async function listOrdersPage(
   session: ShopifySession,
   options: ListOrdersOptions,
 ): Promise<OrdersPage> {
-  const data = await shopifyGraphQL<{
-    orders: {
-      pageInfo: { hasNextPage: boolean; endCursor: string | null }
-      nodes: ShopifyOrder[]
-    }
-  }>(session, ORDERS_QUERY, {
+  const variables = {
     first: SHOPIFY_PAGE_SIZE,
     after: options.after,
     query: `updated_at:>='${options.updatedAtMin}'`,
-  })
-  return {
-    orders: data.orders.nodes,
-    hasNextPage: data.orders.pageInfo.hasNextPage,
-    endCursor: data.orders.pageInfo.endCursor,
+  }
+  if (options.includeShippingAddress === false) {
+    const data = await shopifyGraphQL<OrdersData>(
+      session,
+      ORDERS_QUERY_WITHOUT_SHIPPING_ADDRESS,
+      variables,
+    )
+    return toOrdersPage(data, false)
+  }
+
+  try {
+    const { data, optionalFieldErrors } = await requestGraphQL<OrdersData>(
+      session,
+      ORDERS_QUERY,
+      variables,
+      ['shippingAddress'],
+    )
+    return toOrdersPage(data, optionalFieldErrors.length > 0)
+  } catch (error) {
+    if (!(error instanceof ShopifyApiError) || error.code !== ACCESS_DENIED_CODE) throw error
+    const data = await shopifyGraphQL<OrdersData>(
+      session,
+      ORDERS_QUERY_WITHOUT_SHIPPING_ADDRESS,
+      variables,
+    )
+    return toOrdersPage(data, true)
   }
 }
 

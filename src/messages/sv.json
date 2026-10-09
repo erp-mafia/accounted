@@ -703,7 +703,8 @@
     "backfill_running": "Hämtar…",
     "backfill_missing_date": "Välj ett startdatum först.",
     "backfill_done_title": "Äldre ordrar hämtade",
-    "backfill_failed_title": "Hämtningen misslyckades"
+    "backfill_failed_title": "Hämtningen misslyckades",
+    "shipping_country_withheld": "Leveransland saknas: ge appen Protected customer data access med fältet Address i Shopify (kräver planen Grow eller högre)."
   },
   "zettle": {
     "title": "Zettle",

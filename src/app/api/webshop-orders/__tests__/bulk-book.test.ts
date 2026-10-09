@@ -1080,9 +1080,38 @@ describe('POST /api/webshop-orders/bulk-book', () => {
       expect(body.data.booked_count).toBe(1)
     })
 
-    it('books when the billing country is unknown (Shopify stores null)', async () => {
+    it('books when the country is unknown (e.g. a Shopify order without a shipping address)', async () => {
       const { body } = await runOne(zeroRateOrder(ORDER_1, null), EXPORT_GOODS, '3105', true)
       expect(body.data.booked_count).toBe(1)
+    })
+
+    it('checks a Shopify row against its destination (shipping) country (crm#1032)', async () => {
+      // Shopify rows carry where the goods go, which is what the goods boxes
+      // follow: shipped to Norway is a ruta 36 export, shipped to Germany is not.
+      const shopify = {
+        platform: 'shopify',
+        store_scope: 'minbutik.myshopify.com',
+        external_id: 'shopify_minbutik.myshopify.com_order_1042',
+      }
+      const toNorway = await runOne(
+        zeroRateOrder(ORDER_1, 'NO', shopify),
+        EXPORT_GOODS,
+        '3105',
+        true,
+      )
+      expect(toNorway.body.data.booked_count).toBe(1)
+
+      reset()
+      const toGermany = await runOne(
+        zeroRateOrder(ORDER_1, 'DE', shopify),
+        EXPORT_GOODS,
+        '3105',
+        false,
+      )
+      expect(toGermany.body.data.results[0].error?.code).toBe(
+        'WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH',
+      )
+      expect(toGermany.body.data.results[0].error?.details?.customer_country).toBe('DE')
     })
 
     it('ignores the rate-0 template when the order has no 0% bucket', async () => {

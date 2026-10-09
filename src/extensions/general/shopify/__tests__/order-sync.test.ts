@@ -32,6 +32,7 @@ import {
   shopifyShopScope,
   syncShopifyOrders,
   resolveWindowStartIso,
+  shippingCountryOf,
 } from '../lib/order-sync'
 import type {
   ShopifyConnection,
@@ -108,7 +109,8 @@ function conn<T>(nodes: T[], hasNextPage = false) {
 
 /**
  * Default order: tax-inclusive Swedish store, 1250 kr gross at 25% VAT
- * (1000 net + 250 moms), one product line covering the whole total.
+ * (1000 net + 250 moms), one product line covering the whole total, shipped
+ * to a Swedish address.
  */
 function makeOrder(overrides: Partial<ShopifyOrder> = {}): ShopifyOrder {
   return {
@@ -123,6 +125,7 @@ function makeOrder(overrides: Partial<ShopifyOrder> = {}): ShopifyOrder {
     taxesIncluded: true,
     totalPriceSet: money('1250.00'),
     taxLines: [taxLine(25, '250.00')],
+    shippingAddress: { countryCodeV2: 'SE' },
     lineItems: conn([lineItem('Produkt A', 2, '1250.00', [taxLine(25, '250.00')])]),
     shippingLines: conn<ShopifyShippingLine>([]),
     refunds: [],
@@ -140,8 +143,13 @@ function makeRefund(overrides: Partial<ShopifyRefund> = {}): ShopifyRefund {
 }
 
 /** One-page result helper; the loop terminates on hasNextPage: false. */
-function page(orders: ShopifyOrder[], hasNextPage = false, endCursor: string | null = null) {
-  return { orders, hasNextPage, endCursor }
+function page(
+  orders: ShopifyOrder[],
+  hasNextPage = false,
+  endCursor: string | null = null,
+  shippingAddressWithheld = false,
+) {
+  return { orders, hasNextPage, endCursor, shippingAddressWithheld }
 }
 
 /** Minimal chainable supabase mock covering the sync's query patterns. */
@@ -411,7 +419,7 @@ describe('mapOrderToWebshopRow', () => {
         customer_company: null,
         customer_email: null,
         customer_orgnr: null,
-        customer_country: null,
+        customer_country: 'SE',
         payment_method: 'Klarna',
         payment_method_title: 'Klarna',
         gateway_reference: null,
@@ -458,6 +466,50 @@ describe('mapOrderToWebshopRow', () => {
     ).toEqual([])
     expect(orderAmountUnparseable(makeOrder({ totalPriceSet: money('nope') }))).toBe(true)
   })
+
+  it('stores a foreign shipping country as the destination (crm#1032)', () => {
+    // An EU distance sale (OSS) and an export outside the EU: the account
+    // choice downstream keys on exactly this column.
+    const [toGermany] = mapOrderToWebshopRow(
+      connection,
+      's',
+      makeOrder({ shippingAddress: { countryCodeV2: 'DE' } }),
+    )
+    expect(toGermany.customer_country).toBe('DE')
+    const [toNorway] = mapOrderToWebshopRow(
+      connection,
+      's',
+      makeOrder({ shippingAddress: { countryCodeV2: 'no' } }),
+    )
+    expect(toNorway.customer_country).toBe('NO')
+  })
+
+  it('keeps the country null for an order without a shipping address', () => {
+    // Digital goods and local pickup ship nowhere; there is no destination
+    // to guess, and the billing country is never used as a stand-in.
+    const [row] = mapOrderToWebshopRow(connection, 's', makeOrder({ shippingAddress: null }))
+    expect(row.customer_country).toBeNull()
+  })
+
+  it('keeps the country null when the run stopped asking for addresses', () => {
+    const { shippingAddress: _omitted, ...withoutAddress } = makeOrder()
+    const [row] = mapOrderToWebshopRow(connection, 's', withoutAddress as ShopifyOrder)
+    expect(row.customer_country).toBeNull()
+  })
+})
+
+describe('shippingCountryOf', () => {
+  it('returns the upper-cased ISO code', () => {
+    expect(shippingCountryOf({ shippingAddress: { countryCodeV2: 'fi' } })).toBe('FI')
+  })
+
+  it('treats a withheld field, the unknown region ZZ and junk as no country', () => {
+    expect(shippingCountryOf({ shippingAddress: { countryCodeV2: null } })).toBeNull()
+    expect(shippingCountryOf({ shippingAddress: { countryCodeV2: 'ZZ' } })).toBeNull()
+    expect(shippingCountryOf({ shippingAddress: { countryCodeV2: 'Sweden' } })).toBeNull()
+    expect(shippingCountryOf({ shippingAddress: null })).toBeNull()
+    expect(shippingCountryOf({})).toBeNull()
+  })
 })
 
 describe('mapRefundToWebshopRow', () => {
@@ -494,7 +546,7 @@ describe('mapRefundToWebshopRow', () => {
         customer_company: null,
         customer_email: null,
         customer_orgnr: null,
-        customer_country: null,
+        customer_country: 'SE',
         payment_method: 'Klarna',
         payment_method_title: 'Klarna',
         gateway_reference: null,
@@ -507,6 +559,19 @@ describe('mapRefundToWebshopRow', () => {
     expect(
       mapRefundToWebshopRow(connection, 's', makeOrder(), makeRefund({ totalRefundedSet: money('0') })),
     ).toEqual([])
+  })
+
+  it("takes its order's destination country (the refund reverses that sale)", () => {
+    const order = makeOrder({ shippingAddress: { countryCodeV2: 'NO' } })
+    const [row] = mapRefundToWebshopRow(connection, 's', order, makeRefund())
+    expect(row.customer_country).toBe('NO')
+    const [noAddress] = mapRefundToWebshopRow(
+      connection,
+      's',
+      makeOrder({ shippingAddress: null }),
+      makeRefund(),
+    )
+    expect(noAddress.customer_country).toBeNull()
   })
 })
 
@@ -577,6 +642,50 @@ describe('syncShopifyOrders', () => {
     expect(secondArgs.after).toBe('cursor-1')
     // The window is fixed for the whole run; only the cursor moves.
     expect(secondArgs.updatedAtMin).toBe(firstArgs.updatedAtMin)
+  })
+
+  it('asks for the destination country on every page by default', async () => {
+    const { client } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce(page([makeOrder()]))
+    const summary = await syncShopifyOrders(client, makeConnection())
+    expect(listOrdersPage.mock.calls[0][1].includeShippingAddress).toBe(true)
+    expect(summary.shippingCountryWithheld).toBeUndefined()
+    expect(upsertedRows()[0].customer_country).toBe('SE')
+  })
+
+  it('keeps syncing with null countries when the store withholds shipping addresses', async () => {
+    const { client, updates } = makeSupabaseMock()
+    // What listOrdersPage reports for Shopify's protected-data refusal: the
+    // page is complete, shippingAddress came back null on every order.
+    const withheld = makeOrder({
+      shippingAddress: null,
+      displayFinancialStatus: 'PARTIALLY_REFUNDED',
+      refunds: [makeRefund()],
+    })
+    const second = makeOrder({
+      legacyResourceId: '1043',
+      name: '#1043',
+      updatedAt: '2026-08-02T08:00:00Z',
+      shippingAddress: undefined,
+    })
+    listOrdersPage
+      .mockResolvedValueOnce(page([withheld], true, 'cursor-1', true))
+      .mockResolvedValueOnce(page([second]))
+
+    const summary = await syncShopifyOrders(client, makeConnection())
+
+    expect(summary.shippingCountryWithheld).toBe(true)
+    expect(summary.revoked).toBeUndefined()
+    expect(summary.fetched).toBe(2)
+    // The refusal is app-level, so the rest of the run stops asking.
+    expect(listOrdersPage.mock.calls[0][1].includeShippingAddress).toBe(true)
+    expect(listOrdersPage.mock.calls[1][1].includeShippingAddress).toBe(false)
+    const rows = [...upsertedRows(0), ...upsertedRows(1)]
+    expect(rows.map((r) => r.row_type)).toEqual(['order', 'refund', 'order'])
+    expect(rows.every((r) => r.customer_country === null)).toBe(true)
+    // Never treated as a connection problem: no revoke, cursor still advances.
+    expect(updates.some((u) => u.values.status === 'revoked')).toBe(false)
+    expect(cursorUpdates(updates).length).toBeGreaterThan(0)
   })
 
   it('re-polls with a 24h overlap from the persisted cursor', async () => {

@@ -32,11 +32,11 @@ const defaultLog = createLogger('shopify/order-sync')
  * unpaid orders for the invoice flow). AUTHORIZED/PENDING orders re-surface
  * via updatedAt once payment captures. Each refund of a paid order is a
  * separate negative row parented to its order. Rows carry the booking
- * underlag the Admin API exposes without touching Shopify's protected
- * customer data program: per-rate VAT, a line-item snapshot, gateway names.
- * Customer fields stay null (deliberate v1 decision): booking works, and
- * "Skapa faktura" starts without a prefilled customer. Nothing here books
- * anything (feed-only doctrine, same as the WooCommerce and Stripe feeds).
+ * underlag the Admin API exposes: per-rate VAT, a line-item snapshot,
+ * gateway names, and the destination (shipping) country. Customer fields
+ * stay null (deliberate v1 decision): booking works, and "Skapa faktura"
+ * starts without a prefilled customer. Nothing here books anything
+ * (feed-only doctrine, same as the WooCommerce and Stripe feeds).
  *
  * The write path is upsertWebshopOrders() (lib/webshop-orders/ingest), which
  * owns FX enrichment, the frozen-row rules for booked orders and the
@@ -122,6 +122,13 @@ export interface ShopifySyncSummary {
   deadlineReached?: boolean
   /** Set when the store reported the credentials revoked (401/403). */
   revoked?: boolean
+  /**
+   * Set when the store withheld shipping addresses from the app (protected
+   * customer data not granted), so this run's rows carry no destination
+   * country. Orders and amounts still synced; the settings panel tells the
+   * merchant which permission to grant.
+   */
+  shippingCountryWithheld?: boolean
 }
 
 /**
@@ -344,6 +351,21 @@ function refundedTotal(order: ShopifyOrder): number {
   return sum
 }
 
+/**
+ * The order's destination country (ISO 3166-1 alpha-2) from its shipping
+ * address: where the goods go decides how the sale is taxed (domestic, EU
+ * distance sale under OSS, export). Null when the order ships nowhere
+ * (digital goods, local pickup) or the store withholds the address. Never
+ * the billing country as a fallback: billing is not the destination, and a
+ * guessed country would steer the account choice wrong. Shopify's ZZ
+ * ("unknown region") is not a country either.
+ */
+export function shippingCountryOf(order: Pick<ShopifyOrder, 'shippingAddress'>): string | null {
+  const code = order.shippingAddress?.countryCodeV2?.trim().toUpperCase()
+  if (!code || code === 'ZZ' || !/^[A-Z]{2}$/.test(code)) return null
+  return code
+}
+
 /** Row status: the financial status lowercased (paid, partially_refunded, …). */
 function orderStatus(order: ShopifyOrder): string {
   return (order.displayFinancialStatus ?? 'paid').toLowerCase()
@@ -381,14 +403,19 @@ export function mapOrderToWebshopRow(
       total_tax: partTax(order.taxLines),
       vat_breakdown: buildVatBreakdown(order),
       line_items: mapLineItems(order),
-      // Deliberately null (v1): customer fields sit behind Shopify's
-      // protected customer data program. The Orders page shows "–" and
-      // "Skapa faktura" starts without a prefilled customer.
+      // Deliberately null (v1): the feed reads no customer identity (names,
+      // emails, street addresses; all protected customer data in Shopify).
+      // The Orders page shows no customer and "Skapa faktura" starts
+      // without a prefilled one.
       customer_name: null,
       customer_company: null,
       customer_email: null,
       customer_orgnr: null,
-      customer_country: null,
+      // The one address fact read: for Shopify this column holds the
+      // SHIPPING (destination) country, not the billing country the
+      // WooCommerce sync stores (crm#1032). Null when the order ships
+      // nowhere or the store withholds addresses from the app.
+      customer_country: shippingCountryOf(order),
       payment_method: order.paymentGatewayNames[0] ?? null,
       payment_method_title: order.paymentGatewayNames.join(', ') || null,
       gateway_reference: null,
@@ -431,7 +458,9 @@ export function mapRefundToWebshopRow(
       customer_company: null,
       customer_email: null,
       customer_orgnr: null,
-      customer_country: null,
+      // A refund reverses its order's sale, so it takes the order's
+      // destination (the Refund object carries no address of its own).
+      customer_country: shippingCountryOf(order),
       payment_method: order.paymentGatewayNames[0] ?? null,
       payment_method_title: order.paymentGatewayNames.join(', ') || null,
       gateway_reference: null,
@@ -545,6 +574,9 @@ export async function syncShopifyOrders(
   let failureFloorMs = Number.POSITIVE_INFINITY
   // True once the whole window was listed to its end (empty page or last page).
   let windowExhausted = false
+  // Once the store withholds shipping addresses it does so for every order
+  // (an app-level grant), so the rest of the run stops asking.
+  let includeShippingAddress = true
 
   try {
     // Token exchange happens up front (the token lives ~24h, far longer than
@@ -562,7 +594,21 @@ export async function syncShopifyOrders(
         break
       }
 
-      const page = await listOrdersPage(session, { updatedAtMin, after })
+      const page = await listOrdersPage(session, {
+        updatedAtMin,
+        after,
+        includeShippingAddress,
+      })
+      if (page.shippingAddressWithheld) {
+        // Not an error: amounts and VAT do not depend on it, and the rows
+        // simply carry no destination country. The panel tells the merchant
+        // which Shopify permission to grant.
+        summary.shippingCountryWithheld = true
+        includeShippingAddress = false
+        log.warn('store withholds shipping addresses; destination country left empty', {
+          connectionId: connection.id,
+        })
+      }
       if (page.orders.length === 0) {
         windowExhausted = true
         break

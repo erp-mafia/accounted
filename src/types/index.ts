@@ -4286,7 +4286,12 @@ export interface WebshopOrder {
   customer_email: string | null
   /** Best effort; must be user-confirmed before use in legal fields. */
   customer_orgnr: string | null
-  /** Billing country, ISO 3166-1 alpha-2; drives the export/EU 0%-sale hint. */
+  /**
+   * Order country, ISO 3166-1 alpha-2; drives the export/EU 0%-sale hint and
+   * the bulk-book rate-0 guard. Per platform: WooCommerce stores the BILLING
+   * country, Shopify the SHIPPING (destination) country (null when the order
+   * ships nowhere or the store withholds addresses).
+   */
   customer_country: string | null
   payment_method: string | null
   payment_method_title: string | null

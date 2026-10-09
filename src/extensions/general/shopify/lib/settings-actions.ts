@@ -53,6 +53,7 @@ export interface ShopifySyncPayload {
     errors?: number
     revoked?: boolean
     deadlineReached?: boolean
+    shippingCountryWithheld?: boolean
   } | null
 }
 
@@ -99,4 +100,17 @@ export function syncSummary(payload: ShopifySyncPayload | null): ShopifySyncOutc
   if (fetched === 0) return { reason: 'empty' }
   if (errors > 0) return { reason: 'errors', values: { fetched, imported, errors } }
   return { reason: 'feed', values: { fetched, imported } }
+}
+
+/**
+ * Whether the run's orders came without a destination country because the
+ * store withholds shipping addresses from the app (the panel then names the
+ * Shopify permission to grant). Null when the run cannot tell (no orders
+ * listed, revoked, unreadable body): the panel keeps what it showed.
+ */
+export function shippingCountryWithheld(payload: ShopifySyncPayload | null): boolean | null {
+  const summary = payload?.transactions
+  if (!summary || summary.revoked === true) return null
+  if (summary.shippingCountryWithheld === true) return true
+  return typeof summary.fetched === 'number' && summary.fetched > 0 ? false : null
 }

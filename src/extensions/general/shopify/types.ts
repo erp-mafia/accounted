@@ -128,6 +128,13 @@ export interface ShopifyOrder {
   totalPriceSet: ShopifyMoneyBag
   /** Per-rate tax charged on the whole order; the vat_breakdown source. */
   taxLines: ShopifyTaxLine[]
+  /**
+   * Destination only: the shipping address's country code, nothing else from
+   * the address. Null when the order ships nowhere (digital goods, local
+   * pickup) or the store withholds addresses from the app (protected
+   * customer data); absent when the run stopped asking after such a refusal.
+   */
+  shippingAddress?: { countryCodeV2: string | null } | null
   /** First page of line items; hasNextPage means the snapshot is incomplete. */
   lineItems: { pageInfo: { hasNextPage: boolean }; nodes: ShopifyLineItem[] }
   shippingLines: { pageInfo: { hasNextPage: boolean }; nodes: ShopifyShippingLine[] }

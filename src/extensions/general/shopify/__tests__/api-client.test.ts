@@ -256,5 +256,106 @@ describe('listOrdersPage', () => {
       after: 'cursor-1',
       query: "updated_at:>='2026-05-01T00:00:00.000Z'",
     })
+    expect(page.shippingAddressWithheld).toBe(false)
+  })
+
+  const OPTIONS = { updatedAtMin: '2026-05-01T00:00:00.000Z', after: null }
+
+  function sentQuery(call: number): string {
+    return JSON.parse((fetchMock.mock.calls[call][1] as RequestInit).body as string).query
+  }
+
+  function ordersData(nodes: unknown[]) {
+    return { orders: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } }
+  }
+
+  it('asks for the destination country only, nothing else from the address', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: ordersData([{ legacyResourceId: '1042', shippingAddress: { countryCodeV2: 'NO' } }]),
+      }),
+    )
+    const page = await listOrdersPage(SESSION, OPTIONS)
+    expect(page.orders[0].shippingAddress).toEqual({ countryCodeV2: 'NO' })
+    expect(sentQuery(0)).toContain('shippingAddress { countryCodeV2 }')
+    expect(sentQuery(0)).not.toMatch(/address1|zip|billingAddress|email|customer/)
+  })
+
+  it('tolerates the documented protected-data refusal: null field plus a field-scoped error', async () => {
+    // Shopify's documented shape for a field the app may not read: HTTP 200,
+    // the field null in data, an errors entry whose path points at it.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: ordersData([
+          { legacyResourceId: '1042', shippingAddress: null },
+          { legacyResourceId: '1043', shippingAddress: null },
+        ]),
+        errors: [
+          {
+            message:
+              'This app is not approved to access the MailingAddress object. See https://partners.shopify.com/1/apps/2/customer_data for more details.',
+            path: ['orders', 'nodes', 0, 'shippingAddress'],
+            extensions: { code: 'ACCESS_DENIED' },
+          },
+          {
+            message: 'This app is not approved to use the countryCodeV2 field.',
+            path: ['orders', 'nodes', 1, 'shippingAddress', 'countryCodeV2'],
+          },
+        ],
+      }),
+    )
+    const page = await listOrdersPage(SESSION, OPTIONS)
+    expect(page.orders).toHaveLength(2)
+    expect(page.shippingAddressWithheld).toBe(true)
+    // Answered in place: no retry, and nothing classified as revoked.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries once without the address when the whole query is refused, so the sync keeps working', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          errors: [{ message: 'Access denied', extensions: { code: 'ACCESS_DENIED' } }],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: ordersData([{ legacyResourceId: '1042' }]) }))
+    const page = await listOrdersPage(SESSION, OPTIONS)
+    expect(page.orders).toHaveLength(1)
+    expect(page.shippingAddressWithheld).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(sentQuery(0)).toContain('shippingAddress')
+    expect(sentQuery(1)).not.toContain('shippingAddress')
+  })
+
+  it('still classifies as revoked when the query is refused without the address too (read_orders missing)', async () => {
+    const denied = () =>
+      jsonResponse({ errors: [{ message: 'Access denied', extensions: { code: 'ACCESS_DENIED' } }] })
+    fetchMock.mockResolvedValueOnce(denied()).mockResolvedValueOnce(denied())
+    const error = await listOrdersPage(SESSION, OPTIONS).catch((e) => e)
+    expect(isRevokedCredentialsError(error)).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('still fails on an error outside the shipping address, even next to a tolerated one', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: ordersData([{ legacyResourceId: '1042', shippingAddress: null }]),
+        errors: [
+          { message: 'withheld', path: ['orders', 'nodes', 0, 'shippingAddress'] },
+          { message: 'Internal error', path: ['orders', 'nodes', 0, 'taxLines'] },
+        ],
+      }),
+    )
+    const error = await listOrdersPage(SESSION, OPTIONS).catch((e) => e)
+    expect(error).toBeInstanceOf(ShopifyApiError)
+    expect((error as ShopifyApiError).message).toContain('Internal error')
+    expect(isRevokedCredentialsError(error)).toBe(false)
+  })
+
+  it('leaves the address out when the caller stopped asking for it', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ data: ordersData([]) }))
+    const page = await listOrdersPage(SESSION, { ...OPTIONS, includeShippingAddress: false })
+    expect(sentQuery(0)).not.toContain('shippingAddress')
+    expect(page.shippingAddressWithheld).toBe(false)
   })
 })

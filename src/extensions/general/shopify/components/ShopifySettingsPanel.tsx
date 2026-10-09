@@ -10,12 +10,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useFormat } from '@/lib/hooks/use-format'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { History, KeyRound, RefreshCw, ShoppingBag, Unlink } from 'lucide-react'
 import {
   shopifyRequest,
+  shippingCountryWithheld as shippingCountryWithheldIn,
   syncSummary,
   SHOPIFY_CONNECT_TIMEOUT_MS,
   SHOPIFY_SYNC_TIMEOUT_MS,
@@ -66,6 +68,9 @@ export default function ShopifySettingsPanel() {
   const [backfillFrom, setBackfillFrom] = useState('')
   const [backfilling, setBackfilling] = useState(false)
   const [togglingTransactionSync, setTogglingTransactionSync] = useState(false)
+  // Learned from the last sync or backfill in this session: the store
+  // withholds shipping addresses, so orders carry no destination country.
+  const [shippingCountryWithheld, setShippingCountryWithheld] = useState(false)
 
   const failureCopy = { timeout: t('action_timeout'), network: t('action_network') }
 
@@ -134,6 +139,8 @@ export default function ShopifySettingsPanel() {
     failedTitle: string,
   ) {
     const summary = syncSummary(payload ?? null)
+    const withheld = shippingCountryWithheldIn(payload ?? null)
+    if (withheld !== null) setShippingCountryWithheld(withheld)
     if (summary.reason === 'revoked') {
       toast({ title: failedTitle, description: t('sync_revoked'), variant: 'destructive' })
     } else if (summary.reason === 'partial') {
@@ -345,6 +352,9 @@ export default function ShopifySettingsPanel() {
                   // (e.g. cash-account currency conflict) must not hide
                   // behind a healthy-looking "Ansluten" badge.
                   <p className="mt-1 text-sm text-destructive">{connection.error_message}</p>
+                )}
+                {isActive && shippingCountryWithheld && (
+                  <AttnLine className="mt-1">{t('shipping_country_withheld')}</AttnLine>
                 )}
               </div>
             </div>

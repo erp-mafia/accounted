@@ -39,6 +39,7 @@ export interface WebshopOrderUpsert {
   customer_company: string | null
   customer_email: string | null
   customer_orgnr: string | null
+  /** Billing country for WooCommerce, shipping (destination) country for Shopify. */
   customer_country: string | null
   payment_method: string | null
   payment_method_title: string | null
