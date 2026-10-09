@@ -16,6 +16,7 @@ Not here (load the sibling skill instead):
 - New customer setup and the customer_type decision tree: \`customer-onboarding\`
 - Credit notes, or a sent invoice that is wrong: \`kreditfaktura-process\`
 - Matching a month of incoming payments against the bank feed: \`bank-reconciliation\`
+- An open invoice from a previous system whose verifikat came in by SIE: \`gnubok_register_booked_invoice\`, never \`gnubok_create_invoice\` (a new number, and the revenue and moms booked a second time)
 
 ## Step 0: Orient before acting
 

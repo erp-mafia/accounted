@@ -4,6 +4,7 @@
 // app/(dashboard)/pending/page.tsx so the vocabulary has exactly one owner.
 
 import type { PendingOperationRejectionCategory } from '@/types'
+import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-invoice-mode'
 
 // Short human label (i18n key in the "pending" namespace) for each staged
 // operation_type. Keep in sync with OPERATION_RISK_TIERS in
@@ -171,7 +172,20 @@ export function humanizeOperationType(operationType: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1)
 }
 
-export function operationLabel(operationType: string, t: (key: string) => string): string {
+/**
+ * The label of a staged operation. A create_invoice staged by
+ * gnubok_register_booked_invoice registers an invoice that is already booked
+ * instead of creating a draft (crm#1094), so with its params it gets its own
+ * label rather than "Ny faktura".
+ */
+export function operationLabel(
+  operationType: string,
+  t: (key: string) => string,
+  params?: Record<string, unknown> | null,
+): string {
+  if (operationType === 'create_invoice' && isRegisterBookedInvoiceParams(params)) {
+    return t('type_register_booked_invoice')
+  }
   const labelKey = OPERATION_LABEL_KEYS[operationType]
   return labelKey ? t(labelKey) : humanizeOperationType(operationType)
 }
@@ -279,16 +293,49 @@ export const singleActionWarnings: Record<string, string> = {
 
 /**
  * The consequence sentence the approver consents to. Keyed on the operation
- * type; the one type whose outcome depends on its params (convert_invoice
- * with target 'order' creates a draft kundorder, no F-number, nothing
- * booked) reads the params so the dialog never promises a faktura that the
- * approval will not create.
+ * type; the types whose outcome depends on their params read them, so the
+ * dialog never promises what the approval will not do: convert_invoice with
+ * target 'order' creates a draft kundorder (no F-number, nothing booked), and
+ * a create_invoice staged by gnubok_register_booked_invoice registers an
+ * invoice that is already booked instead of creating a draft (crm#1094).
  */
 export function singleActionWarning(operationType: string, params?: Record<string, unknown> | null): string {
   if (operationType === 'convert_invoice' && params?.target === 'order') {
     return 'Genom att klicka godkänn så skapas en kundorder (utkast, OR-nummer) från proforman eller offerten. Ingen faktura skapas och inget bokförs; fakturan skapas senare från kundordern.'
   }
+  if (operationType === 'create_invoice' && isRegisterBookedInvoiceParams(params)) {
+    return 'Genom att klicka godkänn så registreras fakturan i kundreskontran med sitt eget fakturanummer och kopplas till verifikationen där den redan är bokförd. Ingen verifikation bokförs och inget skickas till kunden. Registreringen kan inte ångras.'
+  }
   return singleActionWarnings[operationType] ?? ''
+}
+
+/**
+ * The consent sentence a pending Granskning row shows before any click. High
+ * risk shows it (its approval opens a dialog with it as well). So does a
+ * registration of an already-booked invoice (crm#1094): it cannot be undone,
+ * but it keeps create_invoice's 'medium' tier so a whole kundreskontra can be
+ * approved at once (risk-tiers.ts), and such an approval opens no dialog.
+ */
+export function rowConsentSentence(op: {
+  operation_type: string
+  status: string
+  risk_level?: string | null
+  params?: Record<string, unknown> | null
+}): string {
+  if (op.status !== 'pending') return ''
+  const registration = op.operation_type === 'create_invoice' && isRegisterBookedInvoiceParams(op.params)
+  return op.risk_level === 'high' || registration ? singleActionWarning(op.operation_type, op.params) : ''
+}
+
+/**
+ * The bulk confirmation's line for registrations of already-booked invoices
+ * (crm#1094): with the row's sentence, what tells a bulk approver that the
+ * registrations cannot be undone.
+ */
+export function registerBookedInvoiceBulkLine(count: number): string {
+  return count === 1
+    ? 'En redan bokförd faktura registreras i kundreskontran (inget bokförs, kan inte ångras).'
+    : `${count} redan bokförda fakturor registreras i kundreskontran (inget bokförs, kan inte ångras).`
 }
 
 // Structured rejection categories. One canonical list: /pending's reject
@@ -335,7 +382,10 @@ export function complianceWarningOf(op: {
   preview_data?: Record<string, unknown> | null
 }): ComplianceWarning | null {
   const data = op.preview_data ?? {}
-  if (VAT_WARNING_OPERATION_TYPES.has(op.operation_type)) {
+  // A registration of an already-booked invoice (crm#1094) carries no VAT
+  // explanation: its warnings are Swedish notes about the verifikat and the
+  // reminders, read like any other compliance_warning.
+  if (VAT_WARNING_OPERATION_TYPES.has(op.operation_type) && !isRegisterBookedInvoiceParams(data)) {
     const texts = Array.isArray(data.vat_warnings)
       ? data.vat_warnings.flatMap((warning: unknown) => {
           const text =

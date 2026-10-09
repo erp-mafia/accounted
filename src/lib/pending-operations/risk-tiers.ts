@@ -185,7 +185,14 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // deleting the supplier_invoice_payments row and reverting status; no journal
   // entry is created or modified.
   link_supplier_invoice_voucher: 'medium',
-  create_invoice: 'medium', // creates as draft; sending is a separate op
+  // Creates as draft; sending is a separate op. The same type carries
+  // gnubok_register_booked_invoice (params.mode 'register_booked', crm#1094),
+  // which links an already-booked invoice to its verifikat and cannot be
+  // undone. It stays 'medium' on purpose: a kundreskontra of many open
+  // invoices is approved in one bulk approval, and the MCP approve commits it
+  // without confirmed=true. /pending says "kan inte ångras" on the row and in
+  // the bulk line instead (rowConsentSentence, registerBookedInvoiceBulkLine).
+  create_invoice: 'medium',
   // Rewrites a DRAFT in place (header + full item replace). Same tier as
   // create_invoice: the target has no verifikat yet (isEditableInvoiceDraft
   // is re-checked at commit), so the edit is fully reversible by editing again.

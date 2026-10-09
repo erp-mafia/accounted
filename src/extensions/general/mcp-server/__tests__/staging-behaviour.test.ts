@@ -869,6 +869,18 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     args: { item_type: 'net_deduction_union', description: 'Fackavgift', amount: -350, valid_from: '2026-01-01' },
   },
   gnubok_update_employee_recurring_line: { args: { description: 'Fackavgift Unionen' } },
+  // An SIE-imported kundfaktura verifikat (Dr 1510 100) registered as an
+  // unpaid invoice: the number and the verifikat are unclaimed.
+  gnubok_register_booked_invoice: {
+    args: { invoice_number: '1023', total: 100 },
+    rows: {
+      customers: { name: 'Kunden AB', email: null },
+      company_settings: { invoice_prefix: 'F', next_invoice_number: 1, send_invoice_reminders: true },
+      journal_entries: { status: 'posted', entry_date: '2026-01-15', description: 'Kundfaktura 1023', voucher_series: 'B', voucher_number: 1 },
+      journal_entry_lines: { account_number: '1510', debit_amount: 100, credit_amount: 0, currency: 'SEK', line_description: null },
+    },
+    empty: ['invoices'],
+  },
 }
 
 describe('a tool that declares the staged envelope only stages', () => {

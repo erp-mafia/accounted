@@ -452,6 +452,11 @@ import {
 } from '@/lib/invoices/already-explained-guard'
 import { findCashMethodUnbookedAllocations } from '@/lib/invoices/batch-cash-method-guard'
 import {
+  RegisterBookedInvoiceInputSchema,
+  planBookedInvoiceRegistration,
+  toRegisterBookedInvoiceParams,
+} from '@/lib/invoices/register-booked-invoice'
+import {
   planTransactionInvoiceMatch,
   type MatchInvoiceAmounts,
   type MatchPaymentPlanResult,
@@ -9093,7 +9098,7 @@ export const tools: McpTool[] = [
         ...(offset === 0 ? { invoice_register_coverage: coverage } : {}),
         ...(coverage.has_pre_register_invoices && coverage.covers_from
           ? {
-              coverage_note: `Äldsta fakturan i fakturaregistret är daterad ${coverage.covers_from}. Det finns bokförda verifikat med kundfordringar (1510/1513) före det datumet: äldre kundfakturor kan ligga som verifikat utanför registret (t.ex. efter en migrering) och syns inte i detta svar. Sök i journalen (gnubok_query_journal) för perioden före ${coverage.covers_from}.`,
+              coverage_note: `Fakturaregistret är fullständigt först från ${coverage.covers_from}. Det finns bokförda verifikat med kundfordringar (1510/1513) före det datumet: kundfakturor därifrån kan ligga som verifikat utanför registret (t.ex. efter en migrering, eller när bara de obetalda fakturorna registrerades från det tidigare systemet) och syns inte i detta svar. Sök i journalen (gnubok_query_journal) för perioden före ${coverage.covers_from}.`,
             }
           : {}),
       }
@@ -14387,6 +14392,102 @@ export const tools: McpTool[] = [
         {
           description: 'After approval the invoice transitions to paid (or partially_paid). No new verifikat is created: the existing voucher is the payment posting.',
           tool: 'gnubok_get_ar_ledger',
+        },
+      )
+    },
+  },
+
+  {
+    // crm#1094: the kundreskontra of a company whose books came in by SIE.
+    // Rules in lib/invoices/register-booked-invoice.ts; staged under the
+    // create_invoice pending type, told apart by params.mode.
+    name: 'gnubok_register_booked_invoice',
+    keywords: ['reskontra', 'kundreskontra', 'importera reskontra', 'öppna poster', 'bokförd faktura', 'befintlig faktura', 'historisk faktura', 'systembyte', 'sie', 'kundfaktura', 'open items'],
+    title: 'Register Booked Invoice (Kundreskontra)',
+    description: 'Stage registering an already-booked customer invoice (e.g. from SIE) in the kundreskontra: own number, linked to its verifikat, nothing posted. SEK, faktureringsmetoden only; cannot be undone. Approval counts the verifikat as backed: attach the invoice PDF in the same session.',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        customer_id: { type: 'string', description: 'Customer UUID (gnubok_list_customers)' },
+        invoice_number: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 64,
+          description: 'The number printed on the invoice, kept as is. A purely numeric old number may first need next_invoice_number set past the old series (gnubok_update_company_settings): ask the user for its last number before a batch.',
+        },
+        invoice_date: { type: 'string', description: 'YYYY-MM-DD' },
+        due_date: { type: 'string', description: 'YYYY-MM-DD' },
+        journal_entry_id: {
+          type: 'string',
+          description: 'The posted verifikat that booked this invoice: it debits 151x by the total. Find it with gnubok_query_journal (accounts ["1510"], text = the invoice number). Never the opening balance: an invoice only in #IB needs the SIE of its own year imported first.',
+        },
+        total: { type: 'number', description: 'Invoice total incl. VAT, SEK' },
+        remaining_amount: { type: 'number', description: 'Kvarvarande saldo per the reskontra, SEK (default: total). Below the total it stands for the old payments, dated balance_as_of: never also link their verifikat.' },
+        balance_as_of: { type: 'string', description: 'YYYY-MM-DD: the reskontra\'s date, which remaining_amount is stated as of. Required when remaining_amount is below the total.' },
+        currency: { type: 'string', description: 'The invoice\'s currency per the reskontra (ISO 4217, default SEK). Only SEK registers: skip other currencies.' },
+        ...STAGING_ARGS_PROPERTIES,
+      },
+      required: ['customer_id', 'invoice_number', 'invoice_date', 'due_date', 'journal_entry_id', 'total'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: ANNOTATIONS_STAGED_WRITE,
+    async execute(args, companyId, userId, supabase, actor) {
+      const { dry_run: dryRun, idempotency_key: idempotencyKey, ...fields } = args
+      const parsed = RegisterBookedInvoiceInputSchema.safeParse(fields)
+      if (!parsed.success) throw fieldValidationError('Invalid invoice registration', zodFieldIssues(parsed.error, fields))
+      const params = toRegisterBookedInvoiceParams(parsed.data)
+
+      const planned = await planBookedInvoiceRegistration(supabase, companyId, params)
+      if (!planned.ok) throw codedRefusal(planned.code, planned.message)
+      const { plan } = planned
+      const remainingNote = plan.status === 'partially_paid' ? `, kvar ${plan.remainingAmount} per ${plan.paidAsOf}` : ''
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'create_invoice',
+        `Registrera bokförd faktura ${params.invoice_number}: ${plan.customerName} ${plan.total} SEK${remainingNote} (verifikat ${plan.voucher.label})`,
+        params,
+        {
+          mode: params.mode,
+          customer_name: plan.customerName,
+          invoice_number: params.invoice_number,
+          invoice_date: params.invoice_date,
+          due_date: params.due_date,
+          currency: 'SEK',
+          subtotal: plan.subtotal,
+          vat_amount: plan.vatAmount,
+          total: plan.total,
+          vat_rate: plan.vatRate,
+          vat_treatment: plan.vatTreatment,
+          status: plan.status,
+          paid_amount: plan.paidAmount,
+          remaining_amount: plan.remainingAmount,
+          ...(plan.paidAsOf ? { balance_as_of: plan.paidAsOf } : {}),
+          journal_entry_id: plan.voucher.journalEntryId,
+          voucher_label: plan.voucher.label,
+          voucher_date: plan.voucher.entryDate,
+          voucher_description: plan.voucher.description,
+          // No verifikat is written, so period_status is informational only:
+          // a locked or closed period does not block the registration.
+          writes_verifikat: false,
+          period_lock_applies: false,
+          ...(plan.warnings.length > 0 ? { registration_warnings: plan.warnings } : {}),
+        },
+        actor,
+        {
+          description: 'Once approved the invoice is in the kundreskontra under its own number, linked to its verifikat; nothing is posted, and the registration cannot be undone, so the user checks customer, amounts and verifikat before approving. Approval also makes that verifikat count as backed by the invoice: it leaves the missing-underlag lists (gnubok_list_verifikat_without_documents, the dashboard badge, gnubok_vat_close_check) although no PDF is in Accounted. So attach the invoice PDF to that verifikat in this same session, because nothing will flag it later; it is opened from the invoice through its verifikat. A balance below the total already counts the old payments: do not also link their verifikat. When every open invoice is in, check the kundreskontra against 1510 with gnubok_get_reconciliation_status (account_key "manual:1510").',
+          tool: 'gnubok_link_document_to_voucher',
+          args: { journal_entry_id: params.journal_entry_id },
+        },
+        {
+          dryRun: dryRun === true,
+          idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : undefined,
+          // Swedish: for this mode the approval card shows the note as written.
+          ...(plan.warnings.length > 0 ? { complianceNote: plan.warnings.map((w) => w.message_sv).join(' ') } : {}),
         },
       )
     },

@@ -965,8 +965,9 @@ export default function InvoicesPage() {
       </div>
 
       {/* Coverage boundary (convention 6: one page-domain attn line). Shown
-          only when posted AR verifikat predate the register's first invoice:
-          the list is then silently incomplete for that period. */}
+          only when posted AR verifikat predate covers_from, the date from
+          which the register is complete: the list is then silently
+          incomplete for that period. */}
       {registerCoverage.has_pre_register_invoices && registerCoverage.covers_from && (
         <p className="attn text-[12.5px]">
           {t('coverage_notice', { date: formatDate(registerCoverage.covers_from) })}

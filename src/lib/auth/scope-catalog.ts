@@ -261,6 +261,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_send_invoice:                    'invoices:write',
   gnubok_mark_invoice_as_paid:            'invoices:write',
   gnubok_mark_invoice_as_sent:            'invoices:write',
+  // An invoice already booked elsewhere (SIE) into the kundreskontra: stages, books nothing
+  gnubok_register_booked_invoice:         'invoices:write',
   // Kundorder (sales orders): the pre-invoice document. Reads and staged
   // writes ride the invoice scopes (an order exists only to become one).
   gnubok_list_sales_orders:               'invoices:read',

@@ -9,7 +9,15 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import path from 'path'
-import { complianceWarningOf, singleActionWarning, singleActionWarnings } from '../vocabulary'
+import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import {
+  complianceWarningOf,
+  operationLabel,
+  registerBookedInvoiceBulkLine,
+  rowConsentSentence,
+  singleActionWarning,
+  singleActionWarnings,
+} from '../vocabulary'
 
 describe('singleActionWarning', () => {
   it('promises a faktura with F-number for convert_invoice without a target (and with target invoice)', () => {
@@ -28,6 +36,67 @@ describe('singleActionWarning', () => {
   it('ignores params for every other operation type', () => {
     expect(singleActionWarning('credit_invoice', { target: 'order' })).toBe(singleActionWarnings.credit_invoice)
     expect(singleActionWarning('unknown_type', { target: 'order' })).toBe('')
+  })
+
+  it('describes a registration of an already-booked invoice, not a draft, for create_invoice in register mode (crm#1094)', () => {
+    const sentence = singleActionWarning('create_invoice', { mode: 'register_booked', invoice_number: '1023' })
+    expect(sentence).toContain('kundreskontran')
+    expect(sentence).toContain('där den redan är bokförd')
+    expect(sentence).toContain('Ingen verifikation bokförs')
+    expect(sentence).toContain('Registreringen kan inte ångras')
+    expect(sentence).not.toContain('utkast')
+    expect(singleActionWarning('create_invoice', { customer_id: 'c-1' })).toBe(singleActionWarnings.create_invoice)
+  })
+})
+
+/**
+ * A registration of an already-booked invoice cannot be undone but keeps
+ * create_invoice's 'medium' tier, so it is bulk-approvable and approved from
+ * the row without a dialog (crm#1094): the row and the bulk line are where
+ * the approver reads "kan inte ångras".
+ */
+describe('rowConsentSentence and the bulk line', () => {
+  const registration = { mode: 'register_booked', invoice_number: '1023' }
+
+  it('keeps a registration bulk-approvable: create_invoice\'s medium tier, not high', () => {
+    expect(getRiskLevel('create_invoice', registration)).toBe('medium')
+  })
+
+  it('shows the registration\'s sentence on its pending row although it is medium risk', () => {
+    const sentence = rowConsentSentence({ operation_type: 'create_invoice', status: 'pending', risk_level: 'medium', params: registration })
+    expect(sentence).toBe(singleActionWarning('create_invoice', registration))
+    expect(sentence).toContain('Registreringen kan inte ångras')
+  })
+
+  it('keeps the rest of the rule: high risk shows its sentence, an ordinary medium draft and a resolved row do not', () => {
+    expect(rowConsentSentence({ operation_type: 'close_period', status: 'pending', risk_level: 'high', params: {} })).toBe(singleActionWarnings.close_period)
+    expect(rowConsentSentence({ operation_type: 'create_invoice', status: 'pending', risk_level: 'medium', params: { customer_id: 'c-1' } })).toBe('')
+    expect(rowConsentSentence({ operation_type: 'create_invoice', status: 'committed', risk_level: 'medium', params: registration })).toBe('')
+  })
+
+  it('says in the bulk confirmation that registrations cannot be undone', () => {
+    expect(registerBookedInvoiceBulkLine(1)).toBe('En redan bokförd faktura registreras i kundreskontran (inget bokförs, kan inte ångras).')
+    expect(registerBookedInvoiceBulkLine(12)).toBe('12 redan bokförda fakturor registreras i kundreskontran (inget bokförs, kan inte ångras).')
+  })
+})
+
+describe('operationLabel', () => {
+  const t = (key: string) => `t:${key}`
+
+  it('labels a create_invoice in register mode as a registration, not a new invoice (crm#1094)', () => {
+    expect(operationLabel('create_invoice', t, { mode: 'register_booked' })).toBe('t:type_register_booked_invoice')
+    expect(operationLabel('create_invoice', t, { customer_id: 'c-1' })).toBe('t:type_create_invoice')
+    expect(operationLabel('create_invoice', t)).toBe('t:type_create_invoice')
+    expect(operationLabel('credit_invoice', t, { mode: 'register_booked' })).toBe('t:type_credit_invoice')
+  })
+
+  it('has the registration label in both languages', () => {
+    for (const locale of ['sv', 'en']) {
+      const messages = JSON.parse(fs.readFileSync(path.resolve(__dirname, `../../../messages/${locale}.json`), 'utf8')) as {
+        pending: Record<string, unknown>
+      }
+      expect(messages.pending.type_register_booked_invoice, locale).toBeTruthy()
+    }
   })
 })
 
@@ -90,6 +159,13 @@ describe('complianceWarningOf', () => {
         preview_data: { compliance_warning: 'EU_CUSTOMER_SWEDISH_VAT: Swedish VAT on an EU customer.' },
       }),
     ).toBeNull()
+  })
+
+  it('reads a registration\'s Swedish note as written: it has no VAT explanation (crm#1094)', () => {
+    const note = 'Verifikation B45 nämner inte fakturanummer 1023: kontrollera att det är fakturans verifikation.'
+    expect(
+      complianceWarningOf({ operation_type: 'create_invoice', preview_data: { mode: 'register_booked', compliance_warning: note } }),
+    ).toEqual({ kind: 'note', text: note })
   })
 })
 

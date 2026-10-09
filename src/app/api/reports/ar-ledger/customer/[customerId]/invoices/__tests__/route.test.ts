@@ -27,11 +27,16 @@ interface QueryResult {
 function buildSupabase(
   customer: { id: string; name: string } | null,
   invoicesResult: QueryResult,
-  entriesResult: QueryResult
+  entriesResult: QueryResult,
+  /** The second journal_entries read: the verifikat invoices are linked to. */
+  linkedEntriesResult?: QueryResult
 ) {
   const invoicesIn = vi.fn().mockReturnThis()
+  const entriesIn = vi.fn().mockReturnThis()
+  let entryReads = 0
   return {
     invoicesIn,
+    entriesIn,
     from: vi.fn().mockImplementation((table: string) => {
       if (table === 'customers') {
         return {
@@ -51,11 +56,13 @@ function buildSupabase(
         }
       }
       // journal_entries
+      entryReads += 1
+      const result = entryReads > 1 && linkedEntriesResult ? linkedEntriesResult : entriesResult
       return {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
-        in: vi.fn().mockReturnThis(),
-        then: (resolve: (v: QueryResult) => void) => resolve(entriesResult),
+        in: entriesIn,
+        then: (resolve: (v: QueryResult) => void) => resolve(result),
       }
     }),
   }
@@ -201,6 +208,47 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
       outstanding: 625,
       outstanding_sek: 625,
       debit: 625,
+    })
+  })
+
+  it('shows the imported verifikat an invoice registered from the books is linked to (crm#1094)', async () => {
+    const invoices = [
+      {
+        id: 'inv-registered',
+        invoice_number: '1023',
+        invoice_date: '2026-03-02',
+        due_date: '2026-04-01',
+        total: 12500,
+        paid_amount: 0,
+        currency: 'SEK',
+        exchange_rate: null,
+        remaining_amount: 12500,
+        notes: null,
+        status: 'sent',
+        journal_entry_id: 'je-sie',
+      },
+    ]
+    const supabase = buildSupabase(
+      { id: 'cust-1', name: 'Kunden AB' },
+      { data: invoices, error: null },
+      // No invoice_created entry: the invoice was booked by the SIE import.
+      { data: [], error: null },
+      { data: [{ id: 'je-sie', voucher_number: 45, voucher_series: 'B', description: 'Kundfaktura 1023' }], error: null }
+    )
+    authWith(supabase)
+    const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
+    const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
+    expect(res.status).toBe(200)
+
+    expect(supabase.entriesIn).toHaveBeenCalledWith('id', ['je-sie'])
+    const body = (await res.json()) as { data: { lines: Array<Record<string, unknown>> } }
+    expect(body.data.lines[0]).toMatchObject({
+      invoice_id: 'inv-registered',
+      journal_entry_id: 'je-sie',
+      voucher_series: 'B',
+      voucher_number: 45,
+      description: 'Kundfaktura 1023',
+      outstanding: 12500,
     })
   })
 

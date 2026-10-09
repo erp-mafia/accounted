@@ -19,6 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS, VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
 import { DEDUCTION_TYPE_LABELS, isDeductionType } from '@/lib/invoices/rot-rut-rules'
+import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-invoice-mode'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
 import { LinkDocumentsPreview } from './LinkDocumentsPreview'
@@ -320,6 +321,58 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
         <span className="tabular-nums text-right">{money(data.vat_amount, (data.currency as string) || 'SEK')}</span>
         <span className="font-medium">Totalt</span>
         <span className="tabular-nums font-medium text-right">{money(data.total, (data.currency as string) || 'SEK')}</span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A create_invoice staged by gnubok_register_booked_invoice (crm#1094):
+ * nothing is posted and there are no draft lines, so what the approver checks
+ * is which invoice it is, the verifikat it is tied to and what is left to pay.
+ */
+function RegisterBookedInvoicePreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('pending')
+  const currency = (data.currency as string) || 'SEK'
+  const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value : '-')
+  const date = (value: unknown) => (typeof value === 'string' && value ? formatDate(value) : '-')
+  const voucher = [text(data.voucher_label), typeof data.voucher_date === 'string' && data.voucher_date ? formatDate(data.voucher_date) : null]
+    .filter(Boolean)
+    .join(', ')
+
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        <span className="text-muted-foreground">{t('preview_field.customer_name')}</span>
+        <span className="min-w-0 break-words">{text(data.customer_name)}</span>
+        <span className="text-muted-foreground">{t('preview_field.invoice_number')}</span>
+        <span className="font-mono tabular-nums">{text(data.invoice_number)}</span>
+        <span className="text-muted-foreground">{t('preview_field.invoice_date')}</span>
+        <span className="tabular-nums">{date(data.invoice_date)}</span>
+        <span className="text-muted-foreground">{t('preview_field.due_date')}</span>
+        <span className="tabular-nums">{date(data.due_date)}</span>
+        <span className="text-muted-foreground">{t('preview_field.voucher_label')}</span>
+        <span className="tabular-nums">{voucher}</span>
+        {typeof data.voucher_description === 'string' && data.voucher_description.trim() && (
+          <>
+            <span className="text-muted-foreground">{t('preview_field.voucher_description')}</span>
+            <span className="min-w-0 break-words">{data.voucher_description}</span>
+          </>
+        )}
+      </div>
+      <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
+        <span className="text-muted-foreground">{t('preview_field.vat_amount')}</span>
+        <span className="tabular-nums text-right">{money(data.vat_amount, currency)}</span>
+        <span className="text-muted-foreground">{t('preview_field.total')}</span>
+        <span className="tabular-nums text-right">{money(data.total, currency)}</span>
+        <span className="font-medium">{t('preview_field.invoice_remaining')}</span>
+        <span className="tabular-nums font-medium text-right">{money(data.remaining_amount, currency)}</span>
+        {typeof data.balance_as_of === 'string' && data.balance_as_of && (
+          <>
+            <span className="text-muted-foreground">{t('preview_field.balance_as_of')}</span>
+            <span className="tabular-nums text-right">{formatDate(data.balance_as_of)}</span>
+          </>
+        )}
       </div>
     </div>
   )
@@ -1035,7 +1088,9 @@ export function OperationPreview({ op, detail = false }: { op: OperationPreviewI
       case 'create_customer':
         return <CustomerPreview data={op.preview_data} />
       case 'create_invoice':
-        return <InvoicePreview data={op.preview_data} />
+        return isRegisterBookedInvoiceParams(op.preview_data)
+          ? <RegisterBookedInvoicePreview data={op.preview_data} />
+          : <InvoicePreview data={op.preview_data} />
       case 'update_invoice':
         return <UpdateInvoicePreview data={op.preview_data} />
       case 'create_transaction':

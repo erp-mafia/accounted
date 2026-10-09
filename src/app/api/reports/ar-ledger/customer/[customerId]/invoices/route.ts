@@ -11,6 +11,9 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  * Returns the invoices that contribute to a customer's outstanding balance.
  * Each row exposes the registration journal entry (if any) via
  * `journal_entry_id`, so the UI can link directly to `/bookkeeping/[id]`.
+ * That is the invoice engine's own entry, or else the verifikat the invoice
+ * is linked to (invoices.journal_entry_id): an invoice migrated or registered
+ * from the books was booked by an imported verifikat (crm#1094).
  *
  * If an invoice has no posted registration entry yet (still draft), the
  * `journal_entry_id` is null and the UI must fall back to `/invoices/[id]`.
@@ -50,7 +53,8 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
       exchange_rate,
       remaining_amount,
       notes,
-      status
+      status,
+      journal_entry_id
     `)
     .eq('company_id', companyId)
     .eq('customer_id', customerId)
@@ -88,6 +92,31 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
 
     for (const e of entries || []) {
       entryMap.set(e.source_id, {
+        id: e.id,
+        voucher_number: e.voucher_number,
+        voucher_series: e.voucher_series || 'A',
+        description: e.description,
+      })
+    }
+  }
+
+  // An invoice booked outside the invoice engine (an imported verifikat,
+  // linked by the provider migration or a registration) has no
+  // invoice_created entry: resolve the verifikat it is linked to instead.
+  const linked = invoices.filter((inv) => !entryMap.has(inv.id) && typeof inv.journal_entry_id === 'string')
+  if (linked.length > 0) {
+    const { data: linkedEntries } = await supabase
+      .from('journal_entries')
+      .select('id, voucher_number, voucher_series, description')
+      .eq('company_id', companyId)
+      .in('id', [...new Set(linked.map((inv) => inv.journal_entry_id as string))])
+      .in('status', ['posted', 'reversed'])
+
+    const byId = new Map((linkedEntries || []).map((e) => [e.id as string, e] as const))
+    for (const inv of linked) {
+      const e = byId.get(inv.journal_entry_id as string)
+      if (!e) continue
+      entryMap.set(inv.id, {
         id: e.id,
         voucher_number: e.voucher_number,
         voucher_series: e.voucher_series || 'A',

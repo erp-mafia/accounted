@@ -1,11 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Coverage of the invoice register (the `invoices` table) relative to the
- * company's bookkeeping. The register only holds invoices created in
- * Accounted: a company migrated mid-year (SIE import) or backfilled through
- * manual/API verifikat has real customer invoices that exist ONLY as journal
- * entries. Every surface that answers "which invoices do we have" from the
+ * company's bookkeeping. The register holds invoices issued in Accounted and
+ * invoices registered from the books: a company migrated mid-year (SIE import)
+ * or backfilled through manual/API verifikat can still have customer invoices
+ * that exist ONLY as journal entries. Every surface that answers "which invoices do we have" from the
  * register alone looks complete while silently omitting that period; this
  * helper computes the disclosure those surfaces show.
  *
@@ -35,9 +36,12 @@ export interface InvoiceRegisterCoverage {
    * where register-backed answers start being complete. Drafts, proformas
    * and delivery notes are excluded: a backdated one would move the boundary
    * and suppress the disclosure for exactly the period it exists to cover.
-   * Null when the register is empty (the empty state already routes the
-   * user to migration) OR when the lookup failed: null always means
-   * "unknown", never "complete".
+   * So are invoices registered from the books (isRegisteredFromBooks): the
+   * open items of an older reskontra, not the start of a complete history;
+   * a register holding only those is complete from no date yet, so the
+   * boundary is today. Null when the register is empty (the empty state
+   * already routes the user to migration) OR when the lookup failed: null
+   * always means "unknown", never "complete".
    */
   covers_from: string | null
   /**
@@ -108,25 +112,90 @@ async function probePreRegisterArDebits(
   return data != null
 }
 
-export async function fetchInvoiceRegisterCoverage(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<InvoiceRegisterCoverage> {
-  const { data: firstInvoice, error: firstError } = await supabase
+/** The real, non-draft invoices of the register, selecting `columns`. */
+function registerInvoices(supabase: SupabaseClient, companyId: string, columns: string) {
+  return supabase
     .from('invoices')
-    .select('invoice_date')
+    .select(columns)
     .eq('company_id', companyId)
     .neq('status', 'draft')
     // Proformas and delivery notes are not register invoices (no AR posting);
     // an early one would move the boundary without covering anything.
     .eq('document_type', 'invoice')
+}
+
+interface FirstInvoiceRow {
+  invoice_date?: string | null
+  journal_entry_id?: string | null
+  invoice_items?: unknown[] | null
+}
+
+/**
+ * An invoice registered from the books (gnubok_register_booked_invoice,
+ * crm#1094): linked to the verifikat that booked it and written without
+ * lines (register-booked-invoice.ts never writes any). Invoices issued in
+ * Accounted always have lines; one the provider migration linked but could
+ * not give lines reads the same way, which only widens the disclosure. A row
+ * that did not report its lines is not judged.
+ */
+function isRegisteredFromBooks(row: FirstInvoiceRow): boolean {
+  return row.journal_entry_id != null && Array.isArray(row.invoice_items) && row.invoice_items.length === 0
+}
+
+/**
+ * The earliest invoice_date among invoices NOT registered from the books:
+ * unlinked (kontantmetoden, deferred booking, an unlinked migrated invoice)
+ * or with lines. Null when there is none; undefined when a lookup failed.
+ */
+async function earliestCompleteInvoiceDate(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<string | null | undefined> {
+  const [unlinked, withLines] = await Promise.all([
+    registerInvoices(supabase, companyId, 'invoice_date')
+      .is('journal_entry_id', null)
+      .order('invoice_date', { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+    registerInvoices(supabase, companyId, 'invoice_date, invoice_items!inner(id)')
+      .order('invoice_date', { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  ])
+  if (unlinked.error || withLines.error) return undefined
+  const dates = [unlinked.data, withLines.data]
+    .map((row) => (row as { invoice_date?: string | null } | null)?.invoice_date)
+    .filter((date): date is string => typeof date === 'string' && date !== '')
+  return dates.length > 0 ? dates.sort()[0] : null
+}
+
+export async function fetchInvoiceRegisterCoverage(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: { today?: string } = {},
+): Promise<InvoiceRegisterCoverage> {
+  const { data: firstInvoice, error: firstError } = await registerInvoices(
+    supabase,
+    companyId,
+    'invoice_date, journal_entry_id, invoice_items(id)',
+  )
     .order('invoice_date', { ascending: true })
     .limit(1)
     .maybeSingle()
   if (firstError) return NO_INVOICE_REGISTER_COVERAGE
 
-  const coversFrom = (firstInvoice as { invoice_date?: string } | null)?.invoice_date ?? null
-  if (!coversFrom) return NO_INVOICE_REGISTER_COVERAGE
+  const first = firstInvoice as FirstInvoiceRow | null
+  let coversFrom = first?.invoice_date ?? null
+  if (!first || !coversFrom) return NO_INVOICE_REGISTER_COVERAGE
+
+  // The earliest invoice is an open item registered from an older
+  // reskontra: completeness starts at the first invoice the register holds
+  // its whole history for, or nowhere yet.
+  if (isRegisteredFromBooks(first)) {
+    const complete = await earliestCompleteInvoiceDate(supabase, companyId)
+    if (complete === undefined) return NO_INVOICE_REGISTER_COVERAGE
+    coversFrom = complete ?? options.today ?? todayIsoStockholm()
+  }
 
   const hasPreRegister = await probePreRegisterArDebits(supabase, companyId, coversFrom)
   // Probe failure means UNKNOWN: never report a confident "complete".

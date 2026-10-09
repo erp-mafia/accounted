@@ -132,6 +132,8 @@ import {
 } from '@/lib/bokslut/assets/asset-api'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher, type LinkInvoiceToVoucherResult } from '@/lib/invoices/voucher-matching'
+import { RegisterBookedInvoiceParamsSchema, registerBookedInvoice } from '@/lib/invoices/register-booked-invoice'
+import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-invoice-mode'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { planTransactionInvoiceMatch } from '@/lib/invoices/match-payment-plan'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
@@ -2205,6 +2207,49 @@ async function commitCreateInvoice(
       // Why the treatment is what it is (#2749, #2558): echoed so an agent
       // that auto-approved still sees what preview.vat_warnings said.
       ...(build.warnings.length > 0 ? { vat_warnings: build.warnings } : {}),
+    },
+  }
+}
+
+/**
+ * Commit a staged gnubok_register_booked_invoice (crm#1094): a create_invoice
+ * whose params carry mode 'register_booked'. registerBookedInvoice re-runs
+ * every staging rule against the books as they are now, then writes the
+ * invoices row and, for a partly paid invoice, its one payment row dated
+ * balance_as_of; no journal entry or line.
+ */
+async function commitRegisterBookedInvoice(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  const parsed = RegisterBookedInvoiceParamsSchema.safeParse(params)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    return {
+      error: `Invalid ${issue?.path?.join('.') || 'params'}: ${issue?.message ?? 'validation failed'}`,
+      errorCode: 'VALIDATION_ERROR',
+      status: 400,
+    }
+  }
+  const outcome = await registerBookedInvoice(supabase, companyId, userId, parsed.data)
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    return {
+      error: entry?.message_sv ?? outcome.message,
+      errorCode: outcome.code,
+      status: entry?.httpStatus ?? 400,
+      data: { message_en: outcome.message, ...(outcome.details ?? {}) },
+    }
+  }
+  return {
+    data: {
+      invoice_id: outcome.invoiceId,
+      invoice_number: parsed.data.invoice_number,
+      status: outcome.plan.status,
+      remaining_amount: outcome.plan.remainingAmount,
+      journal_entry_id: outcome.plan.voucher.journalEntryId,
     },
   }
 }
@@ -7516,7 +7561,9 @@ async function commitPendingOperationInner(
         result = await commitRetagLineDimensions(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_invoice':
-        result = await commitCreateInvoice(supabase, userId, companyId, pendingOp.params)
+        result = isRegisterBookedInvoiceParams(pendingOp.params)
+          ? await commitRegisterBookedInvoice(supabase, userId, companyId, pendingOp.params)
+          : await commitCreateInvoice(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_transaction':
         result = await commitCreateTransaction(supabase, userId, companyId, pendingOp.params)

@@ -28,7 +28,10 @@
  *    fee (Dr 1510 / Cr 3990) on the next run. Also decide how to handle
  *    the backlog: determineReminderLevel sends the highest eligible level
  *    first, so long-overdue customers would get a final notice with fee
- *    and interest as their first-ever reminder.
+ *    and interest as their first-ever reminder. The backlog includes
+ *    invoices that entered the register already overdue, provider-migrated
+ *    or registered from the books (gnubok_register_booked_invoice,
+ *    crm#1094), which the old system may already have reminded.
  *
  * Kept dependency-free on purpose: it is imported from both server code
  * (the cron route) and client components (the settings form).

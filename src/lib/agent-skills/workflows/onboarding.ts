@@ -218,6 +218,12 @@ even connects.
   (skattefri intäktsränta) or 6992 (ej avdragsgilla avgifter), create
   them NOW so tax payments and fees book correctly from the first sync.
 - Voucher gaps: explain each with \`gnubok_explain_voucher_gap\`.
+- Open customer invoices from the old system (its kundreskontra, often a
+  PDF) when no migration wizard brings them: register each with
+  \`gnubok_register_booked_invoice\` against the verifikat the SIE import
+  brought, never \`gnubok_create_invoice\` (a new number, and the revenue
+  and moms booked a second time). Attach each invoice PDF to the same
+  verifikat, then check the kundreskontra against 1510.
 
 ## Step 4b: after the connections: reconcile (this is where trust is won)
 
@@ -257,6 +263,7 @@ message instead of making them ask.
 - \`gnubok_create_sie_upload\`: byte-exact upload URL for the SIE file
 - \`gnubok_sie_preflight\`: scan a shared SIE file, nothing written
 - \`gnubok_import_sie\`: staged import; use the preflight's mappings
+- \`gnubok_register_booked_invoice\`: an open invoice the SIE import already booked, into the kundreskontra (staged, posts nothing)
 - \`gnubok_connect_bank\` / \`gnubok_connect_skatteverket\`: status + connect links
 - \`gnubok_connect_migration\`: connect card into the previous-system wizard
 - \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`: state checks

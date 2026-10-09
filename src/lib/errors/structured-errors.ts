@@ -5716,6 +5716,97 @@ const LINK_INVOICE_VOUCHER: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Register an already-booked customer invoice (no new JE, crm#1094)
+// ─────────────────────────────────────────────────────────────────
+
+const INVOICE_REGISTER_BOOKED: Record<string, StructuredErrorEntry> = {
+  INVOICE_REGISTER_CASH_METHOD: {
+    httpStatus: 409,
+    message_sv:
+      'Företaget bokför enligt kontantmetoden: en obetald fakturas försäljning och moms bokförs först när den betalas, så den kan inte kopplas till en verifikation. Än så länge kan öppna fakturor bara registreras på det här sättet under faktureringsmetoden.',
+    message_en:
+      'The company uses kontantmetoden: an unpaid invoice\'s revenue and VAT are booked when it is paid, so it cannot be linked to a verifikat. For now open invoices can be registered this way under faktureringsmetoden only.',
+    remediation: {
+      description: 'Do not register open invoices for this company; tell the user that the kundreskontra cannot be imported under kontantmetoden yet.',
+    },
+  },
+  INVOICE_REGISTER_NUMBER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Fakturanumret finns redan i kundreskontran. Ett fakturanummer kan bara registreras en gång.',
+    message_en: 'That invoice number is already in the invoice register; a number can be registered once.',
+  },
+  INVOICE_REGISTER_NUMBER_IN_SERIES: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturanumret ligger i den nummerserie Accounted själv delar ut och serien har inte passerat det än, så en senare faktura skulle få samma nummer. Ställ först in nästa fakturanummer efter den gamla seriens sista nummer, eller ett prefix för Accounteds serie, under Inställningar, Fakturor.',
+    message_en:
+      'The invoice number is in the series Accounted issues and the series has not passed it yet, so a later invoice would get the same number. Set next_invoice_number past the old series (or an invoice_prefix) first.',
+    remediation: {
+      description: 'Set next_invoice_number past the last number of the old series, or an invoice_prefix for Accounted\'s own series, then register the invoice again.',
+      tool: 'gnubok_update_company_settings',
+    },
+  },
+  INVOICE_REGISTER_VOUCHER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Verifikationen kunde inte hittas i bolaget.',
+    message_en: 'Journal entry not found in this company.',
+  },
+  INVOICE_REGISTER_VOUCHER_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen är inte bokförd eller har makulerats med storno. Fakturan kan bara registreras mot en bokförd verifikation.',
+    message_en: 'The journal entry is not posted (or has been reversed). An invoice can only be registered against a posted verifikat.',
+  },
+  INVOICE_REGISTER_OPENING_BALANCE: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationen är en ingående balans, inte fakturans egen verifikation. Importera SIE-filen för året då fakturan bokfördes (äldsta året först) och registrera fakturan mot den verifikationen.',
+    message_en:
+      'The journal entry is an opening balance, not the invoice\'s own verifikat. Import the SIE file of the year the invoice was booked in (oldest year first), then register the invoice against that verifikat.',
+    remediation: {
+      description: 'Import the SIE file of the year the invoice was booked in, oldest year first, then find the invoice\'s verifikat (accounts ["1510"], text = the invoice number) and register against it.',
+      tool: 'gnubok_query_journal',
+    },
+  },
+  INVOICE_REGISTER_VOUCHER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen är redan bokföringen av en annan kundfaktura.',
+    message_en: 'The journal entry already books another customer invoice.',
+  },
+  INVOICE_REGISTER_VOUCHER_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan kan inte registreras på det här sättet än: verifikationen blandar försäljning som en kreditfaktura inte kan vända i samma momsrutor (flera momssatser, en del utan moms, momsfri försäljning eller försäljning till utlandet eller med omvänd betalningsskyldighet bredvid moms eller bredvid varandra), eller bokför varuförsäljning till utlandet, vinstmarginalbeskattning, vilande moms eller ROT/RUT-avdrag. Fakturan står kvar utanför kundreskontran och dess belopp blir en skillnad mot 1510.',
+    message_en:
+      'This invoice cannot be registered this way yet: its verifikat mixes sales a kreditfaktura cannot reverse into the same momsdeklaration boxes (several VAT rates, an untaxed part, momsfri or zero-rated sales next to VAT or next to each other), or books goods sold abroad, vinstmarginalbeskattning (VMB), vilande moms or a ROT/RUT deduction. It stays outside the kundreskontra, and its amount is a difference against 1510.',
+    remediation: {
+      description: 'Leave this invoice out of the register and tell the user why (message_en names what the verifikat books) and that its amount stays a difference between the kundreskontra and 1510.',
+    },
+  },
+  INVOICE_REGISTER_VOUCHER_NOT_SALE: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationen är inte en kundfakturaverifikation: den ska debitera kundfordringar (151x) och kreditera försäljning och eventuell utgående moms.',
+    message_en:
+      'The journal entry is not a customer invoice verifikat: it must debit accounts receivable (151x) and credit revenue and any output VAT.',
+  },
+  INVOICE_REGISTER_AMOUNT_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationen bokför ett annat belopp på kundfordringar (151x) än fakturans totalbelopp. Välj fakturans egen verifikation; en samlingsverifikation för flera fakturor kan inte kopplas till en av dem.',
+    message_en:
+      'The journal entry books a different amount on accounts receivable (151x) than the invoice total. Pick the invoice\'s own verifikat; one covering several invoices cannot be linked to one of them.',
+  },
+  INVOICE_REGISTER_FOREIGN_CURRENCY: {
+    httpStatus: 400,
+    message_sv: 'Fakturan är i utländsk valuta. Än så länge kan bara fakturor i SEK registreras på det här sättet.',
+    message_en: 'The invoice is in a foreign currency. Only SEK invoices can be registered this way for now.',
+    remediation: {
+      description: 'Leave this invoice out of the register and tell the user that invoices in other currencies cannot be registered yet.',
+    },
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Link SUPPLIER invoice to an existing posted verifikat (no new JE)
 // ─────────────────────────────────────────────────────────────────
 
@@ -7040,6 +7131,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...MATCH_INVOICE,
   ...LINK_TX_JE,
   ...LINK_INVOICE_VOUCHER,
+  ...INVOICE_REGISTER_BOOKED,
   ...LINK_SI_VOUCHER,
   ...MATCH_BATCH,
   ...BULK_BOOK,

@@ -61,10 +61,13 @@ import { useAccountNamesSource } from '@/components/pending-operations/use-accou
 import {
   complianceWarningOf,
   operationLabel,
+  registerBookedInvoiceBulkLine,
+  rowConsentSentence,
   singleActionWarning,
   REJECTION_CATEGORY_LABELS,
 } from '@/components/pending-operations/vocabulary'
 import { describeRetrievedSkills } from '@/lib/agent-skills/retrieved-skills'
+import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-invoice-mode'
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
 // they read naturally under the heading "Genom att bekräfta utförs följande:".
@@ -74,6 +77,8 @@ const bulkActionDescriptions: Record<string, (count: number) => string> = {
   create_customer: (n) => (n === 1 ? 'En ny kund skapas.' : `${n} nya kunder skapas.`),
   create_invoice: (n) =>
     n === 1 ? 'Ett fakturautkast skapas (skickas inte).' : `${n} fakturautkast skapas (skickas inte).`,
+  // A create_invoice staged by gnubok_register_booked_invoice (bulkActionKey).
+  register_booked_invoice: registerBookedInvoiceBulkLine,
   categorize_transaction: (n) =>
     n === 1 ? 'En transaktion kategoriseras och bokförs.' : `${n} transaktioner kategoriseras och bokförs.`,
   match_transaction_invoice: (n) =>
@@ -82,6 +87,23 @@ const bulkActionDescriptions: Record<string, (count: number) => string> = {
     n === 1 ? 'Ett dokument bifogas en transaktion.' : `${n} dokument bifogas transaktioner.`,
   uncategorize_transaction: (n) =>
     n === 1 ? 'En kategorisering tas bort.' : `${n} kategoriseringar tas bort.`,
+}
+
+/**
+ * The grouping key of the bulk dialog and the "all of this type" shortcuts. A
+ * registration of an already-booked invoice shares the create_invoice pending
+ * type but creates no draft (crm#1094), so it gets its own line and its own
+ * shortcut instead of being counted as fakturautkast.
+ */
+function bulkActionKey(op: PendingOperation): string {
+  return op.operation_type === 'create_invoice' && isRegisterBookedInvoiceParams(op.params)
+    ? 'register_booked_invoice'
+    : op.operation_type
+}
+
+/** The label of a bulkActionKey. */
+function bulkActionKeyLabel(key: string, t: (key: string) => string): string {
+  return key === 'register_booked_invoice' ? t('type_register_booked_invoice') : operationLabel(key, t)
 }
 
 function bulkActionLabel(operationType: string, count: number, t: (key: string) => string): string {
@@ -506,7 +528,7 @@ export default function PendingOperationsPage() {
         results.filter((r) => r.status === 'committed').map((r) => r.id),
       )
       const committedInvoiceDrafts = operations.some(
-        (op) => committedIds.has(op.id) && op.operation_type === 'create_invoice',
+        (op) => committedIds.has(op.id) && bulkActionKey(op) === 'create_invoice',
       )
       const draftsCta = committedInvoiceDrafts && invoiceDraftsCtaUseful
         ? {
@@ -684,10 +706,10 @@ export default function PendingOperationsPage() {
     range.resetAnchor()
   }
 
-  // "Approve all of this type": find ops with the same operation_type that are bulk-eligible
-  function selectAllOfType(operationType: string) {
+  // "Approve all of this type": find bulk-eligible ops with the same bulkActionKey
+  function selectAllOfType(key: string) {
     const ids = bulkEligible
-      .filter((op) => op.operation_type === operationType)
+      .filter((op) => bulkActionKey(op) === key)
       .map((op) => op.id)
     setSelectedIds(new Set(ids))
     range.resetAnchor()
@@ -697,7 +719,8 @@ export default function PendingOperationsPage() {
   const typeCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const op of bulkEligible) {
-      counts.set(op.operation_type, (counts.get(op.operation_type) ?? 0) + 1)
+      const key = bulkActionKey(op)
+      counts.set(key, (counts.get(key) ?? 0) + 1)
     }
     return Array.from(counts.entries()).filter(([, count]) => count >= 2)
   }, [bulkEligible])
@@ -708,7 +731,8 @@ export default function PendingOperationsPage() {
     const counts = new Map<string, number>()
     for (const op of bulkEligible) {
       if (selectedIds.has(op.id)) {
-        counts.set(op.operation_type, (counts.get(op.operation_type) ?? 0) + 1)
+        const key = bulkActionKey(op)
+        counts.set(key, (counts.get(key) ?? 0) + 1)
       }
     }
     return Array.from(counts.entries()).map(([type, count]) => ({ type, count }))
@@ -735,7 +759,7 @@ export default function PendingOperationsPage() {
   const sourceLine = (op: PendingOperation) => {
     const isAgent = op.actor_type && op.actor_type !== 'user'
     return [
-      operationLabel(op.operation_type, t),
+      operationLabel(op.operation_type, t, op.params),
       isAgent ? (originLabel(op, t) ?? op.actor_label ?? op.actor_type) : null,
       op.agent_metadata?.skills_loaded?.length ? t('skills_retrieved', { skills: retrievedNames(op.agent_metadata.skills_loaded) }) : null,
       formatRelativeTime(op.created_at),
@@ -882,7 +906,7 @@ export default function PendingOperationsPage() {
                   className={QUIET_LINK_CLASS}
                   onClick={() => selectAllOfType(type)}
                 >
-                  {operationLabel(type, t)} ({count})
+                  {bulkActionKeyLabel(type, t)} ({count})
                 </button>
               ))}
             {!allSelected && (
@@ -933,9 +957,9 @@ export default function PendingOperationsPage() {
                 showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
               const isSelected = selectedIds.has(op.id)
               const isAgent = op.actor_type && op.actor_type !== 'user'
-              const warningSentence = singleActionWarning(op.operation_type, op.params)
-              const showHighRiskWarning =
-                op.risk_level === 'high' && warningSentence && op.status === 'pending'
+              // High risk, and a registration of an already-booked invoice:
+              // it cannot be undone but is approved without a dialog.
+              const rowWarning = rowConsentSentence(op)
               const complianceWarning = complianceWarningOf(op)
 
               if (op.status !== 'pending') {
@@ -943,7 +967,7 @@ export default function PendingOperationsPage() {
                 const resolvedAt = op.resolved_at ?? op.created_at
                 const sub = [
                   formatRelativeTime(resolvedAt),
-                  operationLabel(op.operation_type, t),
+                  operationLabel(op.operation_type, t, op.params),
                   originLabel(op, t),
                 ]
                   .filter(Boolean)
@@ -1091,10 +1115,10 @@ export default function PendingOperationsPage() {
                         </span>
                       </p>
                     )}
-                    {showHighRiskWarning && (
+                    {rowWarning && (
                       <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
                         <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                        <span>{warningSentence}</span>
+                        <span>{rowWarning}</span>
                       </p>
                     )}
                     {/* Action pills under the text (concept gact) */}

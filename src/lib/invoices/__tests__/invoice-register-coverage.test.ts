@@ -101,6 +101,77 @@ describe('fetchInvoiceRegisterCoverage', () => {
   })
 })
 
+/**
+ * gnubok_register_booked_invoice (crm#1094) registers only the open items of
+ * an older reskontra: linked to the verifikat that booked them, no lines. A
+ * paid invoice of the same months is still only a verifikat, so those
+ * registrations must not pull the boundary back over that period.
+ */
+describe('fetchInvoiceRegisterCoverage: invoices registered from the books', () => {
+  beforeEach(() => {
+    reset()
+  })
+
+  const registration = { invoice_date: '2025-11-15', journal_entry_id: 'je-sie-1', invoice_items: [] }
+
+  it('starts the boundary at the first invoice the register holds the whole history of', async () => {
+    enqueue({ data: registration, error: null })
+    // The earliest unlinked invoice, then the earliest with lines.
+    enqueue({ data: null, error: null })
+    enqueue({ data: { invoice_date: '2026-10-01', invoice_items: [{ id: 'item-1' }] }, error: null })
+    enqueue({ data: { id: 'entry-1' }, error: null })
+
+    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
+
+    expect(coverage).toEqual({ covers_from: '2026-10-01', has_pre_register_invoices: true })
+    expect(findCall('invoices', 'is')).toEqual(['journal_entry_id', null])
+    expect(findCalls('invoices', 'select')).toContainEqual(['invoice_date, invoice_items!inner(id)'])
+    expect(findCall('journal_entries', 'lt')).toEqual(['entry_date', '2026-10-01'])
+  })
+
+  it('takes an unlinked invoice (kontantmetoden, deferred booking) as complete history too', async () => {
+    enqueue({ data: registration, error: null })
+    enqueue({ data: { invoice_date: '2026-02-01' }, error: null })
+    enqueue({ data: { invoice_date: '2026-03-01', invoice_items: [{ id: 'item-1' }] }, error: null })
+    enqueue({ data: { id: 'entry-1' }, error: null })
+
+    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
+
+    expect(coverage.covers_from).toBe('2026-02-01')
+  })
+
+  it('discloses everything before today when the register holds only registrations', async () => {
+    enqueue({ data: registration, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'entry-1' }, error: null })
+
+    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
+
+    expect(coverage).toEqual({ covers_from: '2026-10-09', has_pre_register_invoices: true })
+  })
+
+  it('degrades to UNKNOWN when the boundary lookup fails', async () => {
+    enqueue({ data: registration, error: null })
+    enqueue({ data: null, error: { message: 'statement timeout' } })
+    enqueue({ data: null, error: null })
+
+    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
+
+    expect(coverage).toEqual(NO_INVOICE_REGISTER_COVERAGE)
+  })
+
+  it('keeps a first invoice with lines as the boundary, linked or not', async () => {
+    enqueue({ data: { invoice_date: '2026-07-19', journal_entry_id: 'je-1', invoice_items: [{ id: 'item-1' }] }, error: null })
+    enqueue({ data: { id: 'entry-1' }, error: null })
+
+    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
+
+    expect(coverage).toEqual({ covers_from: '2026-07-19', has_pre_register_invoices: true })
+    expect(findCall('invoices', 'is')).toBeUndefined()
+  })
+})
+
 describe('hasPreRegisterArInPeriod', () => {
   beforeEach(() => {
     reset()
