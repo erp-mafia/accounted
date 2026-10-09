@@ -39,14 +39,13 @@ describe('summariseMissingUnderlag', () => {
     expect(summary.top?.count).toBe(2)
   })
 
-  it('inherits canHaveEmailReceipt exactly, including where it is narrow', () => {
-    // NO_EMAIL_RECEIPT_EXISTS (lib/receipt-hunt/select.ts) matches on \blön\b,
-    // so the compound "Löneutbetalning" reads as mail-searchable. That is the
-    // shipped hunt predicate's behaviour, not this summary's: pinned here so a
-    // future widening is a deliberate change to one regex with one test to
-    // update, rather than a silent divergence between the row and the agent.
+  it('inherits canHaveEmailReceipt exactly, including its compound words', () => {
+    // NO_EMAIL_RECEIPT_EXISTS (lib/receipt-hunt/select.ts) was widened to the
+    // "löne-" compounds (agent feedback seq 956543), so "Löneutbetalning" now
+    // reads as not_mail here too. Pinned so the row and the agent keep the
+    // one predicate: a change to that regex updates this test, never only one side.
     const summary = summariseMissingUnderlag(1, [{ description: 'Löneutbetalning augusti' }])
-    expect(summary.top?.kind).toBe('mail')
+    expect(summary.top?.kind).toBe('not_mail')
   })
 
   it('breaks a tie towards the larger amounts, which the RPC returns first', () => {

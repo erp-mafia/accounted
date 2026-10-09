@@ -90,4 +90,43 @@ describe('POST /api/salary/runs/[id]/lines', () => {
     expect(status).toBe(201)
     expect(body.data.id).toBe('li-1')
   })
+
+  it('returns 400 with the Swedish reason for is_avgift_basis=false on a taxable benefit (agent feedback seq 947288)', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup
+      { data: { id: SRE_UUID, employee_id: 'emp-1' } }, // salary_run_employees membership
+    ])
+
+    const response = await POST(
+      createMockRequest('/api/salary/runs/run-1/lines', {
+        method: 'POST',
+        body: { ...validBody, item_type: 'benefit_meals', description: 'Kostförmån', amount: 500, is_avgift_basis: false },
+      }),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.code).toBe('VALIDATION_ERROR')
+    expect(body.error).toMatch(/is_avgift_basis=false stöds ännu inte/)
+  })
+
+  it('creates the same benefit line when the flag is left at true', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } },
+      { data: { id: SRE_UUID, employee_id: 'emp-1' } },
+      { data: { id: 'li-2' } },
+    ])
+
+    const response = await POST(
+      createMockRequest('/api/salary/runs/run-1/lines', {
+        method: 'POST',
+        body: { ...validBody, item_type: 'benefit_meals', description: 'Kostförmån', amount: 500 },
+      }),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    expect(response.status).toBe(201)
+  })
 })

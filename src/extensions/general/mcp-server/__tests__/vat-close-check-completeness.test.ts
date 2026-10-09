@@ -346,8 +346,8 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     // The old mirror could not see this at all: ruta 48 carries the 2645 leg.
     expect(result.rutor.ruta48).toBe(1250)
     // And the agent now sees the empty basis boxes itself (#2919).
-    expect((result.rutor as Record<string, number>).ruta21).toBe(0)
-    expect((result.rutor as Record<string, number>).ruta22).toBe(0)
+    expect(result.rutor.ruta21).toBe(0)
+    expect(result.rutor.ruta22).toBe(0)
   })
 
   it('one ordinary domestic receipt no longer suppresses the reverse-charge check', async () => {
@@ -495,7 +495,7 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     const blocker = result.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')!
     expect(blocker.severity).toBe('medium')
     expect(blocker.hint).not.toBe(RC_BASIS_MISSING_HINT)
-    expect((result.rutor as Record<string, number>).ruta21).toBe(5000)
+    expect(result.rutor.ruta21).toBe(5000)
   })
 
   // #3387: sales on a class 3 account with no momskod and no momssats reach no

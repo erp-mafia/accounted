@@ -236,9 +236,17 @@ export function selectProposals(
  *
  * Swedish bank statements truncate hard, which is why "skat" has to match as
  * well as "skatt": a real ledger row reads "Inbetalning skat BG 000005...".
+ *
+ * Swedish also compounds: "Löneutbetalning", "Preliminärskatt", "Prel
+ * Vinstskatt" and "Skattekonto" never matched a whole-word "lön" or "skatt",
+ * so imported salary and tax verifikat were offered for a mail search their
+ * underlag (the lönespecifikation, the skattekonto) can never satisfy (agent
+ * feedback seq 956543). Hence "skatt" anywhere in a word, the "löne-" stems
+ * as prefixes (they survive truncation; a bare "lone" would catch "Lonely")
+ * and the bank's "Prel" abbreviation.
  */
 const NO_EMAIL_RECEIPT_EXISTS =
-  /\bl[oö]n\b|\bl[oö]ner\b|\bskatt?\b|skatteverket|arbetsgivaravg|\bmoms\b|utdelning|amortering|\br[aä]nta\b|egen ins[aä]ttning/i
+  /\bl[oö]n\b|\bl[oö]ner\b|\bl[oö]ne(?:utb|spec|k[oö]rn)|skatt|\bskat\b|\bprel\b|arbetsgivaravg|\bmoms\b|utdelning|amortering|\br[aä]nta\b|egen ins[aä]ttning/i
 
 /**
  * Whether it is worth spending a mailbox search on this purchase.

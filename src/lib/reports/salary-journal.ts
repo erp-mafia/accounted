@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { effectiveRow } from '@/lib/salary/effective-figures'
 
 /**
  * Lönejournal: Monthly/annual per-employee salary register.
@@ -66,7 +67,7 @@ export async function generateSalaryJournal(
       .from('salary_run_employees')
       .select(`
         *,
-        employee:employees(id, first_name, last_name, personnummer_last4, employment_type),
+        employee:employees(id, first_name, last_name, personnummer_last4, employment_type, f_skatt_status),
         salary_run:salary_runs!inner(period_year, period_month, payment_date, status)
       `)
       .eq('company_id', companyId)
@@ -106,13 +107,18 @@ export interface SalaryJournalRunFields {
 
 /**
  * One salary_run_employees row (joined with `employee:employees(first_name,
- * last_name, personnummer_last4, employment_type)`) as a lönejournal row. The
- * per-run bokföringsunderlag reads the same mapping, so the underlag and the
- * lönejournal cannot disagree on what a figure means.
+ * last_name, personnummer_last4, employment_type, f_skatt_status)`) as a
+ * lönejournal row. The per-run bokföringsunderlag reads the same mapping, so
+ * the underlag and the lönejournal cannot disagree on what a figure means.
+ *
+ * Tax, net, avgifter and employer cost are the EFFECTIVE figures (review-step
+ * overrides applied, lib/salary/effective-figures): the lönejournal is the
+ * underlag for the AGI and the posted verifikat, which both use them.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function toSalaryJournalRow(sre: any, run: SalaryJournalRunFields): SalaryJournalRow {
   const emp = sre.employee as { first_name: string; last_name: string; personnummer_last4: string; employment_type: string } | null
+  const effective = effectiveRow(sre)
   return {
     employeeId: sre.employee_id,
     employeeName: emp ? `${emp.first_name} ${emp.last_name}` : 'Okänd',
@@ -122,13 +128,13 @@ export function toSalaryJournalRow(sre: any, run: SalaryJournalRunFields): Salar
     periodMonth: run.period_month,
     paymentDate: run.payment_date,
     grossSalary: sre.gross_salary,
-    taxWithheld: sre.tax_withheld,
-    netSalary: sre.net_salary,
-    avgifterAmount: sre.avgifter_amount,
+    taxWithheld: effective.tax_withheld,
+    netSalary: effective.net_salary,
+    avgifterAmount: effective.avgifter_amount,
     avgifterRate: sre.avgifter_rate,
     vacationAccrual: sre.vacation_accrual,
     vacationAccrualAvgifter: sre.vacation_accrual_avgifter,
-    totalEmployerCost: sre.gross_salary + sre.avgifter_amount + sre.vacation_accrual + sre.vacation_accrual_avgifter,
+    totalEmployerCost: effective.employer_cost,
     sickDays: sre.sick_days,
     vabDays: sre.vab_days,
     parentalDays: sre.parental_days,

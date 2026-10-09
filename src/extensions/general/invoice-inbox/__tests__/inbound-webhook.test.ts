@@ -1031,6 +1031,148 @@ describe('POST /inbound', () => {
     const rejection = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')
     expect(rejection?.args[0]).toMatchObject({ status: 'error', kind_hint: 'receipt' })
   })
+
+  describe('a mail whose only attachment is refused (feedback seq 957595)', () => {
+    // A booking confirmation: the receipt is the body, the only attachment a
+    // calendar invite. Before, the .ics was refused, an error row written and
+    // no document filed at all.
+    const BOOKING_BODY =
+      'Tack för din bokning! Bokningsnummer 4711. Tjänst: Klippning herr, 45 minuter. ' +
+      'Datum 2026-04-24 kl 10:00. Pris 450,00 kr varav moms 90,00 kr. Betalt med kort. ' +
+      'Avbokning senast 24 timmar innan. Välkommen!'
+
+    function bookingMail(attachments: unknown[], text = BOOKING_BODY) {
+      return {
+        object: 'email',
+        id: 'em_123',
+        to: ['acme-ab-x7f2@arcim.io'],
+        from: 'noreply@booking.example',
+        created_at: '2026-04-20T10:00:00Z',
+        subject: 'Bokningsbekräftelse',
+        bcc: null,
+        cc: null,
+        reply_to: null,
+        html: null,
+        text,
+        headers: {},
+        message_id: '<msg@x>',
+        raw: null,
+        attachments,
+      }
+    }
+    const ICS = { id: 'att_ics', filename: 'bokning.ics', size: 900, content_type: 'text/calendar', content_id: null, content_disposition: 'attachment' }
+
+    it('files the body as one document next to the refused .ics', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ attachments: [ICS] }) as never)
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null })                  // per-attachment dup check finds nothing
+      enqueue({ data: { id: 'item-ics-err' } }) // rejection-row insert
+      enqueue({ data: null })                  // body-document dedupe check finds nothing
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-body-1' } as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(bookingMail([ICS]) as never)
+      vi.mocked(fetchInboundAttachment).mockResolvedValue({
+        id: 'att_ics',
+        filename: 'bokning.ics',
+        contentType: 'text/calendar',
+        buffer: new ArrayBuffer(8),
+      })
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+
+      expect(res.status).toBe(200)
+      expect(body.data.reason).toBe('email_body')
+      expect(body.data.inbox_item_id).toBe('item-body-1')
+      expect(body.data.results).toEqual([{ attachment_id: 'att_ics', error: 'Unsupported type text/calendar' }])
+      // Exactly one document: the body, rendered to a PDF.
+      expect(uploadAndExtract).toHaveBeenCalledTimes(1)
+      const [, , companyId, file, source, emailMeta] = vi.mocked(uploadAndExtract).mock.calls[0]
+      expect(companyId).toBe('company-1')
+      expect(source).toBe('email')
+      expect(file.type).toBe('application/pdf')
+      expect(emailMeta?.resendAttachmentId).toBeUndefined()
+      // The refusal stays visible as its own error row.
+      const rejection = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')
+      expect(rejection?.args[0]).toMatchObject({ status: 'error', resend_attachment_id: 'att_ics' })
+      expect(receivedEvents()[0].payload).toMatchObject({
+        outcome: 'email_body',
+        inbox_item_id: 'item-body-1',
+        attachments: [{ id: 'att_ics', outcome: 'rejected', reason: 'unsupported_type', mime: 'text/calendar' }],
+      })
+    })
+
+    it('does not duplicate the body document when Resend redelivers before the attachment row exists', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ attachments: [ICS] }) as never)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null })                      // per-attachment dup check finds nothing
+      enqueue({ data: { id: 'item-ics-err' } })    // rejection-row insert
+      enqueue({ data: { id: 'item-body-1' } })     // body-document dedupe check: already filed
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(bookingMail([ICS]) as never)
+      vi.mocked(fetchInboundAttachment).mockResolvedValue({
+        id: 'att_ics',
+        filename: 'bokning.ics',
+        contentType: 'text/calendar',
+        buffer: new ArrayBuffer(8),
+      })
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+
+      expect(body.data.reason).toBe('email_body_duplicate')
+      expect(body.data.inbox_item_id).toBe('item-body-1')
+      expect(uploadAndExtract).not.toHaveBeenCalled()
+    })
+
+    it('does not file the body next to a filed PDF', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // per-attachment dup check for the PDF
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-pdf-1' } as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(bookingMail([PDF_ATTACHMENT]) as never)
+      vi.mocked(fetchInboundAttachment).mockResolvedValue(PDF_DOWNLOAD)
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+
+      expect(body.data.reason).toBeUndefined()
+      expect(body.data.results).toEqual([{ attachment_id: 'att_1', inbox_item_id: 'item-pdf-1' }])
+      expect(uploadAndExtract).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(uploadAndExtract).mock.calls[0][3].type).toBe('application/pdf')
+      expect(vi.mocked(uploadAndExtract).mock.calls[0][5]?.resendAttachmentId).toBe('att_1')
+    })
+
+    it('keeps only the error row when the body next to the refused file is a short note', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ attachments: [ICS] }) as never)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null })                   // per-attachment dup check finds nothing
+      enqueue({ data: { id: 'item-ics-err' } }) // rejection-row insert
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(bookingMail([ICS], 'Se bifogad fil.') as never)
+      vi.mocked(fetchInboundAttachment).mockResolvedValue({
+        id: 'att_ics',
+        filename: 'bokning.ics',
+        contentType: 'text/calendar',
+        buffer: new ArrayBuffer(8),
+      })
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+
+      expect(body.data.reason).toBeUndefined()
+      expect(uploadAndExtract).not.toHaveBeenCalled()
+    })
+  })
 })
 
 /** Every InboundMailReceived append, in order. */

@@ -2267,6 +2267,11 @@ function ResultStep({
 
   // Övriga data as a quiet line list, not a card grid.
   const entityLines: { label: string; value: string; detail?: string; failed: boolean }[] = []
+  // The provider job knows how many records it skipped but not why (see
+  // SkipReasons.reasonUnknown): one neutral line says what skipping means.
+  const hasSkippedWithoutReason = MIGRATION_RESOURCES.some(
+    (resource) => (results?.[resource]?.skipReasons?.reasonUnknown ?? 0) > 0,
+  )
   if (results) {
     if (results.companyInfo?.imported) {
       entityLines.push({ label: 'Företagsinformation', value: 'Importerad', failed: false })
@@ -2508,6 +2513,9 @@ function ResultStep({
               </div>
             ))}
           </div>
+          {hasSkippedWithoutReason && (
+            <p className="text-[13px] text-muted-foreground">{t('ext_arcim_job_skipped_explanation')}</p>
+          )}
         </section>
       )}
 
@@ -2625,6 +2633,7 @@ function formatSkipReasons(
     )
   }
   if (reasons.unsupported) parts.push(`${reasons.unsupported} kunde inte tolkas`)
+  if (reasons.reasonUnknown) parts.push(`${reasons.reasonUnknown} hoppades över`)
   if (reasons.noMatch) {
     const matchLabel = entityType === 'invoice' ? 'utan matchning' : 'utan matchning'
     parts.push(`${reasons.noMatch} ${matchLabel}`)
@@ -3771,9 +3780,13 @@ export default function ArcimMigrationWorkspace({
     }} onResult={status => {
       const results: MigrationResults = {}
       for (const count of status.counts) {
+        // skipped counts every record not imported, failures included, as the
+        // per-step path does; without the job's skipped records here, a
+        // resource with failures showed only "N misslyckades" and the skipped
+        // ones vanished (agent feedback seq 939430).
         results[count.resource] = {
-          total: count.total, imported: count.imported, skipped: count.skipped,
-          skipReasons: { failed: count.needs_attention },
+          total: count.total, imported: count.imported, skipped: count.skipped + count.needs_attention,
+          skipReasons: { failed: count.needs_attention, reasonUnknown: count.skipped },
           ...(['salesInvoices', 'supplierInvoices'].includes(count.resource) ? {
             fxUnresolved: count.fx_unresolved, vatUnresolved: count.vat_unresolved, creditNotesUnlinked: count.credit_notes_unlinked,
             creditNotesLinked: count.credit_notes_linked ?? 0,

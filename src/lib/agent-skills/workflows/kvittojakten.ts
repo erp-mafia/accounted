@@ -137,7 +137,7 @@ Both stage a pending operation and return \`staged: true\`. Nothing is linked un
 
 Hand over for approval as described in "Your harness". Then report, in the user's language, in four short groups: **found and staged** (item, document), **ambiguous** (what to choose between), **not found in mail**, **needs a human** (not mail-searchable).
 
-Every item you did not stage gets its \`next_step\` sentence beside it, as the worklist wrote it. That sentence is the whole point of the group: the user should be able to work down the list without deciding anything. Group items that share a next step ("tre kvitton ligger i Kivra") so the list stays short. If \`total_count\` was larger than what you worked through, say how many remain and offer another round.
+Every item you did not stage gets its \`next_step\` sentence beside it, as the worklist wrote it. That sentence is the whole point of the group: the user should be able to work down the list without deciding anything. Group items that share a next step ("tre kvitton ligger i Kivra") so the list stays short. If \`total_count\` was larger than what you worked through, say how many remain and offer another round: call the worklist again with \`offset\` set to the \`next_offset\` it returned.
 
 Then, **only when something was not found in mail**, close with one question and nothing else: could those receipts be in another mailbox, a private address or a shared one like faktura@ or invoice@? If the answer is yes, the fix is not another search. Tell them to add a forwarding rule from that address to \`inbox_address\`, because that makes every future receipt arrive on its own and this hunt shorter every month. Ask once. When everything was found, do not ask at all.
 

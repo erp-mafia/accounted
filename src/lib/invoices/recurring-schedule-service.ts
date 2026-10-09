@@ -25,6 +25,8 @@ import {
   buildRecurringPlaceholderValues,
 } from '@/lib/invoices/recurring-placeholders'
 import { isTextLine } from '@/lib/invoices/recurring-schedule-items'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { roundOre } from '@/lib/money'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   archiveIssuedInvoicePdf,
@@ -291,7 +293,9 @@ export async function executeRecurringSchedule(
     for (const item of items) item.vat_rate = 0
   }
 
-  const subtotal = items.reduce((sum, it) => sum + it.quantity * it.unit_price, 0)
+  // Öre-exact amounts, the rule buildInvoiceWriteData applies: each line net
+  // is computeLineNet (whole öre) and the header sums are rounded.
+  const subtotal = roundOre(items.reduce((sum, it) => sum + computeLineNet(it.quantity, it.unit_price), 0))
   let vatAmount = 0
   for (const item of items) {
     const itemRate = item.vat_rate != null ? item.vat_rate : vatRules.rate
@@ -300,10 +304,10 @@ export async function executeRecurringSchedule(
         `VAT rate ${itemRate}% not allowed for customer type ${customer.customer_type}`,
       )
     }
-    const lineTotal = item.quantity * item.unit_price
-    vatAmount += Math.round((lineTotal * itemRate) / 100 * 100) / 100
+    const lineTotal = computeLineNet(item.quantity, item.unit_price)
+    vatAmount = roundOre(vatAmount + Math.round((lineTotal * itemRate) / 100 * 100) / 100)
   }
-  const total = subtotal + vatAmount
+  const total = roundOre(subtotal + vatAmount)
 
   const uniqueRates = new Set(items.map((it) => (it.vat_rate != null ? it.vat_rate : vatRules.rate)))
   const isMixedRate = uniqueRates.size > 1
@@ -422,7 +426,7 @@ export async function executeRecurringSchedule(
       }
     }
     const itemRate = item.vat_rate != null ? item.vat_rate : vatRules.rate
-    const lineTotal = item.quantity * item.unit_price
+    const lineTotal = computeLineNet(item.quantity, item.unit_price)
     const itemVat = Math.round((lineTotal * itemRate) / 100 * 100) / 100
     return {
       invoice_id: invoice.id,

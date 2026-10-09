@@ -39,6 +39,7 @@ vi.mock('@/lib/core/documents/document-service', () => ({
 }))
 
 import { bulkBookMatchedInboxItems } from '../categorize-core'
+import { TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
 import { BulkBookInboxSchema } from '@/lib/api/schemas'
 import { eventBus } from '@/lib/events/bus'
 
@@ -365,6 +366,32 @@ describe('bulkBookMatchedInboxItems: booking', () => {
     expect(skipped).toEqual([{ item_id: 'i1', reason: 'not_matched' }])
     expect(booked).toEqual([{ item_id: 'i2', transaction_id: 'tx-2', journal_entry_id: 'je-1' }])
     expect(mockCreateJE).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Agent feedback seq 887729: a foreign row with no SEK value is refused by the
+// engine. The skip names that cause instead of "no account mapping", which
+// would send the user to the wrong fix.
+describe('bulkBookMatchedInboxItems: a foreign row without a SEK value', () => {
+  it('skips it as missing_sek_value with the Swedish reason, and books nothing', async () => {
+    const supabase = queuedSupabase([
+      { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null } },
+      { data: { id: 'tx-1', date: '2026-06-01', amount: -200, currency: 'CAD', amount_sek: null, exchange_rate: null, cash_account_id: null, journal_entry_id: null } },
+      { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [] }, // resolveSettlementAccount: no CAD cash account -> 1930
+      { data: [{ id: 'fp-1' }] }, // ensureFiscalPeriod: an open period covers the date
+    ])
+    mockCreateJE.mockRejectedValue(new TransactionMissingSekValueError('tx-1', 'CAD', '2026-06-01'))
+
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'],
+      category: 'expense_software',
+    })
+
+    expect(booked).toEqual([])
+    expect(skipped).toHaveLength(1)
+    expect(skipped[0]).toMatchObject({ item_id: 'i1', reason: 'missing_sek_value' })
+    expect(skipped[0].detail).toMatch(/saknar SEK-belopp och växelkurs/)
   })
 })
 

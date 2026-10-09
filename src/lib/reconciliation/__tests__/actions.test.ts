@@ -329,6 +329,8 @@ describe('matchPairs', () => {
       ['ENTRY_REVERSED', 'ENTRY_REVERSED'],
       ['NOT_SETTLED', 'PAIR_NOT_CLOSED'],
       ['LINK_RACE', 'LINK_RACE'],
+      ['BANK_ANCHOR_REFUSED', 'BANK_ANCHOR_REFUSED'],
+      ['OVER_ALLOCATED', 'PAIR_NOT_CLOSED'],
       ['WRITE_FAILED', 'UNKNOWN'],
     ]
     for (const [engineCode, skipCode] of cases) {
@@ -351,6 +353,34 @@ describe('matchPairs', () => {
       pairs: [{ external_ids: [R1], journal_entry_ids: [E1] }],
     })
     expect(result?.skipped[0].code).toBe('UNKNOWN')
+  })
+
+  it('a split the bank-anchor guard refused is BANK_ANCHOR_REFUSED, not UNKNOWN (agent feedback seq 853921, 877706)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1930' } })
+    linkToVouchersMock.mockResolvedValue({
+      success: false,
+      error: 'Kopplingen nekades: verifikationen bokför inte beloppet på bankkontot åt samma håll som transaktionen.',
+      code: 'BANK_ANCHOR_REFUSED',
+    })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      pairs: [
+        {
+          external_ids: [R1],
+          journal_entry_ids: [E1, E2],
+          allocations: [
+            { journal_entry_id: E1, amount: -120 },
+            { journal_entry_id: E2, amount: 20 },
+          ],
+        },
+      ],
+    })
+
+    expect(result?.applied).toEqual([])
+    expect(result?.skipped).toHaveLength(1)
+    expect(result?.skipped[0]).toMatchObject({ code: 'BANK_ANCHOR_REFUSED' })
+    expect(result?.skipped[0].message).toMatch(/^Kopplingen nekades/)
   })
 
   it('maps a refused 1:N split the same way: a missing verifikat is ENTRY_NOT_FOUND, a bad split shape UNSUPPORTED_PAIR_SHAPE', async () => {

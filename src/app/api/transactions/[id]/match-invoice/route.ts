@@ -296,11 +296,13 @@ export const POST = withRouteContext(
         transactionId,
         transactionDate: transaction.date,
         transactionAmount: transaction.amount,
-        // `amount` is in `currency`; the 19xx legs the detector compares it
-        // against are always SEK. Selected above via select('*').
+        // `amount` is in `currency`; the ledger legs the detector compares it
+        // against are always SEK, on the account cash_account_id says the
+        // money landed on. Selected above via select('*').
         transactionCurrency: transaction.currency ?? null,
         transactionAmountSek: transaction.amount_sek ?? null,
         transactionExchangeRate: transaction.exchange_rate ?? null,
+        cashAccountId: transaction.cash_account_id ?? null,
       })
       if (!force) {
         if (candidate) {

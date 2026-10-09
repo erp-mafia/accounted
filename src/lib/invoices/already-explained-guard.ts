@@ -229,6 +229,12 @@ export interface TransactionForDuplicate {
   currency: string | null
   amount_sek?: number | null
   exchange_rate?: number | null
+  /**
+   * Scopes the scan to the account the money landed on (its ledger_account);
+   * absent or null scans the whole 19xx range. A door that selects a narrow
+   * column list must include it, or a 1686 row is compared with 1930 vouchers.
+   */
+  cash_account_id?: string | null
 }
 
 /**
@@ -254,6 +260,7 @@ export async function guardDuplicatePaymentVoucher(
       transactionCurrency: transaction.currency ?? null,
       transactionAmountSek: transaction.amount_sek ?? null,
       transactionExchangeRate: transaction.exchange_rate ?? null,
+      cashAccountId: transaction.cash_account_id ?? null,
     })
   } catch (err) {
     options.onDetectError?.(err)

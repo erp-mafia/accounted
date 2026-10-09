@@ -134,7 +134,9 @@ describe('kontantmetoden cut-off suspension (#3440): agent guidance', () => {
       remediation: getErrorEntry('KONTANTMETOD_CUTOFF_SUSPENDED')?.remediation,
     })
     expect(drafts).not.toHaveProperty('error_code')
-    expect(drafts).not.toHaveProperty('remediation')
+    // The drafts blocker carries its own remediation (cancel or commit each
+    // draft, agent feedback seq 978933), never the suspension's.
+    expect(drafts.remediation).not.toEqual(getErrorEntry('KONTANTMETOD_CUTOFF_SUSPENDED')?.remediation)
   })
 
   it('the year-end-close skill no longer tells an agent to stage the cut-off', () => {

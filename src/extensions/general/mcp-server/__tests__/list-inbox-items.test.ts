@@ -24,7 +24,9 @@ function makeInboxItem(overrides: Record<string, unknown> = {}) {
     email_from: null,
     email_subject: null,
     error_message: null,
-    document_attachments: [],
+    // PostgREST embeds the one document an inbox item points at as an object
+    // (many-to-one), or null when there is none.
+    document_attachments: null,
     ...overrides,
   }
 }
@@ -66,6 +68,13 @@ describe('gnubok_list_inbox_items', () => {
     expect(schema.properties.items.items.required).toContain('file_name')
   })
 
+  it('says it lists the inbox only and names the archive list (feedback seq 876431)', () => {
+    expect(tool.description).toMatch(/^Inbox items only/)
+    expect(tool.description).toContain('generated customer invoices')
+    expect(tool.description).toContain('gnubok_list_records')
+    expect(tools.some((t) => t.name === 'gnubok_list_records')).toBe(true)
+  })
+
   it('advertises optional cursor pagination without changing required output fields', () => {
     const inputSchema = tool.inputSchema as { properties: Record<string, unknown> }
     const outputSchema = tool.outputSchema as {
@@ -79,13 +88,16 @@ describe('gnubok_list_inbox_items', () => {
   })
 
   it('joins the document and returns its file_name on each list row', async () => {
+    // The embed is an OBJECT: invoice_inbox_items.document_id is many-to-one.
+    // Reading it as an array gave every row file_name null in production
+    // (agent feedback seq 876431) while a mock of the wrong shape passed.
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({
       data: [
         makeInboxItem({
           id: 'inbox-1',
           created_at: '2026-07-31T12:00:00Z',
-          document_attachments: [{ file_name: 'dooer-export-2026-07.pdf' }],
+          document_attachments: { file_name: 'leverantor-export-2026-07.pdf' },
         }),
         makeInboxItem({
           id: 'inbox-2',
@@ -104,7 +116,7 @@ describe('gnubok_list_inbox_items', () => {
     const select = findCall('invoice_inbox_items', 'select')?.[0]
     expect(select).toContain('document_attachments(file_name)')
     expect(result.items.map((item) => item.file_name)).toEqual([
-      'dooer-export-2026-07.pdf',
+      'leverantor-export-2026-07.pdf',
       null,
     ])
     expect(result.count).toBe(2)

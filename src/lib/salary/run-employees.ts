@@ -16,6 +16,7 @@ import { roundOre } from '@/lib/money'
 import { degreeAdjustedMonthlySalary } from '@/lib/salary/work-schedule'
 import { runDeviationWindow } from '@/lib/salary/deviation-period'
 import { SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
+import { refreshRunEmployeeSalaryType } from '@/lib/salary/base-salary-line'
 import type { SalaryLineItemType } from '@/types'
 
 export type RunEmployeeResult<T> =
@@ -276,7 +277,9 @@ export async function setRunEmployeeSalary(
 
   const { data: sre, error: sreError } = await supabase
     .from('salary_run_employees')
-    .select('id, employee_id, salary_type, employment_degree, monthly_salary, hours_worked')
+    .select(
+      'id, employee_id, salary_type, employment_degree, monthly_salary, hours_worked, employee:employees(salary_type, employment_type)',
+    )
     .eq('salary_run_id', args.salaryRunId)
     .eq('employee_id', args.employeeId)
     .eq('company_id', args.companyId)
@@ -300,16 +303,25 @@ export async function setRunEmployeeSalary(
     employment_degree: number
     monthly_salary: number
     hours_worked: number | null
+    employee?: { salary_type?: string | null; employment_type?: string | null } | null
   }
+
+  // The run is a draft (gated above), and the calculation prices the
+  // employee's LIVE pay type: the row's salary_type is only the snapshot
+  // taken when the employee joined the run. Check against the live type, so
+  // an employee moved from hourly to monthly pay since then is not refused
+  // the field that matches how they are paid now (agent feedback seq 869949).
+  const salaryType = row.employee?.salary_type || row.salary_type
+  const snapshotStale = salaryType !== row.salary_type
 
   // The field must match how the employee is paid: a monthly figure on an
   // hourly row would be ignored by the engine (hourly gross = rate x hours)
   // and hours on a monthly row would never price anything.
-  if ((hasMonthly && row.salary_type !== 'monthly') || (hasHours && row.salary_type !== 'hourly')) {
+  if ((hasMonthly && salaryType !== 'monthly') || (hasHours && salaryType !== 'hourly')) {
     return {
       ok: false,
       code: 'SALARY_RUN_SALARY_FIELD_MISMATCH',
-      details: { salary_type: row.salary_type },
+      details: { salary_type: salaryType },
     }
   }
 
@@ -365,7 +377,7 @@ export async function setRunEmployeeSalary(
   const data: SetRunSalaryData = {
     salary_run_employee_id: row.id,
     employee_id: row.employee_id,
-    salary_type: row.salary_type,
+    salary_type: salaryType,
     employment_degree: row.employment_degree,
     previous_monthly_salary: row.monthly_salary,
     monthly_salary: monthly,
@@ -376,6 +388,27 @@ export async function setRunEmployeeSalary(
 
   if (args.dryRun) {
     return { ok: true, data }
+  }
+
+  // Refresh the stale snapshot and swap the Grundlön/Timlön display line
+  // before the write below prices it.
+  if (snapshotStale) {
+    const { error: refreshError } = await refreshRunEmployeeSalaryType(supabase, {
+      companyId: args.companyId,
+      salaryRunEmployeeId: row.id,
+      salaryType,
+      employmentType: row.employee?.employment_type || 'employee',
+      amount: 0,
+      quantity: null,
+      unitPrice: null,
+    })
+    if (refreshError) {
+      return {
+        ok: false,
+        code: 'INTERNAL_ERROR',
+        details: { message: refreshError.message, code: refreshError.code },
+      }
+    }
   }
 
   // Clearing calculation_breakdown is what makes a stale booking impossible:

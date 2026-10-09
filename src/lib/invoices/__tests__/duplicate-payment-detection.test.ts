@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   detectDuplicatePaymentVoucher,
   detectExplainingVoucherSet,
@@ -833,12 +833,15 @@ describe('detectExplainingVoucherSetForTransaction', () => {
     expect(supabase.from.mock.calls.length - callsBefore).toBe(1)
   })
 
-  it('fails open when the cash-account lookup errors instead of widening the scan', async () => {
+  it('throws when the cash-account lookup errors, instead of widening the scan or answering "no set"', async () => {
+    // The caller's detection-failure path runs (guardAlreadyExplained:
+    // onDetectError, and a force it cannot re-verify is refused).
     const callsBefore = supabase.from.mock.calls.length
     enqueue({ data: { id: 'tx-1', date: '2026-07-31', amount: 100, currency: 'SEK', cash_account_id: 'ca-1', journal_entry_id: null }, error: null })
     enqueue({ data: null, error: { message: 'boom' } })
-    const set = await detectExplainingVoucherSetForTransaction(supabase as never, 'company-1', 'tx-1')
-    expect(set).toBeNull()
+    await expect(detectExplainingVoucherSetForTransaction(supabase as never, 'company-1', 'tx-1')).rejects.toThrow(
+      'cash account lookup failed',
+    )
     expect(supabase.from.mock.calls.length - callsBefore).toBe(2)
   })
 
@@ -852,5 +855,129 @@ describe('detectExplainingVoucherSetForTransaction', () => {
     expect(set).toBeNull()
     const tables = supabase.from.mock.calls.slice(callsBefore).map((c) => c[0])
     expect(tables).toEqual(['transactions', 'cash_accounts', 'journal_entries'])
+  })
+})
+
+/**
+ * The 1:1 detector compares the bank row only with vouchers on the account
+ * the money landed on (agent feedback seq 965009): a Stripe charge on 1686
+ * was refused as a duplicate of a 1930 voucher with another date, customer
+ * and invoice, because every 1910-1949 debit of the same amount counted.
+ *
+ * A small filtering stand-in, so the account filter is exercised against
+ * rows rather than asserted as a query shape.
+ */
+describe('detectDuplicatePaymentVoucher: scoped to the row\'s settlement account', () => {
+  type Row = Record<string, unknown>
+
+  function db(tables: Record<string, Row[]>, failing: string[] = []) {
+    const from = vi.fn((table: string) => {
+      const preds: ((r: Row) => boolean)[] = []
+      let range: [number, number] | null = null
+      let single = false
+      const chain: Record<string, unknown> = {
+        select: () => chain,
+        eq: (c: string, v: unknown) => (preds.push((r) => r[c] === v), chain),
+        gte: (c: string, v: unknown) => (preds.push((r) => String(r[c]) >= String(v)), chain),
+        lte: (c: string, v: unknown) => (preds.push((r) => String(r[c]) <= String(v)), chain),
+        gt: (c: string, v: unknown) => (preds.push((r) => Number(r[c]) > Number(v)), chain),
+        in: (c: string, vs: unknown[]) => (preds.push((r) => vs.includes(r[c])), chain),
+        order: () => chain,
+        range: (a: number, b: number) => ((range = [a, b]), chain),
+        maybeSingle: () => ((single = true), chain),
+        then: (resolve: (v: unknown) => void) => {
+          if (failing.includes(table)) return resolve({ data: null, error: { message: 'boom' } })
+          let rows = (tables[table] ?? []).filter((r) => preds.every((p) => p(r)))
+          if (range) rows = rows.slice(range[0], range[1] + 1)
+          resolve({ data: single ? (rows[0] ?? null) : rows, error: null })
+        },
+      }
+      return chain
+    })
+    return { from }
+  }
+
+  function entry(id: string, date: string) {
+    return {
+      id, company_id: 'company-1', status: 'posted', entry_date: date, description: `Voucher ${id}`,
+      voucher_series: 'A', voucher_number: 1, source_type: 'manual',
+    }
+  }
+
+  const tables = (lines: Row[], entries: Row[]) => ({
+    journal_entries: entries,
+    journal_entry_lines: lines,
+    cash_accounts: [
+      { id: 'ca-stripe', company_id: 'company-1', ledger_account: '1686' },
+      { id: 'ca-bank', company_id: 'company-1', ledger_account: '1930' },
+    ],
+    invoice_payments: [],
+    transactions: [],
+  })
+
+  const args = {
+    companyId: 'company-1',
+    transactionId: 'tx-1',
+    transactionDate: '2026-10-03',
+    transactionAmount: 1250,
+    transactionCurrency: 'SEK',
+  }
+
+  it('a 1686 row is not a duplicate of a 1930 debit of the same amount', async () => {
+    const supabase = db(tables(
+      [{ id: 'l-1', journal_entry_id: 'je-bank', account_number: '1930', debit_amount: 1250 }],
+      [entry('je-bank', '2026-09-30')],
+    ))
+    const result = await detectDuplicatePaymentVoucher(supabase as never, { ...args, cashAccountId: 'ca-stripe' })
+    expect(result).toBeNull()
+  })
+
+  it('a 1686 debit of the same amount is a candidate for the 1686 row', async () => {
+    const supabase = db(tables(
+      [
+        { id: 'l-1', journal_entry_id: 'je-bank', account_number: '1930', debit_amount: 1250 },
+        { id: 'l-2', journal_entry_id: 'je-psp', account_number: '1686', debit_amount: 1250 },
+      ],
+      [entry('je-bank', '2026-09-30'), entry('je-psp', '2026-10-03')],
+    ))
+    const result = await detectDuplicatePaymentVoucher(supabase as never, { ...args, cashAccountId: 'ca-stripe' })
+    expect(result).toMatchObject({ journal_entry_id: 'je-psp', bank_account_number: '1686', reason: 'exact_amount_same_date' })
+  })
+
+  it('an explicit bankAccountNumber scopes the scan without a lookup', async () => {
+    const supabase = db(tables(
+      [{ id: 'l-1', journal_entry_id: 'je-bank', account_number: '1930', debit_amount: 1250 }],
+      [entry('je-bank', '2026-09-30')],
+    ))
+    expect(await detectDuplicatePaymentVoucher(supabase as never, { ...args, bankAccountNumber: '1686' })).toBeNull()
+    expect(supabase.from.mock.calls.map((c) => c[0])).not.toContain('cash_accounts')
+  })
+
+  it('a row without a cash account keeps the whole 19xx range', async () => {
+    const supabase = db(tables(
+      [
+        { id: 'l-1', journal_entry_id: 'je-bank', account_number: '1930', debit_amount: 1250 },
+        // A clearing account is outside the legacy range.
+        { id: 'l-2', journal_entry_id: 'je-psp', account_number: '1686', debit_amount: 1250 },
+      ],
+      [entry('je-bank', '2026-09-30'), entry('je-psp', '2026-10-03')],
+    ))
+    const result = await detectDuplicatePaymentVoucher(supabase as never, { ...args, cashAccountId: null })
+    expect(result).toMatchObject({ journal_entry_id: 'je-bank', bank_account_number: '1930' })
+    expect(supabase.from.mock.calls.map((c) => c[0])).not.toContain('cash_accounts')
+  })
+
+  it('throws when the cash-account lookup fails, instead of widening the scan or answering "no duplicate"', async () => {
+    const supabase = db(
+      tables(
+        [{ id: 'l-1', journal_entry_id: 'je-bank', account_number: '1930', debit_amount: 1250 }],
+        [entry('je-bank', '2026-10-03')],
+      ),
+      ['cash_accounts'],
+    )
+    await expect(detectDuplicatePaymentVoucher(supabase as never, { ...args, cashAccountId: 'ca-stripe' })).rejects.toThrow(
+      'cash account lookup failed',
+    )
+    expect(supabase.from.mock.calls.map((c) => c[0])).not.toContain('journal_entries')
   })
 })

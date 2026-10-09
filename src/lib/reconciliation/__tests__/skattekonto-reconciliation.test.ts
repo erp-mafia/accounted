@@ -699,6 +699,53 @@ describe('getSkattekontoReconciliationStatus', () => {
       expect(s.unexplained_difference).toBe(0)
     })
 
+    // Agent feedback seq 897389: a duplicated SIE IB and the entry undoing it,
+    // both opening_balance on one fiscal-year start, net to 0 on 1630. The
+    // floor stopped at them and dropped every earlier year, so "Bokfört på
+    // 1630" fell short of the huvudbok by exactly that history and the gap
+    // showed up as an opening difference. The real floor (not the mock) now
+    // skips the pair and the balance runs over all history.
+    it('a cancelling IB pair is no floor: the ledger balance is the full-history huvudbok sum', async () => {
+      const actualGl = await vi.importActual<typeof import('../gl-balance')>('../gl-balance')
+      findOpeningBalanceFloorMock.mockImplementation(actualGl.findOpeningBalanceFloor)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const H1 = head('H1', '2018-05-02', { source_type: 'import' })
+      const H2 = head('H2', '2020-11-12', { source_type: 'import' })
+      const M1 = head('M1', '2021-01-01', { source_type: 'opening_balance', voucher_series: 'M' })
+      const M2 = head('M2', '2021-01-01', { source_type: 'opening_balance', voucher_series: 'M' })
+      const A1 = head('A1', '2024-02-01')
+      const A2 = head('A2', '2025-04-05')
+      const A3 = head('A3', '2026-03-01')
+      const rows = [
+        row('r1', '2025-04-05', 3000, { journal_entry_id: 'A2' }),
+        row('r2', '2026-03-01', -1000, { journal_entry_id: 'A3' }),
+      ]
+      enqueue({ data: { value: { saldo: { saldoSkatteverket: 7000 }, fetchedAt: FETCHED_AT } } })
+      enqueue({ data: rows })
+      enqueue({ data: [{ period_start: '2021-01-01' }] }) // the floor's fiscal-year read
+      enqueue({ data: [A2, A3] })
+      const lines = [
+        ledgerLine(H1, 6000), ledgerLine(H2, -1500),
+        ledgerLine(M1, 4000), ledgerLine(M2, -4000),
+        ledgerLine(A1, 500), ledgerLine(A2, 3000), ledgerLine(A3, -1000),
+      ]
+      wholeLedger(lines)
+      const huvudbok = lines.reduce((sum, l) => roundOre(sum + l.debit_amount - l.credit_amount), 0)
+
+      const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+      if (!s) throw new Error('expected status')
+      expect(await findOpeningBalanceFloorMock.mock.results[0].value).toBeNull()
+      expect(sumAccountBalanceMock).toHaveBeenCalledWith(expect.anything(), COMPANY, '1630', { cutoffDate: TODAY })
+      expect(s.ledger_balance).toBe(huvudbok)
+      expect(s.ledger_balance).toBe(7000)
+      expect(s.difference).toBe(0)
+      expect(s.skattekonto?.history_start).toBe('2025-04-05')
+      expect(s.skattekonto?.ledger_balance_before_start).toBe(5000)
+      expect(s.skattekonto?.opening_difference).toBe(0)
+      expect(s.unexplained_difference).toBe(0)
+      expect(s.is_reconciled).toBe(true)
+    })
+
     it('reports null balances when the IB read fails, never an unfloored sum', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueueBase(enqueue, { saldo: 1000, rows: [row('r1', '2026-08-01', 1000)] })

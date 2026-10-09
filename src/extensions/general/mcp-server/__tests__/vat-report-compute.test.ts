@@ -158,6 +158,62 @@ describe('computeVatReport', () => {
     expect(result.rutor.ruta48).toBe(62.5)
   })
 
+  // Agent feedback seq 911266: the Skatteverket filing carried ruta 50 (import
+  // basis 4545-4547) while this report hand-listed 20 rutor and left it out,
+  // so an agent checking the declaration before filing could not see it.
+  it('returns ruta 50 (import tax base) from 4545 against 4599', async () => {
+    const lines: MockLine[] = [
+      { account_number: '4545', debit_amount: 8000, credit_amount: 0, journal_entry_id: 'imp-1' },
+      { account_number: '4599', debit_amount: 0, credit_amount: 8000, journal_entry_id: 'imp-1' },
+      { account_number: '2615', debit_amount: 0, credit_amount: 2000, journal_entry_id: 'imp-2' },
+      { account_number: '2645', debit_amount: 2000, credit_amount: 0, journal_entry_id: 'imp-2' },
+    ]
+
+    const result = await computeVatReport(
+      { period_type: 'quarterly', year: 2026, period: 2 },
+      'company-1',
+      mockSupabaseWithLines(lines)
+    )
+
+    expect(result.rutor.ruta50).toBe(8000)
+    expect(result.rutor.ruta60).toBe(2000)
+    expect(result.rutor.ruta48).toBe(2000)
+    expect(result.rutor.ruta49).toBe(0)
+  })
+
+  it('returns every SKV 4700 box the declaration has, each declared in the outputSchema', async () => {
+    const lines: MockLine[] = [
+      { account_number: '3105', debit_amount: 0, credit_amount: 700, journal_entry_id: 'exp-1' },
+      { account_number: '1510', debit_amount: 700, credit_amount: 0, journal_entry_id: 'exp-1' },
+    ]
+    const result = await computeVatReport(
+      { period_type: 'monthly', year: 2026, period: 4 },
+      'company-1',
+      mockSupabaseWithLines(lines)
+    )
+
+    // 3105 is export of goods: ruta 36, which the hand-listed view dropped.
+    expect(result.rutor.ruta36).toBe(700)
+
+    const expected = [
+      'ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12',
+      'ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32',
+      'ruta35', 'ruta36', 'ruta37', 'ruta38', 'ruta39', 'ruta40', 'ruta41', 'ruta42',
+      'ruta48', 'ruta49', 'ruta50', 'ruta60', 'ruta61', 'ruta62',
+    ]
+    expect(Object.keys(result.rutor).sort()).toEqual([...expected].sort())
+
+    // The schema lists exactly the boxes the runtime returns. It declares no
+    // `required` list (tools/list budget): this assertion is the guarantee.
+    for (const name of ['gnubok_get_vat_report', 'gnubok_vat_review_widget']) {
+      const tool = tools.find((t) => t.name === name)
+      const rutorSchema = (tool!.outputSchema as {
+        properties: { rutor: { properties: Record<string, unknown> } }
+      }).properties.rutor
+      expect(Object.keys(rutorSchema.properties).sort(), name).toEqual([...expected].sort())
+    }
+  })
+
   it('reports rutor 20-24 as zero when only the fiktiv pair was booked (the #2919 shape)', async () => {
     const lines: MockLine[] = [
       { account_number: '6540', debit_amount: 250, credit_amount: 0, journal_entry_id: 'rc-1' },

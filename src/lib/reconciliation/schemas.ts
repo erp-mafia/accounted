@@ -257,6 +257,13 @@ export const ReconciliationItemSchema = z.object({
   proposal: ReconciliationProposalSchema.nullable().optional(),
   /** Ledger line dated within AWAITING_EXTERNAL_DAYS of the snapshot: the outside side may simply not have posted it yet. */
   awaiting_external: z.boolean().optional(),
+  /**
+   * Bank ledger rows only: the verifikat could be the account's opening
+   * balance (booked manually or by import, dated on its fiscal year's first
+   * day, no bank link), so "Märk som IB" applies. False for a verifikat dated
+   * in the year: a rättelse or payment is a movement, never an IB.
+   */
+  ib_eligible: z.boolean().optional(),
   actions: z.array(ReconciliationItemActionSchema),
 })
 export type ReconciliationItem = z.infer<typeof ReconciliationItemSchema>

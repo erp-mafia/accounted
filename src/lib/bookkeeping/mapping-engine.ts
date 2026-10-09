@@ -376,11 +376,11 @@ function buildResult(
   vatRegistered?: VatRegistration
 ): MappingResult {
   // VAT figures land on journal entry lines, which are always SEK, so they
-  // are derived from the SEK value of the transaction. The LENIENT resolver
-  // is deliberate: buildTransactionEntryLines resolves the gross with the
-  // same ladder, so the VAT lines and the bank leg can never disagree (a
-  // rateless legacy row degrades to today's behavior on both sides instead
-  // of unbalancing the net line). Mirrors buildMappingResultFromCategory.
+  // are derived from the SEK value of the transaction. The lenient resolver
+  // differs from the strict one only on a foreign row with no SEK value, and
+  // buildTransactionEntryLines refuses to book exactly that row
+  // (TX_MISSING_SEK_VALUE), so its fallback figure never reaches the ledger:
+  // it only keeps a suggestion renderable. Mirrors buildMappingResultFromCategory.
   const absSekAmount = Math.abs(resolveSekAmountLenient(
     transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
   ))

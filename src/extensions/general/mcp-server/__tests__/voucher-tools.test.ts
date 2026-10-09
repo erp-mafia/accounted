@@ -496,6 +496,9 @@ describe('gnubok_create_voucher: staging gates', () => {
       },
       error: null,
     })
+    // existing-IB check: no pointer on the year, no posted IB entry in it
+    enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null }, error: null })
+    enqueue({ data: [], error: null })
     enqueue({
       data: [
         { account_number: '1930', account_name: 'Företagskonto', is_active: true },
@@ -527,6 +530,86 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(result.preview.document_attached).toBe(false)
     expect(result.preview.compliance_warning).toBeUndefined()
     expect(result.message).not.toMatch(/WARNING/)
+  })
+
+  // Agent feedback seqs 892914, 897234, 897844: refuse a second IB at
+  // staging, before a human is asked to approve it.
+  it('is_opening_balance: refuses to stage a second IB for a year that already has one', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'fp-1',
+        is_closed: false,
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        name: '2026',
+      },
+      error: null,
+    })
+    enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null }, error: null })
+    enqueue({ data: [{ id: 'je-ib-1', voucher_series: 'A', voucher_number: 1 }], error: null })
+
+    await expect(
+      createVoucher.execute(
+        {
+          entry_date: '2026-01-01',
+          description: 'Reversal of the imported IB',
+          fiscal_period_id: 'fp-1',
+          is_opening_balance: true,
+          lines: [
+            { account_number: '2081', debit_amount: 25000, credit_amount: 0 },
+            { account_number: '1930', debit_amount: 0, credit_amount: 25000 },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({
+      code: 'OB_PERIOD_ALREADY_HAS_BALANCES',
+      message: expect.stringMatching(/redan en ingående balans \(verifikation A-1\)/),
+    })
+    // Nothing staged.
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('without is_opening_balance: never runs the existing-IB check', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'fp-1',
+        is_closed: false,
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        name: '2026',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '1010', account_name: 'Balanserade utgifter', is_active: true },
+        { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+      ],
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+    enqueue({ data: { id: 'op-manual' }, error: null }) // pending_operations insert
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-01-01',
+        description: 'Ordinary voucher on the first day',
+        fiscal_period_id: 'fp-1',
+        lines: balancedLines,
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    expect(findCall('journal_entries', 'select')).toBeUndefined()
   })
 
   it('rejects when inbox_item_id is already booked as a journal entry', async () => {

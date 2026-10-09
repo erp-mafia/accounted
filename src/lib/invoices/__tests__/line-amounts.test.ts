@@ -6,13 +6,11 @@ import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 
 describe('computeLineAmounts', () => {
-  it('passes qty * price through untouched when no discount applies', () => {
-    // Legacy parity: existing invoices store the unrounded product.
-    expect(computeLineAmounts(3, 33.333)).toEqual({
-      gross: 3 * 33.333,
-      discount: 0,
-      net: 3 * 33.333,
-    })
+  it('rounds qty * price to öre when no discount applies', () => {
+    // A three-decimal unit price used to store 99.999 as the line net and a
+    // header total off by a fraction of an öre (agent feedback seq 965009).
+    expect(computeLineAmounts(3, 33.333)).toEqual({ gross: 100, discount: 0, net: 100 })
+    expect(computeLineAmounts(7, 14.285)).toEqual({ gross: 100, discount: 0, net: 100 })
     expect(computeLineAmounts(2, 100, null)).toEqual({ gross: 200, discount: 0, net: 200 })
     expect(computeLineAmounts(2, 100, 0)).toEqual({ gross: 200, discount: 0, net: 200 })
   })

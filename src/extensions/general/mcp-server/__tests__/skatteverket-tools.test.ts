@@ -226,6 +226,23 @@ describe('gnubok_agi_submit', () => {
     expect(mockKvittenser).not.toHaveBeenCalled()
   })
 
+  it('previews the payout month as the AGI period (agent feedback seq 948847)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // Earned in September, paid in October: declared for October.
+    enqueue({ data: { id: 'sr-1', status: 'booked', period_year: 2026, period_month: 9, payment_date: '2026-10-06' } })
+    enqueue({ data: { id: 'decl-1', status: 'generated', xml_content: '<agi/>' } })
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // insert
+
+    const result = (await agiSubmit.execute(
+      { salary_run_id: 'sr-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+
+    expect(result.preview.period).toBe('2026-10')
+    expect(result.preview.earned_period).toBe('2026-09')
+  })
+
   it('throws when no AGI XML exists yet', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'sr-1', status: 'booked', period_year: 2026, period_month: 3, payment_date: '2026-03-25' } })
@@ -353,6 +370,28 @@ describe('gnubok_agi_status: run-scoped filing state', () => {
       submittedAtEstimated: false,
       source: 'declaration',
     })
+  })
+
+  it('reads the payout month, not the earned month (agent feedback seq 948847)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueStatusReads(enqueue, {
+      id: 'sr-late',
+      period_year: 2026,
+      period_month: 9,
+      payment_date: '2026-10-06',
+      agi_generated_at: '2026-10-05T10:00:00Z',
+      agi_submitted_at: null,
+    }, null)
+    enqueue({ data: null }) // agi_declarations fallback
+
+    const result = (await agiStatus.execute(
+      { salary_run_id: 'sr-late' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { period: string }
+
+    expect(result.period).toBe('202610')
+    const keyFilter = findCalls('extension_data', 'eq').find((args) => args[0] === 'key')
+    expect(keyFilter?.[1]).toBe('agi_submission_202610')
+    expect(mockKvittenser).toHaveBeenCalledWith(expect.anything(), '165560000000', '202610', expect.anything())
   })
 
   it('a run with neither XML nor record reports none', async () => {

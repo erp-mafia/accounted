@@ -175,11 +175,17 @@ export async function findMatchingVouchersForSupplierInvoice(
         const scoped = q
           .like('account_number', `${settlement.accountPrefix}%`)
           .gt(amountColumn, 0)
-        // Only lines actually labelled with the invoice's currency can be
-        // expressed in it at all; everything else is unscoreable, so this is a
-        // strict superset of what survives scoring and keeps the FX candidate
-        // set small. No-op on a SEK invoice.
-        if (isForeignInvoice) return scoped.eq('currency', invoiceCurrency)
+        // A foreign invoice on the 244x side reads every AP debit in the
+        // window, whatever its label, exactly the set a SEK invoice reads: a
+        // payment voucher that carries its 2440 debit in SEK only (an SIE
+        // import, a manual verifikat) settles the invoice through the
+        // SEK-booked fallback below, and the link validator accepts it
+        // (feedback seq 930807). On the 19xx side the SEK set would be the
+        // company's whole bank history in the window, so only lines labelled
+        // with the invoice's currency are read there: they are the only ones
+        // expressible in it. No-op on a SEK invoice.
+        if (isForeignInvoice && onBankCredit) return scoped.eq('currency', invoiceCurrency)
+        if (isForeignInvoice) return scoped
         // Every payout a kontantmetod company makes credits 19xx, so the
         // unbanded set is its whole bank history in the window. Band the
         // kronor column around the invoice (candidateAmountBand). A 244x debit
@@ -201,7 +207,18 @@ export async function findMatchingVouchersForSupplierInvoice(
   // and a voucher paying mixed SEK + EUR suppliers debits both 2440 and 2441).
   const byEntry = new Map<
     string,
-    { entry: VoucherRow; apDebitTotal: number; lineCurrency: string | null }
+    {
+      entry: VoucherRow
+      apDebitTotal: number
+      lineCurrency: string | null
+      /** Every settlement-side line, for the SEK-booked fallback. */
+      sideLines: SettlementSideLine[]
+      /** A settlement-side line carries no figure in the invoice's currency. */
+      unconvertible: boolean
+      converted: boolean
+      /** Set when the voucher settles through the SEK-booked fallback. */
+      sekBooked?: { sekTotal: number }
+    }
   >()
 
   for (const line of lines) {
@@ -213,18 +230,48 @@ export async function findMatchingVouchersForSupplierInvoice(
     // the ledger column exactly as before; on a foreign invoice it reads
     // amount_in_currency and returns null for a line that carries no figure
     // in that currency.
+    // Nothing on the settlement side (a converted amount is only ever
+    // positive where the SEK column is).
+    const rawSide = Number(settlement.entrySide === 'credit' ? line.credit_amount : line.debit_amount) || 0
+    if (rawSide <= 0) continue
     const debit = ledgerLineSideAmountIn(line, invoiceCurrency, settlement.entrySide)
-    if (debit === null || debit <= 0) continue
+    const unconvertible = debit === null
 
-    const existing = byEntry.get(entry.id)
-    if (existing) {
-      existing.apDebitTotal += debit
-    } else {
-      byEntry.set(entry.id, {
-        entry,
-        apDebitTotal: debit,
-        lineCurrency: line.currency,
-      })
+    let candidate = byEntry.get(entry.id)
+    if (!candidate) {
+      candidate = { entry, apDebitTotal: 0, lineCurrency: null, sideLines: [], unconvertible: false, converted: false }
+      byEntry.set(entry.id, candidate)
+    }
+    candidate.sideLines.push({ currency: line.currency, amount_in_currency: line.amount_in_currency, sideSek: rawSide })
+    if (unconvertible) {
+      candidate.unconvertible = true
+      continue
+    }
+    if (debit === null || debit <= 0) continue
+    candidate.apDebitTotal += debit
+    if (!candidate.converted) {
+      candidate.lineCurrency = line.currency
+      candidate.converted = true
+    }
+  }
+
+  // A voucher with a settlement-side line the invoice's currency cannot read
+  // is judged as the link validator judges it (sekBookedSettlement): settled
+  // through the SEK-booked fallback, scored on its SEK total at the invoice's
+  // rate, or not a candidate at all, since the link would refuse it.
+  const fxRate = Number(invoice.exchange_rate)
+  for (const [entryId, candidate] of byEntry) {
+    if (candidate.unconvertible) {
+      const fallback = sekBookedSettlement(candidate.sideLines, invoiceCurrency, invoice.exchange_rate, remainingAmount)
+      if (!fallback.eligible) {
+        byEntry.delete(entryId)
+        continue
+      }
+      candidate.apDebitTotal = round2(fallback.sekTotal / fxRate)
+      candidate.lineCurrency = null
+      candidate.sekBooked = { sekTotal: fallback.sekTotal }
+    } else if (candidate.apDebitTotal <= 0) {
+      byEntry.delete(entryId)
     }
   }
 
@@ -298,7 +345,7 @@ export async function findMatchingVouchersForSupplierInvoice(
 
   const ctx: CandidateContext = { invoice, remainingAmount }
   const candidates: SupplierVoucherCandidate[] = []
-  for (const { entry, apDebitTotal, lineCurrency } of byEntry.values()) {
+  for (const { entry, apDebitTotal, lineCurrency, sekBooked } of byEntry.values()) {
     const scored = scoreCandidate(entry, apDebitTotal, lineCurrency, ctx)
     if (!scored) continue
     candidates.push({
@@ -313,7 +360,9 @@ export async function findMatchingVouchersForSupplierInvoice(
       ap_line_currency: lineCurrency,
       period_locked: lockedPeriods.has(entry.fiscal_period_id),
       confidence: scored.confidence,
-      match_reason: scored.match_reason,
+      match_reason: sekBooked
+        ? `${scored.match_reason}; betalningen är bokförd i SEK (${formatNumber(sekBooked.sekTotal)} kr) och omräknad med fakturans kurs`
+        : scored.match_reason,
     })
   }
 
@@ -533,15 +582,10 @@ export async function validateVoucherForSupplierInvoiceLink(
   // A settlement-side line that carries no amount in the invoice's currency.
   // Fail CLOSED on it, UNLESS the whole matched side is genuinely SEK-booked:
   // then the fallback below mirrors the RPC's SEK-booked settlement gate
-  // (migration 20260830140000).
+  // (migration 20260830140000), through the predicate the candidate finder
+  // shares (sekBookedSettlement).
   let unconvertibleLineCurrency: string | null | undefined
-  // Fallback classification, counted per LINE exactly as the RPC does: a line
-  // labelled with the invoice's currency whose amount_in_currency is 0 is
-  // still a readable LINE and must keep the fallback disabled, because its
-  // real SEK ledger movement is excluded from sekSideTotal.
-  let readableCount = 0
-  let sekSideTotal = 0
-  let foreignLabelCount = 0
+  const sideLines: SettlementSideLine[] = []
   for (const raw of lines) {
     const line = raw as {
       account_number: string
@@ -553,15 +597,7 @@ export async function validateVoucherForSupplierInvoiceLink(
     if (!line.account_number?.startsWith(settlement.accountPrefix)) continue
     const rawDebit =
       Number(settlement.entrySide === 'credit' ? line.credit_amount : line.debit_amount) || 0
-    if (invoiceCurrency !== 'SEK' && rawDebit > 0) {
-      if (line.currency === invoiceCurrency && line.amount_in_currency != null) {
-        readableCount += 1
-      } else if ((line.currency ?? 'SEK') === 'SEK') {
-        sekSideTotal += rawDebit
-      } else {
-        foreignLabelCount += 1
-      }
-    }
+    sideLines.push({ currency: line.currency, amount_in_currency: line.amount_in_currency, sideSek: rawDebit })
     const debit = ledgerLineSideAmountIn(line, invoiceCurrency, settlement.entrySide)
     if (debit === null) {
       if (rawDebit > 0 && unconvertibleLineCurrency === undefined) {
@@ -576,44 +612,29 @@ export async function validateVoucherForSupplierInvoiceLink(
   apDebitTotal = round2(apDebitTotal)
 
   if (unconvertibleLineCurrency !== undefined) {
-    // SEK-booked settlement fallback, mirroring the RPC gate byte-for-byte:
-    // zero readable lines, every unreadable line SEK-booked, a sane
-    // exchange_rate, and the voucher's SEK total within 10% of remaining *
-    // rate. The RPC settles the FULL remaining; on ap_debit it also books the
-    // FX residual to 3960/7960 as its own verifikat, on bank_credit it books
-    // nothing (no skuld was carried at the invoice rate). The validation
-    // outcome only has to agree.
-    const exchangeRate = Number(invoice.exchange_rate)
-    const fallbackEligible =
-      readableCount === 0 &&
-      foreignLabelCount === 0 &&
-      sekSideTotal > 0 &&
-      Number.isFinite(exchangeRate) &&
-      exchangeRate > 0 &&
-      exchangeRate < 100000
-    if (!fallbackEligible) {
+    // SEK-booked settlement fallback, mirroring the RPC gate byte-for-byte
+    // (sekBookedSettlement). The RPC settles the FULL remaining; on ap_debit
+    // it also books the FX residual to 3960/7960 as its own verifikat, on
+    // bank_credit it books nothing (no skuld was carried at the invoice
+    // rate). The validation outcome only has to agree.
+    const fallback = sekBookedSettlement(sideLines, invoiceCurrency, invoice.exchange_rate, remainingAmount)
+    if (!fallback.eligible) {
       return {
         ok: false,
         code: 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
-        details: {
-          invoice_currency: invoice.currency,
-          line_currency: unconvertibleLineCurrency,
-        },
-      }
-    }
-    const sekTotal = round2(sekSideTotal)
-    const bookedSek = round2(remainingAmount * exchangeRate)
-    if (Math.abs(sekTotal - bookedSek) > bookedSek * 0.1) {
-      return {
-        ok: false,
-        code: 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
-        details: {
-          invoice_currency: invoice.currency,
-          line_currency: unconvertibleLineCurrency,
-          reason: 'fx_deviation_too_large',
-          expected_sek: bookedSek,
-          voucher_sek: sekTotal,
-        },
+        details:
+          fallback.reason === 'fx_deviation_too_large'
+            ? {
+                invoice_currency: invoice.currency,
+                line_currency: unconvertibleLineCurrency,
+                reason: 'fx_deviation_too_large',
+                expected_sek: fallback.bookedSek,
+                voucher_sek: fallback.sekTotal,
+              }
+            : {
+                invoice_currency: invoice.currency,
+                line_currency: unconvertibleLineCurrency,
+              },
       }
     }
     // Full-remaining settlement, exactly as the RPC computes it. lineCurrency
@@ -926,6 +947,70 @@ function bankCreditCapacity(
   const used = round2(voucherRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
   const left = round2(bankCredit - used)
   return left > AMOUNT_TOLERANCE ? left : null
+}
+
+/** A settlement-side line (244x debit or 19xx credit) as the SEK-booked fallback reads it. */
+export interface SettlementSideLine {
+  currency: string | null
+  amount_in_currency: number | string | null
+  /** The SEK ledger amount on the settlement side of the line. */
+  sideSek: number
+}
+
+export type SekBookedSettlement =
+  | { eligible: true; sekTotal: number; bookedSek: number }
+  | { eligible: false; reason: 'not_eligible' }
+  | { eligible: false; reason: 'fx_deviation_too_large'; sekTotal: number; bookedSek: number }
+
+/**
+ * The RPC's SEK-booked settlement gate (migration 20260830140000) for a
+ * foreign-currency invoice, as ONE predicate for the link validator and the
+ * candidate finder, so the finder never offers a voucher the link refuses and
+ * never hides one it accepts (feedback seq 930807: a USD invoice paid by an
+ * SIE-imported voucher with its 2440 debit in SEK linked fine by hand, yet no
+ * candidate was ever proposed).
+ *
+ * Counted per LINE exactly as the RPC does: zero lines readable in the
+ * invoice's currency (a line labelled with it whose amount_in_currency is 0
+ * still counts as readable, because its real SEK movement is not in the SEK
+ * total), zero lines labelled with a third currency, a positive SEK total, a
+ * sane exchange_rate, and that SEK total within 10 % of remaining x rate.
+ */
+export function sekBookedSettlement(
+  sideLines: readonly SettlementSideLine[],
+  invoiceCurrency: string,
+  exchangeRate: unknown,
+  remainingAmount: number,
+): SekBookedSettlement {
+  let readableCount = 0
+  let sekSideTotal = 0
+  let foreignLabelCount = 0
+  for (const line of sideLines) {
+    if (!(line.sideSek > 0)) continue
+    if (line.currency === invoiceCurrency && line.amount_in_currency != null) {
+      readableCount += 1
+    } else if ((line.currency ?? 'SEK') === 'SEK') {
+      sekSideTotal += line.sideSek
+    } else {
+      foreignLabelCount += 1
+    }
+  }
+  const rate = Number(exchangeRate)
+  const eligible =
+    invoiceCurrency !== 'SEK' &&
+    readableCount === 0 &&
+    foreignLabelCount === 0 &&
+    sekSideTotal > 0 &&
+    Number.isFinite(rate) &&
+    rate > 0 &&
+    rate < 100000
+  if (!eligible) return { eligible: false, reason: 'not_eligible' }
+  const sekTotal = round2(sekSideTotal)
+  const bookedSek = round2(remainingAmount * rate)
+  if (Math.abs(sekTotal - bookedSek) > bookedSek * 0.1) {
+    return { eligible: false, reason: 'fx_deviation_too_large', sekTotal, bookedSek }
+  }
+  return { eligible: true, sekTotal, bookedSek }
 }
 
 function computeRemaining(invoice: SupplierInvoice): number {

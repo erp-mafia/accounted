@@ -30,6 +30,8 @@ import { validateOneOffTaxLine } from '@/lib/salary/one-off-tax'
 import { validateVacationCategoryLine } from '@/lib/salary/vacation-category'
 import { roundOre } from '@/lib/money'
 import { isCalculatedLine, isCalculatedLineType } from '@/lib/salary/calculated-line-items'
+import { ADDITION_ITEM_TYPES } from '@/lib/salary/calculation-engine'
+import { isBenefitItemType } from '@/lib/salary/benefit-payments'
 import type { SalaryLineItemType } from '@/types'
 
 export type PayslipLineResult<T> =
@@ -189,6 +191,37 @@ async function loadLineInRun(
   return { ok: true, data: { line: line as SalaryLineItemRow, calculated } }
 }
 
+export const AVGIFT_BASIS_FLAG_UNSUPPORTED =
+  'Raden ingår alltid i underlaget för arbetsgivaravgifter: is_avgift_basis=false stöds ännu inte för skattepliktiga tillägg och förmåner och skulle ignoreras vid beräkningen. ' +
+  'Spara raden med is_avgift_basis=true och justera arbetsgivaravgifterna i granskningssteget (avancerat läge) om underlaget ska vara lägre.'
+
+/**
+ * is_avgift_basis=false on a line the engine always folds into the
+ * avgiftsunderlag. The flag is stored but no calculation reads it: the
+ * engine's avgifter basis is gross pay (taxable additions included) plus
+ * every förmån (calculation-engine.ts), and the AGI and the booking follow
+ * the engine. Accepting the flag told the caller the line was outside the
+ * underlag while the run charged arbetsgivaravgifter on it (agent feedback
+ * seq 947288). Refused until the engine and the AGI honour it (a domain
+ * decision: which AGI field such a förmån is declared in).
+ */
+export function validateAvgiftBasisLine(line: {
+  item_type?: string | null
+  is_avgift_basis?: boolean | null
+  is_taxable?: boolean | null
+  is_gross_deduction?: boolean | null
+  is_net_deduction?: boolean | null
+}): string | null {
+  if (line.is_avgift_basis !== false || !line.item_type) return null
+  if (line.is_taxable === false) return null
+  const benefit = isBenefitItemType(line.item_type)
+  const addition =
+    (ADDITION_ITEM_TYPES as readonly string[]).includes(line.item_type) &&
+    !line.is_gross_deduction &&
+    !line.is_net_deduction
+  return benefit || addition ? AVGIFT_BASIS_FLAG_UNSUPPORTED : null
+}
+
 /** The refusal for a line the calculation owns. */
 function calculatedLineRefusal(details: Record<string, unknown>): PayslipLineResult<never> {
   return { ok: false, code: 'SALARY_LINE_CALCULATED', details }
@@ -228,6 +261,10 @@ export async function createPayslipLine(
   const categoryError = validateVacationCategoryLine(input)
   if (categoryError) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'vacation_category', message: categoryError } }
+  }
+  const avgiftBasisError = validateAvgiftBasisLine(input)
+  if (avgiftBasisError) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'is_avgift_basis', message: avgiftBasisError } }
   }
   const accountNumber =
     input.account_number || getLineItemAccount(input.item_type as SalaryLineItemType)
@@ -316,6 +353,14 @@ export async function updatePayslipLine(
   const categoryError = validateVacationCategoryLine(merged)
   if (categoryError) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'vacation_category', message: categoryError } }
+  }
+  // Only when the patch touches what decides it, so an unrelated edit of a
+  // row stored before the refusal existed still goes through.
+  const touchesAvgiftBasis = ['is_avgift_basis', 'item_type', 'is_taxable', 'is_gross_deduction', 'is_net_deduction']
+    .some((key) => key in updates)
+  const avgiftBasisError = touchesAvgiftBasis ? validateAvgiftBasisLine(merged) : null
+  if (avgiftBasisError) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'is_avgift_basis', message: avgiftBasisError } }
   }
 
   if (args.dryRun) {

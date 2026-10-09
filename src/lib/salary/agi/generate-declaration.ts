@@ -207,7 +207,7 @@ export async function generateAgiDeclaration(
 
   const { data: settings } = await supabase
     .from('company_settings')
-    .select('company_name, org_number, phone, email')
+    .select('company_name, org_number, phone, email, tax_contact_name, tax_contact_phone, tax_contact_email')
     .eq('company_id', companyId)
     .single()
 
@@ -241,9 +241,13 @@ export async function generateAgiDeclaration(
     companyName,
     periodYear: agiPeriod.periodYear,
     periodMonth: agiPeriod.periodMonth,
-    contactName: (profile?.full_name || companyName || '').trim(),
-    contactPhone: (settings?.phone || '').trim(),
-    contactEmail: (settings?.email || profile?.email || userEmail || '').trim(),
+    // The AGI kontaktperson is the company's tax contact when one is set
+    // (company_settings.tax_contact_*, the same contact the periodisk
+    // sammanställning files with); each field falls back on its own to the
+    // company contact details and then the signed-in user.
+    contactName: (settings?.tax_contact_name?.trim() || profile?.full_name || companyName || '').trim(),
+    contactPhone: (settings?.tax_contact_phone?.trim() || settings?.phone || '').trim(),
+    contactEmail: (settings?.tax_contact_email?.trim() || settings?.email || profile?.email || userEmail || '').trim(),
   }
 
   // Load per-day absence (VAB + parental only: sick days go to FK separately).

@@ -67,6 +67,12 @@ export interface SkattekontoBookingSuggestion {
   account: string
   account_name?: string | null
   label?: string | null
+  /**
+   * A VAT refund that clears 1650 within 1 kr: the refund minus the
+   * receivable, booked as a third line on 3740 (positive = credit 3740). The
+   * counter account then takes the receivable. Absent otherwise.
+   */
+  ore_rounding?: number
 }
 
 /**

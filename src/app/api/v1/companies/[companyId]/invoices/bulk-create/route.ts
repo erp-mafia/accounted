@@ -53,6 +53,8 @@ import {
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
 import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
 import type { Invoice, InvoiceDocumentType } from '@/types'
@@ -263,7 +265,9 @@ async function createOneInvoice(
     for (const item of input.items) item.vat_rate = 0
   }
 
-  const subtotal = input.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
+  // Öre-exact amounts, the rule buildInvoiceWriteData applies: each line net
+  // is computeLineNet (whole öre) and the header sums are rounded.
+  const subtotal = roundOre(input.items.reduce((sum, item) => sum + computeLineNet(item.quantity, item.unit_price), 0))
   let vatAmount = 0
   if (documentType !== 'delivery_note') {
     for (const item of input.items) {
@@ -283,11 +287,11 @@ async function createOneInvoice(
           },
         }
       }
-      const lineTotal = item.quantity * item.unit_price
-      vatAmount += Math.round((lineTotal * itemRate) / 100 * 100) / 100
+      const lineTotal = computeLineNet(item.quantity, item.unit_price)
+      vatAmount = roundOre(vatAmount + Math.round((lineTotal * itemRate) / 100 * 100) / 100)
     }
   }
-  const total = documentType === 'delivery_note' ? 0 : subtotal + vatAmount
+  const total = documentType === 'delivery_note' ? 0 : roundOre(subtotal + vatAmount)
   const uniqueRates = new Set(input.items.map((it) => it.vat_rate ?? vatRules.rate))
   const isMixedRate = uniqueRates.size > 1
   const headerVatRate = documentType === 'delivery_note'
@@ -322,7 +326,7 @@ async function createOneInvoice(
 
   const itemRows = input.items.map((item, sortOrder) => {
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-    const lineTotal = item.quantity * item.unit_price
+    const lineTotal = computeLineNet(item.quantity, item.unit_price)
     const itemVat = documentType === 'delivery_note'
       ? 0
       : Math.round((lineTotal * itemRate) / 100 * 100) / 100

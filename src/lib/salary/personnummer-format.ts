@@ -126,6 +126,37 @@ export function maskPersonnummer(personnummer: string): string {
   return `${digits.slice(0, 8)}-XXXX`
 }
 
+/** Month 01-12 and day 01-31, or 61-91 for a samordningsnummer (day + 60). */
+const MMDD = '(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01]|6[1-9]|[78]\\d|9[01])'
+
+/**
+ * A 12-digit personnummer or samordningsnummer in free text: YYYYMMDDNNNN,
+ * or with "-", "+" or a space before the last four digits. The date part
+ * must look like a birth date (year 18xx-20xx), so an employer id such as
+ * 16XXXXXXXXXX, an amount or a reference number is left alone.
+ */
+const PERSONNUMMER_12_IN_TEXT = new RegExp(`(?<!\\d)((?:18|19|20)\\d{2}${MMDD})[-+ ]?\\d{4}(?!\\d)`, 'g')
+
+/**
+ * The 10-digit form, YYMMDDNNNN or YYMMDD-NNNN / YYMMDD+NNNN. An
+ * organisationsnummer has the same shape but its third digit is 2 or more
+ * (NN2N...), which no month can be, so the month check leaves it alone.
+ */
+const PERSONNUMMER_10_IN_TEXT = new RegExp(`(?<![\\d-])(\\d{2}${MMDD})[-+]?\\d{4}(?![\\d-])`, 'g')
+
+/**
+ * Mask every personnummer in a free-text message, keeping the birth date
+ * the way maskPersonnummer does: YYYYMMDD-XXXX for the 12-digit form,
+ * YYMMDD-XXXX for the 10-digit form. For third-party text that can name an
+ * employee by personnummer (e.g. Skatteverket's AGI kontrollsvar) before it
+ * reaches an API caller or an agent's context.
+ */
+export function maskPersonnummerInText(text: string): string {
+  return text
+    .replace(PERSONNUMMER_12_IN_TEXT, '$1-XXXX')
+    .replace(PERSONNUMMER_10_IN_TEXT, '$1-XXXX')
+}
+
 /**
  * Format personnummer with dash: YYYYMMDD-NNNN
  */

@@ -92,7 +92,7 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
             <span>{t(`ext_arcim_job_resource_${row.resource}`)}</span>
             <span className="tabular-nums text-muted-foreground">{t('ext_arcim_job_counts', {
               imported: row.imported, total: row.total, pending: row.pending, failed: row.needs_attention,
-            })}</span>
+            })}{row.skipped > 0 && `, ${t('ext_arcim_job_counts_skipped', { skipped: row.skipped })}`}</span>
           </li>)}
         </ul>
         {migrationRefusals(status.job).map(group => <div key={group.messageKey} className="space-y-1 text-sm">
@@ -101,6 +101,10 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
           })}</p>
           <p className="text-muted-foreground">{t(group.messageKey, { provider })}</p>
         </div>)}
+        {/* The job counts skipped records but not why (agent feedback seq 939430). */}
+        {status.counts.some(row => row.skipped > 0) && (
+          <p className="text-sm text-muted-foreground">{t('ext_arcim_job_skipped_explanation')}</p>
+        )}
       </>}
       {disconnected && <p className="text-sm text-muted-foreground">{t('ext_arcim_job_connection')}</p>}
       {review && status && <div className="space-y-6">

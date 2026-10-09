@@ -208,6 +208,48 @@ describe('gnubok_get_salary_run: personnummer contract', () => {
   })
 })
 
+describe('gnubok_get_salary_run: effective figures', () => {
+  it('adds per-employee `effective` and run `effective_totals` with the overrides applied', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // Stored totals predate the override.
+    enqueue({ data: { id: 'run-1', status: 'review', total_tax: 7000, total_net: 23000, total_avgifter: 9426 } })
+    enqueue({
+      data: [
+        {
+          id: 'sre-1',
+          salary_run_id: 'run-1',
+          employee_id: 'emp-1',
+          gross_salary: 30000,
+          tax_withheld: 7000,
+          tax_withheld_override: 0,
+          net_salary: 23000,
+          avgifter_amount: 9426,
+          avgifter_amount_override: 0,
+          vacation_accrual: 0,
+          vacation_accrual_avgifter: 0,
+          employee: { first_name: 'Anna', last_name: 'Andersson', personnummer: SAMPLE_PERSONNUMMER, f_skatt_status: 'a_skatt' },
+        },
+      ],
+    })
+
+    const result = (await getSalaryRun.execute(
+      { salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as {
+      total_tax: number
+      effective_totals: Record<string, number>
+      employees: Array<{ tax_withheld: number; effective: Record<string, number> }>
+    }
+
+    expect(result.total_tax).toBe(7000) // stored column untouched
+    expect(result.employees[0].tax_withheld).toBe(7000) // raw column untouched
+    expect(result.employees[0].effective.tax_withheld).toBe(0)
+    expect(result.employees[0].effective.net_salary).toBe(30000)
+    expect(result.effective_totals.total_tax).toBe(0)
+    expect(result.effective_totals.total_net).toBe(30000)
+    expect(result.effective_totals.total_avgifter).toBe(0)
+  })
+})
+
 describe('gnubok_get_payslip', () => {
   const SRE_ROW = {
     id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
@@ -279,6 +321,37 @@ describe('gnubok_get_payslip', () => {
     expect(result.line_items[0].salary_line_item_id).toBe('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee')
     expect(result.line_items[0].id).toBeUndefined()
     expect(JSON.stringify(result)).not.toContain(SAMPLE_PERSONNUMMER)
+  })
+
+  it('reports the effective tax and net when a tax override is set (agent feedback seq 911374)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ...SRE_ROW,
+        tax_withheld_override: 12000,
+        avgifter_amount_override: 0,
+        override_reason: 'Frivilligt extra skatteavdrag',
+        employee: { ...SRE_ROW.employee, f_skatt_status: 'a_skatt' },
+      },
+    })
+
+    const result = (await getPayslip.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-1' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as {
+      amounts: Record<string, number>
+      effective: Record<string, number | boolean>
+    }
+
+    // Raw calculated values stay under `amounts` for compatibility.
+    expect(result.amounts.tax_withheld).toBe(8200)
+    expect(result.amounts.net_salary).toBe(26800)
+    // `effective` is what the booking, AGI and bank file use.
+    expect(result.effective.tax_withheld).toBe(12000)
+    expect(result.effective.net_salary).toBe(23000)
+    expect(result.effective.avgifter_amount).toBe(0)
+    expect(result.effective.employer_cost).toBe(40519.64)
+    expect(result.effective.tax_overridden).toBe(true)
   })
 
   it('throws when the employee is not in the run', async () => {

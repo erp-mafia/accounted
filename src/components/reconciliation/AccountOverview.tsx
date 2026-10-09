@@ -821,7 +821,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                           onIgnore={() => void setIgnored(item, true)}
                           onUnignore={() => void setIgnored(item, false)}
                           onBook={() => setBookRow(item)}
-                          onMarkIb={!isSkv && item.side === 'ledger' && item.bucket === 'unmatched_ledger' ? () => void markOpeningBalance(item) : undefined}
+                          onMarkIb={!isSkv && item.side === 'ledger' && item.bucket === 'unmatched_ledger' && item.ib_eligible ? () => void markOpeningBalance(item) : undefined}
                           moveTargets={!isSkv && item.item_type === 'transaction' && item.bucket === 'unmatched_external' ? otherBankAccounts : []}
                           onMove={(target) => void moveToAccount(item, target)}
                         />

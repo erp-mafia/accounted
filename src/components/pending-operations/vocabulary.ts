@@ -61,6 +61,7 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   book_vat_settlement: 'type_book_vat_settlement',
   mark_vat_period_filed: 'type_mark_vat_period_filed',
   unmark_vat_period_filed: 'type_unmark_vat_period_filed',
+  mark_agi_period_filed: 'type_mark_agi_period_filed',
   send_payslips: 'type_send_payslips',
   revert_salary_run: 'type_revert_salary_run',
   unapprove_salary_run: 'type_unapprove_salary_run',
@@ -123,6 +124,7 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   ignore_transaction: 'type_ignore_transaction',
   retag_line_dimensions: 'type_retag_line_dimensions',
   set_voucher_note: 'type_set_voucher_note',
+  cancel_draft_entry: 'type_cancel_draft_entry',
   // Bulk booking / allocation
   match_batch_allocate: 'type_match_batch_allocate',
   bulk_book_transactions: 'type_bulk_book_transactions',

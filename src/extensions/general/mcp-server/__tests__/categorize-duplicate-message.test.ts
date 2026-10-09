@@ -165,3 +165,23 @@ describe('gnubok_categorize_transaction duplicate-guard message', () => {
     expect(err.message).toContain('transaktionen är i EUR utan växelkurs')
   })
 })
+
+// Agent feedback seq 887729: with no duplicate in the way, a foreign row with
+// no SEK value is refused at staging (it used to stage and post the foreign
+// figure as kronor). Nothing is staged.
+describe('gnubok_categorize_transaction on a foreign row without a SEK value', () => {
+  it('refuses with TX_MISSING_SEK_VALUE after the duplicate guard found nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: coreTxRow({ amount: -200, currency: 'CAD' }), error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: guardTxRow({ amount: -200, currency: 'CAD' }), error: null })
+    mockDetectDup.mockResolvedValue(null)
+
+    const err = await runCategorize(supabase)
+
+    expect((err as Error & { code?: string }).code).toBe('TX_MISSING_SEK_VALUE')
+    expect(mockDetectDup).toHaveBeenCalledTimes(1)
+    expect(findCalls('pending_operations', 'insert')).toEqual([])
+  })
+})

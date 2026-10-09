@@ -1172,3 +1172,87 @@ describe('gnubok_query_journal: voucher number arguments', () => {
     }
   })
 })
+
+// Agent feedback seq 897234: a date range spanning two fiscal years summed the
+// prior year's lines AND the IB verifikat that restates them, with nothing in
+// the result saying so.
+describe('gnubok_query_journal: totals_note when the sum crosses an IB verifikat', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_query_journal')!
+
+  function row(opts: {
+    id: string
+    entryId: string
+    account: string
+    debit: number
+    credit: number
+    date: string
+    sourceType: string
+    voucherNumber: number
+    status?: string
+  }) {
+    return {
+      id: opts.id, account_number: opts.account,
+      debit_amount: opts.debit, credit_amount: opts.credit,
+      currency: 'SEK', line_description: null, project: null, cost_center: null, sort_order: 0,
+      journal_entries: {
+        id: opts.entryId, voucher_number: opts.voucherNumber, voucher_series: 'A',
+        entry_date: opts.date, description: 'x', notes: null,
+        source_type: opts.sourceType, status: opts.status ?? 'posted',
+      },
+    }
+  }
+
+  it('explains the double count when prior-year lines and the IB that restates them are both summed', async () => {
+    const rows = [
+      // Prior year: 1000 into the bank account.
+      row({ id: 'l1', entryId: 'e-2025', account: '1930', debit: 1000, credit: 0, date: '2025-06-01', sourceType: 'manual', voucherNumber: 12 }),
+      // New year's IB restates the same 1000.
+      row({ id: 'l2', entryId: 'e-ib', account: '1930', debit: 1000, credit: 0, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
+      row({ id: 'l3', entryId: 'e-ib', account: '2081', debit: 0, credit: 1000, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
+    ]
+    const { supabase } = makeEntryLinesMock(rows)
+
+    const result = (await tool().execute(
+      { accounts: ['1930'], date_from: '2025-01-01', date_to: '2026-12-31' },
+      'company-1', 'user-1', supabase,
+    )) as { totals: { debit: number }; totals_note?: string }
+
+    // The sum itself is unchanged: the note explains it, it does not "fix" it.
+    expect(result.totals.debit).toBe(2000)
+    expect(result.totals_note).toMatch(/opening-balance \(IB\) verifikat \(A-1\)/)
+    expect(result.totals_note).toMatch(/account 1930\b/)
+    expect(result.totals_note).toMatch(/gnubok_get_balance_sheet/)
+    expect(result.totals_note).toMatch(/2026-01-01/)
+  })
+
+  it('stays silent when the range starts at the IB (nothing before it is summed)', async () => {
+    const rows = [
+      row({ id: 'l2', entryId: 'e-ib', account: '1930', debit: 1000, credit: 0, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
+      row({ id: 'l4', entryId: 'e-2026', account: '1930', debit: 0, credit: 300, date: '2026-02-01', sourceType: 'manual', voucherNumber: 2 }),
+    ]
+    const { supabase } = makeEntryLinesMock(rows)
+
+    const result = (await tool().execute(
+      { accounts: ['1930'], date_from: '2026-01-01' },
+      'company-1', 'user-1', supabase,
+    )) as { totals: { net: number }; totals_note?: string }
+
+    expect(result.totals.net).toBe(700)
+    expect(result.totals_note).toBeUndefined()
+  })
+
+  it('stays silent when the earlier lines are on another account than the IB lines', async () => {
+    const rows = [
+      row({ id: 'l1', entryId: 'e-2025', account: '3001', debit: 0, credit: 500, date: '2025-06-01', sourceType: 'manual', voucherNumber: 12 }),
+      row({ id: 'l2', entryId: 'e-ib', account: '1930', debit: 1000, credit: 0, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
+    ]
+    const { supabase } = makeEntryLinesMock(rows)
+
+    const result = (await tool().execute(
+      { date_from: '2025-01-01' },
+      'company-1', 'user-1', supabase,
+    )) as { totals_note?: string }
+
+    expect(result.totals_note).toBeUndefined()
+  })
+})

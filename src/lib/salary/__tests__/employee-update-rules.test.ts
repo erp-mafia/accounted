@@ -9,6 +9,7 @@ import {
   HOURLY_RATE_REQUIRED,
   MONTHLY_SALARY_REQUIRED,
   TAX_TABLE_REQUIRED,
+  VACATION_DAYS_MINIMUM,
   VAXA_START_REQUIRED,
   validateEmployeeUpdate,
 } from '../employee-update-rules'
@@ -127,5 +128,33 @@ describe('validateEmployeeUpdate', () => {
       'vaxa_stod_start',
       'bank_account_number',
     ])
+  })
+})
+
+describe('validateEmployeeUpdate: vacation days (agent feedback seq 828138)', () => {
+  const ROW = { ...VALID_ROW, vacation_rule: 'procentregeln', vacation_days_per_year: 25 }
+
+  it('lets an employee on vacation_rule none drop to 0 days', () => {
+    expect(validateEmployeeUpdate({ ...ROW, vacation_rule: 'none' }, { vacation_days_per_year: 0 })).toEqual([])
+  })
+
+  it('lets the same patch switch to none and set 0 days', () => {
+    expect(validateEmployeeUpdate(ROW, { vacation_rule: 'none', vacation_days_per_year: 0 })).toEqual([])
+  })
+
+  it('refuses fewer than 25 days for an employee under another rule', () => {
+    expect(validateEmployeeUpdate(ROW, { vacation_days_per_year: 20 })).toEqual([
+      { field: 'vacation_days_per_year', message: VACATION_DAYS_MINIMUM },
+    ])
+  })
+
+  it('refuses leaving none while 0 days are stored', () => {
+    expect(
+      validateEmployeeUpdate({ ...ROW, vacation_rule: 'none', vacation_days_per_year: 0 }, { vacation_rule: 'procentregeln' }),
+    ).toEqual([{ field: 'vacation_days_per_year', message: VACATION_DAYS_MINIMUM }])
+  })
+
+  it('does not block an unrelated edit', () => {
+    expect(validateEmployeeUpdate({ ...ROW, vacation_days_per_year: 20 }, { email: 'x@example.test' })).toEqual([])
   })
 })

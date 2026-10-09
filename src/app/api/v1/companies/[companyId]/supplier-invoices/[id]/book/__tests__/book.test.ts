@@ -230,6 +230,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/book', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.dry_run).toBe(true)
+    // Names the invoice, so a staged Bokför can be told apart (feedback seq 930807).
+    expect(body.data.preview).toMatchObject({
+      supplier_invoice_number: '55012',
+      supplier_name: 'Leverantören AB',
+      total: 10000,
+      currency: 'SEK',
+    })
     const { journal_entry: entry } = body.data.preview
     expect(entry).toMatchObject({ fiscal_period_id: FP_ID, entry_date: '2026-09-03', balanced: true, total_debit: 10000 })
     expect(entry.lines).toEqual([

@@ -1,0 +1,281 @@
+/**
+ * What the customer-invoice staging tools show before approval (agent
+ * feedback seq 851670, 876823, 929266).
+ *
+ * gnubok_mark_invoice_as_paid used to say "booked (15xx → 19xx)" whatever the
+ * company's method, so an agent on kontantmetoden read it as a receivable
+ * clearing it did not have and booked the payment by hand. The preview now
+ * carries the lines the executor posts. gnubok_mark_invoice_as_sent and
+ * gnubok_send_invoice titled a draft "null <kund>": a draft has no number
+ * until approval. They now name it by customer and amount, the number it
+ * will most likely get, and whether approval posts a verifikat.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createTableMockSupabase } from '@/tests/helpers'
+import { formatAmount } from '@/lib/utils'
+
+vi.mock('@/lib/invoices/duplicate-payment-candidates', () => ({
+  findDuplicatePaymentCandidatesForInvoice: vi.fn(async () => []),
+}))
+vi.mock('@/lib/email/service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/email/service')>()),
+  getEmailService: () => ({ isConfigured: () => true }),
+}))
+
+import { tools } from '../server'
+
+const markPaid = tools.find((t) => t.name === 'gnubok_mark_invoice_as_paid')!
+const markSent = tools.find((t) => t.name === 'gnubok_mark_invoice_as_sent')!
+const sendInvoice = tools.find((t) => t.name === 'gnubok_send_invoice')!
+
+const INVOICE_ID = '33333333-3333-4333-8333-333333333333'
+
+function sentInvoice(overrides: Record<string, unknown> = {}) {
+  return {
+    id: INVOICE_ID,
+    invoice_number: 'F-1001',
+    status: 'sent',
+    document_type: 'invoice',
+    credited_invoice_id: null,
+    journal_entry_id: null,
+    payment_cash_account_id: null,
+    total: 12500,
+    total_sek: 12500,
+    subtotal: 10000,
+    subtotal_sek: 10000,
+    vat_amount: 2500,
+    vat_amount_sek: 2500,
+    currency: 'SEK',
+    exchange_rate: null,
+    vat_treatment: 'standard_25',
+    paid_amount: 0,
+    remaining_amount: 12500,
+    customer: { name: 'Testkund AB', email: 'ekonomi@example.com' },
+    ...overrides,
+  }
+}
+
+const ITEM = {
+  id: 'item-1',
+  invoice_id: INVOICE_ID,
+  sort_order: 0,
+  line_type: 'product',
+  description: 'Konsulttjänst',
+  quantity: 1,
+  unit: 'st',
+  unit_price: 10000,
+  line_total: 10000,
+  vat_rate: 25,
+  vat_amount: 2500,
+  revenue_account: null,
+}
+
+function setup(settings: Record<string, unknown>, invoice: Record<string, unknown>) {
+  const mock = createTableMockSupabase({
+    invoices: { data: invoice },
+    invoice_items: { data: [ITEM] },
+    company_settings: {
+      data: { entity_type: 'enskild_firma', bookkeeping_locked_through: null, ...settings },
+    },
+    fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null } },
+    pending_operations: { data: { id: 'op-1' } },
+    'rpc:peek_next_invoice_number': { data: 'F-1042' },
+  })
+  return mock
+}
+
+function stagedInsert(findCall: (t: string, m: string) => unknown[] | undefined) {
+  const args = findCall('pending_operations', 'insert')
+  expect(args).toBeDefined()
+  return args![0] as { title: string; preview_data: Record<string, unknown> }
+}
+
+type PreviewLine = { account_number: string; debit_amount: number; credit_amount: number }
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('gnubok_mark_invoice_as_paid: the preview shows the entry the method books', () => {
+  it('kontantmetoden, unbooked SEK invoice: bank debit, revenue and output VAT credit, no 1510', async () => {
+    const { supabase, findCall } = setup({ accounting_method: 'cash' }, sentInvoice())
+
+    const result = (await markPaid.execute(
+      { invoice_id: INVOICE_ID, payment_date: '2026-09-15' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { preview: Record<string, unknown>; next?: { description: string } }
+
+    const preview = result.preview
+    expect(preview.accounting_method).toBe('cash')
+    expect(preview.source_type).toBe('invoice_cash_payment')
+    const entry = preview.journal_entry_preview as { lines: PreviewLine[]; total_debit: number; total_credit: number }
+    const byAccount = Object.fromEntries(entry.lines.map((l) => [l.account_number, l]))
+    expect(byAccount['1930']).toMatchObject({ debit_amount: 12500, credit_amount: 0 })
+    expect(byAccount['3001']).toMatchObject({ debit_amount: 0, credit_amount: 10000 })
+    expect(byAccount['2611']).toMatchObject({ debit_amount: 0, credit_amount: 2500 })
+    expect(byAccount['1510']).toBeUndefined()
+    expect(entry.total_debit).toBe(12500)
+    expect(entry.total_credit).toBe(12500)
+
+    expect(result.next?.description).toContain('kontantmetoden')
+    expect(result.next?.description).not.toContain('15xx')
+    // The persisted approval card carries the same lines.
+    expect(stagedInsert(findCall).preview_data.journal_entry_preview).toEqual(entry)
+  })
+
+  it('faktureringsmetoden: the payment clears 1510', async () => {
+    const { supabase } = setup({ accounting_method: 'accrual' }, sentInvoice({ journal_entry_id: 'je-issue' }))
+
+    const result = (await markPaid.execute(
+      { invoice_id: INVOICE_ID, payment_date: '2026-09-15' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { preview: Record<string, unknown>; next?: { description: string } }
+
+    expect(result.preview.accounting_method).toBe('accrual')
+    expect(result.preview.source_type).toBe('invoice_paid')
+    const entry = result.preview.journal_entry_preview as { lines: PreviewLine[] }
+    expect(entry.lines).toEqual([
+      expect.objectContaining({ account_number: '1930', debit_amount: 12500, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '1510', debit_amount: 0, credit_amount: 12500 }),
+    ])
+    expect(result.next?.description).toContain('1510')
+  })
+
+  it('kontantmetoden, invoice already booked at issue: clears 1510 like the executor', async () => {
+    const { supabase, findCalls } = setup({ accounting_method: 'cash' }, sentInvoice({ journal_entry_id: 'je-issue' }))
+
+    const result = (await markPaid.execute(
+      { invoice_id: INVOICE_ID, payment_date: '2026-09-15' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { preview: Record<string, unknown> }
+
+    expect(result.preview.accounting_method).toBe('accrual')
+    const entry = result.preview.journal_entry_preview as { lines: PreviewLine[] }
+    expect(entry.lines.map((l) => l.account_number)).toEqual(['1930', '1510'])
+    // The 1510 clearing needs no invoice rows.
+    expect(findCalls('invoice_items', 'select')).toHaveLength(0)
+  })
+})
+
+describe('gnubok_mark_invoice_as_paid: the preview follows the executor, not a proposal', () => {
+  async function stage(settings: Record<string, unknown>, invoice: Record<string, unknown>, items?: unknown[]) {
+    const mock = setup(settings, invoice)
+    if (items) mock.setTable('invoice_items', { data: items })
+    const result = (await markPaid.execute(
+      { invoice_id: INVOICE_ID, payment_date: '2026-09-15' },
+      'company-1', 'user-1', mock.supabase as never, { type: 'api_key' } as never,
+    )) as { preview: Record<string, unknown>; next?: { description: string } }
+    return { result, lines: (result.preview.journal_entry_preview as { lines: PreviewLine[] }).lines }
+  }
+
+  it('an öre remainder is booked bank against 1510, as the executor does, never a 3740 write-off', async () => {
+    const { lines } = await stage(
+      { accounting_method: 'accrual' },
+      sentInvoice({ journal_entry_id: 'je-issue', paid_amount: 12499.6, remaining_amount: 0.4 }),
+    )
+    expect(lines).toEqual([
+      expect.objectContaining({ account_number: '1930', debit_amount: 0.4, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '1510', debit_amount: 0, credit_amount: 0.4 }),
+    ])
+  })
+
+  it('a reverse-charge cash entry names only the accounts it touches (no 26xx)', async () => {
+    const { result, lines } = await stage(
+      { accounting_method: 'cash' },
+      sentInvoice({ vat_treatment: 'reverse_charge', vat_amount: 0, vat_amount_sek: 0, total: 10000, total_sek: 10000, remaining_amount: 10000 }),
+      [{ ...ITEM, vat_rate: 0, vat_amount: 0 }],
+    )
+    expect(lines.map((l) => l.account_number)).toEqual(['1930', '3308'])
+    expect(result.next?.description).toContain('debit 1930 / credit 3308')
+    expect(result.next?.description).not.toMatch(/26\d\d/)
+  })
+
+  it('a ROT cash entry names the 1513 share it debits', async () => {
+    const { result, lines } = await stage(
+      { accounting_method: 'cash' },
+      sentInvoice({ deduction_total: 3750, remaining_amount: 8750 }),
+      [{ ...ITEM, deduction_type: 'rot', deduction_amount: 3750 }],
+    )
+    expect(lines.map((l) => l.account_number)).toContain('1513')
+    expect(result.next?.description).toMatch(/debit 1930, 1513 \/ credit/)
+  })
+})
+
+describe('gnubok_mark_invoice_as_sent / gnubok_send_invoice: a draft without a number', () => {
+  const draft = () => sentInvoice({ status: 'draft', invoice_number: null, total: 4321.5 })
+
+  it('titles the draft by customer and amount, never "null", with the expected number', async () => {
+    const { supabase, findCall } = setup({ accounting_method: 'accrual', defer_invoice_booking: false }, draft())
+
+    const result = (await markSent.execute(
+      { invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { preview: Record<string, unknown> }
+
+    const { title } = stagedInsert(findCall)
+    expect(title).not.toContain('null')
+    expect(title).toBe(`Markera skickad: Testkund AB, ${formatAmount(4321.5)} SEK (förväntat nr F-1042)`)
+    expect(result.preview.will_post_journal_entry).toBe(true)
+    expect(result.preview.expected_invoice_number).toBe('F-1042')
+    expect(result.preview.expected_invoice_number_note).toContain('not reserved')
+    expect(findCall('rpc:peek_next_invoice_number', 'rpc')?.[0]).toEqual({
+      p_company_id: 'company-1',
+      p_document_type: 'invoice',
+    })
+  })
+
+  it('deferred booking: approval posts no verifikat', async () => {
+    const { supabase } = setup({ accounting_method: 'accrual', defer_invoice_booking: true }, draft())
+
+    const result = (await markSent.execute(
+      { invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { preview: Record<string, unknown> }
+
+    expect(result.preview.will_post_journal_entry).toBe(false)
+  })
+
+  it('kontantmetoden: approval posts no verifikat (booked at payment)', async () => {
+    const { supabase } = setup({ accounting_method: 'cash' }, draft())
+
+    const result = (await markSent.execute(
+      { invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { preview: Record<string, unknown> }
+
+    expect(result.preview.will_post_journal_entry).toBe(false)
+  })
+
+  it('leaves the number out of the title when it cannot be peeked', async () => {
+    const { supabase, setTable, findCall } = setup({ accounting_method: 'accrual' }, draft())
+    setTable('rpc:peek_next_invoice_number', { data: null, error: { message: 'boom' } })
+
+    const result = (await markSent.execute(
+      { invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { preview: Record<string, unknown> }
+
+    expect(stagedInsert(findCall).title).toBe(`Markera skickad: Testkund AB, ${formatAmount(4321.5)} SEK`)
+    expect(result.preview.expected_invoice_number).toBeNull()
+  })
+
+  it('keeps the number in the title once the draft has one', async () => {
+    const { supabase, findCall } = setup({ accounting_method: 'accrual' }, sentInvoice({ status: 'draft', invoice_number: 'F-007' }))
+
+    await markSent.execute(
+      { invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )
+
+    expect(stagedInsert(findCall).title).toBe('Markera skickad: F-007 Testkund AB')
+    expect(findCall('rpc:peek_next_invoice_number', 'rpc')).toBeUndefined()
+  })
+
+  it('send_invoice titles the draft the same way', async () => {
+    const { supabase, findCall } = setup({ accounting_method: 'accrual', defer_invoice_booking: false }, draft())
+
+    const result = (await sendInvoice.execute(
+      { invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { preview: Record<string, unknown> }
+
+    const { title } = stagedInsert(findCall)
+    expect(title).not.toContain('null')
+    expect(title).toBe(`Skicka: Testkund AB, ${formatAmount(4321.5)} SEK (förväntat nr F-1042) till ekonomi@example.com`)
+    expect(result.preview.will_post_journal_entry).toBe(true)
+  })
+})

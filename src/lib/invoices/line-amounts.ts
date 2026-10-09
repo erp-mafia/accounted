@@ -18,12 +18,15 @@ import { roundOre } from '@/lib/money'
  * exact 2-decimal arithmetic and the UBL line check
  * LineExtensionAmount = base - allowance holds without a tolerance.
  *
- * A line with no discount keeps the legacy unrounded `quantity * unit_price`
- * as its net so existing invoices, stored line_totals and the Peppol
- * LINE_TOTAL_MISMATCH check stay byte-identical.
+ * A line with no discount is rounded to öre the same way: net =
+ * roundOre(quantity * unit_price). It used to keep the raw product, so a
+ * three-decimal unit price stored a line_total with a third decimal and a
+ * header total a fraction of an öre off, which no payment could match
+ * (agent feedback seq 965009). The Peppol LINE_TOTAL_MISMATCH check compares öre-rounded values,
+ * so lines stored either way still pass it.
  */
 export interface LineAmounts {
-  /** Line amount before discount (rounded to öre when a discount applies). */
+  /** Line amount before discount, rounded to öre. */
   gross: number
   /** Discount amount in invoice currency (0 when no discount). */
   discount: number
@@ -41,11 +44,10 @@ export function computeLineAmounts(
   unitPrice: number,
   discountPercent?: number | null,
 ): LineAmounts {
-  const raw = (quantity || 0) * (unitPrice || 0)
+  const gross = roundOre((quantity || 0) * (unitPrice || 0))
   if (!hasLineDiscount(discountPercent)) {
-    return { gross: raw, discount: 0, net: raw }
+    return { gross, discount: 0, net: gross }
   }
-  const gross = roundOre(raw)
   const discount = roundOre((gross * (discountPercent as number)) / 100)
   return { gross, discount, net: roundOre(gross - discount) }
 }

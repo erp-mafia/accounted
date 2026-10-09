@@ -47,6 +47,12 @@ export interface UnlinkedGLLine {
    *  rows from get_account_gl_lines_for_matching (the N:1 candidate fetch);
    *  undefined on the unmatched-only path, where it is always implicitly 0. */
   linked_transaction_count?: number
+  /** Set (on every line of the verifikat) when 1:N bank_line slices on this
+   *  SEK account settle part of the verifikat: its net on the account minus
+   *  those slices, debit positive, in SEK (20261006121002). Null when the
+   *  verifikat has no junction link, so its lines are the open amount. See
+   *  {@link openAmountByEntry}. */
+  remaining_amount?: number | string | null
   /** FX metadata, see {@link ledgerLineAmountIn}. Optional because the two
    *  candidate RPCs (get_unlinked_gl_lines, get_account_gl_lines_for_matching)
    *  do not project these columns; callers that read journal_entry_lines
@@ -518,8 +524,12 @@ export async function runReconciliation(
     persistSuggestions = false,
   } = options
 
-  // Fetch unlinked GL lines via RPC
-  const glLines = await fetchUnlinkedGLLines(supabase, companyId, accountNumber, dateFrom, dateTo)
+  // Fetch unlinked GL lines via RPC. A partially allocated verifikat (1:N
+  // slices settle part of it, remaining_amount set) is listed for the user,
+  // never auto-linked: its lines carry the full amount, not the open part.
+  const glLines = (await fetchUnlinkedGLLines(supabase, companyId, accountNumber, dateFrom, dateTo)).filter(
+    (line) => line.remaining_amount == null,
+  )
 
   // Fetch unmatched transactions, scoped to the selected cash account.
   // Paginated: a busy company can exceed PostgREST's silent 1000-row cap, which
@@ -1033,8 +1043,9 @@ export async function getReconciliationStatus(
   // on a foreign account every line resolves to null and there is no sum to
   // report. Deliberately all-or-nothing: a partial sum silently understates the
   // side it is meant to explain. On SEK, ledgerLineAmountIn never returns null,
-  // so this is always a number for the 95% case.
-  const unmatchedGlAmounts = unlinkedLines.map((line) => ledgerLineAmountIn(line, currency))
+  // so this is always a number for the 95% case. Per verifikat: a partially
+  // allocated one counts only the remainder its 1:N slices leave open.
+  const unmatchedGlAmounts = [...openAmountByEntry(unlinkedLines, currency).values()]
   const unmatchedGlLineTotal = unmatchedGlAmounts.some((a) => a === null)
     ? null
     : roundOre(unmatchedGlAmounts.reduce((sum: number, a) => sum + (a ?? 0), 0))
@@ -1114,10 +1125,64 @@ export type BankLinkRefusalCode =
   | 'INVALID_SPLIT'
   /** Someone else linked the row between the read and the write. */
   | 'LINK_RACE'
+  /**
+   * The database's bank-anchor guard refused the write (PT409 BANK_ANCHOR_*,
+   * 20260921183218, 20261006121001, 20261006121004): a verifikat does not
+   * book the row, or its 1:N slice, on the bank ledger in that direction,
+   * slices against the row's direction do not add up to it, or the row's
+   * bank account binding does not allow the link. Retrying the same request
+   * cannot succeed.
+   */
+  | 'BANK_ANCHOR_REFUSED'
+  /**
+   * A 1:N slice asks a verifikat for more than other bank rows' slices leave
+   * of it on the account (or nothing is left at all).
+   */
+  | 'OVER_ALLOCATED'
   | 'WRITE_FAILED'
 
 function refused(code: BankLinkRefusalCode, error: string): { success: false; error: string; code: BankLinkRefusalCode } {
   return { success: false, error, code }
+}
+
+/**
+ * Why the bank-anchor guards refused a link, per raised name, in words that
+ * say what to change: none of them goes away on a retry.
+ */
+const BANK_ANCHOR_REASON: Record<string, string> = {
+  // 20261006121001: a verifikat does not book its amount (a slice: its own
+  // slice) on the bank ledger in that direction.
+  BANK_ANCHOR_SETTLEMENT_CHANGED:
+    'Kopplingen nekades: verifikationen bokför inte beloppet på bankkontot åt samma håll som transaktionen, eller vid en delning som sin del av den. Ett uttag ska stå i kredit på bankkontot och en insättning i debet.',
+  // 20261006121004: slices against the row's direction that do not add up to it.
+  BANK_ANCHOR_SPLIT_UNBALANCED:
+    'Kopplingen nekades: transaktionen fördelas på verifikationer i båda riktningar, och delarna blir inte tillsammans transaktionens belopp. Fördela hela beloppet, så att delarna summerar till transaktionen.',
+  // The row's cash account is gone, or no longer in the row's currency.
+  BANK_ANCHOR_CASH_ACCOUNT_CHANGED:
+    'Kopplingen nekades: transaktionens bankkonto finns inte längre, eller har en annan valuta än transaktionen. Flytta transaktionen till rätt bankkonto innan du kopplar den.',
+  // The link would move the row to another cash account, but it is already
+  // anchored where it is.
+  BANK_ANCHOR_BINDING_IN_USE:
+    'Kopplingen nekades: transaktionen skulle flyttas till ett annat bankkonto, men den är redan kopplad på det konto där den ligger. Ta bort den befintliga kopplingen först.',
+}
+
+/**
+ * A link write the bank-anchor guards refused, as its own refusal instead of
+ * WRITE_FAILED: that one reads "Försök igen", and a retry of a refused
+ * direction, split or binding fails the same way every time (agent feedback
+ * seq 853921, 877706). null for any other database error.
+ */
+function bankAnchorRefusal(
+  error: { code?: string | null; message?: string | null } | null | undefined,
+): { success: false; error: string; code: BankLinkRefusalCode } | null {
+  if (error?.code !== 'PT409' || typeof error.message !== 'string' || !error.message.startsWith('BANK_ANCHOR_')) {
+    return null
+  }
+  return refused(
+    'BANK_ANCHOR_REFUSED',
+    BANK_ANCHOR_REASON[error.message] ??
+      'Kopplingen nekades: transaktionen och verifikationen stämmer inte längre med varandra på bankkontot. Kontrollera dem innan du kopplar.',
+  )
 }
 
 /**
@@ -1325,7 +1390,7 @@ export async function manualLink(
   ).select('id')
 
   if (updateError) {
-    return refused('WRITE_FAILED', 'Kunde inte koppla transaktionen. Försök igen.')
+    return bankAnchorRefusal(updateError) ?? refused('WRITE_FAILED', 'Kunde inte koppla transaktionen. Försök igen.')
   }
   if (!updatedRows || updatedRows.length === 0) {
     return refused('LINK_RACE', 'Transaktionen är redan kopplad till en verifikation.')
@@ -1393,7 +1458,8 @@ export interface LinkTransactionToVouchersResult {
  *     line on the settlement account;
  *   - every slice is non-zero, has the sign of that voucher's net line on the
  *     account and is not larger than it (a voucher cannot absorb more of the
- *     bank row than it books on the account);
+ *     bank row than it books on the account), nor than what other bank rows'
+ *     bank_line slices on the same account leave of it;
  *   - the slices sum to the transaction amount within the öre tolerance: the
  *     same rule match-batch enforces, and the one the reconciliation
  *     difference depends on (a split that does not close would hide a real
@@ -1529,6 +1595,39 @@ export async function linkTransactionToVouchers(
     netByEntry.set(line.journal_entry_id, prev === null || amount === null ? null : roundOre((prev ?? 0) + amount))
   }
 
+  // What other bank rows on this cash account already hold of each verifikat
+  // through their bank_line slices (an earlier partial split, a bulk-booked
+  // samlingsverifikat). A verifikat can only give this row the rest: two
+  // full-size slices on one verifikat would count its line twice. Same cash
+  // account and currency as this row, so the slices are in the unit of `net`.
+  const { data: heldRows, error: heldError } = await supabase
+    .from('transaction_voucher_links')
+    .select('journal_entry_id, allocated_amount, transactions(cash_account_id, currency)')
+    .eq('company_id', companyId)
+    .eq('role', 'bank_line')
+    .in('journal_entry_id', journalEntryIds)
+  if (heldError) {
+    return refused('WRITE_FAILED', 'Kunde inte läsa verifikatens befintliga kopplingar. Försök igen.')
+  }
+  const ownCashAccountId = typeof tx.cash_account_id === 'string' ? tx.cash_account_id : null
+  const heldByEntry = new Map<string, number>()
+  for (const row of (heldRows ?? []) as Array<{
+    journal_entry_id: string
+    allocated_amount: number | string
+    transactions?:
+      | { cash_account_id: string | null; currency: string | null }
+      | Array<{ cash_account_id: string | null; currency: string | null }>
+      | null
+  }>) {
+    const holder = Array.isArray(row.transactions) ? row.transactions[0] : row.transactions
+    if (!holder) continue
+    if ((holder.cash_account_id ?? null) !== ownCashAccountId || (holder.currency || 'SEK') !== currency) continue
+    heldByEntry.set(
+      row.journal_entry_id,
+      roundOre((heldByEntry.get(row.journal_entry_id) ?? 0) + Number(row.allocated_amount)),
+    )
+  }
+
   const txAmount = roundOre(Number(tx.amount))
   const resolved: VoucherAllocation[] = []
   for (const input of allocations) {
@@ -1540,7 +1639,19 @@ export async function linkTransactionToVouchers(
     if (net === null) {
       return refused('NOT_SETTLED', `Verifikat ${label} saknar belopp i ${currency} på ${accountNumber}`)
     }
-    const slice = roundOre(input.amount ?? net)
+    const held = heldByEntry.get(input.journal_entry_id) ?? 0
+    const remainder = roundOre(net - held)
+    if (
+      Math.abs(held) >= VOUCHER_LINK_AMOUNT_TOLERANCE &&
+      (Math.abs(remainder) < VOUCHER_LINK_AMOUNT_TOLERANCE || Math.sign(remainder) !== Math.sign(net))
+    ) {
+      return refused(
+        'OVER_ALLOCATED',
+        `Verifikat ${label} är redan helt kopplat på ${accountNumber} till andra transaktioner.`,
+      )
+    }
+    // An omitted slice takes what the verifikat has left, not its whole line.
+    const slice = roundOre(input.amount ?? remainder)
     if (Math.abs(slice) < VOUCHER_LINK_AMOUNT_TOLERANCE) {
       return refused('NOT_SETTLED', `Beloppet för verifikat ${label} får inte vara 0.`)
     }
@@ -1554,6 +1665,12 @@ export async function linkTransactionToVouchers(
       return refused(
         'NOT_SETTLED',
         `Beloppet för verifikat ${label} (${slice}) är större än verifikatets rad på ${accountNumber} (${net}).`,
+      )
+    }
+    if (Math.abs(slice) > Math.abs(remainder) + VOUCHER_LINK_AMOUNT_TOLERANCE) {
+      return refused(
+        'OVER_ALLOCATED',
+        `Beloppet för verifikat ${label} (${slice}) är större än det som återstår av verifikatets rad på ${accountNumber} (${remainder}): resten är redan kopplad till andra transaktioner.`,
       )
     }
     resolved.push({ journal_entry_id: input.journal_entry_id, amount: slice })
@@ -1631,7 +1748,7 @@ export async function linkTransactionToVouchers(
       companyId,
       transactionId,
     })
-    return refused('WRITE_FAILED', 'Kunde inte koppla transaktionen. Försök igen.')
+    return bankAnchorRefusal(insertError) ?? refused('WRITE_FAILED', 'Kunde inte koppla transaktionen. Försök igen.')
   }
 
   // Behandlingshistorik (BFNAR 2013:2 kap 8): one match event for the row,
@@ -2003,6 +2120,32 @@ export async function fetchUnlinkedGLLines(
   } catch {
     return []
   }
+}
+
+/**
+ * What each verifikat of a candidate-RPC result leaves unexplained on the
+ * account, in `currency`, keyed by journal_entry_id. Several lines of one
+ * verifikat net (a link settles the whole verifikat). A verifikat that 1:N
+ * bank_line slices settle in part carries remaining_amount on its lines and
+ * counts only that remainder: its full line already sits in the ledger
+ * movement, and the slices already explain the rest (agent feedback seq
+ * 854089). The RPC computes the remainder in SEK and sets it only for SEK
+ * slices, so a foreign account keeps the per-line rule. null for a verifikat
+ * with a line that has no amount in `currency` (see ledgerLineAmountIn).
+ */
+export function openAmountByEntry(lines: UnlinkedGLLine[], currency: string): Map<string, number | null> {
+  const out = new Map<string, number | null>()
+  const remainders = new Map<string, number>()
+  for (const line of lines) {
+    if (currency === 'SEK' && line.remaining_amount != null && Number.isFinite(Number(line.remaining_amount))) {
+      remainders.set(line.journal_entry_id, roundOre(Number(line.remaining_amount)))
+    }
+    const amount = ledgerLineAmountIn(line, currency)
+    const prev = out.has(line.journal_entry_id) ? out.get(line.journal_entry_id) : 0
+    out.set(line.journal_entry_id, prev === null || amount === null ? null : roundOre((prev ?? 0) + amount))
+  }
+  for (const [entryId, remainder] of remainders) out.set(entryId, remainder)
+  return out
 }
 
 /**

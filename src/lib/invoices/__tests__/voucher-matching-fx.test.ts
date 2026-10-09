@@ -1204,7 +1204,11 @@ describe('findMatchingVouchersForSupplierInvoice: foreign-currency invoices', ()
     expect(result).toEqual([])
   })
 
-  it('narrows the line query to the invoice currency and projects both FX columns', async () => {
+  it('reads every 244x debit, whatever its label, and projects both FX columns (feedback seq 930807)', async () => {
+    // A SEK-booked payment voucher can settle a foreign invoice (the link
+    // validator's SEK-booked fallback), so the 244x side is no longer narrowed
+    // to lines labelled with the invoice's currency: it reads the same set a
+    // SEK invoice reads.
     const { supabase, queries } = createFilteringSupabase({ entries: [correctEurApVoucher] })
 
     await findMatchingVouchersForSupplierInvoice(
@@ -1215,9 +1219,115 @@ describe('findMatchingVouchersForSupplierInvoice: foreign-currency invoices', ()
 
     const lineQuery = queries.find((q) => q.table === 'journal_entry_lines')
     expect(lineQuery!.columns).toContain('amount_in_currency')
-    expect(lineQuery!.filters).toEqual(
-      expect.arrayContaining([{ op: 'eq', column: 'currency', value: 'EUR' }])
+    expect(lineQuery!.columns).toContain('currency')
+    expect(
+      lineQuery!.filters.some((f) => f.op !== 'or' && f.column === 'currency')
+    ).toBe(false)
+  })
+
+  // Feedback seq 930807: a USD invoice paid by an SIE-imported voucher whose
+  // 2440 debit carries SEK only. The link validator accepted the pair and
+  // settled it in full; the finder never proposed it.
+  function usdInvoicePaidInSek() {
+    return makeSupplierInvoice({
+      id: 'sinv-usd',
+      supplier_invoice_number: 'US-501',
+      currency: 'USD',
+      total: 4.8,
+      total_sek: 45,
+      exchange_rate: 9.375,
+      remaining_amount: 4.8,
+      paid_amount: 0,
+      status: 'registered',
+      invoice_date: '2026-06-01',
+      due_date: '2026-06-30',
+      arrival_number: 999999,
+    })
+  }
+
+  const sekBookedUsdPayment = entry('je-usd-sek', 31, 'Betalning molntjanst', [
+    { id: 'l-usd-sek-ap', account_number: '2440', debit_amount: 45, credit_amount: 0, currency: null },
+    { id: 'l-usd-sek-bank', account_number: '1930', debit_amount: 0, credit_amount: 45, currency: null },
+  ])
+
+  it('proposes a SEK-booked 2440 debit for a foreign invoice, converted at the invoice rate, as the validator accepts it', async () => {
+    const { supabase } = createFilteringSupabase({ entries: [sekBookedUsdPayment] })
+
+    const candidates = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      usdInvoicePaidInSek() as never
     )
+
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({
+      journal_entry_id: 'je-usd-sek',
+      ap_debit_amount: 4.8,
+      currency: 'USD',
+      ap_line_currency: null,
+      settlement_side: 'ap_debit',
+    })
+    expect(candidates[0].match_reason).toMatch(/bokförd i SEK/)
+
+    const validation = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      usdInvoicePaidInSek() as never,
+      'je-usd-sek'
+    )
+    expect(validation.ok).toBe(true)
+    if (!validation.ok) return
+    expect(validation.paymentAmount).toBe(4.8)
+    expect(validation.isFullyPaid).toBe(true)
+  })
+
+  it('proposes nothing the validator would refuse: a SEK-booked debit far from the invoice rate', async () => {
+    const offRate = entry('je-usd-off', 32, 'Betalning', [
+      { id: 'l-usd-off-ap', account_number: '2440', debit_amount: 60, credit_amount: 0, currency: 'SEK' },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [offRate] })
+
+    const candidates = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      usdInvoicePaidInSek() as never
+    )
+    expect(candidates).toEqual([])
+
+    const validation = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      usdInvoicePaidInSek() as never,
+      'je-usd-off'
+    )
+    expect(validation.ok).toBe(false)
+    if (validation.ok) return
+    expect(validation.details).toMatchObject({ reason: 'fx_deviation_too_large' })
+  })
+
+  it('proposes nothing the validator would refuse: a readable line next to a SEK-booked one', async () => {
+    const mixed = entry('je-eur-mixed', 33, 'Betalning', [
+      { id: 'l-mixed-eur', account_number: '2440', debit_amount: 5750, credit_amount: 0, currency: 'EUR', amount_in_currency: 500 },
+      { id: 'l-mixed-sek', account_number: '2440', debit_amount: 5750, credit_amount: 0, currency: 'SEK' },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [mixed] })
+
+    const candidates = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      eurSupplierInvoice() as never
+    )
+    expect(candidates).toEqual([])
+
+    const validation = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurSupplierInvoice() as never,
+      'je-eur-mixed'
+    )
+    expect(validation.ok).toBe(false)
+    if (validation.ok) return
+    expect(validation.code).toBe('LINK_SI_VOUCHER_CURRENCY_MISMATCH')
   })
 
   it('SEK: matches on the raw column and adds no currency filter', async () => {

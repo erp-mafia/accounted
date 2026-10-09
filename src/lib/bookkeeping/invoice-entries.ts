@@ -173,34 +173,21 @@ function invoiceOutstandingAmount(invoice: Invoice): number {
 }
 
 /**
- * Create journal entry when an invoice is marked as paid
- *
- *   Debit  1930 Företagskonto       [total]
- *   Credit 1510 Kundfordringar      [total]
- *
- * `settlementAccountNumber` overrides the debit side for payments that land
- * somewhere other than the bank account: e.g. '1686' (Fordringar för
- * kontokort) when a Stripe payment settles into the PSP balance and only
- * reaches 1930 with the later payout.
+ * The lines of the payment verifikat createInvoicePaymentJournalEntry posts,
+ * as a pure function so a preview shows exactly what the mark-paid doors
+ * book: the settlement account debited and 1510 credited for what is still
+ * outstanding (remaining_amount, net of the ROT/RUT share), or the partial
+ * `paymentAmount`, with a 3960/7960 line when an exchange-rate difference
+ * is given. Throws InvoiceFxRateMissingError for a foreign amount without a
+ * rate, like the booking itself.
  */
-export async function createInvoicePaymentJournalEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+export function buildInvoicePaymentLines(
   invoice: Invoice,
-  paymentDate: string,
-  exchangeRateDifference?: number,
-  customerName?: string,
-  paymentAmount?: number,
+  customerName: string | undefined,
   settlementAccountNumber: string = '1930',
-  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
-): Promise<JournalEntry | null> {
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
-  if (!fiscalPeriodId) {
-    log.warn('No open fiscal period found for payment date:', paymentDate)
-    return null
-  }
-
+  exchangeRateDifference?: number,
+  paymentAmount?: number,
+): { description: string; lines: CreateJournalEntryLineInput[] } {
   const isPartial = paymentAmount != null
   const desc = buildInvoiceDescription(
     isPartial ? 'Delbetalning kundfaktura' : 'Inbetalning kundfaktura',
@@ -297,6 +284,42 @@ export async function createInvoicePaymentJournalEntry(
     // leak into every other line (same contract as proposal stamping).
     for (const line of lines) line.dimensions = { ...defaultDimensions }
   }
+
+  return { description: desc, lines }
+}
+
+/**
+ * Create journal entry when an invoice is marked as paid
+ *
+ *   Debit  1930 Företagskonto       [total]
+ *   Credit 1510 Kundfordringar      [total]
+ *
+ * `settlementAccountNumber` overrides the debit side for payments that land
+ * somewhere other than the bank account: e.g. '1686' (Fordringar för
+ * kontokort) when a Stripe payment settles into the PSP balance and only
+ * reaches 1930 with the later payout.
+ */
+export async function createInvoicePaymentJournalEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  invoice: Invoice,
+  paymentDate: string,
+  exchangeRateDifference?: number,
+  customerName?: string,
+  paymentAmount?: number,
+  settlementAccountNumber: string = '1930',
+  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
+): Promise<JournalEntry | null> {
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
+  if (!fiscalPeriodId) {
+    log.warn('No open fiscal period found for payment date:', paymentDate)
+    return null
+  }
+
+  const { description: desc, lines } = buildInvoicePaymentLines(
+    invoice, customerName, settlementAccountNumber, exchangeRateDifference, paymentAmount,
+  )
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,

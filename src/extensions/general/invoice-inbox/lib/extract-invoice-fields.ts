@@ -384,8 +384,8 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
     {
       "description": string,
       "quantity": number,
-      "unitPrice": number | null,
-      "lineTotal": number,
+      "unitPrice": number | null,       // excluding VAT, like lineTotal
+      "lineTotal": number,              // the line amount EXCLUDING VAT (see the lineItems rule)
       "vatRate": number | null,         // percent integer: 25, 12, 6, or 0. Same convention as vatBreakdown.rate.
       "accountSuggestion": null         // always null: leave Swedish BAS suggestion to the user
     }
@@ -420,6 +420,7 @@ Rules:
 - "total" is the amount the buyer must pay (look for "Att betala", "Total", "Amount paid", "Amount due", "Balance"). Prefer this over Subtotal.
 - Dates: convert any format to YYYY-MM-DD. If the document only shows month/year, leave null.
 - creditedInvoiceNumber: only on a credit note, the number of the original invoice it refers to ("Krediterar faktura 10234", "Avser faktura", "Original invoice"), exactly as printed. null on every other document and when no invoice number is referenced. invoiceNumber stays the credit note's own number.
+- Identifiers (invoiceNumber, paymentReference/OCR, creditedInvoiceNumber, order numbers): copy them exactly as printed, character for character. When one wraps onto the next line, join the parts and KEEP a hyphen printed at the end of the first line: inside an identifier a line-end hyphen is part of the number, never word hyphenation ("INV-123-202604-" then "0001" on the next line is "INV-123-202604-0001").
 - Credit note amounts: give totals and lineItems with the sign printed on the document (negative when printed negative).
 - servicePeriodStart/servicePeriodEnd: only when the document explicitly states the period the charge covers ("Avtalsperiod", "Period", "Försäkringstid", "Subscription period", coverage dates). Never infer from invoice/due dates. Month-only boundaries map to the first resp. last day of the month.
 - Bankgiro/Plusgiro: only set when the document is for a Swedish supplier on a Swedish bank rail. Do not invent.
@@ -428,6 +429,7 @@ Rules:
 - Numbers: parse with the document's locale (Swedish "1 234,56" = 1234.56; English "$1,234.56" = 1234.56). Output as plain JSON numbers.
 - If a field is missing or unreadable, set it to null. Never invent values.
 - lineItems: include every line. Empty array is fine if the document has no itemised lines.
+- lineItems amounts: lineTotal and unitPrice are ALWAYS excluding VAT, so the lines sum to totals.subtotal and the lines plus their VAT make totals.total. When the document prints a line only including VAT ("inkl. moms", a receipt or utility bill without a net column), convert it: lineTotal = printed amount - printed amount x vatRate / (100 + vatRate), rounded to 2 decimals (1250.00 at 25 % gives 1000.00). Never put an amount including VAT in lineTotal.
 - vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.
 - prominentAmounts: ONLY for documents that are NOT invoices or receipts (documentKind "other" or "government_letter") AND where totals.total is null, when the document still displays clear monetary amounts (a price, fee, deposit or paid-in sum: "Engångspris", "Anslutningspris", "Insatt belopp", "Månadspris", "Pris", "Belopp"). Typical sources: bankintyg, bank/account agreements, contracts, statements. One entry per distinct amount, label = the document's own label for it. NEVER include account numbers, org numbers, phone numbers, OCR/reference numbers, dates, percentages, or zero amounts. ALWAYS an empty array for invoices and receipts, including ones whose total is unreadable: never move an invoice total here.`
 

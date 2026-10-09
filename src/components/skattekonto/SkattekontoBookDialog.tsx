@@ -10,6 +10,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { stageSkvManualPrefill } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import type {
   SkattekontoBatchResult,
   SkattekontoBatchRowResult,
@@ -411,6 +412,14 @@ export default function SkattekontoBookDialog({
                   ? `${suggestion.account} ${suggestion.account_name}`
                   : suggestion.account,
               })}
+              {suggestion.ore_rounding ? (
+                <span className="block text-xs text-muted-foreground">
+                  {t('posting_rounding', {
+                    receivable: formatCurrency(roundOre(Math.abs(amount) - suggestion.ore_rounding)),
+                    difference: formatCurrency(Math.abs(suggestion.ore_rounding)),
+                  })}
+                </span>
+              ) : null}
             </dd>
           </div>
         ) : suggestion === null ? (

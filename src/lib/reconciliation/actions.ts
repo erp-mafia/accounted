@@ -56,6 +56,7 @@ export type PairSkipCode =
   | 'ROW_IGNORED'
   | 'NOT_FOUND'
   | 'LINK_RACE'
+  | 'BANK_ANCHOR_REFUSED'
   | 'UNKNOWN'
 
 export interface AppliedLink {
@@ -121,6 +122,11 @@ const BANK_SKIP_CODE: Record<BankLinkRefusalCode, PairSkipCode> = {
   NOT_SETTLED: 'PAIR_NOT_CLOSED',
   INVALID_SPLIT: 'UNSUPPORTED_PAIR_SHAPE',
   LINK_RACE: 'LINK_RACE',
+  // Its own code, not UNKNOWN: that one invited retries of a refusal that
+  // repeats (agent feedback seq 853921, 877706).
+  BANK_ANCHOR_REFUSED: 'BANK_ANCHOR_REFUSED',
+  // An amounts refusal: the verifikat has less left than the slice asks for.
+  OVER_ALLOCATED: 'PAIR_NOT_CLOSED',
   WRITE_FAILED: 'UNKNOWN',
 }
 

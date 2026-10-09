@@ -502,6 +502,41 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
     }
   })
 
+  it('stores öre-exact line and header amounts for a three-decimal unit price', async () => {
+    // Same rule as buildInvoiceWriteData (agent feedback seq 965009): a raw
+    // 3 x 33.333 used to preview and store 99.999 / 124.999.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: VALID_CUSTOMER, error: null },
+        company_settings: { data: { vat_registered: true }, error: null },
+      }),
+    )
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create?dry_run=true`, {
+        invoices: [
+          {
+            customer_id: CUSTOMER_ID,
+            invoice_date: '2026-05-12',
+            due_date: '2026-06-11',
+            currency: 'SEK',
+            items: [{ ...SAMPLE_ITEM('Tredecimalt pris'), quantity: 3, unit_price: 33.333, vat_rate: 25 }],
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const preview = body.data.preview.results[0].data.preview
+    expect(preview.items[0]).toMatchObject({ line_total: 100, vat_amount: 25 })
+    expect(preview.subtotal).toBe(100)
+    expect(preview.vat_amount).toBe(25)
+    expect(preview.total).toBe(125)
+  })
+
   it('rejects all_or_nothing: true with 501 NOT_IMPLEMENTED', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

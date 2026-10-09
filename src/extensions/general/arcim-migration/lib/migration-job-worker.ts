@@ -15,6 +15,8 @@ import { linkMigratedRegistrationVouchers, type MigratedInvoiceLinkInput, type R
 import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
 import { ORE_TOLERANCE } from '@/lib/money'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
+import { advanceInvoiceSeriesPastImported } from '@/lib/invoices/invoice-number-series'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex } from './entity-mapper'
 import { bokioSupplierSource } from './bokio-supplier-source'
 import { invoiceWithinScope } from './invoice-scope'
@@ -351,6 +353,36 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
   }
 }
 
+/**
+ * Continue the company's invoice series after the sales invoices this job
+ * imported. The counter stood at its start value after a migration, so the
+ * first invoice issued here restarted the old system's series at 001.
+ *
+ * Runs once, when the link phase has no chunks left, over every sales
+ * invoice the job imported: the outlier guard in
+ * advanceInvoiceSeriesPastImported needs the whole series, not a batch.
+ * Monotonic, so a replay after a failed phase advance is harmless. A failed
+ * read or write is logged and never fails the job; the deadline still defers.
+ */
+export async function advanceInvoiceSeriesForJob(supabase: SupabaseClient, job: ProviderMigrationJob, deadline: number): Promise<void> {
+  try {
+    const rows = await withinMigrationDeadline(fetchAllRows<{ id: string; receipt: MigrationChunk['receipt'] | null }>(({ from, to }) =>
+      supabase.from('migration_job_chunks').select('id,receipt').eq('company_id', job.company_id).eq('job_id', job.id)
+        .eq('resource', 'salesInvoices').not('target_id', 'is', null).order('id').range(from, to)), deadline)
+    const numbers = rows.map(r => r.receipt?.link?.invoiceNumber ?? null).filter((n): n is string => !!n)
+    if (!numbers.length) return
+    const result = await withinMigrationDeadline(advanceInvoiceSeriesPastImported(supabase, job.company_id, numbers), deadline)
+    if (result.advanced) log.info('invoice series advanced past imported invoices', { jobId: job.id, from: result.from, to: result.to })
+    else if (result.reason === 'outlier') {
+      log.warn('invoice series left unchanged: imported numbers look like an outlier',
+        { jobId: job.id, current: result.current, highest: result.highest })
+    }
+  } catch (error) {
+    if (failureCode(error) === 'MIGRATION_DEADLINE') throw error
+    log.warn('invoice series not advanced after imported sales invoices', { jobId: job.id, ...failureDetails(error) })
+  }
+}
+
 async function followupBatch(supabase: SupabaseClient, job: ProviderMigrationJob, chunks: MigrationChunk[], deadline: number): Promise<void> {
   let records: Record<string, unknown>[]
   if (job.phase === 'link') {
@@ -537,7 +569,11 @@ export async function runProviderMigrationWorker(options: {
             .eq('state', state).order('resource_order').order('id').limit(BATCH_SIZE), deadline - 5000)
           if (readError) throw new Error(readError.message)
           const chunks = (rows ?? []) as MigrationChunk[]
-          if (!chunks.length) await migrationRpc(supabase, job, 'advance_provider_migration_job', {}, deadline - 5000)
+          if (!chunks.length) {
+            // The link phase is done: every sales invoice of the job is in the register.
+            if (job.phase === 'link') await advanceInvoiceSeriesForJob(supabase, job, deadline - 5000)
+            await migrationRpc(supabase, job, 'advance_provider_migration_job', {}, deadline - 5000)
+          }
           else if (job.phase === 'import') await importBatch(supabase, job, chunks, connection, deadline - 5000)
           else await withinMigrationDeadline(followupBatch(supabase, job, chunks, deadline - 5000), deadline - 5000)
         }

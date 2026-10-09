@@ -90,6 +90,23 @@ describe('gnubok_generate_agi', () => {
     expect(mockGenerateAgi).not.toHaveBeenCalled()
   })
 
+  it('previews the payout month the generator declares, not the earned month (agent feedback seq 948847)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'run-1', status: 'booked', period_year: 2026, period_month: 9, payment_date: '2026-10-06' },
+    })
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations.insert
+
+    const result = (await generateAgi.execute(
+      { salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { preview: Record<string, unknown>; message: string }
+
+    expect(result.preview.period).toBe('2026-10')
+    expect(result.preview.earned_period).toBe('2026-09')
+  })
+
   it('throws when the run is still in draft', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

@@ -913,3 +913,147 @@ describe('generateSIEExport', () => {
     expect(output).toContain('"Stängning Bokio"')
   })
 })
+
+// Agent feedback seq 852586: the file wrote #RAR -1 but no #IB -1, #UB -1 or
+// #RES -1, so an importing årsredovisning program read an empty prior year.
+describe('generateSIEExport: previous year balances (#IB -1, #UB -1, #RES -1)', () => {
+  // 2024 opens from the compute_prior_opening_balances fallback (no IB
+  // pointer). It sells 500 on 3001, books 100 of planenlig avskrivning
+  // (source_type year_end, NOT the closing) and is closed by the resultatavslut
+  // e-close, which zeroes 3001 and 7832 into 2099. 2025 opens from the IB
+  // entry that close created, and has one sale of its own.
+  const prevEntries = [{ id: 'e-sale' }, { id: 'e-dep' }, { id: 'e-close' }]
+  const prevLines = [
+    { id: 'p1', journal_entry_id: 'e-sale', account_number: '1930', debit_amount: 500, credit_amount: 0 },
+    { id: 'p2', journal_entry_id: 'e-sale', account_number: '3001', debit_amount: 0, credit_amount: 500 },
+    { id: 'p3', journal_entry_id: 'e-dep', account_number: '7832', debit_amount: 100, credit_amount: 0 },
+    { id: 'p4', journal_entry_id: 'e-dep', account_number: '1229', debit_amount: 0, credit_amount: 100 },
+    { id: 'p5', journal_entry_id: 'e-close', account_number: '3001', debit_amount: 500, credit_amount: 0 },
+    { id: 'p6', journal_entry_id: 'e-close', account_number: '7832', debit_amount: 0, credit_amount: 100 },
+    { id: 'p7', journal_entry_id: 'e-close', account_number: '2099', debit_amount: 0, credit_amount: 400 },
+  ]
+
+  function twoYearQueue() {
+    return [
+      { data: { id: 'period-2', period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: 'ob-2025' }, error: null },
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      // journal_entries, year 0: one sale
+      { data: [{ id: 'e-2025', entry_date: '2025-02-01', voucher_number: 1, voucher_series: 'A', description: 'Sale 2025', status: 'posted' }], error: null },
+      {
+        data: [
+          { id: 'y1', journal_entry_id: 'e-2025', account_number: '1930', debit_amount: 200, credit_amount: 0, line_description: null, dimensions: {} },
+          { id: 'y2', journal_entry_id: 'e-2025', account_number: '3001', debit_amount: 0, credit_amount: 200, line_description: null, dimensions: {} },
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // dimensions
+      { data: [], error: null }, // dimension_values
+      // getOpeningBalances(year 0): the IB entry, then its lines
+      { data: [{ id: 'ob-2025' }], error: null },
+      {
+        data: [
+          { account_number: '1930', debit_amount: 1500, credit_amount: 0 },
+          { account_number: '2081', debit_amount: 0, credit_amount: 1000 },
+          { account_number: '1229', debit_amount: 0, credit_amount: 100 },
+          { account_number: '2099', debit_amount: 0, credit_amount: 400 },
+        ],
+        error: null,
+      },
+      // getOpeningBalances(year -1): RPC fallback
+      {
+        data: [
+          { account_number: '1930', debit: 1000, credit: 0 },
+          { account_number: '2081', debit: 0, credit: 1000 },
+        ],
+        error: null,
+      },
+      { data: prevEntries, error: null }, // journal_entries, year -1
+      { data: ['e-close'], error: null }, // result_closing_entry_ids, year -1
+      { data: prevLines, error: null }, // journal_entry_lines, year -1
+    ]
+  }
+
+  it.each([false, true])(
+    'with exclude_year_end_closing=%s: #UB -1 equals #IB 0 for every balance account and #RES -1 keeps the depreciation',
+    async (excludeClosing) => {
+      results = twoYearQueue()
+
+      const output = await generateSIEExport(supabase, 'company-1', {
+        ...baseOptions,
+        fiscal_period_id: 'period-2',
+        exclude_year_end_closing: excludeClosing,
+      })
+      const records = output.split('\r\n')
+
+      expect(records).toContain('#RAR -1 20240101 20241231')
+      expect(records).toContain('#IB -1 1930 1000.00')
+      expect(records).toContain('#IB -1 2081 -1000.00')
+
+      // IB/UB continuity: UB(year -1) = IB(year 0), account by account,
+      // whatever the flag says (it shapes year 0 only).
+      const ib0 = records.filter((r) => r.startsWith('#IB 0 '))
+      expect(ib0).toHaveLength(4)
+      for (const record of ib0) {
+        const [, , account, amount] = record.split(' ')
+        expect(records).toContain(`#UB -1 ${account} ${amount}`)
+      }
+      expect(records.filter((r) => r.startsWith('#UB -1 '))).toHaveLength(4)
+
+      // The prior-year result before the resultatavslut: the sale AND the
+      // year_end depreciation, not the zeros the closing leaves behind.
+      expect(records).toContain('#RES -1 3001 -500.00')
+      expect(records).toContain('#RES -1 7832 100.00')
+
+      // The year -1 entry read is never narrowed by the flag.
+      const fromMock = supabase.from as ReturnType<typeof vi.fn>
+      const entryBuilders = fromMock.mock.calls
+        .map((call, i) => ({ table: call[0] as string, builder: fromMock.mock.results[i].value }))
+        .filter((c) => c.table === 'journal_entries')
+      const priorEntryRead = entryBuilders[entryBuilders.length - 1].builder
+      expect(priorEntryRead.neq).not.toHaveBeenCalled()
+      expect(supabase.rpc).toHaveBeenCalledWith('result_closing_entry_ids', {
+        p_company_id: 'company-1',
+        p_fiscal_period_id: 'period-1',
+      })
+    },
+  )
+
+  it('writes every balance item before the first #VER (SIE 4 record order)', async () => {
+    results = twoYearQueue()
+
+    const output = await generateSIEExport(supabase, 'company-1', { ...baseOptions, fiscal_period_id: 'period-2' })
+    const records = output.split('\r\n')
+
+    const firstVer = records.findIndex((r) => r.startsWith('#VER '))
+    expect(firstVer).toBeGreaterThan(0)
+    const balanceIdx = records
+      .map((r, i) => (/^#(IB|UB|RES) (0|-1) /.test(r) ? i : -1))
+      .filter((i) => i >= 0)
+    expect(balanceIdx.length).toBeGreaterThan(0)
+    expect(Math.max(...balanceIdx)).toBeLessThan(firstVer)
+    // Grouped by record type: #IB, then #UB, then #RES.
+    const kinds = balanceIdx.map((i) => records[i].split(' ')[0])
+    expect(kinds).toEqual([...kinds].sort((a, b) => ['#IB', '#UB', '#RES'].indexOf(a) - ['#IB', '#UB', '#RES'].indexOf(b)))
+    expect(records).toContain('#UB 0 1930 1700.00')
+    expect(records).toContain('#RES 0 3001 -200.00')
+  })
+
+  it('writes no year -1 records when there is no previous fiscal year', async () => {
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      { data: [], error: null }, // journal_entries
+      { data: [], error: null }, // dimensions
+      { data: [], error: null }, // dimension_values
+      { data: [{ account_number: '1930', debit: 200, credit: 0 }, { account_number: '2081', debit: 0, credit: 200 }], error: null }, // RPC
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#UB 0 1930 200.00')
+    expect(output).not.toMatch(/^#(RAR|IB|UB|RES) -1 /m)
+    expect(supabase.rpc).not.toHaveBeenCalledWith('result_closing_entry_ids', expect.anything())
+  })
+})

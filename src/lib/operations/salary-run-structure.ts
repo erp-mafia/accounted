@@ -485,7 +485,7 @@ export const salaryRunsLinesCreate = defineOperation({
     ),
     is_taxable: LINE.is_taxable.describe('Default true. False on skattefri traktamente or milersättning and on nettolöneavdrag.'),
     is_avgift_basis: LINE.is_avgift_basis.describe(
-      'Default true. False on skattefri traktamente or milersättning and on nettolöneavdrag.',
+      'Default true. False on skattefri traktamente or milersättning and on nettolöneavdrag. Refused on taxable pay and förmån lines: the calculation always counts them in the avgiftsunderlag.',
     ),
     is_vacation_basis: LINE.is_vacation_basis.describe(
       'Default true (semestergrundande). False on traktamente, milersättning and every deduction.',

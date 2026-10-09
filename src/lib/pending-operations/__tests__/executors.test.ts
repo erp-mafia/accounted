@@ -1576,10 +1576,10 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
   })
 
   it('auto-rejects 409 when doc is already linked to a different posted JE (WORM guard)', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null }) // doc fetch
-    enqueue({ data: { status: 'posted' }, error: null })                        // WORM: existing JE status
+    enqueue({ data: { status: 'posted', voucher_series: 'A', voucher_number: 12 }, error: null }) // holder
     enqueue({ data: null, error: null })                                         // dispatcher reject update
 
     const result = await commitPendingOperation(
@@ -1587,27 +1587,85 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     )
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
+    expect(result.error).toMatch(/^Bilagan är redan kopplad till verifikation A12 /)
+    expect(result.error).toMatch(/rätta den \(Rätta, correct_entry\)/)
+    // Refused before any write: the document row is never updated.
+    expect(findCall('document_attachments', 'update')).toBeUndefined()
   })
 
-  it('allows re-linking when existing linked JE is not yet posted (draft)', async () => {
-    // A doc linked to a draft (uncommitted) JE can be moved: only posted
-    // verifikationer trigger the WORM guard.
-    const { supabase, enqueue } = createQueuedMockSupabase()
+  it('auto-rejects 409 with a Swedish reason, not a 500, when the holder is a reversed verifikat (feedback seq 932068)', async () => {
+    // The immutability trigger refuses any change of a set journal_entry_id,
+    // whatever the holder's status. The guard used to refuse only a posted
+    // holder, so a document on a reversed verifikat passed staging and died
+    // at commit on the raw trigger text as HTTP 500 "Något gick fel".
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
-    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-DRAFT' }, error: null }) // doc fetch
-    enqueue({ data: { status: 'draft' }, error: null })                         // WORM: existing JE: not posted
-    enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
-    enqueue({
-      data: { id: 'doc-1', file_name: 'kvitto.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
-      error: null,
-    })                                                                           // linkToJournalEntry: doc update
-    enqueue({ data: [{ id: 'inbox-1' }], error: null })                         // inbox stamp: one row claimed
-    enqueue({ data: null, error: null })                                         // dispatcher commit update
+    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-REVERSED' }, error: null }) // doc fetch
+    enqueue({ data: { status: 'reversed', voucher_series: 'a', voucher_number: 57 }, error: null }) // holder
+    enqueue({ data: null, error: null })                                         // dispatcher reject update
 
     const result = await commitPendingOperation(
       supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
     )
-    expect(result.status).toBe('committed')
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toMatch(/^Bilagan är redan kopplad till verifikation A57 och kan inte flyttas/)
+    expect(result.error).toMatch(/makulerad/)
+    expect(result.error).toMatch(/Rätta \(correct_entry\)/)
+    expect(findCall('document_attachments', 'update')).toBeUndefined()
+  })
+
+  it('auto-rejects 409 when the existing linked JE is a draft: the trigger refuses that move too', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
+    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-DRAFT' }, error: null }) // doc fetch
+    enqueue({ data: { status: 'draft', voucher_series: 'A', voucher_number: null }, error: null }) // holder
+    enqueue({ data: null, error: null })                                         // dispatcher reject update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toMatch(/^Bilagan är redan kopplad till ett verifikationsutkast/)
+    expect(findCall('document_attachments', 'update')).toBeUndefined()
+  })
+
+  it('auto-rejects 409 when the doc is linked elsewhere even if the holder row cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
+    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null }) // doc fetch
+    enqueue({ data: null, error: null })                                         // holder: not visible
+    enqueue({ data: null, error: null })                                         // dispatcher reject update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toMatch(/^Bilagan är redan kopplad till en annan verifikation/)
+  })
+
+  it('auto-rejects 409 when the immutability trigger refuses the write the precheck let through (race or line-level link)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
+    enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch: unlinked at precheck
+    enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
+    enqueue({
+      data: null,
+      error: {
+        message:
+          'BFL_DOCUMENT_IMMUTABILITY: cannot clear or change journal_entry_id on document doc-1 once set (BFL 5 kap 6 §). Reverse the journal entry first.',
+      },
+    })                                                                           // linkToJournalEntry: doc update refused
+    enqueue({ data: null, error: null })                                         // dispatcher reject update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toBe('Bilagan är redan kopplad till en verifikation och kopplingen kan inte ändras (BFL 5 kap 6 §).')
   })
 
   it('happy path: links doc to verifikation with no prior journal_entry_id', async () => {
@@ -1828,7 +1886,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
     enqueue({ data: { id: 'op-1' }, error: null })                                  // CAS claim
     // row 1: doc-1 already linked to je-OTHER (posted) -> skipped
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null })   // doc fetch
-    enqueue({ data: { status: 'posted' }, error: null })                           // WORM: existing JE status
+    enqueue({ data: { status: 'posted', voucher_series: 'A', voucher_number: 3 }, error: null }) // holder
     // row 2: doc-2 -> je-2 succeeds
     enqueue({ data: { id: 'doc-2', journal_entry_id: null }, error: null })         // doc fetch
     enqueue({ data: { id: 'je-2' }, error: null })                                 // linkToJournalEntry: JE ownership
@@ -1851,7 +1909,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
     enqueue({ data: { id: 'op-1' }, error: null })                                  // CAS claim
     // row 1: doc-1 already linked to a posted JE -> WORM skip
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null })   // doc fetch
-    enqueue({ data: { status: 'posted' }, error: null })                           // WORM: existing JE status
+    enqueue({ data: { status: 'posted', voucher_series: 'A', voucher_number: 3 }, error: null }) // holder
     // row 2: doc-2 not found -> skip
     enqueue({ data: null, error: null })                                           // doc fetch: not found
     enqueue({ data: null, error: null })                                           // dispatcher reject update

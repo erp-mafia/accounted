@@ -4,6 +4,7 @@ import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { registerSupplierInvoiceHandler } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
 import { registerEventLogHandler } from '@/lib/events/handlers/event-log-handler'
 import { registerDocumentReadHandler } from '@/lib/events/handlers/document-read-handler'
+import { registerAgentFeedbackRelayHandler } from '@/lib/events/handlers/agent-feedback-relay-handler'
 import { registerWebhookHandler } from '@/lib/webhooks/handler'
 import { registerConfiguredPeppolTransports } from '@/lib/invoices/transports'
 import { registerObservabilitySink } from '@/lib/observability'
@@ -98,6 +99,7 @@ export function ensureInitialized(): void {
   registerSupplierInvoiceHandler()
   registerEventLogHandler()
   registerDocumentReadHandler()
+  registerAgentFeedbackRelayHandler()
   registerWebhookHandler()
   // Peppol Access Point adapters are registered from the environment here so
   // every route that reports transport availability sees the same answer.

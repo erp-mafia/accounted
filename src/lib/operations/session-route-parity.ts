@@ -423,7 +423,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/deadlines': gap('P3', 'custom deadline'),
   'PUT /api/deadlines/:id': gap('P3'),
   'DELETE /api/deadlines/:id': gap('P3'),
-  'POST /api/deadlines/:id/complete': gap('P3'),
+  'POST /api/deadlines/:id/complete': covered(['gnubok_mark_vat_period_filed', 'gnubok_mark_agi_period_filed'], 'the moms and AGI deadlines, by period; other and custom deadlines, and un-completing one, stay UI-only'),
   'POST /api/rot-rut/payout-file': covered(['gnubok_generate_rot_rut_file']),
   'POST /api/rot-rut/beslut/import': covered(['gnubok_import_rot_rut_beslut']),
   'PATCH /api/rot-rut/payout-requests/:id': gap('P3', 'begäran lifecycle (cancel/rejected)'),
@@ -689,4 +689,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 135
+export const GAP_CEILING = 134

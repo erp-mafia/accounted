@@ -27,7 +27,15 @@ vi.mock('../lib/skattekonto-match', async (importOriginal) => {
   }
 })
 
+// The 1650 balance behind the VAT-refund routing (feedback seq 975032).
+// Default: nothing on 1650, so every other test keeps the rule's account.
+vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/reconciliation/gl-balance')>()
+  return { ...actual, sumAccountBalance: vi.fn(), findOpeningBalanceFloor: vi.fn() }
+})
+
 import { findFiscalPeriod, createDraftEntry, commitEntry } from '@/lib/bookkeeping/engine'
+import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/reconciliation/gl-balance'
 import {
   findLedgerTwinCandidates,
   findLedgerTwinCandidatesForIds,
@@ -117,6 +125,8 @@ beforeEach(() => {
   vi.mocked(findLedgerTwinCandidatesForIds).mockImplementation(
     async (_supabase, _companyId, ids) => new Map(ids.map((id) => [id, []])),
   )
+  vi.mocked(sumAccountBalance).mockResolvedValue(0)
+  vi.mocked(findOpeningBalanceFloor).mockResolvedValue(null)
 })
 
 describe('attachBookingSuggestions', () => {
@@ -934,5 +944,168 @@ describe('ledger twin guard (an SIE-imported or manual verifikat already carries
       ),
     ).rejects.toThrow(/Kunde inte söka kandidater/)
     expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+  })
+})
+
+// Agent feedback seq 975032: Skatteverket's VAT refund clears the 1650
+// receivable the momsavräkning booked, instead of crediting 2650.
+describe('VAT refund routing (1650 receivable)', () => {
+  const MOMS_RULE = {
+    id: 'sys-6', priority: 20, pattern: 'mervärdesskatt,moms,momsdeklaration',
+    amount_min: null, amount_max: null, company_type: 'all',
+    counter_account: '2650', counter_account_ef: null,
+    label: 'Redovisningskonto för moms', active: true,
+  }
+
+  it('books D 1630 / K 1650 when 1650 holds the receivable on the event date', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({
+      transaktionstext: 'Moms juli 2026 - sept 2026',
+      transaktionsdatum: '2026-10-05',
+      belopp_skatteverket: 1240,
+    })
+    enqueue({ data: row })
+    enqueue({ data: [MOMS_RULE] })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] })
+    vi.mocked(sumAccountBalance).mockResolvedValue(1240)
+
+    await bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id)
+
+    const input = vi.mocked(createDraftEntry).mock.calls[0][3]
+    expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1630', 1240, 0],
+      ['1650', 0, 1240],
+    ])
+    expect(vi.mocked(sumAccountBalance)).toHaveBeenCalledWith(expect.anything(), 'company-1', '1650', {
+      cutoffDate: '2026-10-05',
+    })
+  })
+
+  const bookRefund = async (refund: number, receivable: number) => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({
+      transaktionstext: 'Moms juli 2026 - sept 2026',
+      transaktionsdatum: '2026-10-05',
+      belopp_skatteverket: refund,
+    })
+    enqueue({ data: row })
+    enqueue({ data: [MOMS_RULE] })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] })
+    vi.mocked(sumAccountBalance).mockResolvedValue(receivable)
+    await bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id)
+    const input = vi.mocked(createDraftEntry).mock.calls.at(-1)![3]
+    const debit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const credit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(Math.round(debit * 100)).toBe(Math.round(credit * 100))
+    return input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+  }
+
+  it('books a refund 1 kr above the receivable as K 1650 receivable + K 3740 1 kr', async () => {
+    expect(await bookRefund(1241, 1240)).toEqual([
+      ['1630', 1241, 0],
+      ['1650', 0, 1240],
+      ['3740', 0, 1],
+    ])
+  })
+
+  it('books a refund 1 kr below the receivable as K 1650 receivable + D 3740 1 kr', async () => {
+    expect(await bookRefund(1239, 1240)).toEqual([
+      ['1630', 1239, 0],
+      ['1650', 0, 1240],
+      ['3740', 1, 0],
+    ])
+  })
+
+  it('keeps K 2650 unchanged when the refund is more than 1 kr off the receivable', async () => {
+    expect(await bookRefund(1242, 1240)).toEqual([
+      ['1630', 1242, 0],
+      ['2650', 0, 1242],
+    ])
+  })
+
+  it('keeps D 2650 / K 1630 for a VAT charge', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Moms april 2026 - juni 2026', belopp_skatteverket: -4200 })
+    enqueue({ data: row })
+    enqueue({ data: [MOMS_RULE] })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] })
+    vi.mocked(sumAccountBalance).mockResolvedValue(900)
+
+    await bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id)
+
+    const input = vi.mocked(createDraftEntry).mock.calls[0][3]
+    expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['2650', 4200, 0],
+      ['1630', 0, 4200],
+    ])
+    expect(vi.mocked(sumAccountBalance)).not.toHaveBeenCalled()
+  })
+
+  it('suggests 1650 with the 3740 rounding in the preview, reading 1650 once per event date', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: [MOMS_RULE] })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    vi.mocked(sumAccountBalance).mockResolvedValue(1240)
+    const rows = [
+      makeSkvRow({ transaktionstext: 'Moms juli 2026 - sept 2026', transaktionsdatum: '2026-10-05', belopp_skatteverket: 1241 }),
+      // Same date: 1650 is already taken by the first row (1240), so this one
+      // keeps the rule's account.
+      makeSkvRow({ transaktionstext: 'Mervärdesskatt', transaktionsdatum: '2026-10-05', belopp_skatteverket: 1 }),
+    ]
+
+    const enriched = await attachBookingSuggestions(supabase as unknown as SupabaseClient, 'company-1', rows)
+
+    expect(enriched[0].booking_suggestion).toEqual({
+      account: '1650',
+      account_name: getBASReference('1650')?.account_name ?? null,
+      label: getBASReference('1650')?.account_name ?? 'Momsfordran',
+      ore_rounding: 1,
+    })
+    expect(enriched[1].booking_suggestion?.account).toBe('2650')
+    expect(vi.mocked(sumAccountBalance)).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not show two refunds clearing one receivable: the second keeps 2650', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: [MOMS_RULE] })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    vi.mocked(sumAccountBalance).mockResolvedValue(1240)
+    const rows = [
+      makeSkvRow({ transaktionstext: 'Moms juli 2026 - sept 2026', transaktionsdatum: '2026-10-05', belopp_skatteverket: 1240 }),
+      makeSkvRow({ transaktionstext: 'Moms juli 2026 - sept 2026', transaktionsdatum: '2026-10-05', belopp_skatteverket: 1240 }),
+      // A later date sees the earlier suggestion as already consumed too.
+      makeSkvRow({ transaktionstext: 'Mervärdesskatt', transaktionsdatum: '2026-10-09', belopp_skatteverket: 300 }),
+    ]
+
+    const enriched = await attachBookingSuggestions(supabase as unknown as SupabaseClient, 'company-1', rows)
+
+    expect(enriched.map((r) => r.booking_suggestion?.account)).toEqual(['1650', '2650', '2650'])
+  })
+
+  it('reads 1650 from the IB date when the account has an ingående balans', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({
+      transaktionstext: 'Moms juli 2026 - sept 2026',
+      transaktionsdatum: '2026-10-05',
+      belopp_skatteverket: 1240,
+    })
+    enqueue({ data: row })
+    enqueue({ data: [MOMS_RULE] })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] })
+    vi.mocked(findOpeningBalanceFloor).mockResolvedValue({ date: '2026-01-01', amount: 900, entryIds: ['ib-2026'] })
+    vi.mocked(sumAccountBalance).mockResolvedValue(0)
+
+    await bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id)
+
+    expect(vi.mocked(sumAccountBalance)).toHaveBeenCalledWith(expect.anything(), 'company-1', '1650', {
+      fromDate: '2026-01-01',
+      cutoffDate: '2026-10-05',
+    })
+    const input = vi.mocked(createDraftEntry).mock.calls[0][3]
+    expect(input.lines.map((l) => l.account_number)).toEqual(['1630', '2650'])
   })
 })

@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { SalaryEmployeeOverrideSchema } from '@/lib/api/schemas'
 import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
 import { removeEmployeeFromRun, setRunEmployeeSalary } from '@/lib/salary/run-employees'
+import { refreshRunTotals, type OverrideAffectedTotals } from '@/lib/salary/refresh-run-totals'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -183,7 +184,24 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
       return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
     }
 
-    return NextResponse.json({ data })
+    // The stored run totals were written at calculation time; an override
+    // moves tax, net, avgifter and employer cost, so re-derive them now or
+    // every reader of salary_runs.total_* disagrees with the booking.
+    // The override above is already saved, so a failed refresh must not
+    // turn the request into a 500: it is logged and run_totals comes back
+    // null. Every surface that shows figures (run page, MCP reads, booking
+    // preview, the booking itself) recomputes them from the rows anyway.
+    let runTotals: OverrideAffectedTotals | null = null
+    try {
+      runTotals = await refreshRunTotals(supabase, companyId, id)
+      if (!runTotals) {
+        ctx.log.warn('run totals not refreshed: run left review before the write', { salaryRunId: id })
+      }
+    } catch (err) {
+      ctx.log.error('run totals refresh failed after an override was saved', err, { salaryRunId: id })
+    }
+
+    return NextResponse.json({ data: { ...data, run_totals: runTotals } })
   },
   { requireWrite: true },
 )

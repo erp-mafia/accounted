@@ -2384,6 +2384,9 @@ export default function ImportPage() {
   const [userId, setUserId] = useState('')
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
   const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
+  // Off by default: UTF-8 is the deliberate default (2026-08-08); CP437 is for
+  // older desktop programs that read #FORMAT PC8 literally.
+  const [exportCp437, setExportCp437] = useState(false)
   const t = useTranslations('import')
   const router = useRouter()
   const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
@@ -2723,6 +2726,15 @@ export default function ImportPage() {
                   />
                   <span>{t('export_sie_exclude_closing_label')}</span>
                 </label>
+                <label className="flex cursor-pointer items-start gap-2 text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded-sm border-border"
+                    checked={exportCp437}
+                    onChange={(e) => setExportCp437(e.target.checked)}
+                  />
+                  <span>{t('export_sie_cp437_label')}</span>
+                </label>
               </div>
               <DialogFooter>
                 <Button
@@ -2730,6 +2742,7 @@ export default function ImportPage() {
                     if (exportPeriodId) {
                       const params = new URLSearchParams({ period_id: exportPeriodId })
                       if (exportExcludeClosing) params.set('exclude_closing', 'true')
+                      if (exportCp437) params.set('encoding', 'cp437')
                       window.open(`/api/reports/sie-export?${params.toString()}`, '_blank')
                     }
                   }}

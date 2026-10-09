@@ -109,6 +109,9 @@ interface OpeningBalanceLineRow {
  * payments that an import labelled opening_balance in mid-year: flooring at
  * one of those would drop months of real movement.
  *
+ * A date whose IB entries (two or more) cancel to zero on the account is not
+ * a floor: the latest date that is one wins, and none means null.
+ *
  * Returns null when the account has no IB. Throws on a read failure: the
  * floor decides what the balance is, so a caller must not guess it.
  */
@@ -144,15 +147,28 @@ export async function findOpeningBalanceFloor(
   if (error) throw new Error(`Kunde inte läsa räkenskapsår: ${error.message}`)
   const yearStarts = new Set(((data ?? []) as Array<{ period_start: string }>).map((p) => p.period_start))
 
-  const ib = candidates.filter((c) => yearStarts.has(c.entry.entry_date))
-  if (ib.length === 0) return null
-  const date = ib.reduce((latest, c) => (c.entry.entry_date > latest ? c.entry.entry_date : latest), ib[0].entry.entry_date)
-  let amount = 0
-  const entryIds = new Set<string>()
-  for (const { entry, line } of ib) {
-    if (entry.entry_date !== date) continue
-    amount += Number(line.debit_amount || 0) - Number(line.credit_amount || 0)
-    entryIds.add(entry.id)
+  const byDate = new Map<string, { amount: number; entryIds: Set<string> }>()
+  for (const { entry, line } of candidates) {
+    if (!yearStarts.has(entry.entry_date)) continue
+    const group = byDate.get(entry.entry_date) ?? { amount: 0, entryIds: new Set<string>() }
+    group.amount += Number(line.debit_amount || 0) - Number(line.credit_amount || 0)
+    group.entryIds.add(entry.id)
+    byDate.set(entry.entry_date, group)
   }
-  return { date, amount: roundOre(amount), entryIds: Array.from(entryIds) }
+
+  // Latest date first. Two or more IB entries on one date that cancel to the
+  // öre on this account are no IB of it: a duplicated SIE IB and the entry
+  // that undoes it, both labelled opening_balance. Flooring there dropped
+  // every earlier year from the balance although nothing restates them, so
+  // the reconciliation disagreed with the huvudbok by exactly the pre-IB
+  // history. Such a date is skipped; with no date left the balance runs over
+  // all history, as the huvudbok does.
+  const dates = Array.from(byDate.keys()).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
+  for (const date of dates) {
+    const group = byDate.get(date)!
+    const amount = roundOre(group.amount)
+    if (group.entryIds.size >= 2 && amount === 0) continue
+    return { date, amount, entryIds: Array.from(group.entryIds) }
+  }
+  return null
 }

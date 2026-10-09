@@ -9,12 +9,17 @@ const alignMock = vi.fn()
 vi.mock('../skattekonto-reconciliation', () => ({
   getSkattekontoReconciliationStatus: (...args: unknown[]) => skvStatusMock(...args),
 }))
-vi.mock('../bank-reconciliation', () => ({
-  fetchUnlinkedGLLines: (...args: unknown[]) => fetchUnlinkedMock(...args),
-  fetchJunctionLinkMap: (...args: unknown[]) => junctionMock(...args),
-  scopeTransactionsToAccount: (q: unknown) => q,
-  alignLinkedTransactionsToWindow: (...args: unknown[]) => alignMock(...args),
-}))
+vi.mock('../bank-reconciliation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../bank-reconciliation')>()
+  return {
+    fetchUnlinkedGLLines: (...args: unknown[]) => fetchUnlinkedMock(...args),
+    fetchJunctionLinkMap: (...args: unknown[]) => junctionMock(...args),
+    scopeTransactionsToAccount: (q: unknown) => q,
+    alignLinkedTransactionsToWindow: (...args: unknown[]) => alignMock(...args),
+    // Pure: the real per-verifikat rule.
+    openAmountByEntry: actual.openAmountByEntry,
+  }
+})
 const coveringSetsMock = vi.fn()
 vi.mock('../covering-set-candidate', () => ({
   proposeCoveringSets: (...args: unknown[]) => coveringSetsMock(...args),
@@ -137,6 +142,7 @@ describe('listAccountItems', () => {
     fetchUnlinkedMock.mockResolvedValue([
       { line_id: 'l1', journal_entry_id: 'e-2', debit_amount: 0, credit_amount: 1250, line_description: null, entry_date: '2026-08-03', voucher_number: 12, voucher_series: 'A', entry_description: 'Kontorsvaror', source_type: 'manual' },
     ])
+    enqueue({ data: [{ period_start: '2026-01-01' }] }) // fiscal year starts (Märk som IB)
     enqueue({
       data: [
         { id: 'e-1', entry_date: '2026-08-05', voucher_series: 'A', voucher_number: 11, description: 'Lön augusti' },
@@ -275,6 +281,65 @@ describe('listAccountItems', () => {
     )
     expect(res?.items.map((i) => i.item_id)).toEqual(['t-in', 't-pre'])
     expect(res?.items[1]).toMatchObject({ bucket: 'matched', linked_journal_entry_id: 'e-6' })
+  })
+
+  it('lists a partially allocated verifikat with only its remainder (agent feedback seq 854089)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+    fetchUnlinkedMock.mockResolvedValue([
+      // -300 on 1930, of which a 1:N slice settles -100.
+      { line_id: 'l1', journal_entry_id: 'e-part', debit_amount: 0, credit_amount: 300, line_description: null, entry_date: '2026-08-05', voucher_number: 7, voucher_series: 'A', entry_description: 'Betalning', source_type: 'supplier_invoice_paid', remaining_amount: -200 },
+      { line_id: 'l2', journal_entry_id: 'e-credit', debit_amount: 200, credit_amount: 0, line_description: null, entry_date: '2026-08-05', voucher_number: 8, voucher_series: 'A', entry_description: 'Kreditnota', source_type: 'supplier_invoice_paid', remaining_amount: null },
+    ])
+    enqueue({ data: [{ period_start: '2026-01-01' }] })
+
+    const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'unmatched_ledger' })
+    const byId = Object.fromEntries((result?.items ?? []).map((i) => [i.item_id, i]))
+
+    expect(byId['e-part']).toMatchObject({ bucket: 'unmatched_ledger', amount: -200 })
+    expect(byId['e-credit']).toMatchObject({ bucket: 'unmatched_ledger', amount: 200 })
+  })
+
+  it('offers Märk som IB only on a manual or imported verifikat dated on a fiscal year start, with no bank link (agent feedback seq 878478)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+    const line = { debit_amount: 5000, credit_amount: 0, line_description: null, voucher_series: 'A', entry_description: 'Verifikat', remaining_amount: null }
+    fetchUnlinkedMock.mockResolvedValue([
+      { ...line, line_id: 'l1', journal_entry_id: 'e-ib', entry_date: '2026-01-01', voucher_number: 1, source_type: 'manual' },
+      { ...line, line_id: 'l2', journal_entry_id: 'e-ib-sie', entry_date: '2025-01-01', voucher_number: 1, source_type: 'import' },
+      // A rättelse dated mid-year: a movement, never an IB.
+      { ...line, line_id: 'l3', journal_entry_id: 'e-rattelse', entry_date: '2026-09-21', voucher_number: 17, source_type: 'manual' },
+      // Year start, but booked by a flow the RPC refuses to re-tag.
+      { ...line, line_id: 'l4', journal_entry_id: 'e-bank', entry_date: '2026-01-01', voucher_number: 2, source_type: 'bank_transaction' },
+      // Year start, but 1:N slices already settle part of it.
+      { ...line, line_id: 'l5', journal_entry_id: 'e-part', entry_date: '2026-01-01', voucher_number: 3, source_type: 'manual', remaining_amount: 1000 },
+    ])
+    enqueue({ data: [{ period_start: '2025-01-01' }, { period_start: '2026-01-01' }] })
+
+    const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'unmatched_ledger' })
+    const eligible = Object.fromEntries((result?.items ?? []).map((i) => [i.item_id, i.ib_eligible]))
+
+    expect(eligible).toEqual({
+      'e-ib': true,
+      'e-ib-sie': true,
+      'e-rattelse': false,
+      'e-bank': false,
+      'e-part': false,
+    })
+    expect(findCalls('fiscal_periods', 'eq')[0]).toEqual(['company_id', COMPANY])
+  })
+
+  it('offers Märk som IB on nothing when the fiscal years cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+    fetchUnlinkedMock.mockResolvedValue([
+      { line_id: 'l1', journal_entry_id: 'e-ib', debit_amount: 5000, credit_amount: 0, line_description: null, entry_date: '2026-01-01', voucher_number: 1, voucher_series: 'A', entry_description: 'IB', source_type: 'manual', remaining_amount: null },
+    ])
+    enqueue({ data: null, error: { message: 'boom' } })
+
+    const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'unmatched_ledger' })
+
+    expect(result?.items[0]).toMatchObject({ item_id: 'e-ib', ib_eligible: false })
   })
 
   it('returns null for an unknown cash account', async () => {

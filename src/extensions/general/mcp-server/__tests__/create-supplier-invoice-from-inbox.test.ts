@@ -73,6 +73,8 @@ function makeMock(opts: {
   supplierRecord?: Record<string, unknown> | null
   /** When set, company_settings serves this vat_registered flag. */
   vatRegistered?: boolean
+  /** When set, company_settings also serves these columns (booking mode). */
+  companySettings?: Record<string, unknown>
 }) {
   const inboxResult = { data: opts.inbox ?? null, error: opts.inbox ? null : { message: 'not found' } }
   const supplierByOrgResult = { data: opts.supplierByOrg ?? null, error: null }
@@ -172,9 +174,13 @@ function makeMock(opts: {
       if (table === 'invoice_inbox_items') return inboxChain()
       if (table === 'suppliers') return supplierChain()
       if (table === 'pending_operations') return pendingChain()
-      if (table === 'company_settings' && opts.vatRegistered !== undefined) {
+      if (table === 'company_settings' && (opts.vatRegistered !== undefined || opts.companySettings)) {
         return staticChain({
-          data: { vat_registered: opts.vatRegistered, dimensions_enabled: opts.dimensions?.enabled ?? false },
+          data: {
+            vat_registered: opts.vatRegistered ?? true,
+            dimensions_enabled: opts.dimensions?.enabled ?? false,
+            ...opts.companySettings,
+          },
           error: null,
         })
       }
@@ -241,9 +247,11 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     // the invoice header field that gates the WHOLE 2641 posting downstream
     // in createSupplierInvoiceRegistrationEntry. Deriving it from the items
     // instead keeps the header honest regardless of what the header block said.
+    // The total still has to agree with the lines incl. VAT (feedback seq
+    // 983757): only the VAT figure is stale here.
     const staleTotals = {
       ...baseExtracted,
-      totals: { subtotal: 1000, vat: 0, total: 1000 }, // stale: doesn't match the line below
+      totals: { subtotal: 1000, vat: 0, total: 1250 }, // stale VAT: doesn't match the line below
       lineItems: [
         { description: 'Konsulttimmar', quantity: 10, unit_price: 100, line_total: 1000, vat_rate: 25, vat_amount: 250 },
       ],
@@ -645,14 +653,16 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect(params.vat_amount).toBe(250)
   })
 
-  it('passes already-decimal vat_rate through unchanged and zeroes foreign percent rates', async () => {
+  it('passes already-decimal vat_rate through unchanged and books foreign VAT as cost, never on 2641', async () => {
+    // The document bills 1 000 + 12 % and 500 + 19 % foreign VAT: 1 715.00.
     const mixedRates = {
       ...baseExtracted,
+      totals: { subtotal: 1500, vat: 215, total: 1715 },
       lineItems: [
         // Already decimal (staged by an agent following the storage convention).
         { description: 'Svensk tjänst', quantity: 1, unit_price: 1000, line_total: 1000, vat_rate: 0.12, vat_amount: 120 },
-        // Foreign rate (DE 19 %): outside the Swedish statutory set, maps to 0
-        // per the extraction contract.
+        // Foreign rate (DE 19 %): outside the Swedish statutory set, so not
+        // deductible ingående moms here; the 95.00 is part of the cost.
         { description: 'Utländsk tjänst', quantity: 1, unitPrice: 500, lineTotal: 500, vatRate: 19 },
       ],
     }
@@ -675,15 +685,22 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     )) as { staged: boolean }
 
     expect(result.staged).toBe(true)
-    const params = inserts[0].params as {
-      vat_amount: number
-      items: Array<{ vat_rate: number; vat_amount: number }>
-    }
+    const params = inserts[0].params as StagedParams
     expect(params.items[0].vat_rate).toBe(0.12)
     expect(params.items[0].vat_amount).toBe(120)
     expect(params.items[1].vat_rate).toBe(0)
     expect(params.items[1].vat_amount).toBe(0)
+    expect(params.items[1].line_total).toBe(595)
+    expect(params.items[1].unit_price).toBe(595)
     expect(params.vat_amount).toBe(120)
+    expect(params.total).toBe(1715)
+    expect((result as unknown as { preview: Record<string, unknown> }).preview.foreign_vat_in_cost).toMatchObject({ amount: 95 })
+
+    // 2440 carries the billed total; the cost line includes the foreign VAT.
+    const lines = await registrationLines(params)
+    expect(lines.find((l) => l.account_number === '6540')?.debit_amount).toBe(1595)
+    expect(lines.find((l) => l.account_number === '2641')?.debit_amount).toBe(120)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(1715)
   })
 
   it('rejects apply_slp when the line resolves to a non-741x account (staging-time guard)', async () => {
@@ -720,6 +737,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
         status: 'received',
         extracted_data: {
           ...baseExtracted,
+          totals: { subtotal: 10000, vat: 0, total: 10000 },
           lineItems: [
             { description: 'Tjänstepension', quantity: 1, unit_price: 10000, line_total: 10000, vat_rate: 0, vat_amount: 0 },
           ],
@@ -1552,13 +1570,39 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
     expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(444191.5)
   })
 
-  it('does not absorb a gap over 0.50: that is not rounding', async () => {
+  it('does not carry a gap over 0.50 as öresavrundning, though per-line VAT rounding on ten lines still explains it', async () => {
     const { result, params } = await stage({ ...themax, totals: { ...themax.totals, total: 444192.42 } })
 
+    expect(result.staged).toBe(true)
     expect(params.items).toHaveLength(10)
     expect(params.items.some((i) => i.account_number === '3740')).toBe(false)
-    expect(params.subtotal).toBe(355894.12)
     expect(result.preview.ore_rounding).toBeUndefined()
+  })
+
+  it('stages nothing past the per-line rounding tolerance (feedback seq 983757)', async () => {
+    // Ten lines tolerate 0.50 + 10 x 0.005 = 0.55.
+    const { result, params } = await stage({ ...themax, totals: { ...themax.totals, total: 444192.47 } })
+
+    expect(result.staged).toBe(false)
+    expect(params).toBeUndefined()
+    expect(result.preview.error_code).toBe('SI_CREATE_TOTALS_MISMATCH')
+    expect(result.preview.gap).toBe(0.56)
+  })
+
+  it('stages a long invoice whose lines round their VAT one by one: 120 lines of 9.98 at 25 %', async () => {
+    // Line by line 120 x 2.50 = 300.00; the document's VAT on the sum is 299.40.
+    const many = {
+      ...themax,
+      totals: { subtotal: 1197.6, vat: 299.4, total: 1497 },
+      lineItems: Array.from({ length: 120 }, (_, i) => ({
+        description: `Artikel ${i + 1}`, quantity: 1, unitPrice: 9.98, lineTotal: 9.98, vatRate: 25, accountSuggestion: '4010',
+      })),
+    }
+    const { result, params } = await stage(many)
+
+    expect(result.staged).toBe(true)
+    expect(params.items).toHaveLength(120)
+    expect(params.total).toBe(1497)
   })
 
   it('never touches a foreign-currency invoice', async () => {
@@ -1713,5 +1757,347 @@ describe('gnubok_create_supplier_invoice_from_inbox: a line is never given a gue
     expect(result.staged).toBe(true)
     const params = inserts[0].params as { items: Array<{ account_number: string }> }
     expect(params.items[0].account_number).toBe('5410')
+  })
+})
+
+describe('gnubok_create_supplier_invoice_from_inbox: line amounts that include VAT (feedback seq 983757)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockResolveRate.mockReset()
+  })
+
+  // A utility bill that prints its consumption line only incl. VAT: 1 412.62
+  // (1 130.10 + 282.52 VAT) plus a 75.00 fee at 0 %, 1 487.62 rounded to a
+  // billed 1 488.00. The extraction's totals are right, but lineTotal holds
+  // the gross, and staging used to add 25 % on top: 2440 credited 1 840.78.
+  const grossBill = {
+    supplier: { name: 'Nätbolaget AB' },
+    invoice: { invoiceNumber: 'EL-2001', invoiceDate: '2026-09-20', dueDate: '2026-10-20', currency: 'SEK', paymentReference: null },
+    totals: { subtotal: 1205.1, vatAmount: 282.52, total: 1488 },
+    lineItems: [
+      { description: 'Förbrukning', quantity: 1, unitPrice: 1412.62, lineTotal: 1412.62, vatRate: 25, accountSuggestion: '5020' },
+      { description: 'Avgift', quantity: 1, unitPrice: 75, lineTotal: 75, vatRate: 0, accountSuggestion: '6570' },
+    ],
+  }
+
+  async function stage(
+    extracted: unknown,
+    opts: { args?: Record<string, unknown>; vatRegistered?: boolean } = {},
+  ) {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-gross',
+        status: 'received',
+        extracted_data: extracted,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-gross',
+      },
+      inserts,
+      ...(opts.vatRegistered !== undefined ? { vatRegistered: opts.vatRegistered } : {}),
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-gross', ...opts.args },
+      'company-1', 'user-1', supabase,
+    )) as {
+      staged: boolean
+      dry_run?: boolean
+      message: string
+      preview: Record<string, unknown>
+      next?: { tool: string; args: Record<string, unknown>; description: string }
+    }
+    return { result, inserts, params: inserts[0]?.params as StagedParams | undefined }
+  }
+
+  it('reads the lines as gross: 1 130.10 + 282.52 VAT, 75.00, 0.38 öresavrundning, and 2440 is credited with the billed 1 488.00', async () => {
+    const { result, params } = await stage(grossBill)
+
+    expect(result.staged).toBe(true)
+    expect(params!.items).toHaveLength(3)
+    expect(params!.items[0]).toMatchObject({ account_number: '5020', unit_price: 1130.1, line_total: 1130.1, vat_rate: 0.25, vat_amount: 282.52 })
+    expect(params!.items[1]).toMatchObject({ account_number: '6570', line_total: 75, vat_rate: 0, vat_amount: 0 })
+    expect(params!.items[2]).toMatchObject({ account_number: '3740', line_total: 0.38, vat_rate: 0, vat_amount: 0 })
+    // The header agrees with its own items: subtotal + vat_amount = total.
+    expect(params!.subtotal).toBe(1205.48)
+    expect(params!.vat_amount).toBe(282.52)
+    expect(params!.total).toBe(1488)
+
+    expect(result.preview.line_amounts_interpreted_as).toBe('gross')
+    expect(String(result.preview.warning)).toMatch(/include VAT/)
+    expect(result.preview.subtotal).toBe(1205.48)
+    expect(result.preview.vat_amount).toBe(282.52)
+    expect(result.preview.total).toBe(1488)
+
+    const lines = await registrationLines(params!)
+    expect(lines.find((l) => l.account_number === '5020')?.debit_amount).toBe(1130.1)
+    expect(lines.find((l) => l.account_number === '6570')?.debit_amount).toBe(75)
+    expect(lines.find((l) => l.account_number === '3740')?.debit_amount).toBe(0.38)
+    expect(lines.find((l) => l.account_number === '2641')?.debit_amount).toBe(282.52)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(1488)
+  })
+
+  it('shows the same reading on a dry run without staging', async () => {
+    const { result, inserts } = await stage(grossBill, { args: { dry_run: true } })
+
+    expect(result.dry_run).toBe(true)
+    expect(inserts).toHaveLength(0)
+    expect(result.preview.line_amounts_interpreted_as).toBe('gross')
+    expect(result.preview.total).toBe(1488)
+  })
+
+  it('stages nothing when neither reading reconciles, and points at set_inbox_extracted_data', async () => {
+    const { result, inserts } = await stage({ ...grossBill, totals: { ...grossBill.totals, total: 1600 } })
+
+    expect(result.staged).toBe(false)
+    expect(inserts).toHaveLength(0)
+    expect(result.message).toMatch(/stämmer inte med fakturans totalbelopp/)
+    expect(result.preview).toMatchObject({
+      error_code: 'SI_CREATE_TOTALS_MISMATCH',
+      extracted_total: 1600,
+      lines_net: 1487.62,
+      lines_vat: 353.16,
+      lines_incl_vat: 1840.78,
+      gap: -240.78,
+    })
+    expect(result.next?.tool).toBe('gnubok_set_inbox_extracted_data')
+    expect(result.next?.args).toEqual({ inbox_item_id: 'inbox-gross' })
+    // The fix is in the lines, never a lower total: foreign VAT is cost.
+    expect(result.next?.description).toMatch(/excluding Swedish VAT/)
+    expect(result.next?.description).toMatch(/foreign VAT with vatRate 0/)
+    expect(result.next?.description).toMatch(/Never lower totals.total/)
+    expect(result.next?.description).not.toMatch(/or fix totals.total/)
+  })
+
+  it('refuses on a dry run too', async () => {
+    const { result } = await stage({ ...grossBill, totals: { ...grossBill.totals, total: 1600 } }, { args: { dry_run: true } })
+    expect(result.staged).toBe(false)
+    expect(result.preview.error_code).toBe('SI_CREATE_TOTALS_MISMATCH')
+  })
+
+  it('does not read the lines as gross when the document VAT does not match the VAT inside them', async () => {
+    const { result } = await stage({ ...grossBill, totals: { subtotal: null, vatAmount: null, total: 1488 } })
+    expect(result.staged).toBe(false)
+    expect(result.preview.error_code).toBe('SI_CREATE_TOTALS_MISMATCH')
+  })
+
+  it('keeps net lines that already reconcile exactly as before, with no gross reading', async () => {
+    const netBill = {
+      ...grossBill,
+      lineItems: [
+        { ...grossBill.lineItems[0], unitPrice: 1130.1, lineTotal: 1130.1 },
+        grossBill.lineItems[1],
+      ],
+    }
+    const { result, params } = await stage(netBill)
+
+    expect(result.staged).toBe(true)
+    // VAT derived from the net line (1 130.10 x 25 % = 282.525, 282.53),
+    // the öre the document rounded to the krona carried on 3740.
+    expect(params!.items[0]).toMatchObject({ line_total: 1130.1, vat_amount: 282.53 })
+    expect(params!.items[2]).toMatchObject({ account_number: '3740', line_total: 0.37 })
+    expect(params!.total).toBe(1488)
+    expect(result.preview.line_amounts_interpreted_as).toBeUndefined()
+    expect(result.preview.warning).toBeUndefined()
+  })
+
+  it('leaves reverse charge on its own path: the line nets are the payable, nothing is refused', async () => {
+    const { result, params } = await stage(grossBill, { args: { vat_treatment_override: 'reverse_charge' } })
+
+    expect(result.staged).toBe(true)
+    expect(params!.items.map((i) => [i.line_total, i.vat_amount])).toEqual([[1412.62, 0], [75, 0]])
+    expect(params!.total).toBe(1487.62)
+    expect(result.preview.line_amounts_interpreted_as).toBeUndefined()
+    expect((result.preview.payable_recomputed as { reason: string }).reason).toBe('reverse_charge')
+  })
+
+  it('leaves exempt on its own path too', async () => {
+    const { result, params } = await stage(grossBill, { args: { vat_treatment_override: 'exempt' } })
+
+    expect(result.staged).toBe(true)
+    expect(params!.total).toBe(1487.62)
+    expect(params!.vat_amount).toBe(0)
+    expect(result.preview.line_amounts_interpreted_as).toBeUndefined()
+  })
+
+  it('reads the lines as gross for a non-registered company too: the fold keeps the printed amounts as cost', async () => {
+    const { result, params } = await stage(grossBill, { vatRegistered: false })
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.line_amounts_interpreted_as).toBe('gross')
+    expect(params!.items.map((i) => [i.account_number, i.line_total, i.vat_amount])).toEqual([
+      ['5020', 1412.62, 0],
+      ['6570', 75, 0],
+      ['3740', 0.38, 0],
+    ])
+    expect(params!.vat_amount).toBe(0)
+    expect(params!.total).toBe(1488)
+    expect(result.preview.vat_registration).toMatchObject({ vat_registered: false, seller_vat_added_to_cost: 282.52 })
+    const lines = await registrationLines(params!)
+    expect(lines.find((l) => l.account_number === '2641')).toBeUndefined()
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(1488)
+  })
+
+  it('never adds the VAT a second time for a non-registered company: billed 1 250.00 incl. 25 %, payable 1 250.00', async () => {
+    const single = {
+      ...grossBill,
+      totals: { subtotal: 1000, vatAmount: 250, total: 1250 },
+      lineItems: [{ description: 'Hyra', quantity: 1, unitPrice: 1250, lineTotal: 1250, vatRate: 25, accountSuggestion: '5010' }],
+    }
+    const { result, params } = await stage(single, { vatRegistered: false })
+
+    expect(result.staged).toBe(true)
+    expect(params!.items).toHaveLength(1)
+    expect(params!.items[0]).toMatchObject({ line_total: 1250, vat_rate: 0, vat_amount: 0 })
+    expect(params!.total).toBe(1250)
+    const lines = await registrationLines(params!)
+    expect(lines.find((l) => l.account_number === '5010')?.debit_amount).toBe(1250)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(1250)
+  })
+
+  it('keeps a non-registered company\'s net lines folded as before when they reconcile as net', async () => {
+    const net = {
+      ...grossBill,
+      totals: { subtotal: 1000, vatAmount: 250, total: 1250 },
+      lineItems: [{ description: 'Hyra', quantity: 1, unitPrice: 1000, lineTotal: 1000, vatRate: 25, accountSuggestion: '5010' }],
+    }
+    const { result, params } = await stage(net, { vatRegistered: false })
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.line_amounts_interpreted_as).toBeUndefined()
+    expect(params!.items[0]).toMatchObject({ line_total: 1250, vat_rate: 0, vat_amount: 0 })
+    expect(params!.total).toBe(1250)
+  })
+
+  it('books foreign VAT as cost when the lines are printed incl. it, without a second 19 %', async () => {
+    const foreignGross = {
+      ...grossBill,
+      invoice: { ...grossBill.invoice, currency: 'EUR' },
+      totals: { subtotal: 100, vatAmount: 19, total: 119 },
+      lineItems: [{ description: 'Software', quantity: 1, unitPrice: 119, lineTotal: 119, vatRate: 19, accountSuggestion: '6540' }],
+    }
+    mockResolveRate.mockResolvedValue({
+      ok: true,
+      rate: { currency: 'EUR', rate: 11.5, exchangeRate: 11.5, exchangeRateDate: '2026-09-20', source: 'fetched' },
+    })
+    const { result, params } = await stage(foreignGross)
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.line_amounts_interpreted_as).toBe('gross')
+    expect(params!.items[0]).toMatchObject({ line_total: 119, vat_rate: 0, vat_amount: 0 })
+    expect(params!.total).toBe(119)
+    expect(result.preview.foreign_vat_in_cost).toMatchObject({ amount: 19 })
+  })
+
+  it('stages nothing and says so when no line items were extracted', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-gross',
+        status: 'received',
+        extracted_data: { ...grossBill, lineItems: [] },
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-gross',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const err = await tool
+      .execute({ inbox_item_id: 'inbox-gross' }, 'company-1', 'user-1', supabase)
+      .then(() => null, (e: unknown) => e as Error & { code?: string; remediation?: { tool?: string } })
+
+    expect(err?.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(err?.message).toMatch(/No line items were extracted/)
+    expect(err?.remediation?.tool).toBe('gnubok_set_inbox_extracted_data')
+    expect(inserts).toHaveLength(0)
+  })
+})
+
+describe('gnubok_create_supplier_invoice_from_inbox: carries the OCR onto the invoice (feedback seq 869949)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  async function stage(paymentReference: unknown) {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-ocr',
+        status: 'received',
+        extracted_data: { ...baseExtracted, invoice: { ...baseExtracted.invoice, paymentReference } },
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-ocr',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute({ inbox_item_id: 'inbox-ocr' }, 'company-1', 'user-1', supabase)) as {
+      staged: boolean
+      preview: Record<string, unknown>
+    }
+    return { result, params: inserts[0]?.params as Record<string, unknown> }
+  }
+
+  it('stages the extracted paymentReference, trimmed, and shows it in the preview', async () => {
+    const { result, params } = await stage(' 4711000012345 ')
+    expect(result.staged).toBe(true)
+    expect(params.payment_reference).toBe('4711000012345')
+    expect(result.preview.payment_reference).toBe('4711000012345')
+  })
+
+  it('stages null when the extraction has none', async () => {
+    for (const value of [null, '', '   ', undefined, 12345]) {
+      const { params } = await stage(value)
+      expect(params.payment_reference).toBeNull()
+    }
+  })
+})
+
+describe('gnubok_create_supplier_invoice_from_inbox: the preview says whether a verifikat is posted (feedback seq 930807)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  async function preview(companySettings?: Record<string, unknown>) {
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-will',
+        status: 'received',
+        extracted_data: baseExtracted,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-will',
+      },
+      ...(companySettings ? { companySettings } : {}),
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-will', dry_run: true },
+      'company-1', 'user-1', supabase,
+    )) as { preview: { will: string; will_post_journal_entry: boolean } }
+    return result.preview
+  }
+
+  it('promises the registration verifikat under faktureringsmetoden', async () => {
+    const p = await preview({ accounting_method: 'accrual', defer_invoice_booking: false })
+    expect(p.will_post_journal_entry).toBe(true)
+    expect(p.will).toMatch(/post a registration journal entry on confirm/)
+  })
+
+  it('promises no verifikat when the company defers invoice booking, and names the Bokför tool', async () => {
+    const p = await preview({ accounting_method: 'accrual', defer_invoice_booking: true })
+    expect(p.will_post_journal_entry).toBe(false)
+    expect(p.will).not.toMatch(/post a registration journal entry/)
+    expect(p.will).toMatch(/defer_invoice_booking/)
+    expect(p.will).toMatch(/gnubok_book_supplier_invoice/)
+  })
+
+  it('promises no verifikat under kontantmetoden', async () => {
+    const p = await preview({ accounting_method: 'cash' })
+    expect(p.will_post_journal_entry).toBe(false)
+    expect(p.will).toMatch(/kontantmetoden/)
   })
 })

@@ -35,7 +35,7 @@ import {
   EMAIL_ALLOWED_MIME_TYPES,
   ensureHtmlDocument,
 } from './lib/upload-and-extract'
-import { isSignatureImage, renderEmailBodyUnderlag } from './lib/email-body-underlag'
+import { emailBodyToText, isSignatureImage, isSubstantiveBody, renderEmailBodyUnderlag } from './lib/email-body-underlag'
 import type { RenderedEmailBodyUnderlag } from './lib/email-body-underlag'
 import {
   verifyInboundWebhook,
@@ -1942,57 +1942,69 @@ export const invoiceInboxExtension: Extension = {
             mime: sanitiseMime(att.content_type),
           }))
 
-          if (documentAttachments.length === 0) {
-            // Body-only mail: for app-store, SaaS and travel receipts the body
-            // IS the receipt, and often the only underlag the user has. Render
-            // it to a PDF with the received parts embedded and run the normal
-            // extract pipeline instead of dead-ending in an error row. An
-            // empty body, or a mail-client note next to signature images,
-            // keeps the error row: there is nothing to archive.
+          // The mail body as its own underlag: rendered to a PDF with the
+          // received parts embedded and run through the normal extract
+          // pipeline. Null when there is nothing to file (an empty body, a
+          // mail-client note next to signature images, a render or upload
+          // failure): the caller decides what stays behind then.
+          const fileEmailBody = async (): Promise<{ inbox_item_id: string; duplicate: boolean } | null> => {
             let bodyDoc: RenderedEmailBodyUnderlag | null = null
             try {
               bodyDoc = await renderBodyUnderlag()
             } catch (err) {
               console.error('[invoice-inbox/inbound] Email-body rendering failed:', err)
             }
-            if (bodyDoc && bodyDoc.buffer.byteLength <= MAX_FILE_SIZE) {
-              // Resend retries the webhook on failure: a retry after success
-              // must not duplicate the body document. Body items carry the
-              // email_id with a NULL attachment id. Scoped to the company:
-              // one mail to two inboxes files once per inbox (#2181).
-              const { data: existingBody } = await serviceSupabase
-                .from('invoice_inbox_items')
-                .select('id')
-                .eq('company_id', companyId)
-                .eq('resend_email_id', email_id)
-                .is('resend_attachment_id', null)
-                .maybeSingle()
-              if (existingBody) {
-                return { processed: 0, reason: 'email_body_duplicate', inbox_item_id: existingBody.id, attachments: [] }
-              }
-              try {
-                const result = await uploadAndExtract(
-                  serviceSupabase,
-                  userId,
-                  companyId,
-                  bodyDoc,
-                  'email',
-                  {
-                    from,
-                    subject,
-                    receivedAt: created_at,
-                    messageId: message_id,
-                    bodyText,
-                    resendEmailId: email_id,
-                    kindHint,
-                  }
-                )
-                return { processed: 1, reason: 'email_body', inbox_item_id: result.inbox_item_id, attachments: ignoredOutcomes }
-              } catch (err) {
-                // Fall through to the error row so the mail never vanishes.
-                console.error('[invoice-inbox/inbound] Email-body document failed:', err)
-              }
+            if (!bodyDoc || bodyDoc.buffer.byteLength > MAX_FILE_SIZE) return null
+            // Resend retries the webhook on failure: a retry after success
+            // must not duplicate the body document. Body items carry the
+            // email_id with a NULL attachment id. Scoped to the company:
+            // one mail to two inboxes files once per inbox (#2181).
+            const { data: existingBody } = await serviceSupabase
+              .from('invoice_inbox_items')
+              .select('id')
+              .eq('company_id', companyId)
+              .eq('resend_email_id', email_id)
+              .is('resend_attachment_id', null)
+              .maybeSingle()
+            if (existingBody) return { inbox_item_id: existingBody.id, duplicate: true }
+            try {
+              const result = await uploadAndExtract(
+                serviceSupabase,
+                userId,
+                companyId,
+                bodyDoc,
+                'email',
+                {
+                  from,
+                  subject,
+                  receivedAt: created_at,
+                  messageId: message_id,
+                  bodyText,
+                  resendEmailId: email_id,
+                  kindHint,
+                }
+              )
+              return { inbox_item_id: result.inbox_item_id, duplicate: false }
+            } catch (err) {
+              console.error('[invoice-inbox/inbound] Email-body document failed:', err)
+              return null
             }
+          }
+
+          if (documentAttachments.length === 0) {
+            // Body-only mail: for app-store, SaaS and travel receipts the body
+            // IS the receipt, and often the only underlag the user has. Filed
+            // instead of dead-ending in an error row. An empty body, or a
+            // mail-client note next to signature images, keeps the error row:
+            // there is nothing to archive.
+            const body = await fileEmailBody()
+            if (body?.duplicate) {
+              return { processed: 0, reason: 'email_body_duplicate', inbox_item_id: body.inbox_item_id, attachments: [] }
+            }
+            if (body) {
+              return { processed: 1, reason: 'email_body', inbox_item_id: body.inbox_item_id, attachments: ignoredOutcomes }
+            }
+            // Fall through to the error row so the mail never vanishes.
             await serviceSupabase.from('invoice_inbox_items').insert({
               company_id: companyId,
               user_id: userId,
@@ -2304,6 +2316,30 @@ export const invoiceInboxExtension: Extension = {
                 inbox_item_id: failedItemId,
                 ...(replacedItemId ? { replaced_item_id: replacedItemId } : {}),
               })
+            }
+          }
+
+          // Every attachment was refused (a calendar invite, a type outside
+          // the allowlist, too large) and none was filed: the body is then
+          // filed the way a body-only mail is. A booking confirmation whose
+          // only attachment was an .ics left an error row and no document
+          // at all, though its body was the receipt (agent feedback seq
+          // 957595). Only for a substantive body, so a "see attached" note
+          // next to a refused file does not become a document, and not when
+          // an attachment failed on our side: that one is the likelier
+          // receipt and its error row asks for it again. Filing the body next
+          // to attachments that WERE filed is a separate design call.
+          const onlyRefused = attachmentOutcomes.every((o) => o.outcome === 'rejected' || o.outcome === 'ignored')
+          if (onlyRefused && isSubstantiveBody(emailBodyToText(fullEmail.html, fullEmail.text))) {
+            const body = await fileEmailBody()
+            if (body) {
+              return {
+                processed: results.length + (body.duplicate ? 0 : 1),
+                reason: body.duplicate ? 'email_body_duplicate' : 'email_body',
+                inbox_item_id: body.inbox_item_id,
+                results,
+                attachments: attachmentOutcomes,
+              }
             }
           }
 

@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { vacationPayRateFromPercentInput } from '@/lib/salary/vacation-pay-rate'
+import { vacationDaysFromInput, vacationPayRateFromPercentInput } from '@/lib/salary/vacation-pay-rate'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
@@ -163,6 +163,7 @@ async function submitEmployee(body: unknown, locale: ErrorLocale): Promise<Submi
 // unmounts DialogContent children on close).
 function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCancel: () => void }) {
   const t = useTranslations('employees')
+  const tEmployee = useTranslations('salary_employee')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
@@ -251,7 +252,9 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       clearing_number: normalizeBankNumber(clearing) || undefined,
       bank_account_number: normalizeBankNumber(account) || undefined,
       vacation_rule: vacationRule,
-      vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || 25,
+      // 0 is a real value (vacation_rule none, e.g. a company owner outside
+      // semesterlagen); only an empty field falls back to the default 25.
+      vacation_days_per_year: vacationDaysFromInput(form.get('vacation_days_per_year')) ?? 25,
       // Empty (or hidden under sammalöneregeln/none) = statutory rate.
       vacation_pay_rate: vacationPayRateFromPercentInput(form.get('vacation_pay_rate')),
       // Always sent: {} means no default dimensions.
@@ -436,8 +439,19 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
               )}
             </Field>
             <Field label="Semesterdagar per år" htmlFor="vacation_days_per_year">
-              <Input id="vacation_days_per_year" name="vacation_days_per_year" type="number" min="25" max="40" defaultValue="25" />
-              <p className="text-xs text-muted-foreground">Lagstadgat minimum: 25 dagar</p>
+              <Input
+                id="vacation_days_per_year"
+                name="vacation_days_per_year"
+                type="number"
+                min={vacationRule === 'none' ? 0 : 25}
+                max="40"
+                defaultValue="25"
+              />
+              <p className="text-xs text-muted-foreground">
+                {vacationRule === 'none'
+                  ? tEmployee('form_vacation_days_hint_none')
+                  : tEmployee('form_vacation_days_hint')}
+              </p>
             </Field>
             {(vacationRule === 'procentregeln' || vacationRule === 'semesterersattning') && (
               <Field label="Semesterlön, procentsats" htmlFor="vacation_pay_rate">

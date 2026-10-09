@@ -13,6 +13,8 @@
  *
  * Gating per rule:
  *   - salary amount, tax table, Växa-stöd start: always.
+ *   - vacation days (minimum 25 unless vacation_rule is 'none'): only when
+ *     the patch names vacation_rule or vacation_days_per_year.
  *   - jämkning: only when the patch names a jämkning key (#2058), so a
  *     legacy row with an incomplete beslut stays editable in unrelated ways.
  *   - bank details: only when the patch changes one of them, so legacy
@@ -33,6 +35,20 @@ export const MONTHLY_SALARY_REQUIRED = 'Månadslön krävs och måste vara stör
 export const HOURLY_RATE_REQUIRED = 'Timlön krävs och måste vara större än 0 för timlöneform'
 export const TAX_TABLE_REQUIRED = 'Skattetabell krävs för A-skatt anställda'
 export const VAXA_START_REQUIRED = 'Startdatum för Växa-stöd måste anges när Växa-stöd är aktiverat'
+export const VACATION_DAYS_MINIMUM =
+  'Semesterdagar per år måste vara minst 25 (semesterlagen 4 §). Färre dagar går bara med semesterregeln "Ingen semester" (none), t.ex. för en företagsledare som inte omfattas av semesterlagen'
+
+/** Statutory minimum (semesterlagen 4 §): 25 semesterdagar per år. */
+export const STATUTORY_VACATION_DAYS = 25
+
+/**
+ * Fewer than 25 vacation days is only valid when the employee earns no
+ * vacation at all (vacation_rule 'none': e.g. a company owner outside
+ * semesterlagen). Every other rule prices days off a 25-day minimum.
+ */
+export function vacationDaysBelowMinimum(rule: unknown, days: unknown): boolean {
+  return rule !== 'none' && typeof days === 'number' && days < STATUTORY_VACATION_DAYS
+}
 
 /**
  * Every issue with the row an update would store, in a stable order (salary,
@@ -61,6 +77,16 @@ export function validateEmployeeUpdate(
   }
   if (merged.vaxa_stod_eligible && !merged.vaxa_stod_start) {
     issues.push({ field: 'vaxa_stod_start', message: VAXA_START_REQUIRED })
+  }
+
+  // Gated on the patch naming either key, so the merged rule (an employee
+  // leaving 'none' with 0 days stored) is caught without blocking unrelated
+  // edits of a row the old schema never let below 25.
+  if (
+    ('vacation_rule' in sent || 'vacation_days_per_year' in sent) &&
+    vacationDaysBelowMinimum(merged.vacation_rule, merged.vacation_days_per_year)
+  ) {
+    issues.push({ field: 'vacation_days_per_year', message: VACATION_DAYS_MINIMUM })
   }
 
   if (touchesJamkning(sent)) {

@@ -265,6 +265,45 @@ describe('extractInvoiceFields', () => {
     expect(system).toContain('The field is NOT invoice-only')
   })
 
+  it('tells the model that lineTotal excludes VAT, and how to convert a line printed incl. VAT', async () => {
+    // Feedback seq 983757: a bill that printed its line only incl. VAT came
+    // through with the gross in lineTotal, and every consumer (the inbox MCP
+    // door, the web prefill) reads lineTotal as the net. Pin the rule.
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'faktura.pdf',
+    })
+    const call = mockCreate.mock.calls[0][0]
+    const system: string =
+      typeof call.system === 'string'
+        ? call.system
+        : call.system.map((block: { text: string }) => block.text).join('\n')
+    expect(system).toContain('"lineTotal": number,              // the line amount EXCLUDING VAT')
+    expect(system).toContain('- lineItems amounts: lineTotal and unitPrice are ALWAYS excluding VAT')
+    expect(system).toContain('Never put an amount including VAT in lineTotal.')
+  })
+
+  it('tells the model to keep a hyphen at a line break inside an identifier', async () => {
+    // Agent feedback seq 936092: an invoice number wrapped after a hyphen
+    // ("...-202604-" / "0001") came back with the hyphen dropped, read as
+    // word hyphenation. Pinned so a prompt edit cannot silently drop the rule.
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'invoice.pdf',
+    })
+    const call = mockCreate.mock.calls[0][0]
+    const system: string =
+      typeof call.system === 'string'
+        ? call.system
+        : call.system.map((block: { text: string }) => block.text).join('\n')
+    expect(system).toContain('KEEP a hyphen printed at the end of the first line')
+    expect(system).toContain('never word hyphenation')
+  })
+
   it('sends document content for a PDF upload', async () => {
     mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
     await extractInvoiceFields({

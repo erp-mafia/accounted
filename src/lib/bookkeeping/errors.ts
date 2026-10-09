@@ -33,6 +33,7 @@ export const ENTRY_ALREADY_REVERSED = 'ENTRY_ALREADY_REVERSED' as const
 export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY_EXISTS' as const
 export const ASSET_DEPRECIATION_REFUSED = 'ASSET_DEPRECIATION_REFUSED' as const
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
+export const TX_MISSING_SEK_VALUE = 'TX_MISSING_SEK_VALUE' as const
 export const BOOKKEEPING_DATABASE_ERROR = 'BOOKKEEPING_DATABASE_ERROR' as const
 export const MEANINGLESS_CORRECTION = 'MEANINGLESS_CORRECTION' as const
 export const CORRECTION_CHAIN_TOO_DEEP = 'CORRECTION_CHAIN_TOO_DEEP' as const
@@ -389,6 +390,28 @@ export class InvalidMappingResultError extends Error {
   }
 }
 
+/**
+ * A foreign-currency bank transaction has neither amount_sek nor an
+ * exchange_rate, so its SEK value is unknown. Journal lines are always kronor
+ * (BFL 4 kap 6 §), and the old fallback booked the raw foreign number as if it
+ * were kronor: 100 CAD posted as 100 kr. Booking refuses instead; the next
+ * step is the transaction's refresh-exchange-rate route, which fetches the
+ * Riksbanken rate for the transaction date.
+ */
+export class TransactionMissingSekValueError extends Error {
+  readonly code = TX_MISSING_SEK_VALUE
+  constructor(
+    public readonly transactionId: string,
+    public readonly currency: string,
+    public readonly date: string
+  ) {
+    super(
+      `Transaction ${transactionId} is in ${currency} but has neither amount_sek nor exchange_rate; it cannot be booked until its SEK value is known`
+    )
+    this.name = 'TransactionMissingSekValueError'
+  }
+}
+
 // ============================================================================
 // BookkeepingDatabaseError: single wrapper for all "Failed to <op>: <cause>"
 // engine throws. The `operation` tag is preserved for logs; the cause string
@@ -496,6 +519,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof EntryAlreadyReversedError ||
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
+    err instanceof TransactionMissingSekValueError ||
     err instanceof BookkeepingDatabaseError ||
     err instanceof MeaninglessCorrectionError ||
     err instanceof CorrectionChainTooDeepError ||
@@ -719,6 +743,23 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
           details: {
             debitAccount: err.debitAccount,
             creditAccount: err.creditAccount,
+          },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof TransactionMissingSekValueError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: {
+            transactionId: err.transactionId,
+            currency: err.currency,
+            date: err.date,
           },
         },
       },

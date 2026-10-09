@@ -11,6 +11,14 @@ import { Label } from '@/components/ui/label'
 import { cn, formatDate } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { sameWindow, windowFitsPeriod } from '@/lib/reports/report-drilldown'
+import {
+  clampToPeriod,
+  resolvePreset,
+  restoreRangeChoice,
+  serializeRangeChoice,
+  type RangePreset,
+  type StoredRangeChoice,
+} from '@/lib/reports/report-range-preset'
 
 export type DateRangeValue = {
   /** Inclusive lower bound. ISO YYYY-MM-DD. `undefined` = period start. */
@@ -19,7 +27,7 @@ export type DateRangeValue = {
   toDate?: string
 }
 
-type Preset = 'full_year' | 'ytd' | 'this_month' | 'last_month' | 'this_quarter' | 'custom'
+type Preset = RangePreset
 
 interface Props {
   /** Selected fiscal period: bounds the range. */
@@ -57,7 +65,6 @@ interface Props {
 }
 
 const STORAGE_KEY_PREFIX = 'Accounted:report-range-preset:'
-const PRESETS: Preset[] = ['full_year', 'ytd', 'this_month', 'last_month', 'this_quarter', 'custom']
 const MENU_PRESETS: Exclude<Preset, 'custom'>[] = ['full_year', 'ytd', 'this_month', 'last_month', 'this_quarter']
 
 function todayIso(): string {
@@ -69,72 +76,6 @@ function todayIso(): string {
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
-}
-
-function clampToPeriod(date: string, periodStart: string, periodEnd: string): string {
-  if (date < periodStart) return periodStart
-  if (date > periodEnd) return periodEnd
-  return date
-}
-
-/**
- * Resolve a preset to a concrete range inside the fiscal period.
- *
- * Endpoints are always clamped to the period: e.g. "this month" outside the
- * period collapses to a zero-width range at whichever boundary you're nearest.
- * `full_year` returns `{}` so the API call omits the params entirely and the
- * report falls back to its full-period default (preserves cache parity with
- * the pre-feature behaviour).
- */
-export function resolvePreset(
-  preset: Preset,
-  periodStart: string,
-  periodEnd: string,
-  reference: string,
-): DateRangeValue {
-  if (preset === 'full_year') return {}
-  if (preset === 'custom') return {}
-  if (preset === 'ytd') {
-    const to = clampToPeriod(reference, periodStart, periodEnd)
-    return { fromDate: periodStart, toDate: to }
-  }
-  const ref = new Date(reference)
-  // Same UTC pitfall as todayIso(): Date.toISOString() returns UTC, so a
-  // local Date constructed via `new Date(y, m, d)` round-trips to the wrong
-  // calendar day in any timezone west of UTC. Use the local components.
-  const toLocalIso = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  if (preset === 'this_month') {
-    const y = ref.getFullYear()
-    const m = ref.getMonth()
-    const start = `${y}-${String(m + 1).padStart(2, '0')}-01`
-    const end = toLocalIso(new Date(y, m + 1, 0))
-    return {
-      fromDate: clampToPeriod(start, periodStart, periodEnd),
-      toDate: clampToPeriod(end, periodStart, periodEnd),
-    }
-  }
-  if (preset === 'last_month') {
-    const y = ref.getFullYear()
-    const m = ref.getMonth() - 1
-    const start = toLocalIso(new Date(y, m, 1))
-    const end = toLocalIso(new Date(y, m + 1, 0))
-    return {
-      fromDate: clampToPeriod(start, periodStart, periodEnd),
-      toDate: clampToPeriod(end, periodStart, periodEnd),
-    }
-  }
-  if (preset === 'this_quarter') {
-    const y = ref.getFullYear()
-    const q = Math.floor(ref.getMonth() / 3)
-    const start = `${y}-${String(q * 3 + 1).padStart(2, '0')}-01`
-    const end = toLocalIso(new Date(y, q * 3 + 3, 0))
-    return {
-      fromDate: clampToPeriod(start, periodStart, periodEnd),
-      toDate: clampToPeriod(end, periodStart, periodEnd),
-    }
-  }
-  return {}
 }
 
 /**
@@ -170,9 +111,11 @@ export function ReportDateRange({
   // Consumed by the first resolution below, whether or not it fits.
   const pendingInitialRef = useRef(initialValue)
 
-  // Restore last-used preset per company, then resolve it against the
+  // Restore the last choice per company, then resolve it against the
   // current fiscal period. The period selector lives upstream: when it
   // changes, we re-resolve so the dates always sit inside the visible year.
+  // A custom range is restored with its dates; one outside this year falls
+  // back to the default (lib/reports/report-range-preset.ts).
   useEffect(() => {
     if (!company?.id || typeof window === 'undefined') return
     const initialWindow = pendingInitialRef.current
@@ -186,19 +129,25 @@ export function ReportDateRange({
       onChange(match ? resolvePreset(match, periodStart, periodEnd, today) : initialWindow)
       return
     }
-    const stored = window.localStorage.getItem(storageKeyPrefix + company.id) as Preset | null
-    const initial: Preset = stored && PRESETS.includes(stored) ? stored : defaultPreset
-    setPreset(initial)
-    if (initial !== 'custom') {
-      onChange(resolvePreset(initial, periodStart, periodEnd, todayIso()))
+    let stored: string | null = null
+    try {
+      stored = window.localStorage.getItem(storageKeyPrefix + company.id)
+    } catch {
+      // Storage blocked (private mode, site data disabled): open on the default.
     }
+    const restored = restoreRangeChoice(stored, { periodStart, periodEnd, defaultPreset, today: todayIso() })
+    setPreset(restored.preset)
+    onChange(restored.value)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [company?.id, periodStart, periodEnd, storageKeyPrefix, defaultPreset])
 
   const remember = useCallback(
-    (next: Preset) => {
-      if (company?.id && typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKeyPrefix + company.id, next)
+    (next: StoredRangeChoice) => {
+      if (!company?.id || typeof window === 'undefined') return
+      try {
+        window.localStorage.setItem(storageKeyPrefix + company.id, serializeRangeChoice(next))
+      } catch {
+        // Storage blocked or full: the choice applies now, it is just not remembered.
       }
     },
     [company?.id, storageKeyPrefix],
@@ -207,7 +156,7 @@ export function ReportDateRange({
   const choosePreset = useCallback(
     (next: Exclude<Preset, 'custom'>) => {
       setPreset(next)
-      remember(next)
+      remember({ preset: next })
       onChange(resolvePreset(next, periodStart, periodEnd, todayIso()))
       setOpen(false)
     },
@@ -219,7 +168,7 @@ export function ReportDateRange({
     const to = draft.to ? clampToPeriod(draft.to, periodStart, periodEnd) : periodEnd
     const ordered = from <= to ? { fromDate: from, toDate: to } : { fromDate: to, toDate: from }
     setPreset('custom')
-    remember('custom')
+    remember({ preset: 'custom', ...ordered })
     onChange(ordered)
     setOpen(false)
   }, [draft.from, draft.to, onChange, periodEnd, periodStart, remember])

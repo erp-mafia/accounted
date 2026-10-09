@@ -122,6 +122,35 @@ function makeMockSupabase(period: Record<string, unknown> | null) {
   } as never
 }
 
+/**
+ * The period read ends in .single(); the draft list (agent feedback seq
+ * 978933) is awaited after .order().limit(). Records the draft query's
+ * filters so a test can assert it lists only this period's drafts.
+ */
+function makeMockSupabaseWithDrafts(
+  period: Record<string, unknown> | null,
+  drafts: Array<Record<string, unknown>>,
+) {
+  const draftFilters: Array<[string, unknown]> = []
+  let draftLimit: number | undefined
+  const from = vi.fn((table: string) => {
+    const chain: Record<string, unknown> = {}
+    chain.select = vi.fn(() => chain)
+    chain.eq = vi.fn((column: string, value: unknown) => {
+      if (table === 'journal_entries') draftFilters.push([column, value])
+      return chain
+    })
+    chain.order = vi.fn(() => chain)
+    chain.limit = vi.fn((n: number) => {
+      draftLimit = n
+      return Promise.resolve({ data: drafts, error: null })
+    })
+    chain.single = vi.fn().mockResolvedValue({ data: period, error: null })
+    return chain
+  })
+  return { supabase: { from } as never, draftFilters, draftLimit: () => draftLimit, from }
+}
+
 describe('gnubok_year_end_readiness: execute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -159,16 +188,19 @@ describe('gnubok_year_end_readiness: execute', () => {
     })
 
     const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
-    const supabase = makeMockSupabase({
-      id: 'period-1',
-      name: '2026',
-      period_start: '2026-01-01',
-      period_end: '2026-12-31',
-      is_closed: false,
-      locked_at: null,
-      closing_entry_id: null,
-      continuity_verified: true,
-    })
+    const { supabase } = makeMockSupabaseWithDrafts(
+      {
+        id: 'period-1',
+        name: '2026',
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        is_closed: false,
+        locked_at: null,
+        closing_entry_id: null,
+        continuity_verified: true,
+      },
+      [],
+    )
 
     const result = (await tool.execute(
       { fiscal_period_id: 'period-1' },
@@ -331,5 +363,92 @@ describe('gnubok_year_end_readiness: execute', () => {
     )) as { preview: { resultAppropriation?: unknown } | null }
 
     expect(result.preview?.resultAppropriation).toEqual(resultAppropriation)
+  })
+
+  // Agent feedback seq 978933: readiness reported draft_count=1 and nothing an
+  // agent could act on. It now lists the drafts by id, so each one can be
+  // cancelled with gnubok_cancel_draft_entry or committed.
+  it('lists the drafts behind DRAFT_ENTRIES by id, capped at 20, for this period only', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ready: false,
+      blockers: [{ code: 'DRAFT_ENTRIES', message: '2 utkast måste bokföras eller raderas innan bokslut' }],
+      errors: ['2 utkast måste bokföras eller raderas innan bokslut'],
+      warnings: [],
+      draftCount: 2,
+      voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
+      trialBalanceBalanced: true,
+    })
+    const mock = makeMockSupabaseWithDrafts(
+      {
+        id: 'period-1', name: '2026',
+        period_start: '2026-01-01', period_end: '2026-12-31',
+        is_closed: false, locked_at: null, closing_entry_id: null, continuity_verified: true,
+      },
+      [
+        { id: 'draft-1', voucher_series: 'A', entry_date: '2026-03-01', description: 'Hyra mars', source_type: 'manual', created_at: '2026-03-01T08:00:00Z' },
+        { id: 'draft-2', voucher_series: 'A', entry_date: '2026-04-01', description: 'Hyra april', source_type: 'manual', created_at: '2026-04-01T08:00:00Z' },
+      ],
+    )
+
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const result = (await tool.execute(
+      { fiscal_period_id: 'period-1' },
+      'company-1', 'user-1', mock.supabase,
+    )) as {
+      draft_count: number
+      drafts: Array<Record<string, unknown>>
+      blockers: Array<{ kind: string; remediation?: { tool?: string } }>
+    }
+
+    expect(result.draft_count).toBe(2)
+    expect(result.blockers[0]).toMatchObject({
+      kind: 'draft_entries',
+      remediation: { tool: 'gnubok_cancel_draft_entry' },
+    })
+    expect(result.drafts).toEqual([
+      { journal_entry_id: 'draft-1', voucher_series: 'A', entry_date: '2026-03-01', description: 'Hyra mars', source_type: 'manual', created_at: '2026-03-01T08:00:00Z' },
+      { journal_entry_id: 'draft-2', voucher_series: 'A', entry_date: '2026-04-01', description: 'Hyra april', source_type: 'manual', created_at: '2026-04-01T08:00:00Z' },
+    ])
+    expect(mock.draftFilters).toEqual(
+      expect.arrayContaining([
+        ['company_id', 'company-1'],
+        ['fiscal_period_id', 'period-1'],
+        ['status', 'draft'],
+      ]),
+    )
+    expect(mock.draftLimit()).toBe(20)
+  })
+
+  it('skips the draft read and answers an empty list when there are no drafts', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ready: true,
+      blockers: [],
+      errors: [],
+      warnings: [],
+      draftCount: 0,
+      voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
+      trialBalanceBalanced: true,
+    })
+    const mock = makeMockSupabaseWithDrafts(
+      {
+        id: 'period-1', name: '2026',
+        period_start: '2026-01-01', period_end: '2026-12-31',
+        is_closed: false, locked_at: null, closing_entry_id: null, continuity_verified: true,
+      },
+      [],
+    )
+
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const result = (await tool.execute(
+      { fiscal_period_id: 'period-1' },
+      'company-1', 'user-1', mock.supabase,
+    )) as { drafts: unknown[] }
+
+    expect(result.drafts).toEqual([])
+    expect(mock.from).not.toHaveBeenCalledWith('journal_entries')
   })
 })

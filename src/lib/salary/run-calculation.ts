@@ -55,6 +55,8 @@ import { getLineItemAccount } from './account-mapping'
 import { recurringLineFlags, type RecurringLineItemType } from './recurring-lines'
 import { computePremiumLines } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
+import { effectiveRow } from './effective-figures'
+import { refreshRunEmployeeSalaryType } from './base-salary-line'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
 import { dailyDivisor, degreeAdjustedMonthlySalary, hourlyDivisor, scheduledHoursPerDay } from './work-schedule'
 import { vaxaStodRefundWarning } from './vaxa-stod'
@@ -403,6 +405,27 @@ export async function runSalaryCalculation(
   for (const sre of runEmployees) {
     const emp = sre.employee
     if (!emp) continue
+
+    // 8-. The engine prices the employee's live pay type. A row whose
+    //     salary_type snapshot predates a switch between hourly and monthly
+    //     pay gets the snapshot and its Grundlön/Timlön display line brought
+    //     in line first (lib/salary/base-salary-line.ts); the branches below
+    //     price the new line.
+    if (sre.salary_type && emp.salary_type && sre.salary_type !== emp.salary_type) {
+      const hourly = emp.salary_type === 'hourly'
+      const { error: refreshError } = await refreshRunEmployeeSalaryType(supabase, {
+        companyId,
+        salaryRunEmployeeId: sre.id,
+        salaryType: emp.salary_type,
+        employmentType: emp.employment_type,
+        amount: hourly ? roundOre((emp.hourly_rate || 0) * (sre.hours_worked || 0)) : 0,
+        quantity: hourly ? (sre.hours_worked ?? null) : null,
+        unitPrice: hourly ? (emp.hourly_rate ?? null) : null,
+      })
+      if (refreshError) {
+        return { ok: false, code: 'DATABASE_ERROR', details: refreshError }
+      }
+    }
 
     // 8a. Derive absence line items from per-day records. The cutover karens
     //     adjustment applies only while the 12-month högriskskydd lookback
@@ -884,10 +907,22 @@ export async function runSalaryCalculation(
         0,
       )
 
-    // Keep raw engine tax/net for the calculation trace, but snapshots and
-    // run totals must use the same effective withholding as payslips/bank.
-    const effectiveTax = sre.tax_withheld_override ?? result.taxWithheld
-    const effectiveNet = roundOre(result.netSalary + result.taxWithheld - effectiveTax)
+    // Keep raw engine figures for the calculation trace, but snapshots and
+    // run totals must use the same effective values (review-step overrides
+    // applied) as the booking, the payslip and the bank file.
+    const effective = effectiveRow({
+      gross_salary: result.grossSalary,
+      tax_withheld: result.taxWithheld,
+      tax_withheld_override: sre.tax_withheld_override,
+      net_salary: result.netSalary,
+      avgifter_amount: result.avgifterAmount,
+      avgifter_amount_override: sre.avgifter_amount_override,
+      vacation_accrual: result.vacationAccrual,
+      vacation_accrual_avgifter: result.vacationAccrualAvgifter,
+      employee: { f_skatt_status: emp.f_skatt_status },
+    })
+    const effectiveTax = effective.tax_withheld
+    const effectiveNet = effective.net_salary
 
     // 8g. Write the per-employee row. Mirrors calendar-derived hours into the
     //     hours_worked snapshot column so downstream code (reports, storno via
@@ -899,6 +934,7 @@ export async function runSalaryCalculation(
     const { error: empUpdateError } = await supabase
       .from('salary_run_employees')
       .update({
+        salary_type: emp.salary_type,
         hours_worked: snapshotHoursWorked,
         gross_salary: result.grossSalary,
         gross_deductions: result.grossDeductions,
@@ -1005,9 +1041,9 @@ export async function runSalaryCalculation(
     totalGross += result.grossSalary
     totalTax += effectiveTax
     totalNet += effectiveNet
-    totalAvgifter += result.avgifterAmount
+    totalAvgifter += effective.avgifter_amount
     totalVacationAccrual += result.vacationAccrual
-    totalEmployerCost += result.totalEmployerCost
+    totalEmployerCost += effective.employer_cost
   }
 
   // 9. Update run totals + freeze the calculation_params snapshot. The

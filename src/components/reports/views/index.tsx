@@ -128,6 +128,19 @@ function ReportEmptyState({ title, description }: { title: string; description: 
   return <EmptyState icon={FileText} title={title} description={description} />
 }
 
+/**
+ * True when the click that just landed on `row` ends a text selection inside
+ * it. Dragging across an amount to copy it fires a click on mouseup; that
+ * click must leave the user on the report with the text selected instead of
+ * drilling into the account. A plain click collapses any earlier selection on
+ * mousedown, so it still navigates.
+ */
+function endsTextSelectionIn(row: Element): boolean {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.toString().trim() === '') return false
+  return selection.containsNode(row, true)
+}
+
 function reportQuery(
   periodId: string,
   range?: DateRangeValue,
@@ -795,7 +808,10 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                       <tr
                         key={row.account_number}
                         className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
-                        onClick={() => onNavigateToAccount(row.account_number)}
+                        onClick={(e) => {
+                          if (endsTextSelectionIn(e.currentTarget)) return
+                          onNavigateToAccount(row.account_number)
+                        }}
                       >
                         <td className="px-4 py-1.5">
                           <AccountNumber number={row.account_number} name={row.account_name} />

@@ -433,6 +433,21 @@ describe('executeRecurringSchedule auto-send', () => {
     mockUploadDocument.mockResolvedValue({})
   })
 
+  it('stores öre-exact line and header amounts for a three-decimal unit price', async () => {
+    // The same rule as buildInvoiceWriteData: the line net is whole öre and
+    // the header sums are rounded (agent feedback seq 965009).
+    enqueueHappyPath()
+    const schedule = makeSchedule() as unknown as { items: Array<Record<string, unknown>> }
+    schedule.items[0] = { ...schedule.items[0], quantity: 3, unit_price: 33.333, vat_rate: 25 }
+
+    await executeRecurringSchedule(client, schedule as unknown as Parameters<typeof executeRecurringSchedule>[1], today)
+
+    const header = findCalls('invoices', 'insert')[0][0] as Record<string, unknown>
+    expect(header).toMatchObject({ subtotal: 100, vat_amount: 25, total: 125, remaining_amount: 125 })
+    const rows = findCalls('invoice_items', 'insert')[0][0] as Array<Record<string, unknown>>
+    expect(rows[0]).toMatchObject({ line_total: 100, vat_amount: 25 })
+  })
+
   it('creates a payment link before rendering and passes its QR to the PDF', async () => {
     enqueueHappyPath()
     mockApplyPaymentLink.mockImplementation(

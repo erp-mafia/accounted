@@ -87,7 +87,8 @@ async function withHistoricalBankLink(
       "SELECT pg_get_functiondef('public.get_account_gl_lines_for_matching(uuid,text,date,date,boolean)'::regprocedure) AS definition")
     const definition = rows[0].definition
     expect(definition.match(/FUNCTION public\.get_account_gl_lines_for_matching\(/g)).toHaveLength(1)
-    expect(definition.match(/public\.transactions\b/g)).toHaveLength(4)
+    // Four link reads, plus the 1:N slice remainder (20261006121002).
+    expect(definition.match(/public\.transactions\b/g)).toHaveLength(5)
     await client.query(definition
       .replace('FUNCTION public.get_account_gl_lines_for_matching(', 'FUNCTION pg_temp.get_account_gl_lines_for_matching(')
       .replaceAll('public.transactions', 'pg_temp.historical_transactions'))

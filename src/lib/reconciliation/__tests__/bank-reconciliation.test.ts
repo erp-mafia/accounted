@@ -37,6 +37,7 @@ import {
   scopeTransactionsToAccount,
   ledgerLineAmountIn,
   fetchJunctionLinkMap,
+  openAmountByEntry,
 } from '../bank-reconciliation'
 import type { UnlinkedGLLine } from '../bank-reconciliation'
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
@@ -582,6 +583,28 @@ describe('runReconciliation', () => {
     expect(result.applied).toBe(0)
   })
 
+  it('never auto-links a partially allocated verifikat, even on its full line amount', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // 1:N slices already settle 100 of the -300 line; the RPC lists it with
+    // its remainder for the user. A pointer to it would count the line twice.
+    const tx = makeTransaction({ id: 'tx-1', amount: -300, date: '2024-06-15', currency: 'SEK' })
+    const partial: UnlinkedGLLine = makeGLLine({
+      line_id: 'line-1',
+      journal_entry_id: 'je-partial',
+      credit_amount: 300,
+      entry_date: '2024-06-15',
+      remaining_amount: -200,
+    })
+
+    enqueue({ data: [partial] })
+    enqueue({ data: [tx] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: true })
+
+    expect(result.matches).toEqual([])
+  })
+
   it('applies matches when not dry run', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
 
@@ -1103,6 +1126,40 @@ describe('manualLink', () => {
     expect(result.code).toBe('LINK_RACE')
   })
 
+  it('names a wrong-direction link the bank-anchor guard refused instead of "Försök igen"', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: null, error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('BANK_ANCHOR_REFUSED')
+    expect(result.error).toMatch(/^Kopplingen nekades/)
+  })
+
+  it('keeps WRITE_FAILED for any other write error', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Kunde inte koppla transaktionen. Försök igen.',
+      code: 'WRITE_FAILED',
+    })
+  })
+
   it('succeeds for a bound transaction when the account matches', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const tx = makeTransaction({
@@ -1466,20 +1523,22 @@ describe('linkTransactionToVouchers', () => {
   })
 
   /**
-   * Queue up to and including the ledger read, in the order the function
-   * consumes it: tx, invoice_payments, supplier_invoice_payments,
-   * journal_entries, journal_entry_lines. (cash_account_id is null on the
-   * fixture, so the cash-account cross-check is skipped.)
+   * Queue up to and including the ledger reads, in the order the function
+   * consumes them: tx, invoice_payments, supplier_invoice_payments,
+   * journal_entries, journal_entry_lines, and the bank_line slices other rows
+   * already hold on the verifikat. (cash_account_id is null on the fixture,
+   * so the cash-account cross-check is skipped.)
    */
   function enqueueReads(
     enqueue: (r: { data?: unknown; error?: unknown }) => void,
-    opts: { tx?: Record<string, unknown>; entries?: unknown[]; lines?: unknown[] } = {},
+    opts: { tx?: Record<string, unknown>; entries?: unknown[]; lines?: unknown[]; held?: unknown[] } = {},
   ) {
     enqueue({ data: opts.tx ?? freeTx() })
     enqueue({ data: [] }) // invoice_payments
     enqueue({ data: [] }) // supplier_invoice_payments
     enqueue({ data: opts.entries ?? postedEntries })
     enqueue({ data: opts.lines ?? bankLines })
+    enqueue({ data: opts.held ?? [] }) // transaction_voucher_links held by other rows
   }
 
   it('links one row to two verifikat: pointer stays NULL, one signed bank_line slice per verifikat, one matched event each', async () => {
@@ -1723,6 +1782,7 @@ describe('linkTransactionToVouchers', () => {
     enqueue({ data: [] })
     enqueue({ data: postedEntries })
     enqueue({ data: bankLines })
+    enqueue({ data: [] }) // slices other rows hold on the verifikat
     enqueue({ data: [{ id: 'tx-1' }] })
     enqueue({ data: null })
     enqueue({ data: null })
@@ -1841,6 +1901,227 @@ describe('linkTransactionToVouchers', () => {
     expect(updates).toHaveLength(2)
     expect(updates[1][0]).toEqual({ journal_entry_id: null, reconciliation_method: null, is_business: null })
     expect(findCalls('payment_match_log', 'insert')).toEqual([])
+  })
+
+  it('accepts a mixed-sign split: a payment and a netted credit note (agent feedback seq 853921)', async () => {
+    // -100 out of the bank = -120 paid on one verifikat, +20 credited on another.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueReads(enqueue, {
+      tx: freeTx({ amount: -100 }),
+      lines: [
+        { journal_entry_id: E1, debit_amount: 0, credit_amount: 120, currency: null, amount_in_currency: null },
+        { journal_entry_id: E2, debit_amount: 20, credit_amount: 0, currency: null, amount_in_currency: null },
+      ],
+    })
+    enqueue({ data: [{ id: 'tx-1' }] }) // lock UPDATE
+    enqueue({ data: null }) // junction insert
+    enqueue({ data: null }) // payment_match_log
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+      '1930',
+    )
+
+    expect(result).toEqual({
+      success: true,
+      allocations: [
+        { journal_entry_id: E1, amount: -120 },
+        { journal_entry_id: E2, amount: 20 },
+      ],
+    })
+    const inserted = findCalls('transaction_voucher_links', 'insert')[0][0] as Array<{ allocated_amount: number }>
+    expect(inserted.map((r) => r.allocated_amount)).toEqual([-120, 20])
+  })
+
+  it('reports a bank-anchor refusal as BANK_ANCHOR_REFUSED, not a retryable write failure (agent feedback seq 877706)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueReads(enqueue)
+    enqueue({ data: [{ id: 'tx-1' }] }) // lock UPDATE
+    enqueue({ data: null, error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } }) // junction insert
+    enqueue({ data: null }) // compensating delete
+    enqueue({ data: null }) // restore UPDATE
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+      '1930',
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('BANK_ANCHOR_REFUSED')
+    expect(result.error).toMatch(/^Kopplingen nekades: verifikationen bokför inte beloppet/)
+    expect(result.error).not.toMatch(/Försök igen/)
+    // The lock is still rolled back.
+    expect(findCalls('transaction_voucher_links', 'delete')).toHaveLength(1)
+    expect(findCalls('transactions', 'update')).toHaveLength(2)
+  })
+
+  it('reports a changed bank account under the request as BANK_ANCHOR_REFUSED too', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueReads(enqueue)
+    enqueue({ data: [{ id: 'tx-1' }] })
+    enqueue({ data: null, error: { code: 'PT409', message: 'BANK_ANCHOR_CASH_ACCOUNT_CHANGED' } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+      '1930',
+    )
+
+    expect(result).toMatchObject({ success: false, code: 'BANK_ANCHOR_REFUSED' })
+    expect(result.error).toMatch(/bankkonto finns inte längre/)
+    expect(result.error).not.toMatch(/försök igen/i)
+  })
+
+  it.each([
+    ['BANK_ANCHOR_SPLIT_UNBALANCED', /blir inte tillsammans transaktionens belopp/],
+    ['BANK_ANCHOR_BINDING_IN_USE', /redan kopplad på det konto där den ligger/],
+    ['BANK_ANCHOR_SOMETHING_NEW', /stämmer inte längre med varandra/],
+  ])('gives %s its own reason, never "försök igen"', async (name, reason) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueReads(enqueue)
+    enqueue({ data: [{ id: 'tx-1' }] })
+    enqueue({ data: null, error: { code: 'PT409', message: name } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+      '1930',
+    )
+
+    expect(result).toMatchObject({ success: false, code: 'BANK_ANCHOR_REFUSED' })
+    expect(result.error).toMatch(reason)
+    expect(result.error).not.toMatch(/försök igen/i)
+  })
+
+  it('caps a slice at what other rows leave of the verifikat, and defaults an omitted slice to that remainder', async () => {
+    // Another row on the same cash account already holds -200 of E1's -500.
+    const held = [
+      { journal_entry_id: E1, allocated_amount: '-200.00', transactions: { cash_account_id: null, currency: 'SEK' } },
+      // A slice on another cash account (the other leg of a transfer) is not this account's share.
+      { journal_entry_id: E2, allocated_amount: '-300.00', transactions: { cash_account_id: 'other-cash', currency: 'SEK' } },
+    ]
+
+    let m = createQueuedMockSupabase()
+    enqueueReads(m.enqueue, { tx: freeTx({ amount: -600 }), held })
+    let r = await linkTransactionToVouchers(
+      m.supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+      '1930',
+      { dryRun: true },
+    )
+    expect(r).toEqual({
+      success: true,
+      allocations: [
+        { journal_entry_id: E1, amount: -300 },
+        { journal_entry_id: E2, amount: -300 },
+      ],
+    })
+
+    m = createQueuedMockSupabase()
+    enqueueReads(m.enqueue, { held })
+    r = await linkTransactionToVouchers(
+      m.supabase as never,
+      'company-1',
+      'tx-1',
+      [
+        { journal_entry_id: E1, amount: -500 },
+        { journal_entry_id: E2, amount: -300 },
+      ],
+      'user-1',
+      '1930',
+      { dryRun: true },
+    )
+    expect(r.success).toBe(false)
+    expect(r.code).toBe('OVER_ALLOCATED')
+    expect(r.error).toBe(
+      'Beloppet för verifikat A-11 (-500) är större än det som återstår av verifikatets rad på 1930 (-300): resten är redan kopplad till andra transaktioner.',
+    )
+  })
+
+  it('refuses a verifikat other rows already settle in full', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueReads(enqueue, {
+      held: [{ journal_entry_id: E2, allocated_amount: -300, transactions: [{ cash_account_id: null, currency: 'SEK' }] }],
+    })
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+      '1930',
+    )
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Verifikat A-12 är redan helt kopplat på 1930 till andra transaktioner.',
+      code: 'OVER_ALLOCATED',
+    })
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('does not link when the held slices cannot be read', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: freeTx() })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: postedEntries })
+    enqueue({ data: bankLines })
+    enqueue({ data: null, error: { message: 'boom' } })
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+      '1930',
+    )
+
+    expect(result).toMatchObject({ success: false, code: 'WRITE_FAILED' })
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('keeps WRITE_FAILED for a PT409 that is not a bank-anchor refusal', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueReads(enqueue)
+    enqueue({ data: [{ id: 'tx-1' }] })
+    enqueue({ data: null, error: { code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY' } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+      '1930',
+    )
+
+    expect(result).toMatchObject({ success: false, code: 'WRITE_FAILED' })
   })
 })
 
@@ -2295,6 +2576,91 @@ describe('getReconciliationStatus', () => {
     expect(status.unmatched_transaction_total).toBe(0)
     expect(status.unmatched_gl_line_total).toBe(0)
     expect(status.unexplained_difference).toBe(100)
+  })
+
+  it('counts only the remainder of a partially allocated verifikat, so a netted credit note explains it (agent feedback seq 854089)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // One bank payment of -500 split over two verifikat: 100 of e-part's -300
+    // and all of e-full's -400. The other -200 of e-part was in reality netted
+    // against a +200 credit note (e-credit) that nothing links yet.
+    enqueue({
+      data: [
+        {
+          id: 't-split',
+          date: '2026-08-05',
+          amount: -500,
+          journal_entry_id: null,
+          reconciliation_method: 'manual',
+          is_ignored: false,
+          cash_account_id: null,
+        },
+      ],
+    })
+    // Junction anchors of that row: its two slices.
+    enqueue({
+      data: [
+        { transaction_id: 't-split', journal_entry_id: 'e-part', role: 'bank_line' },
+        { transaction_id: 't-split', journal_entry_id: 'e-full', role: 'bank_line' },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'e-part', status: 'posted', source_type: 'supplier_invoice_paid' },
+        { id: 'e-full', status: 'posted', source_type: 'supplier_invoice_paid' },
+        { id: 'e-credit', status: 'posted', source_type: 'supplier_invoice_paid' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 0, credit_amount: 300, journal_entry_id: 'e-part' },
+        { debit_amount: 0, credit_amount: 400, journal_entry_id: 'e-full' },
+        { debit_amount: 200, credit_amount: 0, journal_entry_id: 'e-credit' },
+      ],
+    })
+    // Candidate RPC: the partly settled verifikat with its remainder, and the
+    // credit note.
+    enqueue({
+      data: [
+        {
+          line_id: 'l-part',
+          journal_entry_id: 'e-part',
+          debit_amount: 0,
+          credit_amount: 300,
+          entry_date: '2026-08-05',
+          voucher_number: 7,
+          voucher_series: 'A',
+          entry_description: 'Betalning',
+          source_type: 'supplier_invoice_paid',
+          linked_transaction_count: 1,
+          remaining_amount: -200,
+        },
+        {
+          line_id: 'l-credit',
+          journal_entry_id: 'e-credit',
+          debit_amount: 200,
+          credit_amount: 0,
+          entry_date: '2026-08-05',
+          voucher_number: 8,
+          voucher_series: 'A',
+          entry_description: 'Kreditnota',
+          source_type: 'supplier_invoice_paid',
+          linked_transaction_count: 0,
+          remaining_amount: null,
+        },
+      ],
+    })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.bank_transaction_total).toBe(-500)
+    expect(status.gl_1930_period_movement).toBe(-500)
+    expect(status.difference).toBe(0)
+    expect(status.matched_count).toBe(1)
+    expect(status.unmatched_gl_line_count).toBe(2)
+    // -200 left open on e-part, +200 on the credit note.
+    expect(status.unmatched_gl_line_total).toBe(0)
+    expect(status.unexplained_difference).toBe(0)
   })
 
   it('reports no residual on a foreign account whose candidate lines carry no FX amount', async () => {
@@ -3252,5 +3618,42 @@ describe('fetchJunctionLinkMap', () => {
     await expect(fetchJunctionLinkMap(supabase as never, 'company-1', ids)).rejects.toThrow(
       'Kunde inte hämta verifikatkopplingar: boom',
     )
+  })
+})
+
+// ============================================================
+// openAmountByEntry: what each candidate verifikat leaves open
+// ============================================================
+
+describe('openAmountByEntry', () => {
+  it('nets several lines of one verifikat and keeps verifikat apart', () => {
+    const open = openAmountByEntry(
+      [
+        makeGLLine({ journal_entry_id: 'e-1', debit_amount: 100 }),
+        makeGLLine({ journal_entry_id: 'e-1', credit_amount: 30 }),
+        makeGLLine({ journal_entry_id: 'e-2', credit_amount: 45.5 }),
+      ],
+      'SEK',
+    )
+    expect([...open]).toEqual([
+      ['e-1', 70],
+      ['e-2', -45.5],
+    ])
+  })
+
+  it('uses the remainder of a partially allocated verifikat instead of its lines', () => {
+    const open = openAmountByEntry(
+      [
+        makeGLLine({ journal_entry_id: 'e-part', credit_amount: 2000, remaining_amount: '-1750.00' }),
+        makeGLLine({ journal_entry_id: 'e-part', credit_amount: 500, remaining_amount: '-1750.00' }),
+      ],
+      'SEK',
+    )
+    expect(open.get('e-part')).toBe(-1750)
+  })
+
+  it('stays null on a foreign account whose lines carry no amount in its currency', () => {
+    const open = openAmountByEntry([makeGLLine({ journal_entry_id: 'e-1', debit_amount: 100 })], 'EUR')
+    expect(open.get('e-1')).toBeNull()
   })
 })

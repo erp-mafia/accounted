@@ -243,6 +243,20 @@ describe('canHaveEmailReceipt', () => {
     expect(canHaveEmailReceipt('Skatt lön Juni   BG 0000050501055 Bg-bet. via internet')).toBe(false)
   })
 
+  it('skips compounded salary and tax wording an imported ledger uses (feedback seq 956543)', () => {
+    expect(canHaveEmailReceipt('Löneutbetalning: 2026.M.01 - anställd: 1')).toBe(false)
+    expect(canHaveEmailReceipt('Lönespecifikation mars')).toBe(false)
+    expect(canHaveEmailReceipt('Prel Vinstskatt')).toBe(false)
+    expect(canHaveEmailReceipt('Preliminärskatt mars')).toBe(false)
+    expect(canHaveEmailReceipt('Prel BG 0000050501055')).toBe(false)
+    expect(canHaveEmailReceipt('Överföring till skattekonto')).toBe(false)
+    expect(canHaveEmailReceipt('F-skatt september')).toBe(false)
+  })
+
+  it('does not mistake an English word starting with "lone" for salary', () => {
+    expect(canHaveEmailReceipt('Lonely Planet Kortköp/uttag')).toBe(true)
+  })
+
   it('keeps a supplier invoice paid over bankgiro', () => {
     // This one matched a real emailed invoice; skipping the whole rail would
     // have thrown away the hunt's best hit.

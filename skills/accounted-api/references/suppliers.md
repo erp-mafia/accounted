@@ -114,7 +114,7 @@ Request body:
   expense_date: string,
   amount: number,
   vat_amount?: number,
-  currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF",
+  currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD",
   exchange_rate?: number,
   expense_account: string,
   employee_id?: string | null,
@@ -535,7 +535,7 @@ Request body:
   invoice_date: string,
   due_date: string,
   delivery_date?: string | "",
-  currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF",
+  currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD",
   exchange_rate?: number,
   vat_treatment?: "standard_25" | "reduced_12" | "reduced_6" | "reverse_charge" | "export" | "exempt",
   reverse_charge?: boolean,
@@ -2002,7 +2002,7 @@ Request body:
   account_number?: string,
   default_expense_account?: string,
   default_payment_terms?: number,
-  default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | null,
+  default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null,
   notes?: string
 }
 ```
@@ -2221,7 +2221,7 @@ Request body:
   account_number?: string,
   default_expense_account?: string | null,
   default_payment_terms?: number,
-  default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | null,
+  default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null,
   notes?: string
 }
 ```
@@ -2344,7 +2344,7 @@ Bulk-create endpoint mirroring /customers/bulk-create. Each supplier is validate
 Request body:
 ```ts
 {
-  suppliers: { name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | null, notes?: string }[],
+  suppliers: { name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null, notes?: string }[],
   all_or_nothing?: boolean
 }
 ```

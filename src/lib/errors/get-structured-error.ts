@@ -50,6 +50,7 @@ import {
   NoOpenPeriodForDateError,
   TargetPeriodClosedError,
   TargetPeriodLockedError,
+  TransactionMissingSekValueError,
   isBookkeepingError,
 } from '../bookkeeping/errors'
 
@@ -628,6 +629,12 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
     return {
       code: err.code,
       details: { debitAccount: err.debitAccount, creditAccount: err.creditAccount },
+    }
+  }
+  if (err instanceof TransactionMissingSekValueError) {
+    return {
+      code: err.code,
+      details: { transactionId: err.transactionId, currency: err.currency, date: err.date },
     }
   }
   if (err instanceof MeaninglessCorrectionError) {

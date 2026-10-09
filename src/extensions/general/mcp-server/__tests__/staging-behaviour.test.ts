@@ -145,6 +145,9 @@ const READ_ONLY_RPCS = new Set([
   // The previous year's closing balance per project: the IB split preview
   // (gnubok_split_opening_balances_per_project) reads it, #3313.
   'compute_object_closing_balances',
+  // The invoice number a draft will most likely get, never reserved: the
+  // mark-sent and send previews show it (agent feedback seq 876823).
+  'peek_next_invoice_number',
   // The undo's lock answer (closed or locked fiscal year, company lock date):
   // gnubok_undo_sie_import refuses at stage time what the undo RPC would,
   // crm#1022.
@@ -472,6 +475,17 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       company_settings: { bookkeeping_locked_through: null },
     },
   },
+  // Cancel a draft verifikat in an open, unlocked 2026 (agent feedback seq
+  // 978933): the preview reads the entry and the lock, never the engine.
+  gnubok_cancel_draft_entry: {
+    rows: {
+      journal_entries: { status: 'draft', description: 'Bankavgift', entry_date: '2026-01-15', source_type: 'manual', voucher_series: 'A', voucher_number: 0 },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+      company_settings: { bookkeeping_locked_through: null },
+    },
+    // A draft with underlag is refused (DRAFT_HAS_DOCUMENTS): this one has none.
+    empty: ['document_attachments'],
+  },
   // One 5410 line struck, replaced by a balanced 5420 / 2440 pair; nothing
   // anchored to a bank row or payment, no underlag on the struck line.
   gnubok_correct_entry_lines: {
@@ -584,6 +598,14 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
         completed_at: '2026-05-04T12:00:00.000Z',
         status: 'submitted',
       },
+    },
+  },
+  // AGI filed outside Accounted (agent feedback seq 892914): August 2026 filed
+  // from the previous system in September, its deadline row still pending.
+  gnubok_mark_agi_period_filed: {
+    args: { year: 2026, month: 8, filed_on: '2026-09-10' },
+    rows: {
+      deadlines: { tax_deadline_type: 'arbetsgivardeklaration', tax_period: '2026-08', due_date: '2026-09-12', is_completed: false, completed_at: null, status: 'upcoming' },
     },
   },
   // Utlägg (expense claims): an aktiebolag owner's open claim on 2893, nothing

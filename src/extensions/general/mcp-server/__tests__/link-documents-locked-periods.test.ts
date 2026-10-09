@@ -102,7 +102,7 @@ describe('gnubok_link_documents_to_vouchers: rows in locked or closed periods', 
     expect(result.staged).toBe(true)
     const inserted = findCall('pending_operations', 'insert')![0] as Inserted
     expect(inserted.params.links.map((l) => l.journal_entry_id)).toEqual([uuid(201), uuid(202)])
-    expect(inserted.title).toBe('Koppla 2 bilagor till verifikat (1 i låst period)')
+    expect(inserted.title).toBe('Koppla 2 av 3 bilagor till verifikat A1-A2 (1 i låst period)')
     expect(result.preview).toMatchObject({
       total: 3,
       matched_count: 2,
@@ -187,7 +187,7 @@ describe('gnubok_link_documents_to_vouchers: rows in locked or closed periods', 
 
     expect(result.staged).toBe(true)
     const inserted = findCall('pending_operations', 'insert')![0] as Inserted
-    expect(inserted.title).toBe('Koppla 2 bilagor till verifikat')
+    expect(inserted.title).toBe('Koppla 2 bilagor till verifikat A1-A2')
     expect(inserted.params.links).toEqual([
       { document_id: uuid(101), journal_entry_id: uuid(201), journal_entry_line_id: null },
       { document_id: uuid(102), journal_entry_id: uuid(202), journal_entry_line_id: null },

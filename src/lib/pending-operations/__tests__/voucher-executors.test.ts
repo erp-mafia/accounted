@@ -320,6 +320,9 @@ describe('commitPendingOperation: create_voucher', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { period_start: '2026-01-01', name: '2026' }, error: null }) // fiscal_periods lookup
+    // existing-IB check: no pointer on the year, no posted IB entry in it
+    enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null }, error: null })
+    enqueue({ data: [], error: null })
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
@@ -345,6 +348,107 @@ describe('commitPendingOperation: create_voucher', () => {
       expect.objectContaining({ source_type: 'opening_balance' }),
       'user_accept'
     )
+  })
+
+  // Agent feedback seqs 892914, 897234, 897844: a second IB voucher in a year
+  // that already has one was posted, and every report then read the second as
+  // a movement of the same balances.
+  it('opening_balance: refuses with 409 when the year already points at an IB, without posting', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { period_start: '2026-01-01', name: '2026' }, error: null }) // fiscal_periods lookup
+    enqueue({
+      data: {
+        opening_balances_set: true,
+        opening_balance_entry_id: 'je-ib-1',
+        opening_balance_entry: { voucher_series: 'A', voucher_number: 1 },
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-01-01',
+        description: 'Second IB',
+        fiscal_period_id: 'fp-1',
+        is_opening_balance: true,
+        lines: [
+          { account_number: '1930', debit_amount: 5000, credit_amount: 0 },
+          { account_number: '2081', debit_amount: 0, credit_amount: 5000 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    // 409 is a state refusal: the dispatcher auto-rejects the op.
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toMatch(/redan en ingående balans \(verifikation A-1\)/)
+    expect(result.error).toMatch(/gnubok_correct_opening_balances/)
+    expect(result.error).toMatch(/gnubok_reverse_journal_entry/)
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('opening_balance: refuses with 409 when a posted IB voucher exists without the year pointer', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { period_start: '2026-01-01', name: '2026' }, error: null }) // fiscal_periods lookup
+    enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null }, error: null })
+    enqueue({ data: [{ id: 'je-ib-orphan', voucher_series: 'B', voucher_number: 3 }], error: null })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-01-01',
+        description: 'Manual reversal of an imported IB, booked as IB',
+        fiscal_period_id: 'fp-1',
+        is_opening_balance: true,
+        lines: [
+          { account_number: '2081', debit_amount: 5000, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 5000 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    // 409 is a state refusal: the dispatcher auto-rejects the op.
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toMatch(/verifikation B-3/)
+    // Without the pointer the correct-IB operation cannot replace it, so the
+    // message only offers the storno path.
+    expect(result.error).not.toMatch(/gnubok_correct_opening_balances/)
+    expect(result.error).toMatch(/gnubok_reverse_journal_entry/)
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('opening_balance: fails closed with 500 when the existing-IB check cannot run', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { period_start: '2026-01-01', name: '2026' }, error: null }) // fiscal_periods lookup
+    enqueue({ data: null, error: { message: 'connection reset' } })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-01-01',
+        description: 'IB',
+        fiscal_period_id: 'fp-1',
+        is_opening_balance: true,
+        lines: [
+          { account_number: '1930', debit_amount: 5000, credit_amount: 0 },
+          { account_number: '2081', debit_amount: 0, credit_amount: 5000 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.http_status).toBe(500)
+    expect(createJournalEntry).not.toHaveBeenCalled()
   })
 
   it('opening_balance: rejects with 400 when any line is a P&L account (class 3-8)', async () => {

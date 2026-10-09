@@ -70,7 +70,7 @@ describe('gnubok_create_employee', () => {
     expect(error.code).toBe('VALIDATION_ERROR')
     expect(error.retryable).toBe(false)
     expect(error.message_en).toMatch(/^Invalid employee: vacation_days_per_year: /)
-    expect(error.message_sv).toBe('vacation_days_per_year: Måste vara minst 25.')
+    expect(error.message_sv).toMatch(/^vacation_days_per_year: Semesterdagar per år måste vara minst 25 \(semesterlagen 4 §\)/)
   })
 
   it.each([
@@ -113,12 +113,23 @@ describe('gnubok_create_employee', () => {
 describe('gnubok_update_employee', () => {
   it('names vacation_days_per_year in the update schema refusal', async () => {
     const { supabase } = createQueuedMockSupabase()
+    const error = await refusal('gnubok_update_employee', { employee_id: 'emp-1', vacation_days_per_year: 41 }, supabase)
+
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.retryable).toBe(false)
+    expect(error.message_en).toMatch(/^Invalid employee update: vacation_days_per_year: /)
+    expect(error.message_sv).toBe('vacation_days_per_year: Får vara högst 40.')
+  })
+
+  it('names vacation_days_per_year when fewer than 25 days meet a stored vacation rule other than none', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1', first_name: 'Test', last_name: 'Testsson', vacation_rule: 'procentregeln', vacation_days_per_year: 25 } })
     const error = await refusal('gnubok_update_employee', { employee_id: 'emp-1', vacation_days_per_year: 12 }, supabase)
 
     expect(error.code).toBe('VALIDATION_ERROR')
     expect(error.retryable).toBe(false)
     expect(error.message_en).toMatch(/^Invalid employee update: vacation_days_per_year: /)
-    expect(error.message_sv).toBe('vacation_days_per_year: Måste vara minst 25.')
+    expect(error.message_sv).toMatch(/^vacation_days_per_year: Semesterdagar per år måste vara minst 25/)
   })
 
   it('names the field a merged-row rule refuses', async () => {

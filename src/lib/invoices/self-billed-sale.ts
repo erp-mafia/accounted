@@ -22,6 +22,7 @@ import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { eventBus } from '@/lib/events'
 import { roundOre } from '@/lib/money'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { createLogger } from '@/lib/logger'
 import type { EntityType, Invoice } from '@/types'
 
@@ -154,9 +155,10 @@ export async function resolveSelfBilledSaleDraft(
         },
       }
     }
-    const lineTotal = item.quantity * item.unit_price
+    // Whole-öre line net, the rule buildInvoiceWriteData applies.
+    const lineTotal = computeLineNet(item.quantity, item.unit_price)
     const lineVat = roundOre((lineTotal * itemRate) / 100)
-    vatAmount += lineVat
+    vatAmount = roundOre(vatAmount + lineVat)
     items.push({
       sort_order: i,
       description: item.description,
@@ -169,7 +171,7 @@ export async function resolveSelfBilledSaleDraft(
     })
   }
 
-  const subtotal = input.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
+  const subtotal = roundOre(items.reduce((sum, item) => sum + item.line_total, 0))
   const total = roundOre(subtotal + vatAmount)
 
   const uniqueRates = new Set(input.items.map((item) => item.vat_rate ?? vatRules.rate))

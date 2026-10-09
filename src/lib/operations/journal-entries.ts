@@ -16,9 +16,10 @@
  * app/api/bookkeeping/journal-entries/[id]/ and
  * app/api/bookkeeping/no-doc-required/batch.
  *
- * MCP: the three corrections and the batch flag stage (gnubok_correct_entry
- * stays the storno tool); the note keeps its hand-written
- * gnubok_set_voucher_note, so journal-entries.set-note has no MCP binding.
+ * MCP: the three corrections, the batch flag and the draft cancel stage
+ * (gnubok_correct_entry stays the storno tool); the note keeps its
+ * hand-written gnubok_set_voucher_note, so journal-entries.set-note has no MCP
+ * binding.
  */
 import { z } from 'zod'
 import { CreateJournalEntrySchema, InlineRattelseLineSchema } from '@/lib/api/schemas'
@@ -29,7 +30,11 @@ import {
   redateJournalEntry,
   strikeJournalEntryLines,
 } from '@/lib/core/bookkeeping/journal-entry-corrections'
-import { setJournalEntryNote, updateDraftJournalEntry } from '@/lib/core/bookkeeping/journal-entry-edits'
+import {
+  cancelDraftJournalEntry,
+  setJournalEntryNote,
+  updateDraftJournalEntry,
+} from '@/lib/core/bookkeeping/journal-entry-edits'
 import {
   NO_DOC_BATCH_MAX,
   batchSetNoDocumentRequired,
@@ -512,6 +517,90 @@ export const journalEntriesUpdateDraft = defineOperation({
     )
     if (!outcome.ok || outcome.dryRun) return outcome
     return { ...outcome, data: toDraftOut(outcome.data) }
+  },
+})
+
+// ---------------------------------------------------------------------------
+// journal-entries.cancel-draft (MCP; v1 DELETE /journal-entries/{id} is the
+// hand-written route over the same service, which keeps its optional
+// Idempotency-Key)
+// ---------------------------------------------------------------------------
+
+const CancelledDraftOut = z.object({
+  id: z.string().uuid(),
+  fiscal_period_id: z.string().uuid(),
+  voucher_series: z.string(),
+  voucher_number: z.number().int().nullable(),
+  entry_date: z.string(),
+  description: z.string(),
+  status: z.literal('cancelled'),
+  source_type: z.string(),
+  source_id: z.string().nullable(),
+  notes: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+})
+
+export const journalEntriesCancelDraft = defineOperation({
+  id: 'journal-entries.cancel-draft',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  // Nothing leaves the ledger: a draft is not bokförd, holds no voucher
+  // number, and the row survives as cancelled.
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'Cancel an uncommitted DRAFT verifikat, so it stops blocking the year-end close.',
+    description:
+      'Flips a draft journal entry to status cancelled through the engine. A draft holds no voucher number, so cancelling it leaves no gap in the löpande nummerordning (BFL 5 kap 7 §) and needs no gap explanation; the row and its lines stay archived as cancelled. Posted and reversed entries are refused with CANNOT_CANCEL_NON_DRAFT: storno them instead. Dry-runnable.',
+    useWhen:
+      'A draft will never be committed (a duplicate, an abandoned import, a draft the agent decided against), typically one gnubok_year_end_readiness lists under drafts with the DRAFT_ENTRIES blocker.',
+    doNotUseFor: 'Undoing a posted verifikat (gnubok_reverse_journal_entry, storno) or editing a draft.',
+    pitfalls: [
+      'Only status draft can be cancelled: a posted entry answers CANNOT_CANCEL_NON_DRAFT with details.currentStatus.',
+      'A draft in a locked or closed period, or behind the company lock date, answers PERIOD_LOCKED: the lock is the user\'s decision, never lift it to make a cancel fit.',
+      'A draft that is already cancelled is not staged again (JOURNAL_ENTRY_ALREADY_CANCELLED): nothing is left to do.',
+      'A draft that holds underlag is refused with DRAFT_HAS_DOCUMENTS (details.documents lists them): a cancelled draft\'s documents can never be moved to another verifikat, so it must be booked instead.',
+    ],
+    example: {
+      request: { journal_entry_id: '0e9c…' },
+      response: {
+        data: { id: '0e9c…', voucher_series: 'A', voucher_number: 0, entry_date: '2026-05-12', status: 'cancelled' },
+        meta: META_EXAMPLE,
+      },
+    },
+  },
+  input: z.object({ journal_entry_id: JOURNAL_ENTRY_ID }),
+  output: CancelledDraftOut,
+  errorCodes: [
+    'JOURNAL_ENTRY_NOT_FOUND',
+    'CANNOT_CANCEL_NON_DRAFT',
+    'PERIOD_LOCKED',
+    'JOURNAL_ENTRY_ALREADY_CANCELLED',
+    'DRAFT_HAS_DOCUMENTS',
+    'BOOKKEEPING_DATABASE_ERROR',
+  ],
+  mcp: {
+    name: 'gnubok_cancel_draft_entry',
+    title: 'Cancel Draft Journal Entry',
+    description:
+      'Stage cancelling a DRAFT verifikat (never posted, no voucher number) that blocks year-end as DRAFT_ENTRIES; ids from gnubok_year_end_readiness drafts. The row stays as cancelled, no number gap. Posted entries are refused: storno them.',
+    keywords: ['utkast', 'makulera utkast', 'ta bort utkast', 'radera utkast', 'draft', 'delete draft', 'discard draft'],
+    stage: {
+      pendingType: 'cancel_draft_entry',
+      title: () => 'Makulera utkast till verifikat',
+    },
+  },
+  run: async (ctx, { journal_entry_id }, { dryRun }) => {
+    const outcome = await cancelDraftJournalEntry(ctx, journal_entry_id, { dryRun })
+    // v1 answers an already cancelled draft with the entry, on a dry run too.
+    // Here a dry run is the staging preview: refuse instead of staging a
+    // cancel that has nothing left to do.
+    if (dryRun && outcome.ok && !outcome.dryRun) {
+      return { ok: false, code: 'JOURNAL_ENTRY_ALREADY_CANCELLED', details: { journal_entry_id } }
+    }
+    if (!outcome.ok || outcome.dryRun) return outcome
+    return { ...outcome, data: { ...outcome.data, status: 'cancelled' as const } }
   },
 })
 

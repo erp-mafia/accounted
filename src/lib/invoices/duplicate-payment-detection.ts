@@ -87,6 +87,24 @@ interface DetectArgs {
   transactionAmountSek?: number | null
   /** `transactions.exchange_rate`. */
   transactionExchangeRate?: number | null
+  /**
+   * The settlement account the bank row belongs to (cash_accounts.ledger_account)
+   * when known. Narrows the scan to that account: money that arrived on a
+   * PSP clearing account (1686) cannot be a duplicate of a 1930 voucher of
+   * the same amount, and a 1930 row cannot be one of a 1940 voucher. Null or
+   * omitted scans the whole 19xx range, the legacy shape for rows with no
+   * resolvable cash account. Wins over `cashAccountId` when both are given.
+   */
+  bankAccountNumber?: string | null
+  /**
+   * `transactions.cash_account_id`: the detector resolves its ledger_account
+   * into `bankAccountNumber` (resolveCashAccountLedger). Every door that holds
+   * the row passes it. A failed lookup throws rather than widening the scan to
+   * every 19xx account or answering "no duplicate": the callers' detection-
+   * failure path then runs (fail open without force, the "check did not run"
+   * warning on the MCP approval card, a refused force).
+   */
+  cashAccountId?: string | null
 }
 
 /**
@@ -96,8 +114,10 @@ interface DetectArgs {
  * Filters applied:
  *  - posted status (drafts cannot be a duplicate by definition)
  *  - entry date within ±DATE_WINDOW_DAYS of transaction.date
- *  - has a line that debits a BAS 19xx (kassa/bank) account for the same
- *    rounded amount (within 0.01 SEK), the bank line's SEK value against the
+ *  - has a line that debits the row's own settlement account
+ *    (`bankAccountNumber`), or any BAS 19xx (kassa/bank) account when that is
+ *    unknown, for the same rounded amount (within 0.01 SEK), the bank line's
+ *    SEK value against the
  *    leg's debit column, which is always SEK. When the bank line has no SEK
  *    value (a foreign row with no stored rate) the amount test is skipped and
  *    the candidate comes back with `amount_verified: false`: skipping is not a
@@ -126,6 +146,17 @@ export async function detectDuplicatePaymentVoucher(
 
   const dateMs = new Date(transactionDate).getTime()
   if (Number.isNaN(dateMs)) return null
+
+  // The account the money landed on. A PSP row on 1686 compared with every
+  // 19xx debit was refused as a duplicate of a 1930 voucher that merely had
+  // the same amount (agent feedback seq 965009).
+  let bankAccountNumber = args.bankAccountNumber?.trim() || null
+  if (args.bankAccountNumber === undefined && args.cashAccountId) {
+    const ledger = await resolveCashAccountLedger(supabase, companyId, args.cashAccountId)
+    if (!ledger.ok) throw new Error('duplicate-payment check: cash account lookup failed')
+    bankAccountNumber = ledger.accountNumber?.trim() || null
+  }
+
   const lowDate = new Date(dateMs - DATE_WINDOW_DAYS * 24 * 3600 * 1000)
     .toISOString()
     .split('T')[0]
@@ -167,11 +198,12 @@ export async function detectDuplicatePaymentVoucher(
           .eq('status', 'posted')
           .gte('entry_date', lowDate)
           .lte('entry_date', highDate),
-      filterLines: (q: EntryLinesQuery) =>
-        q
-          .gte('account_number', String(BANK_ACCOUNT_LOW))
-          .lte('account_number', String(BANK_ACCOUNT_HIGH))
-          .gt('debit_amount', 0),
+      filterLines: (q: EntryLinesQuery) => {
+        const scoped = bankAccountNumber
+          ? q.eq('account_number', bankAccountNumber)
+          : q.gte('account_number', String(BANK_ACCOUNT_LOW)).lte('account_number', String(BANK_ACCOUNT_HIGH))
+        return scoped.gt('debit_amount', 0)
+      },
       // The old embed was aliased: journal_entry:journal_entries!inner(...).
       attachEntriesAs: 'journal_entry',
     })
@@ -771,6 +803,30 @@ export interface TransactionForExplaining {
 }
 
 /**
+ * The ledger account a bank row settles on: its cash account's
+ * ledger_account. `accountNumber` is null when the row has no cash account
+ * (or the account names no ledger), and the detectors then scan the whole
+ * 19xx range as before. `ok: false` when the lookup failed: without the
+ * account a scan would widen to every 19xx account, an unverified answer, so
+ * both detectors throw on it and their callers' failure path decides.
+ */
+export async function resolveCashAccountLedger(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string | null | undefined,
+): Promise<{ ok: true; accountNumber: string | null } | { ok: false }> {
+  if (!cashAccountId) return { ok: true, accountNumber: null }
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .select('ledger_account')
+    .eq('id', cashAccountId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) return { ok: false }
+  return { ok: true, accountNumber: (data?.ledger_account as string | null) ?? null }
+}
+
+/**
  * Convenience for the routes: resolve the row's settlement account from its
  * cash account and run the set detector. Accepts the transaction id (one
  * fetch) or a row a caller already holds. A row that already carries a live
@@ -796,19 +852,12 @@ export async function detectExplainingVoucherSetForTransaction(
   }
   if (!row || row.journal_entry_id) return null
 
-  let bankAccountNumber: string | null = null
-  if (row.cash_account_id) {
-    const { data: cashAccount, error } = await supabase
-      .from('cash_accounts')
-      .select('ledger_account')
-      .eq('id', row.cash_account_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    // Without the account the scan would widen to every 19xx account: an
-    // unverified answer, so a failed lookup is a pass, not a wider guess.
-    if (error) return null
-    bankAccountNumber = (cashAccount?.ledger_account as string | null) ?? null
-  }
+  // Without the account the scan would widen to every 19xx account: an
+  // unverified answer. A failed lookup throws, like the 1:1 detector, so the
+  // caller's detection-failure path runs instead of a silent "no set".
+  const ledger = await resolveCashAccountLedger(supabase, companyId, row.cash_account_id)
+  if (!ledger.ok) throw new Error('explaining-voucher check: cash account lookup failed')
+  const bankAccountNumber = ledger.accountNumber
 
   return detectExplainingVoucherSet(supabase, {
     companyId,

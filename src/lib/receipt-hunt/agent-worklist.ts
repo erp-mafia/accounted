@@ -74,6 +74,8 @@ export interface AgentWorklist {
   total_count: number
   /** The company's inbox address: mail forwarded here becomes an inbox document. Null when not provisioned. */
   inbox_address: string | null
+  /** Pass as `offset` for the next page. Absent on the last page. */
+  next_offset?: number
 }
 
 /** Verifikat already carrying a staged or settled link are not asked about twice. */
@@ -85,6 +87,16 @@ const LINK_OPERATION_TYPES = [
 ] as const
 const LOOKUP_CHUNK = 150
 const MAX_ITEMS = 100
+/** verifikat_without_documents returns at most this many rows per call. */
+const VERIFIKAT_PAGE = 100
+/**
+ * How many verifikat (most recent first, the RPC's order) the list is ranked
+ * over. Fixed, never derived from `offset`: a window that grew with the page
+ * would re-rank, and page two would repeat or skip items of page one. It used
+ * to be one RPC page, so a second round of the hunt could only re-request the
+ * same top 100 (agent feedback seq 957595).
+ */
+const VERIFIKAT_WINDOW = 500
 
 /**
  * How far back an invoice settled by bankgiro, plusgiro or OCR is worth
@@ -315,38 +327,57 @@ async function fetchVerifikatContext(
  */
 const kindRank = (kind: AgentWorklistKind) => (kind === 'transaction' ? 0 : 1)
 
-export async function resolveAgentWorklist(
+/** The ranking window of verifikat without underlag, paged through the RPC's own cap. */
+async function fetchVerifikatWindow(
   supabase: SupabaseClient,
   companyId: string,
-  opts: { limit?: number; since?: string | null } = {},
-): Promise<AgentWorklist> {
-  const limit = Math.min(Math.max(1, opts.limit ?? 25), MAX_ITEMS)
-  const since = opts.since ?? null
-
-  const [verifikatRes, transactions, claimed, inboxAddress] = await Promise.all([
-    supabase.rpc('verifikat_without_documents', {
+  since: string | null,
+): Promise<{ rows: VerifikatRow[]; total: number }> {
+  const rows: VerifikatRow[] = []
+  let total = 0
+  for (let offset = 0; offset < VERIFIKAT_WINDOW; offset += VERIFIKAT_PAGE) {
+    const { data, error } = await supabase.rpc('verifikat_without_documents', {
       p_company_id: companyId,
       p_since: since,
       p_min_amount: 0,
-      p_limit: MAX_ITEMS,
-      p_offset: 0,
-    }),
+      p_limit: VERIFIKAT_PAGE,
+      p_offset: offset,
+    })
+    if (error) throw new Error(`verifikat_without_documents failed: ${error.message}`)
+    const result = data as {
+      ok?: boolean
+      code?: string
+      total_count?: number
+      verifikat?: VerifikatRow[]
+    } | null
+    if (!result?.ok) {
+      throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
+    }
+    total = result.total_count ?? 0
+    const page = result.verifikat ?? []
+    rows.push(...page)
+    if (page.length < VERIFIKAT_PAGE || rows.length >= total) break
+  }
+  return { rows, total }
+}
+
+export async function resolveAgentWorklist(
+  supabase: SupabaseClient,
+  companyId: string,
+  opts: { limit?: number; offset?: number; since?: string | null } = {},
+): Promise<AgentWorklist> {
+  const limit = Math.min(Math.max(1, opts.limit ?? 25), MAX_ITEMS)
+  const offset = Math.max(0, Math.floor(opts.offset ?? 0))
+  const since = opts.since ?? null
+
+  const [verifikatWindow, transactions, claimed, inboxAddress] = await Promise.all([
+    fetchVerifikatWindow(supabase, companyId, since),
     fetchCandidateTransactions(supabase, companyId),
     fetchClaimedTargets(supabase, companyId),
     fetchInboxAddress(supabase, companyId),
   ])
-  if (verifikatRes.error) throw new Error(`verifikat_without_documents failed: ${verifikatRes.error.message}`)
-  const verifikatResult = verifikatRes.data as {
-    ok?: boolean
-    code?: string
-    total_count?: number
-    verifikat?: VerifikatRow[]
-  } | null
-  if (!verifikatResult?.ok) {
-    throw new Error(`verifikat_without_documents failed: ${verifikatResult?.code ?? 'unknown error'}`)
-  }
 
-  const verifikat = (verifikatResult.verifikat ?? []).filter(
+  const verifikat = verifikatWindow.rows.filter(
     (v) => !claimed.journalEntryIds.has(v.journal_entry_id),
   )
   const context = await fetchVerifikatContext(
@@ -398,15 +429,17 @@ export async function resolveAgentWorklist(
   }
 
   ranked.sort((a, b) => kindRank(a.item.kind) - kindRank(b.item.kind) || b.sek - a.sek)
+  const end = offset + limit
   return {
-    items: ranked.slice(0, limit).map((r) => r.item),
-    // The verifikat total comes from the RPC (it may exceed the page fetched
-    // here); claimed rows inside that page are subtracted so the number
-    // matches what the agent can actually work on.
+    items: ranked.slice(offset, end).map((r) => r.item),
+    // The verifikat total comes from the RPC (it may exceed the window
+    // fetched here); claimed rows inside the window are subtracted so the
+    // number matches what the agent can actually work on.
     total_count:
-      (verifikatResult.total_count ?? 0) -
-      ((verifikatResult.verifikat ?? []).length - verifikat.length) +
+      verifikatWindow.total -
+      (verifikatWindow.rows.length - verifikat.length) +
       ranked.filter((r) => r.item.kind === 'transaction').length,
     inbox_address: inboxAddress,
+    ...(end < ranked.length ? { next_offset: end } : {}),
   }
 }

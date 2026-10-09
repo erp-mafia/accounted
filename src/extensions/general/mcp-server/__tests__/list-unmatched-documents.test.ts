@@ -48,6 +48,14 @@ describe('gnubok_list_unmatched_documents', () => {
     expect(tool.description).toMatch(/journal entry/)
   })
 
+  it('says it covers the inbox only and names the archive list (feedback seq 876431)', () => {
+    // An agent read an empty inbox as "the document does not exist" while it
+    // sat in the archive: the description has to say where the rest is.
+    expect(tool.description).toMatch(/Inbox only/)
+    expect(tool.description).toContain('gnubok_list_records')
+    expect(tools.some((t) => t.name === 'gnubok_list_records')).toBe(true)
+  })
+
   it('excludes inbox rows already booked as a journal entry, not just supplier invoices', async () => {
     const inboxChain = makeRecordingChain({ data: [], error: null })
     const fromMock = vi.fn().mockReturnValue(inboxChain.proxy)

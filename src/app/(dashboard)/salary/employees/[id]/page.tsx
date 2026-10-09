@@ -21,7 +21,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { vacationPayRateFromPercentInput, vacationPayRateToPercent } from '@/lib/salary/vacation-pay-rate'
+import { vacationDaysFromInput, vacationPayRateFromPercentInput, vacationPayRateToPercent } from '@/lib/salary/vacation-pay-rate'
 import {
   validateEmployeeBankAccount,
   isValidClearing,
@@ -200,7 +200,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       clearing_number: clearableField(normalizeBankNumber(clearing), employee?.clearing_number),
       bank_account_number: clearableField(normalizeBankNumber(account), employee?.bank_account_number),
       vacation_rule: vacationRule,
-      vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || undefined,
+      // 0 is a real value (vacation_rule none); only an empty field is "unchanged".
+      vacation_days_per_year: vacationDaysFromInput(form.get('vacation_days_per_year')) ?? undefined,
       // Always sent: an empty field (or a rule that hides it) clears the
       // kollektivavtal rate back to the statutory one.
       vacation_pay_rate: vacationPayRateFromPercentInput(form.get('vacation_pay_rate')),
@@ -680,12 +681,14 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                         id="vacation_days_per_year"
                         name="vacation_days_per_year"
                         type="number"
-                        min="25"
+                        min={vacationRule === 'none' ? 0 : 25}
                         max="40"
                         defaultValue={employee.vacation_days_per_year}
                         disabled={!canWrite}
                       />
-                      <p className="text-xs text-muted-foreground">{t('form_vacation_days_hint')}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {vacationRule === 'none' ? t('form_vacation_days_hint_none') : t('form_vacation_days_hint')}
+                      </p>
                     </div>
                     {(vacationRule === 'procentregeln' || vacationRule === 'semesterersattning') && (
                       <div className="space-y-2">

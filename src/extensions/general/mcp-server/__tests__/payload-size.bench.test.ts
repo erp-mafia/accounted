@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 60_200
+const SIMPLE_CATALOG_CEILING = 60_300
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -666,6 +666,12 @@ describe('tools/list payload size guard', () => {
     // gnubok_update_invoice gain qr_mode (one payment QR per invoice), an
     // enum with the shortest descriptions that still say what null means.
     // Measured 60 094 with them, ~106 headroom.
+    // 60 200 to 60 300 on 2026-10-06 (agent-feedback batch): gnubok_create_employee
+    // and gnubok_update_employee gain address_line1, postal_code and city (bare
+    // types), and gnubok_get_vat_report / gnubok_vat_review_widget declare every
+    // SKV 4700 ruta the filing carries (no descriptions; the rutor `required`
+    // list was dropped to pay for most of it). Measured about 60 256 with both
+    // plus the batch's other MRs, ~44 headroom.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

@@ -813,7 +813,7 @@ Request body:
   invoice_date: string,
   due_date: string,
   delivery_date?: string | "",
-  currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF",
+  currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD",
   exchange_rate?: number,
   vat_treatment?: "standard_25" | "reduced_12" | "reduced_6" | "reverse_charge" | "export" | "exempt",
   reverse_charge?: boolean,

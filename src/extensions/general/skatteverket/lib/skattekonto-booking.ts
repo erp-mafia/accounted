@@ -3,8 +3,11 @@ import { booksCurrentTax, resolveCompanyEntityType } from '@/lib/company/entity-
 import { commitEntry, createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { roundOre } from '@/lib/money'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { getPrimary as getPrimaryCashAccount } from '@/lib/cash-accounts/service'
+import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/reconciliation/gl-balance'
+import { VAT_REFUND_ACCOUNT, VAT_ROUNDING_ACCOUNT, VAT_SETTLEMENT_ACCOUNT } from '@/lib/reports/vat-settlement'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   findLedgerTwinCandidates,
@@ -57,6 +60,8 @@ export type { EntityType } from '@/types'
 
 interface SkattekontoRuleRow {
   id: string
+  /** NULL for a system seed rule, the company id for a company's own rule. */
+  company_id?: string | null
   priority: number
   pattern: string
   amount_min: number | null
@@ -94,6 +99,13 @@ export class SkattekontoBookingError extends Error {
 export interface CounterAccountMatch {
   account: string
   label: string
+  /**
+   * Only on a VAT refund that clears 1650 (resolveVatRefundCounterAccount):
+   * the refund minus the 1650 receivable, at most 1 kr either way, booked on
+   * 3740 öresavrundning. Positive = credit 3740, negative = debit 3740. The
+   * counter account then takes the receivable, not the refund.
+   */
+  oreRounding?: number
 }
 
 /**
@@ -107,6 +119,80 @@ async function resolvePrimarySekAccount(
 ): Promise<string> {
   const primary = await getPrimaryCashAccount(supabase, companyId, 'SEK')
   return primary?.ledger_account ?? PRIMARY_SEK_FALLBACK
+}
+
+/** Reads the 1650 balance up to an event date (null on a failed read). */
+type VatReceivableBalanceReader = (eventDate: string | undefined) => Promise<number | null>
+
+/**
+ * The 1650 balance on the event date (today without one), floored at the
+ * latest ingående balans like every other balance reader: an IB restates the
+ * earlier years whose detail stays in the ledger, so an unfloored sum counts
+ * them twice and would keep "finding" a receivable that a refund already
+ * cleared. A failed floor or sum read answers null (keep the rule's account).
+ */
+function readVatReceivableBalance(supabase: SupabaseClient, companyId: string): VatReceivableBalanceReader {
+  return async (eventDate) => {
+    const cutoffDate = eventDate ?? new Date().toISOString().slice(0, 10)
+    let floorDate: string | null = null
+    try {
+      floorDate = (await findOpeningBalanceFloor(supabase, companyId, VAT_REFUND_ACCOUNT, cutoffDate))?.date ?? null
+    } catch {
+      return null
+    }
+    return sumAccountBalance(supabase, companyId, VAT_REFUND_ACCOUNT, {
+      ...(floorDate ? { fromDate: floorDate } : {}),
+      cutoffDate,
+    })
+  }
+}
+
+/**
+ * The largest gap between the refund and the 1650 receivable that is booked
+ * as rounding. The declaration rounds each ruta to whole kronor while the
+ * momsavräkning rounds the net, so Skatteverket's refund can differ from the
+ * receivable by a krona; the settlement itself puts its rounding on 3740.
+ * A larger gap is no rounding: such a refund keeps the rule's account.
+ */
+const VAT_REFUND_ROUNDING_LIMIT = 1
+
+/** Re-assessments of an earlier period keep the rule's account. */
+const VAT_DECISION_TEXT = /ompröv|beslut/i
+
+/**
+ * The counter-account for a VAT refund (agent feedback seq 975032).
+ *
+ * The seed rule books every moms event on 2650, both signs. But the
+ * momsavräkning (lib/reports/vat-settlement.ts) puts a net receivable on 1650,
+ * so when Skatteverket then credits the skattekonto (a positive event),
+ * crediting 2650 leaves 1650 open and shows a VAT debt on 2650 that does not
+ * exist. When 1650 holds a debit balance on the event date that matches the
+ * refund within 1 kr, the refund clears it instead: 1650 takes the receivable
+ * and the gap goes to 3740 öresavrundning (oreRounding), the convention the
+ * settlement uses for its own rounding. Everything else keeps the rule's
+ * account: a debit event (VAT charged), an omprövning or beslut, a company's
+ * own rule (only the system seed is re-routed), a failed balance read, an
+ * empty 1650, and a gap above 1 kr either way.
+ */
+async function resolveVatRefundCounterAccount(
+  match: CounterAccountMatch,
+  seedRule: boolean,
+  belopp: number | undefined,
+  transaktionstext: string,
+  eventDate: string | undefined,
+  readBalance: VatReceivableBalanceReader,
+): Promise<CounterAccountMatch> {
+  if (!seedRule || match.account !== VAT_SETTLEMENT_ACCOUNT) return match
+  if (belopp === undefined || !(belopp > 0)) return match
+  if (VAT_DECISION_TEXT.test(transaktionstext)) return match
+  const receivable = await readBalance(eventDate)
+  if (receivable === null || !(receivable > 0)) return match
+  const gap = roundOre(belopp - receivable)
+  if (Math.abs(gap) > VAT_REFUND_ROUNDING_LIMIT) return match
+  const label = getBASReference(VAT_REFUND_ACCOUNT)?.account_name ?? 'Momsfordran'
+  return gap === 0
+    ? { account: VAT_REFUND_ACCOUNT, label }
+    : { account: VAT_REFUND_ACCOUNT, label, oreRounding: gap }
 }
 
 /**
@@ -129,7 +215,7 @@ const SAFE_ID_PATTERN = /^[a-zA-Z0-9_-]+$/
 // ship override metadata we don't need to the application layer (SOC 2
 // CC6.1, ISO 27001 A.8.5 least-privilege data access).
 const SKATTEKONTO_RULE_COLUMNS =
-  'id, priority, pattern, amount_min, amount_max, company_type, counter_account, counter_account_ef, label, active, requires_employer'
+  'id, company_id, priority, pattern, amount_min, amount_max, company_type, counter_account, counter_account_ef, label, active, requires_employer'
 
 /**
  * Result of walking the rules for one transaktionstext.
@@ -144,7 +230,12 @@ const SKATTEKONTO_RULE_COLUMNS =
  * distinct hint.
  */
 type RuleMatchOutcome =
-  | { kind: 'match'; match: CounterAccountMatch }
+  | {
+      kind: 'match'
+      match: CounterAccountMatch
+      /** The rule is a system seed (company_id NULL), not the company's own. */
+      seedRule: boolean
+    }
   | { kind: 'employer_gated' }
   | { kind: 'none' }
 
@@ -215,6 +306,7 @@ function matchSkattekontoRule(
         account,
         label: rule.label ?? transaktionstext,
       },
+      seedRule: rule.company_id == null,
     }
   }
 
@@ -247,6 +339,9 @@ export async function guessCounterAccount(
   // Whether (company_settings.employer_registered ?? pays_salaries) is true.
   // Defaults false: the safe side of the requires_employer gate for an EF.
   employerRegistered = false,
+  // The event's transaktionsdatum: the cutoff for the 1650 balance that
+  // decides where a VAT refund goes (resolveVatRefundCounterAccount).
+  eventDate?: string,
 ): Promise<CounterAccountMatch | null> {
   if (!SAFE_ID_PATTERN.test(companyId)) {
     // The caller is supposed to pass a validated company id (from
@@ -269,13 +364,20 @@ export async function guessCounterAccount(
   if (outcome.kind !== 'match') return null
   const match = outcome.match
 
-  return {
-    ...match,
-    account:
-      match.account === PRIMARY_SEK_SENTINEL
-        ? await resolvePrimarySekAccount(supabase, companyId)
-        : match.account,
-  }
+  return resolveVatRefundCounterAccount(
+    {
+      ...match,
+      account:
+        match.account === PRIMARY_SEK_SENTINEL
+          ? await resolvePrimarySekAccount(supabase, companyId)
+          : match.account,
+    },
+    outcome.seedRule,
+    belopp,
+    transaktionstext,
+    eventDate,
+    readVatReceivableBalance(supabase, companyId),
+  )
 }
 
 /**
@@ -354,6 +456,7 @@ export async function attachBookingSuggestions<
     belopp_skatteverket: number | string
     journal_entry_id: string | null
     status: string
+    transaktionsdatum?: string
   },
 >(
   supabase: SupabaseClient,
@@ -373,6 +476,27 @@ export async function attachBookingSuggestions<
   }
 
   const ctx = await loadRuleContext(supabase, companyId)
+  // One 1650 read per event date for the whole page. A suggestion posts
+  // nothing, so the refunds already suggested onto 1650 are subtracted in row
+  // order (the order the batch commits them): two refunds against one
+  // receivable must not both be shown clearing it.
+  const readBalance = readVatReceivableBalance(supabase, companyId)
+  const balanceByDate = new Map<string, Promise<number | null>>()
+  const suggestedRefunds: Array<{ date: string | undefined; amount: number }> = []
+  const readRemainingReceivable: VatReceivableBalanceReader = async (eventDate) => {
+    const key = eventDate ?? ''
+    let pending = balanceByDate.get(key)
+    if (!pending) {
+      pending = readBalance(eventDate)
+      balanceByDate.set(key, pending)
+    }
+    const balance = await pending
+    if (balance === null) return null
+    const alreadySuggested = suggestedRefunds
+      .filter((r) => !eventDate || !r.date || r.date <= eventDate)
+      .reduce((sum, r) => sum + r.amount, 0)
+    return roundOre(balance - alreadySuggested)
+  }
   const enriched: (T & {
     booking_suggestion: SkattekontoBookingSuggestion | null
     booking_gate?: 'requires_employer' | null
@@ -401,19 +525,35 @@ export async function attachBookingSuggestions<
       enriched.push({ ...row, booking_suggestion: null })
       continue
     }
-    const match = outcome.match
-
-    const account =
-      match.account === PRIMARY_SEK_SENTINEL
-        ? await ctx.resolvePrimarySek()
-        : match.account
+    const match = await resolveVatRefundCounterAccount(
+      {
+        ...outcome.match,
+        account:
+          outcome.match.account === PRIMARY_SEK_SENTINEL
+            ? await ctx.resolvePrimarySek()
+            : outcome.match.account,
+      },
+      outcome.seedRule,
+      Number(row.belopp_skatteverket),
+      row.transaktionstext,
+      row.transaktionsdatum,
+      readRemainingReceivable,
+    )
+    if (match.account === VAT_REFUND_ACCOUNT) {
+      // What this booking takes off 1650: the receivable, not the refund.
+      suggestedRefunds.push({
+        date: row.transaktionsdatum,
+        amount: roundOre(Number(row.belopp_skatteverket) - (match.oreRounding ?? 0)),
+      })
+    }
 
     enriched.push({
       ...row,
       booking_suggestion: {
-        account,
-        account_name: getBASReference(account)?.account_name ?? null,
+        account: match.account,
+        account_name: getBASReference(match.account)?.account_name ?? null,
         label: match.label,
+        ...(match.oreRounding ? { ore_rounding: match.oreRounding } : {}),
       },
     })
   }
@@ -634,15 +774,24 @@ export async function bokforSkattekontoTransaction(
       'NO_COUNTER_ACCOUNT',
     )
   }
+  // The 1650 balance is read fresh for every row (no memo): a batch commits
+  // row by row, so a refund booked earlier in the batch is already counted.
   const guess: CounterAccountMatch | null =
     outcome.kind === 'match'
-      ? {
-          ...outcome.match,
-          account:
-            outcome.match.account === PRIMARY_SEK_SENTINEL
-              ? await ctx.resolvePrimarySek()
-              : outcome.match.account,
-        }
+      ? await resolveVatRefundCounterAccount(
+          {
+            ...outcome.match,
+            account:
+              outcome.match.account === PRIMARY_SEK_SENTINEL
+                ? await ctx.resolvePrimarySek()
+                : outcome.match.account,
+          },
+          outcome.seedRule,
+          Number(tx.belopp_skatteverket),
+          tx.transaktionstext,
+          tx.transaktionsdatum,
+          readVatReceivableBalance(supabase, companyId),
+        )
       : null
   if (!guess) {
     throw new SkattekontoBookingError(
@@ -685,6 +834,21 @@ export async function bokforSkattekontoTransaction(
   // 5. Build lines based on sign convention
   const amount = Math.abs(Number(tx.belopp_skatteverket))
   const isCreditToSkattekonto = Number(tx.belopp_skatteverket) > 0
+  // A VAT refund that clears 1650 within 1 kr: the counter line takes the
+  // receivable and the gap is a third line on 3740 (credit when the refund is
+  // larger, debit when smaller). Only ever set on a credit to the skattekonto.
+  const oreRounding = isCreditToSkattekonto ? (guess.oreRounding ?? 0) : 0
+  const roundingLines: CreateJournalEntryLineInput[] =
+    oreRounding === 0
+      ? []
+      : [
+          {
+            account_number: VAT_ROUNDING_ACCOUNT,
+            debit_amount: oreRounding < 0 ? roundOre(-oreRounding) : 0,
+            credit_amount: oreRounding > 0 ? roundOre(oreRounding) : 0,
+            line_description: 'Öres- och kronutjämning',
+          },
+        ]
 
   const lines: CreateJournalEntryLineInput[] = isCreditToSkattekonto
     ? [
@@ -697,9 +861,10 @@ export async function bokforSkattekontoTransaction(
         {
           account_number: guess.account,
           debit_amount: 0,
-          credit_amount: amount,
+          credit_amount: roundOre(amount - oreRounding),
           line_description: guess.label,
         },
+        ...roundingLines,
       ]
     : [
         {

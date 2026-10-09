@@ -84,6 +84,33 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]', () => {
     expect(status).toBe(200)
     expect(body.data.id).toBe('line-1')
   })
+
+  it('returns 400 with the Swedish reason when the patch clears is_avgift_basis on a taxable addition (agent feedback seq 947288)', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } },
+      {
+        data: {
+          id: 'line-1',
+          item_type: 'bonus',
+          amount: 5000,
+          is_taxable: true,
+          is_avgift_basis: true,
+          is_gross_deduction: false,
+          is_net_deduction: false,
+          salary_run_employee: { salary_run_id: 'run-1' },
+        },
+      },
+    ])
+    const response = await PATCH(
+      createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'PATCH', body: { is_avgift_basis: false } }),
+      params(),
+    )
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
+    expect(status).toBe(400)
+    expect(body.code).toBe('VALIDATION_ERROR')
+    expect(body.error).toMatch(/is_avgift_basis=false stöds ännu inte/)
+  })
 })
 
 describe('DELETE /api/salary/runs/[id]/lines/[lineId]', () => {

@@ -136,8 +136,12 @@ export interface OperationMcpBinding {
    */
   stage?: {
     pendingType: PendingOperationType
-    /** The one-line title the approver sees, in Swedish. */
-    title: (input: Record<string, unknown>) => string
+    /**
+     * The one-line title the approver sees, in Swedish. `preview` is the dry
+     * run's preview the operation is staged with, for a title that names what
+     * the input only points at (the invoice number behind an id).
+     */
+    title: (input: Record<string, unknown>, preview?: Record<string, unknown>) => string
     /**
      * For a pending type that existed before its operation did: rewrites
      * params staged in the old shape into the operation's input, so a row

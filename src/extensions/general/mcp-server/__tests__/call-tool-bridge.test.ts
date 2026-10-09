@@ -442,6 +442,79 @@ describe('gnubok_stage_tool bridge', () => {
     expect((await eventPromise).errorKind).toBe('bridge_refused')
   })
 
+  // Agent feedback seq 871035: a key without pending_operations:approve tried
+  // to reject its own staged operation through the bridge and was told to
+  // "call it directly by name", a tool its tools/list did not contain.
+  it('names the missing scope and /pending instead of a direct call the key cannot make', async () => {
+    keyWithScopes(['bookkeeping:write', 'pending_operations:read'])
+    const eventPromise = captureNextToolCalled()
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_stage_tool', {
+        tool: 'gnubok_reject_pending_operation',
+        arguments: { operation_id: 'op-1' },
+      }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    const text = JSON.stringify(payload)
+    expect(text).toContain('pending_operations:approve')
+    expect(text).toContain('/pending')
+    expect(text).not.toMatch(/directly by name/)
+    // Still refused at the bridge, before execute(): nothing is rejected.
+    const event = await eventPromise
+    expect(event.errorKind).toBe('bridge_refused')
+    expect(event.latencyMs).toBe(0)
+  })
+
+  it('keeps the direct-call advice for a key that holds the target scope', async () => {
+    keyWithScopes(['pending_operations:approve'])
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_stage_tool', {
+        tool: 'gnubok_reject_pending_operation',
+        arguments: { operation_id: 'op-1' },
+      }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    expect(JSON.stringify(payload)).toMatch(/directly by name/)
+  })
+
+  it('names the missing scope for a listed staging write the key cannot reach', async () => {
+    keyWithScopes(['transactions:read'])
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_stage_tool', { tool: 'gnubok_create_invoice', arguments: {} }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    const text = JSON.stringify(payload)
+    expect(text).toContain('invoices:write')
+    expect(text).not.toMatch(/call it directly/)
+  })
+
+  it('names the missing scope on gnubok_call_tool too', async () => {
+    keyWithScopes(['transactions:read'])
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', {
+        tool: 'gnubok_approve_pending_operation',
+        arguments: { operation_id: 'op-1' },
+      }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    const text = JSON.stringify(payload)
+    expect(text).toContain('pending_operations:approve')
+    expect(text).toContain('/pending')
+    expect(text).not.toMatch(/directly by name/)
+  })
+
   it('refuses a call with no tool name', async () => {
     const eventPromise = captureNextToolCalled()
     const { isError } = await parsedToolResult(await handleMcpRequest(mcpToolCall('gnubok_stage_tool', {})))

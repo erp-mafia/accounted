@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { roundOre } from '@/lib/money'
+import { effectiveRunTotals } from '@/lib/salary/effective-figures'
 import type { SalaryRunEmployee } from '@/types'
 import { formatRunAmount, type RunDetail } from './types'
 
@@ -18,35 +18,17 @@ interface RunKpiCardsProps {
 export function RunKpiCards({ run, employees }: RunKpiCardsProps) {
   const t = useTranslations('salary_run')
 
-  // Each step rounded to whole öre (CLAUDE.md rule 6), so a sum over many
-  // rows never shows binary drift.
-  const effTax = employees.reduce((s, e) => roundOre(s + (e.tax_withheld_override ?? e.tax_withheld)), 0)
-  const effAvgifter = employees.reduce(
-    (s, e) => roundOre(s + (e.avgifter_amount_override ?? e.avgifter_amount)),
-    0,
-  )
-  const effNet = employees.reduce(
-    (s, e) => roundOre(s + e.net_salary + (e.tax_withheld - (e.tax_withheld_override ?? e.tax_withheld))),
-    0,
-  )
-  const effEmployerCost = employees.reduce(
-    (s, e) =>
-      roundOre(
-        s +
-          e.gross_salary +
-          (e.avgifter_amount_override ?? e.avgifter_amount) +
-          e.vacation_accrual +
-          e.vacation_accrual_avgifter,
-      ),
-    0,
-  )
+  // The shared effective-figures helper (each step rounded to whole öre)
+  // applies the same override rules as the booking, including that an
+  // F-skatt row ignores an avgifter override.
+  const effective = effectiveRunTotals(employees)
 
   const cards = [
     { label: t('kpi_gross'), value: run.total_gross },
-    { label: t('kpi_tax'), value: effTax },
-    { label: t('kpi_net'), value: effNet, accent: true },
-    { label: t('kpi_avgifter'), value: effAvgifter },
-    { label: t('kpi_employer_cost'), value: effEmployerCost },
+    { label: t('kpi_tax'), value: effective.total_tax },
+    { label: t('kpi_net'), value: effective.total_net, accent: true },
+    { label: t('kpi_avgifter'), value: effective.total_avgifter },
+    { label: t('kpi_employer_cost'), value: effective.total_employer_cost },
   ]
 
   // Flat stat row: label/number pairs on whitespace, no boxes or rules.

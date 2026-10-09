@@ -4,6 +4,7 @@ import {
   alignLinkedTransactionsToWindow,
   fetchJunctionLinkMap,
   fetchUnlinkedGLLines,
+  openAmountByEntry,
   scopeTransactionsToAccount,
 } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
@@ -144,6 +145,20 @@ async function attachEntries(
     p.voucher_number = meta.voucher_number
     p.description = meta.description
   }
+}
+
+/**
+ * The first day of every fiscal year of the company: the only date an opening
+ * balance can carry. A failed read offers no "Märk som IB" at all rather than
+ * offering it on a mid-year verifikat.
+ */
+async function fetchFiscalYearStarts(supabase: SupabaseClient, companyId: string): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('period_start')
+    .eq('company_id', companyId)
+  if (error) return new Set()
+  return new Set(((data ?? []) as Array<{ period_start: string }>).map((p) => p.period_start))
 }
 
 export async function listAccountItems(
@@ -322,15 +337,15 @@ export async function listAccountItems(
         options.windowFrom ?? undefined,
         options.windowTo ?? undefined,
       )
-      // One item per entry: several 1930 lines of one voucher net, as a link settles the voucher.
+      // One item per entry: several 1930 lines of one voucher net, as a link
+      // settles the voucher. A voucher 1:N slices settle in part shows only
+      // what they leave open (agent feedback seq 854089). Amounts in SEK, as
+      // the ledger side has always been listed here.
+      const openByEntry = openAmountByEntry(lines, 'SEK')
+      const periodStarts = lines.length > 0 ? await fetchFiscalYearStarts(supabase, companyId) : new Set<string>()
       const byEntry = new Map<string, ReconciliationItem>()
       for (const l of lines) {
-        const amount = roundOre(Number(l.debit_amount || 0) - Number(l.credit_amount || 0))
-        const existing = byEntry.get(l.journal_entry_id)
-        if (existing) {
-          existing.amount = roundOre(existing.amount + amount)
-          continue
-        }
+        if (byEntry.has(l.journal_entry_id)) continue
         byEntry.set(l.journal_entry_id, {
           item_id: l.journal_entry_id,
           item_type: 'journal_entry',
@@ -338,11 +353,19 @@ export async function listAccountItems(
           bucket: 'unmatched_ledger',
           date: l.entry_date,
           description: l.entry_description || l.line_description || '',
-          amount,
+          amount: openByEntry.get(l.journal_entry_id) ?? 0,
           currency,
           voucher_number: l.voucher_number,
           voucher_series: l.voucher_series,
           entry_status: 'posted',
+          // mark_entry_as_opening_balance accepts only this shape: a manual or
+          // imported verifikat dated on its fiscal year's first day, with no
+          // bank link. Anything else is a movement in the year, so "Märk som
+          // IB" is not offered for it (agent feedback seq 878478).
+          ib_eligible:
+            periodStarts.has(l.entry_date) &&
+            (l.source_type === 'manual' || l.source_type === 'import') &&
+            l.remaining_amount == null,
           actions: ['match', 'review'],
         })
       }

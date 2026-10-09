@@ -64,6 +64,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // A Skatteverket-confirmed filing is never relabelled or reopened.
   mark_vat_period_filed: 'low',
   unmark_vat_period_filed: 'low',
+  mark_agi_period_filed: 'low',
   // Operation registry, wave 2: booking, payment files, utlägg, payroll.
   send_payslips: 'medium',
   revert_salary_run: 'low',
@@ -137,6 +138,8 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // notes-only diff on committed entries and rejects anything more, so the
   // op cannot touch booking data even if tampered with.
   set_voucher_note: 'low',
+  // A draft holds no voucher number and the row survives as cancelled.
+  cancel_draft_entry: 'low',
   // A fact in Arkiv: no journal impact, reverted in one call (revert_company_fact).
   arkiv_propose_fact: 'low',
   // Ignoring a bank transaction flips transactions.is_ignored and nothing

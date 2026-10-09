@@ -131,6 +131,13 @@ describe('structured-errors registry', () => {
     expect(codes).toContain('ECONNREFUSED')
     expect(getErrorEntry('ECONNREFUSED')?.retryable).toBe(true)
   })
+
+  it('registers the reconciliation link refusal BANK_ANCHOR_REFUSED as a non-retryable conflict with a Swedish message', () => {
+    const entry = getErrorEntry('BANK_ANCHOR_REFUSED')
+    expect(entry?.httpStatus).toBe(409)
+    expect(entry?.retryable).toBeFalsy()
+    expect(entry?.message_sv).toMatch(/^Kopplingen nekades/)
+  })
 })
 
 describe('errorResponse', () => {

@@ -21,6 +21,7 @@ import type { PendingOperation } from '@/types'
 import { DEDUCTION_TYPE_LABELS, isDeductionType } from '@/lib/invoices/rot-rut-rules'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
+import { LinkDocumentsPreview } from './LinkDocumentsPreview'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { complianceWarningOf, type ComplianceWarning } from './vocabulary'
@@ -1051,6 +1052,8 @@ export function OperationPreview({ op, detail = false }: { op: OperationPreviewI
         return <AttachDocumentPreview data={op.preview_data} params={op.params ?? {}} detail={detail} />
       case 'match_transaction_invoice':
         return <MatchTransactionInvoicePreview data={op.preview_data} />
+      case 'link_documents_to_vouchers':
+        return <LinkDocumentsPreview data={op.preview_data} />
       case 'link_document_to_voucher':
         return <LinkDocumentToVoucherPreview data={op.preview_data} params={op.params ?? {}} detail={detail} />
       default:

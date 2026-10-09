@@ -154,6 +154,81 @@ describe('commitPendingOperation: submit_vat_declaration / submit_agi', () => {
     expect(result.error).toMatch(/rejected/i)
   })
 
+  it('AGI rejected at kontroll → details carry the kontrollrapport, personnummer masked (agent feedback seq 948847)', async () => {
+    // Synthetic personnummer; the employer id (16 + org nr) must survive.
+    const PNR = '190001010000'
+    const agi = vi.fn().mockResolvedValue({
+      ok: false,
+      code: 'AGI_KONTROLL_REJECTED',
+      http_status: 422,
+      recoverable: false,
+      error: `Skatteverket avvisade AGI-underlaget vid kontroll: Fel för ${PNR}. Åtgärda felen och generera om AGI:n.`,
+      details: {
+        kontrollrapport: {
+          kontrollresultat_status: 'DONE_REJECTED',
+          status: 'FAILED',
+          antalFel: 1,
+          valideringsfel: [{ felmeddelande: `Ruta 001 saknas för ${PNR} hos 165560000000.` }],
+          bearbetningsfel: [],
+          redovisningsperioder: [
+            {
+              period: '202610',
+              antalFel: 1,
+              antalVarningar: 0,
+              kontrollfel: [{ felkategori: 'X', uppgiftsTyp: 'IU', textNyckel: 'k', identifierare: PNR, felmeddelande: 'Fel', felstatus: 'STOPP' }],
+            },
+          ],
+        },
+      },
+    } satisfies SkvSubmitResult)
+    registerFakeSkatteverket({ commitSubmitVatDeclaration: vi.fn(), commitSubmitAgi: agi })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null })           // reject update
+
+    const op = makePendingOp({ operation_type: 'submit_agi', params: { salary_run_id: 'sr-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(422)
+    expect(result.code).toBe('AGI_KONTROLL_REJECTED')
+    expect(result.operation_status).toBe('rejected')
+    const rapport = (result.data as { kontrollrapport: Record<string, unknown> }).kontrollrapport
+    expect(rapport.antalFel).toBe(1)
+    expect((rapport.valideringsfel as Array<{ felmeddelande: string }>)[0].felmeddelande).toBe(
+      'Ruta 001 saknas för 19000101-XXXX hos 165560000000.',
+    )
+    const perioder = rapport.redovisningsperioder as Array<{ kontrollfel: Array<{ identifierare: string }> }>
+    expect(perioder[0].kontrollfel[0].identifierare).toBe('19000101-XXXX')
+    expect(result.error).toContain('19000101-XXXX')
+    expect(JSON.stringify(result)).not.toContain(PNR)
+
+    // Persisted on the rejected op too, masked.
+    const updates = findCalls('pending_operations', 'update')
+    const persisted = updates.at(-1)?.[0] as { result_data: Record<string, unknown> }
+    expect(persisted.result_data.error_code).toBe('AGI_KONTROLL_REJECTED')
+    expect(persisted.result_data.details).toMatchObject({ kontrollrapport: { antalFel: 1 } })
+    expect(JSON.stringify(persisted)).not.toContain(PNR)
+  })
+
+  it('recoverable failure → released to pending with any personnummer in the message masked', async () => {
+    const agi = vi.fn().mockResolvedValue({
+      ok: false, code: 'SKATTEVERKET_PROCESSING', http_status: 202, recoverable: true,
+      error: 'Skatteverket bearbetar fortfarande underlaget för 190001010000 och 000101-0000.',
+    } satisfies SkvSubmitResult)
+    registerFakeSkatteverket({ commitSubmitVatDeclaration: vi.fn(), commitSubmitAgi: agi })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null })           // release-to-pending update
+
+    const op = makePendingOp({ operation_type: 'submit_agi', params: { salary_run_id: 'sr-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.code).toBe('SKATTEVERKET_PROCESSING')
+    expect(result.error).toBe('Skatteverket bearbetar fortfarande underlaget för 19000101-XXXX och 000101-XXXX.')
+  })
+
   it('missing params → 400 without resolving the extension service', async () => {
     const vat = vi.fn()
     registerFakeSkatteverket({ commitSubmitVatDeclaration: vat, commitSubmitAgi: vi.fn() })

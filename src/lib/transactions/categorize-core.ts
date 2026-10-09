@@ -36,7 +36,7 @@ import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-ent
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { isBookkeepingError, TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import {
   detectBookingDuplicate,
@@ -486,6 +486,22 @@ export async function categorizeMatchedTransaction(
     )
     if (journalEntry) journalEntryId = journalEntry.id
   } catch (err) {
+    // A foreign row with no SEK value is refused before anything is written
+    // (buildTransactionEntryLines). Answered as a coded result rather than
+    // rethrown: the approval executor would otherwise reject the operation
+    // with the engine's English text and no code to branch on.
+    if (err instanceof TransactionMissingSekValueError) {
+      log.warn('categorize refused: foreign transaction has no SEK value', {
+        txId,
+        companyId,
+        currency: err.currency,
+      })
+      return {
+        error: getErrorEntry(err.code)?.message_sv ?? err.message,
+        errorCode: err.code,
+        status: 400,
+      }
+    }
     if (isBookkeepingError(err)) throw err
     log.error('Failed to create journal entry:', err)
     return { error: err instanceof Error ? err.message : 'Failed to create journal entry', status: 500 }
@@ -731,6 +747,9 @@ export async function bulkBookMatchedInboxItems(
         result.errorCode === 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED' ||
         result.errorCode === 'NO_OPEN_PERIOD_FOR_DATE'
           ? 'no_open_period'
+          // A foreign row with no SEK value is not a mapping problem: the
+          // repair is fetching its exchange rate.
+          : result.errorCode === 'TX_MISSING_SEK_VALUE' ? 'missing_sek_value'
           : result.status === 404 ? 'transaction_not_found'
           : result.status === 409 ? 'already_booked_or_duplicate'
           : result.status === 400 ? 'no_account_mapping'

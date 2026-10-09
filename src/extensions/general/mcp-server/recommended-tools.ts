@@ -45,12 +45,22 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
   {
     workflow: 'categorize_month',
     description: 'Categorize and book a month of bank transactions.',
-    skill: 'bank-reconciliation',
+    // bookkeep is the skill whose job this is (#2982); bank-reconciliation is
+    // the avstämning playbook and hands categorizing back to bookkeep (agent
+    // feedback seq 841832).
+    skill: 'bookkeep',
     tools: [
       'gnubok_list_uncategorized_transactions',
       'gnubok_suggest_categories',
+      // Underlag already in Accounted, read before proposing a kontering.
+      'gnubok_list_unmatched_documents',
+      'gnubok_get_document_content',
       'gnubok_categorize_transaction',
       'gnubok_match_transaction_to_invoice',
+      // Same-day samlingsverifikat, or one row split over several accounts.
+      'gnubok_bulk_book_transactions',
+      // Stages the underlag link next to the booking it backs.
+      'gnubok_attach_document_to_transaction',
       // For transactions whose affärshändelse is already booked on an existing
       // verifikat: links without creating new bookkeeping. Categorizing such a
       // transaction would double-book it.
@@ -176,6 +186,29 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
     ],
   },
 ]
+
+/**
+ * Workflow skills that deliberately have no loadout, each with the reason.
+ * Every other workflow skill must be named by a loadout above:
+ * __tests__/agent-briefing.test.ts fails a skill that is in neither, so a new
+ * workflow skill forces the choice. bookkeep (#2982) shipped without one and
+ * categorize_month kept naming bank-reconciliation (agent feedback seq
+ * 841832). Analyses (itemKind 'analysis') are not workflows and are exempt.
+ */
+export const WORKFLOW_SKILLS_WITHOUT_LOADOUT: Readonly<Record<string, string>> = {
+  'bank-reconciliation':
+    'Avstämning playbook for one bank account: the month is reconcile_month, categorizing is bookkeep (categorize_month).',
+  'year-end-close':
+    'Yearly and gated: gnubok_run_year_end carries gnubok_year_end_readiness as its pre-flight.',
+  'tax-planning': 'Read-only estimates before year-end; nothing to stage or batch-load.',
+  'kreditfaktura-process': 'Exception path started from one invoice, not a recurring batch.',
+  'customer-onboarding': 'Decision tree for one customer record; invoice_run carries the customer tools.',
+  onboarding: 'One-time company setup through the connect_* tools in the default catalog.',
+  'create-skill': "Authors the user's own skill with one tool, gnubok_create_skill.",
+  'kvittojakten-claude': 'Client variant of kvittojakten, which receipt_hunt names.',
+  'kvittojakten-chatgpt': 'Client variant of kvittojakten, which receipt_hunt names.',
+  'kvittojakten-grok': 'Client variant of kvittojakten, which receipt_hunt names.',
+}
 
 /** What annotateLoadoutTools needs to know about one registry tool. */
 export interface RecommendedToolClassification {

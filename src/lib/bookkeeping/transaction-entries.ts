@@ -1,11 +1,11 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveCashAccountVoucherSeries } from './cash-account-voucher-series'
 import { bankBookingContext } from './bank-booking-context'
-import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
+import { resolveSekAmountOrNull, buildCurrencyMetadata } from './currency-utils'
 import { coerceDimensionsBag, mergeDimensionBags } from './dimension-resolver'
 import { extractNetAmount, extractVatAmount } from './vat-entries'
 import { roundOre } from '@/lib/money'
-import { InvalidMappingResultError } from '@/lib/bookkeeping/errors'
+import { InvalidMappingResultError, TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
@@ -84,10 +84,17 @@ export function buildTransactionEntryLines(
     throw new InvalidMappingResultError(mappingResult.debit_account, mappingResult.credit_account)
   }
 
-  const absAmountSek = Math.abs(resolveSekAmount(
+  // Strict ladder: a foreign row with neither amount_sek nor exchange_rate has
+  // no SEK value, and the lenient resolver would book the foreign number as
+  // kronor (100 CAD as 100 kr). Every categorize preview and commit builds its
+  // lines here, so refusing here refuses them all.
+  const sekAmount = resolveSekAmountOrNull(
     transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
-  ))
-  const absAmount = absAmountSek
+  )
+  if (sekAmount === null) {
+    throw new TransactionMissingSekValueError(transaction.id, transaction.currency, transaction.date)
+  }
+  const absAmount = Math.abs(sekAmount)
   const isExpense = transaction.amount < 0
   const isForeign = transaction.currency !== 'SEK'
   const currencyMeta = buildCurrencyMetadata(

@@ -159,6 +159,11 @@ export async function bookSupplierInvoice(
           supplier_invoice_id: invoice.id,
           arrival_number: invoice.arrival_number ?? null,
           supplier_invoice_number: invoice.supplier_invoice_number ?? null,
+          // Which invoice this is, for the approver: four staged Bokför
+          // operations used to read the same (feedback seq 930807).
+          supplier_name: supplierName ?? null,
+          total: invoice.total,
+          currency: invoice.currency,
           status: invoice.status,
           journal_entry: toEntryPreview(input),
           creates_accrual_schedules: items.some((item) => item.accrual_period_start && item.accrual_period_end),

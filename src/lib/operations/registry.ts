@@ -161,6 +161,7 @@ import {
   journalEntriesSetNote,
   journalEntriesStrikeLines,
   journalEntriesUpdateDraft,
+  journalEntriesCancelDraft,
 } from './journal-entries'
 import {
   auditTrailList,
@@ -182,6 +183,7 @@ import {
   vatFilingsMark,
   vatFilingsUnmark,
 } from './vat-filings'
+import { agiFilingsMark } from './agi-filings'
 import {
   arsredovisningAddSignatory,
   arsredovisningCreateVersion,
@@ -329,6 +331,7 @@ export const OPERATIONS: readonly AnyOperation[] = [
   importsSkattekontoFile,
   // journal-entries
   journalEntriesUpdateDraft,
+  journalEntriesCancelDraft,
   journalEntriesSetNote,
   journalEntriesCorrectMetadata,
   journalEntriesStrikeLines,
@@ -354,6 +357,8 @@ export const OPERATIONS: readonly AnyOperation[] = [
   vatFilingsList,
   vatFilingsMark,
   vatFilingsUnmark,
+  // agi-filings (MCP only: the dashboard completes a deadline by id)
+  agiFilingsMark,
   // arsredovisning
   arsredovisningUpdateNarrative,
   arsredovisningUpdateCompliance,

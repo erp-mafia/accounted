@@ -107,6 +107,73 @@ describe('findOpeningBalanceFloor', () => {
     expect(await findOpeningBalanceFloor(supabase as never, 'company-1', '1630', '2026-09-27')).toBeNull()
   })
 
+  // Agent feedback seq 897389: an SIE import left a duplicated IB and the
+  // entry undoing it on the same fiscal-year start, both opening_balance. The
+  // pair nets to 0 on the account, so it restates nothing: flooring at it
+  // dropped every earlier year and the reconciliation disagreed with the
+  // huvudbok by exactly that history.
+  it('skips a date whose IB entries cancel to zero, and returns null when no date is left', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [ib('m1', '2021-01-01'), ib('m2', '2021-01-01')] })
+    enqueue({
+      data: [
+        { id: 'l1', journal_entry_id: 'm1', debit_amount: 4000, credit_amount: 0 },
+        { id: 'l2', journal_entry_id: 'm2', debit_amount: 0, credit_amount: 4000 },
+      ],
+    })
+    enqueue({ data: [{ period_start: '2021-01-01' }] })
+
+    expect(await findOpeningBalanceFloor(supabase as never, 'company-1', '1630', '2026-09-27')).toBeNull()
+    // Null makes the caller sum all history, exactly as the huvudbok does.
+    expect(findCalls('fiscal_periods', 'in')).toEqual([['period_start', ['2021-01-01']]])
+  })
+
+  it('walks past a cancelling pair to the latest real IB below it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [ib('ib-2020', '2020-01-01'), ib('m1', '2021-01-01'), ib('m2', '2021-01-01')] })
+    enqueue({
+      data: [
+        { id: 'l0', journal_entry_id: 'ib-2020', debit_amount: 1200.5, credit_amount: 0 },
+        { id: 'l1', journal_entry_id: 'm1', debit_amount: 4000, credit_amount: 0 },
+        { id: 'l2', journal_entry_id: 'm2', debit_amount: 0, credit_amount: 4000 },
+      ],
+    })
+    enqueue({ data: [{ period_start: '2020-01-01' }, { period_start: '2021-01-01' }] })
+
+    expect(await findOpeningBalanceFloor(supabase as never, 'company-1', '1630', '2026-09-27')).toEqual({
+      date: '2020-01-01',
+      amount: 1200.5,
+      entryIds: ['ib-2020'],
+    })
+  })
+
+  it('still floors at a single IB entry, and at two same-date entries that do not cancel', async () => {
+    const single = createQueuedMockSupabase()
+    single.enqueue({ data: [ib('ib-2026', '2026-01-01')] })
+    single.enqueue({ data: [{ id: 'l1', journal_entry_id: 'ib-2026', debit_amount: 0, credit_amount: 0 }] })
+    single.enqueue({ data: [{ period_start: '2026-01-01' }] })
+    // One entry is never skipped, even when it nets to zero on the account.
+    expect(await findOpeningBalanceFloor(single.supabase as never, 'company-1', '1630', '2026-09-27')).toEqual({
+      date: '2026-01-01',
+      amount: 0,
+      entryIds: ['ib-2026'],
+    })
+
+    const pair = createQueuedMockSupabase()
+    pair.enqueue({ data: [ib('a', '2026-01-01'), ib('b', '2026-01-01')] })
+    pair.enqueue({
+      data: [
+        { id: 'l1', journal_entry_id: 'a', debit_amount: 500, credit_amount: 0 },
+        { id: 'l2', journal_entry_id: 'b', debit_amount: 0, credit_amount: 499.99 },
+      ],
+    })
+    pair.enqueue({ data: [{ period_start: '2026-01-01' }] })
+    const floor = await findOpeningBalanceFloor(pair.supabase as never, 'company-1', '1630', '2026-09-27')
+    expect(floor?.date).toBe('2026-01-01')
+    expect(floor?.amount).toBe(0.01)
+    expect(floor?.entryIds.sort()).toEqual(['a', 'b'])
+  })
+
   it('throws on a read failure instead of guessing the floor', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [ib('ib-2026', '2026-01-01')] })

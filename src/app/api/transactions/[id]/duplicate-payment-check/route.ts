@@ -68,6 +68,9 @@ export const GET = withRouteContext(
         transactionCurrency: transaction.currency ?? null,
         transactionAmountSek: transaction.amount_sek ?? null,
         transactionExchangeRate: transaction.exchange_rate ?? null,
+        // Scoped to the account the money landed on, like the set detector
+        // below: a 1686 row is never a duplicate of a 1930 voucher.
+        cashAccountId: transaction.cash_account_id ?? null,
       })
     } catch (err) {
       log.warn('duplicate-payment-voucher detection failed', err as Error)

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { previewPath } from '@/lib/documents/preview'
+import { DocumentAlreadyLinkedError, isDocumentImmutabilityRefusal } from '@/lib/documents/link-holder'
 import { ALLOWED_DOCUMENT_TYPES } from '@/lib/documents/upload-types'
 import {
   DOCUMENT_DELETE_REFUSALS,
@@ -1269,6 +1270,10 @@ export async function linkToJournalEntry(
     .single()
 
   if (error) {
+    // The immutability trigger refuses any change of a set link, whatever
+    // the holding verifikat's status. That is a conflict the caller can name,
+    // not a server failure: typed so every surface answers 409.
+    if (isDocumentImmutabilityRefusal(error.message)) throw new DocumentAlreadyLinkedError(documentId)
     throw new Error(`Failed to link document: ${error.message}`)
   }
 

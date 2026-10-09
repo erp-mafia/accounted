@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { tools } from '../server'
 import {
   RECOMMENDED_WORKFLOW_LOADOUTS,
+  WORKFLOW_SKILLS_WITHOUT_LOADOUT,
   annotateLoadoutTools,
   assertRecommendedLoadoutsValid,
   type RecommendedToolEntry,
@@ -600,6 +601,46 @@ describe('recommended_tools workflow loadouts (issue #1098)', () => {
     const slugs = new Set(workflowSkills.map((s) => s.slug))
     for (const loadout of RECOMMENDED_WORKFLOW_LOADOUTS) {
       expect(slugs.has(loadout.skill), `workflow "${loadout.workflow}" skill "${loadout.skill}"`).toBe(true)
+    }
+  })
+
+  // Agent feedback seq 841832: bookkeep (#2982) shipped with no loadout and
+  // categorize_month kept naming bank-reconciliation. A new workflow skill now
+  // has to be named by a loadout or listed, with a reason, as having none.
+  it('every workflow skill is named by a loadout or sits on the explicit no-loadout list', () => {
+    const named = new Set(RECOMMENDED_WORKFLOW_LOADOUTS.map((l) => l.skill))
+    const unaccounted = workflowSkills
+      .filter((s) => s.itemKind !== 'analysis')
+      .map((s) => s.slug)
+      .filter((slug) => !named.has(slug) && !(slug in WORKFLOW_SKILLS_WITHOUT_LOADOUT))
+    expect(
+      unaccounted,
+      'name these skills in a loadout or add them to WORKFLOW_SKILLS_WITHOUT_LOADOUT (recommended-tools.ts) with a reason',
+    ).toEqual([])
+  })
+
+  it('the no-loadout list holds only real workflow skills that no loadout names', () => {
+    const slugs = new Set(workflowSkills.map((s) => s.slug))
+    const named = new Set(RECOMMENDED_WORKFLOW_LOADOUTS.map((l) => l.skill))
+    for (const [slug, reason] of Object.entries(WORKFLOW_SKILLS_WITHOUT_LOADOUT)) {
+      expect(slugs.has(slug), `${slug} is not a workflow skill`).toBe(true)
+      expect(named.has(slug), `${slug} is named by a loadout; drop it from the list`).toBe(false)
+      expect(reason.length, slug).toBeGreaterThan(0)
+    }
+  })
+
+  it('categorize_month names bookkeep and the underlag and bulk tools that skill uses', () => {
+    const categorize = RECOMMENDED_WORKFLOW_LOADOUTS.find((l) => l.workflow === 'categorize_month')!
+    expect(categorize.skill).toBe('bookkeep')
+    const bookkeep = workflowSkills.find((s) => s.slug === 'bookkeep')!
+    for (const name of [
+      'gnubok_list_unmatched_documents',
+      'gnubok_get_document_content',
+      'gnubok_bulk_book_transactions',
+      'gnubok_attach_document_to_transaction',
+    ]) {
+      expect(categorize.tools, name).toContain(name)
+      expect(bookkeep.body, name).toContain(name)
     }
   })
 

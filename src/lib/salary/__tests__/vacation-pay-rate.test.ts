@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  vacationDaysFromInput,
   resolveVacationPayRate,
   statutoryVacationPayRate,
   vacationPayRateFromPercentInput,
@@ -63,5 +64,21 @@ describe('form conversion', () => {
     expect(vacationPayRateToPercent(null)).toBe('')
     expect(vacationPayRateToPercent(undefined)).toBe('')
     expect(vacationPayRateToPercent(vacationPayRateFromPercentInput('13,5'))).toBe(13.5)
+  })
+})
+
+describe('vacationDaysFromInput (agent feedback seq 828138)', () => {
+  it('keeps an entered 0 instead of turning it into the default', () => {
+    expect(vacationDaysFromInput('0')).toBe(0)
+  })
+
+  it('reads a normal value', () => {
+    expect(vacationDaysFromInput(' 30 ')).toBe(30)
+  })
+
+  it('reads an empty, missing or unparseable field as null', () => {
+    expect(vacationDaysFromInput('')).toBeNull()
+    expect(vacationDaysFromInput(null)).toBeNull()
+    expect(vacationDaysFromInput('abc')).toBeNull()
   })
 })

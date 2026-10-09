@@ -313,6 +313,29 @@ describe('buildInvoiceWriteData', () => {
     expect(result.invoiceFields.vat_amount).toBe(250)
     expect(result.items[0]).toMatchObject({ line_type: 'text', line_total: 0, vat_amount: 0 })
   })
+
+  it('stores öre-exact line and header amounts for a three-decimal unit price', async () => {
+    // A three-decimal net price: the line used to store 99.999 and the header
+    // total 124.999, which no payment of 125.00 could match (agent feedback
+    // seq 965009).
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'individual' })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [{ description: 'Deposition', quantity: 3, unit: 'st', unit_price: 33.333, vat_rate: 25 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items[0]).toMatchObject({ line_total: 100, vat_amount: 25 })
+    expect(result.invoiceFields.subtotal).toBe(100)
+    expect(result.invoiceFields.vat_amount).toBe(25)
+    expect(result.invoiceFields.total).toBe(125)
+    expect(result.invoiceFields.total_sek).toBe(125)
+    expect(result.invoiceFields.remaining_amount).toBe(125)
+  })
 })
 
 describe('buildInvoiceWriteData stored ROT/RUT personnummer (edit path)', () => {

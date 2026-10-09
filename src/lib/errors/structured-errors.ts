@@ -374,6 +374,26 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
         'Storno the posted entry with POST /api/v1/companies/{companyId}/journal-entries/{id}/reverse. Cancelling a draft that is already cancelled succeeds: the endpoint is idempotent.',
     },
   },
+  DRAFT_HAS_DOCUMENTS: {
+    httpStatus: 409,
+    message_sv:
+      'Utkastet har bilagor som inte kan flyttas när utkastet har makulerats. Bokför utkastet, eller kontakta supporten.',
+    message_en:
+      'The draft holds documents that can never be moved to another verifikat once the draft is cancelled. Book the draft, or contact support.',
+    remediation: {
+      description:
+        'Do not cancel this draft. details.documents lists its underlag. Ask the user to book the draft (commit it), or to contact support to move the documents first.',
+    },
+  },
+  JOURNAL_ENTRY_ALREADY_CANCELLED: {
+    httpStatus: 409,
+    message_sv: 'Utkastet är redan makulerat. Det finns inget kvar att göra.',
+    message_en: 'The draft is already cancelled. There is nothing left to do.',
+    remediation: {
+      description:
+        'Nothing to stage or approve: the draft no longer blocks the year-end close. Re-run gnubok_year_end_readiness to see what remains.',
+    },
+  },
   ENTRY_ALREADY_REVERSED: {
     httpStatus: 409,
     message_sv:
@@ -790,6 +810,21 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_en:
       'Could not fetch the exchange rate from Riksbanken. The verifikation must be posted in SEK.',
     retryable: true,
+  },
+  // A foreign-currency bank row with neither amount_sek nor exchange_rate
+  // (the rate lookup failed at ingest, or the currency had no Riksbanken
+  // series then). Booking it used to post the raw foreign amount as kronor.
+  TX_MISSING_SEK_VALUE: {
+    httpStatus: 400,
+    message_sv:
+      'Transaktionen är i utländsk valuta men saknar SEK-belopp och växelkurs, så den kan inte bokföras: verifikationen måste vara i kronor. Hämta växelkursen för transaktionsdatumet och försök igen.',
+    message_en:
+      'The transaction is in a foreign currency but has neither amount_sek nor exchange_rate, so it cannot be booked: the verifikation must be in SEK. Fetch the exchange rate for the transaction date, then retry.',
+    remediation: {
+      description:
+        'POST /api/v1/companies/{companyId}/transactions/{id}/refresh-exchange-rate (operation transactions.refresh-exchange-rate) fetches the Riksbanken rate for the transaction date and stores amount_sek and exchange_rate on the unbooked row; then retry the same booking. In the app, the booking dialog fetches the rate automatically when it opens the row. A currency Riksbanken does not publish answers TX_EXCHANGE_RATE_UNAVAILABLE: book that row as a manual verifikat with the SEK amount from the bank statement.',
+    },
+    retryable: false,
   },
 }
 
@@ -3016,6 +3051,26 @@ const VAT_FILING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Inlämningsdatumet kan inte ligga i framtiden.',
     message_en: 'The filing date cannot be in the future.',
   },
+  AGI_DEADLINE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Företaget har ingen deadline för arbetsgivardeklarationen den månaden.',
+    message_en: 'The company has no arbetsgivardeklaration deadline for that month.',
+    remediation: {
+      description:
+        'Check the month (the redovisningsperiod, not the month the deadline falls in). AGI deadlines exist for the months the company is registered as an employer (Inställningar); nothing needs marking for a month without one.',
+    },
+  },
+  AGI_FILING_DATE_IN_FUTURE: {
+    httpStatus: 400,
+    message_sv: 'Inlämningsdatumet kan inte ligga i framtiden.',
+    message_en: 'The filing date cannot be in the future.',
+  },
+  AGI_FILING_MARK_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Det gick inte att markera arbetsgivardeklarationen som inlämnad. Försök igen.',
+    message_en: 'The AGI period could not be marked as filed.',
+    retryable: true,
+  },
   VAT_FILING_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Perioden är inte markerad som inlämnad.',
@@ -4587,6 +4642,20 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
       description:
         'Choose a BAS account for each line from the underlag and stage again with line_overrides[].account_number. No account is ever guessed.',
       tool: 'gnubok_create_supplier_invoice_from_inbox',
+    },
+  },
+  // Feedback seq 983757: the inbox door staged lines incl. VAT as net and
+  // credited 2440 with more than the invoice total.
+  SI_CREATE_TOTALS_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturaraderna inklusive moms stämmer inte med fakturans totalbelopp. Rätta raderna efter underlaget och försök igen.',
+    message_en:
+      'The invoice lines including VAT do not add up to the invoice total. Correct the lines from the underlag and try again.',
+    remediation: {
+      description:
+        'Correct lineItems in extracted_data from the underlag: lineTotal is each line amount excluding Swedish VAT, with vatRate 25, 12, 6 or 0. VAT at a foreign rate is not deductible in Sweden and is part of the cost: give that line its amount including the foreign VAT with vatRate 0. Never lower totals.total below what the invoice bills. Then stage again.',
+      tool: 'gnubok_set_inbox_extracted_data',
     },
   },
   SI_CREATE_NO_FISCAL_PERIOD: {
@@ -6815,6 +6884,24 @@ const RECONCILIATION_SIGNOFF: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Link refusals of the account-keyed reconciliation surface
+// (lib/reconciliation/actions.ts) that are not amounts or shapes. A skipped
+// pair carries the bank engine's own Swedish sentence; this entry is what the
+// envelope says when the code is the whole answer (a committed
+// reconciliation_match whose every pair was refused).
+const RECONCILIATION_LINK: Record<string, StructuredErrorEntry> = {
+  // The bank-anchor guard (PT409 BANK_ANCHOR_*) refused the link write. Was
+  // UNKNOWN with "Försök igen", and the retry failed the same way every time
+  // (agent feedback seq 853921, 877706).
+  BANK_ANCHOR_REFUSED: {
+    httpStatus: 409,
+    message_sv:
+      'Kopplingen nekades: en verifikation bokför inte beloppet på bankkontot åt samma håll som transaktionen (vid en delning: som sin del av den), eller så har transaktionens bankkonto ändrats. Kontrollera verifikationen och bankkontot innan du försöker igen.',
+    message_en:
+      'The database refused the bank link: a voucher does not book the amount on the bank ledger in the direction of the transaction (in a 1:N split: of its own slice), or the bank account of the transaction changed. Check the vouchers and the bank account; retrying the same request will not succeed.',
+  },
+}
+
 // Company settings (lib/company/settings-service.ts): the cross-field rules
 // every settings door applies. message_sv is the exact sentence the
 // dashboard's PUT /api/settings has always answered.
@@ -6898,6 +6985,16 @@ const DB_CONFLICTS = {
       'Verifikationen bokför inte transaktionens belopp på bankkontot åt rätt håll, så transaktionen kan inte kopplas till den. Ett uttag ska stå i kredit på bankkontot och en insättning i debet.',
     message_en:
       'The voucher does not book the transaction amount on the bank ledger in the bank direction, so the transaction cannot be linked to it: a withdrawal must credit the bank ledger, a deposit must debit it.',
+  },
+  // 20261006121004: bank_line slices against the row's direction that do not
+  // add up to the row (a lone opposite-sign slice, one sibling of a mixed
+  // split removed or moved away).
+  BANK_ANCHOR_SPLIT_UNBALANCED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är fördelad på verifikationer i båda riktningar, och delarna blir inte tillsammans transaktionens belopp. Koppla bort transaktionen och fördela hela beloppet igen.',
+    message_en:
+      'The bank row is split over vouchers in both directions and the slices do not add up to its amount. Unlink the row and split the whole amount again.',
   },
   BANK_ANCHOR_CASH_ACCOUNT_CHANGED: {
     httpStatus: 409,
@@ -6984,6 +7081,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...COMPANY_SETTINGS,
   ...WEBSHOP_ORDERS,
   ...RECONCILIATION_SIGNOFF,
+  ...RECONCILIATION_LINK,
   ...NODE_SYSTEM,
 }
 

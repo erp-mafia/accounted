@@ -1,7 +1,28 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+// The 1650 balance behind the VAT-refund routing (floor + sum); both are
+// covered in lib/reconciliation/__tests__/gl-balance.test.ts, and one test
+// below runs the real pair end to end.
+const sumAccountBalanceMock = vi.fn()
+const findOpeningBalanceFloorMock = vi.fn()
+vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/reconciliation/gl-balance')>()
+  return {
+    ...actual,
+    sumAccountBalance: (...args: unknown[]) => sumAccountBalanceMock(...args),
+    findOpeningBalanceFloor: (...args: unknown[]) => findOpeningBalanceFloorMock(...args),
+  }
+})
+
 import { guessCounterAccount } from '../lib/skattekonto-booking'
+
+beforeEach(() => {
+  sumAccountBalanceMock.mockReset()
+  findOpeningBalanceFloorMock.mockReset()
+  findOpeningBalanceFloorMock.mockResolvedValue(null)
+})
 
 /**
  * System seeds mirror supabase/migrations/20260519100000_skattekonto_rules.sql
@@ -294,5 +315,155 @@ describe('guessCounterAccount', () => {
     expect(
       await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Inbetalning bokförd', 'aktiebolag'),
     ).toBeNull()
+  })
+})
+
+// Agent feedback seq 975032: the momsavräkning books a net VAT receivable as
+// D 1650, and the seed rule sent Skatteverket's refund to K 2650, leaving 1650
+// open and a phantom VAT debt on 2650. The refund now clears 1650 while 1650
+// holds a debit balance on the event date.
+describe('guessCounterAccount: a VAT refund clears the 1650 receivable', () => {
+  const refundText = 'Moms juli 2026 - sept 2026'
+  const guess = (supabase: unknown, text: string, belopp: number) =>
+    guessCounterAccount(supabase as SupabaseClient, 'company-1', text, 'aktiebolag', belopp, false, '2026-10-05')
+
+  it('credits 1650 when the settlement left a receivable there', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    sumAccountBalanceMock.mockResolvedValue(1240)
+
+    const match = await guess(supabase, refundText, 1240)
+
+    expect(match).toEqual({ account: '1650', label: 'Momsfordran' })
+    expect(sumAccountBalanceMock).toHaveBeenCalledWith(supabase, 'company-1', '1650', { cutoffDate: '2026-10-05' })
+  })
+
+  it('keeps 2650 when 1650 holds no receivable', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    sumAccountBalanceMock.mockResolvedValue(0)
+
+    expect((await guess(supabase, refundText, 1240))?.account).toBe('2650')
+  })
+
+  it('keeps 2650 for a VAT charge (negative event) without reading 1650', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    sumAccountBalanceMock.mockResolvedValue(1240)
+
+    expect((await guess(supabase, refundText, -1240))?.account).toBe('2650')
+    expect(sumAccountBalanceMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps 2650 for an omprövning or beslut, which re-assesses an earlier period', async () => {
+    sumAccountBalanceMock.mockResolvedValue(1240)
+    for (const text of ['Omprövning av momsdeklaration', 'Beslut moms 2026-06']) {
+      const { supabase, enqueue } = makeSupabase()
+      enqueue({ data: SEED_RULES })
+      expect((await guess(supabase, text, 1240))?.account).toBe('2650')
+    }
+    expect(sumAccountBalanceMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps 2650 when the 1650 read fails', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    sumAccountBalanceMock.mockResolvedValue(null)
+
+    expect((await guess(supabase, refundText, 1240))?.account).toBe('2650')
+  })
+
+  it('reads 1650 from the latest ingående balans, never over the years it restates', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    findOpeningBalanceFloorMock.mockResolvedValue({ date: '2026-01-01', amount: 3000, entryIds: ['ib-2026'] })
+    sumAccountBalanceMock.mockResolvedValue(1240)
+
+    expect((await guess(supabase, refundText, 1240))?.account).toBe('1650')
+    expect(findOpeningBalanceFloorMock).toHaveBeenCalledWith(supabase, 'company-1', '1650', '2026-10-05')
+    expect(sumAccountBalanceMock).toHaveBeenCalledWith(supabase, 'company-1', '1650', {
+      fromDate: '2026-01-01',
+      cutoffDate: '2026-10-05',
+    })
+  })
+
+  it('keeps 2650 without summing when the IB read fails', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    findOpeningBalanceFloorMock.mockRejectedValue(new Error('statement timeout'))
+    sumAccountBalanceMock.mockResolvedValue(1240)
+
+    expect((await guess(supabase, refundText, 1240))?.account).toBe('2650')
+    expect(sumAccountBalanceMock).not.toHaveBeenCalled()
+  })
+
+  it('clears 1650 within 1 kr either way and carries the gap as 3740 rounding', async () => {
+    const cases: Array<[number, number, { account: string; oreRounding?: number }]> = [
+      // [refund, receivable on 1650, expected]
+      [1241, 1240, { account: '1650', oreRounding: 1 }], // refund 1 kr above: K 3740
+      [1239, 1240, { account: '1650', oreRounding: -1 }], // refund 1 kr below: D 3740
+      [1240.3, 1240, { account: '1650', oreRounding: 0.3 }],
+      [1240, 1240, { account: '1650' }], // exact: no rounding line
+      [1242, 1240, { account: '2650' }], // 2 kr above: no rounding, rule account
+      [1238, 1240, { account: '2650' }], // 2 kr below
+      [1240, 3000, { account: '2650' }], // a receivable far larger than the refund
+    ]
+    for (const [refund, receivable, expected] of cases) {
+      const { supabase, enqueue } = makeSupabase()
+      enqueue({ data: SEED_RULES })
+      sumAccountBalanceMock.mockResolvedValue(receivable)
+      const match = await guess(supabase, refundText, refund)
+      expect({ account: match?.account, oreRounding: match?.oreRounding }, `${refund} vs ${receivable}`).toEqual({
+        account: expected.account,
+        oreRounding: expected.oreRounding,
+      })
+    }
+  })
+
+  it("keeps a company's own rule that points at 2650: only the system seed is re-routed", async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({
+      data: [
+        {
+          id: 'own-1', company_id: 'company-1', priority: 5, pattern: 'moms',
+          amount_min: null, amount_max: null, company_type: 'all',
+          counter_account: '2650', counter_account_ef: null,
+          label: 'Egen momsregel', active: true, requires_employer: false,
+        },
+        ...SEED_RULES,
+      ],
+    })
+    sumAccountBalanceMock.mockResolvedValue(1240)
+
+    expect(await guess(supabase, refundText, 1240)).toEqual({ account: '2650', label: 'Egen momsregel' })
+    expect(sumAccountBalanceMock).not.toHaveBeenCalled()
+  })
+
+  // Review of MR !34: an unfloored sum counts the year an IB restates twice.
+  // FY2025 left D 3000 on 1650, the IB repeats it on 2026-01-01, and a refund
+  // in February cleared it. The floored balance on a later refund is 0 (the
+  // unfloored one would still say 3000), so the later refund keeps 2650.
+  it('end to end with the real floor and sum: a receivable a refund already cleared is not found again', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/reconciliation/gl-balance')>('@/lib/reconciliation/gl-balance')
+    findOpeningBalanceFloorMock.mockImplementation(actual.findOpeningBalanceFloor)
+    sumAccountBalanceMock.mockImplementation(actual.sumAccountBalance)
+    const { supabase, enqueue, findCalls } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    // findOpeningBalanceFloor: the IB entries on 1650, their lines, the fiscal years.
+    enqueue({ data: [{ id: 'ib-2026', entry_date: '2026-01-01', status: 'posted', source_type: 'opening_balance' }] })
+    enqueue({ data: [{ id: 'l1', journal_entry_id: 'ib-2026', debit_amount: 3000, credit_amount: 0 }] })
+    enqueue({ data: [{ period_start: '2026-01-01' }] })
+    // sumAccountBalance from the IB date: the IB and the February refund.
+    enqueue({ data: [{ id: 'ib-2026' }, { id: 'refund-feb' }] })
+    enqueue({
+      data: [
+        { id: 'l1', journal_entry_id: 'ib-2026', debit_amount: 3000, credit_amount: 0 },
+        { id: 'l2', journal_entry_id: 'refund-feb', debit_amount: 0, credit_amount: 3000 },
+      ],
+    })
+
+    expect((await guess(supabase, refundText, 1240))?.account).toBe('2650')
+    expect(findCalls('journal_entries', 'gte')).toContainEqual(['entry_date', '2026-01-01'])
+    expect(findCalls('journal_entries', 'lte')).toContainEqual(['entry_date', '2026-10-05'])
   })
 })

@@ -775,6 +775,9 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     const op = makePendingOp()
     op.params = {
       ...(op.params as Record<string, unknown>),
+      // The header matches the lines incl. VAT (the totals gate, feedback seq 983757).
+      subtotal: 1500,
+      total: 1750,
       items: [
         {
           line_number: 1,
@@ -973,6 +976,10 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox: dimensions
     op.params = {
       ...(op.params as Record<string, unknown>),
       default_dimensions: { '1': 'KS01' },
+      // The header matches the lines incl. VAT (the totals gate, feedback seq 983757).
+      subtotal: 1100,
+      vat_amount: 275,
+      total: 1375,
       items: [
         {
           line_number: 1,
@@ -1426,5 +1433,181 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox never guess
     expect(supabase.rpc).not.toHaveBeenCalled()
     expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
     expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('commitPendingOperation: create_supplier_invoice_from_inbox refuses a header the lines do not add up to (feedback seq 983757)', () => {
+  // The shape staged before the fix: a line printed incl. VAT staged as net
+  // with 25 % added on top, next to the document's own subtotal and total.
+  // The registration entry would credit 2440 with 1 840.78 against a billed
+  // 1 488.00 and book 353.16 on 2641 where the invoice carries 282.52.
+  const staleMismatch = {
+    ...(makePendingOp().params as Record<string, unknown>),
+    supplier_invoice_number: 'EL-2001',
+    subtotal: 1205.1,
+    vat_amount: 353.16,
+    total: 1488,
+    items: [
+      { line_number: 1, description: 'Förbrukning', quantity: 1, unit: 'st', unit_price: 1412.62, line_total: 1412.62, account_number: '5020', vat_rate: 0.25, vat_amount: 353.16 },
+      { line_number: 2, description: 'Avgift', quantity: 1, unit: 'st', unit_price: 75, line_total: 75, account_number: '6570', vat_rate: 0, vat_amount: 0 },
+    ],
+  }
+
+  it('refuses a stale mismatched op with 400 SI_CREATE_TOTALS_MISMATCH before an ankomstnummer is drawn', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null })
+    enqueue({ data: { id: 'supplier-1', name: 'Nätbolaget AB', supplier_type: 'swedish_business' }, error: null })
+    enqueue({ data: { accounting_method: 'accrual', vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp({ params: staleMismatch }))
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.code).toBe('SI_CREATE_TOTALS_MISMATCH')
+    expect(result.error).toMatch(/stämmer inte med fakturans totalbelopp/)
+    expect(result.error).toContain('1840.78')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+    expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  it('commits the same invoice as the fixed staging stages it: lines read as gross plus öresavrundning, 2440 credited with the billed total', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(makeJournalEntry({ id: 'je-gross' }))
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null })
+    enqueue({ data: { id: 'supplier-1', name: 'Nätbolaget AB', supplier_type: 'swedish_business' }, error: null })
+    enqueue({ data: { accounting_method: 'accrual', vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: 70, error: null }) // arrival number
+    enqueue({ data: makeSupplierInvoice({ id: 'inv-gross', supplier_invoice_number: 'EL-2001' }), error: null })
+    enqueue({ data: null, error: null }) // supplier_invoice_items insert
+    enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const [gross, fee] = staleMismatch.items
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        params: {
+          ...staleMismatch,
+          subtotal: 1205.48,
+          vat_amount: 282.52,
+          items: [
+            { ...gross, unit_price: 1130.1, line_total: 1130.1, vat_amount: 282.52 },
+            fee,
+            { line_number: 3, description: 'Öresavrundning', quantity: 1, unit: 'st', unit_price: 0.38, line_total: 0.38, account_number: '3740', vat_rate: 0, vat_amount: 0 },
+          ],
+        },
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(row).toMatchObject({ subtotal: 1205.48, vat_amount: 282.52, total: 1488, remaining_amount: 1488 })
+    const lines = await postedLines(row)
+    expect(lines.find((l) => l.account_number === '2641')?.debit_amount).toBe(282.52)
+    expect(lines.find((l) => l.account_number === '3740')?.debit_amount).toBe(0.38)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(1488)
+  })
+
+  it('lets per-line VAT rounding through: 120 lines of 9.98 at 25 % against the document total 1 497.00', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null })
+    enqueue({ data: { id: 'supplier-1', name: 'Grossisten AB', supplier_type: 'swedish_business' }, error: null })
+    enqueue({ data: { accounting_method: 'cash', vat_registered: true }, error: null }) // cash: no JE
+    enqueue({ data: 73, error: null }) // arrival number
+    enqueue({ data: makeSupplierInvoice({ id: 'inv-many', supplier_invoice_number: 'EL-2001' }), error: null })
+    enqueue({ data: null, error: null }) // supplier_invoice_items insert
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const items = Array.from({ length: 120 }, (_, i) => ({
+      line_number: i + 1, description: `Artikel ${i + 1}`, quantity: 1, unit: 'st',
+      unit_price: 9.98, line_total: 9.98, account_number: '4010', vat_rate: 0.25, vat_amount: 2.5,
+    }))
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { ...staleMismatch, subtotal: 1197.6, vat_amount: 300, total: 1497, items } }),
+    )
+
+    expect(result.status).toBe('committed')
+    const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(row.total).toBe(1497)
+  })
+
+  it('leaves reverse charge on its own path: the header is rebuilt from the items, so no mismatch is possible', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(makeJournalEntry({ id: 'je-rc' }))
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null })
+    enqueue({ data: { id: 'supplier-1', name: 'Utland Ltd', supplier_type: 'eu_business' }, error: null })
+    enqueue({ data: { accounting_method: 'accrual', vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: 71, error: null }) // arrival number
+    enqueue({ data: makeSupplierInvoice({ id: 'inv-rc-gate', supplier_invoice_number: 'EL-2001' }), error: null })
+    enqueue({ data: null, error: null }) // supplier_invoice_items insert
+    enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { ...staleMismatch, vat_treatment: 'reverse_charge' } }),
+    )
+
+    expect(result.status).toBe('committed')
+    const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(row).toMatchObject({ subtotal: 1487.62, vat_amount: 0, total: 1487.62 })
+  })
+})
+
+describe('commitPendingOperation: create_supplier_invoice_from_inbox writes the OCR (feedback seq 869949)', () => {
+  function enqueueCashCommit(enqueue: ReturnType<typeof createQueuedMockSupabase>['enqueue']) {
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null })
+    enqueue({ data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' }, error: null })
+    enqueue({ data: { accounting_method: 'cash' }, error: null }) // cash: no JE
+    enqueue({ data: 72, error: null }) // arrival number
+    enqueue({ data: makeSupplierInvoice({ id: 'inv-ocr', supplier_invoice_number: 'INV-100' }), error: null })
+    enqueue({ data: null, error: null }) // supplier_invoice_items insert
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+  }
+
+  it('inserts the staged payment_reference, trimmed', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueueCashCommit(enqueue)
+    const base = makePendingOp()
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { ...base.params, payment_reference: ' 4711000012345 ' } }),
+    )
+
+    expect(result.status).toBe('committed')
+    const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(row.payment_reference).toBe('4711000012345')
+  })
+
+  it('writes null for an op staged before the reference was carried', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueueCashCommit(enqueue)
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp())
+
+    expect(result.status).toBe('committed')
+    const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(row.payment_reference).toBeNull()
   })
 })

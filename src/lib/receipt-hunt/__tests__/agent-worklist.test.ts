@@ -228,6 +228,64 @@ describe('resolveAgentWorklist', () => {
     expect(result.inbox_address).toBeNull()
   })
 
+  it('pages with offset and next_offset over one stable ranking (feedback seq 957595)', async () => {
+    const supabase = mockSupabase(fixture(), { ok: true, total_count: 3, verifikat: VERIFIKAT })
+    const full = await resolveAgentWorklist(supabase, 'co-1')
+    expect(full.next_offset).toBeUndefined()
+
+    const first = await resolveAgentWorklist(supabase, 'co-1', { limit: 2 })
+    expect(first.next_offset).toBe(2)
+    const second = await resolveAgentWorklist(supabase, 'co-1', { limit: 2, offset: first.next_offset })
+    expect(second.next_offset).toBeUndefined()
+
+    const paged = [...first.items, ...second.items].map((i) => i.journal_entry_id ?? i.transaction_id)
+    expect(paged).toEqual(full.items.map((i) => i.journal_entry_id ?? i.transaction_id))
+    expect(second.total_count).toBe(full.total_count)
+  })
+
+  it('answers an empty page past the end instead of wrapping around', async () => {
+    const supabase = mockSupabase(fixture(), { ok: true, total_count: 3, verifikat: VERIFIKAT })
+    const result = await resolveAgentWorklist(supabase, 'co-1', { limit: 5, offset: 10 })
+
+    expect(result.items).toEqual([])
+    expect(result.next_offset).toBeUndefined()
+  })
+
+  it('ranks over more than one RPC page, so an older large verifikat is reachable', async () => {
+    // The RPC returns at most 100 rows, most recent first. The worklist used
+    // to rank only that first page, so nothing past it could ever be worked.
+    const row = (n: number, gross: number) => ({
+      journal_entry_id: `je-${n}`,
+      voucher_series: 'A',
+      voucher_number: n,
+      entry_date: '2026-03-01',
+      description: 'Kortköp',
+      source_type: 'bank_transaction',
+      gross_amount: gross,
+    })
+    const recent = Array.from({ length: 100 }, (_, i) => row(i + 1, 100 + i))
+    const older = [row(101, 50_000), ...Array.from({ length: 19 }, (_, i) => row(102 + i, 10))]
+    const supabase = mockSupabase({ ...fixture(), pending_operations: [] }, null)
+    const rpc = vi.fn((_fn: string, args: { p_offset: number }) =>
+      Promise.resolve({
+        data: { ok: true, total_count: 120, verifikat: args.p_offset === 0 ? recent : older },
+        error: null,
+      }),
+    )
+    ;(supabase as unknown as { rpc: unknown }).rpc = rpc
+    mockFetchCandidateTransactions.mockResolvedValue([])
+
+    const result = await resolveAgentWorklist(supabase, 'co-1', { limit: 100 })
+
+    expect(rpc.mock.calls.map(([, args]) => args.p_offset)).toEqual([0, 100])
+    expect(result.items[0].journal_entry_id).toBe('je-101')
+    expect(result.total_count).toBe(120)
+    expect(result.next_offset).toBe(100)
+    const rest = await resolveAgentWorklist(supabase, 'co-1', { limit: 100, offset: 100 })
+    expect(rest.items).toHaveLength(20)
+    expect(rest.next_offset).toBeUndefined()
+  })
+
   it('throws when the RPC reports not-ok', async () => {
     const supabase = mockSupabase(fixture(), { ok: false, code: 'forbidden' })
     await expect(resolveAgentWorklist(supabase, 'co-1')).rejects.toThrow('forbidden')

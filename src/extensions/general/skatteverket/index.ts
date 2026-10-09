@@ -78,6 +78,7 @@ import {
   agiLasPeriod,
   agiLasUppPeriod,
 } from './lib/agi-client'
+import { firstAgiKontrollMessage, summarizeAgiKontrollrapport } from './lib/agi-kontrollrapport'
 import {
   previewSkattekontoSync,
   runSkattekontoSync,
@@ -3369,8 +3370,15 @@ async function commitSubmitAgi(
         .eq('company_id', companyId).eq('salary_run_id', salaryRunId)
         .eq('period_year', periodYear).eq('period_month', periodMonth)
         .in('status', ['generated', 'pending_signature', 'exported'])
+      // Skatteverket's kontrollsvar rides along (personnummer masked) so the
+      // approver sees which fields were refused, not only that they were.
+      const kontrollrapport = summarizeAgiKontrollrapport(kontroll.data)
+      const firstError = firstAgiKontrollMessage(kontrollrapport)
       return { ok: false, code: 'AGI_KONTROLL_REJECTED', http_status: 422, recoverable: false,
-        error: 'Skatteverket avvisade AGI-underlaget vid kontroll. Åtgärda felen och generera om AGI:n.' }
+        error: firstError
+          ? `Skatteverket avvisade AGI-underlaget vid kontroll: ${firstError.replace(/[.\s]+$/, '')}. Åtgärda felen och generera om AGI:n.`
+          : 'Skatteverket avvisade AGI-underlaget vid kontroll. Åtgärda felen och generera om AGI:n.',
+        details: { kontrollrapport: kontrollrapport ?? { kontrollresultat_status: kontroll.data.status } } }
     }
 
     // 3. skapaGranskningsunderlag (lasPeriod=true) → Mina Sidor signing link.

@@ -298,10 +298,10 @@ export function buildMappingResultFromCategory(
   }
 
   // Journal entry lines are SEK; transaction.amount is in transaction.currency.
-  // The lenient resolver (not the OrNull sibling) is deliberate: it must agree
-  // with buildTransactionEntryLines, which nets these VAT lines against the
-  // same resolution of the gross. Disagreeing resolvers would unbalance the
-  // net line; agreeing ones keep legacy rateless rows exactly as before.
+  // buildTransactionEntryLines nets these VAT lines against the strict
+  // resolution of the gross, which agrees with this lenient one on every row
+  // it books: the two differ only on a foreign row with no SEK value, and that
+  // row is refused there (TX_MISSING_SEK_VALUE) before any line is posted.
   const absAmount = Math.abs(transaction.amount)
   const absSekAmount = Math.abs(resolveSekAmount(
     transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate

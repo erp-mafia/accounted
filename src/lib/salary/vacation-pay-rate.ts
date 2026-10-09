@@ -72,3 +72,16 @@ export function vacationPayRateToPercent(rate: number | null | undefined): numbe
   if (typeof rate !== 'number' || !Number.isFinite(rate)) return ''
   return roundOre(rate * 100)
 }
+
+/**
+ * Form helper for "Semesterdagar per år": 0 is a real value (vacation_rule
+ * none, e.g. a company owner outside semesterlagen), so only an empty or
+ * unparseable field reads as null (callers pick their default).
+ * `parseInt(...) || 25` turned an entered 0 into 25.
+ */
+export function vacationDaysFromInput(raw: unknown): number | null {
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  if (text === '') return null
+  const days = Number.parseInt(text, 10)
+  return Number.isFinite(days) ? days : null
+}

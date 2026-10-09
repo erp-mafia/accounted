@@ -7,13 +7,21 @@
  *     updateDraftEntry, which refuses anything but a draft (a posted entry
  *     is corrected with storno or inline rättelse, never edited);
  *   - the internal note (anteckning), annotation metadata the journal_entries
- *     immutability trigger allows on posted entries too.
+ *     immutability trigger allows on posted entries too;
+ *   - cancelling a DRAFT (v1 DELETE /journal-entries/{id} and the staged
+ *     gnubok_cancel_draft_entry) through the engine's cancelDraftEntry, which
+ *     refuses anything but a draft.
  *
  * Dry runs read and validate only: no header update, no line replacement, no
- * account backfill.
+ * account backfill, no cancel.
  */
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { assertLinesWellFormed, updateDraftEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import {
+  assertLinesWellFormed,
+  cancelDraftEntry,
+  updateDraftEntry,
+  validateBalance,
+} from '@/lib/bookkeeping/engine'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import {
@@ -140,6 +148,145 @@ async function previewDraftUpdate(
       })),
       will: 'replace the draft header and lines; the draft stays unposted and gets no voucher number until it is committed',
     },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Draft cancel
+// ---------------------------------------------------------------------------
+
+/** The header v1 GET /journal-entries/{id} answers, without the lines. */
+export const CANCEL_DRAFT_HEADER_COLUMNS =
+  'id, fiscal_period_id, voucher_series, voucher_number, entry_date, description, status, source_type, source_id, notes, reverses_id, reversed_by_id, correction_of_id, created_at, updated_at'
+
+export interface JournalEntryHeader {
+  id: string
+  fiscal_period_id: string
+  voucher_series: string
+  voucher_number: number | null
+  entry_date: string
+  description: string
+  status: string
+  source_type: string
+  source_id: string | null
+  notes: string | null
+  reverses_id: string | null
+  reversed_by_id: string | null
+  correction_of_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Cancel an uncommitted DRAFT verifikat: status draft to cancelled through the
+ * engine (a compare-and-set on status, so a concurrent commit wins). A draft
+ * holds no voucher number, so nothing leaves the löpande nummerordning
+ * (BFL 5 kap 7 §) and no gap needs explaining; the row and its lines stay as
+ * cancelled evidence. A posted or reversed entry is refused with
+ * CANNOT_CANCEL_NON_DRAFT: storno is its only way out. A draft behind a period
+ * lock or the company lock date answers PERIOD_LOCKED, the verdict the lock
+ * triggers would reach, before any write. A draft that holds underlag answers
+ * DRAFT_HAS_DOCUMENTS and lists them: a cancelled draft's documents can never
+ * be linked to another verifikat.
+ *
+ * Already cancelled answers the entry unchanged, on a dry run too: it is the
+ * end state the caller asked for, not a conflict.
+ */
+/** How many of a draft's documents a DRAFT_HAS_DOCUMENTS refusal lists by id. */
+const DRAFT_DOCUMENTS_LISTED = 20
+
+export async function cancelDraftJournalEntry(
+  ctx: OperationContext,
+  entryId: string,
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<JournalEntryHeader>> {
+  const { supabase, companyId } = ctx
+  const { data: existing, error: fetchError } = await supabase
+    .from('journal_entries')
+    .select(CANCEL_DRAFT_HEADER_COLUMNS)
+    .eq('company_id', companyId)
+    .eq('id', entryId)
+    .maybeSingle()
+  if (fetchError) return { ok: false, code: 'BOOKKEEPING_DATABASE_ERROR', error: fetchError }
+  if (!existing) return { ok: false, code: 'JOURNAL_ENTRY_NOT_FOUND' }
+  const entry = existing as unknown as JournalEntryHeader
+
+  if (entry.status === 'cancelled') return { ok: true, data: entry }
+  if (entry.status !== 'draft') {
+    return { ok: false, code: 'CANNOT_CANCEL_NON_DRAFT', details: { currentStatus: entry.status } }
+  }
+
+  // A draft can hold underlag, and enforce_document_journal_entry_immutability
+  // refuses re-pointing a document whose journal_entry_id is set (the
+  // correction relink covers posted entries only). Cancelled, the draft would
+  // keep its documents forever, and a re-upload dedups back to the stuck row.
+  const { data: docs, error: docsError, count: docCount } = await supabase
+    .from('document_attachments')
+    .select('id, file_name', { count: 'exact' })
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', entryId)
+    .eq('is_current_version', true)
+    .limit(DRAFT_DOCUMENTS_LISTED)
+  if (docsError) return { ok: false, code: 'BOOKKEEPING_DATABASE_ERROR', error: docsError }
+  const documents = ((docs ?? []) as Array<{ id: string; file_name: string | null }>).map((d) => ({
+    document_id: d.id,
+    file_name: d.file_name,
+  }))
+  const documentCount = Math.max(docCount ?? 0, documents.length)
+  if (documentCount > 0) {
+    return {
+      ok: false,
+      code: 'DRAFT_HAS_DOCUMENTS',
+      messageSv: `Utkastet har ${documentCount} ${documentCount === 1 ? 'bilaga' : 'bilagor'} som inte kan flyttas när utkastet har makulerats. Bokför utkastet, eller kontakta supporten.`,
+      details: { journal_entry_id: entryId, document_count: documentCount, documents },
+    }
+  }
+
+  // Checked before the dry-run branch so a preview never promises a cancel
+  // the lock triggers refuse.
+  const lock = await checkPeriodLock(supabase, companyId, entry.entry_date)
+  if (lock.locked) {
+    return {
+      ok: false,
+      code: 'PERIOD_LOCKED',
+      details: { reason: lock.reason, fiscal_period_id: lock.fiscal_period_id, entry_date: entry.entry_date },
+    }
+  }
+
+  if (options.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      preview: {
+        // `id` is the v1 dry-run key; journal_entry_id names it for agents.
+        id: entry.id,
+        journal_entry_id: entry.id,
+        voucher_series: entry.voucher_series,
+        entry_date: entry.entry_date,
+        description: entry.description,
+        source_type: entry.source_type,
+        status: 'cancelled',
+        current_status: entry.status,
+        would_release_voucher_number: false,
+      },
+    }
+  }
+
+  try {
+    const cancelled = await cancelDraftEntry(supabase, companyId, ctx.userId, entryId)
+    // Refetch the header columns so the answer has GET's shape rather than
+    // every column the engine selected.
+    const { data } = await supabase
+      .from('journal_entries')
+      .select(CANCEL_DRAFT_HEADER_COLUMNS)
+      .eq('company_id', companyId)
+      .eq('id', entryId)
+      .maybeSingle()
+    return { ok: true, data: (data ?? cancelled) as unknown as JournalEntryHeader }
+  } catch (err) {
+    if (isBookkeepingError(err)) return typedFailure(err)
+    ctx.log.error('cancel draft journal entry failed', err instanceof Error ? err : new Error(String(err)), { entryId })
+    return { ok: false, code: 'BOOKKEEPING_DATABASE_ERROR', details: { step: 'cancel' } }
   }
 }
 

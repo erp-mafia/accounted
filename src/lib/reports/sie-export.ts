@@ -68,10 +68,11 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
     throw new Error('Fiscal period not found')
   }
 
-  // Fetch previous fiscal year for #RAR -1 (per SIE spec, both years should be present)
+  // Fetch previous fiscal year for #RAR -1 (per SIE spec, both years should be
+  // present) and its #IB -1 / #UB -1 / #RES -1 balances below.
   const { data: prevPeriod } = await supabase
     .from('fiscal_periods')
-    .select('period_start, period_end')
+    .select('id, period_start, period_end, opening_balance_entry_id')
     .eq('company_id', companyId)
     .lt('period_end', period.period_start)
     .order('period_end', { ascending: false })
@@ -240,9 +241,75 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
     openingBalancesByAccount.set(accountNumber, amount)
   }
 
+  // The previous year's balances. #RAR -1 alone announces a year the file
+  // then says nothing about, and importers (årsredovisning programs) read an
+  // empty prior-year income statement and balance sheet from it.
+  // exclude_year_end_closing never applies here: it shapes year 0 for a
+  // receiver that closes that year itself, while year -1 is already closed and
+  // its closing is part of #IB 0. See computePriorYearBalances for the rules.
+  const priorYear = prevPeriod
+    ? await computePriorYearBalances(supabase, companyId, prevPeriod)
+    : null
+  if (priorYear) {
+    for (const [accountNumber, amount] of priorYear.openingBalances) {
+      lines.push(`#IB -1 ${accountNumber} ${formatAmount(amount)}`)
+    }
+  }
+
   // Exclude the OB entry from VER/TRANS and from movement calculations to
   // prevent double-counting: it is already represented by the #IB records above.
   const periodEntries = (entries as JournalEntry[])?.filter(e => e.id !== obEntryId) ?? []
+
+  // === Closing balances (UB for balance sheet, RES for income statement) ===
+  // Written with the other balance items, before the verifications, which is
+  // the record order SIE 4 prescribes (#IB, #UB, #RES, then #VER).
+  // Movement balances from journal entries
+  const movementBalances = calculateBalances(periodEntries)
+
+  // Merge all accounts that have either IB or movements
+  const allAccountNumbers = new Set([
+    ...openingBalancesByAccount.keys(),
+    ...movementBalances.keys(),
+  ])
+
+  const closingRecords: string[] = []
+  const resultRecords: string[] = []
+  for (const accountNumber of [...allAccountNumbers].sort()) {
+    const accountClass = parseInt(accountNumber[0])
+    const ib = openingBalancesByAccount.get(accountNumber) || 0
+    const movement = movementBalances.get(accountNumber) || 0
+
+    if (accountClass <= 2) {
+      // Balance sheet: UB = IB + movements during period
+      const ub = Math.round((ib + movement) * 100) / 100
+      closingRecords.push(`#UB 0 ${accountNumber} ${formatAmount(ub)}`)
+    } else {
+      // Income statement: RES = movements only (IB should be zero)
+      resultRecords.push(`#RES 0 ${accountNumber} ${formatAmount(movement)}`)
+    }
+  }
+
+  const priorClosingRecords: string[] = []
+  const priorResultRecords: string[] = []
+  if (priorYear) {
+    const priorAccountNumbers = new Set([
+      ...priorYear.openingBalances.keys(),
+      ...priorYear.movements.keys(),
+    ])
+    for (const accountNumber of [...priorAccountNumbers].sort()) {
+      const accountClass = parseInt(accountNumber[0])
+      if (accountClass <= 2) {
+        const ib = priorYear.openingBalances.get(accountNumber) || 0
+        const movement = priorYear.movements.get(accountNumber) || 0
+        priorClosingRecords.push(`#UB -1 ${accountNumber} ${formatAmount(Math.round((ib + movement) * 100) / 100)}`)
+      } else {
+        const result = priorYear.resultMovements.get(accountNumber) || 0
+        priorResultRecords.push(`#RES -1 ${accountNumber} ${formatAmount(result)}`)
+      }
+    }
+  }
+
+  lines.push(...closingRecords, ...priorClosingRecords, ...resultRecords, ...priorResultRecords)
 
   // === Journal entries (VER + TRANS) ===
   for (const entry of periodEntries) {
@@ -278,32 +345,95 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
     lines.push('}')
   }
 
-  // === Closing balances (UB for balance sheet, RES for income statement) ===
-  // Movement balances from journal entries
-  const movementBalances = calculateBalances(periodEntries)
+  return lines.join('\r\n') + '\r\n'
+}
 
-  // Merge all accounts that have either IB or movements
-  const allAccountNumbers = new Set([
-    ...openingBalancesByAccount.keys(),
-    ...movementBalances.keys(),
-  ])
-
-  for (const accountNumber of [...allAccountNumbers].sort()) {
-    const accountClass = parseInt(accountNumber[0])
-    const ib = openingBalancesByAccount.get(accountNumber) || 0
-    const movement = movementBalances.get(accountNumber) || 0
-
-    if (accountClass <= 2) {
-      // Balance sheet: UB = IB + movements during period
-      const ub = Math.round((ib + movement) * 100) / 100
-      lines.push(`#UB 0 ${accountNumber} ${formatAmount(ub)}`)
-    } else {
-      // Income statement: RES = movements only (IB should be zero)
-      lines.push(`#RES 0 ${accountNumber} ${formatAmount(movement)}`)
-    }
+/**
+ * The previous fiscal year's balances for #IB -1 / #UB -1 / #RES -1.
+ *
+ * - openingBalances: non-zero IB per account, from getOpeningBalances (the
+ *   year's IB entry, or the compute_prior_opening_balances fallback), as for
+ *   year 0.
+ * - movements: every posted or reversed entry of the year except its IB
+ *   entry, closing included. #UB -1 = IB + these, which is exactly what the
+ *   next year opened from, so #UB -1 equals #IB 0 when the years are
+ *   continuous.
+ * - resultMovements: the same without the resultatavslut, as resolved by
+ *   result_closing_entry_ids (the linked closing_entry_id plus any closing
+ *   booked by hand or in a previous system). That is the statutory
+ *   pre-closing result the 'exclude-final' trial balance reads: depreciation,
+ *   tax and appropriations (also source_type 'year_end') stay in, and a
+ *   closed year's #RES -1 is not zeroed by the transfer to 2099.
+ *
+ * Every read paginates, so a large prior year is never truncated.
+ */
+async function computePriorYearBalances(
+  supabase: SupabaseClient,
+  companyId: string,
+  prevPeriod: { id: string; period_start: string; opening_balance_entry_id: string | null },
+): Promise<{
+  openingBalances: Map<string, number>
+  movements: Map<string, number>
+  resultMovements: Map<string, number>
+}> {
+  const { balances, obEntryId } = await getOpeningBalances(supabase, companyId, {
+    period_start: prevPeriod.period_start,
+    opening_balance_entry_id: prevPeriod.opening_balance_entry_id ?? null,
+  })
+  const openingBalances = new Map<string, number>()
+  for (const [accountNumber, { debit, credit }] of balances) {
+    const amount = Math.round(((Number(debit) || 0) - (Number(credit) || 0)) * 100) / 100
+    if (amount === 0) continue
+    openingBalances.set(accountNumber, amount)
   }
 
-  return lines.join('\r\n') + '\r\n'
+  const entries = await fetchAllRows<{ id: string }>(({ from, to }) =>
+    supabase
+      .from('journal_entries')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', prevPeriod.id)
+      .in('status', ['posted', 'reversed'])
+      .order('id', { ascending: true })
+      .range(from, to),
+    { dedupeBy: (r) => r.id },
+  )
+
+  const { data: closingIds, error: closingIdsError } = await supabase.rpc('result_closing_entry_ids', {
+    p_company_id: companyId,
+    p_fiscal_period_id: prevPeriod.id,
+  })
+  if (closingIdsError) throw new Error(closingIdsError.message)
+  const resultClosingEntryIds = new Set(Array.isArray(closingIds) ? (closingIds as string[]) : [])
+
+  const entryLines = await fetchLinesByEntryIds<{
+    id: string
+    journal_entry_id: string
+    account_number: string
+    debit_amount: number
+    credit_amount: number
+  }>(
+    supabase,
+    entries.map((e) => e.id).filter((id) => id !== obEntryId),
+    'id, journal_entry_id, account_number, debit_amount, credit_amount',
+  )
+
+  const movements = new Map<string, number>()
+  const resultMovements = new Map<string, number>()
+  for (const line of entryLines) {
+    const netAmount = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
+    movements.set(
+      line.account_number,
+      Math.round(((movements.get(line.account_number) || 0) + netAmount) * 100) / 100,
+    )
+    if (resultClosingEntryIds.has(line.journal_entry_id)) continue
+    resultMovements.set(
+      line.account_number,
+      Math.round(((resultMovements.get(line.account_number) || 0) + netAmount) * 100) / 100,
+    )
+  }
+
+  return { openingBalances, movements, resultMovements }
 }
 
 /**

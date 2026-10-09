@@ -9,10 +9,13 @@ import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 ensureInitialized()
 
-function errorResponse(code: string): NextResponse {
+function errorResponse(code: string, details?: Record<string, unknown>): NextResponse {
   const entry = getErrorEntry(code)
+  // A line rule names its own Swedish reason (details.message); the
+  // registry text alone only says the request was invalid.
+  const reason = typeof details?.message === 'string' ? details.message : null
   return NextResponse.json(
-    { error: entry?.message_sv ?? 'Något gick fel', code },
+    { error: reason ?? entry?.message_sv ?? 'Något gick fel', code },
     { status: entry?.httpStatus ?? 500 },
   )
 }
@@ -44,7 +47,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; lineId: st
       patch: validation.data,
     })
 
-    if (!result.ok) return errorResponse(result.code)
+    if (!result.ok) return errorResponse(result.code, result.details)
     return NextResponse.json({ data: result.data })
   },
   { requireWrite: true },

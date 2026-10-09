@@ -45,6 +45,7 @@ import { suggestPartiesForCompany } from '@/lib/parties/suggest'
 import { createLogger } from '@/lib/logger'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { completeInvoiceRows, type CompleteInvoiceRowsTrail } from '@/lib/invoices/complete-invoice-rows'
+import { advanceInvoiceSeriesPastImported } from '@/lib/invoices/invoice-number-series'
 import {
   linkMigratedRegistrationVouchers,
   type MigratedInvoiceLinkInput,
@@ -1204,6 +1205,32 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             }
             creditNotesLinked++
           }))
+        }
+
+        // Continue the invoice series after the imported ones: the counter
+        // stood at its start value, so the first invoice issued here restarted
+        // the old system's series at 001. Every listed invoice now in the
+        // register counts, whether this run or an earlier one imported it.
+        // A failed settings write never fails the import that landed.
+        try {
+          const series = await advanceInvoiceSeriesPastImported(
+            supabase,
+            companyId,
+            listed.map((inv) => inv.invoiceNumber).filter((n) => !!n && invoiceIdByNumber.has(n)),
+          )
+          if (series.advanced) {
+            log.info('invoice series advanced past imported invoices', { from: series.from, to: series.to })
+          } else if (series.reason === 'outlier') {
+            // A jump or a stray number: left for the user to set by hand.
+            log.warn('invoice series left unchanged: imported numbers look like an outlier', {
+              current: series.current,
+              highest: series.highest,
+            })
+          }
+        } catch (err) {
+          log.warn('invoice series not advanced after sales invoice import', {
+            error: err instanceof Error ? err.message : String(err),
+          })
         }
 
         if (excluded.length > 0) {

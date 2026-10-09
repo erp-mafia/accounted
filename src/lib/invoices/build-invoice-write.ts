@@ -12,6 +12,7 @@ import {
 import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { roundOre } from '@/lib/money'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import {
@@ -350,13 +351,15 @@ export async function buildInvoiceWriteData(params: {
 
   // Free-text rows carry no amounts and are excluded from totals + VAT.
   // Line totals are net of any per-line discount (rabatt i procent).
-  const subtotal = items.reduce(
+  // Öre-exact header: each line net is already in öre (computeLineNet), and
+  // the sums are rounded so float addition cannot leave a total like 999.9999999.
+  const subtotal = roundOre(items.reduce(
     (sum, item) =>
       item.line_type === 'text'
         ? sum
         : sum + computeLineNet(item.quantity, item.unit_price, item.discount_percent),
     0,
-  )
+  ))
 
   let vatAmount = 0
   if (documentType !== 'delivery_note') {
@@ -390,10 +393,12 @@ export async function buildInvoiceWriteData(params: {
         }
       }
       const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
-      vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
+      // Same per-line rounding as the item rows below (vat_amount), so the
+      // header always equals the sum of its lines.
+      vatAmount = roundOre(vatAmount + Math.round(lineTotal * itemRate / 100 * 100) / 100)
     }
   }
-  const total = documentType === 'delivery_note' ? 0 : subtotal + vatAmount
+  const total = documentType === 'delivery_note' ? 0 : roundOre(subtotal + vatAmount)
 
   // Validate any per-line posting-account override against the company's chart
   // of accounts. The legacy field name is revenue_account, but balance-sheet
@@ -672,7 +677,7 @@ export async function buildInvoiceWriteData(params: {
     // queries treat them as fully unpaid for the CUSTOMER's share: the
     // Skatteverket portion is on 1513 and clears when the agency pays out.
     // Proformas / delivery notes / quotes have no payment obligation → keep 0.
-    remaining_amount: documentType === 'invoice' ? total - deductionTotal : 0,
+    remaining_amount: documentType === 'invoice' ? roundOre(total - deductionTotal) : 0,
     vat_treatment: vatHeader.vat_treatment,
     vat_rate: documentType === 'delivery_note' ? 0 : (isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate)),
     moms_ruta: vatHeader.moms_ruta,

@@ -36,6 +36,12 @@ describe('CURRENCIES', () => {
     expect(CurrencySchema.safeParse('CHF').success).toBe(true)
   })
 
+  it('includes CAD (Riksbanken series SEKCADPMI)', () => {
+    expect(CURRENCIES).toContain('CAD')
+    expect(FOREIGN_CURRENCIES).toContain('CAD')
+    expect(CurrencySchema.safeParse('CAD').success).toBe(true)
+  })
+
   it('every foreign currency has a fallback rate and a symbol', async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async () => new Response('', { status: 503 })) as typeof fetch

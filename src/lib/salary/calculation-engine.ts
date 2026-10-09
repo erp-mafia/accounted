@@ -90,6 +90,18 @@ export interface SalaryCalculationInput {
   employmentEnd?: string | null
 }
 
+/**
+ * Line types summed into gross pay as additions (Step 2) when taxable and
+ * not a gross or net deduction. Exported so the payslip line commands can
+ * tell which lines the avgiftsunderlag always includes.
+ */
+export const ADDITION_ITEM_TYPES: readonly SalaryLineItemType[] = [
+  'overtime', 'overtime_50', 'overtime_100',
+  'ob_weekday_evening', 'ob_weekend', 'ob_night', 'ob_holiday',
+  'bonus', 'commission',
+  'other', 'correction', 'semesterersattning',
+]
+
 /** Row types Step 3 consumes as signed absence; Step 4 must never see them again. */
 const ABSENCE_ITEM_TYPES: ReadonlySet<string> = new Set([
   'sick_karens', 'sick_day2_14', 'sick_day15_plus', 'vab', 'parental_leave', 'unpaid_leave', 'vacation',
@@ -443,14 +455,8 @@ export function calculateSalary(
   // deductions belong to Steps 4 and 7 and rows that are not taxable are
   // not wages; neither is an addition. The engine-derived semesterersättning
   // row never reaches this list (run-calculation filters it by provenance).
-  const ADDITION_TYPES: SalaryLineItemType[] = [
-    'overtime', 'overtime_50', 'overtime_100',
-    'ob_weekday_evening', 'ob_weekend', 'ob_night', 'ob_holiday',
-    'bonus', 'commission',
-    'other', 'correction', 'semesterersattning',
-  ]
   const additions = input.lineItems.filter(
-    li => ADDITION_TYPES.includes(li.itemType) && li.isTaxable && !li.isGrossDeduction && !li.isNetDeduction
+    li => ADDITION_ITEM_TYPES.includes(li.itemType) && li.isTaxable && !li.isGrossDeduction && !li.isNetDeduction
   )
   const totalAdditions = r(additions.reduce((sum, li) => sum + li.amount, 0))
   if (totalAdditions !== 0) {

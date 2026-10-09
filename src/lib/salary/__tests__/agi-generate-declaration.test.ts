@@ -127,6 +127,75 @@ beforeEach(() => {
   eventBus.clear()
 })
 
+describe('generateAgiDeclaration: kontaktperson (agent feedback seq 948847)', () => {
+  function enqueueWithSettings(
+    enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
+    settings: Record<string, unknown>,
+  ) {
+    enqueueMany([
+      { data: RUN },
+      { data: COMPANY },
+      { data: settings },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [] }, // salary_absence_days
+      { data: null }, // agi_declarations maybeSingle
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs update
+    ])
+  }
+
+  it('uses the tax contact when the company has no phone, instead of refusing for telefon', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueWithSettings(enqueueMany, {
+      ...SETTINGS,
+      phone: null,
+      tax_contact_name: 'Kim Kontakt',
+      tax_contact_phone: '08-123 45 67',
+      tax_contact_email: 'skatt@test.se',
+    })
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<gem:Namn>Kim Kontakt</gem:Namn>')
+    expect(result.xml).toContain('<gem:Telefon>08-123 45 67</gem:Telefon>')
+    expect(result.xml).toContain('<gem:Epostadress>skatt@test.se</gem:Epostadress>')
+  })
+
+  it('prefers the tax contact over the company contact details', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueWithSettings(enqueueMany, {
+      ...SETTINGS,
+      tax_contact_name: 'Kim Kontakt',
+      tax_contact_phone: '08-123 45 67',
+      tax_contact_email: null,
+    })
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<gem:Telefon>08-123 45 67</gem:Telefon>')
+    expect(result.xml).not.toContain('0701234567')
+    // No tax contact e-mail: falls back to the company e-mail.
+    expect(result.xml).toContain('<gem:Epostadress>agi@test.se</gem:Epostadress>')
+  })
+
+  it('still refuses with AGI_INCOMPLETE_DATA when neither the company nor the tax contact has a phone', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueWithSettings(enqueueMany, { ...SETTINGS, phone: null, tax_contact_phone: '  ' })
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('AGI_INCOMPLETE_DATA')
+    expect((result.details as { missing_fields: string[] }).missing_fields).toContain('telefon')
+  })
+})
+
 describe('generateAgiDeclaration: redovisningsperiod follows the payout month (#2191)', () => {
   it('declares an August run paid 25 September under 202609, in the XML and the stored row', async () => {
     const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()

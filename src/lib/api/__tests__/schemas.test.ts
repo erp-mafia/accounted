@@ -179,7 +179,7 @@ describe('Enum schemas', () => {
   })
 
   it('CurrencySchema accepts supported currencies', () => {
-    for (const c of ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF']) {
+    for (const c of ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF', 'CAD']) {
       expect(CurrencySchema.safeParse(c).success).toBe(true)
     }
     expect(CurrencySchema.safeParse('JPY').success).toBe(false)
@@ -3606,5 +3606,55 @@ describe('CreateJournalEntryLineSchema: cost_center/project aliases follow the b
       const result = CreateJournalEntryLineSchema.safeParse(line(bad))
       expect(result.success).toBe(false)
     }
+  })
+})
+
+describe('vacation_days_per_year: 25-day minimum except with vacation_rule none (agent feedback seq 828138)', () => {
+  const owner = {
+    first_name: 'Test',
+    last_name: 'Testsson',
+    personnummer: '199001011234',
+    employment_type: 'company_owner' as const,
+    employment_start: '2026-01-01',
+    salary_type: 'monthly' as const,
+    monthly_salary: 30000,
+    f_skatt_status: 'a_skatt' as const,
+    is_sidoinkomst: false,
+    tax_table_number: 33,
+    tax_municipality: 'Stockholm',
+  }
+
+  it('accepts 0 days for a company owner with vacation_rule none', () => {
+    const result = CreateEmployeeSchema.safeParse({ ...owner, vacation_rule: 'none', vacation_days_per_year: 0 })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.vacation_days_per_year).toBe(0)
+  })
+
+  it('refuses 20 days under any other rule', () => {
+    for (const rule of ['procentregeln', 'sammaloneregeln', 'semesterersattning']) {
+      const result = CreateEmployeeSchema.safeParse({ ...owner, vacation_rule: rule, vacation_days_per_year: 20 })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.issues.map((i) => i.path.join('.'))).toContain('vacation_days_per_year')
+      }
+    }
+  })
+
+  it('refuses fewer than 25 days with the default rule (procentregeln)', () => {
+    expect(CreateEmployeeSchema.safeParse({ ...owner, vacation_days_per_year: 24 }).success).toBe(false)
+  })
+
+  it('keeps the 0-40 bounds and the 25 default', () => {
+    expect(CreateEmployeeSchema.safeParse({ ...owner, vacation_rule: 'none', vacation_days_per_year: -1 }).success).toBe(false)
+    expect(CreateEmployeeSchema.safeParse({ ...owner, vacation_days_per_year: 41 }).success).toBe(false)
+    const parsed = CreateEmployeeSchema.safeParse(owner)
+    expect(parsed.success && parsed.data.vacation_days_per_year).toBe(25)
+  })
+
+  it('update: checks the pair when the body carries both keys', () => {
+    expect(UpdateEmployeeSchema.safeParse({ vacation_rule: 'none', vacation_days_per_year: 0 }).success).toBe(true)
+    expect(UpdateEmployeeSchema.safeParse({ vacation_rule: 'procentregeln', vacation_days_per_year: 20 }).success).toBe(false)
+    // One key alone is left to the merged-row rule (employee-update-rules).
+    expect(UpdateEmployeeSchema.safeParse({ vacation_days_per_year: 0 }).success).toBe(true)
   })
 })

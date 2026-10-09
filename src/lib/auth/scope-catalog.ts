@@ -290,6 +290,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_update_account:                  'bookkeeping:write',
   // Verifikat annotation (notes-only edit: allowed on posted entries)
   gnubok_set_voucher_note:                'bookkeeping:write',
+  // Cancel an uncommitted draft (no voucher number, row kept as cancelled)
+  gnubok_cancel_draft_entry:              'bookkeeping:write',
   gnubok_get_balance_sheet:               'reports:read',
   gnubok_get_general_ledger:              'reports:read',
   gnubok_query_journal:                   'reports:read',
@@ -344,6 +346,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_book_vat_settlement: 'bookkeeping:write',
   gnubok_mark_vat_period_filed: 'bookkeeping:write',
   gnubok_unmark_vat_period_filed: 'bookkeeping:write',
+  gnubok_mark_agi_period_filed: 'payroll:write',
   // Operation registry, wave 2: booking, payment files, utlägg, payroll.
   gnubok_send_payslips: 'payroll:write',
   gnubok_revert_salary_run: 'payroll:write',

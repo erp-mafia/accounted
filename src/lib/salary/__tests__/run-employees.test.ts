@@ -357,6 +357,92 @@ describe('setRunEmployeeSalary', () => {
     expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees'])
   })
 
+  it('accepts monthly_salary when the employee moved to monthly pay after joining the draft run (agent feedback seq 869949)', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 6 } })
+    // Snapshot says hourly (taken when the employee joined the run); the
+    // employee is paid monthly now, which is what the calculation prices.
+    mock.enqueue({
+      data: {
+        ...SRE_ROW,
+        salary_type: 'hourly',
+        monthly_salary: 0,
+        hours_worked: null,
+        employee: { salary_type: 'monthly', employment_type: 'employee' },
+      },
+    })
+    mock.enqueue({ data: [{ id: 'li-old', item_type: 'hourly_salary' }] }) // base lines read
+    mock.enqueue({ data: null }) // Grundlön line insert
+    mock.enqueue({ data: null }) // stale Timlön line delete
+    mock.enqueue({ data: null }) // snapshot salary_type refresh
+    mock.enqueue({ data: null }) // sre monthly_salary update
+    mock.enqueue({ data: null }) // Grundlön line amount update
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 30000,
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.salary_type).toBe('monthly')
+      expect(result.data.monthly_salary).toBe(30000)
+    }
+    const sreUpdates = mock.findCalls('salary_run_employees', 'update').map((a) => a[0])
+    expect(sreUpdates).toEqual([
+      { salary_type: 'monthly' },
+      { monthly_salary: 30000, calculation_breakdown: null },
+    ])
+    expect(mock.findCalls('salary_line_items', 'in').at(-1)).toEqual(['item_type', ['hourly_salary']])
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+      item_type: 'monthly_salary',
+      description: 'Grundlön',
+      account_number: '7210',
+    })
+    // The new line is priced by the regular display refresh: 30 000 x 80 %.
+    const lineUpdates = mock.findCalls('salary_line_items', 'update').map((a) => a[0])
+    expect(lineUpdates).toEqual([{ amount: 24000 }])
+  })
+
+  it('a dry run checks against the live pay type without writing', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 6 } })
+    mock.enqueue({
+      data: { ...SRE_ROW, salary_type: 'hourly', hours_worked: null, employee: { salary_type: 'monthly', employment_type: 'employee' } },
+    })
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      monthlySalary: 30000,
+      dryRun: true,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(mock.findCalls('salary_run_employees', 'update')).toHaveLength(0)
+    expect(mock.findCalls('salary_line_items', 'insert')).toHaveLength(0)
+  })
+
+  it('still refuses hours on an employee who is paid monthly now, even with a stale hourly snapshot', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 6 } })
+    mock.enqueue({
+      data: { ...SRE_ROW, salary_type: 'hourly', hours_worked: null, employee: { salary_type: 'monthly', employment_type: 'employee' } },
+    })
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      hoursWorked: 160,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('SALARY_RUN_SALARY_FIELD_MISMATCH')
+      expect(result.details).toEqual({ salary_type: 'monthly' })
+    }
+  })
+
   it('rejects hours_worked on a monthly row', async () => {
     mock.enqueue({ data: { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 6 } })
     mock.enqueue({ data: { ...SRE_ROW, hours_worked: null } })

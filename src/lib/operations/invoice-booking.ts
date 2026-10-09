@@ -14,7 +14,25 @@ import { z } from 'zod'
 import { BULK_BOOK_MAX_INVOICES, bookInvoice, bulkBookInvoices } from '@/lib/invoices/book-service'
 import { bookSupplierInvoice } from '@/lib/supplier-invoices/book-service'
 import type { Invoice, SupplierInvoice } from '@/types'
+import { formatAmount } from '@/lib/utils'
 import { defineOperation } from './types'
+
+/**
+ * The approval title of a staged supplier-invoice Bokför, from the dry run's
+ * preview: "Bokför leverantörsfaktura 55012 (Leverantör AB, 6 250,00 SEK)".
+ * Every one used to read "Bokför leverantörsfaktura", so an approver with four
+ * of them in /pending could not tell them apart (feedback seq 930807). Parts
+ * the preview lacks are left out, never guessed.
+ */
+export function bookSupplierInvoiceTitle(preview?: Record<string, unknown>): string {
+  const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : null)
+  const invoiceNumber = text(preview?.supplier_invoice_number)
+  const supplierName = text(preview?.supplier_name)
+  const total = typeof preview?.total === 'number' && Number.isFinite(preview.total) ? preview.total : null
+  const amount = total === null ? null : `${formatAmount(total)} ${text(preview?.currency) ?? 'SEK'}`
+  const details = [supplierName, amount].filter((part): part is string => part !== null)
+  return `Bokför leverantörsfaktura${invoiceNumber ? ` ${invoiceNumber}` : ''}${details.length > 0 ? ` (${details.join(', ')})` : ''}`
+}
 
 const META_EXAMPLE = { request_id: 'req_…', api_version: '2026-05-12' }
 
@@ -308,7 +326,7 @@ export const supplierInvoicesBook = defineOperation({
     description:
       'Stage the deferred Bokför step for a registered supplier invoice that has no verifikat yet (defer_invoice_booking companies). The preview shows the exact registration lines. Refused for paid invoices, credit notes, kontantmetoden and locked periods.',
     keywords: ['bokför leverantörsfaktura', 'registrera men bokför inte', 'obokförd leverantörsfaktura', 'leverantörsskuld'],
-    stage: { pendingType: 'book_supplier_invoice', title: () => 'Bokför leverantörsfaktura' },
+    stage: { pendingType: 'book_supplier_invoice', title: (_input, preview) => bookSupplierInvoiceTitle(preview) },
   },
   run: async (ctx, { supplier_invoice_id }, { dryRun }) => {
     const outcome = await bookSupplierInvoice(ctx, supplier_invoice_id, { dryRun })

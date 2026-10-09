@@ -600,3 +600,104 @@ describe('lines the calculation owns (#3185)', () => {
     }
   })
 })
+
+describe('is_avgift_basis=false on a line the avgiftsunderlag always includes (agent feedback seq 947288)', () => {
+  const BENEFIT_INPUT = {
+    ...BASE_INPUT,
+    item_type: 'benefit_meals' as const,
+    description: 'Kostförmån',
+    amount: 500,
+    is_vacation_basis: false,
+  }
+
+  it('refuses a taxable benefit line with the flag, before any write', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { employeeId: EMPLOYEE_ID },
+      input: { ...BENEFIT_INPUT, is_avgift_basis: false },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('VALIDATION_ERROR')
+      expect(result.details?.field).toBe('is_avgift_basis')
+      expect(String(result.details?.message)).toMatch(/granskningssteget/)
+    }
+    expect(mock.findCalls('salary_line_items', 'insert')).toHaveLength(0)
+  })
+
+  it('refuses a taxable addition (bonus) with the flag', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { employeeId: EMPLOYEE_ID },
+      input: { ...BASE_INPUT, is_avgift_basis: false },
+      dryRun: true,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.details?.field).toBe('is_avgift_basis')
+  })
+
+  it('accepts the same benefit line without the flag', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { employeeId: EMPLOYEE_ID },
+      input: BENEFIT_INPUT,
+      dryRun: true,
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('accepts the flag where nothing ignores it: a tax-free reimbursement and a net deduction', async () => {
+    for (const input of [
+      { ...BASE_INPUT, item_type: 'expense_reimbursement' as const, is_taxable: false, is_avgift_basis: false, is_vacation_basis: false },
+      { ...BASE_INPUT, item_type: 'net_deduction_other' as const, amount: -200, is_taxable: false, is_avgift_basis: false, is_vacation_basis: false, is_net_deduction: true },
+    ]) {
+      mock.reset()
+      mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+      mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+      const result = await createPayslipLine(supabase, {
+        companyId: COMPANY_ID,
+        salaryRunId: RUN_ID,
+        target: { employeeId: EMPLOYEE_ID },
+        input,
+        dryRun: true,
+      })
+      expect(result.ok).toBe(true)
+    }
+  })
+
+  it('refuses a patch that clears the flag on a taxable addition', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: EXISTING_LINE })
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { is_avgift_basis: false },
+      dryRun: true,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.details?.field).toBe('is_avgift_basis')
+  })
+
+  it('lets an unrelated patch through on a row stored with the flag before the refusal', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...EXISTING_LINE, is_avgift_basis: false } })
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { amount: 6000 },
+      dryRun: true,
+    })
+    expect(result.ok).toBe(true)
+  })
+})

@@ -25,6 +25,7 @@ import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
 import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
+import { VACATION_DAYS_MINIMUM, vacationDaysBelowMinimum } from '@/lib/salary/employee-update-rules'
 import { SalaryCalculationPolicySchema } from '@/lib/salary/calculation-policy'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
@@ -3825,7 +3826,9 @@ const EmployeeSchemaBase = z.object({
   clearing_number: z.string().max(10).optional(),
   bank_account_number: z.string().max(20).optional(),
   vacation_rule: VacationRuleSchema.default('procentregeln'),
-  vacation_days_per_year: z.number().int().min(25).max(40).default(25),
+  // 0-40 here; the 25-day statutory minimum (semesterlagen 4 §) is a
+  // cross-field rule below: it does not apply with vacation_rule 'none'.
+  vacation_days_per_year: z.number().int().min(0).max(40).default(25),
   semestertillagg_rate: z.number().min(0).max(0.05).default(0.0043),
   // Kollektivavtal semesterlön rate as a fraction (0.135 = 13.5 %); null =
   // statutory 12 % (14.4 % at 30 days). Bounds mirror the DB CHECK and
@@ -3914,6 +3917,16 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
     })
   }
 
+  // Fewer than 25 vacation days only for an employee without vacation
+  // (vacation_rule 'none', e.g. a company owner outside semesterlagen).
+  if (vacationDaysBelowMinimum(data.vacation_rule, data.vacation_days_per_year)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: VACATION_DAYS_MINIMUM,
+      path: ['vacation_days_per_year'],
+    })
+  }
+
   // Jämkning: the engine (isJamkningValid in lib/salary/calculation-engine.ts)
   // applies the beslut only when BOTH dates are set, so a percentage needs
   // both a start and an end date on every write path (#2058). The create body
@@ -3975,7 +3988,7 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
   is_sidoinkomst: z.boolean(),
   f_skatt_status: FSkattStatusSchema,
   vacation_rule: VacationRuleSchema,
-  vacation_days_per_year: z.number().int().min(25).max(40),
+  vacation_days_per_year: z.number().int().min(0).max(40),
   semestertillagg_rate: z.number().min(0).max(0.05),
   vacation_pay_rate: z.number().min(0.12).max(0.3).nullable(),
   vaxa_stod_eligible: z.boolean(),
@@ -4045,6 +4058,21 @@ export const UpdateEmployeeSchema = EmployeeSchemaPatchBase.partial().superRefin
       code: z.ZodIssueCode.custom,
       message: 'Växa-stödets slutdatum måste vara efter startdatumet',
       path: ['vaxa_stod_end'],
+    })
+  }
+
+  // Vacation days: when the body carries both keys the rule is checkable
+  // here; a body with one of them is checked on the merged row by
+  // lib/salary/employee-update-rules.ts.
+  if (
+    data.vacation_rule !== undefined &&
+    data.vacation_days_per_year !== undefined &&
+    vacationDaysBelowMinimum(data.vacation_rule, data.vacation_days_per_year)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: VACATION_DAYS_MINIMUM,
+      path: ['vacation_days_per_year'],
     })
   }
 

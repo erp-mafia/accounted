@@ -16,6 +16,14 @@ vi.mock('../engine', () => ({
 
 // Mock currency-utils with real logic
 vi.mock('../currency-utils', () => ({
+  resolveSekAmountOrNull: vi.fn().mockImplementation(
+    (amount: number, amountSek: number | null, currency: string | null, exchangeRate: number | null) => {
+      if (!currency || currency === 'SEK') return amount
+      if (amountSek != null) return Math.round(amountSek * 100) / 100
+      if (exchangeRate != null && exchangeRate > 0) return Math.round(amount * exchangeRate * 100) / 100
+      return null
+    }
+  ),
   resolveSekAmount: vi.fn().mockImplementation(
     (amount: number, amountSek: number | null, currency: string | null, exchangeRate: number | null) => {
       if (!currency || currency === 'SEK') return amount
@@ -69,6 +77,7 @@ const mockedCreateEntry = vi.mocked(createJournalEntry)
 const mockedFindFiscalPeriod = vi.mocked(findFiscalPeriod)
 
 const { createTransactionJournalEntry, buildDomesticExpenseLines, buildTransactionEntryLines } = await import('../transaction-entries')
+const { TransactionMissingSekValueError } = await import('../errors')
 
 function makeMappingResult(overrides: Partial<MappingResult> = {}): MappingResult {
   return {
@@ -696,6 +705,88 @@ describe('buildTransactionEntryLines', () => {
     const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
     const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
     expect(totalDebit).toBeCloseTo(totalCredit, 2)
+  })
+})
+
+// Agent feedback seq 887729: a foreign row with neither amount_sek nor
+// exchange_rate was booked with the foreign figure as kronor (the lenient
+// resolver's fallback). It is refused now, at preview and at commit alike.
+describe('buildTransactionEntryLines: a foreign row needs a SEK value', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  const ratelessCad = () =>
+    makeTransaction({
+      id: 'tx-cad',
+      amount: -200,
+      currency: 'CAD' as Transaction['currency'],
+      amount_sek: null,
+      exchange_rate: null,
+      date: '2026-09-30',
+      description: 'Card purchase',
+    })
+  const privateMapping = () =>
+    makeMappingResult({ debit_account: '2013', credit_account: '1930', default_private: true })
+
+  it('refuses the preview lines with TX_MISSING_SEK_VALUE', () => {
+    let thrown: unknown
+    try {
+      buildTransactionEntryLines(ratelessCad(), privateMapping())
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(TransactionMissingSekValueError)
+    expect(thrown).toMatchObject({
+      code: 'TX_MISSING_SEK_VALUE',
+      transactionId: 'tx-cad',
+      currency: 'CAD',
+      date: '2026-09-30',
+    })
+  })
+
+  it('refuses the commit before any journal entry is created', async () => {
+    await expect(
+      createTransactionJournalEntry(null as never, 'company-1', 'user-1', ratelessCad(), privateMapping()),
+    ).rejects.toBeInstanceOf(TransactionMissingSekValueError)
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+    expect(mockedFindFiscalPeriod).not.toHaveBeenCalled()
+  })
+
+  it('refuses every branch, not only the private one (income without VAT)', () => {
+    const tx = makeTransaction({
+      amount: 200, currency: 'CAD' as Transaction['currency'], amount_sek: null, exchange_rate: null,
+    })
+    expect(() =>
+      buildTransactionEntryLines(tx, makeMappingResult({ debit_account: '1930', credit_account: '3900' })),
+    ).toThrow(TransactionMissingSekValueError)
+  })
+
+  it('books a EUR row with amount_sek in kronor, the foreign amount only as metadata', async () => {
+    const tx = makeTransaction({
+      amount: -100, currency: 'EUR', amount_sek: -1148.5, exchange_rate: 11.485, description: 'EUR purchase',
+    })
+
+    await createTransactionJournalEntry(
+      null as never, 'company-1', 'user-1', tx, makeMappingResult({ debit_account: '6991', credit_account: '1930' }),
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find(l => l.account_number === '6991')?.debit_amount).toBe(1148.5)
+    const bank = input.lines.find(l => l.account_number === '1930')
+    expect(bank?.credit_amount).toBe(1148.5)
+    expect(bank?.currency).toBe('EUR')
+    expect(bank?.amount_in_currency).toBe(100)
+    assertBalanced(input)
+  })
+
+  it('leaves a SEK row and a legacy null-currency row untouched', () => {
+    for (const currency of ['SEK', null]) {
+      const tx = makeTransaction({ amount: -200, currency: currency as Transaction['currency'] })
+      const lines = buildTransactionEntryLines(tx, makeMappingResult({ debit_account: '6991', credit_account: '1930' }))
+      expect(lines.find(l => l.account_number === '1930')?.credit_amount).toBe(200)
+    }
   })
 })
 

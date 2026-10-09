@@ -319,7 +319,7 @@ export type BankConnectionStatus = 'pending' | 'pending_selection' | 'active' | 
  * (supabase/migrations) and the SERIES_IDS map in lib/currency/riksbanken.ts;
  * lib/currency/__tests__/currencies.test.ts pins both.
  */
-export const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF'] as const
+export const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF', 'CAD'] as const
 export type Currency = (typeof CURRENCIES)[number]
 /** Currencies that need an exchange rate to reach SEK. */
 export const FOREIGN_CURRENCIES: readonly Currency[] = CURRENCIES.filter((c) => c !== 'SEK')
@@ -2738,6 +2738,8 @@ export type PendingOperationType =
   | 'set_opening_balances_manual'
   | 'correct_opening_balances'
   | 'split_opening_balances_per_project'
+  // Cancel an uncommitted draft verifikat (lib/operations/journal-entries.ts)
+  | 'cancel_draft_entry'
   | 'delete_supplier_invoice'
   | 'uncredit_supplier_invoice'
   | 'update_supplier_invoice_item_account'
@@ -2827,6 +2829,9 @@ export type PendingOperationType =
   // Completes / reopens the period's moms deadline; no ledger impact.
   | 'mark_vat_period_filed'
   | 'unmark_vat_period_filed'
+  // AGI filed outside Accounted (gnubok_mark_agi_period_filed,
+  // lib/operations/agi-filings.ts): completes the month's AGI deadline.
+  | 'mark_agi_period_filed'
   // Payroll over MCP, run structure (lib/operations/salary-run-structure.ts):
   // who is on a draft run, its payslip lines, the paid mark, and the
   // rättelsekörning of a booked run (storno + a new draft for the period).

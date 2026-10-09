@@ -518,10 +518,46 @@ describe('gnubok_book_salary_run', () => {
     total_avgifter: 9426,
   }
 
+  const ROSTER_ROW = {
+    id: 'sre-1',
+    calculation_breakdown: { steps: [] },
+    gross_salary: 30000,
+    tax_withheld: 7000,
+    tax_withheld_override: null,
+    net_salary: 23000,
+    avgifter_amount: 9426,
+    avgifter_amount_override: null,
+    vacation_accrual: 0,
+    vacation_accrual_avgifter: 0,
+    employee: { f_skatt_status: 'a_skatt' },
+  }
+
+  it('previews the effective totals: overrides set after the calculation are applied (agent feedback seq 948847)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW }) // salary_runs lookup (stored totals predate the override)
+    enqueue({
+      data: [{ ...ROSTER_ROW, tax_withheld_override: 0, avgifter_amount_override: 0 }],
+    }) // roster preflight
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await bookSalaryRun.execute(
+      { salary_run_id: 'run-1' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.total_tax).toBe(0)
+    expect(result.preview.total_avgifter).toBe(0)
+    expect(result.preview.total_net).toBe(30000)
+    expect(result.preview.overrides_applied).toBe(true)
+  })
+
   it('stages high-risk with a totals preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: RUN_ROW }) // salary_runs lookup
-    enqueue({ data: [{ id: 'sre-1', calculation_breakdown: { steps: [] } }] }) // roster preflight
+    enqueue({ data: [ROSTER_ROW] }) // roster preflight
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
     enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
     enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
@@ -536,6 +572,8 @@ describe('gnubok_book_salary_run', () => {
     expect(result.preview.period).toBe('2026-06')
     expect(result.preview.employee_count).toBe(1)
     expect(result.preview.total_net).toBe(23000)
+    expect(result.preview.total_avgifter).toBe(9426)
+    expect(result.preview.overrides_applied).toBe(false)
     expect(result.preview.current_status).toBe('review')
   })
 
@@ -686,6 +724,52 @@ describe('gnubok_create_employee', () => {
     ).rejects.toThrow(/jamkning_valid_to/)
   })
 
+  it('stages a company owner with vacation_rule none and 0 vacation days (agent feedback seq 828138)', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      company_settings: { data: { entity_type: 'ab' } },
+      fiscal_periods: { data: null },
+      pending_operations: { data: { id: 'op-owner' }, error: null },
+    })
+
+    const result = (await createEmployee.execute(
+      { ...validArgs, employment_type: 'company_owner', vacation_rule: 'none', vacation_days_per_year: 0 },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params.vacation_days_per_year).toBe(0)
+  })
+
+  it('rejects fewer than 25 vacation days under any other vacation rule', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      createEmployee.execute(
+        { ...validArgs, vacation_rule: 'procentregeln', vacation_days_per_year: 20 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/vacation_days_per_year/)
+  })
+
+  it('accepts and stages the address fields (agent feedback seq 828138)', async () => {
+    expect(Object.keys(createEmployee.inputSchema.properties as object)).toEqual(
+      expect.arrayContaining(['address_line1', 'postal_code', 'city']),
+    )
+    const supabaseMock = makeCapturingSupabase({
+      company_settings: { data: { entity_type: 'ab' } },
+      fiscal_periods: { data: null },
+      pending_operations: { data: { id: 'op-addr' }, error: null },
+    })
+
+    await createEmployee.execute(
+      { ...validArgs, address_line1: 'Testgatan 1', postal_code: '111 22', city: 'Teststad' },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )
+
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toMatchObject({ address_line1: 'Testgatan 1', postal_code: '111 22', city: 'Teststad' })
+  })
+
   it('blocks EF owners on payroll (entity-type preflight)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { entity_type: 'ef' } }) // company_settings
@@ -777,6 +861,50 @@ describe('gnubok_update_employee', () => {
     )) as { staged: boolean }
 
     expect(result.staged).toBe(true)
+  })
+
+  it('stages address fields, with null clearing one', async () => {
+    expect(Object.keys(updateEmployee.inputSchema.properties as object)).toEqual(
+      expect.arrayContaining(['address_line1', 'postal_code', 'city']),
+    )
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, address_line1: null, postal_code: null, city: 'Gamla staden' } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-addr2' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', address_line1: 'Testgatan 1', postal_code: '111 22', city: null },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: { patch: Record<string, unknown> } }
+    expect(inserted.params.patch).toEqual({ address_line1: 'Testgatan 1', postal_code: '111 22', city: null })
+  })
+
+  it('lets an owner on vacation_rule none drop to 0 vacation days, and refuses it under another rule', async () => {
+    const owner = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, vacation_rule: 'none', vacation_days_per_year: 25 } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-vac' }, error: null },
+    })
+    const ok = (await updateEmployee.execute(
+      { employee_id: 'emp-1', vacation_days_per_year: 0 },
+      'company-1', 'user-1', owner as never, { type: 'user' },
+    )) as { staged: boolean }
+    expect(ok.staged).toBe(true)
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EXISTING, vacation_rule: 'procentregeln', vacation_days_per_year: 25 } })
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', vacation_days_per_year: 0 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/Invalid employee update/)
   })
 
   it('rejects personnummer changes at the tool boundary', async () => {

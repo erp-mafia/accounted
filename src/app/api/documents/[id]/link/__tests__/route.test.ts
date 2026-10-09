@@ -198,6 +198,27 @@ describe('POST /api/documents/[id]/link', () => {
     expect(body.error.code).toBe('DOC_LINK_ALREADY_LINKED')
   })
 
+  it('answers 409 DOC_LINK_ALREADY_LINKED, not a 500, when the immutability trigger refuses a move off a reversed verifikat', async () => {
+    // The trigger refuses any change of a set journal_entry_id whatever the
+    // holder's status (agent feedback seq 932068): its raw text used to fall
+    // through to DOC_LINK_FAILED.
+    enqueue({ data: { id: 'je-1' } }) // journal entry company check
+    enqueue({
+      data: null,
+      error: {
+        message:
+          'BFL_DOCUMENT_IMMUTABILITY: cannot clear or change journal_entry_id on document doc-1 once set (BFL 5 kap 6 §). Reverse the journal entry first.',
+      },
+    })
+    const res = await POST(
+      makeReq({ journal_entry_id: JE_ID }),
+      createMockRouteParams({ id: 'doc-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('DOC_LINK_ALREADY_LINKED')
+  })
+
   it('rejects a journal entry outside the active company with DOC_LINK_ENTRY_NOT_FOUND', async () => {
     // The company-scoped lookup finds no row: same result whether the id is
     // bogus or belongs to another tenant. The document must never be updated.

@@ -34,6 +34,11 @@ import {
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
+import {
+  exceedsSupplierInvoiceTotalsTolerance,
+  supplierInvoiceLinesInclVat,
+  supplierInvoiceTotalsGap,
+} from '@/lib/supplier-invoices/line-totals'
 import { matchPairs, unmatchLink } from '@/lib/reconciliation/actions'
 import { signOffAccount } from '@/lib/reconciliation/signoff'
 import { bookResidualAndLink, ReconciliationResidualError } from '@/lib/reconciliation/residual'
@@ -85,6 +90,12 @@ import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-en
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
+import {
+  existingOpeningBalanceMessage,
+  findExistingOpeningBalance,
+  OPENING_BALANCE_EXISTS_CODE,
+  type ExistingOpeningBalance,
+} from '@/lib/import/opening-balance/existing'
 import { closePeriod, lockPeriod, unlockPeriod, resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
   executeYearEndClosing,
@@ -154,6 +165,12 @@ import { emitBatchAllocationEvents } from '@/lib/transactions/batch-allocation-e
 import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
 import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
 import { attachDocumentToTransaction } from '@/lib/transactions/document-attach'
+import {
+  DocumentAlreadyLinkedError,
+  documentHeldElsewhereReasonSv,
+  isDocumentImmutabilityRefusal,
+  type DocumentLinkHolder,
+} from '@/lib/documents/link-holder'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
@@ -164,10 +181,12 @@ import { extensionRegistry } from '@/lib/extensions/registry'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import {
   SkatteverketRecoverableError,
+  maskPersonnummerDeep,
   type SkatteverketCommitServices,
   type SkattekontoBookingCommitService,
   type SkvSubmitResult,
 } from '@/lib/pending-operations/skatteverket-commit'
+import { maskPersonnummerInText } from '@/lib/salary/personnummer-format'
 import { PartialCommitError } from '@/lib/pending-operations/errors'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
@@ -1935,9 +1954,10 @@ async function commitCreateTransaction(
   }
 
   // A foreign-currency row must carry its SEK translation from the moment it
-  // lands. The categorization path resolves a line amount through the LENIENT
-  // resolveSekAmount() (lib/bookkeeping/currency-utils.ts), which falls back to
-  // the RAW foreign number when amount_sek and exchange_rate are both empty. A
+  // lands. The categorization path used to resolve a line amount through the
+  // LENIENT resolveSekAmount() (lib/bookkeeping/currency-utils.ts), which falls
+  // back to the RAW foreign number when amount_sek and exchange_rate are both
+  // empty (it now refuses with TX_MISSING_SEK_VALUE). A
   // staged 1500 USD row therefore debited 1500 kr while buildCurrencyMetadata()
   // stamped the same line `currency: USD, amount_in_currency: 1500`: one line
   // asserting two different amounts. Nothing catches it, because every leg is
@@ -1976,10 +1996,10 @@ async function commitCreateTransaction(
       // it is a bulk bank feed where one unreachable rate must not abort the
       // batch, and its rows stay repairable via
       // /api/transactions/[id]/refresh-exchange-rate. Here there is exactly one
-      // row, the approver is present, and storing NULL only relocates the
-      // failure to the categorization step, which does NOT refuse: it silently
-      // books 1:1. So the commit boundary is the last place the contradiction
-      // can still be surfaced to a human.
+      // row and the approver is present, so storing NULL would only relocate
+      // the failure to the categorization step (which refuses the row with
+      // TX_MISSING_SEK_VALUE). Refusing here surfaces it while a human is
+      // looking at this row.
       return {
         error:
           `Transaktionen är i ${currency} men ingen växelkurs kunde hämtas för ${date}. ` +
@@ -3844,10 +3864,13 @@ async function commitAttachDocumentToTransaction(
  * a copy that silently keeps the old behaviour when the first one is hardened.
  *
  * Two checks: the document exists in THIS company, and the WORM rule that a
- * document already belonging to a POSTED verifikat cannot be moved to another
- * one (it is räkenskapsinformation under BFL 5 kap 6 § once the verifikat is
- * posted). Re-linking to the SAME verifikat is allowed: that is a no-op or a
- * line-level refinement, not a move.
+ * document already attached to a verifikat cannot be moved to another one
+ * (BFL 5 kap 6 §). The rule holds whatever the holder's status: the
+ * immutability trigger refuses any change of a set journal_entry_id, so a
+ * guard that only refused a POSTED holder let a document on a reversed or
+ * draft verifikat through to a raw trigger error and an HTTP 500 at approval
+ * (agent feedback seq 932068). Re-linking to the SAME verifikat is allowed:
+ * that is a no-op or a line-level refinement, not a move.
  */
 type DocumentLinkPrecheck =
   | { ok: true }
@@ -3869,20 +3892,18 @@ async function precheckDocumentLink(
 
   const existingJeId = (doc.journal_entry_id as string | null) ?? null
   if (existingJeId && existingJeId !== journalEntryId) {
+    // Read only to name the holder in the refusal: the refusal itself does
+    // not depend on what this lookup finds.
     const { data: existingJe } = await supabase
       .from('journal_entries')
-      .select('status')
+      .select('status, voucher_series, voucher_number')
       .eq('id', existingJeId)
       .eq('company_id', companyId)
       .maybeSingle()
-    if (existingJe && (existingJe as { status: string }).status === 'posted') {
-      return {
-        ok: false,
-        reason:
-          'Bilagan är kopplad till en bokförd verifikation och kan inte länkas om. Ladda upp ett nytt dokument.',
-        status: 409,
-      }
-    }
+    const holder = existingJe
+      ? { journal_entry_id: existingJeId, ...(existingJe as Omit<DocumentLinkHolder, 'journal_entry_id'>) }
+      : null
+    return { ok: false, reason: documentHeldElsewhereReasonSv(holder), status: 409 }
   }
 
   return { ok: true }
@@ -3943,6 +3964,12 @@ async function stampInboxItemForLinkedDocument(
   }
 }
 
+/** The immutability trigger refused the write, typed by linkToJournalEntry or raw. */
+function isDocumentLinkConflict(err: unknown): boolean {
+  if (err instanceof DocumentAlreadyLinkedError) return true
+  return isDocumentImmutabilityRefusal(err instanceof Error ? err.message : String(err ?? ''))
+}
+
 /**
  * Shared failure mapping for both link executors. A locked period is the one
  * case worth its own sentence: it is recoverable by unlocking, unlike the rest,
@@ -3953,6 +3980,12 @@ function documentLinkFailureMessage(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err ?? '')
   if (/locked\/closed fiscal period|Bokföringen är låst/i.test(msg)) {
     return 'Verifikationens period är låst: bilagan kan inte länkas.'
+  }
+  // The precheck names the holder; this is the race it cannot see (a link
+  // set between the precheck and the write) or a line-level link that would
+  // change. Both are the immutability trigger refusing, never a server fault.
+  if (isDocumentLinkConflict(err)) {
+    return 'Bilagan är redan kopplad till en verifikation och kopplingen kan inte ändras (BFL 5 kap 6 §).'
   }
   // No ErrorContext value covers document attachments, and journal_entry would
   // phrase the fallback as a verifikat problem when the failure is the link.
@@ -3996,7 +4029,8 @@ async function commitLinkDocumentToVoucher(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err ?? '')
     const isLocked = /locked\/closed fiscal period|Bokföringen är låst/i.test(msg)
-    return { error: documentLinkFailureMessage(err), status: isLocked ? 409 : 500 }
+    const status = isLocked || isDocumentLinkConflict(err) ? 409 : 500
+    return { error: documentLinkFailureMessage(err), status }
   }
 }
 
@@ -4515,6 +4549,9 @@ async function commitCreateSupplierInvoiceFromInbox(
   const currency = (params.currency as string) || 'SEK'
   const vatTreatment = (params.vat_treatment as string) || 'standard_25'
   const notes = (params.notes as string | null) ?? null
+  // Absent on ops staged before the MCP door carried it: null, as before.
+  const paymentReference =
+    typeof params.payment_reference === 'string' ? params.payment_reference.trim() || null : null
   const rawItems = (params.items as Array<Record<string, unknown>> | undefined) ?? []
   // Dimensions PR7: resolved at staging time; coerce is the drift/tamper gate.
   const defaultDimensions = coerceDimensionsBag(params.default_dimensions)
@@ -4677,13 +4714,6 @@ async function commitCreateSupplierInvoiceFromInbox(
     .eq('company_id', companyId)
     .single()
 
-  const { data: arrivalNum, error: arrivalErr } = await supabase
-    .rpc('get_next_arrival_number', { p_company_id: companyId })
-
-  if (arrivalErr) {
-    return { error: `Failed to generate arrival number: ${arrivalErr.message}`, status: 500 }
-  }
-
   const reverseCharge = vatTreatment === 'reverse_charge'
   // Icke momsregistrerad (feedback seq 708521): the seller's moms is part of
   // the cost, never 2641. Staging folds it into the lines; an op staged
@@ -4770,6 +4800,40 @@ async function commitCreateSupplierInvoiceFromInbox(
     total: totalRounded,
   })
 
+  // Hard gate (feedback seq 983757): the registration verifikat credits 2440
+  // with the item rows plus their VAT, while the reskontra row keeps the
+  // staged total. Where the header is the document's own total (not derived
+  // from the items above), the two must agree within öresavrundning and
+  // per-line VAT rounding (supplierInvoiceTotalsTolerance), or the books
+  // carry a leverantörsskuld the supplier never billed. Staging refuses
+  // the mismatch since the same fix; this catches an op staged before it, or
+  // a tampered one, before an ankomstnummer is drawn.
+  if (!headerFromItems) {
+    const gap = supplierInvoiceTotalsGap(totalRounded, items)
+    if (exceedsSupplierInvoiceTotalsTolerance(gap, items.length)) {
+      const entry = getErrorEntry('SI_CREATE_TOTALS_MISMATCH')
+      log.warn('Refused a staged inbox supplier invoice whose lines do not add up to its total', {
+        companyId,
+        inboxItemId,
+        gap,
+      })
+      return {
+        error:
+          `${entry?.message_sv ?? 'Fakturaraderna inklusive moms stämmer inte med fakturans totalbelopp.'} `
+          + `Raderna inklusive moms: ${supplierInvoiceLinesInclVat(items)}, totalbelopp: ${totalRounded}.`,
+        errorCode: 'SI_CREATE_TOTALS_MISMATCH',
+        status: entry?.httpStatus ?? 400,
+      }
+    }
+  }
+
+  const { data: arrivalNum, error: arrivalErr } = await supabase
+    .rpc('get_next_arrival_number', { p_company_id: companyId })
+
+  if (arrivalErr) {
+    return { error: `Failed to generate arrival number: ${arrivalErr.message}`, status: 500 }
+  }
+
   const { data: invoice, error: invoiceErr } = await supabase
     .from('supplier_invoices')
     .insert({
@@ -4798,6 +4862,9 @@ async function commitCreateSupplierInvoiceFromInbox(
       paid_amount: 0,
       remaining_amount: totalRounded,
       document_id: documentId,
+      // The OCR the extraction read (feedback seq 869949): a betalfil
+      // references the payment by it.
+      payment_reference: paymentReference,
       notes,
       default_dimensions: defaultDimensions ?? {},
     })
@@ -5546,6 +5613,33 @@ async function commitCreateVoucher(
           `(${period.period_start}). Angivet datum: ${entryDate}. ` +
           `Ändra datumet eller bokför som en vanlig verifikation utan is_opening_balance.`,
         status: 400,
+      }
+    }
+
+    // Constraint 3: one IB per year (agent feedback seqs 892914, 897234,
+    // 897844). A second opening_balance voucher on the same date is read by
+    // every report as the IB plus a movement of the same balances, so the
+    // year's balances count twice. The staging tool refuses this too; this is
+    // the authoritative check, since another IB can be posted between staging
+    // and approval. Fails closed when the check itself cannot run.
+    let existingIb: ExistingOpeningBalance | null
+    try {
+      existingIb = await findExistingOpeningBalance(supabase, companyId, fiscalPeriodId)
+    } catch (err) {
+      log.warn('create_voucher: existing-IB check failed, refusing the IB', {
+        fiscalPeriodId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return {
+        error: 'Det gick inte att kontrollera om räkenskapsåret redan har en ingående balans. Försök igen.',
+        status: 500,
+      }
+    }
+    if (existingIb) {
+      return {
+        error: existingOpeningBalanceMessage(existingIb),
+        errorCode: OPENING_BALANCE_EXISTS_CODE,
+        status: 409,
       }
     }
 
@@ -6570,9 +6664,22 @@ function getSkatteverketServices(): SkatteverketCommitServices {
 function handleSkvSubmitResult(result: SkvSubmitResult): ExecutorResult {
   if (!result.ok) {
     if (result.recoverable) {
-      throw new SkatteverketRecoverableError(result.error, result.code, result.http_status)
+      throw new SkatteverketRecoverableError(maskPersonnummerInText(result.error), result.code, result.http_status)
     }
-    return { error: result.error, status: result.http_status }
+    // Skatteverket's own answer (e.g. the AGI kontrollrapport) rides along as
+    // failure details: persisted in result_data.details and returned to the
+    // approver, personnummer masked. Without it a rejection said only that
+    // Skatteverket refused, not which field (agent feedback seq 948847).
+    const details =
+      result.details && Object.keys(result.details).length > 0
+        ? maskPersonnummerDeep(result.details)
+        : undefined
+    return {
+      error: maskPersonnummerInText(result.error),
+      status: result.http_status,
+      errorCode: result.code,
+      ...(details ? { data: details } : {}),
+    }
   }
   const data: Record<string, unknown> = { ...result, status: 'awaiting_signature' }
   delete data.ok

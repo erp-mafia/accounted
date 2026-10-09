@@ -162,7 +162,7 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
           companyId,
           userId,
           stage.pendingType,
-          stage.title(input as Record<string, unknown>),
+          stage.title(input as Record<string, unknown>, previewData),
           params,
           previewData,
           actor,

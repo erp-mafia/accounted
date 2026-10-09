@@ -67,6 +67,13 @@ export interface SkipReasons {
    * is declined and counted rather than imported.
    */
   zeroTotal?: number
+  /**
+   * Skipped records whose reason the result does not carry. The provider
+   * migration job reports state 'skipped' per resource without grouping it by
+   * the chunk's receipt reason (provider_migration_counts), so the wizard can
+   * count them but not say which reason each had (agent feedback seq 939430).
+   */
+  reasonUnknown?: number
 }
 
 /**
