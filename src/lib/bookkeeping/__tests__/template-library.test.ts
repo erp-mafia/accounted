@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX } from '../template-library'
+import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, templateShareLines } from '../template-library'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Partial<BookingTemplateLibrary> = {}): BookingTemplateLibrary {
@@ -114,6 +114,44 @@ describe('applyTemplate', () => {
     expect(byAccount['2614'].credit_amount).toBe('202.00')
     expect(byAccount['2645'].debit_amount).toBe('202.00')
     expect(byAccount['6540'].debit_amount).toBe('807.99')
+  })
+
+  it('save-as-mall then apply round-trips a reverse-charge booking with its basis pair (crm#1096)', () => {
+    // What the momskod "tjänster utanför EU, 25 %" books on 6540: the 4531 /
+    // 4598 basis pair nets to zero like the fiktiv pair. Counted toward the
+    // total it doubled it, and the re-applied mall booked half of everything.
+    const source = [
+      { account_number: '6540', debit_amount: '1000', credit_amount: '' },
+      { account_number: '2645', debit_amount: '250', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '250' },
+      { account_number: '4531', debit_amount: '1000', credit_amount: '' },
+      { account_number: '4598', debit_amount: '', credit_amount: '1000' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1000' },
+    ]
+    const derived = deriveTemplateLinesFromBooking(source)
+    expect(derived.find((l) => l.account === '1930')!.type).toBe('settlement')
+    expect(derived.find((l) => l.account === '2614')!.vat_rate).toBe(0.25)
+
+    const applied = applyTemplate(derived, 1000)
+    expect(applied.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['6540', '1000.00', ''],
+      ['2645', '250.00', ''],
+      ['2614', '', '250.00'],
+      ['4531', '1000.00', ''],
+      ['4598', '', '1000.00'],
+      ['1930', '', '1000.00'],
+    ])
+  })
+
+  it('keeps a 45xx cost line in the total when no 4598 offset sits beside it', () => {
+    const derived = deriveTemplateLinesFromBooking([
+      { account_number: '4535', debit_amount: '1000', credit_amount: '' },
+      { account_number: '2645', debit_amount: '250', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '250' },
+      { account_number: '2440', debit_amount: '', credit_amount: '1000' },
+    ])
+    expect(derived.find((l) => l.account === '4535')).toMatchObject({ type: 'business', ratio: 1 })
+    expect(derived.find((l) => l.account === '2440')).toMatchObject({ type: 'settlement', ratio: 1 })
   })
 
   it('handles representation with 25% input VAT', () => {
@@ -233,6 +271,64 @@ describe('deriveTemplateLinesFromBooking', () => {
     ])
     expect(lines.find((l) => l.account === '2641')!.vat_rate).toBe(0.12)
     expect(lines.find((l) => l.account === '1930')!.type).toBe('settlement')
+  })
+})
+
+describe('templateShareLines', () => {
+  // What the mall editor (TemplateForm) shows share inputs for and checks
+  // sums to 1.0: a basis pair there read as three shares summing to 3.
+  it('leaves the basis pair of a reverse-charge mall out of the shares (crm#1096)', () => {
+    const derived = deriveTemplateLinesFromBooking([
+      { account_number: '6540', debit_amount: '1000', credit_amount: '' },
+      { account_number: '2645', debit_amount: '250', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '250' },
+      { account_number: '4531', debit_amount: '1000', credit_amount: '' },
+      { account_number: '4598', debit_amount: '', credit_amount: '1000' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1000' },
+    ])
+    expect(templateShareLines(derived).map((l) => [l.account, l.ratio])).toEqual([['6540', 1]])
+  })
+
+  it('keeps every cost line of a split mall beside the basis pair', () => {
+    // A momskod on 6540 (600) and none on 6550 (400): the fiktiv moms is 25 %
+    // of the 600 basis. Read against the whole total it was 15 %, snapped to 12 %.
+    const derived = deriveTemplateLinesFromBooking([
+      { account_number: '6540', debit_amount: '600', credit_amount: '' },
+      { account_number: '2645', debit_amount: '150', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '150' },
+      { account_number: '4531', debit_amount: '600', credit_amount: '' },
+      { account_number: '4598', debit_amount: '', credit_amount: '600' },
+      { account_number: '6550', debit_amount: '400', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1000' },
+    ])
+    const shares = templateShareLines(derived)
+    expect(shares.map((l) => [l.account, l.ratio])).toEqual([['6540', 0.6], ['6550', 0.4]])
+    expect(shares.reduce((sum, l) => sum + (l.ratio ?? 1), 0)).toBe(1)
+    expect(derived.filter((l) => l.type === 'vat').map((l) => [l.account, l.vat_rate]))
+      .toEqual([['2645', 0.25], ['2614', 0.25]])
+  })
+
+  it('reads a fiktiv leg\'s rate from a cost line on a basis account in a split booking', () => {
+    // 4531 carries its own basis (600), so there is no 4598 pair to read.
+    const derived = deriveTemplateLinesFromBooking([
+      { account_number: '4531', debit_amount: '600', credit_amount: '' },
+      { account_number: '2645', debit_amount: '150', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '150' },
+      { account_number: '6550', debit_amount: '400', credit_amount: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '1000' },
+    ])
+    expect(derived.filter((l) => l.type === 'vat').map((l) => [l.account, l.vat_rate]))
+      .toEqual([['2645', 0.25], ['2614', 0.25]])
+  })
+
+  it('counts a 45xx line without a 4598 offset as the cost line it is', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      { account: '4535', label: 'Tjänster EU', side: 'debit', type: 'business', ratio: 1 },
+      { account: '2645', label: 'Moms', side: 'debit', type: 'vat', vat_rate: 0.25 },
+      { account: '2614', label: 'Moms', side: 'credit', type: 'vat', vat_rate: 0.25 },
+      { account: '2440', label: 'Leverantörsskulder', side: 'credit', type: 'settlement', ratio: 1 },
+    ]
+    expect(templateShareLines(lines).map((l) => l.account)).toEqual(['4535'])
   })
 })
 

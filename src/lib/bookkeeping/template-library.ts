@@ -1,7 +1,12 @@
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine, VatTreatment } from '@/types'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import { isReverseChargeVatAccount } from '@/lib/bookkeeping/vat-entries'
+import {
+  isReverseChargeBasisLeg,
+  isReverseChargeVatAccount,
+  RC_BASIS_OFFSET_ACCOUNT,
+} from '@/lib/bookkeeping/vat-entries'
+import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
 
 /**
@@ -176,6 +181,28 @@ export interface BookingRowInput {
   credit_amount: string
 }
 
+/**
+ * The legs of a reverse-charge basis pair booked beside the user's own cost
+ * line (45xx D / 4598 K, as a momskod generates it, crm#1096). The pair nets
+ * to zero and is no part of the payment: never the total, the settlement leg
+ * or one of the shares the cost is split by. Only beside the 4598 offset:
+ * without it a 45xx line is the cost line itself.
+ */
+export function reverseChargeBasisPairLegs(accounts: readonly string[]): (account: string) => boolean {
+  const hasOffset = accounts.includes(RC_BASIS_OFFSET_ACCOUNT)
+  return (account) => hasOffset && isReverseChargeBasisLeg(account)
+}
+
+/**
+ * The cost/revenue lines whose ratios split a template's total, as the
+ * template editor shows and checks them: the business lines without a
+ * basis pair's legs.
+ */
+export function templateShareLines(lines: BookingTemplateLibraryLine[]): BookingTemplateLibraryLine[] {
+  const isBasisPairLeg = reverseChargeBasisPairLegs(lines.map((l) => l.account))
+  return lines.filter((l) => l.type === 'business' && !isBasisPairLeg(l.account))
+}
+
 /** Standard Swedish VAT rates a template line can carry (matches the rate
  *  selector in the template editor). 0 = no/foreign VAT. */
 const STANDARD_VAT_RATES = [0.25, 0.12, 0.06, 0] as const
@@ -197,16 +224,40 @@ function snapVatRate(vatAmount: number, total: number, isReverseCharge: boolean)
 }
 
 /**
+ * The rate of a fiktiv-moms leg read from the basis it was self-assessed on:
+ * a reverse-charge basis line (a 45xx/44xx pair leg, or a cost line on 4531
+ * and its siblings) whose amount at the account's own rate is the leg's
+ * amount, to the öre. A split verifikat books the fiktiv moms on one cost
+ * line's share, which the whole total misreads (150 on a 600 share of 1000
+ * snapped to 12 %). Null without such a line: the caller snaps against the
+ * total.
+ */
+function fiktivRateFromBasis(
+  vatAmount: number,
+  rows: ReadonlyArray<{ account: string; amount: number }>,
+): number | null {
+  for (const row of rows) {
+    const rate = rcBasisAccountRate(row.account)
+    if (rate !== null && Math.abs(Math.round(row.amount * rate * 100) - Math.round(vatAmount * 100)) <= 1) {
+      return rate
+    }
+  }
+  return null
+}
+
+/**
  * Derive amount-parameterised template lines from a concrete, balanced set of
  * booking rows — the inverse of {@link applyTemplate}, used by "Spara som mall".
  *
  * A booking stores literal debit/credit amounts; a template stores ratios of a
  * total plus VAT rates. The mapping:
  *   - total = the larger of Σdebit / Σcredit (equal when the entry balances),
- *     excluding fiktiv-moms legs (reverse charge/import): they net to zero and
- *     are no part of the payment, so counting them would inflate the total and
- *     shrink every derived business ratio
- *   - a 26xx line → a VAT line, its rate snapped to the nearest standard rate
+ *     excluding fiktiv-moms legs (reverse charge/import) and a 45xx/4598 basis
+ *     pair: they net to zero and are no part of the payment, so counting them
+ *     would inflate the total and shrink every derived business ratio
+ *   - a 26xx line → a VAT line, its rate snapped to the nearest standard rate;
+ *     a fiktiv-moms leg takes the rate of the basis line it was self-assessed
+ *     on when the booking has one (fiktivRateFromBasis), else the total's
  *   - the single non-VAT line closest to the total → the settlement leg (the
  *     bank / counter account), ratio 1
  *   - every other non-VAT line → a business (cost/revenue) line, ratio = amount/total
@@ -236,7 +287,11 @@ export function deriveTemplateLinesFromBooking(
 
   if (parsed.length < 2) return []
 
-  const countsTowardTotal = (r: { account: string }) => !isReverseChargeVatAccount(r.account)
+  // A basis pair nets to zero as well: counted, it doubled the total and
+  // halved every ratio (crm#1096).
+  const isBasisPairLeg = reverseChargeBasisPairLegs(parsed.map((r) => r.account))
+  const countsTowardTotal = (r: { account: string }) =>
+    !isReverseChargeVatAccount(r.account) && !isBasisPairLeg(r.account)
   const sumDebit = parsed.reduce((s, r) => (r.side === 'debit' && countsTowardTotal(r) ? s + r.amount : s), 0)
   const sumCredit = parsed.reduce((s, r) => (r.side === 'credit' && countsTowardTotal(r) ? s + r.amount : s), 0)
   const total = roundOre(Math.max(sumDebit, sumCredit))
@@ -251,7 +306,7 @@ export function deriveTemplateLinesFromBooking(
   let bestDistance = Infinity
   let bestIsCredit = false
   parsed.forEach((row, index) => {
-    if (isVat(row.account)) return
+    if (isVat(row.account) || isBasisPairLeg(row.account)) return
     const distance = Math.abs(row.amount - total)
     const closer = distance < bestDistance - 0.005
     const tiePreferCredit =
@@ -267,12 +322,14 @@ export function deriveTemplateLinesFromBooking(
 
   return parsed.map((row, index) => {
     if (isVat(row.account)) {
+      const isFiktiv = isReverseChargeVatAccount(row.account)
       return {
         account: row.account,
         label: label(row.account),
         side: row.side,
         type: 'vat',
-        vat_rate: snapVatRate(row.amount, total, isReverseChargeVatAccount(row.account)),
+        vat_rate: (isFiktiv ? fiktivRateFromBasis(row.amount, parsed) : null)
+          ?? snapVatRate(row.amount, total, isFiktiv),
       }
     }
     if (index === settlementIndex) {

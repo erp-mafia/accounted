@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,6 +20,8 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntryReviewContent'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { LineVatCodeBadge, LineVatCodeMenu } from '@/components/bookkeeping/LineVatCodeMenu'
+import { AccountNumber } from '@/components/ui/account-number'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import TemplateApplyButton from '@/components/bookkeeping/TemplateApplyButton'
@@ -44,12 +46,20 @@ import {
   formatFailedDocumentNames,
   type DocumentLinkFailure,
 } from '@/lib/documents/link-documents'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatAmount, formatCurrency } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { roundOre } from '@/lib/money'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { resolveVoucherEnter, type VoucherEnterAction } from '@/lib/bookkeeping/voucher-enter-key'
+import {
+  foldGeneratedVatLines,
+  groupVoucherLinesWithVatCodes,
+  vatCodeAfterAccountChange,
+  vatCodeConflictAccounts,
+  vatCodeRuleForAccount,
+  type VoucherLineVatCode,
+} from '@/lib/bookkeeping/voucher-line-vat-code'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
@@ -71,6 +81,12 @@ export interface FormLine {
   tax_code?: string | null
   /** SIE dimension map {sie_dim_no: object_code}, e.g. {"1":"KS01","6":"P001"}. */
   dimensions?: Record<string, string>
+  /** The momskod chosen for the line (crm#1096): a reverse-charge purchase whose
+   *  fiktiv-moms and basis lines are generated under it, null when switched
+   *  off, unset when the line follows its account (lib/bookkeeping/voucher-
+   *  line-vat-code.ts). Never sent: the generated lines are what the
+   *  declaration reads. */
+  vat_code?: VoucherLineVatCode | null
 }
 
 interface Props {
@@ -234,7 +250,19 @@ export default function JournalEntryForm({
   // enabled so the attempt can happen; the handlers gate on validity.
   const [showValidationHints, setShowValidationHints] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
-  const { accounts } = useAccounts()
+  const { accounts, isLoading: accountsLoading, error: accountsError } = useAccounts()
+  // Chart row per account number: what a line's momskod may be follows the
+  // account's own momskod (crm#1096). Until the chart is known no line takes
+  // one, so a momskod never books against a guessed account rule.
+  const accountByNumber = useMemo(
+    () => new Map(accounts.map((a) => [a.account_number, a])),
+    [accounts],
+  )
+  const chartReady = !accountsLoading && !(accountsError && accounts.length === 0)
+  const vatRowOf = useMemo(
+    () => (chartReady ? (accountNumber: string) => accountByNumber.get(accountNumber) : null),
+    [chartReady, accountByNumber],
+  )
   // Full BAS catalogue (static reference data, fetched once per session). Lets
   // the account picker surface standard accounts the company hasn't activated
   // yet; picking one activates it at commit via the existing rail.
@@ -630,6 +658,15 @@ export default function JournalEntryForm({
       updated[index].debit_amount = ''
     }
 
+    // A new account decides the momskod again (crm#1096), except that a code
+    // chosen on an ordinary cost account survives a correction to another one.
+    if (field === 'account_number' && value !== lines[index]?.account_number) {
+      updated[index].vat_code = vatCodeAfterAccountChange(
+        lines[index]?.vat_code,
+        vatCodeRuleForAccount(value, accountByNumber.get(value)),
+      )
+    }
+
     // Auto-fill line description from account name when selecting an account.
     // NOTE: we intentionally do NOT auto-fill a balancing amount here: that was
     // surprising when splitting across several lines. The balancing amount is
@@ -651,6 +688,10 @@ export default function JournalEntryForm({
     }
 
     setLines(updated)
+  }
+
+  const updateLineVatCode = (index: number, code: VoucherLineVatCode | null | undefined) => {
+    setLines((ls) => ls.map((l, i) => (i === index ? { ...l, vat_code: code } : l)))
   }
 
   // Outstanding imbalance from every line except `excludeIndex`.
@@ -778,6 +819,45 @@ export default function JournalEntryForm({
     && submittableLines.length >= 2
     && incompleteLineCount === 0
 
+  // Each line with the lines its momskod generates (crm#1096). Derived on every
+  // render, never stored, so they follow the line's amount, account and code.
+  // They net to zero, so balance and the FX base above stay on the typed lines;
+  // bookedLines is the verifikat that is shown, saved as mall and posted.
+  const lineGroups = useMemo(
+    () => groupVoucherLinesWithVatCodes(lines, vatRowOf),
+    [lines, vatRowOf],
+  )
+  const bookedLines = useMemo<FormLine[]>(
+    () => lineGroups.flatMap((group) => [group.line, ...group.generated]),
+    [lineGroups],
+  )
+  const generatedTotals = lineGroups.reduce(
+    (sum, group) => {
+      for (const l of group.generated) {
+        sum.debit += parseFloat(l.debit_amount) || 0
+        sum.credit += parseFloat(l.credit_amount) || 0
+      }
+      return sum
+    },
+    { debit: 0, credit: 0 },
+  )
+  const bookedTotalDebit = roundOre(totalDebit + generatedTotals.debit)
+  const bookedTotalCredit = roundOre(totalCredit + generatedTotals.credit)
+  const vatCodeConflicts = vatCodeConflictAccounts(lineGroups)
+  const hasVatCodeConflict = vatCodeConflicts.length > 0
+
+  // A saved draft or a Kopiera copy of a verifikat this form posted carries
+  // what a momskod generated as ordinary lines, directly under their line:
+  // fold them back into that line's momskod once the chart is known, so they
+  // follow the line again. Lines from bank and inbox proposals are placed
+  // elsewhere and stay as typed. A draft being edited keeps its saved shape.
+  const vatFoldPendingRef = useRef(initialLines !== undefined)
+  useEffect(() => {
+    if (!vatFoldPendingRef.current || !vatRowOf) return
+    vatFoldPendingRef.current = false
+    setLines((prev) => foldGeneratedVatLines(prev, vatRowOf, { stored: !!editEntryId }))
+  }, [vatRowOf, editEntryId])
+
   // Account number → BAS name, so derived template lines get meaningful labels.
   const accountNameMap = useMemo(
     () => Object.fromEntries(catalog.map((a) => [a.account_number, a.account_name])),
@@ -786,8 +866,8 @@ export default function JournalEntryForm({
   // Template lines derived from the current kontering. Fewer than two usable
   // lines (a 4-digit account + an amount) disables "Spara som mall".
   const derivedTemplateLines = useMemo(
-    () => deriveTemplateLinesFromBooking(lines, accountNameMap),
-    [lines, accountNameMap],
+    () => deriveTemplateLinesFromBooking(bookedLines, accountNameMap),
+    [bookedLines, accountNameMap],
   )
 
   const rate = parseFloat(exchangeRate) || 0
@@ -892,7 +972,7 @@ export default function JournalEntryForm({
   }
 
   const handleReview = () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch || hasVatCodeConflict) {
       setShowValidationHints(true)
       return
     }
@@ -992,7 +1072,8 @@ export default function JournalEntryForm({
   // Inner submit: builds payload, POSTs, throws a structured error on failure
   // (so the activation hook can intercept ACCOUNTS_NOT_IN_CHART).
   const postJournalEntry = useCallback(async () => {
-    const submittableLines = lines.filter(
+    // bookedLines: the typed lines plus what their momskoder generate.
+    const submittableLines = bookedLines.filter(
       (l) => l.account_number && (l.debit_amount || l.credit_amount)
     )
 
@@ -1099,7 +1180,7 @@ export default function JournalEntryForm({
       }),
     })
     return (await throwOnStructuredError(res)) as { data?: { id?: string; voucher_series?: string; voucher_number?: number }; journal_entry_id?: string }
-  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, seriesResolved, notes, extraBody])
+  }, [bookedLines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, seriesResolved, notes, extraBody])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
     useSubmitWithAccountActivation(postJournalEntry)
@@ -1242,7 +1323,7 @@ export default function JournalEntryForm({
   }
 
   const handleSaveDraft = async () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch || hasVatCodeConflict) {
       setShowValidationHints(true)
       return
     }
@@ -1312,7 +1393,7 @@ export default function JournalEntryForm({
   // editEntryId URL) and keep it a draft. No field reset: the host dialog
   // closes on success via onUpdated.
   const handleSaveEdit = async () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch || hasVatCodeConflict) {
       setShowValidationHints(true)
       return
     }
@@ -1388,9 +1469,9 @@ export default function JournalEntryForm({
         description={description}
         notes={notes || undefined}
         voucherSeries={voucherSeries}
-        lines={lines}
-        totalDebit={totalDebit}
-        totalCredit={totalCredit}
+        lines={bookedLines}
+        totalDebit={bookedTotalDebit}
+        totalCredit={bookedTotalCredit}
         attachmentCount={uploadedFiles.filter((f) => f.status === 'uploaded').length}
         showBalanceBadge
         hideDate={false}
@@ -1643,7 +1724,9 @@ export default function JournalEntryForm({
 
       {/* Entry lines: mobile cards */}
       <div className="sm:hidden space-y-3">
-        {lines.map((line, index) => (
+        {lines.map((line, index) => {
+          const vatGroup = lineGroups[index]
+          return (
           <div key={index} className="rounded-lg border bg-card p-3 space-y-2">
             <div className="flex items-start gap-2">
               <div className="flex-1">
@@ -1658,6 +1741,15 @@ export default function JournalEntryForm({
                   inputRef={(el) => { mobileAccountRefs.current[index] = el }}
                 />
               </div>
+              {vatGroup && vatGroup.rule.mode !== 'none' && (
+                <div className="shrink-0 -mt-1">
+                  <LineVatCodeMenu
+                    rule={vatGroup.rule}
+                    code={vatGroup.code}
+                    onChange={(code) => updateLineVatCode(index, code)}
+                  />
+                </div>
+              )}
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -1674,6 +1766,11 @@ export default function JournalEntryForm({
               onKeyDown={handleLineDescKeyDown(index)}
               placeholder={t('line_description_placeholder')}
             />
+            {vatGroup?.code && vatGroup.rule.mode !== 'none' && (
+              <div>
+                <LineVatCodeBadge rule={vatGroup.rule} code={vatGroup.code} />
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">{t('col_debit')}</Label>
@@ -1744,18 +1841,38 @@ export default function JournalEntryForm({
                 )}
               </div>
             )}
+            {/* What the line's momskod generates: read-only, follows the line. */}
+            {vatGroup && vatGroup.generated.length > 0 && (
+              <div className="space-y-1 border-t pt-2 text-xs text-muted-foreground">
+                <p>{t('vat_code_generated_title', { account: line.account_number })}</p>
+                {vatGroup.generated.map((generated, gi) => (
+                  <div key={gi} className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate">
+                      <AccountNumber number={generated.account_number} size="sm" />{' '}
+                      {generated.line_description}
+                    </span>
+                    <span className="shrink-0 tabular-nums">
+                      {generated.debit_amount
+                        ? t('sum_d', { amount: formatAmount(parseFloat(generated.debit_amount)) })
+                        : t('sum_k', { amount: formatAmount(parseFloat(generated.credit_amount)) })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-        ))}
+          )
+        })}
 
         {/* Mobile totals */}
         <div className="flex justify-between items-center px-1 pt-2 font-semibold text-sm">
           <span>{t('sum')}</span>
           <div className="flex gap-4">
             <span className={isBalanced ? 'text-success' : 'text-destructive'}>
-              {t('sum_d', { amount: totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) })}
+              {t('sum_d', { amount: bookedTotalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) })}
             </span>
             <span className={isBalanced ? 'text-success' : 'text-destructive'}>
-              {t('sum_k', { amount: totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) })}
+              {t('sum_k', { amount: bookedTotalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) })}
             </span>
           </div>
         </div>
@@ -1801,8 +1918,12 @@ export default function JournalEntryForm({
             </tr>
           </thead>
           <tbody>
-            {lines.map((line, index) => (
-              <tr key={index} className="border-b">
+            {lines.map((line, index) => {
+              const vatGroup = lineGroups[index]
+              return (
+              <Fragment key={index}>
+              {/* A line with generated rows hands its bottom rule to the last of them. */}
+              <tr className={vatGroup && vatGroup.generated.length > 0 ? undefined : 'border-b'}>
                 <td className="py-1.5">
                   <AccountCombobox
                     value={line.account_number}
@@ -1824,6 +1945,9 @@ export default function JournalEntryForm({
                     placeholder={t('line_description_placeholder')}
                     className="h-8"
                   />
+                  {vatGroup?.code && vatGroup.rule.mode !== 'none' && (
+                    <LineVatCodeBadge rule={vatGroup.rule} code={vatGroup.code} />
+                  )}
                   {line.dimensions &&
                     Object.keys(line.dimensions).length > 0 &&
                     (line.account_number || line.debit_amount || line.credit_amount) && (
@@ -1934,6 +2058,13 @@ export default function JournalEntryForm({
                         )}
                       </div>
                     )}
+                    {vatGroup && vatGroup.rule.mode !== 'none' && (
+                      <LineVatCodeMenu
+                        rule={vatGroup.rule}
+                        code={vatGroup.code}
+                        onChange={(code) => updateLineVatCode(index, code)}
+                      />
+                    )}
                     <Button
                       variant="ghost"
                       size="icon-sm"
@@ -1945,7 +2076,29 @@ export default function JournalEntryForm({
                   </div>
                 </td>
               </tr>
-            ))}
+              {/* What the line's momskod generates: read-only, follows the line. */}
+              {(vatGroup?.generated ?? []).map((generated, gi, all) => (
+                <tr
+                  key={`vat-${gi}`}
+                  className={cn('text-muted-foreground', gi === all.length - 1 && 'border-b')}
+                  title={t('vat_code_generated_title', { account: line.account_number })}
+                >
+                  <td className="py-1 pl-3">
+                    <AccountNumber number={generated.account_number} size="sm" />
+                  </td>
+                  <td className="py-1 px-1 text-xs">{generated.line_description}</td>
+                  <td className="py-1 px-1 text-right text-xs tabular-nums">
+                    {generated.debit_amount ? formatAmount(parseFloat(generated.debit_amount)) : ''}
+                  </td>
+                  <td className="py-1 px-1 text-right text-xs tabular-nums">
+                    {generated.credit_amount ? formatAmount(parseFloat(generated.credit_amount)) : ''}
+                  </td>
+                  <td colSpan={2}></td>
+                </tr>
+              ))}
+              </Fragment>
+              )
+            })}
           </tbody>
           <tfoot>
             <tr className="font-semibold">
@@ -1957,14 +2110,14 @@ export default function JournalEntryForm({
                   isBalanced ? 'text-success' : 'text-destructive'
                 }`}
               >
-                {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                {bookedTotalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
               </td>
               <td
                 className={`py-2 px-1 text-right ${
                   isBalanced ? 'text-success' : 'text-destructive'
                 }`}
               >
-                {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                {bookedTotalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
               </td>
               <td></td>
               <td></td>
@@ -2068,7 +2221,7 @@ export default function JournalEntryForm({
             </>
           )}
         </div>
-        {showValidationHints && (!description || !selectedPeriod || isUploading || periodMismatch || incompleteLineCount > 0 || (!isBalanced && submittableLines.length < 2)) && (
+        {showValidationHints && (!description || !selectedPeriod || isUploading || periodMismatch || incompleteLineCount > 0 || (!isBalanced && submittableLines.length < 2) || hasVatCodeConflict) && (
           <div className="text-xs text-destructive space-y-0.5 text-right">
             {!description && <p>{t('validation_description')}</p>}
             {!selectedPeriod && <p>{t('validation_period')}</p>}
@@ -2081,6 +2234,9 @@ export default function JournalEntryForm({
             )}
             {submittableLines.length < 2 && incompleteLineCount === 0 && (
               <p>{t('validation_min_lines')}</p>
+            )}
+            {hasVatCodeConflict && (
+              <p>{t('validation_vat_code_conflict', { accounts: vatCodeConflicts.join(', ') })}</p>
             )}
           </div>
         )}
@@ -2184,9 +2340,9 @@ export default function JournalEntryForm({
           description={description}
           notes={notes || undefined}
           voucherSeries={!embedded ? voucherSeries : undefined}
-          lines={lines}
-          totalDebit={totalDebit}
-          totalCredit={totalCredit}
+          lines={bookedLines}
+          totalDebit={bookedTotalDebit}
+          totalCredit={bookedTotalCredit}
           attachmentCount={uploadedFiles.filter((f) => f.status === 'uploaded').length}
           showBalanceBadge={!embedded}
           hideDate={!!embedded}

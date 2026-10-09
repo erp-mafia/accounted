@@ -94,6 +94,15 @@ export const RC_BASIS_ACCOUNTS_BY_RATE = {
   r6: ['4517', '4537', '4533', '4417', '4427'],
 } as const
 
+/** The momssats a static RC basis account books its basis at (4531 is 25 %), read from the groups above; null for any other account. */
+export function rcBasisAccountRate(account: string): 0.25 | 0.12 | 0.06 | null {
+  const isIn = (accounts: readonly string[]) => accounts.includes(account)
+  if (isIn(RC_BASIS_ACCOUNTS_BY_RATE.r25)) return 0.25
+  if (isIn(RC_BASIS_ACCOUNTS_BY_RATE.r12)) return 0.12
+  if (isIn(RC_BASIS_ACCOUNTS_BY_RATE.r6)) return 0.06
+  return null
+}
+
 /** Net debit balance of the RC basis accounts, one figure per momssats. */
 export interface RcBasisTotalsByRate {
   r25: number

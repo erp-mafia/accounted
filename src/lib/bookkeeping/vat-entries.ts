@@ -258,7 +258,8 @@ export function reverseChargeKindForBasisAccount(account: string): { kind: Rever
   return null
 }
 
-const RC_BASIS_BOXES: ReadonlySet<string> = new Set(['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24'])
+/** The momsdeklaration boxes of a reverse-charge purchase's basis (ruta 20-24). */
+export const RC_BASIS_BOXES: ReadonlySet<string> = new Set(['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24'])
 
 /**
  * Whether a debit on `account` already reports the reverse-charge basis in

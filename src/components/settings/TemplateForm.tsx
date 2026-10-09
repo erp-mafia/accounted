@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { Trash2, Plus } from 'lucide-react'
-import { convertLibraryToBookingTemplate, applyTemplate } from '@/lib/bookkeeping/template-library'
+import { convertLibraryToBookingTemplate, applyTemplate, templateShareLines } from '@/lib/bookkeeping/template-library'
 import { deriveLibraryCategory } from '@/lib/bookkeeping/template-groups'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { formatCurrency } from '@/lib/utils'
@@ -104,16 +104,18 @@ export function TemplateForm({
   // Ratio is only load-bearing when a template splits the amount across more
   // than one cost/revenue line. Hide it for the simple case to keep the form
   // approachable for non-accountants; it stays 1.0 under the hood.
-  const businessLineCount = lines.filter((l) => l.type === 'business').length
+  // A reverse-charge basis pair (45xx / 4598) is no share of the cost: it
+  // mirrors the cost line it belongs to, so its legs get no input and no part
+  // in the sum check (templateShareLines).
+  const shareLines = templateShareLines(lines)
+  const businessLineCount = shareLines.length
   const showRatio = businessLineCount > 1
   // The ratio only validates against cost/revenue lines (businessRatioSum), so
   // only those get an editable input. The settlement leg is the full counter-
   // amount (ratio 1.0) and is shown in the live preview, not as a control —
   // an editable settlement ratio that doesn't feed the sum check would mislead.
-  const firstRatioIndex = showRatio ? lines.findIndex((l) => l.type === 'business') : -1
-  const businessRatioSum = lines
-    .filter((l) => l.type === 'business')
-    .reduce((sum, l) => sum + (l.ratio ?? 1), 0)
+  const firstRatioIndex = showRatio ? lines.indexOf(shareLines[0]) : -1
+  const businessRatioSum = shareLines.reduce((sum, l) => sum + (l.ratio ?? 1), 0)
   const ratioSumOff = showRatio && Math.abs(businessRatioSum - 1) > 0.001
 
   // Live split preview for a 1 000 kr amount. Computed only once every line has
@@ -225,7 +227,7 @@ export function TemplateForm({
         </div>
         <div className="space-y-2 mt-1">
           {lines.map((line, i) => {
-            const showRatioInput = showRatio && line.type === 'business'
+            const showRatioInput = showRatio && shareLines.includes(line)
             return (
             <div key={i} className="rounded-lg border border-border p-2 space-y-1.5">
               <div className="flex items-center gap-2">

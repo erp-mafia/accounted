@@ -1,0 +1,432 @@
+import type { CreateJournalEntryLineInput, VatDeclarationRutor } from '@/types'
+import {
+  generateReverseChargePurchaseLines,
+  isReverseChargeKind,
+  reverseChargeKindForBasisAccount,
+  reverseChargeKindRuta,
+  RC_BASIS_BOXES,
+  RC_BASIS_OFFSET_ACCOUNT,
+  REVERSE_CHARGE_KINDS,
+  REVERSE_CHARGE_TREATMENT_KINDS,
+  type ReverseChargeKind,
+} from './vat-entries'
+import {
+  defaultRateForVatTreatment,
+  isAccountVatTreatment,
+  resolveVatTreatmentRuta,
+  type AccountVatTreatment,
+} from '@/lib/vat/account-vat-treatment'
+import { getBoxForAccount } from '@/lib/vat/moms-box-mapping'
+import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
+import { roundOre } from '@/lib/money'
+
+/**
+ * The momskod of a konteringsrad in the manual verifikat form (crm#1096).
+ *
+ * The momsdeklaration reads account numbers, never a per-line tag
+ * (ACCOUNT_RUTA in lib/reports/vat-declaration.ts plus the chart's own
+ * momskoder; journal_entry_lines.tax_code is read by nothing). So a momskod on
+ * a line cannot be stored and honoured later: it has to become the lines that
+ * put the purchase in its rutor. Every other booking surface already does that
+ * for a reverse-charge purchase through generateReverseChargePurchaseLines
+ * (bank categorisation, supplier invoices, booking templates, mapping rules):
+ * the fiktiv-moms pair (2645|2647 D / 26x4 K, rutor 30-32 and 48) plus the
+ * basis pair (44xx|45xx D / 4598 K, rutor 20-24). This module wires that one
+ * producer to a form line; no VAT formula lives here.
+ *
+ * The line's account decides what a momskod may be (vatCodeRuleForAccount),
+ * read from the chart row exactly as the declaration reads it: an account that
+ * reports its own ruta 20-24 fixes the box and the rate, so the momskod only
+ * adds the fiktiv moms beside it; an ordinary cost account takes any kind and
+ * rate, and the basis pair books the box.
+ *
+ * Only reverse-charge purchases are offered. Their generated lines net to zero
+ * inside the verifikat (2645 = 26x4, 45xx = 4598), so a momskod never changes
+ * an amount the user typed or the balance. An ordinary domestic purchase has
+ * no base ruta (its 2641 line is its whole declaration effect) and its moms
+ * line changes what the verifikat pays, so it stays a line the user types,
+ * as before.
+ */
+
+/** The self-assessed rates the producer has basis accounts for. */
+export const VOUCHER_LINE_VAT_RATES = [0.25, 0.12, 0.06] as const
+export type VoucherLineVatRate = (typeof VOUCHER_LINE_VAT_RATES)[number]
+
+/** Huvudregeln: what a newly chosen momskod starts on (resolveReverseChargeRate's default). */
+export const DEFAULT_VOUCHER_LINE_VAT_RATE: VoucherLineVatRate = 0.25
+
+/** The purchase types offered, in momsdeklaration order (ruta 20, 21, 22, 24). */
+export const VOUCHER_LINE_VAT_KINDS: readonly ReverseChargeKind[] = REVERSE_CHARGE_KINDS
+
+export interface VoucherLineVatCode {
+  kind: ReverseChargeKind
+  rate: VoucherLineVatRate
+}
+
+export function isVoucherLineVatRate(value: unknown): value is VoucherLineVatRate {
+  return (VOUCHER_LINE_VAT_RATES as readonly unknown[]).includes(value)
+}
+
+/**
+ * The part of a form line this module reads. Amounts are the form's input
+ * strings. `vat_code` is what the user chose: a code, null for switched off,
+ * undefined for no choice (the line follows its account, see
+ * groupVoucherLinesWithVatCodes).
+ */
+export interface VoucherVatCodeLine {
+  account_number: string
+  debit_amount: string
+  credit_amount: string
+  vat_code?: VoucherLineVatCode | null
+}
+
+/** The chart_of_accounts columns the rule reads. */
+export interface VoucherVatCodeAccountRow {
+  default_vat_treatment?: string | null
+  default_vat_rate?: number | string | null
+}
+
+/** Chart row per account number; undefined for an account the chart does not hold. */
+export type VoucherVatCodeRowLookup = (accountNumber: string) => VoucherVatCodeAccountRow | null | undefined
+
+/** A generated line, in the form's string shape so it renders and submits like a typed one. */
+export interface GeneratedVoucherLine {
+  account_number: string
+  debit_amount: string
+  credit_amount: string
+  line_description: string
+}
+
+/** The momsdeklaration boxes of a reverse-charge basis (ruta 20-24, RC_BASIS_BOXES). */
+export type RcBasisBox = 'ruta20' | 'ruta21' | 'ruta22' | 'ruta23' | 'ruta24'
+
+/** A purchase cost account: BAS class 4-6, the 4598 offset included. */
+const COST_ACCOUNT = /^[4-6]\d{3}$/
+
+/**
+ * The accounts a purchase is paid or owed on: 19xx bank and cash, 20xx owner
+ * accounts (egna insättningar), 24xx-25xx and 27xx-29xx liabilities
+ * (leverantörsskulder, a card or an owner's account in 28xx).
+ */
+const PURCHASE_SETTLEMENT_ACCOUNT = /^(19|20|24|25|27|28|29)\d{2}$/
+
+/**
+ * What a momskod may be on a line, decided by its account:
+ *  - none: no momskod. Not a purchase cost account (BAS class 4-6), the 4598
+ *    offset itself, an account that reports another purchase box (trepartshandel
+ *    ruta 37, the import basis ruta 50), or one whose own reverse-charge
+ *    momskod carries no self-assessment rate.
+ *  - fixed: the account reports its own ruta 20-24: a BAS basis account (4531
+ *    is tjänster utanför EU at 25 %) or a class 4-6 account whose kontoplan
+ *    momskod is a reverse-charge purchase. Box and rate are the account's
+ *    (`code`, `box`): the momskod only adds the fiktiv moms beside it. Another
+ *    kind would leave the base in the account's box, and another rate would
+ *    break the per-rate basis/moms identity the declaration checks.
+ *  - free: an ordinary cost account. Any kind and rate; the basis pair books the box.
+ */
+export type VoucherLineVatCodeRule =
+  | { mode: 'none' }
+  | { mode: 'free' }
+  | { mode: 'fixed'; code: VoucherLineVatCode; box: RcBasisBox }
+
+const NO_VAT_CODE: VoucherLineVatCodeRule = { mode: 'none' }
+const ANY_VAT_CODE: VoucherLineVatCodeRule = { mode: 'free' }
+
+/**
+ * The account momskoder that name a reverse-charge purchase, as the kind the
+ * producer books. reverse_charge_domestic maps to domestic_services: on such
+ * an account the kind only picks the 2647 input leg, since the account
+ * reports its own ruta 23/24.
+ */
+const PURCHASE_KIND_BY_TREATMENT: Partial<Record<AccountVatTreatment, ReverseChargeKind>> = {
+  ...REVERSE_CHARGE_TREATMENT_KINDS,
+  reverse_charge_domestic: 'domestic_services',
+}
+
+/**
+ * The box a debit on the account reports, as the declaration resolves it: a
+ * configured momskod decides (resolveVatTreatmentRuta), otherwise the fixed
+ * BAS map (ACCOUNT_TO_BOX, asserted equal to ACCOUNT_RUTA).
+ */
+function purchaseBox(accountNumber: string, treatment: string | null): keyof VatDeclarationRutor | null {
+  if (isAccountVatTreatment(treatment)) {
+    return resolveVatTreatmentRuta(treatment, Number(accountNumber.charAt(0)), accountNumber)?.box ?? null
+  }
+  const box = getBoxForAccount(accountNumber)
+  return box ? (`ruta${box}` as keyof VatDeclarationRutor) : null
+}
+
+/**
+ * The momskod an account with its own ruta 20-24 stands for: a configured
+ * reverse-charge purchase code at the rate the declaration buckets the
+ * account's basis at (the configured momssats, else the treatment's default,
+ * as resolveEffectiveVatRate resolves it), or an unconfigured BAS basis
+ * account read by its number.
+ */
+function ownVatCode(accountNumber: string, row: VoucherVatCodeAccountRow | null | undefined): VoucherLineVatCode | null {
+  const treatment = row?.default_vat_treatment ?? null
+  if (isAccountVatTreatment(treatment)) {
+    const kind = PURCHASE_KIND_BY_TREATMENT[treatment]
+    if (!kind) return null
+    const configured = row?.default_vat_rate == null ? null : Number(row.default_vat_rate)
+    const rate = configured ?? defaultRateForVatTreatment(treatment, Number(accountNumber.charAt(0)))
+    return isVoucherLineVatRate(rate) ? { kind, rate } : null
+  }
+  const basis = reverseChargeKindForBasisAccount(accountNumber)
+  if (basis && isVoucherLineVatRate(basis.rate)) return { kind: basis.kind, rate: basis.rate }
+  // The basis accounts left are domestic goods (4415-4417, ruta 23): no
+  // producer kind of their own, and 2647 is still their input leg.
+  const goodsRate = rcBasisAccountRate(accountNumber)
+  return goodsRate ? { kind: 'domestic_services', rate: goodsRate } : null
+}
+
+/** See VoucherLineVatCodeRule. `row` is the account's chart row; null or undefined when the chart holds none. */
+export function vatCodeRuleForAccount(
+  accountNumber: string,
+  row: VoucherVatCodeAccountRow | null | undefined,
+): VoucherLineVatCodeRule {
+  if (!COST_ACCOUNT.test(accountNumber) || accountNumber === RC_BASIS_OFFSET_ACCOUNT) return NO_VAT_CODE
+  const box = purchaseBox(accountNumber, row?.default_vat_treatment ?? null)
+  if (box === null) return ANY_VAT_CODE
+  if (!RC_BASIS_BOXES.has(box)) return NO_VAT_CODE
+  const code = ownVatCode(accountNumber, row)
+  return code ? { mode: 'fixed', code, box: box as RcBasisBox } : NO_VAT_CODE
+}
+
+/** The box the purchase's base lands in: the account's own on a fixed account, the kind's basis box otherwise. */
+export function vatCodeBasisBox(rule: VoucherLineVatCodeRule, code: VoucherLineVatCode): RcBasisBox {
+  return rule.mode === 'fixed' ? rule.box : reverseChargeKindRuta(code.kind)
+}
+
+/**
+ * The code a line keeps when its account changes: a code chosen on an
+ * ordinary cost account stays when the new account is one too (correcting
+ * 6540 to 6541 must not drop the self-assessment), otherwise the line follows
+ * the new account again.
+ */
+export function vatCodeAfterAccountChange(
+  current: VoucherLineVatCode | null | undefined,
+  next: VoucherLineVatCodeRule,
+): VoucherLineVatCode | undefined {
+  return next.mode === 'free' && current ? current : undefined
+}
+
+function parseAmount(value: string): number {
+  return roundOre(parseFloat(value) || 0)
+}
+
+/**
+ * The lines `code` generates on a line, in the engine's shape: the producer
+ * run on the line's amount, which IS the beskattningsunderlag (the seller
+ * charged no VAT, and the form's amounts are SEK). No basis pair on a fixed
+ * account: it reports the base itself. A credit-side line, a credit note,
+ * mirrors every generated line, reversing the self-assessment as a supplier
+ * credit note does. Empty without a positive amount or on a 'none' account.
+ */
+export function vatCodeLinesForLine(
+  line: Pick<VoucherVatCodeLine, 'debit_amount' | 'credit_amount'>,
+  rule: VoucherLineVatCodeRule,
+  code: VoucherLineVatCode,
+): CreateJournalEntryLineInput[] {
+  if (rule.mode === 'none') return []
+  const debit = parseAmount(line.debit_amount)
+  const credit = parseAmount(line.credit_amount)
+  const base = debit > 0 ? debit : credit
+  if (!(base > 0)) return []
+  const generated = generateReverseChargePurchaseLines({
+    base,
+    rate: code.rate,
+    kind: code.kind,
+    basisBase: rule.mode === 'fixed' ? 0 : base,
+  })
+  if (debit > 0) return generated
+  return generated.map((l) => ({ ...l, debit_amount: l.credit_amount, credit_amount: l.debit_amount }))
+}
+
+function toFormShape(line: CreateJournalEntryLineInput): GeneratedVoucherLine {
+  return {
+    account_number: line.account_number,
+    debit_amount: line.debit_amount > 0 ? String(line.debit_amount) : '',
+    credit_amount: line.credit_amount > 0 ? String(line.credit_amount) : '',
+    line_description: line.line_description ?? '',
+  }
+}
+
+export interface VoucherLineGroup<T extends VoucherVatCodeLine> {
+  line: T
+  rule: VoucherLineVatCodeRule
+  /** The momskod that applies to the line, null when none does. */
+  code: VoucherLineVatCode | null
+  generated: GeneratedVoucherLine[]
+  /**
+   * Accounts the line's chosen momskod generates that another line also books
+   * by hand: the purchase would be declared twice, so the form refuses to save.
+   */
+  conflicts: string[]
+}
+
+/**
+ * Whether the typed lines book a purchase themselves, the condition for an
+ * account's own code to switch on by itself: some line credits an account the
+ * purchase is paid or owed on (PURCHASE_SETTLEMENT_ACCOUNT) and no line
+ * credits a class 4-6 account, 4598 included. An omföring between boxes or
+ * cost accounts (4535 D / 4531 K, 4531 D / 5420 K), a basis-only correction
+ * (4535 D / 4598 K) and an accrual release (4531 D / 1790 K) book no
+ * purchase: the purchase and its fiktiv moms sit in another verifikat, so the
+ * account's own code there would declare rutor 30 and 48 a second time. A
+ * purchase with a typed 45xx / 4598 pair counts as none either: by its lines
+ * it cannot be told from a basis-only correction beside a payment (a copied
+ * supplier invoice whose fiktiv pair folded into another line's code).
+ *
+ * A rule on the shape of the lines, not on what they are for: an upplupen
+ * kostnad booked on 4531 against 2990 has the shape of a purchase.
+ */
+function linesBookPurchase(lines: readonly VoucherVatCodeLine[]): boolean {
+  let settled = false
+  for (const line of lines) {
+    if (!(parseAmount(line.credit_amount) > 0)) continue
+    if (COST_ACCOUNT.test(line.account_number)) return false
+    if (PURCHASE_SETTLEMENT_ACCOUNT.test(line.account_number)) settled = true
+  }
+  return settled
+}
+
+/**
+ * Every form line with the lines its momskod generates. The generated lines
+ * are derived on each render, never stored, so they follow the line's amount,
+ * account and momskod and cannot go stale or be added twice. The verifikat
+ * that is reviewed and posted is the groups flattened in order: each generated
+ * set directly under the line it belongs to.
+ *
+ * A momskod chosen in the menu applies as chosen (on a fixed account only its
+ * on/off counts), whatever else the verifikat books. With no choice made, a
+ * fixed account switches itself on (crm#1096): picking 4531, or an account
+ * whose kontoplan momskod is reverse charge, adds its fiktiv moms under the
+ * debit, but only when the typed lines book the purchase themselves
+ * (linesBookPurchase), so omföringar, basis-only corrections and accrual
+ * releases stay without it. Lines handed in (the bank picker, a proposal,
+ * Kopiera) are judged by the same rule as typed ones. It also stays off on a
+ * credit, and while another line books one of the accounts it would generate
+ * by hand (a hand-built verifikat, a proposal's own fiktiv lines). Wherever it
+ * stays off, the menu still switches it on.
+ *
+ * `rowOf` null: the chart is not known yet, and no line takes a momskod.
+ */
+export function groupVoucherLinesWithVatCodes<T extends VoucherVatCodeLine>(
+  lines: readonly T[],
+  rowOf: VoucherVatCodeRowLookup | null,
+): Array<VoucherLineGroup<T>> {
+  const typedCount = new Map<string, number>()
+  for (const line of lines) {
+    if (line.account_number) typedCount.set(line.account_number, (typedCount.get(line.account_number) ?? 0) + 1)
+  }
+  const booksPurchase = linesBookPurchase(lines)
+
+  return lines.map((line) => {
+    const rule = rowOf ? vatCodeRuleForAccount(line.account_number, rowOf(line.account_number)) : NO_VAT_CODE
+    const none: VoucherLineGroup<T> = { line, rule, code: null, generated: [], conflicts: [] }
+    if (rule.mode === 'none' || line.vat_code === null) return none
+
+    const bookedByHand = (account: string) =>
+      (typedCount.get(account) ?? 0) - (account === line.account_number ? 1 : 0) > 0
+
+    if (line.vat_code) {
+      const code = rule.mode === 'fixed' ? rule.code : line.vat_code
+      if (!isReverseChargeKind(code.kind) || !isVoucherLineVatRate(code.rate)) return none
+      const generated = vatCodeLinesForLine(line, rule, code)
+      const conflicts = [...new Set(generated.map((l) => l.account_number).filter(bookedByHand))]
+      return { line, rule, code, generated: generated.map(toFormShape), conflicts }
+    }
+
+    // No choice made: a fixed account's own code on a purchase, before the
+    // line's amount too, so it shows from the moment the account is picked.
+    if (rule.mode !== 'fixed' || parseAmount(line.credit_amount) > 0 || !booksPurchase) return none
+    if (vatCodeAccounts(rule, rule.code).some(bookedByHand)) return none
+    const generated = vatCodeLinesForLine(line, rule, rule.code)
+    return { line, rule, code: rule.code, generated: generated.map(toFormShape), conflicts: [] }
+  })
+}
+
+/** The accounts a code generates on a line of this rule, whatever its amount. */
+function vatCodeAccounts(rule: VoucherLineVatCodeRule, code: VoucherLineVatCode): string[] {
+  return vatCodeLinesForLine({ debit_amount: '1', credit_amount: '' }, rule, code).map((l) => l.account_number)
+}
+
+/** Every account a chosen momskod generates while another line books it by hand. */
+export function vatCodeConflictAccounts(groups: ReadonlyArray<{ conflicts: readonly string[] }>): string[] {
+  return [...new Set(groups.flatMap((group) => group.conflicts))].sort()
+}
+
+/** The extra fields a stored line can carry that a generated line never has. */
+export interface FoldableVoucherLine extends VoucherVatCodeLine {
+  line_description?: string
+  tax_code?: string | null
+  currency?: string
+  dimensions?: Record<string, string>
+}
+
+function isGeneratedCopy(typed: FoldableVoucherLine, generated: CreateJournalEntryLineInput): boolean {
+  return typed.account_number === generated.account_number
+    && parseAmount(typed.debit_amount) === generated.debit_amount
+    && parseAmount(typed.credit_amount) === generated.credit_amount
+    && (typed.line_description ?? '') === (generated.line_description ?? '')
+    && typed.vat_code === undefined
+    && !typed.tax_code
+    && !typed.currency
+    && (!typed.dimensions || Object.keys(typed.dimensions).length === 0)
+}
+
+/**
+ * A saved draft, or a Kopiera copy of a verifikat this form posted, carries
+ * what a momskod generated as ordinary lines, since the code itself is never
+ * stored. Folds each such set back into its line's momskod so it follows the
+ * line again: a line followed directly by exactly the lines vatCodeLinesForLine
+ * gives for one code (accounts, amounts and the producer's descriptions, no
+ * dimensions) takes that code and loses those lines. The verifikat it posts
+ * is unchanged. Anything else stays as typed, which in practice includes the
+ * reverse-charge lines other producers hand in: a bank proposal puts them
+ * after the bank leg with blank descriptions, and a categorised verifikat
+ * (and the inbox proposal built the same way) has them above its cost line.
+ *
+ * `stored`: the lines are a saved draft being edited, which keeps its shape:
+ * an account with its own box that the draft booked without its fiktiv moms
+ * stays without it instead of switching itself on.
+ *
+ * Returns `lines` itself when nothing changes.
+ */
+export function foldGeneratedVatLines<T extends FoldableVoucherLine>(
+  lines: T[],
+  rowOf: VoucherVatCodeRowLookup,
+  options: { stored?: boolean } = {},
+): T[] {
+  const out: T[] = []
+  let changed = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const rule = vatCodeRuleForAccount(line.account_number, rowOf(line.account_number))
+    if (rule.mode === 'none' || line.vat_code !== undefined) {
+      out.push(line)
+      continue
+    }
+    const candidates: VoucherLineVatCode[] = rule.mode === 'fixed'
+      ? [rule.code]
+      : VOUCHER_LINE_VAT_KINDS.flatMap((kind) => VOUCHER_LINE_VAT_RATES.map((rate) => ({ kind, rate })))
+    const match = candidates
+      .map((code) => ({ code, expected: vatCodeLinesForLine(line, rule, code) }))
+      .find(({ expected }) =>
+        expected.length > 0
+        && i + expected.length < lines.length
+        && expected.every((g, k) => isGeneratedCopy(lines[i + 1 + k], g)))
+    if (match) {
+      out.push({ ...line, vat_code: match.code })
+      i += match.expected.length
+      changed = true
+    } else if (options.stored && rule.mode === 'fixed') {
+      out.push({ ...line, vat_code: null })
+      changed = true
+    } else {
+      out.push(line)
+    }
+  }
+  return changed ? out : lines
+}
