@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Upload, FileText, ImageIcon, X, Loader2 } from 'lucide-react'
 import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
 import { DOCUMENT_UPLOAD_ACCEPT, isAllowedDocumentFile } from '@/lib/documents/upload-types'
+import { addUploads, finishUpload, removeUpload, type UploadedFilesUpdate } from './upload-list'
 
 export interface UploadedFile {
   id?: string
@@ -22,7 +23,13 @@ export interface UploadedFile {
 
 interface DocumentUploadZoneProps {
   files: UploadedFile[]
-  onFilesChange: (files: UploadedFile[]) => void
+  /**
+   * Every change (a drop, a finished upload, the x on a file) arrives as an
+   * update of the host's latest list, never as a whole list: an upload
+   * finishes after later changes, and a list built at its drop would undo
+   * them (upload-list.ts). A useState setter can be passed as is.
+   */
+  onFilesChange: (update: UploadedFilesUpdate) => void
   journalEntryId?: string
   maxFiles?: number
   disabled?: boolean
@@ -35,6 +42,12 @@ interface DocumentUploadZoneProps {
    * file in the tab).
    */
   dropSurfaceRef?: React.RefObject<HTMLElement | null>
+  /**
+   * Called once for every file that finished uploading (it has its document
+   * id by then), also when the host closed in the meantime: a booking dialog
+   * pins it to its bank transaction right away.
+   */
+  onUploaded?: (file: UploadedFile) => void
 }
 
 let uploadCounter = 0
@@ -116,6 +129,7 @@ export default function DocumentUploadZone({
   disabled = false,
   compact = false,
   dropSurfaceRef,
+  onUploaded,
 }: DocumentUploadZoneProps) {
   const t = useTranslations('document_upload')
   const locale = useLocale()
@@ -221,18 +235,16 @@ export default function DocumentUploadZone({
       })
     }
 
-    let currentFiles = [...files, ...validFiles]
-    onFilesChange(currentFiles)
+    onFilesChange(addUploads(validFiles))
 
-    // Upload files that passed validation
+    // Upload files that passed validation. Each result lands on the host's
+    // list as it is by then, not on the one this drop started from.
     for (const f of validFiles.filter((f) => f.status === 'uploading')) {
       const result = await uploadFile(f)
-      currentFiles = currentFiles.map((cf) =>
-        cf.uploadKey === f.uploadKey ? result : cf
-      )
-      onFilesChange([...currentFiles])
+      onFilesChange(finishUpload(result))
+      if (result.status === 'uploaded' && result.id) onUploaded?.(result)
     }
-  }, [files, maxFiles, onFilesChange, t, uploadFile])
+  }, [files.length, maxFiles, onFilesChange, onUploaded, t, uploadFile])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -262,9 +274,9 @@ export default function DocumentUploadZone({
     if (inputRef.current) inputRef.current.value = ''
   }, [handleFiles])
 
-  const removeFile = useCallback((index: number) => {
-    onFilesChange(files.filter((_, i) => i !== index))
-  }, [files, onFilesChange])
+  const removeFile = useCallback((uploadKey: string) => {
+    onFilesChange(removeUpload(uploadKey))
+  }, [onFilesChange])
 
   // Whole-surface drop. Native listeners on the surface element: a
   // dragenter/dragleave pair fires for every child crossed, so a depth
@@ -391,7 +403,7 @@ export default function DocumentUploadZone({
       {/* File list */}
       {files.length > 0 && (
         <div className="space-y-1">
-          {files.map((file, index) => (
+          {files.map((file) => (
             <div
               key={file.uploadKey}
               className="flex min-w-0 items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50"
@@ -432,9 +444,11 @@ export default function DocumentUploadZone({
                 className="shrink-0"
                 onClick={(e) => {
                   e.stopPropagation()
-                  removeFile(index)
+                  removeFile(file.uploadKey)
                 }}
-                disabled={file.status === 'uploading'}
+                // A disabled zone takes no removal either: a booking dialog
+                // locks it while it links what the list held when it began.
+                disabled={disabled || file.status === 'uploading'}
               >
                 <X className="h-3 w-3" />
               </Button>

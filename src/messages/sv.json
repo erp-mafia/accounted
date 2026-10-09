@@ -3851,13 +3851,16 @@
   "tx_booking_dialog": {
     "title": "Bokför transaktion",
     "description": "Skapa en verifikation för transaktionen",
-    "doc_pick_existing": "Välj befintligt underlag",
     "doc_pick_existing_inline": "eller välj befintligt underlag från inkorgen",
     "doc_picked_remove": "Ta bort underlag",
-    "doc_clear": "Ta bort underlag",
     "doc_link_failed_title": "Underlag kunde inte bifogas",
     "doc_link_failed_description": "{count} fil(er) kunde inte länkas till verifikationen. Försök igen via bokföringssidan.",
     "bank_line_description": "Företagskonto"
+  },
+  "tx_booking_underlag": {
+    "file_fallback": "Underlag",
+    "pin_failed_title": "Underlaget kunde inte kopplas till transaktionen",
+    "pin_failed_description": "Det kopplas till verifikatet när du bokför, men finns inte kvar om du stänger innan dess."
   },
   "document_viewer": {
     "empty": "Inget underlag bifogat",

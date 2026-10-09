@@ -1,27 +1,24 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import useSWR from 'swr'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { activateBasAccounts, pickNeedsActivation } from '@/lib/bookkeeping/bas-catalog-client'
+import { useBasCatalog } from '@/lib/hooks/use-bas-catalog'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { ToastAction } from '@/components/ui/toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { AttnLine } from '@/components/ui/attn-line'
-import { needsUnderlagPrompt, templateVatMismatch, vatDisagrees, vatTreatmentAfterAccountChange, type TransactionUnderlag } from '@/lib/transactions/underlag-read'
-
-async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`${url} ${res.status}`)
-  return ((await res.json()) as { data: TransactionUnderlag }).data
-}
+import { needsUnderlagPrompt, templateVatMismatch, vatDisagrees, vatTreatmentAfterAccountChange } from '@/lib/transactions/underlag-read'
 import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-documents'
-import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, Inbox, FileText, X } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, Inbox } from 'lucide-react'
 import { computeProposalLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine, ProposalLinesInput } from '@/lib/bookkeeping/proposal-lines'
 import { accountProposal, businessAccount, previewInputFor, templateBehind, withAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
@@ -34,8 +31,11 @@ import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
+import type { UploadedFilesUpdate } from '@/components/bookkeeping/upload-list'
 import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
-import { carriedDocumentIds, underlagToCarry, uploadInFlight, type ReviewUnderlag } from './review-underlag'
+import { carriedDocumentIds, heldUnderlag, removedUpload, underlagLinkTargets, underlagToCarry, uploadInFlight, type ReviewUnderlag } from './review-underlag'
+import { useTransactionUnderlag } from './use-transaction-underlag'
+import UnderlagFileRow from './UnderlagFileRow'
 import VatTreatmentSelect from './VatTreatmentSelect'
 import AiCategorizeProposal, { AiStatusLine, pickFromRead, proposalMetaFromRead, type AiProposalMeta, type AssistantPick } from './AiCategorizeProposal'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
@@ -79,6 +79,8 @@ interface QuickReviewDialogProps {
    * settlement leg's FX metadata carries the same rate the amounts used.
    */
   onEditLines?: (lines: ProposalLine[], transaction: TransactionWithInvoice) => void
+  /** The row's own underlag was pinned here, or taken off (null): the page keeps its rows in step. */
+  onUnderlagChange?: (transactionId: string, documentId: string | null) => void
 }
 
 export default function QuickReviewDialog({
@@ -93,9 +95,13 @@ export default function QuickReviewDialog({
   carriedUnderlag = null,
   assistantRead = null,
   onEditLines,
+  onUnderlagChange,
 }: QuickReviewDialogProps) {
   const t = useTranslations('tx_quick_review')
   const tCat = useTranslations('tx_categories')
+  const tJournal = useTranslations('journal_form')
+  const tUnderlag = useTranslations('tx_booking_underlag')
+  const tDetach = useTranslations('tx_detach')
   const whyFor = useProposalWhy()
   const { toast } = useToast()
   const router = useRouter()
@@ -112,6 +118,12 @@ export default function QuickReviewDialog({
   // Session-cached (lib/reference-data): the kontoväljare is populated on
   // the first open of every row instead of after a request per open.
   const { accounts } = useAccounts()
+  // The standard accounts the company has not added, and those it
+  // deactivated, listed in the kontoväljare as activated at booking, where
+  // it used to say it found nothing (crm#1101). JournalEntryForm lists the
+  // same; handleConfirm activates the one the person picks here, and no
+  // other (pickedToActivate below).
+  const { catalog: basCatalog, chart: wholeChart } = useBasCatalog({ includeDeactivated: true })
   const { settings: companySettings } = useCompanySettings()
   // The AI proposal shown this session, kept so we can log a calibration sample
   // (proposed vs actually booked) once the user confirms.
@@ -121,10 +133,12 @@ export default function QuickReviewDialog({
   // Seeded with what "Byt" carried from the review it closed: a template
   // switch keeps the underlag attached (PostHog PH 118).
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>(() => carriedUnderlag?.files ?? [])
-  // Underlag already sitting in the inkorg, picked instead of re-uploaded. The
-  // journal entry does not exist yet at pick time, so these are held here and
-  // linked (with their inbox_item_id, which consumes the inbox item) once the
-  // booking returns a verifikat: same select-mode contract TransactionBookingDialog uses.
+  // Underlag already sitting in the inkorg, picked instead of re-uploaded.
+  // The journal entry does not exist yet at pick time: the first document
+  // attached here is pinned to the row at once (useTransactionUnderlag), and
+  // every pick is linked (with its inbox_item_id, which consumes the inbox
+  // item) once the booking returns a verifikat, the same select-mode
+  // contract TransactionBookingDialog uses.
   const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>(() => carriedUnderlag?.inboxDocs ?? [])
   // Carried documents are not read again (see carriedDocumentIds).
   const [carriedDocIds] = useState(() => carriedDocumentIds(carriedUnderlag))
@@ -150,22 +164,33 @@ export default function QuickReviewDialog({
   const [dimsOpen, setDimsOpen] = useState(false)
   const showDims = dimsOpen || Object.keys(dims).length > 0
 
-  const preAttachedDocumentId = transaction?.document_id ?? null
-  // The underlag from either door (pinned to the row, or matched in the
-  // inbox): shown beside the review, and its moms offered over the rate.
-  const { data: underlag } = useSWR<TransactionUnderlag>(
-    open && transaction?.id ? `/api/transactions/${transaction.id}/underlag` : null,
-    fetchUnderlag,
-  )
-  const documentId = preAttachedDocumentId ?? underlag?.document?.id ?? null
+  // The transaction's own underlag, from either door (pinned to the row, or
+  // matched in the inbox): its moms is offered over the rate. The first
+  // document attached here becomes it at once, so closing keeps it
+  // (crm#1101); the hook is shared with TransactionBookingDialog.
+  const underlagState = useTransactionUnderlag({
+    transactionId: transaction?.id ?? null,
+    rowDocumentId: transaction?.document_id ?? null,
+    open,
+    onChange: onUnderlagChange,
+  })
+  const underlag = underlagState.read
+  const documentId = underlagState.documentId
+  // The underlag the row had when the review opened is shown beside it. One
+  // attached here stays in the list where it was dropped instead of
+  // reshaping the dialog under the person's hand; it is beside the review
+  // from the next open on.
+  const viewerDocId = documentId && documentId !== underlagState.attachedHere ? documentId : null
+  // What only this review holds beyond the row's own underlag: what "Byt"
+  // carries to the next review (the row keeps its own).
+  const held = heldUnderlag({ files: uploadedFiles, inboxDocs: pickedInboxDocs }, documentId)
   const [useDocVat, setUseDocVat] = useState(true)
-  // Underlag attached in this dialog (an upload, or a pick from the inkorg)
-  // before the booking exists. It is not on the row yet, so the assistant's
-  // stored read never saw it: once its extraction lands, the row is read
-  // again with it (Jonas, 2026-09-14: "INTERNET BET 1" with an If invoice
-  // attached kept proposing internet). Latest upload first: that is the one
-  // the person just dropped.
-  const inDialogDocId = documentId
+  // Underlag attached in this dialog (an upload, or a pick from the inkorg).
+  // The assistant's stored read never saw it: once its extraction lands, the
+  // row is read again with it (a bank row with an insurance invoice attached
+  // kept proposing internet). Latest upload first: that is the one the
+  // person just dropped.
+  const inDialogDocId = viewerDocId
     ? null
     : ([...uploadedFiles].reverse().find((f) => f.status === 'uploaded' && f.id)?.id ??
         pickedInboxDocs[0]?.document_id ??
@@ -182,6 +207,12 @@ export default function QuickReviewDialog({
   // The whole dialog takes a dropped file, not only the dashed box: the box
   // is folded away until asked for, so the first drag also unfolds it.
   const dropSurfaceRef = useRef<HTMLDivElement>(null)
+  // A finished upload is offered to the row as its underlag; it stays in the
+  // list either way (only held here when the row already has one).
+  const { claim: claimUnderlag, withdraw: withdrawUnderlag, settled: underlagSettled } = underlagState
+  const claimUpload = useCallback((file: UploadedFile) => {
+    if (file.id) void claimUnderlag(file.id, file.fileName)
+  }, [claimUnderlag])
 
   // An account the person sets: the proposal becomes an account booking on
   // it, with the moms vatTreatmentAfterAccountChange decides (none on a
@@ -192,8 +223,16 @@ export default function QuickReviewDialog({
   const underlagVatRate =
     docFacts && (docFacts.currency ?? transaction?.currency) === transaction?.currency ? docFacts.vat_rate : null
   const vatRegistered = companySettings?.vat_registered
+  // The account the person picked here from the catalogue that the active
+  // chart lacks, listed "Aktiveras vid bokföring": the one account
+  // handleConfirm activates before booking. An account a proposal brought
+  // (the assistant's pick, the one the review opened with) is never
+  // activated here: one the company deactivated is refused by the
+  // categorize route, whose toast offers "Aktivera och bokför".
+  const [pickedToActivate, setPickedToActivate] = useState<string | null>(null)
   const handleAccountChange = useCallback((account: string) => {
     if (!account) return
+    setPickedToActivate(pickNeedsActivation(account, accounts, basCatalog) ? account : null)
     setProposal((p) => {
       const current = p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? 'exempt')
       const vat = vatTreatmentAfterAccountChange({
@@ -205,7 +244,7 @@ export default function QuickReviewDialog({
       })
       return withAccount(p, account, vat, amountForLegs)
     })
-  }, [amountForLegs, underlagVatRate, useDocVat, vatRegistered])
+  }, [accounts, basCatalog, amountForLegs, underlagVatRate, useDocVat, vatRegistered])
   // The assistant's pick, taken into this review: the proposal becomes the
   // account it named with its VAT. A pick that pre-filled on its own leaves
   // nothing to undo; one the person clicked, or one read off a document
@@ -228,10 +267,10 @@ export default function QuickReviewDialog({
 
   // Read the row again with the underlag attached in this dialog, once its
   // extraction has landed. The pick replaces the proposal (undo stays
-  // offered) and reports itself for the calibration sample. Nothing here is
-  // stored server-side: the row does not carry the document until booked.
-  // A document "Byt" carried over is not read again: the template the person
-  // picked after attaching it stands.
+  // offered) and reports itself for the calibration sample; the read is not
+  // stored, only the document's pin on the row is. A document "Byt" carried
+  // over is not read again: the template the person picked after attaching
+  // it stands.
   useEffect(() => {
     if (!open || !readDocId || !transaction?.id || carriedDocIds.has(readDocId)) return
     let alive = true
@@ -373,8 +412,10 @@ export default function QuickReviewDialog({
     tx.currency,
     tx.exchange_rate
   )
+  // The row's underlag when it is beside the review, and what was attached
+  // here (the first of it pinned to the row, the rest held).
   const attachedCount =
-    uploadedFiles.filter((f) => f.status === 'uploaded').length + pickedInboxDocs.length
+    (viewerDocId ? 1 : 0) + uploadedFiles.filter((f) => f.status === 'uploaded').length + pickedInboxDocs.length
   const isForeign = !!(tx.currency && tx.currency !== 'SEK')
   const sekConversionMissing = isForeign && (tx.amount_sek == null || tx.exchange_rate == null)
 
@@ -472,6 +513,24 @@ export default function QuickReviewDialog({
     setIsProcessing(true)
     setError(null)
     try {
+      // A pin or a take-off still on its way lands first (Bokför waits for
+      // them; this covers the same tick): the categorize route anchors the
+      // row's pin as it reads it when the booking starts.
+      await underlagSettled()
+
+      // The account the person picked here from the BAS catalogue is
+      // activated first, as the kontoväljare said it would be: added when
+      // the chart lacks it, reactivated when the company deactivated it,
+      // since the categorize route books an account override only when the
+      // chart has it active. Only that pick: an inactive account the
+      // assistant or the opening proposal brought, and a number outside the
+      // catalogue, meet the route's refusal and its "Aktivera och bokför",
+      // as does a failed activation.
+      if (proposal.booking.kind === 'account' && proposal.booking.account === pickedToActivate && wholeChart) {
+        const activated = await activateBasAccounts([proposal.booking.account], wholeChart)
+        if (activated.length > 0) void invalidateReferenceData('ref:accounts')
+      }
+
       // Cleared combobox values leave empty strings behind; strip them so an
       // untouched picker sends no bag at all (learned template bags then apply
       // server-side unchanged).
@@ -500,26 +559,22 @@ export default function QuickReviewDialog({
         }).catch(() => {})
       }
 
-      // Attach the uploaded underlag to the verifikat the booking just created.
-      // BFL 5 kap 7 § requires the verifikation to reference its underlag and
-      // BFL 7 kap requires that underlag to be archived with it; the verifikat
-      // is already committed here, so a failed link can only be reported, not
-      // undone. The parent's "Bokförd" toast must not be the last word when a
-      // receipt never made it onto the books.
-      if (journalEntryId && (uploadedFiles.length > 0 || pickedInboxDocs.length > 0)) {
-        const targets = [
-          ...uploadedFiles
-            .filter((f) => f.status === 'uploaded' && f.id)
-            .map((f) => ({ documentId: f.id as string, fileName: f.fileName })),
-          // inboxItemId stamps the inbox item as consumed so the underlag drops
-          // out of "Underlag att hantera" instead of lingering as a duplicate of
-          // the verifikat it now belongs to: see app/api/documents/[id]/link/route.ts.
-          ...pickedInboxDocs.map((doc) => ({
-            documentId: doc.document_id,
-            fileName: doc.supplier_name ?? doc.file_name,
-            inboxItemId: doc.inbox_item_id,
-          })),
-        ]
+      // Attach the underlag attached here to the verifikat the booking just
+      // created, the document pinned to the row included: the categorize
+      // route anchors that one too, and linking it again changes nothing but
+      // reports an anchor that failed. BFL 5 kap 7 § requires the
+      // verifikation to reference its underlag and BFL 7 kap requires that
+      // underlag to be archived with it; the verifikat is already committed
+      // here, so a failed link can only be reported, not undone. The
+      // parent's "Bokförd" toast must not be the last word when a receipt
+      // never made it onto the books. A pick's inboxItemId stamps the inbox
+      // item as consumed so it drops out of "Underlag att hantera": see
+      // app/api/documents/[id]/link/route.ts. A document the person removed
+      // here never goes onto the verifikat.
+      const targets = underlagLinkTargets({ files: uploadedFiles, inboxDocs: pickedInboxDocs }, transaction.id).filter(
+        (target) => !underlagState.isLetGo(target.documentId),
+      )
+      if (journalEntryId && targets.length > 0) {
         const { failed } = await linkDocuments(targets, journalEntryId)
         if (failed.length > 0) {
           toast({
@@ -568,6 +623,41 @@ export default function QuickReviewDialog({
     }
   }
 
+  // The x on a document attached here lets it go: off the row when the row
+  // holds it or a pin for it is on its way (the file stays in the archive),
+  // then out of the lists. Listed until the row has let it go: a refused
+  // take-off keeps it, as does attaching it again meanwhile.
+  async function letGo(docId: string) {
+    if (!(await withdrawUnderlag(docId))) return
+    setUploadedFiles((prev) => prev.filter((f) => f.id !== docId))
+    setPickedInboxDocs((prev) => prev.filter((d) => d.document_id !== docId))
+  }
+
+  // Every change from the upload zone is an update of the list as it is
+  // when it lands, so an upload finishing after another drop or a removal
+  // keeps both. The x on a finished upload is the one change the dialog
+  // takes over: the document goes through letGo above.
+  function handleFilesChange(update: UploadedFilesUpdate) {
+    const removed = removedUpload(uploadedFiles, update(uploadedFiles))
+    if (removed?.id) {
+      void letGo(removed.id)
+      return
+    }
+    setUploadedFiles(update)
+  }
+
+  // The underlag the row had before this review is confirmed off, as the
+  // row's own "Ta bort underlag" is: it may be a match someone else made.
+  async function detachEarlierUnderlag() {
+    const released = await underlagState.detachEarlier({
+      description: tx.description,
+      amount: formatCurrency(tx.amount, tx.currency),
+    })
+    if (!released) return
+    setUploadedFiles((prev) => prev.filter((f) => f.id !== released))
+    setPickedInboxDocs((prev) => prev.filter((d) => d.document_id !== released))
+  }
+
   return (
     // Non-modal so the agent sheet and its trigger stay usable during review
     // (useDashShellInert above hand-restores page modality). Existing
@@ -584,37 +674,61 @@ export default function QuickReviewDialog({
       <DialogVeil />
       {/* Both variants cap at the space left of a docked agent sheet so the
           right edge never lands unreachable under it (sheet is z-60).
-          --agent-sheet-w is docked-only: sheet closed = the old widths. */}
+          --agent-sheet-w is docked-only: sheet closed = the old widths.
+          Header, body and footer, as in ConfirmationDialog: only the body
+          scrolls, so Stäng and Bokför stay in view however far the body grows
+          (an upload, the assistant reading it, the dimension fields), on a
+          phone as on a desktop. The dialog used to scroll as a whole and an
+          attached file pushed the buttons out of sight (crm#1101). */}
       <DialogContent
         ref={dropSurfaceRef}
-        className={documentId ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto' : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[85vh] overflow-y-auto'}
+        className={cn(
+          'flex max-h-[95dvh] flex-col gap-0 overflow-hidden p-0 sm:max-h-[90dvh]',
+          viewerDocId
+            ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))]'
+            : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))]',
+        )}
         // A file dragged anywhere over the dialog unfolds the upload zone,
         // which then owns the drop (DocumentUploadZone dropSurfaceRef). The
-        // two preventDefaults keep a drop that lands with no zone mounted
-        // (document already attached) from navigating the tab to the file.
+        // two preventDefaults keep a drop that lands before the zone has
+        // mounted from navigating the tab to the file.
         onDragEnter={(e) => {
-          if (!documentId && !showUploadZone && e.dataTransfer.types.includes('Files')) setShowUploadZone(true)
+          if (!showUploadZone && e.dataTransfer.types.includes('Files')) setShowUploadZone(true)
         }}
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => e.preventDefault()}
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0 px-4 pb-3 pt-4 sm:px-6 sm:pb-4 sm:pt-6">
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription className="sr-only">
             {isTemplateBooking ? t('description_template') : t('description_default')}
           </DialogDescription>
         </DialogHeader>
 
-        {/* When a document is pre-attached, show it side-by-side (receipt left,
-            review right). With no document the wrappers use display:contents so
-            the dialog collapses to the original single-column layout. */}
-        <div className={documentId ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]' : 'contents'}>
-          {documentId && (
-            <div className="h-[45vh] lg:sticky lg:top-0 lg:h-[72vh] lg:self-start">
-              <DocumentViewerPane documentId={documentId} className="h-full" />
+        <div className="scrollbar-visible min-h-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6">
+        {/* When the row came with its underlag, show it side-by-side (receipt
+            left, review right). Without one the review column uses
+            display:contents so the body collapses to the single column. */}
+        <div className={viewerDocId ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]' : 'flex flex-col gap-4'}>
+          {viewerDocId && (
+            // The column's height leaves room for the header and the pinned
+            // footer (the body scrolls between them), so the file row at its
+            // foot is in view on a short laptop screen too.
+            <div className="flex h-[45vh] flex-col gap-2 lg:sticky lg:top-0 lg:h-[min(72vh,calc(90dvh-9rem))] lg:self-start">
+              <DocumentViewerPane documentId={viewerDocId} className="min-h-0 flex-1" />
+              {/* Its x takes it off the row once confirmed; the file stays in
+                  the archive. */}
+              <div className="shrink-0">
+                <UnderlagFileRow
+                  name={underlagState.fileName ?? tUnderlag('file_fallback')}
+                  removeLabel={tDetach('menu_item')}
+                  disabled={isProcessing || underlagState.busy}
+                  onRemove={() => void detachEarlierUnderlag()}
+                />
+              </div>
             </div>
           )}
-          <div className={documentId ? 'space-y-4' : 'contents'}>
+          <div className={viewerDocId ? 'flex min-w-0 flex-col gap-4' : 'contents'}>
 
         {bookingWithoutUnderlag && (
           <AttnLine action={{ label: t('underlag_fetch'), onClick: () => setShowUploadZone(true) }}>
@@ -685,13 +799,14 @@ export default function QuickReviewDialog({
             </span>
             {onChangeTemplate && !hasCounterpartyPattern && (
               // The switch closes this review for the picker: the underlag
-              // attached here goes along to the review the pick opens, and
-              // an upload still on its way is waited for, not dropped.
+              // held here goes along to the review the pick opens (the row's
+              // own is on the row), and an upload or a pin still on its way
+              // is waited for, not dropped.
               <button
                 type="button"
                 className={cn(QUIET_LINK_CLASS, 'text-[12.5px] disabled:pointer-events-none disabled:opacity-50')}
-                disabled={uploadInFlight(uploadedFiles)}
-                onClick={() => onChangeTemplate(underlagToCarry({ files: uploadedFiles, inboxDocs: pickedInboxDocs }))}
+                disabled={uploadInFlight(uploadedFiles) || underlagState.busy}
+                onClick={() => onChangeTemplate(underlagToCarry(held))}
               >
                 {t('rec_change')}
               </button>
@@ -807,6 +922,8 @@ export default function QuickReviewDialog({
                 <AccountCombobox
                   value={accountOverride}
                   accounts={accounts}
+                  catalog={basCatalog}
+                  notActivatedLabel={tJournal('account_not_activated')}
                   onChange={handleAccountChange}
                 />
               </div>
@@ -876,128 +993,130 @@ export default function QuickReviewDialog({
           </div>
         )}
 
-        {/* No pre-attached document: let the user upload one. (When a document
-            IS pre-attached it's shown in the left preview column instead.) */}
-        {!documentId && (
-          <div className="rounded-lg border">
-            <button
-              type="button"
-              onClick={() => setShowUploadZone(!showUploadZone)}
-              className="flex items-center justify-between w-full px-3 py-2.5 text-sm hover:bg-secondary/60 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <Paperclip className="h-4 w-4 text-muted-foreground" />
-                <span className="font-medium">{t('doc_label')}</span>
-                {attachedCount > 0 && (
-                  <span className="text-xs text-muted-foreground">
-                    {t('doc_attached_count', { count: attachedCount })}
-                  </span>
-                )}
-              </div>
-              {showUploadZone ? (
-                <ChevronUp className="h-4 w-4 text-muted-foreground" />
-              ) : (
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        {/* The underlag: what was attached here (the first of it is the row's
+            own the moment it lands, so closing keeps it) and the way to add
+            more. The row's underlag from before this review is beside it,
+            with its own x. Locked while the booking runs: handleConfirm
+            links what was attached when it started. */}
+        <div className="rounded-lg border">
+          <button
+            type="button"
+            onClick={() => setShowUploadZone(!showUploadZone)}
+            className="flex items-center justify-between w-full px-3 py-2.5 text-sm hover:bg-secondary/60 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Paperclip className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">{t('doc_label')}</span>
+              {attachedCount > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  {t('doc_attached_count', { count: attachedCount })}
+                </span>
               )}
-            </button>
-            {showUploadZone && (
-              <div className="px-3 pb-3 space-y-2">
-                <DocumentUploadZone
-                  files={uploadedFiles}
-                  onFilesChange={setUploadedFiles}
-                  compact
-                  dropSurfaceRef={dropSurfaceRef}
-                />
-                {pickedInboxDocs.map((doc) => (
-                  <div
-                    key={doc.document_id}
-                    className="flex items-center gap-2 rounded-sm bg-muted/50 px-2 py-1.5 text-sm"
-                  >
-                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="flex-1 truncate">{doc.supplier_name ?? doc.file_name}</span>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      className="shrink-0"
-                      aria-label={t('doc_picked_remove')}
-                      disabled={isProcessing}
-                      onClick={() =>
-                        setPickedInboxDocs((prev) =>
-                          prev.filter((d) => d.document_id !== doc.document_id),
-                        )
-                      }
-                    >
-                      <X className="h-3 w-3" />
-                    </Button>
-                  </div>
-                ))}
-                {/* Locked while the booking is in flight: handleConfirm captured
-                    pickedInboxDocs when it started, so anything picked now would
-                    never be linked and would then be cleared on completion,
-                    vanishing from the list with no error to explain it.
-                    Styled as the dropzone's footer (same treatment as
-                    TransactionBookingDialog) so upload and inbox-pick read as
-                    one underlag surface. */}
-                <button
-                  type="button"
-                  disabled={isProcessing}
-                  onClick={() => setInboxPickerOpen(true)}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/25 px-3 py-2 text-[13px] text-muted-foreground transition-colors duration-150 hover:border-primary/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-                >
-                  <Inbox className="h-4 w-4" />
-                  <span>{t('doc_pick_existing_inline')}</span>
-                </button>
-              </div>
+            </div>
+            {showUploadZone ? (
+              <ChevronUp className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
             )}
-          </div>
-        )}
-
-        {error && (
-          <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-            {error}
-          </div>
-        )}
-
-        {/* Actions. "Stäng", not "Avbryt": an underlag dropped in here is
-            archived and read the moment it lands, so closing undoes nothing;
-            the button only closes the review (PostHog PH 118). */}
-        <div className="flex gap-2 pt-2">
-          <Button
-            variant="outline"
-            className="flex-1"
-            onClick={() => onOpenChange(false)}
-            disabled={isProcessing}
-          >
-            {t('close')}
-          </Button>
-          <Button
-            className="flex-1"
-            onClick={handleConfirm}
-            disabled={
-              isProcessing ||
-              (!isTemplateBooking && !accountOverride) ||
-              rateLoading ||
-              sekConversionMissing
-            }
-          >
-            <Check className="mr-2 h-4 w-4" />
-            {isProcessing ? t('booking') : rateLoading ? t('fetching_rate') : bookingWithoutUnderlag ? t('book_without_underlag') : t('book')}
-          </Button>
+          </button>
+          {showUploadZone && (
+            <div className="px-3 pb-3 space-y-2">
+              <DocumentUploadZone
+                files={uploadedFiles}
+                onFilesChange={handleFilesChange}
+                onUploaded={claimUpload}
+                compact
+                disabled={isProcessing}
+                dropSurfaceRef={dropSurfaceRef}
+              />
+              {pickedInboxDocs.map((doc) => (
+                <UnderlagFileRow
+                  key={doc.document_id}
+                  name={doc.supplier_name ?? doc.file_name}
+                  removeLabel={t('doc_picked_remove')}
+                  disabled={isProcessing}
+                  onRemove={() => void letGo(doc.document_id)}
+                />
+              ))}
+              {/* Locked while the booking is in flight: handleConfirm captured
+                  pickedInboxDocs when it started, so anything picked now would
+                  never be linked and would then be cleared on completion,
+                  vanishing from the list with no error to explain it.
+                  Styled as the dropzone's footer (same treatment as
+                  TransactionBookingDialog) so upload and inbox-pick read as
+                  one underlag surface. */}
+              <button
+                type="button"
+                disabled={isProcessing}
+                onClick={() => setInboxPickerOpen(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/25 px-3 py-2 text-[13px] text-muted-foreground transition-colors duration-150 hover:border-primary/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              >
+                <Inbox className="h-4 w-4" />
+                <span>{t('doc_pick_existing_inline')}</span>
+              </button>
+            </div>
+          )}
         </div>
           </div>
         </div>
+        </div>
 
-        {/* Select mode: the verifikat does not exist yet, so the pick is held in
-            state and linked in handleConfirm once the booking returns its id. */}
+        {/* Actions, outside the scrolling body. "Stäng", not "Avbryt": an
+            underlag dropped in here is archived the moment it lands and the
+            first one stays on the row, so closing undoes nothing; the button
+            only closes the review (PostHog PH 118). */}
+        <div className="shrink-0 space-y-3 border-t px-4 py-3 sm:px-6 sm:py-4">
+          {error && (
+            <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+              {error}
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isProcessing}
+            >
+              {t('close')}
+            </Button>
+            {/* Waits, like "Byt", for an upload or a pin still on its way:
+                one landing during the booking would reach the row after the
+                categorize route read it, and miss the verifikat. */}
+            <Button
+              onClick={handleConfirm}
+              disabled={
+                isProcessing ||
+                (!isTemplateBooking && !accountOverride) ||
+                rateLoading ||
+                sekConversionMissing ||
+                uploadInFlight(uploadedFiles) ||
+                underlagState.busy
+              }
+            >
+              <Check className="mr-2 h-4 w-4" />
+              {isProcessing ? t('booking') : rateLoading ? t('fetching_rate') : bookingWithoutUnderlag ? t('book_without_underlag') : t('book')}
+            </Button>
+          </DialogFooter>
+        </div>
+
+        {/* Select mode: the verifikat does not exist yet. The pick becomes
+            the row's underlag when it has none (the attach route marks the
+            inbox item matched, and the booking consumes it); either way
+            handleConfirm links it once the booking returns its id. */}
         <InboxDocumentPicker
           open={inboxPickerOpen}
           onClose={() => setInboxPickerOpen(false)}
-          onSelect={(doc) =>
+          onSelect={(doc) => {
+            if (pickedInboxDocs.some((d) => d.document_id === doc.document_id)) return
             setPickedInboxDocs((prev) =>
               prev.some((d) => d.document_id === doc.document_id) ? prev : [...prev, doc],
             )
-          }
+            void claimUnderlag(doc.document_id, doc.supplier_name ?? doc.file_name)
+          }}
         />
+        {/* Inside the content: a click or focus in the confirm counts as
+            inside this non-modal review, so it never dismisses it. */}
+        <DestructiveConfirmDialog {...underlagState.confirmProps} />
       </DialogContent>
     </Dialog>
   )

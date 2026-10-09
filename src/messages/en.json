@@ -3851,13 +3851,16 @@
   "tx_booking_dialog": {
     "title": "Post transaction",
     "description": "Create a journal entry for the transaction",
-    "doc_pick_existing": "Choose existing document",
     "doc_pick_existing_inline": "or choose an existing document from the inbox",
     "doc_picked_remove": "Remove document",
-    "doc_clear": "Remove document",
     "doc_link_failed_title": "Receipt could not be attached",
     "doc_link_failed_description": "{count} file(s) could not be linked to the journal entry. Try again from the bookkeeping page.",
     "bank_line_description": "Business account"
+  },
+  "tx_booking_underlag": {
+    "file_fallback": "Document",
+    "pin_failed_title": "The document could not be linked to the transaction",
+    "pin_failed_description": "It is linked to the journal entry when you post, but is not kept if you close first."
   },
   "document_viewer": {
     "empty": "No document attached",

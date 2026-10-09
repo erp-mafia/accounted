@@ -14,9 +14,11 @@ import {
   type TemplateGroup,
 } from '@/lib/bookkeeping/booking-templates'
 import {
+  buildAccountIndex,
   buildActiveAccountIndex,
   searchAccounts,
   type AccountSearchItem,
+  type SearchableAccount,
 } from '@/lib/bookkeeping/account-search'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
@@ -26,6 +28,7 @@ import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import type { BookingTemplateLibrary, EntityType } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { useAccounts, useBookingTemplates } from '@/lib/reference-data/hooks'
+import { useBasCatalog } from '@/lib/hooks/use-bas-catalog'
 import { cn } from '@/lib/utils'
 import { HUE_DOT_CLASS, accountHue, templateGroupHue, type TemplateHue } from '@/lib/bookkeeping/template-group-colors'
 
@@ -253,8 +256,12 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
 // no template covers the account.
 function AccountResultCard({ account, onClick, dense }: { account: AccountSearchItem; onClick: () => void; dense?: boolean }) {
   const t = useTranslations('tx_template_picker')
+  const tJournal = useTranslations('journal_form')
+  // A catalogue account the company has not added says so, as in the
+  // booking dialogs' kontoväljare: the booking adds it.
+  const note = account.isActive ? t('opens_editor_badge') : tJournal('account_not_activated')
   if (dense) {
-    return <DenseRow hue={accountHue(account.account_number)} name={account.account_name} account={account.account_number} note={t('opens_editor_badge')} onClick={onClick} />
+    return <DenseRow hue={accountHue(account.account_number)} name={account.account_name} account={account.account_number} note={note} onClick={onClick} />
   }
   return (
     <button
@@ -269,7 +276,7 @@ function AccountResultCard({ account, onClick, dense }: { account: AccountSearch
         </div>
         <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
           <PenLine className="h-3 w-3" />
-          {t('opens_editor_badge')}
+          {note}
         </span>
       </div>
     </button>
@@ -290,6 +297,13 @@ interface TemplatePickerProps {
   // into the manual booking flow with the account prefilled. Omitting it
   // keeps the picker template-only (and skips the accounts fetch).
   onSelectAccount?: (accountNumber: string) => void
+  /**
+   * Standard BAS accounts the company has not added, searched in the Konton
+   * group beside the active chart and marked as activated at booking. Only
+   * for a host whose account pick books through the engine, which adds a
+   * missing standard account (BankRowTemplatePicker).
+   */
+  accountCatalog?: SearchableAccount[]
   /** One line per template, colour dot, no cards (the picker sits beside the row). */
   dense?: boolean
   selectedTemplateId?: string
@@ -310,6 +324,7 @@ export default function TemplatePicker({
   onSelectCounterparty,
   onPickLibraryTemplate,
   onSelectAccount,
+  accountCatalog,
   dense = false,
   selectedTemplateId,
   includeSystemLibrary = false,
@@ -349,7 +364,13 @@ export default function TemplatePicker({
   const templateDirection = direction === 'income' ? 'income' : 'expense'
   const bothDirections = direction === 'all'
 
-  const accountIndex = useMemo(() => buildActiveAccountIndex(chartAccounts), [chartAccounts])
+  const accountIndex = useMemo(
+    () =>
+      accountCatalog
+        ? buildAccountIndex({ active: chartAccounts.filter((a) => a.is_active !== false), catalog: accountCatalog })
+        : buildActiveAccountIndex(chartAccounts),
+    [chartAccounts, accountCatalog],
+  )
 
   // Lazy convertibility map. A template is "convertible" if it fits the
   // simple debit/credit pair shape the QuickReview booking path expects.
@@ -778,4 +799,17 @@ export default function TemplatePicker({
       </div>
     </div>
   )
+}
+
+/**
+ * The picker a bank row's Bokför opens (Transaktioner): its Konton search
+ * also finds the standard BAS accounts the company has not added, marked as
+ * activated at booking, as the booking dialogs' kontoväljare do (crm#1101).
+ * An account pick opens the manual booking dialog, whose engine path adds
+ * the account. A deactivated account stays out, as in the plain picker. The
+ * catalogue loads only while the picker is open.
+ */
+export function BankRowTemplatePicker(props: TemplatePickerProps) {
+  const { catalog } = useBasCatalog()
+  return <TemplatePicker {...props} accountCatalog={catalog} />
 }

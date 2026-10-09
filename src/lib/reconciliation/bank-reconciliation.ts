@@ -6,6 +6,7 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import {
   ledgerLineAmountIn,
@@ -1188,6 +1189,15 @@ function bankAnchorRefusal(
 /**
  * Manually link a transaction to an existing journal entry.
  * Validates that the journal entry has a bank account line and amounts are directionally compatible.
+ *
+ * `anchorUnderlag`: the caller links on a person's or an agent's own choice
+ * of verifikat for this row (the bank link route, a pair named to the
+ * account-keyed reconciliation), so the row's underlag goes onto that
+ * verifikat as on every booking path. Off by default: anchoring cannot be
+ * undone (a document on a verifikat stays its underlag, and "Koppla bort"
+ * only clears the row's pointer), so a link the system guessed (the auto-link
+ * after an invoice is linked to its voucher, a confirmed suggestion, proposals
+ * applied in bulk) leaves the row's underlag on the row.
  */
 export async function manualLink(
   supabase: SupabaseClient,
@@ -1196,6 +1206,7 @@ export async function manualLink(
   journalEntryId: string,
   userId: string,
   accountNumber: string = '1930',
+  options: { anchorUnderlag?: boolean } = {},
 ): Promise<{ success: boolean; error?: string; code?: BankLinkRefusalCode }> {
   // Fetch transaction. The junction rows ride along on the same read: a row
   // split over several verifikat (linkTransactionToVouchers) or bulk-booked
@@ -1394,6 +1405,17 @@ export async function manualLink(
   }
   if (!updatedRows || updatedRows.length === 0) {
     return refused('LINK_RACE', 'Transaktionen är redan kopplad till en verifikation.')
+  }
+
+  // On a link someone chose, the row's underlag goes onto the verifikat it
+  // is now linked to, as on every booking path (linkTransactionToJournalEntry
+  // included): its pinned document and the inkorg items matched to it (see
+  // lib/transactions/inbox-underlag.ts). A document pinned in a booking
+  // dialog that ended in the duplicate guard's "Matcha mot verifikatet", or
+  // in Matcha mot verifikat after the dialog closed, used to stay off it
+  // (crm#1101). Best-effort and logged inside: the link stands either way.
+  if (options.anchorUnderlag) {
+    await propagateUnderlagForBookedTransaction(supabase, companyId, transactionId, journalEntryId)
   }
 
   try {

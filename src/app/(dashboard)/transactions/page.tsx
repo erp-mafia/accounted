@@ -189,7 +189,12 @@ const BatchDuplicateDialog = dynamic(
   () => import('@/components/transactions/BatchDuplicateDialog'),
   { loading: DialogLoadingSkeleton },
 )
-const TemplatePicker = dynamic(() => import('@/components/transactions/TemplatePicker'), { loading: InlineDialogContentLoading })
+// The bank row's picker: its Konton search also finds the BAS accounts the
+// company has not added yet (crm#1101).
+const TemplatePicker = dynamic(
+  () => import('@/components/transactions/TemplatePicker').then((m) => m.BankRowTemplatePicker),
+  { loading: InlineDialogContentLoading },
+)
 
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
@@ -3536,6 +3541,16 @@ export default function TransactionsPage() {
     setAttachDocTx(transaction)
   }
 
+  // The booking dialogs pin a document to the row the moment it is attached
+  // there, and take it off on its x (crm#1101): the list follows, so the
+  // row shows its underlag and the next open starts with it. The dialogs
+  // revalidate the underlag read and tell the inbox card themselves.
+  function handleUnderlagChanged(transactionId: string, documentId: string | null) {
+    setTransactions((prev) =>
+      prev.map((t) => (t.id === transactionId ? { ...t, document_id: documentId } : t))
+    )
+  }
+
   function handleDocumentAttached(transactionId: string, documentId: string) {
     setTransactions((prev) =>
       prev.map((t) => (t.id === transactionId ? { ...t, document_id: documentId } : t))
@@ -4769,6 +4784,7 @@ export default function TransactionsPage() {
           proposalLineDescription={bookingDialogLineDescription}
           preselectedAccount={bookingDialogAccount}
           onBooked={handleTransactionBooked}
+          onUnderlagChange={handleUnderlagChanged}
         />
       )}
 
@@ -4910,6 +4926,7 @@ export default function TransactionsPage() {
           carriedUnderlag={quickReview?.underlag ?? null}
           assistantRead={quickReview ? (assistantReadsRef.current[quickReview.transaction.id] ?? null) : null}
           onEditLines={handleEditProposedLines}
+          onUnderlagChange={handleUnderlagChanged}
         />
       )}
 

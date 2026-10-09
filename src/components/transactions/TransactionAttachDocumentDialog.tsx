@@ -180,9 +180,12 @@ export default function TransactionAttachDocumentDialog({
         <div className="space-y-2">
           <DocumentUploadZone
             files={uploadedFiles}
-            onFilesChange={(files) => {
-              setUploadedFiles(files)
-              if (files.length > 0) setPickedDoc(null)
+            onFilesChange={(update) => {
+              // One document: a file in the list replaces a pick. The list
+              // itself takes the update as it is when it lands
+              // (DocumentUploadZone).
+              if (update(uploadedFiles).length > 0) setPickedDoc(null)
+              setUploadedFiles(update)
             }}
             maxFiles={1}
             compact

@@ -329,6 +329,11 @@ export async function matchPairs(
   const dryRun = options.dryRun ?? false
 
   const pairs: ReconciliationPair[] = [...(input.pairs ?? [])]
+  // The pairs the caller named (a person's or an agent's choice, a staged
+  // operation's approved list), as against the proposals use_proposals
+  // applies in bulk: only a named bank pair takes the row's underlag onto
+  // the verifikat (manualLink anchorUnderlag).
+  const namedPairs = new Set(pairs)
   if (input.use_proposals) {
     pairs.push(
       ...(await proposalsAsPairs(supabase, companyId, accountKey, input.confidence_threshold ?? 0)),
@@ -509,7 +514,9 @@ export async function matchPairs(
         // engine allows several transactions on one verifikat): each link is
         // independent, so partial success is reported per transaction.
         for (const externalId of externalIds) {
-          const r = await manualLink(supabase, companyId, externalId, journalEntryId, userId, account)
+          const r = await manualLink(supabase, companyId, externalId, journalEntryId, userId, account, {
+            anchorUnderlag: namedPairs.has(pair),
+          })
           if (!r.success) {
             skipped.push({
               pair: { external_ids: [externalId], journal_entry_ids: [journalEntryId] },

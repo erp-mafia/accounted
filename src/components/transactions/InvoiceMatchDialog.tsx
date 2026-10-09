@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
+import { useBasCatalog } from '@/lib/hooks/use-bas-catalog'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -208,6 +209,11 @@ export default function InvoiceMatchDialog({
   // BAS accounts power the AccountCombobox suggestions in edit mode. Loaded
   // once on dialog open; same endpoint that PaymentBookingDialog uses.
   const { accounts } = useAccounts()
+  // Standard accounts the company has not added yet are listed too, as
+  // activated at booking: the match routes post edited rows through the
+  // engine, which seeds them (crm#1101).
+  const { catalog: basCatalog } = useBasCatalog()
+  const tJournal = useTranslations('journal_form')
 
   // A pick belongs to one transaction and invoice: never carry it to another,
   // where it would book that match's excess without the user choosing.
@@ -990,6 +996,8 @@ export default function InvoiceMatchDialog({
                         <AccountCombobox
                           value={line.account_number}
                           accounts={accounts}
+                          catalog={basCatalog}
+                          notActivatedLabel={tJournal('account_not_activated')}
                           onChange={(acc) => updateEditLine(i, { account_number: acc })}
                         />
                         <Input

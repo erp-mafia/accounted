@@ -27,6 +27,15 @@ vi.mock('@/lib/logger', async (importOriginal) => {
   }
 })
 
+// A link someone chose anchors the row's underlag to the verifikat (crm#1101).
+// The propagation itself is tested in lib/transactions/__tests__; here only
+// when manualLink asks for it, so every other test keeps it a no-op as before.
+const { propagateUnderlag } = vi.hoisted(() => ({ propagateUnderlag: vi.fn() }))
+vi.mock('@/lib/transactions/inbox-underlag', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/inbox-underlag')>()),
+  propagateUnderlagForBookedTransaction: (...args: unknown[]) => propagateUnderlag(...args),
+}))
+
 import {
   tryReconcileTransaction,
   runReconciliation,
@@ -1073,6 +1082,57 @@ describe('manualLink', () => {
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
 
     expect(result.success).toBe(true)
+  })
+
+  it("anchors the row's underlag (its pin, its matched inkorg items) to the verifikat a person or an agent chose", async () => {
+    // crm#1101: a document pinned in a booking dialog whose duplicate guard
+    // ended in "Matcha mot verifikatet" stayed off the existing verifikat.
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }) })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', {
+      anchorUnderlag: true,
+    })
+
+    expect(result.success).toBe(true)
+    expect(propagateUnderlag).toHaveBeenCalledTimes(1)
+    expect(propagateUnderlag).toHaveBeenCalledWith(supabase, 'company-1', 'tx-1', 'je-1')
+  })
+
+  it("leaves the row's underlag on the row unless the caller asks: an anchor outlives Koppla bort", async () => {
+    // The auto-link after an invoice is linked to its voucher, a confirmed
+    // suggestion and bulk-applied proposals call without the option: a
+    // guessed link must not make the row's receipt that verifikat's
+    // underlag for good.
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }) })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(true)
+    expect(propagateUnderlag).not.toHaveBeenCalled()
+  })
+
+  it('anchors nothing when the link did not happen', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }) })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    // A concurrent linker won: the optimistic-lock UPDATE matched nothing.
+    enqueue({ data: [] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', {
+      anchorUnderlag: true,
+    })
+
+    expect(result.code).toBe('LINK_RACE')
+    expect(propagateUnderlag).not.toHaveBeenCalled()
   })
 
   it('refuses a row anchored through a bank_line junction row (bulk-book, 1:N split) even with a NULL pointer', async () => {

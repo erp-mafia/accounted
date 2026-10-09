@@ -3,6 +3,14 @@ import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/b
 import { eventBus } from '@/lib/events/bus'
 import { makeTransaction } from '@/tests/helpers'
 
+// Whether the link anchors the row's underlag to the verifikat (crm#1101):
+// the propagation itself is tested in lib/transactions/__tests__.
+const { propagateUnderlag } = vi.hoisted(() => ({ propagateUnderlag: vi.fn() }))
+vi.mock('@/lib/transactions/inbox-underlag', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/inbox-underlag')>()),
+  propagateUnderlagForBookedTransaction: (...args: unknown[]) => propagateUnderlag(...args),
+}))
+
 // Queue-based Supabase mock: every awaited chain consumes the next enqueued
 // result regardless of the builder methods called, so we enqueue results in the
 // exact order the function under test awaits them. Mirrors the manualLink suite
@@ -82,6 +90,28 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     )
 
     expect(result).toEqual({ linkedTransactionId: 'tx-1' })
+  })
+
+  it("leaves the row's underlag on the row: a guessed link never makes its receipt that verifikat's for good (crm#1101)", async () => {
+    // An anchored document stays the verifikat's underlag, and Koppla bort
+    // only clears the row's pointer, so a wrong guess could not free it.
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: POSTED_VOUCHER })
+    enqueue({ data: [
+      { account_number: '2440', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ] })
+    enqueue({ data: [SEK_PRIMARY] })
+    enqueue({ data: [{ id: 'tx-1', amount: -1000 }] })
+    enqueueManualLinkSuccess(enqueue, -1000)
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { supplierInvoiceId: 'si-1' },
+    )
+
+    expect(result).toEqual({ linkedTransactionId: 'tx-1' })
+    expect(propagateUnderlag).not.toHaveBeenCalled()
   })
 
   it('links the single matching unbooked transaction for a supplier payment (expense)', async () => {

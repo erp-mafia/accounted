@@ -183,8 +183,30 @@ describe('matchPairs', () => {
       pairs: [{ external_ids: [R1], journal_entry_ids: [E1] }],
     })
 
-    expect(manualLinkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1, USER, '1931')
+    // A pair the caller named takes the row's underlag onto the verifikat (crm#1101).
+    expect(manualLinkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1, USER, '1931', { anchorUnderlag: true })
     expect(result?.applied).toHaveLength(1)
+  })
+
+  it("anchors the row's underlag on the named bank pairs only, never on proposals applied in bulk (crm#1101)", async () => {
+    // Anchoring cannot be undone by Koppla bort, so a guessed pair the
+    // person did not look at one by one leaves the receipt on the row.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: R2, potential_journal_entry_id: E2, potential_match_confidence: 0.95 }] }) // proposals
+    enqueue({ data: { ledger_account: '1930' } }) // cash_accounts lookup
+    manualLinkMock.mockResolvedValue({ success: true })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      pairs: [{ external_ids: [R1], journal_entry_ids: [E1] }],
+      use_proposals: true,
+    })
+
+    expect(result?.applied).toEqual([
+      { external_id: R1, journal_entry_id: E1 },
+      { external_id: R2, journal_entry_id: E2 },
+    ])
+    expect(manualLinkMock).toHaveBeenNthCalledWith(1, supabase, COMPANY, R1, E1, USER, '1930', { anchorUnderlag: true })
+    expect(manualLinkMock).toHaveBeenNthCalledWith(2, supabase, COMPANY, R2, E2, USER, '1930', { anchorUnderlag: false })
   })
 
   it('splits ONE bank transaction over SEVERAL verifikat through linkTransactionToVouchers (1:N, #1553)', async () => {
