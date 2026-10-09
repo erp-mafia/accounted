@@ -38,6 +38,7 @@ import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { accountDrilldownClick } from '@/components/reports/drilldown-click'
 import { PageHeader } from '@/components/ui/page-header'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
@@ -126,19 +127,6 @@ function ReportErrorCard({ message }: { message: string }) {
 
 function ReportEmptyState({ title, description }: { title: string; description: string }) {
   return <EmptyState icon={FileText} title={title} description={description} />
-}
-
-/**
- * True when the click that just landed on `row` ends a text selection inside
- * it. Dragging across an amount to copy it fires a click on mouseup; that
- * click must leave the user on the report with the text selected instead of
- * drilling into the account. A plain click collapses any earlier selection on
- * mousedown, so it still navigates.
- */
-function endsTextSelectionIn(row: Element): boolean {
-  const selection = window.getSelection()
-  if (!selection || selection.isCollapsed || selection.toString().trim() === '') return false
-  return selection.containsNode(row, true)
 }
 
 function reportQuery(
@@ -375,13 +363,13 @@ function TrialBalanceSimplifiedRow({
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
         >
           <AccountNumber number={row.account_number} name={row.account_name} />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
         >
           {row.account_name}
         </td>
@@ -423,13 +411,13 @@ function TrialBalanceDetailedRow({
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
         >
           <AccountNumber number={row.account_number} name={row.account_name} />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
         >
           {row.account_name}
         </td>
@@ -808,10 +796,7 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                       <tr
                         key={row.account_number}
                         className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
-                        onClick={(e) => {
-                          if (endsTextSelectionIn(e.currentTarget)) return
-                          onNavigateToAccount(row.account_number)
-                        }}
+                        onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
                       >
                         <td className="px-4 py-1.5">
                           <AccountNumber number={row.account_number} name={row.account_name} />
@@ -1051,7 +1036,7 @@ function BalansrapportSectionRows({
         <tr
           key={row.account_number}
           className="border-b cursor-pointer hover:bg-secondary/35 transition-colors"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={accountDrilldownClick(onNavigateToAccount, row.account_number)}
         >
           <td className="px-4 py-1.5">
             <AccountNumber number={row.account_number} name={row.account_name} />
@@ -1135,7 +1120,7 @@ function ReportSectionTable({
                 <tr
                   key={row.account_number}
                   className={`border-b last:border-0 ${onNavigateToAccount ? 'cursor-pointer hover:bg-secondary/35 transition-colors' : ''}`}
-                  onClick={onNavigateToAccount ? () => onNavigateToAccount(row.account_number) : undefined}
+                  onClick={onNavigateToAccount ? accountDrilldownClick(onNavigateToAccount, row.account_number) : undefined}
                 >
                   <td className="px-4 py-1.5 w-20"><AccountNumber number={row.account_number} name={row.account_name} /></td>
                   <td className="px-4 py-1.5">{row.account_name}</td>
