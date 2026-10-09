@@ -28,3 +28,21 @@ export function incrementalLookbackDays(
   const daysSince = Math.ceil(Math.max(0, now - syncedAt) / DAY_MS)
   return Math.min(MAX_LOOKBACK_DAYS, Math.max(INCREMENTAL_LOOKBACK_DAYS, daysSince + 1))
 }
+
+/**
+ * How far back the cron asks the bank for a connection's transactions. The
+ * first sync takes MAX_LOOKBACK_DAYS, every later one the incremental window.
+ * Gated on initial_sync_completed_at, not last_synced_at: a manual "Synka"
+ * sets last_synced_at without the deep backfill, and the cron still owes the
+ * 90 days when the inline activation backfill failed. The account picker
+ * reads the same number to say from which date an account switched on later
+ * gets its transactions (connection-state.ts nextScheduledSyncFrom).
+ */
+export function cronLookbackDays(
+  connection: { initial_sync_completed_at?: string | null; last_synced_at?: string | null },
+  now: number = Date.now(),
+): number {
+  return connection.initial_sync_completed_at
+    ? incrementalLookbackDays(connection.last_synced_at, now)
+    : MAX_LOOKBACK_DAYS
+}

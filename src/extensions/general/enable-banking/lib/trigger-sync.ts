@@ -42,6 +42,7 @@ import {
   BankSyncResultObsoleteError,
 } from '@/lib/bank-sync/persist-sync-result'
 import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
+import { isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
 import { eventBus } from '@/lib/events/bus'
 import {
   SYNC_COOLDOWN_MS,
@@ -161,7 +162,8 @@ export async function triggerConnectionSync(
   const allAccounts = ((connection.accounts_data as StoredAccount[] | null) ?? []).map((a) => ({
     ...a,
   }))
-  const accounts = allAccounts.filter((a) => a.enabled !== false)
+  // Never a mirror card account, even one an old row still has switched on.
+  const accounts = allAccounts.filter(isSyncedAccount)
   if (accounts.length === 0) {
     return { ok: false, code: 'BANK_SYNC_NO_ACCOUNTS', connection_id: connectionId }
   }

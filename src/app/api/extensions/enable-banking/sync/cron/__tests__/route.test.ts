@@ -293,6 +293,35 @@ describe('GET /api/extensions/enable-banking/sync/cron: which connections a run 
     expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
     await expect(response.json()).resolves.toMatchObject({ noAccounts: 1, due: 0 })
   })
+
+  it('never fetches a mirror card account, even one an old row still has switched on (crm#1097)', async () => {
+    state.active = [
+      connection({
+        id: 'conn-svea',
+        accounts_data: [
+          { uid: 'main', currency: 'SEK', enabled: true, iban: 'SE1' },
+          { uid: 'card', currency: 'SEK', enabled: true, name: 'SVEA_MQ_Debit_B2B' },
+        ],
+      }),
+      // Only the card left on: nothing to fetch, so not a due connection.
+      connection({
+        id: 'conn-card-only',
+        company_id: 'company-2',
+        accounts_data: [
+          { uid: 'main', currency: 'SEK', enabled: false, iban: 'SE2' },
+          { uid: 'card', currency: 'SEK', enabled: true, name: 'BOKIO_Debit_Business' },
+        ],
+      }),
+    ]
+
+    const response = await GET(cronRequest())
+
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
+    const [, , , connectionId, account] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(connectionId).toBe('conn-svea')
+    expect(account).toMatchObject({ uid: 'main' })
+    await expect(response.json()).resolves.toMatchObject({ noAccounts: 1 })
+  })
 })
 
 describe('GET /api/extensions/enable-banking/sync/cron: worker pool', () => {
@@ -683,5 +712,15 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
 
     const [, , , , , fromDate] = mocks.syncAccountTransactions.mock.calls[0]
     expect(fromDate).toBe(isoDate(90 * DAY_MS))
+  })
+
+  it('takes 90 days while the first import is still owed, whatever the last manual sync', async () => {
+    state.active = [connection({ initial_sync_completed_at: null, last_synced_at: syncedDaysAgo(1) })]
+
+    await GET(cronRequest())
+
+    const [, , , , , fromDate, , , options] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(fromDate).toBe(isoDate(90 * DAY_MS))
+    expect(options).toMatchObject({ strategy: 'longest' })
   })
 })

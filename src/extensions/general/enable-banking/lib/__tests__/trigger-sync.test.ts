@@ -297,6 +297,29 @@ describe('triggerConnectionSync', () => {
     expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_NO_ACCOUNTS' })
   })
 
+  it('never fetches a mirror card account, even one an old row still has switched on (crm#1097)', async () => {
+    state.connection = connection({
+      accounts_data: [
+        { uid: 'acc-1', currency: 'SEK', enabled: true, iban: 'SE1' },
+        { uid: 'card', currency: 'SEK', enabled: true, name: 'SVEA_MQ_Debit_B2B' },
+      ],
+    })
+    expect((await run()).ok).toBe(true)
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
+    expect(mocks.syncAccountTransactions.mock.calls[0][4]).toMatchObject({ uid: 'acc-1' })
+  })
+
+  it('counts a switched-on mirror card account as no account to sync', async () => {
+    state.connection = connection({
+      accounts_data: [
+        { uid: 'acc-1', currency: 'SEK', enabled: false, iban: 'SE1' },
+        { uid: 'card', currency: 'SEK', enabled: true, name: 'BOKIO_Debit_Business' },
+      ],
+    })
+    expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_NO_ACCOUNTS' })
+    expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
+  })
+
   it('answers retryable and leaves the row alone when the connector hop fails', async () => {
     state.connection = connection({ status: 'error', error_message: 'old' })
     mocks.syncAccountTransactions.mockRejectedValue(new ConnectorSyncError(null, 'CONNECTOR_TIMEOUT', 'aborted'))

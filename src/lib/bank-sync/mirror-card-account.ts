@@ -14,8 +14,9 @@
  *
  * Such an account is never an account of its own, whether it is on or off:
  * the OAuth callback stores it off and unmirrored, the selection save never
- * switches it on (and turns off one switched on before this rule), and
- * neither picker (settings, onboarding) offers it as a choice. An unticked
+ * switches it on (and turns off one switched on before this rule), neither
+ * picker (settings, onboarding) offers it as a choice, and no sync fetches it
+ * (isSyncedAccount), even one an old row still has switched on. An unticked
  * choice was not enough: 6 of 22 connects after #2577 ticked it anyway.
  *
  * The name alone is not enough: a bank could give a real account this label
@@ -48,4 +49,17 @@ export function isMirrorCardAccount(account: MirrorCardCandidate): boolean {
   if (account.iban?.trim()) return false
   if (account.bban?.trim()) return false
   return true
+}
+
+/**
+ * Whether a bank sync fetches this stored account: switched on (a missing
+ * flag counts as on, for rows that predate the per-account toggle) and never
+ * a mirror card account, whatever its flag says. Every sync path (the manual
+ * and agent syncs, the cron and its plan) filters with this. Before it, a card
+ * account an old row still had switched on kept importing opposite-sign twins
+ * on every sync until a selection save turned it off, so the settings line
+ * "hämtas inte" was untrue for it (crm#1097).
+ */
+export function isSyncedAccount(account: MirrorCardCandidate & { enabled?: boolean | null }): boolean {
+  return account.enabled !== false && !isMirrorCardAccount(account)
 }

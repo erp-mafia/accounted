@@ -10,6 +10,7 @@
  * Pure: the route fetches the rows, this decides. Every connection lands in
  * exactly one bucket, so the run can report why anything was not synced.
  */
+import { isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
 import type { StoredAccount } from '../types'
 
 /**
@@ -36,7 +37,7 @@ export interface BankSyncPlan<T> {
     eligible: number
     /** Active connections excluded by design: no bank_sync grant. */
     notEntitled: number
-    /** Every account deselected: nothing to fetch. */
+    /** Nothing to fetch: every account deselected, a mirror card account aside. */
     noAccounts: number
     /** Synced within SYNC_DUE_AFTER_MS. */
     fresh: number
@@ -71,7 +72,9 @@ export function planBankSyncRun<T extends PlannableConnection>(
       continue
     }
     const accounts = (connection.accounts_data as StoredAccount[] | null) ?? []
-    if (!accounts.some(account => account.enabled !== false)) {
+    // The same rule the sync applies: a mirror card account switched on is
+    // still nothing to fetch.
+    if (!accounts.some(isSyncedAccount)) {
       noAccounts++
       continue
     }

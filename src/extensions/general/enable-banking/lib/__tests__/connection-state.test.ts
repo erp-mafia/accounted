@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   buildPageAttentionSentence,
   getConnectionUiState,
+  nextScheduledSyncFrom,
+  offersAccountChoice,
   selectPageAttention,
   sortConnectionsByPrecedence,
   EXPIRY_WARNING_DAYS,
@@ -176,6 +178,80 @@ describe('buildPageAttentionSentence', () => {
     )
     const fresh = new Date(NOW - 5000).toISOString()
     expect(selectPageAttention([conn({ status: 'pending', created_at: fresh })], NOW)).toBeNull()
+  })
+})
+
+describe('offersAccountChoice (crm#1097)', () => {
+  const main = { uid: 'a', name: 'Företagskonto', iban: 'SE1', enabled: true }
+  const savingsOff = { uid: 'b', name: 'Sparkonto', iban: 'SE2', enabled: false }
+  const cardOff = { uid: 'c', name: 'SVEA_MQ_Debit_B2B', enabled: false }
+  const claimedOff = { uid: 'd', iban: 'SE3', enabled: false, claimed_by_company_id: 'company-b' }
+
+  it('offers nothing for the reported shape: every own account syncs, the card account is off', () => {
+    // The card account mirrors the main account and can never be switched
+    // on: an action beside it would open a picker where it cannot be ticked.
+    expect(offersAccountChoice(conn({}), [main, cardOff], NOW)).toBe(false)
+  })
+
+  it('offers "Välj konton" when an ordinary account of this company does not sync', () => {
+    expect(offersAccountChoice(conn({}), [main, savingsOff], NOW)).toBe(true)
+    expect(offersAccountChoice(conn({}), [main, savingsOff, cardOff, claimedOff], NOW)).toBe(true)
+    // Expiring, stale and never-synced rows can still save a selection.
+    expect(offersAccountChoice(conn({ consent_expires: iso(2) }), [savingsOff], NOW)).toBe(true)
+    expect(offersAccountChoice(conn({ last_synced_at: iso(-10) }), [savingsOff], NOW)).toBe(true)
+    expect(offersAccountChoice(conn({ last_synced_at: null }), [savingsOff], NOW)).toBe(true)
+  })
+
+  it('never offers it for an account another company books or a card account, on or off', () => {
+    expect(offersAccountChoice(conn({}), [main, claimedOff], NOW)).toBe(false)
+    expect(offersAccountChoice(conn({}), [main, { ...cardOff, enabled: true }], NOW)).toBe(false)
+    expect(offersAccountChoice(conn({}), [main], NOW)).toBe(false)
+    expect(offersAccountChoice(conn({}), [], NOW)).toBe(false)
+  })
+
+  it('adds no second one where the primary action already is "Välj konton"', () => {
+    expect(offersAccountChoice(conn({ error_message: 'Synkningen har stannat.' }), [savingsOff], NOW)).toBe(false)
+    expect(offersAccountChoice(conn({ status: 'pending_selection' }), [savingsOff], NOW)).toBe(false)
+  })
+
+  it('offers no choice the save refuses: expired, failed or unfinished connections', () => {
+    // The selection save accepts only pending_selection and active rows.
+    for (const status of ['expired', 'error', 'pending', 'revoked']) {
+      expect(offersAccountChoice(conn({ status }), [savingsOff], NOW)).toBe(false)
+    }
+  })
+})
+
+describe('nextScheduledSyncFrom (crm#1097)', () => {
+  // The picker's line for an account switched on later: from which date the
+  // next scheduled sync (the cron's own window) fetches it.
+  const imported = (overrides: Parameters<typeof conn>[0] = {}) => ({
+    ...conn(overrides),
+    initial_sync_completed_at: iso(-30),
+  })
+
+  it('is about a week back on a healthy connection: no history from the connection start', () => {
+    expect(nextScheduledSyncFrom(imported(), NOW)).toBe('2026-08-12')
+    // Expiring still syncs on schedule until the consent runs out.
+    expect(nextScheduledSyncFrom(imported({ consent_expires: iso(2) }), NOW)).toBe('2026-08-12')
+  })
+
+  it('covers the gap since the last sync on a stale connection', () => {
+    expect(nextScheduledSyncFrom(imported({ last_synced_at: iso(-20) }), NOW)).toBe('2026-07-29')
+  })
+
+  it('is the first import\'s 90 days while that import is still owed', () => {
+    expect(nextScheduledSyncFrom({ ...conn({}), initial_sync_completed_at: null }, NOW)).toBe('2026-05-21')
+    expect(nextScheduledSyncFrom(conn({ last_synced_at: null }), NOW)).toBe('2026-05-21')
+  })
+
+  it('says nothing where no scheduled sync comes next', () => {
+    // A stopped sync is run right after the save (BankingSettingsPanel), with its own window.
+    expect(nextScheduledSyncFrom(imported({ error_message: 'Synkningen har stannat.' }), NOW)).toBeNull()
+    // A waiting connection runs its own first import; the others cannot save.
+    for (const status of ['pending_selection', 'expired', 'error', 'pending', 'revoked']) {
+      expect(nextScheduledSyncFrom(imported({ status }), NOW)).toBeNull()
+    }
   })
 })
 

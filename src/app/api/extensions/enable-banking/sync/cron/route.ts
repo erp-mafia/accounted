@@ -30,11 +30,11 @@ import {
   type BankSyncInitialResult,
 } from '@/lib/bank-sync/persist-sync-result'
 import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
+import { isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import {
   INCREMENTAL_LOOKBACK_DAYS,
-  MAX_LOOKBACK_DAYS,
-  incrementalLookbackDays,
+  cronLookbackDays,
 } from '@/extensions/general/enable-banking/lib/cron-lookback'
 import { planBankSyncRun } from '@/extensions/general/enable-banking/lib/cron-plan'
 import { applyRateLimitCooldown, claimSyncLease } from '@/extensions/general/enable-banking/lib/sync-lease'
@@ -221,14 +221,10 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       // First sync: 90-day lookback (PSD2 max). Subsequent: 7-day window,
       // widened to cover any gap since the last successful sync (a paused
       // subscription that was paid again, a renewed consent) so the days in
-      // between are not lost. See cron-lookback.ts.
-      // Gate on initial_sync_completed_at, not last_synced_at: manual "Sync now"
-      // sets last_synced_at without doing the deep backfill, and we want the cron
-      // to still fall back to 90 days if the inline activation backfill failed.
+      // between are not lost. See cronLookbackDays in cron-lookback.ts, which
+      // the account picker reads too.
       const isFirstSync = !connection.initial_sync_completed_at
-      const lookbackDays = isFirstSync
-        ? MAX_LOOKBACK_DAYS
-        : incrementalLookbackDays(connection.last_synced_at)
+      const lookbackDays = cronLookbackDays(connection)
       if (isFirstSync) {
         ctx.log.info('first sync for connection: using 90-day lookback', {
           connectionId: connection.id,
@@ -247,9 +243,10 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
 
       // Keep the full list for the DB write-back so we don't drop accounts
       // the user has opted out of. Sync only the enabled subset (treating
-      // undefined as enabled for back-compat with older rows).
+      // undefined as enabled for back-compat with older rows), and never a
+      // mirror card account, even one an old row still has switched on.
       const allAccounts = (connection.accounts_data as StoredAccount[] || []).map(a => ({ ...a }))
-      const accounts = allAccounts.filter(a => a.enabled !== false)
+      const accounts = allAccounts.filter(isSyncedAccount)
 
       // Detect SIE overlap: skip auto-categorization if the sync range
       // overlaps with a completed SIE import to prevent double-booking

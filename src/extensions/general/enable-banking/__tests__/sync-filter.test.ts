@@ -93,5 +93,23 @@ describe('POST /sync (enable-banking): account filtering', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error).toMatch(/Inga konton är valda/i)
+    // Names the picker by the label the page shows (crm#1097): it used to
+    // say "Hantera konton", a control that does not exist.
+    expect(body.error).toContain('Välj konton')
+    expect(body.error).not.toContain('Hantera')
+  })
+
+  it('counts a mirror card account switched on as no account to sync (crm#1097)', async () => {
+    const ctx = makeContext({
+      status: 'active',
+      accounts_data: [
+        { uid: 'acc-1', currency: 'SEK', enabled: false, iban: 'SE1' },
+        { uid: 'card', currency: 'SEK', enabled: true, name: 'SVEA_MQ_Debit_B2B' },
+      ],
+    })
+
+    const res = await syncRoute.handler(makeRequest(), ctx)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/Inga konton är valda/i)
   })
 })

@@ -13,6 +13,10 @@
  * lib/__tests__/connection-state.test.ts.
  */
 
+import { partitionAccounts } from './claimed-accounts'
+import { cronLookbackDays } from './cron-lookback'
+import type { StoredAccount } from '../types'
+
 /** Days before consent expiry at which renewal becomes the primary action.
  *  Must match isConsentExpiringSoon in api-client.ts. */
 export const EXPIRY_WARNING_DAYS = 7
@@ -93,6 +97,54 @@ export function getConnectionUiState(
       return 'active'
     }
   }
+}
+
+/**
+ * Whether a connection row offers "Välj konton" beside its "x av y konton
+ * synkas" line: the same picker as the "..." menu entry, shown where the row
+ * says one of this company's accounts does not sync (crm#1097: a person told
+ * to change that could not find the menu entry).
+ *
+ * Only for an account the picker can switch on. A card account that mirrors
+ * the main account is never one (partitionAccounts sets it aside), and an
+ * account another company books is a deliberate tick inside the picker's
+ * disclosure, never an action on this row. Only where the save can succeed:
+ * it accepts an 'active' connection (a waiting one shows no details), so an
+ * expired or failed one is offered nothing it cannot save. A row whose
+ * primary action already is "Välj konton" (needs_configuration) gets no
+ * second one. A row where everything syncs stays as quiet as before: the
+ * menu entry is still there.
+ */
+export function offersAccountChoice(
+  connection: ConnectionStateInput,
+  accounts: readonly Pick<StoredAccount, 'claimed_by_company_id' | 'enabled' | 'name' | 'iban' | 'bban'>[],
+  now: number = Date.now(),
+): boolean {
+  if (connection.status !== 'active') return false
+  if (getConnectionUiState(connection, now) === 'needs_configuration') return false
+  return partitionAccounts(accounts).own.some((account) => account.enabled === false)
+}
+
+/**
+ * The date (YYYY-MM-DD) from which the next scheduled sync fetches an account
+ * that a selection save switches on, so the picker can say it before the
+ * save (crm#1097). The initial backfill runs once per connection, for the
+ * accounts chosen then: an account switched on later gets the cron's own
+ * window (cronLookbackDays), about a week on a healthy connection, the gap
+ * since the last sync on a stale one, 90 days while the first import is still
+ * owed. Null when no scheduled sync comes next: a stopped sync
+ * (needs_configuration) syncs right after the save instead, and a connection
+ * that is not active cannot save a changed selection. A company without
+ * bank_sync gets null from the caller: the cron skips it and Synka is refused.
+ */
+export function nextScheduledSyncFrom(
+  connection: ConnectionStateInput & { initial_sync_completed_at?: string | null },
+  now: number = Date.now(),
+): string | null {
+  if (connection.status !== 'active') return null
+  if (getConnectionUiState(connection, now) === 'needs_configuration') return null
+  const days = cronLookbackDays(connection, now)
+  return new Date(now - days * DAY_MS).toISOString().split('T')[0]
 }
 
 /** Sort order for the single "Dina bankkopplingar" group: the row that needs

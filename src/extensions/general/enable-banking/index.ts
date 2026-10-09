@@ -39,7 +39,7 @@ import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions } from './lib/session-sharing'
 import { retireBankConnection } from './lib/retire-connection'
 import { hasSelectableAccounts } from './lib/claimed-accounts'
-import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
+import { isMirrorCardAccount, isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
 import {
   runUnattendedReconciliationSweep,
   toSweepSummary,
@@ -833,13 +833,14 @@ export const enableBankingExtension: Extension = {
         try {
           // Clone account observations; sync only the enabled subset.
           // undefined enabled === true for back-compat with rows that predate
-          // the per-account toggle.
+          // the per-account toggle. A mirror card account is never fetched,
+          // even one an old row still has switched on (isSyncedAccount).
           const allAccounts = (connection.accounts_data as StoredAccount[] || []).map(a => ({ ...a }))
-          const accounts = allAccounts.filter(a => a.enabled !== false)
+          const accounts = allAccounts.filter(isSyncedAccount)
 
           if (accounts.length === 0) {
             return NextResponse.json(
-              { error: 'Inga konton är valda för synkning. Öppna "Hantera konton" för att aktivera minst ett.' },
+              { error: 'Inga konton är valda för synkning. Öppna Välj konton för att aktivera minst ett.' },
               { status: 400 }
             )
           }

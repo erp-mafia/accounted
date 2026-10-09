@@ -177,6 +177,33 @@ describe('POST /sync (enable-banking): retry from error status', () => {
     )
   })
 
+  it('never fetches a mirror card account an old row still has switched on, on "Försök igen" either (crm#1097)', async () => {
+    // A row from before the selection save refused it can still carry the
+    // card switched on. Retrying such a failed connection used to import an
+    // opposite-sign twin of every card purchase again, while the settings
+    // line said the card account is not fetched.
+    ;(syncAccountTransactions as unknown as Mock).mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+    const updateSpy = vi.fn()
+    const ctx = makeContext(
+      makeConnection({
+        status: 'error',
+        error_message: RAW_EB_ERROR,
+        accounts_data: [
+          { uid: 'acc-1', currency: 'SEK', enabled: true, iban: 'SE1' },
+          { uid: 'card', currency: 'SEK', enabled: true, name: 'SVEA_MQ_Debit_B2B' },
+        ] as StoredAccount[],
+      }),
+      updateSpy,
+    )
+
+    const res = await syncRoute.handler(makeRequest(), ctx)
+
+    expect(res.status).toBe(200)
+    expect(syncAccountTransactions).toHaveBeenCalledTimes(1)
+    expect((syncAccountTransactions as unknown as Mock).mock.calls[0][4]).toMatchObject({ uid: 'acc-1' })
+    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ p_accounts: [{ uid: 'acc-1' }] }))
+  })
+
   it('holds the shared sync lease before calling the bank, without ever waiting on it', async () => {
     // "Synka nu" is never put on a cooldown, but the cron and the
     // agent-triggered sync must stay off the connection meanwhile.

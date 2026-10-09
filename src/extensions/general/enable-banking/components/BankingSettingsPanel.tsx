@@ -33,6 +33,7 @@ import { BankConnectionStatus } from './BankConnectionStatus'
 import { AccountPickerDialog } from './AccountPickerDialog'
 import {
   buildPageAttentionSentence,
+  nextScheduledSyncFrom,
   selectPageAttention,
   sortConnectionsByPrecedence,
 } from '../lib/connection-state'
@@ -828,6 +829,7 @@ export default function BankingSettingsPanel() {
           bankName={pickerConnection.bank_name}
           accounts={pickerAccounts}
           isInitialSelection={pickerConnection.status === 'pending_selection'}
+          newAccountsSyncFrom={hasBankSync ? nextScheduledSyncFrom(pickerConnection, stateNow) : null}
           onReauthorize={() => {
             setPickerConnectionId(null)
             handleRetryConnect(pickerConnection)

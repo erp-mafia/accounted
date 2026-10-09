@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { ChevronRight } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import { CURRENCY_LEDGER_DEFAULTS } from '@/lib/cash-accounts/ledger-slots'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -36,7 +36,7 @@ import {
   resolveFiscalYearStart,
   resolveGapFillStart,
 } from '../lib/date-suggestions'
-import { describeClaimedElsewhere, partitionByClaim } from '../lib/claimed-accounts'
+import { describeClaimedElsewhere, describeMirrorCards, partitionAccounts } from '../lib/claimed-accounts'
 import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
 import type { StoredAccount } from '../types'
 import {
@@ -54,6 +54,11 @@ interface AccountPickerDialogProps {
   // saving is allowed but the user is reminded that no sync runs until they
   // confirm.
   isInitialSelection: boolean
+  // From which date the next scheduled sync fetches an account this save
+  // switches on (lib/connection-state.ts nextScheduledSyncFrom); null when
+  // something else follows the save. Said before the save, once an account
+  // that was off is ticked: it gets no history from the connection's start.
+  newAccountsSyncFrom?: string | null
   onSaved: () => void
   // Start a new login at the same bank. Offered only when a waiting
   // connection leaves nothing to pick; the login replaces it.
@@ -82,6 +87,7 @@ export function AccountPickerDialog({
   bankName,
   accounts,
   isInitialSelection,
+  newAccountsSyncFrom = null,
   onSaved,
   onReauthorize,
 }: AccountPickerDialogProps) {
@@ -102,11 +108,12 @@ export function AccountPickerDialog({
   // SVEA_MQ_Debit_B2B) is not a choice at all, on or off, in either list: one
   // muted line says why, and the selection save keeps it off whatever is sent
   // (and turns off one switched on before that rule). It is taken out before
-  // the claim split, so no claim flag can put it behind the disclosure.
-  const { ownAccounts, claimedElsewhere, mirrorCards } = useMemo(() => {
-    const { own, claimedElsewhere } = partitionByClaim(accounts.filter((a) => !isMirrorCardAccount(a)))
-    return { ownAccounts: own, claimedElsewhere, mirrorCards: accounts.filter(isMirrorCardAccount) }
-  }, [accounts])
+  // the claim split, so no claim flag can put it behind the disclosure. The
+  // connection's details in settings split by the same function.
+  const { own: ownAccounts, claimedElsewhere, mirrorCards } = useMemo(
+    () => partitionAccounts(accounts),
+    [accounts],
+  )
   const [claimedOpen, setClaimedOpen] = useState(false)
   // Server-side save rejection (validation / ledger conflict). Shown inline in
   // the dialog: a rejected save persisted nothing and started no sync, so the
@@ -333,6 +340,10 @@ export function AccountPickerDialog({
   // it is collapsed, so the counter never exceeds what the user can see.
   const selectedClaimedCount = claimedElsewhere.filter((a) => selected.has(a.uid)).length
   const selectableCount = ownAccounts.length + selectedClaimedCount
+  // An account that was off and is ticked now. The initial backfill ran once,
+  // for the accounts chosen then, so this one gets only the next scheduled
+  // sync's window (crm#1097), and the dialog says so before the save.
+  const switchesAccountOn = accounts.some((a) => a.enabled === false && selected.has(a.uid))
 
   const byDisplayName = (a: StoredAccount, b: StoredAccount) =>
     (a.name || a.iban || '').localeCompare(b.name || b.iban || '')
@@ -482,9 +493,12 @@ export function AccountPickerDialog({
           error: { message: 'Vi sparade kontovalet men kunde inte hämta transaktioner just nu. Vi försöker igen vid nästa körning.' },
         })
       } else {
+        // Counted like "x av y valda" above and the details' "x av y konton
+        // synkas" (crm#1097): the route's total_count also counts a mirror
+        // card account and accounts left with another company.
         toast({
           title: 'Kontoval sparat',
-          description: `${data.enabled_count} av ${data.total_count} konton kommer synkas.`,
+          description: `${data.enabled_count} av ${selectableCount} ${selectableCount === 1 ? 'konto' : 'konton'} kommer synkas.`,
         })
         onOpenChange(false)
       }
@@ -1022,19 +1036,29 @@ export function AccountPickerDialog({
           )}
         </div>
 
+        {/* An account that was off and is ticked now gets no history from the
+            connection's start: the initial backfill ran once, for the
+            accounts chosen then, and the next scheduled sync fetches only
+            its own window (crm#1097). The row's Synka (POST /sync) fetches
+            120 days for every switched-on account. Said before the save,
+            with both ways to the older transactions. */}
+        {!isInitialSelection && newAccountsSyncFrom && switchesAccountOn && (
+          <p className="text-xs text-muted-foreground">
+            Konton du markerar nu får transaktioner från ungefär{' '}
+            <span className="tabular-nums">{formatDate(newAccountsSyncFrom)}</span> vid nästa
+            automatiska synk. Tryck Synka efter att du sparat för att hämta upp till 120 dagar
+            bakåt, så långt banken lämnar ut. Äldre importerar du som bankfil (Importera, Bankfil).
+          </p>
+        )}
+
         {/* Card account that only mirrors the main account (Svea's
             SVEA_MQ_Debit_B2B, issue #2565): every purchase already arrives on
             the main account, so syncing it would only add an opposite-sign
             twin per purchase. Never a choice, so one line instead of a row.
-            One switched on before the save refused it still syncs until this
-            save turns it off, and the line says so rather than hiding it. */}
+            One switched on before the save refused it is not fetched either
+            (isSyncedAccount), and this save turns its flag off. */}
         {mirrorCards.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {mirrorCards.length === 1 ? 'Kortkontot' : 'Kortkontona'}{' '}
-            {mirrorCards.map((a) => a.name).join(', ')}{' '}
-            {mirrorCards.some((a) => a.enabled !== false) ? 'stängs av när du sparar' : 'hämtas inte'}
-            : kortköpen finns redan på huvudkontot.
-          </p>
+          <p className="text-xs text-muted-foreground">{describeMirrorCards(mirrorCards)}</p>
         )}
 
         {/* Accounts another of the user's companies already books (one SEB

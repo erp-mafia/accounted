@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { incrementalLookbackDays } from '../cron-lookback'
+import { cronLookbackDays, incrementalLookbackDays } from '../cron-lookback'
 
 const NOW = Date.parse('2026-09-02T05:00:00Z')
 const daysAgo = (d: number) => new Date(NOW - d * 24 * 60 * 60 * 1000).toISOString()
@@ -33,5 +33,17 @@ describe('incrementalLookbackDays', () => {
 
   it('never goes below 7 days for a future timestamp (clock skew)', () => {
     expect(incrementalLookbackDays(daysAgo(-2), NOW)).toBe(7)
+  })
+})
+
+describe('cronLookbackDays', () => {
+  it('takes the 90-day first import while it is still owed, whatever the last manual sync', () => {
+    expect(cronLookbackDays({ initial_sync_completed_at: null, last_synced_at: daysAgo(1) }, NOW)).toBe(90)
+    expect(cronLookbackDays({ last_synced_at: null }, NOW)).toBe(90)
+  })
+
+  it('takes the incremental window once the first import is done', () => {
+    expect(cronLookbackDays({ initial_sync_completed_at: daysAgo(30), last_synced_at: daysAgo(1) }, NOW)).toBe(7)
+    expect(cronLookbackDays({ initial_sync_completed_at: daysAgo(30), last_synced_at: daysAgo(20) }, NOW)).toBe(21)
   })
 })

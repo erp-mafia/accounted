@@ -83,6 +83,31 @@ describe('planBankSyncRun', () => {
     expect(plan.stats).toMatchObject({ coolingDown: 1, due: 0, oldestOverdueHours: 24 })
   })
 
+  it('counts a connection whose only switched-on account is a mirror card account as nothing to fetch', () => {
+    const plan = planBankSyncRun(
+      [
+        row('card-only', {
+          accounts_data: [
+            { uid: 'main', iban: 'SE1', enabled: false },
+            { uid: 'card', name: 'SVEA_MQ_Debit_B2B', enabled: true },
+          ],
+        }),
+        row('main-and-card', {
+          accounts_data: [
+            { uid: 'main', iban: 'SE2', enabled: true },
+            { uid: 'card', name: 'SVEA_MQ_Debit_B2B', enabled: true },
+          ],
+        }),
+      ],
+      ENTITLED,
+      NOW,
+      300,
+    )
+
+    expect(plan.selected.map(c => c.id)).toEqual(['main-and-card'])
+    expect(plan.stats).toMatchObject({ noAccounts: 1, due: 1 })
+  })
+
   it('puts every connection in exactly one bucket', () => {
     const rows = [
       row('free', { company_id: 'free' }),

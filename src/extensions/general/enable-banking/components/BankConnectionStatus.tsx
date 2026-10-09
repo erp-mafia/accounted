@@ -14,8 +14,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn, formatDate } from '@/lib/utils'
 import { ChevronRight, Loader2, MoreHorizontal } from 'lucide-react'
-import { getConnectionUiState } from '../lib/connection-state'
-import { describeClaimedElsewhere, partitionByClaim } from '../lib/claimed-accounts'
+import { getConnectionUiState, offersAccountChoice } from '../lib/connection-state'
+import { describeClaimedElsewhere, describeMirrorCards, partitionAccounts } from '../lib/claimed-accounts'
 import type { BankConnection } from '@/types'
 
 interface BankConnectionStatusProps {
@@ -35,8 +35,10 @@ interface BankConnectionStatusProps {
  * identity + state on one line, exactly ONE primary action decided by the
  * derived UI state, every secondary action behind a "..." menu, and the
  * details (accounts, IBAN, balances, initial backfill) behind a collapsed
- * disclosure. The page-level attention sentence lives in the panel, not
- * here (design convention 6: one .attn per page).
+ * disclosure. When the disclosure line says an account does not sync, the
+ * way to change that ("Välj konton", also in the menu) sits beside it. The
+ * page-level attention sentence lives in the panel, not here (design
+ * convention 6: one .attn per page).
  */
 export function BankConnectionStatus({
   connection,
@@ -56,6 +58,7 @@ export function BankConnectionStatus({
   const accounts = (connection.accounts_data as Array<{
     uid: string
     iban?: string
+    bban?: string
     name?: string
     currency: string
     balance?: number
@@ -64,10 +67,12 @@ export function BankConnectionStatus({
     claimed_by_company_id?: string
     claimed_by_company_name?: string
   }>) || []
-  // Accounts another of the user's companies books (one SEB consent covers
-  // every company the signer represents) are not this company's accounts:
-  // they are left out of the list and the count, and summarised in one line.
-  const { own: ownAccounts, claimedElsewhere } = partitionByClaim(accounts)
+  // The same split as the account picker (crm#1097). Accounts another of the
+  // user's companies books (one SEB consent covers every company the signer
+  // represents) and a card account that only mirrors the main account are
+  // not this company's accounts: they are left out of the list and the
+  // count, and each kind is summarised in one line.
+  const { own: ownAccounts, claimedElsewhere, mirrorCards } = partitionAccounts(accounts)
   const enabledCount = ownAccounts.filter((a) => a.enabled !== false).length
 
   function formatBalanceAge(updatedAt: string): string {
@@ -222,7 +227,7 @@ export function BankConnectionStatus({
         {uiState === 'pending_selection' ? (
           <span className="text-xs text-muted-foreground">
             {ownAccounts.length > 0
-              ? `${ownAccounts.length} konton tillgängliga: inga transaktioner synkas ännu`
+              ? `${ownAccounts.length} ${ownAccounts.length === 1 ? 'konto tillgängligt' : 'konton tillgängliga'}: inga transaktioner synkas ännu`
               : claimedElsewhere.length > 0
                 ? 'Alla konton i kopplingen synkas redan i andra bolag'
                 : 'Inga konton i kopplingen: inga transaktioner synkas ännu'}
@@ -329,19 +334,37 @@ export function BankConnectionStatus({
           would read as current). */}
       {accounts.length > 0 && uiState !== 'pending_selection' && (
         <div className="mt-1">
-          <button
-            type="button"
-            onClick={() => setDetailsOpen((v) => !v)}
-            aria-expanded={detailsOpen}
-            className="flex min-h-9 items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
-          >
-            <ChevronRight
-              className={cn('h-3.5 w-3.5 transition-transform duration-150', detailsOpen && 'rotate-90')}
-            />
-            <span className="tabular-nums">
-              {enabledCount} av {ownAccounts.length} konton synkas
-            </span>
-          </button>
+          <div className="flex flex-wrap items-center gap-x-3">
+            <button
+              type="button"
+              onClick={() => setDetailsOpen((v) => !v)}
+              aria-expanded={detailsOpen}
+              className="flex min-h-9 items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+            >
+              <ChevronRight
+                className={cn('h-3.5 w-3.5 transition-transform duration-150', detailsOpen && 'rotate-90')}
+              />
+              <span className="tabular-nums">
+                {enabledCount} av {ownAccounts.length} {ownAccounts.length === 1 ? 'konto' : 'konton'} synkas
+              </span>
+            </button>
+            {/* Where the row says an account of this company does not sync,
+                the way to switch it on sits beside it, under the name the
+                menu entry and the picker use (crm#1097: the picker was only
+                in the "..." menu, and was not found there). Never for a card
+                account or another company's account: neither is a choice
+                here (offersAccountChoice). */}
+            {onManageAccounts && offersAccountChoice(connection, accounts, now) && (
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label={`Välj konton för ${connection.bank_name}`}
+                onClick={() => onManageAccounts(connection.id)}
+              >
+                Välj konton
+              </Button>
+            )}
+          </div>
 
           {detailsOpen && (
             <div className="ml-3 border-l border-border pl-4">
@@ -421,10 +444,22 @@ export function BankConnectionStatus({
                   </div>
                 )
               })}
+              {/* A card account that only mirrors the main account is never
+                  an account of its own (lib/bank-sync/mirror-card-account.ts)
+                  and can never be switched on. A "Synkas ej" row with a
+                  balance read as something to switch on or remove, and the
+                  way to do that could not be found because there is none
+                  (crm#1097). One muted line says what it is, in the picker's
+                  words, and offers nothing. */}
+              {mirrorCards.length > 0 && (
+                <div className="py-2 text-xs text-muted-foreground">
+                  {describeMirrorCards(mirrorCards)}
+                </div>
+              )}
               {/* Sibling companies' accounts carried by this consent: one
-                  muted line, never rows. Moving one here is done in the
-                  account picker ("Hantera konton"), where it is a deliberate
-                  tick inside a disclosure. */}
+                  muted line, never rows, no action. Moving one here is done
+                  in the account picker ("Välj konton"), where it is a
+                  deliberate tick inside a disclosure. */}
               {claimedElsewhere.length > 0 && (
                 <div className="py-2 text-xs text-muted-foreground tabular-nums" data-ph-mask="">
                   {describeClaimedElsewhere(claimedElsewhere)}
