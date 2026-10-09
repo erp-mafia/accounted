@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { MigrationJobScope } from '@/lib/providers/migration-contract'
 import { fiscalYearScopeFromImports, invoiceWithinScope } from '../invoice-scope'
 
 /**
@@ -30,6 +31,13 @@ describe('invoiceWithinScope', () => {
 
   it('keeps an unpaid invoice from any year', () => {
     expect(invoiceWithinScope(dto('2024-06-01', false), SCOPE)).toBe(true)
+  })
+
+  it('reads a job scope by its years alone, and filters nothing when it carries none (crm#1114)', () => {
+    const withYears: MigrationJobScope = { ...SCOPE, allSupplierInvoices: true }
+    const requestOnly: MigrationJobScope = { allSupplierInvoices: true }
+    expect(invoiceWithinScope(dto('2019-06-01', true), withYears)).toBe(false)
+    expect(invoiceWithinScope(dto('2019-06-01', true), requestOnly)).toBe(true)
   })
 
   it('keeps a prior-year invoice settled inside the scope: it backs the 1510/2440 opening balance', () => {

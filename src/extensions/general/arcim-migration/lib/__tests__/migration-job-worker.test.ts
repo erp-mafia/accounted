@@ -5,6 +5,7 @@ import { sealMigrationPayload } from '@/lib/providers/migration-payload'
 import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
 import { FortnoxApiError } from '@/lib/providers/fortnox/client'
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
+import { mapFortnoxToSupplierInvoice } from '@/lib/providers/fortnox/mapper'
 import { enrichBokioSupplierInvoice } from '@/lib/providers/bokio/supplier-evidence'
 const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn() }))
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn() }) }))
@@ -483,6 +484,41 @@ describe('a register the provider refuses', () => {
 
     expect(db.rpc.mock.calls.some(([name]) => name === 'skip_provider_migration_resource')).toBe(false)
     expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'PROVIDER_UPSTREAM_ERROR', failures: 1, resource_index: 1 })
+  })
+})
+
+describe('paid Fortnox supplier invoices on request (crm#1114)', () => {
+  const years = { start: '2025-01-01', end: '2025-12-31' }
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+  })
+
+  it('lists the whole register only for a job whose scope asks for it', async () => {
+    const asked = database({ provider: 'fortnox', resources: ['supplierInvoices'], fiscal_year_scope: { ...years, allSupplierInvoices: true } })
+    const plain = database({ provider: 'fortnox', resources: ['supplierInvoices'], fiscal_year_scope: years })
+    mocks.page.mockResolvedValue({ items: [], nextPage: null, total: 0 })
+
+    await runProviderMigrationWorker({ supabase: asked.supabase, jobId: asked.job.id })
+    await runProviderMigrationWorker({ supabase: plain.supabase, jobId: plain.job.id })
+
+    expect(mocks.page.mock.calls.map(call => [call[3], call[5]])).toEqual([
+      ['supplierInvoices', { allSupplierInvoices: true }], ['supplierInvoices', { allSupplierInvoices: false }],
+    ])
+  })
+
+  it('skips an invoice cancelled in Fortnox without fetching its detail', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['supplierInvoices'],
+      fiscal_year_scope: { ...years, allSupplierInvoices: true } })
+    const cancelled = mapFortnoxToSupplierInvoice({ GivenNumber: '7', Cancelled: true, Total: '500', Balance: '500',
+      InvoiceDate: '2025-03-01', DueDate: '2025-03-31', SupplierName: 'Leverantör AB', SupplierNumber: '1' })
+    db.rows.push({ id: cancelled.id, source_id: cancelled.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(cancelled) })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.hydrate).not.toHaveBeenCalled()
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [{ id: cancelled.id, skip: 'cancelled' }],
+    }))
   })
 })
 

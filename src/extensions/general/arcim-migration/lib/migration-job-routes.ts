@@ -16,7 +16,11 @@ import { fiscalYearScopeFromImports } from './invoice-scope'
 import { ensureConsentSourceIdentity, ProviderCompanyMismatchError } from './provider-client'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
-const CreateSchema = z.object({ consentId: z.uuid(), resources: z.array(z.enum(MIGRATION_RESOURCES)).min(1).max(4) }).strict()
+const CreateSchema = z.object({
+  consentId: z.uuid(), resources: z.array(z.enum(MIGRATION_RESOURCES)).min(1).max(4),
+  /** Fortnox's paid supplier invoices too, for this sync only. */
+  allSupplierInvoices: z.boolean().optional(),
+}).strict()
 const JobSchema = z.object({ jobId: z.uuid(), consentId: z.uuid().optional() }).strict()
 const AcceptSchema = z.object({ jobId: z.uuid() }).strict()
 
@@ -205,9 +209,14 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
       if (!imports?.length) return error('PROVIDER_SIE_IMPORT_REQUIRED', 400)
       const refusal = await sourceIdentityRefusal(ctx, body.data.consentId)
       if (refusal) return refusal
+      // The request for paid supplier invoices rides on the job's own scope,
+      // so a resumed or reconnected job keeps it and the next sync starts
+      // without it (crm#1114).
+      const scope = fiscalYearScopeFromImports(imports)
+      const allSupplierInvoices = body.data.allSupplierInvoices === true && resources.includes('supplierInvoices')
       const { data: job, error: createError } = await createServiceClientNoCookies().rpc('create_provider_migration_job', {
         p_company_id: ctx.companyId, p_user_id: ctx.userId, p_consent_id: body.data.consentId,
-        p_resources: resources, p_scope: fiscalYearScopeFromImports(imports),
+        p_resources: resources, p_scope: allSupplierInvoices ? { ...scope, allSupplierInvoices: true } : scope,
       })
       if (createError) {
         logRefusal(ctx, createError, body.data.consentId)

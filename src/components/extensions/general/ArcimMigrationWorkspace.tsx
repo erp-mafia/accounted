@@ -315,6 +315,8 @@ interface MigrationOptions {
   importSuppliers: boolean
   importSalesInvoices: boolean
   importSupplierInvoices: boolean
+  /** Fortnox: paid supplier invoices too, for this sync only (crm#1114). */
+  importPaidSupplierInvoices: boolean
   importAssets: boolean
   voucherSeries: string
 }
@@ -326,6 +328,7 @@ const DEFAULT_OPTIONS: MigrationOptions = {
   importSuppliers: true,
   importSalesInvoices: true,
   importSupplierInvoices: true,
+  importPaidSupplierInvoices: false,
   importAssets: true,
   voucherSeries: 'B',
 }
@@ -1463,14 +1466,32 @@ function OptionsStep({
           checked={options.importSalesInvoices}
           onChange={() => toggleOption('importSalesInvoices')}
         />
-        <OptionRow
-          label="Leverantörsfakturor"
-          description={provider === 'fortnox'
-            ? t('ext_arcim_supplier_invoices_unpaid_only')
-            : 'Alla leverantörsfakturor (betalda och obetalda)'}
-          checked={options.importSupplierInvoices}
-          onChange={() => toggleOption('importSupplierInvoices')}
-        />
+        <div>
+          <OptionRow
+            label="Leverantörsfakturor"
+            description={provider === 'fortnox'
+              ? t('ext_arcim_supplier_invoices_unpaid_only')
+              : 'Alla leverantörsfakturor (betalda och obetalda)'}
+            checked={options.importSupplierInvoices}
+            onChange={() => toggleOption('importSupplierInvoices')}
+          />
+          {/* Deliberately quiet: the paid ones are already in the ledger as
+              verifikat, and listing them costs one Fortnox call each. For a
+              member who wants the whole register, e.g. when leaving Fortnox. */}
+          {provider === 'fortnox' && options.importSupplierInvoices && (
+            <label
+              htmlFor="arcim-paid-supplier-invoices"
+              className="flex cursor-pointer items-center gap-2 pb-3 text-xs text-muted-foreground"
+            >
+              <Checkbox
+                id="arcim-paid-supplier-invoices"
+                checked={options.importPaidSupplierInvoices}
+                onCheckedChange={() => toggleOption('importPaidSupplierInvoices')}
+              />
+              <span>{t('ext_arcim_supplier_invoices_include_paid')}</span>
+            </label>
+          )}
+        </div>
         {provider === 'fortnox' && (
           <OptionRow
             label="Anläggningstillgångar"
@@ -2342,14 +2363,16 @@ function ResultStep({
     }
     if (results.supplierInvoices) {
       // Shown even at zero: the Fortnox import fetches only unpaid supplier
-      // invoices (filter=unpaid in lib/providers/fortnox/config.ts), so a
-      // register with every invoice paid imports none, and a hidden row read
-      // as "the supplier invoices were lost" (crm#251). The paid ones are in
-      // the ledger as the SIE file's verifikat.
+      // invoices unless the member asked for all (filter=unpaid in
+      // lib/providers/fortnox/config.ts), so a register with every invoice
+      // paid imports none, and a hidden row read as "the supplier invoices
+      // were lost" (crm#251). The paid ones are in the ledger as the SIE
+      // file's verifikat.
       const skipDetail = results.supplierInvoices.skipped > 0
         ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
         : undefined
-      const scopeDetail = provider === 'fortnox' ? t('ext_arcim_supplier_invoices_unpaid_only') : undefined
+      const scopeDetail = provider === 'fortnox' && !results.supplierInvoices.paidIncluded
+        ? t('ext_arcim_supplier_invoices_unpaid_only') : undefined
       entityLines.push({
         label: 'Leverantörsfakturor',
         value: `${results.supplierInvoices.imported} importerade`,
@@ -3693,9 +3716,11 @@ export default function ArcimMigrationWorkspace({
         }
         const resources = MIGRATION_RESOURCES.filter(resource => selected[resource])
         if (resources.length) {
+          const allSupplierInvoices = selectedProvider === 'fortnox'
+            && migrationOptions.importSupplierInvoices && migrationOptions.importPaidSupplierInvoices
           const response = await fetch('/api/extensions/ext/arcim-migration/migration-jobs', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ consentId, resources }),
+            body: JSON.stringify({ consentId, resources, ...(allSupplierInvoices ? { allSupplierInvoices: true } : {}) }),
           })
           const body = await response.json()
           if (!response.ok) throw apiError(body, `HTTP ${response.status}`)
@@ -3792,6 +3817,11 @@ export default function ArcimMigrationWorkspace({
             creditNotesLinked: count.credit_notes_linked ?? 0,
           } : {}),
         }
+      }
+      // The job, not this session's options, says whether Fortnox's paid
+      // supplier invoices were listed too (crm#1114).
+      if (results.supplierInvoices && status.job.fiscal_year_scope?.allSupplierInvoices) {
+        results.supplierInvoices.paidIncluded = true
       }
       // A register the provider refused is a step that could not be fetched:
       // the result names it with the remedy, the same way /migrate reports one.

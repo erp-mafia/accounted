@@ -25,6 +25,14 @@ describe('durable provider listing', () => {
     await expect(fetchMigrationPage(provider, 'token', 'tenant', 'customers', 7)).resolves.toMatchObject({ nextPage: null })
     expect(page).toHaveBeenCalledTimes(1)
   })
+  it('lists only unpaid Fortnox supplier invoices unless the job asks for all of them', async () => {
+    page.mockResolvedValue({ items: [], page: 1, totalPages: 1, totalCount: 0 })
+    await fetchMigrationPage('fortnox', 'token', undefined, 'supplierInvoices', 1)
+    await fetchMigrationPage('fortnox', 'token', undefined, 'supplierInvoices', 1, { allSupplierInvoices: true })
+    // The request concerns supplier invoices only; sales invoices list whole as before.
+    await fetchMigrationPage('fortnox', 'token', undefined, 'salesInvoices', 1, { allSupplierInvoices: true })
+    expect(page.mock.calls.map(call => call[1])).toEqual(['/supplierinvoices?filter=unpaid', '/supplierinvoices', '/invoices'])
+  })
   it('does not accept a repeated or unexpectedly empty page as completion', async () => {
     page.mockResolvedValue({ items: [], page: 1, totalPages: 3, totalCount: 2500 })
     await expect(fetchMigrationPage('visma', 'token', undefined, 'customers', 2)).rejects.toThrow('PAGE_MISMATCH')

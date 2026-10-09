@@ -145,6 +145,11 @@ export interface InvoiceStepResult {
   creditNotesLinked?: number
   hydration?: HydrationReport
   errorSample?: string
+  /**
+   * The run listed Fortnox's paid supplier invoices too, on the member's
+   * request, so the "unpaid only" note does not apply (crm#1114).
+   */
+  paidIncluded?: boolean
 }
 
 export interface MigrationResults {

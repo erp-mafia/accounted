@@ -33,7 +33,8 @@ describe('migration job API', () => {
   })
   it('validates resources and rejects client-supplied company or fiscal scope', async () => {
     for (const body of [{ consentId: id, resources: [] }, { consentId: id, resources: ['journalEntries'] },
-      { consentId: id, resources: ['customers'], companyId: 'foreign' }, { consentId: id, resources: ['customers'], scope: {} }]) {
+      { consentId: id, resources: ['customers'], companyId: 'foreign' }, { consentId: id, resources: ['customers'], scope: {} },
+      { consentId: id, resources: ['supplierInvoices'], allSupplierInvoices: 'yes' }]) {
       expect((await route('POST')(request(body), context().ctx)).status).toBe(400)
     }
     expect(serviceRpc).not.toHaveBeenCalled()
@@ -56,6 +57,18 @@ describe('migration job API', () => {
     })
     expect(after).toHaveBeenCalledOnce()
     expect(worker).not.toHaveBeenCalled()
+  })
+  it('puts a request for paid supplier invoices on the job scope, only with supplier invoices selected', async () => {
+    const { ctx, mockResult } = context(); mockResult({ data: [{ fiscal_year_start: '2025-01-01', fiscal_year_end: '2025-12-31' }] })
+    serviceRpc.mockResolvedValue({ data: { id }, error: null })
+    expect((await route('POST')(request({ consentId: id, resources: ['supplierInvoices'], allSupplierInvoices: true }), ctx)).status).toBe(202)
+    expect((await route('POST')(request({ consentId: id, resources: ['customers'], allSupplierInvoices: true }), ctx)).status).toBe(202)
+    expect((await route('POST')(request({ consentId: id, resources: ['supplierInvoices'] }), ctx)).status).toBe(202)
+    expect(serviceRpc.mock.calls.map(([, args]) => args.p_scope)).toEqual([
+      { start: '2025-01-01', end: '2025-12-31', allSupplierInvoices: true },
+      { start: '2025-01-01', end: '2025-12-31' },
+      { start: '2025-01-01', end: '2025-12-31' },
+    ])
   })
   it('requires a completed SIE import even for a direct API caller', async () => {
     const { ctx, mockResult } = context(); mockResult({ data: [] })

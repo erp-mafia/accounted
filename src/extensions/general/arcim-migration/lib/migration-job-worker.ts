@@ -106,6 +106,13 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     return { id: c.id, row: mapSupplier(dto as SupplierDto, job.user_id, job.company_id) }
   }
   const listed = dto as InvoiceDto
+  // A supplier invoice cancelled (makulerad) in Fortnox was never a payable,
+  // and the supplier-invoice register has no cancelled state: it would land
+  // as credited. ?filter=unpaid never lists one; the whole register, listed
+  // on request (crm#1114), does.
+  if (c.resource === 'supplierInvoices' && job.provider === 'fortnox' && listed.status === 'cancelled') {
+    return { id: c.id, skip: 'cancelled' }
+  }
   if (!invoiceWithinScope(listed, job.fiscal_year_scope)) return { id: c.id, skip: 'outsideFiscalYears' }
   const provider = job.provider as ProviderName
   const budget = Math.min(MAX_DETAIL_BUDGET_MS, Math.max(0, deadline - Date.now() - 5000))
@@ -495,7 +502,8 @@ async function fetchRegisterPage(supabase: SupabaseClient, job: ProviderMigratio
     // attempts running on in a long-lived (self-hosted) process.
     return await withinMigrationDeadline(withExecutionDeadline(deadline, 'migration-list',
       () => fetchMigrationPage(job.provider as ProviderName, connection.accessToken,
-        connection.providerCompanyId, resource, job.next_page)), deadline)
+        connection.providerCompanyId, resource, job.next_page,
+        { allSupplierInvoices: job.fiscal_year_scope?.allSupplierInvoices === true })), deadline)
   } catch (error) {
     if (failureCode(error) !== 'PROVIDER_RESOURCE_FORBIDDEN') throw error
     const reason = providerRefusalReason(error)

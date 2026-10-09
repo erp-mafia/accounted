@@ -11,7 +11,7 @@ import type { BjornLundenResourceConfig, ProviderName } from './types';
 
 import { FortnoxClient } from './fortnox/client';
 import { ISO_DATE_RE } from '@/lib/invariants';
-import { FORTNOX_RESOURCE_CONFIGS } from './fortnox/config';
+import { FORTNOX_ALL_SUPPLIER_INVOICES_ENDPOINT, FORTNOX_RESOURCE_CONFIGS } from './fortnox/config';
 import { VismaClient } from './visma/client';
 import { VISMA_RESOURCE_CONFIGS } from './visma/config';
 import { BrioxClient } from './briox/client';
@@ -113,10 +113,14 @@ export async function fetchInvoiceCompletionDetail(
  */
 export const MIGRATION_LIST_TIMEOUT_MS = 60_000
 
-/** One provider page, never a whole-register loop. The worker persists its cursor. */
+/**
+ * One provider page, never a whole-register loop. The worker persists its cursor.
+ * `allSupplierInvoices` is the job's request for Fortnox's paid supplier
+ * invoices too; every other provider lists the whole register regardless.
+ */
 export async function fetchMigrationPage(
   provider: ProviderName, accessToken: string, providerCompanyId: string | undefined,
-  resource: MigrationResource, page: number,
+  resource: MigrationResource, page: number, options: { allSupplierInvoices?: boolean } = {},
 ): Promise<{ items: MigrationDto[]; nextPage: number | null; total: number }> {
   const kind = { customers: ResourceType.Customers, suppliers: ResourceType.Suppliers,
     salesInvoices: ResourceType.SalesInvoices, supplierInvoices: ResourceType.SupplierInvoices }[resource];
@@ -132,7 +136,9 @@ export async function fetchMigrationPage(
   if (provider === 'visma') {
     result = await vismaClient.getPage(accessToken, config.listEndpoint, { page, pageSize: 1000, timeoutMs: MIGRATION_LIST_TIMEOUT_MS });
   } else if (provider === 'fortnox') {
-    result = await fortnoxClient.getPage(accessToken, config.listEndpoint, FORTNOX_RESOURCE_CONFIGS[kind]!.listKey, { page });
+    const listEndpoint = kind === ResourceType.SupplierInvoices && options.allSupplierInvoices
+      ? FORTNOX_ALL_SUPPLIER_INVOICES_ENDPOINT : config.listEndpoint;
+    result = await fortnoxClient.getPage(accessToken, listEndpoint, FORTNOX_RESOURCE_CONFIGS[kind]!.listKey, { page });
   } else if (provider === 'briox') {
     result = await brioxClient.getPage(accessToken, config.listEndpoint, BRIOX_RESOURCE_CONFIGS[kind]!.listKey, { page });
   } else if (provider === 'bokio') {

@@ -7301,6 +7301,7 @@
     "ext_arcim_documents_locked_result": "{count, plural, one {# underlag kopplades inte: verifikatet ligger i ett klarmarkerat eller låst räkenskapsår ({years}). Öppna året igen och kontrollera sedan underlagen på nytt, det som redan kopplats hoppas över.} other {# underlag kopplades inte: verifikaten ligger i klarmarkerade eller låsta räkenskapsår ({years}). Öppna åren igen och kontrollera sedan underlagen på nytt, det som redan kopplats hoppas över.}}",
     "ext_arcim_documents_locked_open_years": "Gå till Räkenskapsår",
     "ext_arcim_supplier_invoices_unpaid_only": "Bara obetalda leverantörsfakturor hämtas från Fortnox. De betalda finns redan i bokföringen som verifikat från SIE-filen.",
+    "ext_arcim_supplier_invoices_include_paid": "Hämta även betalda (tar längre tid)",
     "ext_tic_name": "Bolagsuppgifter",
     "ext_tic_description": "Hämta företagsinformation automatiskt vid registrering",
     "ext_tic_long_description": "Fyll i företagsuppgifter automatiskt genom att ange organisationsnummer. Hämtar adress, momsregistrering, F-skattestatus och bankuppgifter från offentliga register via TIC.",

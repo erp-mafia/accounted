@@ -53,6 +53,18 @@ describe('Fortnox mapper: paid-status consistency', () => {
     expect(dto.paymentStatus.balance.value).toBe(250)
   })
 
+  it('supplier: reads the Balance string Fortnox\'s schema types it as (crm#1114)', () => {
+    // The whole register, listed on request, is mostly paid invoices: a
+    // string "0.00" has to read as settled and a string remainder as open.
+    const paid = mapFortnoxToSupplierInvoice(supplierRaw({ Total: '608.00', Balance: '0.00' }))
+    expect(paid.status).toBe('paid')
+    expect(paid.paymentStatus.paid).toBe(true)
+    const open = mapFortnoxToSupplierInvoice(supplierRaw({ Total: '608.00', Balance: '608.00' }))
+    expect(open.status).toBe('booked')
+    expect(open.paymentStatus.paid).toBe(false)
+    expect(Number(open.paymentStatus.balance.value)).toBe(608)
+  })
+
   it('supplier: FullyPaid flag with absent Balance keeps status and paid CONSISTENT', () => {
     // Previously deriveInvoiceStatus said paid while paymentStatus.paid said unpaid.
     const dto = mapFortnoxToSupplierInvoice(supplierRaw({ FullyPaid: true }))

@@ -15,6 +15,14 @@ export const FORTNOX_AUTH_URL = 'https://apps.fortnox.se/oauth-v1/auth';
 export const FORTNOX_TOKEN_URL = 'https://apps.fortnox.se/oauth-v1/token';
 export const FORTNOX_RATE_LIMIT: RateLimitConfig = { maxRequests: 4, windowMs: 1000 };
 
+/**
+ * The whole supplier-invoice register, paid invoices included, listed only for
+ * a sync where the member asked for them (crm#1114). Fortnox's schema has no
+ * paid flag on a supplier invoice: the mapper reads payment from Balance,
+ * which the detail form every imported invoice is hydrated from carries.
+ */
+export const FORTNOX_ALL_SUPPLIER_INVOICES_ENDPOINT = '/supplierinvoices';
+
 export const FORTNOX_RESOURCE_CONFIGS: Partial<Record<ResourceType, FortnoxResourceConfig>> = {
   [ResourceType.SalesInvoices]: {
     listEndpoint: '/invoices',
@@ -26,9 +34,11 @@ export const FORTNOX_RESOURCE_CONFIGS: Partial<Record<ResourceType, FortnoxResou
     supportsLastModified: true,
   },
   [ResourceType.SupplierInvoices]: {
-    // Only fetch unpaid/open supplier invoices. Historic paid invoices add
-    // noise and Fortnox's list endpoint doesn't reliably expose FullyPaid,
-    // which caused paid invoices to be imported as unpaid.
+    // Only unpaid/open supplier invoices by default: the paid ones are in the
+    // ledger as the SIE file's verifikat. The filter dates from April, when
+    // paid invoices were imported as unpaid; the mapper has read payment from
+    // Balance since #628. A member can still ask for every invoice for one
+    // sync (FORTNOX_ALL_SUPPLIER_INVOICES_ENDPOINT).
     listEndpoint: '/supplierinvoices?filter=unpaid',
     listKey: 'SupplierInvoices',
     detailEndpoint: '/supplierinvoices/{id}',

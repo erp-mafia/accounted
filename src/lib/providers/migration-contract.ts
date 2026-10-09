@@ -6,6 +6,20 @@ export type MigrationResource = typeof MIGRATION_RESOURCES[number]
 export type MigrationJobState = 'queued' | 'running' | 'retry_wait' | 'needs_attention' | 'completed'
 export type MigrationJobPhase = 'discover' | 'import' | 'link' | 'reconcile' | 'settle' | 'completed'
 
+/**
+ * Which invoices a job imports (migration_jobs.fiscal_year_scope). start and
+ * end are the migrated fiscal years, which bound the paid invoices a job takes
+ * in; a scope built from SIE imports without bounds has none.
+ * allSupplierInvoices is the member's request, for this sync, for Fortnox's
+ * paid supplier invoices too (crm#1114): Fortnox is otherwise listed unpaid
+ * only, and every other provider always lists the whole register.
+ */
+export interface MigrationJobScope {
+  start?: string
+  end?: string
+  allSupplierInvoices?: boolean
+}
+
 export interface ProviderMigrationJob {
   id: string
   company_id: string
@@ -24,7 +38,7 @@ export interface ProviderMigrationJob {
   next_attempt_at: string | null
   failures: number
   error_code: string | null
-  fiscal_year_scope: { start: string; end: string } | null
+  fiscal_year_scope: MigrationJobScope | null
   /**
    * When a member accepted the finished job with the records that still need
    * attention (accept_provider_migration_job). Those records keep their

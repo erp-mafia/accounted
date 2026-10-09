@@ -31,16 +31,17 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}/
 /**
  * True when the invoice should be imported under `scope`.
  *
- * No scope means no filter. An invoice whose issue date cannot be read as an
- * ISO date is kept: dropping it silently would hide a mapper defect behind a
- * plausible skip count. A payment date the provider did not supply says
- * nothing, so the issue date alone decides.
+ * No scope means no filter, and so does a job scope without fiscal-year
+ * bounds (one that only asks for Fortnox's paid supplier invoices). An invoice
+ * whose issue date cannot be read as an ISO date is kept: dropping it silently
+ * would hide a mapper defect behind a plausible skip count. A payment date the
+ * provider did not supply says nothing, so the issue date alone decides.
  */
 export function invoiceWithinScope(
   dto: Pick<SalesInvoiceDto | SupplierInvoiceDto, 'issueDate' | 'paymentStatus'>,
-  scope: FiscalYearScope | null | undefined,
+  scope: Partial<FiscalYearScope> | null | undefined,
 ): boolean {
-  if (!scope) return true
+  if (!scope?.start || !scope.end) return true
   if (!dto.paymentStatus?.paid) return true
   const issued = isoDay(dto.issueDate)
   if (!issued) return true
