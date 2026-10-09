@@ -66,6 +66,7 @@ vi.mock('@/lib/bookkeeping/dimension-rules', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { eventBus } from '@/lib/events/bus'
 import { DELETE as deleteTx, PATCH as patchTx } from '../[id]/route'
 import { POST as refreshRate } from '../[id]/refresh-exchange-rate/route'
 import { POST as linkJe } from '../[id]/link-journal-entry/route'
@@ -669,9 +670,11 @@ describe('POST /transactions/bulk-book', () => {
     expect(preview).toMatchObject({ mode: 'create_new', tx_count: 2, tx_sum: 300, currency: 'SEK' })
     expect(preview.lines).toHaveLength(2)
     expect(wrote(client)).toBe(false)
+    expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
   it('200 commits through the RPC with the API key user as actor', async () => {
+    const posted = { id: JE_ID, company_id: COMPANY_ID, status: 'posted', voucher_series: 'A', voucher_number: 57, lines: [] }
     const client = makeClient({
       company_members: OWNER,
       transactions: rows,
@@ -680,11 +683,17 @@ describe('POST /transactions/bulk-book', () => {
         data: { ok: true, mode: 'create_new', journal_entry_id: JE_ID, voucher_series: 'A', voucher_number: 57, linked_tx_count: 2, tx_sum: 300, docs_linked: 0 },
         error: null,
       },
+      journal_entries: { data: posted, error: null },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post(manual)
     expect(res.status).toBe(200)
     expect((await res.json()).data).toMatchObject({ journal_entry_id: JE_ID, voucher_number: 57, tx_sum: 300 })
     expect(client.rpc).toHaveBeenCalledWith('bulk_book_transactions', expect.objectContaining({ p_company_id: COMPANY_ID, p_user_id: 'user-1' }))
+    // The integrator door announces the new samlingsverifikat like any commit.
+    expect(eventBus.emit).toHaveBeenCalledWith({
+      type: 'journal_entry.committed',
+      payload: { entry: posted, userId: 'user-1', companyId: COMPANY_ID },
+    })
   })
 })

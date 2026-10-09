@@ -1373,6 +1373,71 @@ export async function replaceOpeningBalanceEntry(
   return result
 }
 
+export interface BulkBookingInput {
+  txIds: string[]
+  /** link_existing: attach the rows to this already-posted voucher. */
+  existingJournalEntryId: string | null
+  /** create_new: the samlingsverifikat's description and balanced lines. */
+  newEntry: Record<string, unknown> | null
+}
+
+/**
+ * Bulk-book N same-date SEK bank rows through bulk_book_transactions: one new
+ * samlingsverifikat (BFL 5 kap 6 §, mode create_new) or a link to an
+ * already-posted voucher (link_existing). The RPC inserts, numbers and commits
+ * the verifikat in SQL via commit_journal_entry, so it never passes through
+ * commitEntry. This is its one application door, so that a new verifikat is
+ * announced with journal_entry.committed exactly as commitEntry announces one.
+ * link_existing posts nothing and emits nothing: that voucher was announced
+ * when it was committed.
+ *
+ * Returns the RPC's answer unchanged. Its structured refusals
+ * ({ ok: false, code }) and transport errors stay the callers' to translate.
+ */
+export async function commitBulkBooking(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: BulkBookingInput,
+): Promise<{ data: unknown; error: { message: string; code?: string } | null }> {
+  const { data, error } = await supabase.rpc('bulk_book_transactions', {
+    p_tx_ids: input.txIds,
+    p_existing_journal_entry_id: input.existingJournalEntryId,
+    p_new_entry: input.newEntry,
+    p_company_id: companyId,
+    // Honoured only for a service_role caller (the v1 and pending-operation
+    // doors); a session caller resolves from its own auth.uid()
+    // (migration 20260824170000).
+    p_user_id: userId,
+  })
+  if (error) return { data, error }
+
+  const result = data as { ok?: boolean; mode?: string; journal_entry_id?: string } | null
+  if (result?.ok === true && result.mode === 'create_new' && result.journal_entry_id) {
+    // The verifikat is committed at this point. A failed reload must not turn
+    // the booking into a failure, so it is logged and the event skipped.
+    const { data: entry, error: fetchError } = await supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('id', result.journal_entry_id)
+      .eq('company_id', companyId)
+      .single()
+    if (entry && !fetchError) {
+      await eventBus.emit({
+        type: 'journal_entry.committed',
+        payload: { entry: entry as JournalEntry, userId, companyId },
+      })
+    } else {
+      log.error(
+        'bulk booking committed but posted entry reload failed: journal_entry.committed not emitted',
+        fetchError ?? new Error('posted entry not found'),
+        { operation: 'commit_bulk_booking', companyId, userId, journalEntryId: result.journal_entry_id },
+      )
+    }
+  }
+  return { data, error: null }
+}
+
 /**
  * Get the current date in Swedish timezone (Europe/Stockholm).
  * Avoids UTC date shift when server runs in a different timezone.

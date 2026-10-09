@@ -69,7 +69,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { booksInvoicesOnIssue, cashPartialBlockReason, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
-import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { commitBulkBooking, createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
   canApproveSupplierInvoice,
   resolveUnsettledStatus,
@@ -6895,15 +6895,14 @@ async function commitBulkBookTransactions(
     )
     newEntry = { ...newEntry, lines }
   }
-  const { data, error } = await supabase.rpc('bulk_book_transactions', {
-    p_tx_ids: txIds,
-    p_existing_journal_entry_id: existingJeId,
-    p_new_entry: newEntry,
-    p_company_id: companyId,
-    // This path runs on the cookieless service client where auth.uid() is
-    // NULL; the RPC honors p_user_id only for service_role callers
-    // (migration 20260824170000), so the approving human is the actor.
-    p_user_id: userId,
+  // Through the engine door, which also emits journal_entry.committed for a
+  // new samlingsverifikat. This path runs on the cookieless service client
+  // where auth.uid() is NULL; the RPC honors p_user_id only for service_role
+  // callers (migration 20260824170000), so the approving human is the actor.
+  const { data, error } = await commitBulkBooking(supabase, companyId, userId, {
+    txIds: txIds as string[],
+    existingJournalEntryId: existingJeId,
+    newEntry,
   })
   if (error) {
     // Sanitised log (A.8.11, CC7.2): only error code + message.

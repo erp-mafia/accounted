@@ -44,6 +44,8 @@ const TAGGED = [
   { account_number: '4010', debit_amount: 400, credit_amount: 0, currency: 'SEK', dimensions: { '6': 'P001' } },
   { account_number: '1930', debit_amount: 0, credit_amount: 400, currency: 'SEK' },
 ]
+const POSTED = { id: 'je-1', company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 9, lines: [] }
+
 const UNTAGGED = [
   { account_number: '4010', debit_amount: 400, credit_amount: 0, currency: 'SEK' },
   { account_number: '1930', debit_amount: 0, credit_amount: 400, currency: 'SEK' },
@@ -107,12 +109,20 @@ describe('commitPendingOperation(bulk_book_transactions): dimension policy at ap
       { data: [ruleRow()], error: null }, // account_dimension_rules
       { data: { dimensions_enabled: false }, error: null }, // registry validation: free text
       { data: { ok: true, journal_entry_id: 'je-1', mode: 'create_new', linked_tx_count: 1 }, error: null }, // RPC
+      { data: POSTED, error: null }, // engine door: reload of the posted samlingsverifikat
       { data: null, error: null }, // finalize committed
     ])
+    const committed: unknown[] = []
+    eventBus.on('journal_entry.committed', async (payload) => {
+      committed.push(payload)
+    })
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makeBulkBookOp(UNTAGGED))
 
     expect(result.status).toBe('committed')
+    // An agent-approved samlingsverifikat is announced like any engine
+    // commit, so webhook subscribers hear about it.
+    expect(committed).toEqual([{ entry: POSTED, userId: 'user-1', companyId: 'company-1' }])
     expect(supabase.rpc).toHaveBeenCalledWith(
       'bulk_book_transactions',
       expect.objectContaining({

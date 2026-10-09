@@ -1,7 +1,9 @@
 /**
  * Bulk-book N bank transactions on the same date into one combined verifikat
  * (samlingsverifikation per BFL 5 kap 6 §), atomically through the
- * bulk_book_transactions RPC. Three paths, exactly one per call:
+ * bulk_book_transactions RPC behind the engine door commitBulkBooking
+ * (lib/bookkeeping/engine.ts), which also emits journal_entry.committed for a
+ * new verifikat. Three paths, exactly one per call:
  *
  *   1. existing_journal_entry_id: link the rows to an already-posted voucher
  *      (no new entry; the voucher's 19xx net must equal the row sum);
@@ -13,8 +15,9 @@
  * (POST /api/transactions/bulk-book) and the v1 operation
  * transactions.bulk-book (lib/operations/transactions.ts). The MCP tool
  * gnubok_bulk_book_transactions stages the same RPC through its own
- * hand-written preview and commit executor, and runs the same dimension
- * policy (enforceBulkBookDimensionPolicy below) at stage and at commit.
+ * hand-written preview and commit executor (through the same engine door),
+ * and runs the same dimension policy (enforceBulkBookDimensionPolicy below)
+ * at stage and at commit.
  *
  * Rules before the RPC: every row belongs to the company; one currency, and
  * that currency SEK (the ledger columns are kronor and nothing here carries
@@ -35,6 +38,7 @@ import type { Logger } from '@/lib/logger'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { BookingTemplateLibraryLine, Transaction } from '@/types'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import { commitBulkBooking } from '@/lib/bookkeeping/engine'
 import {
   mergeDimensionBags,
   validateEntryDimensions,
@@ -368,14 +372,12 @@ export async function bulkBookTransactions(
     }
   }
 
-  const { data, error } = await supabase.rpc('bulk_book_transactions', {
-    p_tx_ids: body.tx_ids,
-    p_existing_journal_entry_id: body.existing_journal_entry_id ?? null,
-    p_new_entry: newEntryPayload,
-    p_company_id: companyId,
-    // Honoured only for a service_role caller (the v1 door); a session
-    // caller resolves from its own auth.uid() (migration 20260824170000).
-    p_user_id: userId,
+  // The engine door: it also emits journal_entry.committed for a new
+  // samlingsverifikat, which the RPC alone never announces.
+  const { data, error } = await commitBulkBooking(supabase, companyId, userId, {
+    txIds: body.tx_ids,
+    existingJournalEntryId: body.existing_journal_entry_id ?? null,
+    newEntry: newEntryPayload,
   })
   if (error) {
     opLog.error('bulk_book_transactions RPC error', error)

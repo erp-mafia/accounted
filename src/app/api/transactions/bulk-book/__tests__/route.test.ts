@@ -52,6 +52,7 @@ vi.mock('@/lib/processing-history/append', () => ({
 }))
 
 import { POST } from '../route'
+import { eventBus } from '@/lib/events/bus'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
@@ -147,6 +148,8 @@ describe('POST /api/transactions/bulk-book', () => {
     expect(body.data.mode).toBe('link_existing')
     expect(body.data.journal_entry_id).toBe(JE)
     expect(body.data.linked_tx_count).toBe(2)
+    // Linking posts no new verifikat: nothing to announce as committed.
+    expect(eventBus.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'journal_entry.committed' }))
     // Every booked tx gets its matched inbox items completed against the
     // samlingsverifikat (underlag link + consumed stamp).
     expect(propagateUnderlagForBookedTransaction).toHaveBeenCalledWith(
@@ -212,6 +215,9 @@ describe('POST /api/transactions/bulk-book', () => {
       },
       error: null,
     })
+    // The engine door reloads the posted samlingsverifikat for the event.
+    const posted = { id: JE, company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 13, lines: [] }
+    enqueue({ data: posted, error: null })
     // Event re-fetch.
     enqueue({ data: [], error: null })
 
@@ -233,6 +239,12 @@ describe('POST /api/transactions/bulk-book', () => {
     expect(body.data.journal_entry_id).toBe(JE)
     // Template expansion was invoked once per tx in one_line_per_tx mode.
     expect(vi.mocked(applyTemplate)).toHaveBeenCalledTimes(2)
+    // The new samlingsverifikat is announced like any engine commit, so
+    // webhook subscribers and the event log hear about it.
+    expect(eventBus.emit).toHaveBeenCalledWith({
+      type: 'journal_entry.committed',
+      payload: { entry: posted, userId: 'user-1', companyId: 'company-1' },
+    })
   })
 
   it('maps RPC structured failure code to errorResponseFromCode', async () => {
