@@ -273,9 +273,19 @@ export async function claimSendingDomain(
 }
 
 /**
- * Re-check verification with Resend and persist the outcome. verify() kicks
- * off Resend's DNS check; get() reads the (possibly updated) status and the
- * per-record state shown in the UI.
+ * Resend statuses with no DNS check running and none passed: the only ones a
+ * check should (re)start for. A pending check keeps running on Resend's side.
+ */
+function needsVerificationRun(status: DomainStatus | 'temporary_failure'): boolean {
+  return status === 'not_started' || status === 'failed' || status === 'partially_failed'
+}
+
+/**
+ * Re-check verification with Resend and persist the outcome. Resend's state
+ * is read first: verify() starts an asynchronous DNS check, and a get() right
+ * after it reads that check as pending, so verifying on every check kept the
+ * stored status at pending even with correct DNS (crm#1044). verify() runs
+ * only when no check is running or the last one failed.
  */
 export async function checkSendingDomainVerification(
   supabase: SupabaseClient,
@@ -294,8 +304,11 @@ export async function checkSendingDomainVerification(
 
   try {
     const resend = getResend()
-    await resend.domains.verify(row.resend_domain_id)
-    const fetched = await resend.domains.get(row.resend_domain_id)
+    let fetched = await resend.domains.get(row.resend_domain_id)
+    if (fetched.data && needsVerificationRun(fetched.data.status)) {
+      await resend.domains.verify(row.resend_domain_id)
+      fetched = await resend.domains.get(row.resend_domain_id)
+    }
     if (fetched.error || !fetched.data) {
       return {
         ok: false,

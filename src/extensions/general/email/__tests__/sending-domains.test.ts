@@ -218,11 +218,10 @@ describe('checkSendingDomainVerification', () => {
     expect(result).toMatchObject({ ok: false, status: 404 })
   })
 
-  it('verifies, then persists verified + verified_at', async () => {
+  it('persists verified + verified_at when Resend has verified the domain, without restarting the check', async () => {
     const { client, enqueue, findCall } = sb()
     enqueue({ data: ROW })
     enqueue({ data: { ...ROW, status: 'verified' } })
-    domainsMock.verify.mockResolvedValue({ data: {}, error: null })
     domainsMock.get.mockResolvedValue({
       data: {
         id: 'rd_1',
@@ -236,11 +235,57 @@ describe('checkSendingDomainVerification', () => {
 
     const result = await checkSendingDomainVerification(client, client, 'company-1')
     expect(result.ok).toBe(true)
-    expect(domainsMock.verify).toHaveBeenCalledWith('rd_1')
+    expect(domainsMock.verify).not.toHaveBeenCalled()
     const updateArgs = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>
     expect(updateArgs.status).toBe('verified')
     expect(typeof updateArgs.verified_at).toBe('string')
   })
+
+  it('leaves a running Resend check alone: pending is stored with the per-record state (crm#1044)', async () => {
+    const { client, enqueue, findCall } = sb()
+    enqueue({ data: ROW })
+    enqueue({ data: ROW })
+    const records = [{ ...DKIM_RECORD, status: 'pending' }]
+    domainsMock.get.mockResolvedValue({
+      data: { id: 'rd_1', name: 'hansbolag.example', status: 'pending', records, capabilities: SENDING_ONLY },
+      error: null,
+    })
+
+    const result = await checkSendingDomainVerification(client, client, 'company-1')
+    expect(result.ok).toBe(true)
+    expect(domainsMock.verify).not.toHaveBeenCalled()
+    expect(domainsMock.get).toHaveBeenCalledTimes(1)
+    const updateArgs = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>
+    expect(updateArgs.status).toBe('pending')
+    expect(updateArgs.dns_records).toEqual(records)
+  })
+
+  it.each(['not_started', 'failed', 'partially_failed'])(
+    'starts a Resend check when the status is %s, then stores what Resend reports',
+    async status => {
+      const { client, enqueue, findCall } = sb()
+      enqueue({ data: ROW })
+      enqueue({ data: ROW })
+      domainsMock.get
+        .mockResolvedValueOnce({
+          data: { id: 'rd_1', name: 'hansbolag.example', status, records: [DKIM_RECORD], capabilities: SENDING_ONLY },
+          error: null,
+        })
+        .mockResolvedValueOnce({
+          data: { id: 'rd_1', name: 'hansbolag.example', status: 'pending', records: [DKIM_RECORD], capabilities: SENDING_ONLY },
+          error: null,
+        })
+      domainsMock.verify.mockResolvedValue({ data: {}, error: null })
+
+      const result = await checkSendingDomainVerification(client, client, 'company-1')
+      expect(result.ok).toBe(true)
+      expect(domainsMock.verify).toHaveBeenCalledTimes(1)
+      expect(domainsMock.verify).toHaveBeenCalledWith('rd_1')
+      expect(domainsMock.get).toHaveBeenCalledTimes(2)
+      const updateArgs = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>
+      expect(updateArgs.status).toBe('pending')
+    },
+  )
 
   it('refuses to flip when Resend reports a different domain name than the row (swapped row)', async () => {
     const { client, enqueue, findCall } = sb()
