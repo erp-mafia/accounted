@@ -571,7 +571,7 @@ const PROVIDER_LOGOS: Record<ArcimProvider, string> = {
   wint: '/logos/wint.png',
 }
 
-function ProviderStep({
+export function ProviderStep({
   onSelect,
   onResync,
   onFetchDocuments,
@@ -602,11 +602,24 @@ function ProviderStep({
   const unfinishedCanRetry = !!unfinishedInfo
     && !COMING_SOON_PROVIDERS.has(unfinishedInfo.id)
     && (hasSieImport || unfinishedInfo.sieViaApi)
+  // Until the company has a completed ledger import, a connection that
+  // fetches the ledger itself does not "sync again": its button opens the
+  // import's remaining steps, and nothing moves until "Starta migrering" at
+  // the end of them (crm#1118). Visma and Bokio cannot fetch the ledger, so
+  // theirs keeps "Synka igen" and the SIE upload above is the way forward.
+  // The provider list quotes the same label.
+  const continuesImport = (provider: ArcimProvider) => !hasSieImport && sieViaApi(provider)
+  const connectionAction = (provider: ArcimProvider) =>
+    continuesImport(provider) ? t('ext_arcim_continue_import') : t('ext_arcim_resync')
 
   return (
     <div className="stagger-enter space-y-8">
       <StepHeading
-        title={activeConsents.length > 0 ? 'Anslut ytterligare system' : 'Välj ditt nuvarande bokföringssystem'}
+        title={activeConsents.length === 0
+          ? 'Välj ditt nuvarande bokföringssystem'
+          : hasSieImport
+            ? 'Anslut ytterligare system'
+            : t('ext_arcim_continue_import_heading')}
         lede="Vi hämtar bokföringsdata via SIE och kunder, leverantörer och fakturor via API:et."
       />
 
@@ -634,7 +647,7 @@ function ProviderStep({
           <p className="min-w-0 flex-1 text-sm font-medium">
             {t('ext_arcim_unfinished_connect', { provider: unfinishedInfo.name })}
           </p>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
             {unfinishedCanRetry && (
               <Button size="sm" onClick={() => onSelect(unfinishedInfo.id)}>
                 <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
@@ -687,20 +700,32 @@ function ProviderStep({
                       </p>
                     )}
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onResync(consent.provider, consent.id)}
-                    >
-                      <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-                      Synka igen
-                    </Button>
+                  {/* Full width on a phone, so the buttons wrap under the name
+                      instead of squeezing the date into a column. */}
+                  <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto">
+                    {continuesImport(consent.provider) ? (
+                      <Button size="sm" onClick={() => onResync(consent.provider, consent.id)}>
+                        {connectionAction(consent.provider)}
+                        <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onResync(consent.provider, consent.id)}
+                      >
+                        <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                        {connectionAction(consent.provider)}
+                      </Button>
+                    )}
                     {/* The underlag offer used to live only in the result step
                         of the run that just finished; closing or reloading
                         lost it. From here it runs on its own, with the same
-                        consent, without repeating the migration. */}
-                    {supportsUnderlagImport(consent.provider) && (
+                        consent, without repeating the migration. Not before
+                        a ledger import: underlag link to the imported
+                        verifikat by voucher number, so with none there every
+                        file comes back unmatched. */}
+                    {hasSieImport && supportsUnderlagImport(consent.provider) && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -785,7 +810,7 @@ function ProviderStep({
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {alreadyConnected
-                      ? 'Använd "Synka igen" ovan'
+                      ? t('ext_arcim_use_action_above', { action: connectionAction(provider.id) })
                       : needsSieFirst
                         ? 'Importera SIE-fil först'
                         : provider.authType === 'oauth'

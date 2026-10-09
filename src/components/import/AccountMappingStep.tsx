@@ -35,6 +35,7 @@ import { isValidBASRange } from '@/lib/import/account-mapper'
 import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
 import type { SourceChartSummary } from '@/lib/import/source-chart/apply-source-chart'
 import { ImportNotices } from '@/components/import/ImportNotices'
+import { AttnLine } from '@/components/ui/attn-line'
 import type { ImportNotice } from '@/lib/import/notices'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import type { BASAccount } from '@/types'
@@ -224,9 +225,11 @@ export default function AccountMappingStep({
 
   const canContinue = stats.unmapped === 0 && stats.vatReview === 0
 
-  // Group BAS accounts by class for the dropdown
-  const accountsByClass = useMemo(() => {
+  // Group BAS accounts by class for the dropdown, and index the same accounts
+  // by number so a closed picker can name its selection without the list.
+  const { accountsByClass, accountByNumber } = useMemo(() => {
     const groups: { [key: string]: BASAccount[] } = {}
+    const byNumber = new Map<string, BASAccount>()
     for (const account of basAccounts) {
       if (!isAccountNumber(account.account_number)) continue
       const className = getAccountClassName(account.account_class)
@@ -234,8 +237,9 @@ export default function AccountMappingStep({
         groups[className] = []
       }
       groups[className].push(account)
+      byNumber.set(account.account_number, account)
     }
-    return groups
+    return { accountsByClass: groups, accountByNumber: byNumber }
   }, [basAccounts])
 
   return (
@@ -250,6 +254,23 @@ export default function AccountMappingStep({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* The gate on Continue, said where the step opens: its button and
+              the bulk confirm sit below up to 50 table rows, which on a phone
+              is several screens of scrolling before the way on is visible.
+              It yields to a chart file's own attention sentence (one per
+              page). */}
+          {stats.vatReview > 0 && stats.unmapped === 0 &&
+            !sourceChart?.notices.some((notice) => notice.severity === 'action') && (
+            <AttnLine
+              action={{
+                label: t('vat_review_confirm_all', { count: stats.vatReview }),
+                onClick: onConfirmAllVatTreatments,
+              }}
+            >
+              {t('vat_review_gate', { count: stats.vatReview })}
+            </AttnLine>
+          )}
+
           {/* Stats */}
           <div className="flex gap-4 flex-wrap">
             <Badge
@@ -461,54 +482,13 @@ export default function AccountMappingStep({
                       <ArrowRight className="mx-auto h-4 w-4 text-muted-foreground" />
                     </TableCell>
                     <TableCell>
-                      <Select
-                        value={mapping.targetAccount || 'none'}
-                        onValueChange={(value) => {
-                          const account = basAccounts.find((a) => a.account_number === value)
-                          // A target outside the list is created on import
-                          // under the file's name (the identity option) or
-                          // the name the row already carries.
-                          const createdName =
-                            value === mapping.sourceAccount ? mapping.sourceName : mapping.targetName
-                          onMappingChange(
-                            mapping.sourceAccount,
-                            value === 'none' ? '' : value,
-                            account?.account_name ?? createdName ?? ''
-                          )
-                        }}
-                      >
-                        <SelectTrigger className={!mapping.targetAccount ? 'border-destructive' : ''}>
-                          <SelectValue placeholder="Välj konto..." />
-                        </SelectTrigger>
-                        <SelectContent className="max-h-80">
-                          <SelectItem value="none">-- Välj konto --</SelectItem>
-                          {createdOptionsFor(mapping, knownTargets).map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              <span className="font-mono mr-2">{option.value}</span>
-                              {option.name}
-                              <span className="ml-2 text-muted-foreground">
-                                ({t('new_account_option')})
-                              </span>
-                            </SelectItem>
-                          ))}
-                          {Object.entries(accountsByClass).map(([className, accounts]) => (
-                            <div key={className}>
-                              <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted">
-                                {className}
-                              </div>
-                              {accounts.map((account) => (
-                                <SelectItem
-                                  key={account.account_number}
-                                  value={account.account_number}
-                                >
-                                  <span className="font-mono mr-2">{account.account_number}</span>
-                                  {account.account_name}
-                                </SelectItem>
-                              ))}
-                            </div>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <TargetAccountSelect
+                        mapping={mapping}
+                        knownTargets={knownTargets}
+                        accountsByClass={accountsByClass}
+                        accountByNumber={accountByNumber}
+                        onMappingChange={onMappingChange}
+                      />
                     </TableCell>
                     <TableCell>
                       {mapping.sourceAccount === mapping.targetAccount &&
@@ -767,6 +747,153 @@ function createdOptionsFor(
     })
   }
   return options
+}
+
+/**
+ * One row's target-account picker. Its option list is mounted only while the
+ * list is on screen: open, or fading out after it closed.
+ *
+ * Radix keeps a closed Select's items mounted in a detached fragment (the
+ * trigger shows the selected item's text from there) and registers a native
+ * option per item in state. The list is the BAS catalogue plus the company
+ * chart, about 1,300 accounts, on each of the page's 50 rows: some 65,000
+ * mounted items nobody could see. A laptop spends seconds on that; on an
+ * iPhone, WebKit ran out of memory and reloaded the tab every time a Fortnox
+ * migration reached this step, back at the start of the wizard (crm#1118).
+ * Closed, the picker mounts the selected option alone, which is all its
+ * trigger shows. Typeahead on a focused but closed trigger therefore no longer
+ * jumps through the chart; it does as soon as the list is open.
+ */
+function TargetAccountSelect({
+  mapping,
+  knownTargets,
+  accountsByClass,
+  accountByNumber,
+  onMappingChange,
+}: {
+  mapping: AccountMapping
+  knownTargets: ReadonlySet<string>
+  accountsByClass: Record<string, BASAccount[]>
+  accountByNumber: ReadonlyMap<string, BASAccount>
+  onMappingChange: AccountMappingStepProps['onMappingChange']
+}) {
+  const [open, setOpen] = useState(false)
+  // Set on open, cleared once the content has left the screen. Radix keeps a
+  // closing Select's content mounted for its fade-out, and the fade shows the
+  // list it opened with: keyed on `open` alone, the list would shrink to the
+  // selected row as it faded.
+  const [listMounted, setListMounted] = useState(false)
+
+  return (
+    <Select
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) setListMounted(true)
+      }}
+      value={mapping.targetAccount || 'none'}
+      onValueChange={(value) => {
+        const account = accountByNumber.get(value)
+        // A target outside the list is created on import under the file's
+        // name (the identity option) or the name the row already carries.
+        const createdName =
+          value === mapping.sourceAccount ? mapping.sourceName : mapping.targetName
+        onMappingChange(
+          mapping.sourceAccount,
+          value === 'none' ? '' : value,
+          account?.account_name ?? createdName ?? ''
+        )
+      }}
+    >
+      <SelectTrigger className={!mapping.targetAccount ? 'border-destructive' : ''}>
+        <SelectValue placeholder="Välj konto..." />
+      </SelectTrigger>
+      <SelectContent
+        className="max-h-80"
+        // The fade-out ended: Radix unmounts the content in this same render,
+        // so the closed picker goes straight to its one option. Cleared any
+        // later, the detached fragment would mount the whole list again first.
+        onAnimationEnd={(event) => {
+          if (event.target === event.currentTarget && event.currentTarget.dataset.state === 'closed') {
+            setListMounted(false)
+          }
+        }}
+        // Called once the content has unmounted, faded or not: the fallback
+        // when no exit animation runs, which would leave the list mounted.
+        onCloseAutoFocus={() => setListMounted(false)}
+      >
+        <TargetAccountOptions
+          mapping={mapping}
+          knownTargets={knownTargets}
+          accountsByClass={accountsByClass}
+          accountByNumber={accountByNumber}
+          selectedOnly={!listMounted}
+        />
+      </SelectContent>
+    </Select>
+  )
+}
+
+/**
+ * The options of one row's target picker: the whole list, or with
+ * `selectedOnly` just the selected option, rendered exactly as the list
+ * renders it so a closed trigger names it the same way.
+ */
+export function TargetAccountOptions({
+  mapping,
+  knownTargets,
+  accountsByClass,
+  accountByNumber,
+  selectedOnly,
+}: {
+  mapping: AccountMapping
+  knownTargets: ReadonlySet<string>
+  accountsByClass: Record<string, BASAccount[]>
+  accountByNumber: ReadonlyMap<string, BASAccount>
+  selectedOnly: boolean
+}) {
+  const t = useTranslations('chart_of_accounts')
+  const created = createdOptionsFor(mapping, knownTargets)
+
+  const noneItem = <SelectItem value="none">-- Välj konto --</SelectItem>
+  const createdItem = (option: { value: string; name: string }) => (
+    <SelectItem key={option.value} value={option.value}>
+      <span className="font-mono mr-2">{option.value}</span>
+      {option.name}
+      <span className="ml-2 text-muted-foreground">
+        ({t('new_account_option')})
+      </span>
+    </SelectItem>
+  )
+  const accountItem = (account: BASAccount) => (
+    <SelectItem key={account.account_number} value={account.account_number}>
+      <span className="font-mono mr-2">{account.account_number}</span>
+      {account.account_name}
+    </SelectItem>
+  )
+
+  if (selectedOnly) {
+    if (!mapping.targetAccount) return noneItem
+    const createdOption = created.find((option) => option.value === mapping.targetAccount)
+    if (createdOption) return createdItem(createdOption)
+    const account = accountByNumber.get(mapping.targetAccount)
+    return account ? accountItem(account) : null
+  }
+
+  return (
+    <>
+      {noneItem}
+      {created.map(createdItem)}
+      {Object.entries(accountsByClass).map(([className, accounts]) => (
+        <div key={className}>
+          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted">
+            {className}
+          </div>
+          {accounts.map(accountItem)}
+        </div>
+      ))}
+    </>
+  )
 }
 
 function TruncatedSourceName({ sourceName }: { sourceName: string }) {
