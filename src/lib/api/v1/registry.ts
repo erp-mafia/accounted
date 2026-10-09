@@ -18,7 +18,7 @@
 
 import { z } from 'zod'
 import type { ZodTypeAny } from 'zod'
-import type { ApiKeyScope } from '@/lib/auth/api-keys'
+import type { V1RequiredScope } from '@/lib/auth/scopes'
 import { API_V1_VERSION } from './version'
 
 /**
@@ -150,8 +150,11 @@ export interface EndpointDefinition {
     response: Record<string, unknown>
   }
 
-  /** Required scope; null for public endpoints. */
-  scope: ApiKeyScope | null
+  /**
+   * Required scope; 'authenticated' for an endpoint any valid key may call
+   * (V1_AUTHENTICATED_ENDPOINTS); null for public endpoints.
+   */
+  scope: V1RequiredScope | null
 
   /** Action risk: informs whether the agent should confirm before calling. */
   risk: ActionRisk
@@ -571,7 +574,9 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       'x-idempotent': def.idempotent,
       'x-reversible': def.reversible,
       'x-dry-run-supported': def.dryRunSupported,
-      ...(def.scope ? { 'x-required-scope': def.scope } : {}),
+      // 'authenticated' is not a scope: such an endpoint carries the global
+      // bearer requirement and no x-required-scope.
+      ...(def.scope && def.scope !== 'authenticated' ? { 'x-required-scope': def.scope } : {}),
       ...(parameters.length > 0 ? { parameters } : {}),
       ...(requestBody ? { requestBody } : {}),
       responses: {
@@ -605,7 +610,9 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
         [SCHEME_NAME]: {
           type: 'http',
           scheme: 'bearer',
-          bearerFormat: 'gnubok_sk_<live|test>_<random>',
+          // Live keys are gnubok_sk_<random>, test keys gnubok_sk_test_<random>
+          // (generateApiKey in lib/auth/api-keys.ts): there is no live_ infix.
+          bearerFormat: 'gnubok_sk_[test_]<random>',
         },
       },
     },

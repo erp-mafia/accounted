@@ -70,6 +70,7 @@ const RESOURCES: ResourceGroup[] = [
   { slug: 'webhooks', label: 'Webhooks', description: 'Subscribe to events with HMAC-signed delivery, exponential retries, and dead-letter replay.', matcher: (p) => /\/webhooks|\/webhook-deliveries/.test(p) },
   { slug: 'operations', label: 'Operations', description: 'Poll long-running async operations (year-end closing, imports, currency revaluation).', matcher: (p) => /\/operations(\/|$)/.test(p) },
   { slug: 'health', label: 'Health', description: 'Unauthenticated liveness check.', matcher: (p) => /^\/api\/v1\/health$/.test(p) },
+  { slug: 'api-key', label: 'API key', description: 'What the calling key may do: its mode, scopes, and the companies it reaches with write access per company. Any valid key may call it.', matcher: (p) => /^\/api\/v1\/api-key$/.test(p) },
 ]
 
 /** Discover the resource a given endpoint path belongs to. Returns null if it doesn't fit any. */
@@ -187,7 +188,9 @@ function renderEndpoint(ep: EndpointDefinition): string {
   const methodBadge = ep.method
   lines.push(`### \`${methodBadge}\` ${ep.path} {#${endpointAnchor(ep)}}`)
   lines.push('')
-  lines.push(`**\`${ep.operation}\`**${ep.scope ? ` · scope \`${ep.scope}\`` : ' · public'}`)
+  const access =
+    ep.scope === 'authenticated' ? ' · any valid key, no scope' : ep.scope ? ` · scope \`${ep.scope}\`` : ' · public'
+  lines.push(`**\`${ep.operation}\`**${access}`)
   lines.push('')
   lines.push(ep.summary)
   lines.push('')

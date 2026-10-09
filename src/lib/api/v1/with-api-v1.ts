@@ -10,7 +10,8 @@
  *   3. Resolves the required scope for the route from the v1 endpoint catalogue
  *      and returns INSUFFICIENT_SCOPE if the key lacks it. Public endpoints
  *      (`/health`, `/openapi.json`) skip the scope check but still validate
- *      the token when one is supplied.
+ *      the token when one is supplied. Authenticated endpoints (`/api-key`)
+ *      require a valid token and skip the scope check.
  *   4. When the URL contains `companyId`, verifies the API key's user has
  *      access to that company via `company_members`. Multi-company keys are
  *      supported transparently: the URL is the source of truth. A key with a
@@ -73,7 +74,7 @@ import { withSIEExternalReport } from '@/lib/import/sie-period-read'
 // source of truth so future routes can't forget. The function itself is
 // idempotent (guarded by a module-level boolean).
 ensureInitialized()
-import { resolveRequiredScope } from '@/lib/auth/scopes'
+import { resolveRequiredScope, type V1RequiredScope } from '@/lib/auth/scopes'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import { getEndpointByConcretePath } from './registry'
 import {
@@ -131,6 +132,14 @@ export interface ApiV1Context {
    * company from a resource row goes through `checkCompanyAccess`.
    */
   allowedCompanyIds: string[] | null
+  /**
+   * Companies in the allowlist where the key may only read
+   * (api_key_companies.access = 'read'), or null when there are none. The
+   * wrapper already refuses a write there; exposed for the route that echoes
+   * the key's grant (`GET /api-key`), which reads it through
+   * `companyWriteRefusal`.
+   */
+  readOnlyCompanyIds: string[] | null
   /**
    * The company gate the wrapper runs for a URL `:companyId`, for a company
    * the handler resolved itself (from an operation or webhook delivery row):
@@ -322,13 +331,34 @@ async function readBodyForHash(request: Request): Promise<{ body: unknown; clone
   }
 }
 
+/** Why the company gate refuses a write in a company the key reaches. */
+export type CompanyWriteRefusal = 'ROLE_READ_ONLY' | 'CONNECTION_READ_ONLY'
+
+/**
+ * The two read-only gates of the company gate, as one verdict: the role gate
+ * (a viewer membership) first, then the key's read-only access to the
+ * company. Null when neither applies and a write may proceed. The gate below
+ * and `GET /api-key` both read it, so the grant a key is shown and the one it
+ * is held to cannot drift apart.
+ */
+export function companyWriteRefusal(
+  membershipRole: string | undefined,
+  companyId: string,
+  readOnlyCompanyIds: string[] | null,
+): CompanyWriteRefusal | null {
+  if (membershipRole === READ_ONLY_ROLE) return 'ROLE_READ_ONLY'
+  const target = companyId.toLowerCase()
+  if (readOnlyCompanyIds?.some((id) => id.toLowerCase() === target)) return 'CONNECTION_READ_ONLY'
+  return null
+}
+
 interface CompanyGateInput {
   supabase: SupabaseClient
   userId: string
   allowedCompanyIds: string[] | null
   readOnlyCompanyIds: string[] | null
   method: string
-  requiredScope: ApiKeyScope
+  requiredScope: V1RequiredScope
   requestId: string
   log: Logger
   forensic: { ip: string | undefined; userAgent: string | undefined }
@@ -406,12 +436,12 @@ async function checkCompanyAccessGate(
   }
 
   const membershipRole = (membership as { role?: string }).role
-  const isWrite = !SAFE_METHODS.has(method) || scopeKind(requiredScope) === 'write'
-  const roleReadOnly = membershipRole === READ_ONLY_ROLE
-  const connectionReadOnly = Boolean(
-    input.readOnlyCompanyIds &&
-      input.readOnlyCompanyIds.some((id) => id.toLowerCase() === companyId.toLowerCase()),
-  )
+  const isWrite =
+    !SAFE_METHODS.has(method) ||
+    (requiredScope !== 'authenticated' && scopeKind(requiredScope) === 'write')
+  const writeRefusal = companyWriteRefusal(membershipRole, companyId, input.readOnlyCompanyIds)
+  const roleReadOnly = writeRefusal === 'ROLE_READ_ONLY'
+  const connectionReadOnly = writeRefusal === 'CONNECTION_READ_ONLY'
 
   // Read-only role gate. Cookie routes enforce the viewer role through
   // withRouteContext({ requireWrite }) and the DB enforces it through
@@ -548,6 +578,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           apiKeyName: undefined,
           scopes: [],
           allowedCompanyIds: null,
+          readOnlyCompanyIds: null,
           // A public endpoint has no company to open: fail closed.
           checkCompanyAccess: (_companyId, options) =>
             v1ErrorResponseFromCode('NOT_FOUND', log, {
@@ -572,6 +603,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               apiKeyName: auth.apiKeyName,
               scopes: auth.scopes,
               allowedCompanyIds: auth.allowedCompanyIds,
+              readOnlyCompanyIds: auth.readOnlyCompanyIds,
               unattendedCommitLimit: auth.unattendedCommitLimit,
               mode: auth.mode,
               supabase: createServiceClientNoCookies(),
@@ -609,8 +641,9 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         mode: auth.mode,
       })
 
-      // 4. Scope check.
-      if (!hasScope(auth.scopes, requiredScope)) {
+      // 4. Scope check. An 'authenticated' route needs the valid key above
+      //    and no particular scope.
+      if (requiredScope !== 'authenticated' && !hasScope(auth.scopes, requiredScope)) {
         userLog.warn('insufficient scope', {
           required: requiredScope,
           granted: auth.scopes,
@@ -768,6 +801,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         apiKeyName: auth.apiKeyName,
         scopes: auth.scopes,
         allowedCompanyIds: auth.allowedCompanyIds,
+        readOnlyCompanyIds: auth.readOnlyCompanyIds,
         // A resource door gets the refusal only: ctx.companyWritable stays
         // the URL `:companyId` verdict (false on a company-less route).
         checkCompanyAccess: async (resolvedCompanyId, options) =>

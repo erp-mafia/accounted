@@ -10,6 +10,7 @@
  * Endpoints not listed here are public (no auth): only the discovery routes
  * (`/llms.txt`, `/.well-known/skills`, `/api/v1/health`, `/api/v1/openapi.json`)
  * fall into that bucket. Everything else under `/api/v1/` MUST be in this map
+ * (or in V1_AUTHENTICATED_ENDPOINTS, for a key-only route with no scope)
  * or the wrapper answers NOT_FOUND before it even looks at the bearer token
  * (`resolveRequiredScope` returns null for an unknown path).
  *
@@ -24,13 +25,24 @@
 import type { ApiKeyScope } from './api-keys'
 
 /**
- * Routes that require authentication but no scope check beyond "is the key
- * valid?". The wrapper still validates the key and runs rate limiting.
+ * Routes that need no key at all. A Bearer token, when sent, is validated
+ * opportunistically for rate limiting and attribution; an invalid one is
+ * ignored.
  */
 export const V1_PUBLIC_ENDPOINTS: ReadonlyArray<string> = [
   'GET /api/v1/health',
   'GET /api/v1/openapi.json',
 ]
+
+/**
+ * Routes that need a valid key but no particular scope. The key's own grant
+ * (GET /api/v1/api-key) must answer whatever scopes the key holds: a key
+ * that lacks a scope could otherwise never learn which one it lacks.
+ */
+export const V1_AUTHENTICATED_ENDPOINTS: ReadonlyArray<string> = ['GET /api/v1/api-key']
+
+/** What a v1 route requires of the calling key beyond being valid. */
+export type V1RequiredScope = ApiKeyScope | 'authenticated'
 
 /**
  * Map of v1 endpoint pattern → required scope.
@@ -495,13 +507,16 @@ function compileAll(): CompiledRoute[] {
  * - Returns the scope when a registered v1 endpoint matches.
  * - Returns 'public' for paths in V1_PUBLIC_ENDPOINTS (no scope check needed,
  *   but the wrapper may still want to log the key id).
+ * - Returns 'authenticated' for paths in V1_AUTHENTICATED_ENDPOINTS (a valid
+ *   key is required, no scope is checked).
  * - Returns null when the path is unknown: the wrapper should treat this as
  *   a 404 NOT_FOUND rather than letting the request through unauthenticated.
  */
-export function resolveRequiredScope(method: string, path: string): ApiKeyScope | 'public' | null {
+export function resolveRequiredScope(method: string, path: string): V1RequiredScope | 'public' | null {
   const key = `${method} ${path}`
 
   if (V1_PUBLIC_ENDPOINTS.includes(key)) return 'public'
+  if (V1_AUTHENTICATED_ENDPOINTS.includes(key)) return 'authenticated'
 
   const compiled = compileAll()
   for (const route of compiled) {

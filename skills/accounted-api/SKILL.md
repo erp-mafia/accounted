@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 294 endpoints.
+  pagination, scopes), and all 295 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -37,20 +37,23 @@ Every request sends a bearer key:
 
 ```bash
 curl https://app.gnubok.se/api/v1/companies \
-  -H "Authorization: Bearer gnubok_sk_live_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 ```
 
 - Base URL: `https://app.gnubok.se/api/v1` (legacy machine host, permanent).
   `https://app.accounted.se/api/v1` serves the identical API.
 - Keys are created in the Accounted dashboard under **Settings -> API**
   (`/settings/api`). Two prefixes:
-  - `gnubok_sk_live_*` commits real writes.
+  - `gnubok_sk_<random>` (live: no infix after `gnubok_sk_`) commits real writes.
   - `gnubok_sk_test_*` reads real company data but forces every write into
     dry-run (responses carry `X-Gnubok-Mode: test`). Develop and run evals
     with a test key; switch to live last.
 - Each key carries **scopes** (`invoices:read`, `invoices:write`,
   `payroll:write`, `webhooks:manage`, ...). Every endpoint in the index below
   is annotated with its required scope; a missing scope returns `403`.
+  `GET /api/v1/api-key` (any valid key, no scope needed) returns the key's
+  mode, scopes and per-company write access: check it when a key is
+  connected instead of waiting for the first `403`.
 - Rate limit: 100 requests/minute per key. On `429`, honor `Retry-After`.
 - URLs carry the company id explicitly
   (`/api/v1/companies/{companyId}/invoices`). A key can act on any company its
@@ -149,14 +152,15 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 294 operations. Paths are shown without
+API version `2026-05-12`, 295 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
-### Core (11)
+### Core (12)
 
 Full detail: [references/core.md](references/core.md)
 
 ```text
+GET /api-key : Show what the calling API key may do: mode, scopes and company access [risk:low idempotent]
 GET /companies : List companies the API key can access [scope:companies:read risk:low idempotent]
 POST /companies : Create a company and set it up for bookkeeping [scope:companies:write risk:medium dry-run]
 POST /companies/{companyId}/peppol/access-request : Ask the operators to switch on Peppol for the company (sending, optionally receiving) [scope:companies:write risk:medium idempotent dry-run]

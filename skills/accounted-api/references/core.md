@@ -2,10 +2,83 @@
 
 # Core endpoints
 
-Connectivity, company discovery, async-operation polling, and company settings. Every session starts with GET /companies to resolve the companyId that all other URLs need.
+Connectivity, the calling key's own grant, company discovery, async-operation polling, and company settings. Every session starts with GET /companies to resolve the companyId that all other URLs need.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
+
+### `GET /api/v1/api-key`
+
+**Show what the calling API key may do: mode, scopes and company access.**
+`risk:low · idempotent`
+
+Returns the grant of the key that makes the request: `mode` (`live` or `test`), its `scopes`, whether it reaches every company its user is a member of (`all_memberships`) or only an allowlist (`allowlist`), and every company it reaches with the role and whether writes are let through there. `access` is `read_only` when the membership is a viewer (`read_only_code` `ROLE_READ_ONLY`) or the key was given read-only access to the company (`CONNECTION_READ_ONLY`): the same codes a refused write answers with. Any valid key may call this, whatever its scopes, and it works the same for keys issued through MCP OAuth. A key can write to company X with scope S when `scopes` contains S, X is in `companies` with `access` `read_write`, and `mode` is `live` or the endpoint supports dry-run. For document uploads: `documents:write`, `read_write`, and `mode` `live`.
+
+**Use when:** You connect a customer key and want to check, before the first real call, that it carries the scopes you need and can write to the company you will use, so the customer can fix the key while still on your connect screen.
+**Do not use for:** Company names, org numbers or settings: use GET /api/v1/companies (scope companies:read). Testing a single write end to end: send it with `?dry_run=true` where the endpoint supports dry-run.
+
+**Pitfalls:**
+- A test key (`mode` `test`) forces every write into dry-run, and an endpoint without dry-run support refuses it with 403 TEST_KEY_WRITE_BLOCKED. POST /companies/{companyId}/documents is one: uploads need a live key.
+- The grant can change after you read it: the customer can edit the key's scopes or company access, or remove the user from a company. Keep handling 403 INSUFFICIENT_SCOPE, ROLE_READ_ONLY and CONNECTION_READ_ONLY on real calls.
+- With `company_access` `all_memberships`, companies the user joins later become reachable too; an `allowlist` key never reaches a company outside its list, including one it creates with POST /companies.
+- A non-owner membership in a company whose multi-user plan has lapsed is refused on every call (403 with reason `multi_user_frozen`); this response does not show that state.
+- Archived companies are not listed, the same as GET /api/v1/companies.
+
+Response `200`:
+```ts
+{
+  data: {
+    mode: "live" | "test",
+    scopes: string[],
+    company_access: "all_memberships" | "allowlist",
+    companies: { id: string, role: "owner" | "admin" | "member" | "viewer", access: "read_write" | "read_only", read_only_code: "ROLE_READ_ONLY" | "CONNECTION_READ_ONLY" | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "mode": "live",
+    "scopes": [
+      "companies:read",
+      "documents:read",
+      "documents:write"
+    ],
+    "company_access": "allowlist",
+    "companies": [
+      {
+        "id": "8fd5b1f4-0000-4000-8000-000000000001",
+        "role": "owner",
+        "access": "read_write",
+        "read_only_code": null
+      },
+      {
+        "id": "8fd5b1f4-0000-4000-8000-000000000002",
+        "role": "admin",
+        "access": "read_only",
+        "read_only_code": "CONNECTION_READ_ONLY"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
 
 ### `GET /api/v1/companies`
 

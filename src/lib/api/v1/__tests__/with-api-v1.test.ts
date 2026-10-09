@@ -71,7 +71,7 @@ import {
   checkIdempotencyKey,
   storeIdempotencyResponse,
 } from '@/lib/api/idempotency'
-import { truncateIp, withApiV1 } from '../with-api-v1'
+import { companyWriteRefusal, truncateIp, withApiV1 } from '../with-api-v1'
 import { ok } from '../response'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -228,6 +228,44 @@ describe('withApiV1: scope', () => {
     const body = await res.json()
     expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
     expect(body.error.details.required_scope).toBe('companies:read')
+  })
+
+  it('lets an authenticated-tier route through with a valid key that holds none of the catalogue scopes', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      apiKeyId: 'ak_1',
+      apiKeyName: 'test key',
+      scopes: [],
+      mode: 'live',
+      allowedCompanyIds: null,
+      readOnlyCompanyIds: ['company-9'],
+    })
+    let seen: { scopes: unknown; readOnlyCompanyIds: unknown } | undefined
+    const handler = withApiV1('api-key.get', async (_req, ctx) => {
+      seen = { scopes: ctx.scopes, readOnlyCompanyIds: ctx.readOnlyCompanyIds }
+      return ok({ ok: true }, { requestId: ctx.requestId })
+    })
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/api-key', { headers: { Authorization: 'Bearer gnubok_sk_x' } }),
+      staticRouteContext(),
+    )
+    expect(res.status).toBe(200)
+    expect(seen).toEqual({ scopes: [], readOnlyCompanyIds: ['company-9'] })
+  })
+
+  it('still requires a key on an authenticated-tier route (401, not the public anon downgrade)', async () => {
+    const handler = withApiV1('api-key.get', async (_req, ctx) => ok({ ok: true }, { requestId: ctx.requestId }))
+    const missing = await handler(makeRequest('https://x.test/api/v1/api-key'), staticRouteContext())
+    expect(missing.status).toBe(401)
+
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    const invalid = await handler(
+      makeRequest('https://x.test/api/v1/api-key', { headers: { Authorization: 'Bearer gnubok_sk_bad' } }),
+      staticRouteContext(),
+    )
+    expect(invalid.status).toBe(401)
   })
 
   it('returns 404 NOT_FOUND for unregistered endpoints (no leak)', async () => {
@@ -1422,5 +1460,23 @@ describe('withApiV1: ctx.companyWritable (the URL company gate verdict)', () => 
     )
 
     expect(seen).toEqual([false, false])
+  })
+})
+
+describe('companyWriteRefusal: the read-only rule the gate and GET /api-key share', () => {
+  const COMPANY = '8fd5b1f4-0000-4000-8000-00000000000a'
+
+  it('lets writes through for a non-viewer role in a company the key may write', () => {
+    expect(companyWriteRefusal('owner', COMPANY, null)).toBeNull()
+    expect(companyWriteRefusal('member', COMPANY, ['8fd5b1f4-0000-4000-8000-00000000000b'])).toBeNull()
+  })
+
+  it('refuses a viewer with ROLE_READ_ONLY, ahead of a read-only connection', () => {
+    expect(companyWriteRefusal('viewer', COMPANY, null)).toBe('ROLE_READ_ONLY')
+    expect(companyWriteRefusal('viewer', COMPANY, [COMPANY])).toBe('ROLE_READ_ONLY')
+  })
+
+  it('refuses a read-only connection with CONNECTION_READ_ONLY, compared case-insensitively', () => {
+    expect(companyWriteRefusal('admin', COMPANY, [COMPANY.toUpperCase()])).toBe('CONNECTION_READ_ONLY')
   })
 })

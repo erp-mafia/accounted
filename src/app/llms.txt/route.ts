@@ -26,7 +26,9 @@ declarations, ingest SIE files, and subscribe to webhooks for state changes.
 ## Quickstart
 
 1. Create an API key in the Accounted dashboard at /settings/api.
-2. Authenticate with \`Authorization: Bearer gnubok_sk_<live|test>_<random>\`.
+2. Authenticate with \`Authorization: Bearer gnubok_sk_<random>\` (live) or
+   \`gnubok_sk_test_<random>\` (test). \`GET ${base}/api/v1/api-key\` (any valid key,
+   no scope) shows the key's mode, scopes and per-company write access.
 3. List companies the key can access: \`GET ${base}/api/v1/companies\`.
 4. Use the returned \`id\` as \`{companyId}\` in subsequent paths.
 

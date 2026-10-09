@@ -14,15 +14,17 @@ All requests authenticate with a bearer token in the \`Authorization\` header:
 
 \`\`\`bash
 curl https://app.gnubok.se/api/v1/companies \\
-  -H "Authorization: Bearer gnubok_sk_live_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
-Create keys in the accounted dashboard at **/settings/api**. Two key prefixes are available:
+Create keys in the accounted dashboard at **/settings/api**. Two kinds of key are available:
 
-- \`gnubok_sk_live_*\`: hits real customer data. Use in production.
-- \`gnubok_sk_test_*\`: reads real company data, but every write is forced into dry-run and nothing persists (responses carry \`X-Gnubok-Mode: test\`). Safe for evals, demos, and agent learning. Same surface, different blast radius.
+- \`gnubok_sk_<random>\` (live, no infix after \`gnubok_sk_\`): hits real customer data. Use in production.
+- \`gnubok_sk_test_*\`: reads real company data, but every write is forced into dry-run and nothing persists (responses carry \`X-Gnubok-Mode: test\`); a write to an endpoint without dry-run support, such as a document upload, is refused with \`403 TEST_KEY_WRITE_BLOCKED\`. Safe for evals, demos, and agent learning. Same surface, different blast radius.
 
 Each key carries one or more **scopes** (\`invoices:read\`, \`invoices:write\`, \`payroll:write\`, \`webhooks:manage\`, ...) that gate which endpoints it can call. Scopes are listed on every endpoint reference page.
+
+To check a key before relying on it, call \`GET /api/v1/api-key\`: any valid key may, whatever its scopes. It returns the key's mode, scopes, and every company it reaches with the role and whether writes are let through there.
 
 Rate limit: 100 requests per minute per key.
 
@@ -43,7 +45,7 @@ A multi-company key can act on any company the underlying user is a member of: t
 
 \`\`\`bash
 curl https://app.gnubok.se/api/v1/companies \\
-  -H "Authorization: Bearer gnubok_sk_live_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 For the cross-company view (unbooked items, inbox, next deadline and last booked entry per company) call \`GET /api/v1/portfolio/overview\`: one response covering every company the key's user belongs to.

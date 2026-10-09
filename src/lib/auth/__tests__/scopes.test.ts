@@ -10,6 +10,11 @@ describe('resolveRequiredScope', () => {
     expect(resolveRequiredScope('GET', '/api/v1/openapi.json')).toBe('public')
   })
 
+  it('returns authenticated (a valid key, no scope) for the key-grant endpoint', () => {
+    expect(resolveRequiredScope('GET', '/api/v1/api-key')).toBe('authenticated')
+    expect(resolveRequiredScope('POST', '/api/v1/api-key')).toBeNull()
+  })
+
   it('resolves the companies:read scope for GET /api/v1/companies', () => {
     expect(resolveRequiredScope('GET', '/api/v1/companies')).toBe('companies:read')
   })

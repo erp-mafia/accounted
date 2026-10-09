@@ -14,6 +14,8 @@
 // Phase 1 surface.
 import '@/app/api/v1/health/route'
 import '@/app/api/v1/companies/route'
+// The calling key's own grant (any valid key, no scope).
+import '@/app/api/v1/api-key/route'
 
 // Phase 4 PR-2 (foundation): async operations polling endpoint.
 import '@/app/api/v1/operations/[id]/route'

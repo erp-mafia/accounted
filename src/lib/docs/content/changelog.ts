@@ -35,6 +35,11 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### API keys: inspect a key's grant (2026-10)
+
+- **\`GET /api/v1/api-key\`** (2026-10-07): returns the calling key's \`mode\` (\`live\` | \`test\`), its \`scopes\`, \`company_access\` (\`all_memberships\` or \`allowlist\`) and every company it reaches with \`role\`, \`access\` (\`read_write\` | \`read_only\`) and \`read_only_code\` (\`ROLE_READ_ONLY\` | \`CONNECTION_READ_ONLY\`, the codes a refused write answers with). Any valid key may call it, whatever its scopes, including keys issued through MCP OAuth; no key gives \`401\`. Check a key when a customer connects it instead of waiting for the first \`403\`: a document upload to company X needs \`documents:write\` in \`scopes\`, X with \`access\` \`read_write\`, and \`mode\` \`live\` (a test key gets \`403 TEST_KEY_WRITE_BLOCKED\` on uploads, which cannot be dry-run). Additive.
+- The reference pages said live keys start \`gnubok_sk_live_\`. They start \`gnubok_sk_\` followed directly by the random part; only test keys carry an infix (\`gnubok_sk_test_\`). The OpenAPI \`bearerFormat\` now says the same.
+
 ### Invoices (2026-10)
 
 - **Domestic reverse charge for construction services** (crm#1007, 2026-10-05): \`POST /invoices\` and \`PATCH /invoices/{id}\` accept \`vat_treatment=reverse_charge_domestic\`, omvänd betalningsskyldighet under ML 16 kap. 13 § (the buyer is a construction business and the supply a construction service). The invoice gets 0 % on every line, \`moms_ruta\` 41, revenue on 3231 when sent, and the notice "Omvänd betalningsskyldighet, byggtjänster, ML 16 kap. 13 §" with the buyer's VAT number on the PDF. It needs \`customer_type=swedish_business\` with a Swedish \`vat_number\` (SE + 12 digits) and takes no \`delivery_country\`: \`400 INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED\` (\`details.reason\`) or \`_DELIVERY_COUNTRY_MISMATCH\` otherwise. Additive: nothing changes for a request without it. Not accepted by \`POST /invoices/bulk-create\`.

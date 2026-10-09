@@ -19,7 +19,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { V1_ENDPOINT_SCOPES, V1_PUBLIC_ENDPOINTS } from '@/lib/auth/scopes'
+import { V1_AUTHENTICATED_ENDPOINTS, V1_ENDPOINT_SCOPES, V1_PUBLIC_ENDPOINTS } from '@/lib/auth/scopes'
 import { listEndpoints } from '../registry'
 // Side-effect import: populates the ENDPOINTS registry from every route file.
 import '../load-routes'
@@ -66,7 +66,7 @@ const registeredByKey = new Map(registered.map((e) => [endpointKey(e), e]))
 describe('V1_ENDPOINT_SCOPES <-> endpoint registry parity', () => {
   it('has a scope-map entry, with the same scope, for every registered non-public endpoint', () => {
     const problems = registered
-      .filter((e) => e.scope !== null)
+      .filter((e) => e.scope !== null && e.scope !== 'authenticated')
       .flatMap((e) => {
         const key = endpointKey(e)
         const mapped = V1_ENDPOINT_SCOPES[key]
@@ -83,6 +83,17 @@ describe('V1_ENDPOINT_SCOPES <-> endpoint registry parity', () => {
       .map(endpointKey)
       .filter((key) => !V1_PUBLIC_ENDPOINTS.includes(key))
     expect(problems).toEqual([])
+  })
+
+  it('lists every registered authenticated (any valid key) endpoint in V1_AUTHENTICATED_ENDPOINTS, and nothing else', () => {
+    const registeredAuthenticated = registered
+      .filter((e) => e.scope === 'authenticated')
+      .map(endpointKey)
+      .sort()
+    expect(registeredAuthenticated).toEqual([...V1_AUTHENTICATED_ENDPOINTS].sort())
+    // One tier per route: resolveRequiredScope answers 'authenticated' first, so a
+    // scope-map entry for the same route would be dead and misleading.
+    expect(V1_AUTHENTICATED_ENDPOINTS.filter((key) => key in V1_ENDPOINT_SCOPES)).toEqual([])
   })
 
   it('has a registered endpoint behind every V1_ENDPOINT_SCOPES entry', () => {
@@ -102,7 +113,7 @@ describe('V1_ENDPOINT_SCOPES <-> endpoint registry parity', () => {
   })
 
   it('points every scope-map and public pattern at a route file that exists', () => {
-    const patterns = [...Object.keys(V1_ENDPOINT_SCOPES), ...V1_PUBLIC_ENDPOINTS]
+    const patterns = [...Object.keys(V1_ENDPOINT_SCOPES), ...V1_PUBLIC_ENDPOINTS, ...V1_AUTHENTICATED_ENDPOINTS]
     const missing = patterns.filter((key) => !existsSync(join(REPO_ROOT, routeFileFor(key))))
     expect(missing).toEqual([])
   })
