@@ -22,6 +22,7 @@ import { userHasPassword } from '@/lib/auth/has-password'
 import { isEmailOnBrandAllowlist } from '@/lib/auth/brand-signup-gate'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { BOOKS_GATE_COOKIE, decideBooksGate } from '@/lib/onboarding/books-gate'
+import { isNoCompanyDashboardPath } from '@/lib/company/no-company-routes'
 import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
 import {
   apiRequestSkipsSessionTimeout,
@@ -546,11 +547,13 @@ async function updateSessionInner(
 
   // Routes that stay accessible when the user has no active company.
   // Needed so a user who archived their last company can still delete
-  // their account without being trapped on /onboarding forever.
+  // their account without being trapped on /onboarding forever. The
+  // dashboard pages (Profil and the delete-account page) come from one list
+  // shared with the dashboard layout (lib/company/no-company-routes.ts).
   const isNoCompanyAllowed =
     pathname.startsWith('/onboarding') ||
     pathname.startsWith('/select-company') ||
-    pathname.startsWith('/settings/account') ||
+    isNoCompanyDashboardPath(pathname) ||
     pathname.startsWith('/api/account/') ||
     pathname.startsWith('/api/company')
 

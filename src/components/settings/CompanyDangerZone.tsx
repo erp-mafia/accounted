@@ -27,6 +27,7 @@ import { getBranding } from '@/lib/branding/service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { CompanyMigrationResetDialog } from '@/components/settings/CompanyMigrationResetDialog'
 import { CompanyMigrationArchiveRow } from '@/components/settings/CompanyMigrationArchiveRow'
+import { ACCOUNT_DELETION_HREF } from '@/lib/company/no-company-routes'
 
 const branding = getBranding()
 
@@ -67,17 +68,19 @@ export function CompanyDangerZone() {
         body: JSON.stringify({ confirm_name: confirmText }),
       })
 
+      const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
         throw new Error(body.error || t('danger_delete_failed_default'))
       }
 
       toast({ title: t('danger_deleted_title'), description: company.name })
       // Stay inside settings. If the user had another company, the dashboard
-      // layout will resolve it and /settings/account still renders as
-      // normal. If this was their last company, the layout falls into the
-      // no-company shell rooted at /settings/account.
-      router.push('/settings/account')
+      // layout resolves it and /settings/account renders as normal. If this
+      // was their last company (nextCompanyId null), deleting it was most
+      // likely the step before deleting the account, which requires owning
+      // none: land on that action, which the no-company shell keeps
+      // reachable (crm#1042).
+      router.push(body?.data?.nextCompanyId === null ? ACCOUNT_DELETION_HREF : '/settings/account')
       router.refresh()
     } catch (err) {
       toast({

@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/api/validate'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import { getMailSearchService } from '@/lib/mail-search/service'
+import { getActiveCompanyId } from '@/lib/company/active-company'
 
 const log = createLogger('api/company/delete')
 
@@ -32,6 +33,13 @@ const DeleteCompanySchema = z.object({
  *    name is accepted (see step 3) — accepting alternates would weaken the
  *    confirmation gate on an irreversible action.
  *  - Already-archived companies return 404 (treated as not found).
+ *
+ * Response: { data: { companyId, archivedAt, nextCompanyId } }. nextCompanyId
+ * is the company the user lands in now (the same resolution the middleware
+ * runs on the next request), or null when they have none left: the client
+ * then takes them to the delete-account action instead of a settings page
+ * the middleware would bounce to onboarding (crm#1042). It is absent when
+ * that resolution failed, which never reads as "no companies left".
  */
 export async function POST(
   request: Request,
@@ -280,8 +288,19 @@ export async function POST(
     payload: { companyId, userId: user.id, archivedAt },
   })
 
-  // 9. Build response and clear company cookie if it matched
-  const response = NextResponse.json({ data: { companyId, archivedAt } })
+  // 9. Where the user lands now. Same resolver as the middleware (user
+  // preferences, then the first non-archived membership), read through the
+  // caller's own session so RLS hides the company just archived. A failed
+  // read leaves the field out: unknown is not "no companies left".
+  let nextCompanyId: string | null | undefined
+  try {
+    nextCompanyId = await getActiveCompanyId(supabase, user.id)
+  } catch (err) {
+    log.error('Failed to resolve the next active company after archive', { companyId, err })
+  }
+
+  // 10. Build response and clear company cookie if it matched
+  const response = NextResponse.json({ data: { companyId, archivedAt, nextCompanyId } })
 
   const cookieCompanyId = request.headers.get('cookie')?.match(/gnubok-company-id=([^;]+)/)?.[1]
   if (cookieCompanyId === companyId) {
@@ -290,10 +309,6 @@ export async function POST(
       maxAge: 0,
     })
   }
-
-  // Ignore supabase server-client cookie warnings; the response is what
-  // the browser sees. RLS session isn't relevant here.
-  void supabase
 
   return response
 }

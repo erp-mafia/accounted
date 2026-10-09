@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useId } from 'react'
+import { useState, useEffect, useId, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -31,6 +31,7 @@ import {
   SettingsRowEnd,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
+import { ACCOUNT_DELETION_HASH } from '@/lib/company/no-company-routes'
 
 export function AccountDangerZone() {
   const t = useTranslations('settings_account_danger')
@@ -52,6 +53,22 @@ export function AccountDangerZone() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const errorId = useId()
+  const zoneRef = useRef<HTMLDivElement>(null)
+  const scrolledToZone = useRef(false)
+
+  // Deep link (ACCOUNT_DELETION_HREF, from the last-company delete and the
+  // onboarding escape hatch): bring the action into view once the blocker
+  // list has settled, so the user who came here to delete the account sees
+  // the button straight away. After the fetch on purpose: the panel's
+  // scroll reset on navigation (MainContainer) has run by then. Once per
+  // mount; the hash stays, so a shell remount after router.refresh() scrolls
+  // again instead of being reset to the top.
+  useEffect(() => {
+    if (scrolledToZone.current || (blockers === null && !loadError)) return
+    if (window.location.hash !== `#${ACCOUNT_DELETION_HASH}`) return
+    scrolledToZone.current = true
+    zoneRef.current?.scrollIntoView({ block: 'center' })
+  }, [blockers, loadError])
 
   useEffect(() => {
     let cancelled = false
@@ -155,6 +172,8 @@ export function AccountDangerZone() {
 
   return (
     <>
+      {/* Scroll target of the deep link: marks the top of the zone. */}
+      <div ref={zoneRef} id={ACCOUNT_DELETION_HASH} />
       <SettingsDangerZone label={t('heading')}>
         {/* Owned companies block deletion: functional state, kept visible as
             rows (only the first row carries the label and the why-help). */}

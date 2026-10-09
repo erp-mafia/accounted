@@ -209,6 +209,7 @@ import {
   verifySessionTimeoutState,
 } from '@/lib/auth/session-timeout'
 import { SESSION_TIMEOUT_COOKIE } from '@/lib/auth/session-timeout-shared'
+import { ACCOUNT_DELETION_PATH } from '@/lib/company/no-company-routes'
 
 const ORIGIN = 'http://localhost:3000'
 const SIGNED_IN = { id: 'user-1', app_metadata: {} }
@@ -983,6 +984,35 @@ describe('updateSession redirect destinations', () => {
       state.byraMemberships = []
 
       const response = await run('/')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/onboarding')
+    })
+  })
+
+  // ── No-company branch: the way out to account deletion (crm#1042) ─────
+
+  describe('a user who deleted their last company', () => {
+    beforeEach(() => {
+      state.user = SIGNED_IN
+      state.company = {
+        data: [{ company_id: null, locale: 'sv', used_fallback: true }],
+        error: null,
+      }
+    })
+
+    it('reaches the delete-account page and Profil instead of onboarding', async () => {
+      // Deleting the account requires owning no companies, so this user is
+      // company-less by construction. The action lives on Säkerhet since
+      // #3010; an allowlist naming only Profil bounced them to onboarding.
+      for (const path of [ACCOUNT_DELETION_PATH, '/settings/account']) {
+        const response = await run(path)
+        expect(response.status).toBe(200)
+        expect(locationOf(response)).toBeNull()
+      }
+    })
+
+    it('still sends company pages to onboarding', async () => {
+      const response = await run('/settings/company')
 
       expect(new URL(locationOf(response)!).pathname).toBe('/onboarding')
     })

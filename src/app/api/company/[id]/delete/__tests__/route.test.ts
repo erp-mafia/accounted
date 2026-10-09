@@ -21,12 +21,19 @@ const { mailService } = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/mail-search/service', () => ({ getMailSearchService: () => mailService }))
 
+// Where the user lands after the archive (the middleware's resolver).
+vi.mock('@/lib/company/active-company', () => ({
+  getActiveCompanyId: vi.fn(),
+}))
+
 import { createServiceClient } from '@/lib/supabase/server'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { getActiveCompanyId } from '@/lib/company/active-company'
 import { POST } from '../route'
 
 const mockRequireAuth = vi.mocked(requireAuth)
 const mockCreateServiceClient = vi.mocked(createServiceClient)
+const mockGetActiveCompanyId = vi.mocked(getActiveCompanyId)
 
 type Row = { data: unknown; error: unknown }
 
@@ -78,13 +85,16 @@ function mockService(
   return { from, insertSpy, updateSpies }
 }
 
+// The caller's own session client, distinct from the service client.
+const sessionClient = { session: true }
+
 function mockAuth(userId: string | null) {
   if (userId) {
     mockRequireAuth.mockResolvedValue({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       user: { id: userId, email: 'u@example.com' } as any,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      supabase: {} as any,
+      supabase: sessionClient as any,
       error: null,
     })
   } else {
@@ -102,6 +112,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
   delete mailService.endCompanyGrants
+  mockGetActiveCompanyId.mockResolvedValue('c2')
 })
 
 describe('POST /api/company/[id]/delete', () => {
@@ -112,8 +123,9 @@ describe('POST /api/company/[id]/delete', () => {
       body: { confirm_name: 'Acme' },
     })
     const res = await POST(req, createMockRouteParams({ id: 'c1' }))
-    // requireAuth already returned a NextResponse error
-    expect(res).toBeDefined()
+    // requireAuth already returned the error response
+    expect(res.status).toBe(401)
+    expect(mockCreateServiceClient).not.toHaveBeenCalled()
   })
 
   it('returns 400 when confirm_name does not match', async () => {
@@ -457,5 +469,99 @@ describe('POST /api/company/[id]/delete: mailbox grants', () => {
 
     expect(status).toBe(403)
     expect(mailService.endCompanyGrants).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Deleting the last company is usually the step before deleting the account,
+ * which requires owning none. The response says where the user lands so the
+ * client can take a now company-less user to the delete-account action
+ * instead of a page the middleware bounces to onboarding (crm#1042).
+ */
+describe('POST /api/company/[id]/delete: where the user lands next', () => {
+  function archiveRequest() {
+    return createMockRequest('/api/company/c1/delete', {
+      method: 'POST',
+      body: { confirm_name: 'Acme AB' },
+    })
+  }
+
+  function ownerOfAcme() {
+    mockAuth('user-1')
+    return mockService({
+      companies: [{ data: { id: 'c1', name: 'Acme AB', archived_at: null }, error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+    })
+  }
+
+  it('answers nextCompanyId null when no company remains', async () => {
+    ownerOfAcme()
+    mockGetActiveCompanyId.mockResolvedValue(null)
+
+    const { status, body } = await parseJsonResponse<{
+      data: { companyId: string; nextCompanyId?: string | null }
+    }>(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    expect(status).toBe(200)
+    expect(body.data.companyId).toBe('c1')
+    expect(body.data.nextCompanyId).toBeNull()
+  })
+
+  it('answers the company the user lands in when another one remains', async () => {
+    ownerOfAcme()
+    mockGetActiveCompanyId.mockResolvedValue('c2')
+
+    const { status, body } = await parseJsonResponse<{
+      data: { nextCompanyId?: string | null }
+    }>(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    expect(status).toBe(200)
+    expect(body.data.nextCompanyId).toBe('c2')
+  })
+
+  it('resolves after the archive, through the caller\'s own session', async () => {
+    const { updateSpies } = ownerOfAcme()
+    mockGetActiveCompanyId.mockImplementation(async () => {
+      // The archive and the preference clear have already been written.
+      expect(updateSpies.companies).toHaveBeenCalled()
+      expect(updateSpies.user_preferences).toHaveBeenCalledWith({ active_company_id: null })
+      return null
+    })
+
+    const { status } = await parseJsonResponse(
+      await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })),
+    )
+
+    expect(status).toBe(200)
+    expect(mockGetActiveCompanyId).toHaveBeenCalledWith(sessionClient, 'user-1')
+  })
+
+  it('leaves nextCompanyId out when the resolution fails: unknown is not "none left"', async () => {
+    const { updateSpies } = ownerOfAcme()
+    mockGetActiveCompanyId.mockRejectedValue(new Error('resolution_failed'))
+
+    const { status, body } = await parseJsonResponse<{
+      data: { companyId: string; nextCompanyId?: string | null }
+    }>(await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })))
+
+    // The archive stands; only the landing hint is missing.
+    expect(status).toBe(200)
+    expect(updateSpies.companies).toHaveBeenCalled()
+    expect(body.data.companyId).toBe('c1')
+    expect(body.data).not.toHaveProperty('nextCompanyId')
+  })
+
+  it('returns 404 without resolving anything for a company already deleted', async () => {
+    mockAuth('user-1')
+    mockService({
+      companies: [{ data: { id: 'c1', name: 'Acme AB', archived_at: '2026-01-01T00:00:00Z' }, error: null }],
+    })
+
+    const { status } = await parseJsonResponse(
+      await POST(archiveRequest(), createMockRouteParams({ id: 'c1' })),
+    )
+
+    expect(status).toBe(404)
+    expect(mockGetActiveCompanyId).not.toHaveBeenCalled()
   })
 })

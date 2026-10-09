@@ -33,6 +33,7 @@ import { resolveBrandByHost } from '@/lib/branding/resolve'
 import { resolveBrandDomainBounce } from '@/lib/auth/brand-signup-gate'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { resolveBrandsForTeams } from '@/lib/branding/team-brands'
+import { isNoCompanyDashboardPath } from '@/lib/company/no-company-routes'
 import {
   partitionCompaniesByHomeDomain,
   isCompanyHomedOnHost,
@@ -48,13 +49,6 @@ import {
   getDashboardTeamMemberships,
   getResolvedDashboardAgentProfile,
 } from './request-context'
-
-/**
- * Routes inside the dashboard group that must remain reachable when the
- * user has no active company. Keep in sync with the middleware's
- * no-company allowlist.
- */
-const NO_COMPANY_ALLOWED_PATHS = ['/settings/account']
 
 /**
  * Frame layout: on desktop the page is a rounded panel floating on the
@@ -122,9 +116,9 @@ export default async function DashboardLayout({
   ])
 
   const pathname = headerStore.get('x-pathname') ?? ''
-  const isNoCompanyAllowed = NO_COMPANY_ALLOWED_PATHS.some((p) =>
-    pathname.startsWith(p)
-  )
+  // Dashboard pages that stay reachable without an active company (Profil
+  // and the delete-account page): the same list the middleware lets through.
+  const isNoCompanyAllowed = isNoCompanyDashboardPath(pathname)
 
   // Operator-set system notice (NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL): null when
   // unset or expired, so the banner is not even rendered outside its window.

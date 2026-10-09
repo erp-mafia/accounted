@@ -2073,7 +2073,8 @@
     "journey_pending_invite_note": "Du har en väntande inbjudan till ett företag. Öppna länken i inbjudningsmejlet för att gå med istället.",
     "journey_fact_vat": "Momsregistrerat",
     "journey_fact_ceased": "Avregistrerat",
-    "journey_cancel_add": "Tillbaka till {appName}"
+    "journey_cancel_add": "Tillbaka till {appName}",
+    "account_deletion_link": "Radera mitt konto"
   },
   "select_company": {
     "greeting_night": "God natt",
