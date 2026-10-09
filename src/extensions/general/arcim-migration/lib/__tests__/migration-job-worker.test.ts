@@ -925,6 +925,23 @@ describe('records the review lists', () => {
     }))
     expect(db.job.state).toBe('needs_attention')
   })
+  it('hands the followup the reversed copy a registration link moves from, inside the report', async () => {
+    // commit_provider_migration_followup reads report.replacesJournalEntryId
+    // and writes the move only for a reversed copy of the same source voucher.
+    const db = database({ phase: 'link', resources: ['salesInvoices'] })
+    withFollowup(db, 'done')
+    db.rows.push({ id: 'chunk', source_id: 'inv-1', resource: 'salesInvoices', state: 'imported', target_id: 'invoice-1',
+      payload: '', receipt: { link: { kind: 'customer', invoiceDate: '2026-05-04', totalSek: 2500, currencyCode: 'SEK',
+        sourceVoucher: { series: 'B', number: 57 } } } })
+    mocks.link.mockResolvedValueOnce({ reports: [{ invoiceId: 'invoice-1', kind: 'customer', invoiceNumber: '1001',
+      outcome: 'linked', journalEntryId: 'live', replacesJournalEntryId: 'copy',
+      reason: 'would move the link from its reversed copy (dry run)' }] })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_followup', expect.objectContaining({
+      p_records: [{ id: 'chunk', journal_entry_id: 'live', report: expect.objectContaining({ replacesJournalEntryId: 'copy' }) }],
+    }))
+    expect(db.rows.find(row => row.id === 'chunk')!.state).toBe('done')
+  })
   it('keeps why a payment needs review', async () => {
     const db = database({ phase: 'reconcile', resources: ['supplierInvoices'] })
     withFollowup(db, 'planned')

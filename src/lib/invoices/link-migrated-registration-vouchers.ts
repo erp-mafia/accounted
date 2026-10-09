@@ -12,6 +12,15 @@
  * Duplicate, reversed, open-source cash and amount-mismatched evidence is
  * reported for review. No journal entry or line is written here.
  *
+ * A reversed verifikat is never a registration voucher, so refs resolve from
+ * live (posted) entries only. That matters after an SIE re-sync: replacing a
+ * fiscal year reverses every verifikat the previous import brought in and
+ * imports the year again, so each source ref is carried twice in that year,
+ * by the reversed first copy and by the live second one. Counting the copy
+ * made every re-synced ref ambiguous. An invoice an earlier run linked to the
+ * first copy moves to the live one (`replacesJournalEntryId`): from that
+ * reversed copy only, and only while no other invoice holds the copy.
+ *
  * A foreign-currency invoice is the one exception to an exact AP/AR match
  * (crm#1039, founder decision 2026-10-06). Its SEK total came from our rate
  * index, while the source booked the verifikat at its own rate. When the
@@ -106,6 +115,14 @@ export interface RegistrationLinkReport {
    * reports it for the caller to write; a real run writes it with the link.
    */
   sourceRate?: SourceRateValues
+  /**
+   * Set for `linked` when the invoice still points at a reversed copy of the
+   * verifikat that an SIE re-sync replaced (see the module header): the link
+   * moves from this entry to `journalEntryId`. A dry run reports it for the
+   * caller to write; commit_provider_migration_followup accepts it only for
+   * the reversed copy of the same source voucher in the same fiscal year.
+   */
+  replacesJournalEntryId?: string
 }
 
 /**
@@ -150,7 +167,10 @@ export interface RegistrationLinkCounts {
   ambiguous: number
   /** A verifikat resolved but its AP/AR net does not equal the invoice's SEK total. */
   amountMismatch: number
-  /** The invoice, or the verifikat, already carried a registration link. */
+  /**
+   * The invoice, or the verifikat, already carried a registration link, or
+   * another invoice holds a reversed copy of the verifikat.
+   */
   alreadyLinked: number
 }
 
@@ -297,8 +317,9 @@ async function fetchForeignInvoiceRows(
 }
 
 /**
- * The link and the SEK values in one write: from NULL only, and only while
- * the invoice still has the total the rate was derived from.
+ * The link and the SEK values in one write: from NULL (or from the reversed
+ * copy the invoice still points at), and only while the invoice still has the
+ * total the rate was derived from.
  */
 async function writeSourceRateLink(
   supabase: SupabaseClient,
@@ -306,8 +327,28 @@ async function writeSourceRateLink(
   input: MigratedInvoiceLinkInput,
   entryId: string,
   values: SourceRateValues,
+  replaces: string | undefined,
 ) {
+  // Every chain is spelled out from `.from()`: tests/schema/no-phantom-columns
+  // checks the columns of literal chains only.
   if (input.kind === 'supplier') {
+    if (replaces) {
+      return supabase
+        .from('supplier_invoices')
+        .update({
+          registration_journal_entry_id: entryId,
+          exchange_rate: values.exchangeRate,
+          exchange_rate_date: values.exchangeRateDate,
+          total_sek: values.totalSek,
+          subtotal_sek: values.subtotalSek,
+          vat_amount_sek: values.vatAmountSek,
+        })
+        .eq('id', input.invoiceId)
+        .eq('company_id', companyId)
+        .eq('registration_journal_entry_id', replaces)
+        .eq('total', values.total)
+        .select('id')
+    }
     return supabase
       .from('supplier_invoices')
       .update({
@@ -321,6 +362,23 @@ async function writeSourceRateLink(
       .eq('id', input.invoiceId)
       .eq('company_id', companyId)
       .is('registration_journal_entry_id', null)
+      .eq('total', values.total)
+      .select('id')
+  }
+  if (replaces) {
+    return supabase
+      .from('invoices')
+      .update({
+        journal_entry_id: entryId,
+        exchange_rate: values.exchangeRate,
+        exchange_rate_date: values.exchangeRateDate,
+        total_sek: values.totalSek,
+        subtotal_sek: values.subtotalSek,
+        vat_amount_sek: values.vatAmountSek,
+      })
+      .eq('id', input.invoiceId)
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', replaces)
       .eq('total', values.total)
       .select('id')
   }
@@ -339,6 +397,16 @@ async function writeSourceRateLink(
     .is('journal_entry_id', null)
     .eq('total', values.total)
     .select('id')
+}
+
+/**
+ * Whether an entry is a live copy. The fetchers read posted and reversed
+ * entries only; a row without a status (none in practice) stays a candidate,
+ * as before, and the status read in the corroboration step still refuses
+ * anything that is not posted.
+ */
+function isLiveCopy(row: VoucherRow): boolean {
+  return row.status !== 'reversed'
 }
 
 type Resolution =
@@ -378,9 +446,13 @@ function checkEntryDate(row: VoucherRow, input: MigratedInvoiceLinkInput): Resol
  * Series-less refs (a bare "329") search every series in that year: one hit
  * is checked against the date corridor, several are narrowed by it and hand
  * the survivors to the amount check.
+ *
+ * `index` holds the live entries only; `reversedCopies` the reversed ones,
+ * which never resolve a ref and only explain why one is unresolved.
  */
 function resolveInput(
   index: VoucherIndex,
+  reversedCopies: VoucherIndex,
   periods: FiscalPeriodRow[],
   input: MigratedInvoiceLinkInput,
 ): Resolution {
@@ -402,7 +474,10 @@ function resolveInput(
     const hits = (index.byNumber.get(ref.number) ?? []).filter((v) => v.fiscal_period_id === periodId)
     if (hits.length === 1) return checkEntryDate(hits[0], input)
     if (hits.length === 0) {
-      return { outcome: 'unresolved', reason: `no migrated verifikat carries source number ${ref.number} in that fiscal year` }
+      const onlyReversed = (reversedCopies.byNumber.get(ref.number) ?? []).some((v) => v.fiscal_period_id === periodId)
+      return { outcome: 'unresolved', reason: onlyReversed
+        ? `source number ${ref.number} is carried only by reversed (storno) verifikat in that fiscal year`
+        : `no migrated verifikat carries source number ${ref.number} in that fiscal year` }
     }
     // A ledger with several series (kundfakturor in K, their payments in I)
     // carries the same number more than once a year. The payment voucher
@@ -428,8 +503,12 @@ function resolveInput(
     return checkEntryDate(row, input)
   }
 
-  if (index.ambiguousPeriodKeys.has(voucherKey(periodId, ref.series, ref.number))) {
+  const key = voucherKey(periodId, ref.series, ref.number)
+  if (index.ambiguousPeriodKeys.has(key)) {
     return { outcome: 'ambiguous', reason: `source ref ${ref.series}${ref.number} is carried by more than one verifikat in that fiscal year` }
+  }
+  if (reversedCopies.byPeriodKey.has(key) || reversedCopies.ambiguousPeriodKeys.has(key)) {
+    return { outcome: 'unresolved', reason: `source ref ${ref.series}${ref.number} is carried only by reversed (storno) verifikat in that fiscal year` }
   }
   return { outcome: 'unresolved', reason: `no migrated verifikat carries source ref ${ref.series}${ref.number} in that fiscal year` }
 }
@@ -485,7 +564,11 @@ export async function linkMigratedRegistrationVouchers(
       : fetchSourceRefVouchers(supabase, companyId),
     fetchFiscalPeriods(supabase, companyId),
   ])
-  const index = buildVoucherIndex(vouchers)
+  // A reversed copy never resolves a ref (see the module header). It is kept
+  // apart to explain an unresolved ref, and to recognise an invoice that still
+  // points at the copy an SIE re-sync replaced.
+  const index = buildVoucherIndex(vouchers.filter(isLiveCopy))
+  const reversedCopies = buildVoucherIndex(vouchers.filter((v) => !isLiveCopy(v)))
 
   // 2. Resolve refs in memory. Two inputs landing on one verifikat is a
   //    contest neither side can win without guessing: both stay NULL.
@@ -499,7 +582,7 @@ export async function linkMigratedRegistrationVouchers(
     else claimants.set(entryId, [input])
   }
   for (const input of invoices) {
-    const resolution = resolveInput(index, periods, input)
+    const resolution = resolveInput(index, reversedCopies, periods, input)
     if (resolution.outcome === 'candidates') {
       contested.push({ input, entryIds: resolution.entryIds, reason: resolution.reason })
       continue
@@ -573,6 +656,19 @@ export async function linkMigratedRegistrationVouchers(
   }
   if (resolved.length === 0) return { ...counts, reports }
 
+  // The reversed copies of a candidate: the same source ref in the same fiscal
+  // year. Their holders are read with the candidates' own, so an invoice an
+  // earlier run linked to a copy can move to the live verifikat.
+  const vouchersById = new Map(vouchers.map((v) => [v.id, v]))
+  const reversedCopiesOf = (entryId: string): string[] => {
+    const live = vouchersById.get(entryId)
+    if (!live || live.source_voucher_series == null || live.source_voucher_number == null) return []
+    return (reversedCopies.bySourceRef.get(sourceRefKey(live.source_voucher_series, live.source_voucher_number)) ?? [])
+      .filter((copy) => copy.fiscal_period_id === live.fiscal_period_id)
+      .map((copy) => copy.id)
+  }
+  const referenceIds = [...new Set([...entryIds, ...entryIds.flatMap(reversedCopiesOf)])]
+
   // Invoice ids already referencing each entry, on either register.
   const referencedBy = new Map<string, string[]>()
   const noteReference = (entryId: string | null, invoiceId: string) => {
@@ -581,7 +677,7 @@ export async function linkMigratedRegistrationVouchers(
     if (list) list.push(invoiceId)
     else referencedBy.set(entryId, [invoiceId])
   }
-  for (const ids of chunk(entryIds, ID_CHUNK)) {
+  for (const ids of chunk(referenceIds, ID_CHUNK)) {
     const supplierRows = await fetchAllRows<{ id: string; registration_journal_entry_id: string | null }>(({ from, to }) =>
       supabase
         .from('supplier_invoices')
@@ -624,8 +720,10 @@ export async function linkMigratedRegistrationVouchers(
     for (const row of await fetchForeignInvoiceRows(supabase, companyId, kind, ids)) foreignRows.set(row.id, row)
   }
   let sourceRated = 0
+  let movedFromCopy = 0
 
-  // 4. Decide and write, one invoice at a time, from NULL only.
+  // 4. Decide and write, one invoice at a time: from NULL, or from the
+  //    reversed copy of the same verifikat that the invoice still points at.
   for (const { input, entryId } of resolved) {
     const contest = claimants.get(entryId) ?? []
     if (contest.length > 1) {
@@ -656,6 +754,16 @@ export async function linkMigratedRegistrationVouchers(
       report(input, 'alreadyLinked', 'verifikat is already the registration voucher of another invoice', entryId)
       continue
     }
+    // A re-synced year: the invoice may still point at the reversed copy an
+    // earlier run linked, and then moves to the live one. A copy another
+    // invoice points at makes two invoices claim one source voucher.
+    const copyHolders = reversedCopiesOf(entryId).flatMap((copy) =>
+      (referencedBy.get(copy) ?? []).map((holder) => ({ copy, holder })))
+    if (copyHolders.some(({ holder }) => holder !== input.invoiceId)) {
+      report(input, 'alreadyLinked', 'a reversed copy of the verifikat is the registration voucher of another invoice', entryId)
+      continue
+    }
+    const replaces = copyHolders.find(({ holder }) => holder === input.invoiceId)?.copy
 
     if (typeof input.totalSek !== 'number' || !Number.isFinite(input.totalSek)) {
       report(input, 'amountMismatch', 'invoice has no SEK total to corroborate against')
@@ -713,26 +821,53 @@ export async function linkMigratedRegistrationVouchers(
       continue
     }
 
-    if (dryRun) {
-      report(input, 'linked', sourceRate ? 'would link at the source rate (dry run)' : 'would link (dry run)', entryId)
+    const atRate = sourceRate ? ' at the source rate' : ''
+    const noteLink = () => {
+      const linked = reports[reports.length - 1]
       if (sourceRate) {
-        reports[reports.length - 1].sourceRate = sourceRate
+        linked.sourceRate = sourceRate
         sourceRated++
       }
+      if (replaces) {
+        linked.replacesJournalEntryId = replaces
+        movedFromCopy++
+      }
+    }
+
+    if (dryRun) {
+      report(input, 'linked', `${replaces ? 'would move the link from its reversed copy' : 'would link'}${atRate} (dry run)`, entryId)
+      noteLink()
       continue
     }
 
-    // `.is(null)` makes the write a no-op when the row gained a link since it
-    // was read; `.select('id')` is how that no-op becomes visible.
+    // `.is(null)`, or `.eq()` on the reversed copy the link moves from, makes
+    // the write a no-op when the row's link changed since it was read;
+    // `.select('id')` is how that no-op becomes visible.
     const { data, error } = sourceRate
-      ? await writeSourceRateLink(supabase, companyId, input, entryId, sourceRate)
+      ? await writeSourceRateLink(supabase, companyId, input, entryId, sourceRate, replaces)
       : input.kind === 'supplier'
+      ? replaces
+        ? await supabase
+            .from('supplier_invoices')
+            .update({ registration_journal_entry_id: entryId })
+            .eq('id', input.invoiceId)
+            .eq('company_id', companyId)
+            .eq('registration_journal_entry_id', replaces)
+            .select('id')
+        : await supabase
+            .from('supplier_invoices')
+            .update({ registration_journal_entry_id: entryId })
+            .eq('id', input.invoiceId)
+            .eq('company_id', companyId)
+            .is('registration_journal_entry_id', null)
+            .select('id')
+      : replaces
       ? await supabase
-          .from('supplier_invoices')
-          .update({ registration_journal_entry_id: entryId })
+          .from('invoices')
+          .update({ journal_entry_id: entryId })
           .eq('id', input.invoiceId)
           .eq('company_id', companyId)
-          .is('registration_journal_entry_id', null)
+          .eq('journal_entry_id', replaces)
           .select('id')
       : await supabase
           .from('invoices')
@@ -746,16 +881,12 @@ export async function linkMigratedRegistrationVouchers(
       throw new Error(`Failed to link ${input.kind} invoice ${input.invoiceId} to verifikat ${entryId}: ${error.message}`)
     }
     if (!data || data.length === 0) {
-      report(input, 'alreadyLinked', sourceRate
-        ? 'invoice already carried a registration link, or its total changed since it was read'
-        : 'invoice already carried a registration link', entryId)
+      const changed = replaces ? 'invoice no longer points at the reversed copy' : 'invoice already carried a registration link'
+      report(input, 'alreadyLinked', sourceRate ? `${changed}, or its total changed since it was read` : changed, entryId)
       continue
     }
-    report(input, 'linked', sourceRate ? 'registration voucher linked at the source rate' : 'registration voucher linked', entryId)
-    if (sourceRate) {
-      reports[reports.length - 1].sourceRate = sourceRate
-      sourceRated++
-    }
+    report(input, 'linked', `${replaces ? 'registration voucher linked in place of its reversed copy' : 'registration voucher linked'}${atRate}`, entryId)
+    noteLink()
   }
 
   log.info('registration voucher linking complete', {
@@ -770,6 +901,7 @@ export async function linkMigratedRegistrationVouchers(
     amountMismatch: counts.amountMismatch,
     alreadyLinked: counts.alreadyLinked,
     linkedAtSourceRate: sourceRated,
+    movedFromReversedCopy: movedFromCopy,
   })
 
   return { ...counts, reports }

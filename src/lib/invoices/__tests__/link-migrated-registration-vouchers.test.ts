@@ -31,13 +31,15 @@ const periods = [
   { id: PERIOD_2025, period_start: '2025-01-01', period_end: '2025-12-31', is_closed: false, locked_at: null },
 ]
 
-function voucher(over: { id: string; series?: string | null; number?: number; period?: string; date?: string }) {
+function voucher(over: { id: string; series?: string | null; number?: number; period?: string; date?: string;
+  status?: 'posted' | 'reversed' }) {
   return {
     id: over.id,
     fiscal_period_id: over.period ?? PERIOD_2025,
     entry_date: over.date ?? '2025-03-14',
     source_voucher_series: over.series === undefined ? 'A' : over.series,
     source_voucher_number: over.number ?? 329,
+    status: over.status ?? 'posted',
   }
 }
 
@@ -885,6 +887,224 @@ describe('foreign-currency invoices at the source rate (crm#1039)', () => {
 
     expect(result.ambiguous).toBe(1)
     expect(result.linked).toBe(0)
+    expect(mock.calls.filter((c) => c.method === 'update')).toHaveLength(0)
+  })
+})
+
+/**
+ * Replacing a fiscal year by an SIE re-sync reverses every verifikat the
+ * previous import brought in and imports the year again: each source ref is
+ * then carried twice in that year, by the reversed first copy and by the live
+ * second one. Every re-synced ref used to stop as ambiguous (hundreds of
+ * customer invoices per company), and invoices an earlier run had
+ * linked kept pointing at the reversed copies.
+ */
+describe('a fiscal year an SIE re-sync replaced', () => {
+  beforeEach(() => {
+    mock = createQueuedMockSupabase()
+  })
+
+  const reversedCopy = (over: Partial<Parameters<typeof voucher>[0]> = {}) =>
+    voucher({ id: 'je-copy', series: 'B', number: 57, status: 'reversed', ...over })
+  const liveCopy = (over: Partial<Parameters<typeof voucher>[0]> = {}) =>
+    voucher({ id: 'je-live', series: 'B', number: 57, ...over })
+  const customerInput = (over: Partial<MigratedInvoiceLinkInput> = {}) =>
+    input({ invoiceId: 'inv-1', kind: 'customer', sourceVoucher: { series: 'B', number: 57 }, totalSek: 2500, ...over })
+
+  it('resolves the live copy and links an unlinked invoice from NULL', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      updates: [{ data: [{ id: 'inv-1' }] }],
+    })
+
+    const result = await run([customerInput()])
+
+    expect(result.ambiguous).toBe(0)
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-live', reason: 'registration voucher linked' })
+    expect(result.reports[0].replacesJournalEntryId).toBeUndefined()
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([['is', ['journal_entry_id', null]]]))
+    // The status the split rests on is read with the refs.
+    expect(mock.calls.some((c) => c.table === 'journal_entries' && c.method === 'select'
+      && String(c.args[0]).split(', ').includes('status'))).toBe(true)
+  })
+
+  it('moves the link of an invoice that still points at the reversed copy, and from that copy only', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [{ id: 'inv-1', journal_entry_id: 'je-copy' }],
+      updates: [{ data: [{ id: 'inv-1' }] }],
+    })
+
+    const result = await run([customerInput()])
+
+    expect(result.linked).toBe(1)
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-live', replacesJournalEntryId: 'je-copy',
+      reason: 'registration voucher linked in place of its reversed copy' })
+    const [update] = updateCalls('invoices')
+    expect(update.args[0]).toEqual({ journal_entry_id: 'je-live' })
+    const chain = updateChain('invoices')
+    expect(chain).toEqual(expect.arrayContaining([
+      ['eq', ['id', 'inv-1']],
+      ['eq', ['company_id', COMPANY]],
+      ['eq', ['journal_entry_id', 'je-copy']],
+      ['select', ['id']],
+    ]))
+    expect(chain).not.toContainEqual(['is', ['journal_entry_id', null]])
+    // The copy's holders were read with the live entry's.
+    expect(mock.findCalls('invoices', 'in')).toEqual(expect.arrayContaining([
+      ['journal_entry_id', expect.arrayContaining(['je-live', 'je-copy'])],
+    ]))
+  })
+
+  it('reports the move in a dry run, for the followup to write, and writes nothing', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [{ id: 'inv-1', journal_entry_id: 'je-copy' }],
+    })
+
+    const result = await run([customerInput()], true)
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-live', replacesJournalEntryId: 'je-copy',
+      reason: 'would move the link from its reversed copy (dry run)' })
+    expect(mock.calls.filter((c) => c.method === 'update' || c.method === 'insert')).toHaveLength(0)
+  })
+
+  it('reports a moved link that no longer applies as alreadyLinked', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [{ id: 'inv-1', journal_entry_id: 'je-copy' }],
+      updates: [{ data: [] }],
+    })
+
+    const result = await run([customerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'alreadyLinked', reason: 'invoice no longer points at the reversed copy' })
+    expect(result.reports[0].replacesJournalEntryId).toBeUndefined()
+  })
+
+  it('leaves both links alone when another invoice holds the reversed copy', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [{ id: 'inv-other', journal_entry_id: 'je-copy' }],
+    })
+
+    const result = await run([customerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'alreadyLinked',
+      reason: 'a reversed copy of the verifikat is the registration voucher of another invoice' })
+    expect(updateCalls('invoices')).toHaveLength(0)
+  })
+
+  it('moves a supplier invoice\'s link the same way', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-copy', status: 'reversed' }), voucher({ id: 'je-live' })],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: supplierLines('je-live'),
+      supplierRefs: [{ id: 'si-1', registration_journal_entry_id: 'je-copy' }],
+      customerRefs: [],
+      updates: [{ data: [{ id: 'si-1' }] }],
+    })
+
+    const result = await run([input({ invoiceId: 'si-1' })])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-live', replacesJournalEntryId: 'je-copy' })
+    expect(updateCalls('supplier_invoices')[0].args[0]).toEqual({ registration_journal_entry_id: 'je-live' })
+    expect(updateChain('supplier_invoices')).toEqual(expect.arrayContaining([['eq', ['registration_journal_entry_id', 'je-copy']]]))
+  })
+
+  it('never takes a reversed copy from another fiscal year for this one\'s', async () => {
+    // The same source ref a year earlier, reversed and linked to this invoice,
+    // is not a copy of this year's verifikat: nothing moves.
+    queue({
+      vouchers: [reversedCopy({ period: 'period-2024', date: '2024-03-14' }), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      updates: [{ data: [] }],
+    })
+
+    const result = await run([customerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'alreadyLinked', reason: 'invoice already carried a registration link' })
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([['is', ['journal_entry_id', null]]]))
+    expect(mock.findCalls('invoices', 'in')).toEqual([['journal_entry_id', ['je-live']]])
+  })
+
+  it('moves the link at the source rate for a foreign-currency invoice', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: [line('je-live', '1510', 4405, 0), line('je-live', '3105', 0, 4405)],
+      supplierRefs: [],
+      customerRefs: [{ id: 'inv-eur', journal_entry_id: 'je-copy' }],
+      foreignRows: [[{ id: 'inv-eur', currency: 'EUR', total: 400, subtotal: 400, vat_amount: 0, total_sek: 4398, exchange_rate: 10.995 }]],
+      updates: [{ data: [{ id: 'inv-eur' }] }],
+    })
+
+    const result = await run([customerInput({ invoiceId: 'inv-eur', totalSek: 4398, currencyCode: 'EUR' })])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', replacesJournalEntryId: 'je-copy',
+      reason: 'registration voucher linked in place of its reversed copy at the source rate',
+      sourceRate: { total: 400, totalSek: 4405, exchangeRate: 11.0125 } })
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([
+      ['eq', ['journal_entry_id', 'je-copy']],
+      ['eq', ['total', 400]],
+    ]))
+  })
+
+  it('reports a ref only reversed copies carry as unresolved, saying so', async () => {
+    queue({ vouchers: [reversedCopy()] })
+
+    const result = await run([customerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'unresolved',
+      reason: 'source ref B57 is carried only by reversed (storno) verifikat in that fiscal year' })
+    expect(mock.supabase.from).toHaveBeenCalledTimes(2)
+  })
+
+  it('resolves a series-less ref past the reversed copy, and says so when only copies carry it', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      updates: [{ data: [{ id: 'inv-1' }] }],
+    })
+    const resolved = await run([customerInput({ sourceVoucher: { series: null, number: 57 } })])
+    expect(resolved.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-live' })
+
+    mock = createQueuedMockSupabase()
+    queue({ vouchers: [reversedCopy()] })
+    const copiesOnly = await run([customerInput({ sourceVoucher: { series: null, number: 57 } })])
+    expect(copiesOnly.reports[0]).toMatchObject({ outcome: 'unresolved',
+      reason: 'source number 57 is carried only by reversed (storno) verifikat in that fiscal year' })
+  })
+
+  it('keeps two live copies of one ref ambiguous, whatever is reversed beside them', async () => {
+    queue({ vouchers: [reversedCopy(), liveCopy(), liveCopy({ id: 'je-live-2' })] })
+
+    const result = await run([customerInput()])
+
+    expect(result.ambiguous).toBe(1)
+    expect(result.reports[0].reason).toContain('more than one verifikat')
     expect(mock.calls.filter((c) => c.method === 'update')).toHaveLength(0)
   })
 })
