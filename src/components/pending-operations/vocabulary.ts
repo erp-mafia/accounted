@@ -4,7 +4,11 @@
 // app/(dashboard)/pending/page.tsx so the vocabulary has exactly one owner.
 
 import type { PendingOperationRejectionCategory } from '@/types'
-import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-invoice-mode'
+import {
+  isRegisterBookedInvoiceParams,
+  registerBookedLedgerOf,
+  type RegisterBookedLedger,
+} from '@/lib/invoices/register-booked-invoice-mode'
 
 // Short human label (i18n key in the "pending" namespace) for each staged
 // operation_type. Keep in sync with OPERATION_RISK_TIERS in
@@ -172,20 +176,26 @@ export function humanizeOperationType(operationType: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1)
 }
 
+/** The label key of a registration of an already-booked invoice, per reskontra (crm#1094). */
+const REGISTER_BOOKED_LABEL_KEYS: Record<RegisterBookedLedger, string> = {
+  customer: 'type_register_booked_invoice',
+  supplier: 'type_register_booked_supplier_invoice',
+}
+
 /**
  * The label of a staged operation. A create_invoice staged by
- * gnubok_register_booked_invoice registers an invoice that is already booked
- * instead of creating a draft (crm#1094), so with its params it gets its own
- * label rather than "Ny faktura".
+ * gnubok_register_booked_invoice, or a create_supplier_invoice_from_inbox
+ * staged by gnubok_register_booked_supplier_invoice, registers an invoice that
+ * is already booked instead of creating one (crm#1094), so with its params it
+ * gets its own label rather than "Ny faktura" or "Leverantörsfaktura".
  */
 export function operationLabel(
   operationType: string,
   t: (key: string) => string,
   params?: Record<string, unknown> | null,
 ): string {
-  if (operationType === 'create_invoice' && isRegisterBookedInvoiceParams(params)) {
-    return t('type_register_booked_invoice')
-  }
+  const ledger = registerBookedLedgerOf(operationType, params)
+  if (ledger) return t(REGISTER_BOOKED_LABEL_KEYS[ledger])
   const labelKey = OPERATION_LABEL_KEYS[operationType]
   return labelKey ? t(labelKey) : humanizeOperationType(operationType)
 }
@@ -291,21 +301,28 @@ export const singleActionWarnings: Record<string, string> = {
   dispose_asset: 'Genom att klicka godkänn så bokförs avyttringen: tillgången lämnar registret och en verifikation med vinst eller förlust skapas.',
 }
 
+/** What approving a registration of an already-booked invoice does, per reskontra (crm#1094). */
+const REGISTER_BOOKED_SENTENCES: Record<RegisterBookedLedger, string> = {
+  customer:
+    'Genom att klicka godkänn så registreras fakturan i kundreskontran med sitt eget fakturanummer och kopplas till verifikationen där den redan är bokförd. Ingen verifikation bokförs och inget skickas till kunden. Registreringen kan inte ångras.',
+  supplier:
+    'Genom att klicka godkänn så registreras leverantörsfakturan i leverantörsreskontran och kopplas till verifikationen där den redan är bokförd; fakturans rader hämtas från verifikationen. Ingen verifikation bokförs. Registreringen kan inte ångras.',
+}
+
 /**
  * The consequence sentence the approver consents to. Keyed on the operation
  * type; the types whose outcome depends on their params read them, so the
  * dialog never promises what the approval will not do: convert_invoice with
  * target 'order' creates a draft kundorder (no F-number, nothing booked), and
- * a create_invoice staged by gnubok_register_booked_invoice registers an
- * invoice that is already booked instead of creating a draft (crm#1094).
+ * a create_invoice or create_supplier_invoice_from_inbox staged as the
+ * registration of an already-booked invoice posts nothing (crm#1094).
  */
 export function singleActionWarning(operationType: string, params?: Record<string, unknown> | null): string {
   if (operationType === 'convert_invoice' && params?.target === 'order') {
     return 'Genom att klicka godkänn så skapas en kundorder (utkast, OR-nummer) från proforman eller offerten. Ingen faktura skapas och inget bokförs; fakturan skapas senare från kundordern.'
   }
-  if (operationType === 'create_invoice' && isRegisterBookedInvoiceParams(params)) {
-    return 'Genom att klicka godkänn så registreras fakturan i kundreskontran med sitt eget fakturanummer och kopplas till verifikationen där den redan är bokförd. Ingen verifikation bokförs och inget skickas till kunden. Registreringen kan inte ångras.'
-  }
+  const ledger = registerBookedLedgerOf(operationType, params)
+  if (ledger) return REGISTER_BOOKED_SENTENCES[ledger]
   return singleActionWarnings[operationType] ?? ''
 }
 
@@ -313,7 +330,7 @@ export function singleActionWarning(operationType: string, params?: Record<strin
  * The consent sentence a pending Granskning row shows before any click. High
  * risk shows it (its approval opens a dialog with it as well). So does a
  * registration of an already-booked invoice (crm#1094): it cannot be undone,
- * but it keeps create_invoice's 'medium' tier so a whole kundreskontra can be
+ * but it keeps its pending type's 'medium' tier so a whole reskontra can be
  * approved at once (risk-tiers.ts), and such an approval opens no dialog.
  */
 export function rowConsentSentence(op: {
@@ -323,7 +340,7 @@ export function rowConsentSentence(op: {
   params?: Record<string, unknown> | null
 }): string {
   if (op.status !== 'pending') return ''
-  const registration = op.operation_type === 'create_invoice' && isRegisterBookedInvoiceParams(op.params)
+  const registration = registerBookedLedgerOf(op.operation_type, op.params) !== null
   return op.risk_level === 'high' || registration ? singleActionWarning(op.operation_type, op.params) : ''
 }
 
@@ -336,6 +353,13 @@ export function registerBookedInvoiceBulkLine(count: number): string {
   return count === 1
     ? 'En redan bokförd faktura registreras i kundreskontran (inget bokförs, kan inte ångras).'
     : `${count} redan bokförda fakturor registreras i kundreskontran (inget bokförs, kan inte ångras).`
+}
+
+/** registerBookedInvoiceBulkLine for the leverantörsreskontra. */
+export function registerBookedSupplierInvoiceBulkLine(count: number): string {
+  return count === 1
+    ? 'En redan bokförd leverantörsfaktura registreras i leverantörsreskontran (inget bokförs, kan inte ångras).'
+    : `${count} redan bokförda leverantörsfakturor registreras i leverantörsreskontran (inget bokförs, kan inte ångras).`
 }
 
 // Structured rejection categories. One canonical list: /pending's reject

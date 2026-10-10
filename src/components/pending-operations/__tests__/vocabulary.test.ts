@@ -14,6 +14,7 @@ import {
   complianceWarningOf,
   operationLabel,
   registerBookedInvoiceBulkLine,
+  registerBookedSupplierInvoiceBulkLine,
   rowConsentSentence,
   singleActionWarning,
   singleActionWarnings,
@@ -77,6 +78,57 @@ describe('rowConsentSentence and the bulk line', () => {
   it('says in the bulk confirmation that registrations cannot be undone', () => {
     expect(registerBookedInvoiceBulkLine(1)).toBe('En redan bokförd faktura registreras i kundreskontran (inget bokförs, kan inte ångras).')
     expect(registerBookedInvoiceBulkLine(12)).toBe('12 redan bokförda fakturor registreras i kundreskontran (inget bokförs, kan inte ångras).')
+  })
+})
+
+/**
+ * The supplier side (crm#1094): gnubok_register_booked_supplier_invoice stages
+ * under create_supplier_invoice_from_inbox with the same marker, and every
+ * surface reads it the way it reads the kundreskontra registration.
+ */
+describe('a registration of an already-booked supplier invoice', () => {
+  const registration = { mode: 'register_booked', supplier_invoice_number: '7781' }
+  const t = (key: string) => `t:${key}`
+
+  it('stays bulk-approvable at the inbox type\'s medium tier, and its row says it cannot be undone', () => {
+    expect(getRiskLevel('create_supplier_invoice_from_inbox', registration)).toBe('medium')
+    const sentence = rowConsentSentence({ operation_type: 'create_supplier_invoice_from_inbox', status: 'pending', risk_level: 'medium', params: registration })
+    expect(sentence).toBe(singleActionWarning('create_supplier_invoice_from_inbox', registration))
+    expect(sentence).toContain('leverantörsreskontran')
+    expect(sentence).toContain('där den redan är bokförd')
+    expect(sentence).toContain('fakturans rader hämtas från verifikationen')
+    expect(sentence).toContain('Ingen verifikation bokförs')
+    expect(sentence).toContain('Registreringen kan inte ångras')
+    expect(sentence).not.toContain('kundreskontran')
+  })
+
+  it('leaves an ordinary inbox conversion as it was', () => {
+    const inbox = { inbox_item_id: 'item-1', supplier_id: 's-1' }
+    expect(rowConsentSentence({ operation_type: 'create_supplier_invoice_from_inbox', status: 'pending', risk_level: 'medium', params: inbox })).toBe('')
+    expect(singleActionWarning('create_supplier_invoice_from_inbox', inbox)).toBe('')
+    expect(operationLabel('create_supplier_invoice_from_inbox', t, inbox)).toBe('t:type_create_supplier_invoice_from_inbox')
+  })
+
+  it('has its own label, in both languages, and its own bulk line', () => {
+    expect(operationLabel('create_supplier_invoice_from_inbox', t, registration)).toBe('t:type_register_booked_supplier_invoice')
+    // The marker means a registration only under the two types that carry one.
+    expect(operationLabel('credit_supplier_invoice', t, registration)).toBe('t:type_credit_supplier_invoice')
+    for (const locale of ['sv', 'en']) {
+      const messages = JSON.parse(fs.readFileSync(path.resolve(__dirname, `../../../messages/${locale}.json`), 'utf8')) as {
+        pending: Record<string, unknown> & { preview_field: Record<string, unknown> }
+      }
+      expect(messages.pending.type_register_booked_supplier_invoice, locale).toBeTruthy()
+      expect(messages.pending.preview_field.arrival_number, locale).toBeTruthy()
+    }
+    expect(registerBookedSupplierInvoiceBulkLine(1)).toBe('En redan bokförd leverantörsfaktura registreras i leverantörsreskontran (inget bokförs, kan inte ångras).')
+    expect(registerBookedSupplierInvoiceBulkLine(3)).toBe('3 redan bokförda leverantörsfakturor registreras i leverantörsreskontran (inget bokförs, kan inte ångras).')
+  })
+
+  it('reads its Swedish note as written', () => {
+    const note = 'Verifikation D45 nämner inte fakturanummer 7781: kontrollera att det är fakturans verifikation.'
+    expect(
+      complianceWarningOf({ operation_type: 'create_supplier_invoice_from_inbox', preview_data: { compliance_warning: note } }),
+    ).toEqual({ kind: 'note', text: note })
   })
 })
 

@@ -501,6 +501,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_credit_supplier_invoice:         'suppliers:write',
   gnubok_create_supplier_invoice_from_inbox: 'suppliers:write',
   gnubok_set_inbox_extracted_data:        'suppliers:write',
+  // A supplier invoice already booked elsewhere (SIE) into the leverantörsreskontra: stages, books nothing
+  gnubok_register_booked_supplier_invoice: 'suppliers:write',
   // Supplier invoice payment via existing verifikat (no new bokföring)
   gnubok_find_voucher_candidates_for_supplier_invoice: 'suppliers:read',
   gnubok_link_supplier_invoice_to_voucher: 'suppliers:write',

@@ -457,6 +457,11 @@ import {
   toRegisterBookedInvoiceParams,
 } from '@/lib/invoices/register-booked-invoice'
 import {
+  RegisterBookedSupplierInvoiceInputSchema,
+  planBookedSupplierInvoiceRegistration,
+  toRegisterBookedSupplierInvoiceParams,
+} from '@/lib/supplier-invoices/register-booked'
+import {
   planTransactionInvoiceMatch,
   type MatchInvoiceAmounts,
   type MatchPaymentPlanResult,
@@ -14487,6 +14492,112 @@ export const tools: McpTool[] = [
           dryRun: dryRun === true,
           idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : undefined,
           // Swedish: for this mode the approval card shows the note as written.
+          ...(plan.warnings.length > 0 ? { complianceNote: plan.warnings.map((w) => w.message_sv).join(' ') } : {}),
+        },
+      )
+    },
+  },
+
+  {
+    // crm#1094: the leverantörsreskontra of a company whose books came in by
+    // SIE. Rules in lib/supplier-invoices/register-booked.ts; staged under the
+    // create_supplier_invoice_from_inbox pending type, told apart by params.mode.
+    name: 'gnubok_register_booked_supplier_invoice',
+    keywords: ['leverantörsreskontra', 'reskontra', 'importera reskontra', 'öppna poster', 'bokförd leverantörsfaktura', 'befintlig leverantörsfaktura', 'ankomstnummer', 'systembyte', 'sie', 'leverantörsfaktura', 'open items', 'accounts payable'],
+    title: 'Register Booked Supplier Invoice (Leverantörsreskontra)',
+    description: 'Stage registering an already-booked supplier invoice (e.g. from SIE) in the leverantörsreskontra: linked to its verifikat, its rows copied, nothing posted. SEK, faktureringsmetoden, no reverse charge; cannot be undone.',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        supplier_id: { type: 'string', description: 'Supplier UUID (gnubok_list_suppliers)' },
+        supplier_invoice_number: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 100,
+          description: 'The supplier\'s number as printed on the invoice, kept as is. A number the supplier reuses (already on its invoice of another date) becomes this invoice\'s payment reference instead.',
+        },
+        arrival_number: {
+          type: 'integer',
+          minimum: 1,
+          description: 'The ankomstnummer (löpnummer) the old reskontra gives it, kept as is. Must be below next_arrival_number: before a batch, set that past the old series\' last number (gnubok_update_company_settings). Omit to take the next number in Accounted\'s series.',
+        },
+        invoice_date: { type: 'string', description: 'YYYY-MM-DD' },
+        due_date: { type: 'string', description: 'YYYY-MM-DD' },
+        journal_entry_id: {
+          type: 'string',
+          description: 'The posted verifikat that booked this invoice: it credits 244x by the total. Find it with gnubok_query_journal (accounts ["2440"], text = the invoice number). Never the opening balance: an invoice only in #IB needs the SIE of its own year imported first.',
+        },
+        total: { type: 'number', description: 'Invoice total incl. VAT, SEK' },
+        remaining_amount: { type: 'number', description: 'Kvarvarande saldo per the reskontra, SEK (default: total). Below the total it stands for the old payments, dated balance_as_of: never also link their verifikat.' },
+        balance_as_of: { type: 'string', description: 'YYYY-MM-DD: the reskontra\'s date, which remaining_amount is stated as of. Required when remaining_amount is below the total.' },
+        currency: { type: 'string', description: 'The invoice\'s currency per the reskontra (ISO 4217, default SEK). Only SEK registers: skip other currencies.' },
+        payment_reference: { type: 'string', description: 'The OCR number (or other reference) the invoice is paid with, when it has one.' },
+        ...STAGING_ARGS_PROPERTIES,
+      },
+      required: ['supplier_id', 'supplier_invoice_number', 'invoice_date', 'due_date', 'journal_entry_id', 'total'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: ANNOTATIONS_STAGED_WRITE,
+    async execute(args, companyId, userId, supabase, actor) {
+      const { dry_run: dryRun, idempotency_key: idempotencyKey, ...fields } = args
+      const parsed = RegisterBookedSupplierInvoiceInputSchema.safeParse(fields)
+      if (!parsed.success) throw fieldValidationError('Invalid supplier invoice registration', zodFieldIssues(parsed.error, fields))
+      const params = toRegisterBookedSupplierInvoiceParams(parsed.data)
+
+      const planned = await planBookedSupplierInvoiceRegistration(supabase, companyId, params)
+      if (!planned.ok) throw codedRefusal(planned.code, planned.message)
+      const { plan } = planned
+      const remainingNote = plan.status === 'partially_paid' ? `, kvar ${plan.remainingAmount} per ${plan.paidAsOf}` : ''
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'create_supplier_invoice_from_inbox',
+        `Registrera bokförd leverantörsfaktura ${params.supplier_invoice_number}: ${plan.supplierName} ${plan.total} SEK${remainingNote} (verifikat ${plan.voucher.label})`,
+        params,
+        {
+          // The approval card's own preview reads the marker, as for create_invoice.
+          mode: params.mode,
+          supplier_name: plan.supplierName,
+          // As stored: a number the supplier reuses is the payment reference instead.
+          ...(plan.supplierInvoiceNumber !== null ? { supplier_invoice_number: plan.supplierInvoiceNumber } : {}),
+          ...(plan.paymentReference !== null ? { payment_reference: plan.paymentReference } : {}),
+          // Omitted: the next number in Accounted's series, drawn at approval.
+          ...(plan.arrivalNumber !== null ? { arrival_number: plan.arrivalNumber } : {}),
+          invoice_date: params.invoice_date,
+          due_date: params.due_date,
+          currency: 'SEK',
+          subtotal: plan.subtotal,
+          vat_amount: plan.vatAmount,
+          total: plan.total,
+          vat_treatment: plan.vatTreatment,
+          invoice_remaining: plan.remainingAmount,
+          ...(plan.paidAsOf ? { balance_as_of: plan.paidAsOf } : {}),
+          journal_entry_id: plan.voucher.journalEntryId,
+          voucher_label: plan.voucher.label,
+          voucher_date: plan.voucher.entryDate,
+          voucher_description: plan.voucher.description,
+          // The rows the invoice takes over: the verifikat's lines as booked.
+          voucher_lines: plan.voucherLines,
+          // No verifikat is written, so period_status is informational only:
+          // a locked or closed period does not block the registration.
+          writes_verifikat: false,
+          period_lock_applies: false,
+          ...(plan.warnings.length > 0 ? { registration_warnings: plan.warnings } : {}),
+        },
+        actor,
+        {
+          description: 'Once approved the invoice is in the leverantörsreskontra, linked to its verifikat and carrying its rows; nothing is posted. The registration cannot be undone and a wrong one cannot be corrected in Accounted today, so the user checks supplier, number, amounts and verifikat before approving. A kreditfaktura is only for a credit note the supplier actually issued, never a way to take a registration back. A balance below the total already counts the old payments: do not also link their verifikat. The SIE import brought no underlag: attach the invoice PDF to the verifikat with gnubok_link_document_to_voucher when you have it. When every open invoice is in, check the leverantörsreskontra against 2440 with gnubok_get_reconciliation_status (account_key "manual:2440").',
+          tool: 'gnubok_get_reconciliation_status',
+          args: { account_key: 'manual:2440' },
+        },
+        {
+          dryRun: dryRun === true,
+          idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : undefined,
+          // Swedish: the approval card shows the note as written.
           ...(plan.warnings.length > 0 ? { complianceNote: plan.warnings.map((w) => w.message_sv).join(' ') } : {}),
         },
       )

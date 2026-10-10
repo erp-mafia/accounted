@@ -881,6 +881,18 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     },
     empty: ['invoices'],
   },
+  // An SIE-imported leverantörsfaktura verifikat (Cr 2440 100) registered as
+  // an unpaid supplier invoice: the number and the verifikat are unclaimed.
+  gnubok_register_booked_supplier_invoice: {
+    args: { supplier_invoice_number: '7781', total: 100 },
+    rows: {
+      suppliers: { name: 'Leverantören AB', archived_at: null },
+      company_settings: { accounting_method: 'accrual', next_arrival_number: 1 },
+      journal_entries: { status: 'posted', entry_date: '2026-01-15', description: 'Leverantörsfaktura 7781', voucher_series: 'D', voucher_number: 1, source_type: 'import' },
+      journal_entry_lines: { account_number: '2440', debit_amount: 0, credit_amount: 100, currency: 'SEK', line_description: null, dimensions: {} },
+    },
+    empty: ['supplier_invoices'],
+  },
 }
 
 describe('a tool that declares the staged envelope only stages', () => {

@@ -134,6 +134,10 @@ import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/suppli
 import { linkInvoiceToVoucher, type LinkInvoiceToVoucherResult } from '@/lib/invoices/voucher-matching'
 import { RegisterBookedInvoiceParamsSchema, registerBookedInvoice } from '@/lib/invoices/register-booked-invoice'
 import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-invoice-mode'
+import {
+  RegisterBookedSupplierInvoiceParamsSchema,
+  registerBookedSupplierInvoice,
+} from '@/lib/supplier-invoices/register-booked'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { planTransactionInvoiceMatch } from '@/lib/invoices/match-payment-plan'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
@@ -2247,6 +2251,53 @@ async function commitRegisterBookedInvoice(
     data: {
       invoice_id: outcome.invoiceId,
       invoice_number: parsed.data.invoice_number,
+      status: outcome.plan.status,
+      remaining_amount: outcome.plan.remainingAmount,
+      journal_entry_id: outcome.plan.voucher.journalEntryId,
+    },
+  }
+}
+
+/**
+ * Commit a staged gnubok_register_booked_supplier_invoice (crm#1094): a
+ * create_supplier_invoice_from_inbox whose params carry mode
+ * 'register_booked'. registerBookedSupplierInvoice re-runs every staging rule
+ * against the books as they are now, then writes the supplier_invoices row
+ * with the verifikat's rows and, for a partly paid invoice, its one payment
+ * row dated balance_as_of; no journal entry or line.
+ */
+async function commitRegisterBookedSupplierInvoice(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  const parsed = RegisterBookedSupplierInvoiceParamsSchema.safeParse(params)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    return {
+      error: `Invalid ${issue?.path?.join('.') || 'params'}: ${issue?.message ?? 'validation failed'}`,
+      errorCode: 'VALIDATION_ERROR',
+      status: 400,
+    }
+  }
+  const outcome = await registerBookedSupplierInvoice(supabase, companyId, userId, parsed.data)
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    return {
+      error: entry?.message_sv ?? outcome.message,
+      errorCode: outcome.code,
+      status: entry?.httpStatus ?? 400,
+      data: { message_en: outcome.message, ...(outcome.details ?? {}) },
+    }
+  }
+  return {
+    data: {
+      supplier_invoice_id: outcome.supplierInvoiceId,
+      // null when the supplier reuses the number: it is then the payment reference.
+      supplier_invoice_number: outcome.plan.supplierInvoiceNumber,
+      payment_reference: outcome.plan.paymentReference,
+      arrival_number: outcome.arrivalNumber,
       status: outcome.plan.status,
       remaining_amount: outcome.plan.remainingAmount,
       journal_entry_id: outcome.plan.voucher.journalEntryId,
@@ -7637,7 +7688,9 @@ async function commitPendingOperationInner(
         result = await commitApproveSupplierInvoice(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_supplier_invoice_from_inbox':
-        result = await commitCreateSupplierInvoiceFromInbox(supabase, userId, companyId, pendingOp.params)
+        result = isRegisterBookedInvoiceParams(pendingOp.params)
+          ? await commitRegisterBookedSupplierInvoice(supabase, userId, companyId, pendingOp.params)
+          : await commitCreateSupplierInvoiceFromInbox(supabase, userId, companyId, pendingOp.params)
         break
       case 'credit_supplier_invoice':
         result = await commitCreditSupplierInvoice(supabase, userId, companyId, pendingOp.params)

@@ -266,7 +266,12 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // Create supplier invoice from inbox: stages a `registered` supplier invoice
   // + its line items + document attachment. Reversible until approved (the
   // approval is a separate high-risk op) but creates a leverantörsskuld row,
-  // so we route it through human review at medium tier.
+  // so we route it through human review at medium tier. The same type carries
+  // gnubok_register_booked_supplier_invoice (params.mode 'register_booked',
+  // crm#1094), which links an already-booked invoice to its verifikat and
+  // cannot be undone. Medium on purpose, as for create_invoice's registration:
+  // a leverantörsreskontra is approved in one bulk approval, and /pending says
+  // "kan inte ångras" on the row and in the bulk line instead.
   create_supplier_invoice_from_inbox: 'medium',
   credit_invoice: 'high',
   convert_invoice: 'medium',

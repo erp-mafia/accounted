@@ -224,6 +224,12 @@ even connects.
   brought, never \`gnubok_create_invoice\` (a new number, and the revenue
   and moms booked a second time). Attach each invoice PDF to the same
   verifikat, then check the kundreskontra against 1510.
+- Open supplier invoices the same way (its leverantörsreskontra): register
+  each with \`gnubok_register_booked_supplier_invoice\` against the
+  verifikat that credits 2440, never \`gnubok_create_supplier_invoice_from_inbox\`
+  (the cost and moms booked a second time). To keep the old ankomstnummer,
+  set next_arrival_number past the old series first. Then check the
+  leverantörsreskontra against 2440.
 
 ## Step 4b: after the connections: reconcile (this is where trust is won)
 
@@ -264,6 +270,7 @@ message instead of making them ask.
 - \`gnubok_sie_preflight\`: scan a shared SIE file, nothing written
 - \`gnubok_import_sie\`: staged import; use the preflight's mappings
 - \`gnubok_register_booked_invoice\`: an open invoice the SIE import already booked, into the kundreskontra (staged, posts nothing)
+- \`gnubok_register_booked_supplier_invoice\`: the same for an open supplier invoice, into the leverantörsreskontra
 - \`gnubok_connect_bank\` / \`gnubok_connect_skatteverket\`: status + connect links
 - \`gnubok_connect_migration\`: connect card into the previous-system wizard
 - \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`: state checks

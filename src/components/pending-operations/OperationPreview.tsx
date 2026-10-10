@@ -378,6 +378,80 @@ function RegisterBookedInvoicePreview({ data }: { data: Record<string, unknown> 
   )
 }
 
+/**
+ * The same for a create_supplier_invoice_from_inbox staged by
+ * gnubok_register_booked_supplier_invoice: the invoice takes the verifikat's
+ * own rows, so they show as that verifikat's lines, captioned as booked
+ * already, never as a kontering about to be posted.
+ */
+function RegisterBookedSupplierInvoicePreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('pending')
+  const currency = (data.currency as string) || 'SEK'
+  const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value : '-')
+  const date = (value: unknown) => (typeof value === 'string' && value ? formatDate(value) : '-')
+  const voucher = [text(data.voucher_label), typeof data.voucher_date === 'string' && data.voucher_date ? formatDate(data.voucher_date) : null]
+    .filter(Boolean)
+    .join(', ')
+  const voucherLinesCaption = t('preview_registered_voucher_lines')
+
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        <span className="text-muted-foreground">{t('preview_field.supplier_name')}</span>
+        <span className="min-w-0 break-words">{text(data.supplier_name)}</span>
+        <span className="text-muted-foreground">{t('preview_field.supplier_invoice_number')}</span>
+        <span className="font-mono tabular-nums">{text(data.supplier_invoice_number)}</span>
+        {typeof data.payment_reference === 'string' && data.payment_reference.trim() && (
+          <>
+            <span className="text-muted-foreground">{t('preview_field.payment_reference')}</span>
+            <span className="min-w-0 break-words font-mono tabular-nums">{data.payment_reference}</span>
+          </>
+        )}
+        {typeof data.arrival_number === 'number' && (
+          <>
+            <span className="text-muted-foreground">{t('preview_field.arrival_number')}</span>
+            <span className="font-mono tabular-nums">{data.arrival_number}</span>
+          </>
+        )}
+        <span className="text-muted-foreground">{t('preview_field.invoice_date')}</span>
+        <span className="tabular-nums">{date(data.invoice_date)}</span>
+        <span className="text-muted-foreground">{t('preview_field.due_date')}</span>
+        <span className="tabular-nums">{date(data.due_date)}</span>
+        <span className="text-muted-foreground">{t('preview_field.voucher_label')}</span>
+        <span className="tabular-nums">{voucher}</span>
+        {typeof data.voucher_description === 'string' && data.voucher_description.trim() && (
+          <>
+            <span className="text-muted-foreground">{t('preview_field.voucher_description')}</span>
+            <span className="min-w-0 break-words">{data.voucher_description}</span>
+          </>
+        )}
+      </div>
+      {isKonteringLines(data.voucher_lines) && (
+        <div className="space-y-1 border-t pt-2">
+          <p className="text-xs text-muted-foreground">{voucherLinesCaption}</p>
+          <PreviewKonteringTable lines={data.voucher_lines} label={voucherLinesCaption} />
+        </div>
+      )}
+      <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
+        <span className="text-muted-foreground">{t('preview_field.subtotal')}</span>
+        <span className="tabular-nums text-right">{money(data.subtotal, currency)}</span>
+        <span className="text-muted-foreground">{t('preview_field.vat_amount')}</span>
+        <span className="tabular-nums text-right">{money(data.vat_amount, currency)}</span>
+        <span className="text-muted-foreground">{t('preview_field.total')}</span>
+        <span className="tabular-nums text-right">{money(data.total, currency)}</span>
+        <span className="font-medium">{t('preview_field.invoice_remaining')}</span>
+        <span className="tabular-nums font-medium text-right">{money(data.invoice_remaining, currency)}</span>
+        {typeof data.balance_as_of === 'string' && data.balance_as_of && (
+          <>
+            <span className="text-muted-foreground">{t('preview_field.balance_as_of')}</span>
+            <span className="tabular-nums text-right">{formatDate(data.balance_as_of)}</span>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const UPDATE_INVOICE_FIELD_LABELS: Record<string, string> = {
   notes: 'Anteckningar',
   invoice_date: 'Fakturadatum',
@@ -764,12 +838,12 @@ function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
   )
 }
 
-function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
+function PreviewKonteringTable({ lines, label = 'Föreslagen kontering' }: { lines: PreviewKonteringLine[]; label?: string }) {
   const accountNames = useContext(AccountNamesContext)
   const amount = (n: number | undefined) =>
     n && n > 0 ? n.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''
   return (
-    <table className="w-full border-collapse text-[12.5px]" aria-label="Föreslagen kontering">
+    <table className="w-full border-collapse text-[12.5px]" aria-label={label}>
       <thead>
         <tr>
           <th className={cn(VTH_CLASS, 'w-[70px]')}>Konto</th>
@@ -802,8 +876,9 @@ function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
 
 // Keys GenericPreview never lists as a row: period_status has its own banner
 // and compliance_warning its own line above the preview (OperationPreview),
-// so a row would state the same fact twice.
-const GENERIC_PREVIEW_SKIPPED_KEYS = new Set(['period_status', 'compliance_warning'])
+// so a row would state the same fact twice. registration_warnings are the
+// agent's structured copy of a registration's compliance_warning (crm#1094).
+const GENERIC_PREVIEW_SKIPPED_KEYS = new Set(['period_status', 'compliance_warning', 'registration_warnings'])
 
 function GenericPreview({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations('pending')
@@ -1091,6 +1166,10 @@ export function OperationPreview({ op, detail = false }: { op: OperationPreviewI
         return isRegisterBookedInvoiceParams(op.preview_data)
           ? <RegisterBookedInvoicePreview data={op.preview_data} />
           : <InvoicePreview data={op.preview_data} />
+      case 'create_supplier_invoice_from_inbox':
+        return isRegisterBookedInvoiceParams(op.preview_data)
+          ? <RegisterBookedSupplierInvoicePreview data={op.preview_data} />
+          : <GenericPreview data={op.preview_data} />
       case 'update_invoice':
         return <UpdateInvoicePreview data={op.preview_data} />
       case 'create_transaction':

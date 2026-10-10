@@ -5807,6 +5807,122 @@ const INVOICE_REGISTER_BOOKED: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Register an already-booked SUPPLIER invoice (no new JE, crm#1094)
+// ─────────────────────────────────────────────────────────────────
+
+const SI_REGISTER_BOOKED: Record<string, StructuredErrorEntry> = {
+  SI_REGISTER_CASH_METHOD: {
+    httpStatus: 409,
+    message_sv:
+      'Företaget bokför enligt kontantmetoden: en obetald leverantörsfakturas kostnad och moms bokförs först när den betalas, så den kan inte kopplas till en verifikation. Än så länge kan öppna leverantörsfakturor bara registreras på det här sättet under faktureringsmetoden.',
+    message_en:
+      'The company uses kontantmetoden: an unpaid supplier invoice\'s cost and VAT are booked when it is paid, so it cannot be linked to a verifikat. For now open supplier invoices can be registered this way under faktureringsmetoden only.',
+    remediation: {
+      description: 'Do not register open supplier invoices for this company; tell the user that the leverantörsreskontra cannot be imported under kontantmetoden yet.',
+    },
+  },
+  SI_REGISTER_FOREIGN_CURRENCY: {
+    httpStatus: 400,
+    message_sv: 'Leverantörsfakturan är i utländsk valuta. Än så länge kan bara fakturor i SEK registreras på det här sättet.',
+    message_en: 'The supplier invoice is in a foreign currency. Only SEK invoices can be registered this way for now.',
+    remediation: {
+      description: 'Leave this invoice out of the register and tell the user that invoices in other currencies cannot be registered yet.',
+    },
+  },
+  SI_REGISTER_NUMBER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Leverantörens fakturanummer finns redan i leverantörsreskontran för den här leverantören. En faktura kan bara registreras en gång.',
+    message_en: 'That supplier invoice number is already in the leverantörsreskontra for this supplier; an invoice can be registered once.',
+  },
+  SI_REGISTER_NUMBER_REUSED: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantören har redan en faktura med samma nummer och ett annat fakturadatum, ett nummer som leverantören återanvänder. Ett sådant nummer sparas som fakturans betalningsreferens, men den här fakturan har en egen betalningsreferens och kan inte spara båda. Fakturan står kvar utanför leverantörsreskontran och dess belopp blir en skillnad mot 2440.',
+    message_en:
+      'This supplier already has an invoice with the same number and another invoice date: a number the supplier reuses. Such a number is kept as the invoice\'s payment reference, but this invoice has a payment reference of its own and cannot keep both. It stays outside the leverantörsreskontra, and its amount is a difference against 2440.',
+    remediation: {
+      description: 'Leave this invoice out of the register and tell the user that the supplier reuses its invoice number while this invoice carries its own payment reference, so its amount stays a difference between the leverantörsreskontra and 2440.',
+    },
+  },
+  SI_REGISTER_ARRIVAL_NUMBER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Ankomstnumret används redan av en annan leverantörsfaktura. Utelämna ankomstnumret så får fakturan nästa nummer i Accounteds serie.',
+    message_en: 'That ankomstnummer is already used by another supplier invoice. Leave arrival_number out to give the invoice the next number in Accounted\'s series.',
+  },
+  SI_REGISTER_ARRIVAL_NUMBER_IN_SERIES: {
+    httpStatus: 409,
+    message_sv:
+      'Ankomstnumret ligger inte under Accounteds egen serie, så det skulle hamna i den serien, som då fortsätter efter det numret. Ställ först in Startnummer för leverantörsfakturor efter den gamla seriens sista nummer under Inställningar, Fakturor, eller utelämna ankomstnumret.',
+    message_en:
+      'The ankomstnummer is not below Accounted\'s own series, so it would sit in that series, which would then continue after it. Set next_arrival_number past the old series first, or leave arrival_number out.',
+    remediation: {
+      description: 'Set next_arrival_number past the last ankomstnummer of the old series, then register the invoice again; or leave arrival_number out to draw the next number in Accounted\'s series.',
+      tool: 'gnubok_update_company_settings',
+    },
+  },
+  SI_REGISTER_VOUCHER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Verifikationen kunde inte hittas i bolaget.',
+    message_en: 'Journal entry not found in this company.',
+  },
+  SI_REGISTER_VOUCHER_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen är inte bokförd eller har makulerats med storno. Leverantörsfakturan kan bara registreras mot en bokförd verifikation.',
+    message_en: 'The journal entry is not posted (or has been reversed). A supplier invoice can only be registered against a posted verifikat.',
+  },
+  SI_REGISTER_OPENING_BALANCE: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationen är en ingående balans, inte leverantörsfakturans egen verifikation. Importera SIE-filen för året då fakturan bokfördes (äldsta året först) och registrera fakturan mot den verifikationen.',
+    message_en:
+      'The journal entry is an opening balance, not the supplier invoice\'s own verifikat. Import the SIE file of the year the invoice was booked in (oldest year first), then register the invoice against that verifikat.',
+    remediation: {
+      description: 'Import the SIE file of the year the invoice was booked in, oldest year first, then find the invoice\'s verifikat (accounts ["2440"], text = the supplier\'s invoice number) and register against it.',
+      tool: 'gnubok_query_journal',
+    },
+  },
+  SI_REGISTER_VOUCHER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen är redan bokföringen av en annan leverantörsfaktura.',
+    message_en: 'The journal entry already books another supplier invoice.',
+  },
+  SI_REGISTER_VOUCHER_NOT_PURCHASE: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationen är inte en leverantörsfakturaverifikation: den ska kreditera leverantörsskulder (244x) och debitera kostnad och eventuell ingående moms.',
+    message_en:
+      'The journal entry is not a supplier invoice verifikat: it must credit accounts payable (244x) and debit the cost and any input VAT.',
+  },
+  SI_REGISTER_AMOUNT_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationen bokför ett annat belopp på leverantörsskulder (244x) än fakturans totalbelopp. Välj fakturans egen verifikation; en samlingsverifikation för flera fakturor kan inte kopplas till en av dem.',
+    message_en:
+      'The journal entry books a different amount on accounts payable (244x) than the invoice total. Pick the invoice\'s own verifikat; one covering several invoices cannot be linked to one of them.',
+  },
+  SI_REGISTER_REVERSE_CHARGE: {
+    httpStatus: 400,
+    message_sv:
+      'Leverantörsfakturan kan inte registreras på det här sättet än: verifikationen bokför omvänd betalningsskyldighet eller importmoms (rutorna 20-24, 30-32, 50 och 60-62), köparens egen moms som en kreditfaktura måste vända i samma rutor. Fakturan står kvar utanför leverantörsreskontran och dess belopp blir en skillnad mot 2440.',
+    message_en:
+      'This supplier invoice cannot be registered this way yet: its verifikat books omvänd betalningsskyldighet or import VAT (rutor 20-24, 30-32, 50 and 60-62), the buyer\'s own VAT a kreditfaktura must reverse in the same rutor. It stays outside the leverantörsreskontra, and its amount is a difference against 2440.',
+    remediation: {
+      description: 'Leave this invoice out of the register and tell the user that purchases with reverse charge or import VAT cannot be registered yet and that its amount stays a difference between the leverantörsreskontra and 2440.',
+    },
+  },
+  SI_REGISTER_VOUCHER_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv:
+      'Leverantörsfakturan kan inte registreras på det här sättet än: verifikationen har en rad som netto krediteras (öresavrundning nedåt eller en rabatt), som en kreditfaktura skulle kreditera en gång till i stället för att vända, eller bokför annan moms än ingående moms. Fakturan står kvar utanför leverantörsreskontran och dess belopp blir en skillnad mot 2440.',
+    message_en:
+      'This supplier invoice cannot be registered this way yet: its verifikat has a row that nets to a credit (öresavrundning downwards or a discount), which a kreditfaktura would credit once more instead of reversing, or books VAT other than input VAT. It stays outside the leverantörsreskontra, and its amount is a difference against 2440.',
+    remediation: {
+      description: 'Leave this invoice out of the register and tell the user why (message_en names the account) and that its amount stays a difference between the leverantörsreskontra and 2440.',
+    },
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Link SUPPLIER invoice to an existing posted verifikat (no new JE)
 // ─────────────────────────────────────────────────────────────────
 
@@ -7132,6 +7248,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...LINK_TX_JE,
   ...LINK_INVOICE_VOUCHER,
   ...INVOICE_REGISTER_BOOKED,
+  ...SI_REGISTER_BOOKED,
   ...LINK_SI_VOUCHER,
   ...MATCH_BATCH,
   ...BULK_BOOK,

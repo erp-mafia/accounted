@@ -50,7 +50,7 @@
 
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { dbError } from '@/lib/errors/db-error'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import { createLogger } from '@/lib/logger'
@@ -58,9 +58,15 @@ import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 import type { VatTreatment } from '@/types'
 import { recordInvoicePaymentRow } from './invoice-payment-row'
-import { descriptionMentionsReference } from './invoice-matching'
 import { seriesNumberOf } from './invoice-number-series'
 import { REGISTER_BOOKED_INVOICE_MODE } from './register-booked-invoice-mode'
+import {
+  refineRegistrationDatesAndAmounts,
+  registeredAmountSchema,
+  registrationVoucherLabel,
+  reskontraCurrencySchema,
+  voucherCorroborationWarnings,
+} from './register-booked-rules'
 import { remindersActiveFor } from './reminders-enabled'
 import {
   DOMESTIC_REVERSE_CHARGE_NOTICE,
@@ -169,71 +175,30 @@ const GOODS_ABROAD_REVENUE = new Set(['3105', '3107', '3108'])
 /** journal_entries.source_type of entries that never book a customer invoice. */
 const NOT_A_SALE_SOURCE_TYPES = new Set(['year_end', 'storno'])
 
-/**
- * The date corridor the migration linker accepts between an invoice and its
- * verifikat (14 days before, 90 after). Outside it the verifikat is more
- * likely another year's invoice with the same number and amount: warned, not
- * refused, because the agent named the verifikat explicitly.
- */
-const ENTRY_DATE_DAYS_BEFORE = 14
-const ENTRY_DATE_DAYS_AFTER = 90
-
-const wholeOre = (n: number) => Number.isFinite(n) && Math.abs(roundOre(n) - n) < 1e-9
-const amountSchema = z
-  .number()
-  .positive('must be greater than 0')
-  .refine(wholeOre, 'must be in whole öre (at most two decimals)')
-
 const commonShape = {
   customer_id: z.string().uuid(),
   invoice_number: z.string().trim().min(1).max(64),
   invoice_date: saneIsoDateSchema,
   due_date: saneIsoDateSchema,
   journal_entry_id: z.string().uuid(),
-  total: amountSchema,
+  total: registeredAmountSchema,
   /** The reskontra's own date: what the remaining balance is stated as of. */
   balance_as_of: saneIsoDateSchema.optional(),
   /** The invoice's currency per the reskontra; anything but SEK is refused. */
-  currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, 'must be an ISO 4217 code such as SEK').optional(),
-}
-
-function refineDatesAndAmounts(
-  value: { invoice_date: string; due_date: string; total: number; remaining_amount?: number; balance_as_of?: string },
-  ctx: z.RefinementCtx,
-): void {
-  if (value.due_date < value.invoice_date) {
-    ctx.addIssue({ code: 'custom', path: ['due_date'], message: 'Förfallodatum får inte vara före fakturadatum' })
-  }
-  if (value.remaining_amount !== undefined && value.remaining_amount > value.total + ORE_TOLERANCE) {
-    ctx.addIssue({ code: 'custom', path: ['remaining_amount'], message: 'Kvarvarande saldo får inte vara större än fakturans totalbelopp' })
-  }
-  // The part already paid gets a payment row dated the reskontra's date, so
-  // a partly paid invoice cannot be registered without it.
-  const partlyPaid = value.remaining_amount !== undefined
-    && value.remaining_amount > 0
-    && value.remaining_amount < value.total - ORE_TOLERANCE
-  if (partlyPaid && !value.balance_as_of) {
-    ctx.addIssue({ code: 'custom', path: ['balance_as_of'], message: 'Ange reskontrans datum (det datum kvarvarande saldo gäller) när fakturan är delvis betald' })
-  }
-  if (value.balance_as_of && value.balance_as_of < value.invoice_date) {
-    ctx.addIssue({ code: 'custom', path: ['balance_as_of'], message: 'Reskontrans datum får inte vara före fakturadatum' })
-  }
-  if (value.balance_as_of && value.balance_as_of > todayIsoStockholm()) {
-    ctx.addIssue({ code: 'custom', path: ['balance_as_of'], message: 'Reskontrans datum får inte ligga i framtiden' })
-  }
+  currency: reskontraCurrencySchema.optional(),
 }
 
 /** The tool's arguments: remaining_amount defaults to the total (unpaid). */
 export const RegisterBookedInvoiceInputSchema = z
-  .object({ ...commonShape, remaining_amount: amountSchema.optional() })
+  .object({ ...commonShape, remaining_amount: registeredAmountSchema.optional() })
   .strict()
-  .superRefine(refineDatesAndAmounts)
+  .superRefine(refineRegistrationDatesAndAmounts)
 
 /** The staged params: the input with remaining_amount resolved, under the create_invoice pending type. */
 export const RegisterBookedInvoiceParamsSchema = z
-  .object({ mode: z.literal(REGISTER_BOOKED_INVOICE_MODE), ...commonShape, remaining_amount: amountSchema })
+  .object({ mode: z.literal(REGISTER_BOOKED_INVOICE_MODE), ...commonShape, remaining_amount: registeredAmountSchema })
   .strict()
-  .superRefine(refineDatesAndAmounts)
+  .superRefine(refineRegistrationDatesAndAmounts)
 
 export type RegisterBookedInvoiceInput = z.infer<typeof RegisterBookedInvoiceParamsSchema>
 
@@ -573,9 +538,7 @@ export async function planBookedInvoiceRegistration(
   if (!voucher) {
     return refuse('INVOICE_REGISTER_VOUCHER_NOT_FOUND', `Journal entry not found: no verifikat with id ${input.journal_entry_id} in this company.`)
   }
-  const label = voucher.voucher_series && voucher.voucher_number != null
-    ? `${voucher.voucher_series}${voucher.voucher_number}`
-    : voucher.id.slice(0, 8)
+  const label = registrationVoucherLabel(voucher)
   if (voucher.status !== 'posted') {
     return refuse(
       'INVOICE_REGISTER_VOUCHER_NOT_POSTED',
@@ -655,24 +618,13 @@ export async function planBookedInvoiceRegistration(
   const remaining = roundOre(input.remaining_amount)
   const status = remaining < input.total - ORE_TOLERANCE ? 'partially_paid' : 'sent'
   const paidAmount = roundOre(input.total - remaining)
-  const warnings: BookedInvoiceWarning[] = []
-
-  const texts = [voucher.description, ...lines.map((line) => line.line_description ?? null)]
-  if (!texts.some((text) => descriptionMentionsReference(text, input.invoice_number))) {
-    warnings.push({
-      code: 'REGISTER_VOUCHER_TEXT',
-      message_sv: `Verifikation ${label} nämner inte fakturanummer ${input.invoice_number}: kontrollera att det är fakturans verifikation.`,
-      message_en: `Verifikat ${label} does not mention invoice number ${input.invoice_number}: check that it is this invoice's verifikat.`,
-    })
-  }
-  const days = daysBetweenIso(input.invoice_date, voucher.entry_date)
-  if (days < -ENTRY_DATE_DAYS_BEFORE || days > ENTRY_DATE_DAYS_AFTER) {
-    warnings.push({
-      code: 'REGISTER_VOUCHER_DATE',
-      message_sv: `Verifikation ${label} är daterad ${voucher.entry_date} men fakturan ${input.invoice_date}: kontrollera att det är fakturans verifikation.`,
-      message_en: `Verifikat ${label} is dated ${voucher.entry_date} but the invoice ${input.invoice_date}: check that it is this invoice's verifikat.`,
-    })
-  }
+  const warnings: BookedInvoiceWarning[] = voucherCorroborationWarnings({
+    label,
+    entryDate: voucher.entry_date,
+    invoiceDate: input.invoice_date,
+    texts: [voucher.description, ...lines.map((line) => line.line_description ?? null)],
+    references: [input.invoice_number],
+  })
   // The reminder run writes to every unpaid 'sent' invoice past its due date
   // whose customer has an e-mail address (partially_paid is never reminded),
   // but only while sending is on, product-wide and for the company: the

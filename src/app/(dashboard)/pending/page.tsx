@@ -62,12 +62,13 @@ import {
   complianceWarningOf,
   operationLabel,
   registerBookedInvoiceBulkLine,
+  registerBookedSupplierInvoiceBulkLine,
   rowConsentSentence,
   singleActionWarning,
   REJECTION_CATEGORY_LABELS,
 } from '@/components/pending-operations/vocabulary'
 import { describeRetrievedSkills } from '@/lib/agent-skills/retrieved-skills'
-import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-invoice-mode'
+import { registerBookedLedgerOf } from '@/lib/invoices/register-booked-invoice-mode'
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
 // they read naturally under the heading "Genom att bekräfta utförs följande:".
@@ -77,8 +78,9 @@ const bulkActionDescriptions: Record<string, (count: number) => string> = {
   create_customer: (n) => (n === 1 ? 'En ny kund skapas.' : `${n} nya kunder skapas.`),
   create_invoice: (n) =>
     n === 1 ? 'Ett fakturautkast skapas (skickas inte).' : `${n} fakturautkast skapas (skickas inte).`,
-  // A create_invoice staged by gnubok_register_booked_invoice (bulkActionKey).
+  // Registrations of already-booked invoices (bulkActionKey).
   register_booked_invoice: registerBookedInvoiceBulkLine,
+  register_booked_supplier_invoice: registerBookedSupplierInvoiceBulkLine,
   categorize_transaction: (n) =>
     n === 1 ? 'En transaktion kategoriseras och bokförs.' : `${n} transaktioner kategoriseras och bokförs.`,
   match_transaction_invoice: (n) =>
@@ -91,19 +93,24 @@ const bulkActionDescriptions: Record<string, (count: number) => string> = {
 
 /**
  * The grouping key of the bulk dialog and the "all of this type" shortcuts. A
- * registration of an already-booked invoice shares the create_invoice pending
- * type but creates no draft (crm#1094), so it gets its own line and its own
- * shortcut instead of being counted as fakturautkast.
+ * registration of an already-booked invoice shares create_invoice's pending
+ * type (or, for a supplier invoice, create_supplier_invoice_from_inbox's) but
+ * creates no draft and posts nothing (crm#1094), so it gets its own line and
+ * its own shortcut instead of being counted with them.
  */
+const REGISTER_BOOKED_BULK_KEYS = {
+  customer: 'register_booked_invoice',
+  supplier: 'register_booked_supplier_invoice',
+} as const
+
 function bulkActionKey(op: PendingOperation): string {
-  return op.operation_type === 'create_invoice' && isRegisterBookedInvoiceParams(op.params)
-    ? 'register_booked_invoice'
-    : op.operation_type
+  const ledger = registerBookedLedgerOf(op.operation_type, op.params)
+  return ledger ? REGISTER_BOOKED_BULK_KEYS[ledger] : op.operation_type
 }
 
-/** The label of a bulkActionKey. */
+/** The label of a bulkActionKey: a registration's key names its label (type_<key>). */
 function bulkActionKeyLabel(key: string, t: (key: string) => string): string {
-  return key === 'register_booked_invoice' ? t('type_register_booked_invoice') : operationLabel(key, t)
+  return (Object.values(REGISTER_BOOKED_BULK_KEYS) as string[]).includes(key) ? t(`type_${key}`) : operationLabel(key, t)
 }
 
 function bulkActionLabel(operationType: string, count: number, t: (key: string) => string): string {
