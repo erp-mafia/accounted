@@ -436,19 +436,6 @@ export function generateReverseChargePurchaseLines(purchase: ReverseChargePurcha
   ]
 }
 
-/**
- * The basis pair alone, for a supplier credit note that mirrors the pair its
- * registration posted next to hand-built reversed fiktiv lines. Producers that
- * book a purchase use generateReverseChargePurchaseLines.
- */
-export function generateReverseChargeBasisLines(
-  baseAmount: number,
-  vatRate: number = 0.25,
-  supplierType: ReverseChargeSupplierType,
-): CreateJournalEntryLineInput[] {
-  return basisPairLines(baseAmount, vatRate, reverseChargeKindForSupplierType(supplierType))
-}
-
 function basisPairLines(
   baseAmount: number,
   vatRate: number,

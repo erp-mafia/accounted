@@ -2155,6 +2155,37 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
     expect(mockedCredit).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['a dry run', '?dry_run=true'],
+    ['the commit', ''],
+  ])('returns 409 SI_CREDIT_ROWS_MISMATCH with both figures on %s of an invoice without rows', async (_label, query) => {
+    // A migrated header: its rows give the reversal nothing to take off 2440.
+    const flexible = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: { data: { ...registeredSI, items: [] }, error: null },
+      company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+      fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    const rpc = vi.fn((_name: string) => Promise.resolve({ data: 43, error: null }))
+    mockServiceClient.mockReturnValue({ ...flexible, rpc })
+
+    const res = await creditSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/credit${query}`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_CREDIT_ROWS_MISMATCH')
+    expect(body.error.details).toMatchObject({ rows_payable_sek: 0, invoice_payable_sek: registeredSI.total })
+    // No ankomstnummer drawn and nothing posted.
+    expect(rpc.mock.calls.filter(([name]) => name === 'get_next_arrival_number')).toEqual([])
+    expect(mockedCredit).not.toHaveBeenCalled()
+  })
+
   it('returns 400 VALIDATION_ERROR for a body with unknown fields', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

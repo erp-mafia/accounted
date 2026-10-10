@@ -16,7 +16,10 @@
  *     credit note number, its date and its document when there is one;
  *   - the reversing verifikat (Dr 2440, Cr cost and 2641) is posted through
  *     the engine on the credit note's date whenever the original reached the
- *     ledger, and the document becomes its underlag (BFL 5 kap 6 §);
+ *     ledger, and the document becomes its underlag (BFL 5 kap 6 §); an
+ *     original whose rows do not add up to its payable (or that has no rows
+ *     at all) is refused instead (SI_CREDIT_ROWS_MISMATCH), on a dry run too
+ *     and before an ankomstnummer is drawn or anything is written;
  *   - the original moves to 'credited' with nothing left to pay;
  *   - periodisering schedules on the original stop, and their posted
  *     dissolutions are stornoed (best-effort: a warning, never a failure).
@@ -39,12 +42,17 @@ import type { CoreEvent } from '@/lib/events/types'
 import type { AccountingMethod, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { eventBus } from '@/lib/events'
 import { getSwedishLocalDate, reverseEntry } from '@/lib/bookkeeping/engine'
-import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import {
+  assertSupplierCreditNoteRowsMatchPayable,
+  createSupplierCreditNoteEntry,
+  SupplierCreditNoteRowsMismatchError,
+} from '@/lib/bookkeeping/supplier-invoice-entries'
 import { supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { cancelSchedulesForSource } from '@/lib/bookkeeping/accruals/service'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { normalizeVatRateToFraction } from '@/lib/vat/supplier-invoice-line-checks'
+import { roundOre } from '@/lib/money'
 import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
 import { isoDateSchema } from '@/lib/invariants/zod'
 import {
@@ -125,6 +133,28 @@ const pickSupplier = (s: Original['supplier']): SupplierRef | null => (Array.isA
 
 function failed(error: unknown): Failure {
   return { ok: false, code: 'UNKNOWN_ERROR', error }
+}
+
+/** The refusal of rows that do not add up to the invoice, with both figures. */
+function rowsMismatch(err: SupplierCreditNoteRowsMismatchError): Failure {
+  return {
+    ok: false,
+    code: 'SI_CREDIT_ROWS_MISMATCH',
+    details: { rows_payable_sek: err.rowsPayableSek, invoice_payable_sek: err.invoicePayableSek },
+  }
+}
+
+/**
+ * What the original owes in SEK, which its credit note must take off 244x:
+ * total_sek, else the total of a SEK invoice, else the total at the
+ * invoice's rate. Null when none is known (nothing to compare with).
+ */
+function originalPayableSek(original: Original): number | null {
+  if (typeof original.total_sek === 'number' && Number.isFinite(original.total_sek)) return original.total_sek
+  if (typeof original.total !== 'number' || !Number.isFinite(original.total)) return null
+  if (original.currency === 'SEK') return original.total
+  const rate = original.exchange_rate
+  return rate != null && rate > 0 ? roundOre(original.total * rate) : null
 }
 
 function creditItemsFor(creditNoteId: string, items: SupplierInvoiceItem[]) {
@@ -333,6 +363,28 @@ export async function creditSupplierInvoice(
   // reached the ledger. A paid original was booked by its payment verifikat
   // (expense + 2641), and leaving that un-reversed overstates both.
   const postsEntry = supplierCreditNoteNeedsJournalEntry(accountingMethod, original)
+  const supplierType = supplier?.supplier_type || 'swedish_business'
+  const payableSek = originalPayableSek(original)
+
+  // The verifikat reverses the original's rows, so rows that do not add up to
+  // what the invoice owes are refused. Asked here, of the rule the builder
+  // itself posts by, BEFORE the dry-run answer and the arrival-number
+  // sequence: a dry run and a staged credit refuse what the commit would, and
+  // a refused Kreditera never burns an ankomstnummer or writes a credit note
+  // row to delete again (same ordering as create.ts).
+  if (postsEntry) {
+    try {
+      await assertSupplierCreditNoteRowsMatchPayable(
+        supabase, companyId, original, originalItems, supplierType, payableSek,
+      )
+    } catch (err) {
+      if (err instanceof SupplierCreditNoteRowsMismatchError) return rowsMismatch(err)
+      // The lines could not be built at all (a foreign invoice without a
+      // rate, momskoder that could not be read), so the verifikat could not
+      // be either: the credit stops here, as on any failed read above.
+      return failed(err)
+    }
+  }
 
   if (options.dryRun) {
     return {
@@ -420,14 +472,17 @@ export async function creditSupplierInvoice(
     try {
       // The ORIGINAL items: deferred lines carry their periodisering fields
       // there, so the credit reverses against the same 17xx interim account.
+      // The original's payable: the builder holds the rows to it once more,
+      // as the backstop of the check above.
       const entry = await createSupplierCreditNoteEntry(
         supabase,
         companyId,
         userId,
         creditNote,
         originalItems,
-        supplier?.supplier_type || 'swedish_business',
+        supplierType,
         supplier?.name ?? undefined,
+        payableSek,
       )
       if (!entry) {
         // No fiscal year covers the date: a credit without its verifikat
@@ -437,6 +492,13 @@ export async function creditSupplierInvoice(
       }
       journalEntryId = entry.id
     } catch (err) {
+      if (err instanceof SupplierCreditNoteRowsMismatchError) {
+        // The backstop: the check above passed, or could not be made, and
+        // the builder refuses. Before the engine was called: nothing was
+        // posted, so the credit note row goes.
+        await rollbackCreditNote(ctx, creditNote.id, 'rows_mismatch', false)
+        return rowsMismatch(err)
+      }
       // The engine threw: assume the entry may have committed.
       await rollbackCreditNote(ctx, creditNote.id, 'credit_journal_entry', true)
       if (isBookkeepingError(err)) return { ok: false, code: 'SI_CREDIT_FAILED', error: err }

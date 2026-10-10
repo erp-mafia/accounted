@@ -5,7 +5,6 @@ import { resolveBookingAccount } from './accruals/account-suggestions'
 import { buildSupplierDescription, supplierInvoiceReference } from './supplier-invoice-description'
 import {
   generateReverseChargePurchaseLines,
-  generateReverseChargeBasisLines,
   resolveReverseChargeRate,
   reverseChargeKindForSupplierType,
   reverseChargeOnAccount,
@@ -24,6 +23,7 @@ import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { creditNatural, debitNatural } from './line-side'
 import { isSupplierInvoiceRoundingItem } from '@/lib/supplier-invoices/rounding-item'
+import { supplierInvoiceTotalsTolerance } from '@/lib/supplier-invoices/line-totals'
 import {
   addSupplierBankFeeLine,
   buildSupplierPaymentClearingLines,
@@ -87,6 +87,53 @@ export class SupplierInvoiceFxRateMissingError extends Error {
       `Supplier invoice is in ${currency} but has no exchange rate on file; refusing to post it as if 1 ${currency} = 1 SEK.`
     )
     this.name = 'SupplierInvoiceFxRateMissingError'
+  }
+}
+
+/**
+ * The least a credit note's tolerance ever is, in SEK (see
+ * creditNotePayableToleranceSek). The rows are compared in SEK, where each
+ * cost bucket and moms group of a foreign invoice is rounded to the öre on
+ * its own. The registration's rule counts in the invoice's currency and knows
+ * nothing of that rounding, which outgrows it at a rate below 1 SEK.
+ */
+const CREDIT_NOTE_PAYABLE_TOLERANCE_FLOOR_SEK = 1
+
+/**
+ * How far a credit note's reversal of the rows may sit from the invoice's
+ * payable, in SEK, before it is refused: what the registration itself accepts
+ * between a document total and its lines (supplierInvoiceTotalsTolerance:
+ * öresavrundning plus per-line moms rounding, capped), at the invoice's rate,
+ * and never under the floor. One rule for both: what the registration
+ * accepts as rounding, the credit note accepts too.
+ */
+function creditNotePayableToleranceSek(
+  invoice: Pick<SupplierInvoice, 'currency' | 'exchange_rate'>,
+  lineCount: number,
+): number {
+  const rate = invoice.currency !== 'SEK' && invoice.exchange_rate != null && invoice.exchange_rate > 0
+    ? invoice.exchange_rate
+    : 1
+  return Math.max(CREDIT_NOTE_PAYABLE_TOLERANCE_FLOOR_SEK, supplierInvoiceTotalsTolerance(lineCount) * rate)
+}
+
+/**
+ * Raised, before anything is posted, when a credit note built from the
+ * original's rows would move 244x by another amount than the original's
+ * payable: the rows do not add up to their invoice (duplicated, missing,
+ * stored without their sign, or not there at all, as on some migrated
+ * invoices). Posting it would leave 2440 off by the difference while the
+ * reskontra shows nothing left.
+ */
+export class SupplierCreditNoteRowsMismatchError extends Error {
+  constructor(
+    public readonly rowsPayableSek: number,
+    public readonly invoicePayableSek: number,
+  ) {
+    super(
+      `The invoice's rows reverse ${rowsPayableSek} SEK on 244x, but the invoice's payable is ${invoicePayableSek} SEK; refusing to post a credit note that does not match it.`
+    )
+    this.name = 'SupplierCreditNoteRowsMismatchError'
   }
 }
 
@@ -203,9 +250,55 @@ export async function buildSupplierInvoiceRegistrationEntryInput(
     return null
   }
 
-  const lines: CreateJournalEntryLineInput[] = []
   const desc = buildSupplierDescription('Leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
+  const lines = await buildSupplierInvoiceRowLines(supabase, companyId, invoice, items, supplierType, desc)
+
+  // Credit: Leverantörsskulder, balance guarantee: ensures sum(debits) === sum(credits)
+  // For reverse charge, intermediate credits (2614/2624/2634) already exist, so we subtract them
+  const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+  const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   const isForeign = invoice.currency !== 'SEK'
+  // An invoice whose rows net below zero (a leverantörskreditfaktura keyed in
+  // as an invoice) books 2440 on the debit side instead of a negative credit.
+  lines.push({
+    account_number: '2440',
+    ...creditNatural(totalDebits - totalCredits),
+    line_description: desc,
+    dimensions: coerceDimensionsBag(invoice.default_dimensions),
+    ...buildCurrencyMetadata(invoice.currency, isForeign ? invoice.total : undefined, invoice.exchange_rate),
+  })
+
+  const input: CreateJournalEntryInput = {
+    fiscal_period_id: fiscalPeriodId,
+    entry_date: invoice.invoice_date,
+    description: desc,
+    source_type: 'supplier_invoice_registered',
+    source_id: invoice.id,
+    lines,
+  }
+
+  return input
+}
+
+/**
+ * Every line the registration books for the invoice's rows, all but the skuld
+ * on 2440: cost per (account, dimensions), ingående moms per rate or the
+ * reverse-charge sets, and the SLP pair, each on the side the row's sign
+ * gives it. The kreditfaktura (createSupplierCreditNoteEntry) books these same
+ * lines on the other side, so an invoice and its credit note net to zero on
+ * every account and dimension cell, a row that nets to a credit (rabatt,
+ * öresavrundning downwards, the output side of a reverse charge) included.
+ * The company's momskoder are read only for a reverse-charge invoice.
+ */
+async function buildSupplierInvoiceRowLines(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: SupplierInvoice,
+  items: SupplierInvoiceItem[],
+  supplierType: string,
+  desc: string,
+): Promise<CreateJournalEntryLineInput[]> {
+  const lines: CreateJournalEntryLineInput[] = []
   // Dimensions PR7: expense lines carry item bags merged over the invoice
   // default; every other line (VAT, RC/basis, 2440) carries the default only.
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
@@ -297,7 +390,7 @@ export async function buildSupplierInvoiceRegistrationEntryInput(
   // Särskild löneskatt på pensionskostnader (SLP, 24.26 %): items flagged
   // apply_slp (tjänstepensionspremier on 741x) get a self-balancing
   // 7533 D / 2514 K pair, injected the same way the reverse-charge pairs are.
-  // The pair nets to zero, so the 2440 balance guarantee below keeps the
+  // The pair nets to zero, so the callers' 2440 balance guarantee keeps the
   // payable at the invoice total: SLP is the buyer's own tax, never part of
   // the supplier's fordran.
   const slpBase = slpBaseSek(items, invoice.currency, invoice.exchange_rate)
@@ -306,30 +399,7 @@ export async function buildSupplierInvoiceRegistrationEntryInput(
     lines.push(...slpLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
   }
 
-  // Credit: Leverantörsskulder, balance guarantee: ensures sum(debits) === sum(credits)
-  // For reverse charge, intermediate credits (2614/2624/2634) already exist, so we subtract them
-  const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-  const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-  // An invoice whose rows net below zero (a leverantörskreditfaktura keyed in
-  // as an invoice) books 2440 on the debit side instead of a negative credit.
-  lines.push({
-    account_number: '2440',
-    ...creditNatural(totalDebits - totalCredits),
-    line_description: desc,
-    dimensions: defaultDimensions,
-    ...buildCurrencyMetadata(invoice.currency, isForeign ? invoice.total : undefined, invoice.exchange_rate),
-  })
-
-  const input: CreateJournalEntryInput = {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: invoice.invoice_date,
-    description: desc,
-    source_type: 'supplier_invoice_registered',
-    source_id: invoice.id,
-    lines,
-  }
-
-  return input
+  return lines
 }
 
 export interface SupplierInvoicePaymentLinesOptions {
@@ -944,11 +1014,38 @@ export function largestExpenseAccount(items: SupplierInvoiceItem[]): string {
 }
 
 /**
- * Create journal entry for a supplier credit note (reversal of registration)
+ * Create the journal entry for a supplier credit note: the original's
+ * registration turned around.
  *
- *   Debit  2440 Leverantörsskulder                 [total]
- *   Credit 5xxx/6xxx (per item)                    [line_total]
- *   Credit 2641 Ingående moms                      [total VAT]
+ *   Debit  2440 Leverantörsskulder            [what the registration credited]
+ *   Credit 5xxx/6xxx (per account, dimensions) [line_total]
+ *   Credit 2641 Ingående moms (per rate)       [VAT per rate]
+ *
+ * Every line is one buildSupplierInvoiceRowLines books for the same rows,
+ * on the other side: the cost lines, the ingående moms, the reverse-charge
+ * sets (2645/2647 and 26x4, 44xx/45xx and 4598, so rutor 20-24, 30-32 and 48
+ * fall back by what the registration put in them) and the SLP pair. A row the
+ * original books as a credit (a rabatt, an öresavrundning downwards, the
+ * output side of a reverse charge stored as a row) is debited here, so the
+ * original and a full credit note net to zero on every account and dimension
+ * cell, 2440 included. Taking each line's absolute value instead credited
+ * such a row a second time and debited 2440 by more than the original
+ * credited.
+ *
+ * `items` are the ORIGINAL invoice's rows, signed as the original books them:
+ * deferred lines then reverse against the 17xx interim account they were
+ * registered on (the schedule's posted dissolutions are stornoed separately by
+ * cancelSchedulesForSource), and the item bags against the same dimension
+ * cells, while the credit note's own default_dimensions (copied from the
+ * original at credit time) ride the 2440, moms and reverse-charge lines.
+ * Scaled-down rows reverse a part the same way, each row on its own side.
+ *
+ * `invoicePayableSek` is what the original owes in SEK (its total_sek). When
+ * given, the lines must move 244x by it, the original's own 244x rows
+ * included, to within creditNotePayableToleranceSek; otherwise
+ * SupplierCreditNoteRowsMismatchError is thrown and nothing is posted
+ * (buildSupplierCreditNoteLines, which creditSupplierInvoice also asks before
+ * it writes anything: assertSupplierCreditNoteRowsMatchPayable).
  */
 export async function createSupplierCreditNoteEntry(
   supabase: SupabaseClient,
@@ -957,7 +1054,8 @@ export async function createSupplierCreditNoteEntry(
   creditNote: SupplierInvoice,
   items: SupplierInvoiceItem[],
   supplierType: string,
-  supplierName?: string
+  supplierName?: string,
+  invoicePayableSek?: number | null,
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, creditNote.invoice_date)
   if (!fiscalPeriodId) {
@@ -966,151 +1064,9 @@ export async function createSupplierCreditNoteEntry(
   }
 
   const desc = buildSupplierDescription('Kreditfaktura leverantör', creditNote.supplier_invoice_number, supplierName, `(ankomstnr ${creditNote.arrival_number})`)
-  const lines: CreateJournalEntryLineInput[] = []
-  // Dimensions PR7: items are the ORIGINAL invoice's (see below), so their
-  // bags reverse against the same dimension cells; the credit note's own
-  // default (copied from the original at credit time) rides the other legs.
-  const defaultDimensions = coerceDimensionsBag(creditNote.default_dimensions)
-
-  // Credit: Expense accounts (reverse, in SEK). The caller passes the
-  // ORIGINAL invoice's items so deferred lines reverse against the same 17xx
-  // interim account they were registered on (the schedule's posted
-  // dissolutions are stornoed separately by cancelSchedulesForSource).
-  const creditLines: CreateJournalEntryLineInput[] = []
-  const expenseBuckets = groupExpenseBuckets(
-    items,
-    (item) => resolveBookingAccount('expense', item, item.account_number),
-    (item) => Math.abs(toSekOrThrow(item.line_total, creditNote.currency, creditNote.exchange_rate)),
-    defaultDimensions
+  const lines = await buildSupplierCreditNoteLines(
+    supabase, companyId, creditNote, items, supplierType, desc, invoicePayableSek,
   )
-
-  for (const bucket of expenseBuckets) {
-    creditLines.push({
-      account_number: bucket.account,
-      debit_amount: 0,
-      credit_amount: Math.round(bucket.amount * 100) / 100,
-      line_description: desc,
-      dimensions: bucket.dimensions,
-    })
-  }
-
-  const isReverseCharge = (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && creditNote.reverse_charge
-  const isDomesticRC = supplierType === 'swedish_business' && creditNote.reverse_charge
-
-  if (isReverseCharge) {
-    // Reverse the fiktiv moms per rate group (swap debit/credit from registration)
-    // Input VAT account: 2647 for domestic RC, 2645 for EU/non-EU
-    // Drive iteration off the basis: fiktiv moms is always statutory base × rate.
-    const inputAccount = isDomesticRC ? '2647' : '2645'
-    // Grouped as the registration grouped them, on the same booked accounts.
-    const chart = await fetchChartVatTreatments(supabase, companyId)
-    const rcByRate = groupReverseChargeByRate(
-      items, chart, (item) => resolveBookingAccount('expense', item, item.account_number),
-      creditNote.currency, creditNote.exchange_rate, true,
-    )
-    const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
-    // Only reverse basbeloppsraderna for the portion the registration would
-    // have emitted them, namely the base per rate on accounts that do not
-    // report ruta 20-24 themselves. Items on an account that does (44xx/45xx,
-    // or a reverse-charge momskod) had no parallel basis lines in
-    // registration and so are reversed only via the expense credit line above.
-    for (const [rate, { base: baseAmount, basisBase: nonBasisBase }] of rcByRate) {
-      if (rate > 0 && baseAmount > 0) {
-        const fiktivVat = Math.round(baseAmount * rate * 100) / 100
-        // Determine the output account for this rate
-        let outputAccount: string
-        switch (rate) {
-          case 0.12: outputAccount = '2624'; break
-          case 0.06: outputAccount = '2634'; break
-          default: outputAccount = '2614'; break
-        }
-        creditLines.push({
-          account_number: inputAccount,
-          debit_amount: 0,
-          credit_amount: fiktivVat,
-          line_description: `Omvänd fiktiv ingående moms ${Math.round(rate * 100)}% ${desc}`,
-          dimensions: defaultDimensions,
-        })
-        lines.push({
-          account_number: outputAccount,
-          debit_amount: fiktivVat,
-          credit_amount: 0,
-          line_description: `Omvänd fiktiv utgående moms ${Math.round(rate * 100)}% ${desc}`,
-          dimensions: defaultDimensions,
-        })
-        if (nonBasisBase > 0) {
-          // Reverse the basbeloppsrader (44xx/45xx debit & 4598 credit on the
-          // registration entry become credits & debits here). Without this the
-          // credit note would only undo the VAT amounts (ruta 30-32 + 48) but
-          // leave ruta 20-24 still showing the original basbelopp, exactly
-          // the same FK004-style mismatch the registration fix prevents.
-          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)
-          // Swap debit/credit on every basis line so the credit note nets
-          // against the original registration verifikat.
-          for (const line of basisLines) {
-            lines.push({
-              account_number: line.account_number,
-              debit_amount: line.credit_amount,
-              credit_amount: line.debit_amount,
-              line_description: line.line_description,
-              dimensions: defaultDimensions,
-            })
-          }
-        }
-      }
-    }
-  } else {
-    // Domestic: Credit ingående moms per rate group (reverse)
-    const vatByRate = groupVatByRate(items, creditNote.currency, creditNote.exchange_rate, creditNote.vat_treatment, true)
-    for (const [rate, amount] of vatByRate) {
-      if (amount > 0) {
-        creditLines.push({
-          account_number: '2641',
-          debit_amount: 0,
-          credit_amount: amount,
-          line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
-          dimensions: defaultDimensions,
-        })
-      }
-    }
-  }
-
-  // Reverse the SLP pair: registration booked 7533 D / 2514 K, so the credit
-  // note books 7533 K / 2514 D (same debit/credit swap as basbeloppsraderna
-  // above). Items are the ORIGINAL invoice's, so apply_slp reverses against
-  // the same base. Nets to zero: the 2440 debit guarantee is untouched.
-  //
-  // The base is abs of the SIGNED sum, not the per-item abs the expense
-  // buckets use: registration computed its SLP base as the signed sum, so a
-  // mixed-sign flagged original (+10000 premium and -2000 rebate) booked SLP
-  // on 8000. Per-item abs here would reverse SLP on 12000, striking more
-  // 7533/2514 than was ever posted. The buckets keep per-item abs because
-  // each reversal line must land positive on its own side per account.
-  const slpBase = Math.abs(slpBaseSek(items, creditNote.currency, creditNote.exchange_rate))
-  if (slpBase > 0) {
-    for (const line of generateSlpLines(slpBase)) {
-      lines.push({
-        account_number: line.account_number,
-        debit_amount: line.credit_amount,
-        credit_amount: line.debit_amount,
-        line_description: line.line_description,
-        dimensions: defaultDimensions,
-      })
-    }
-  }
-
-  lines.push(...creditLines)
-
-  // Debit: Leverantörsskulder, balance guarantee: debit = sum of credits minus other debits
-  const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-  const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-  lines.unshift({
-    account_number: '2440',
-    debit_amount: Math.round((totalCredits - totalDebits) * 100) / 100,
-    credit_amount: 0,
-    line_description: desc,
-    dimensions: defaultDimensions,
-  })
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
@@ -1122,6 +1078,75 @@ export async function createSupplierCreditNoteEntry(
   }
 
   return createJournalEntry(supabase, companyId, userId, input)
+}
+
+/**
+ * The rule createSupplierCreditNoteEntry holds a credit note to, asked before
+ * there is a credit note: resolves when the reversal of `items` moves 244x by
+ * `invoicePayableSek`, throws SupplierCreditNoteRowsMismatchError when it
+ * does not. The same lines and the same comparison as the posting path
+ * (buildSupplierCreditNoteLines), so the two cannot disagree; nothing is
+ * posted or written. `original` is the invoice to be credited.
+ */
+export async function assertSupplierCreditNoteRowsMatchPayable(
+  supabase: SupabaseClient,
+  companyId: string,
+  original: SupplierInvoice,
+  items: SupplierInvoiceItem[],
+  supplierType: string,
+  invoicePayableSek: number | null,
+): Promise<void> {
+  await buildSupplierCreditNoteLines(supabase, companyId, original, items, supplierType, '', invoicePayableSek)
+}
+
+/**
+ * The lines of a supplier credit note's verifikat, with the payable rule
+ * applied: every line buildSupplierInvoiceRowLines books for `items` on the
+ * other side, and 2440 by their balance. Posts nothing; the company's
+ * momskoder are read only for a reverse-charge invoice.
+ *
+ * `header` is the credit note, or the original it is copied from
+ * (buildSupplierCreditNoteRow): currency, rate, moms treatment and dimension
+ * bag are the same on both, so the amounts are too.
+ */
+async function buildSupplierCreditNoteLines(
+  supabase: SupabaseClient,
+  companyId: string,
+  header: SupplierInvoice,
+  items: SupplierInvoiceItem[],
+  supplierType: string,
+  desc: string,
+  invoicePayableSek?: number | null,
+): Promise<CreateJournalEntryLineInput[]> {
+  const lines = (await buildSupplierInvoiceRowLines(supabase, companyId, header, items, supplierType, desc))
+    .map((line) => ({ ...line, debit_amount: line.credit_amount, credit_amount: line.debit_amount }))
+
+  // Debit: Leverantörsskulder, balance guarantee: what the registration
+  // credited. An original whose rows net below zero was booked with 2440 on
+  // the debit side, so its credit note credits it. Rows that carry the skuld
+  // themselves (a 244x row) net to zero and need no skuld line of 0.
+  const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+  const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+  if (roundOre(totalCredits - totalDebits) !== 0) {
+    lines.unshift({
+      account_number: '2440',
+      ...debitNatural(totalCredits - totalDebits),
+      line_description: desc,
+      dimensions: coerceDimensionsBag(header.default_dimensions),
+    })
+  }
+
+  if (typeof invoicePayableSek === 'number' && Number.isFinite(invoicePayableSek)) {
+    const rowsPayableSek = roundOre(lines
+      .filter((l) => l.account_number.startsWith('244'))
+      .reduce((sum, l) => sum + l.debit_amount - l.credit_amount, 0))
+    const gapSek = Math.abs(roundOre(rowsPayableSek - invoicePayableSek))
+    if (gapSek > creditNotePayableToleranceSek(header, items.length)) {
+      throw new SupplierCreditNoteRowsMismatchError(rowsPayableSek, roundOre(invoicePayableSek))
+    }
+  }
+
+  return lines
 }
 
 /**
@@ -1174,12 +1199,10 @@ function groupVatByRate(
   currency: string,
   exchangeRate: number | null,
   vatTreatment: string | null | undefined,
-  useAbsoluteValues = false
 ): Map<number, number> {
   const vatByRate = new Map<number, number>()
-  // Second gate on the same contract as itemsHaveVat: the credit-note path
-  // reaches this without the itemsHaveVat pre-check, and a stale stored
-  // 0.25 must not resurrect 2641 there either.
+  // Second gate on the same contract as itemsHaveVat, which every caller
+  // checks first: a stale stored 0.25 must never resurrect 2641.
   if (!treatmentDeductsInputVat(vatTreatment)) return vatByRate
   for (const item of items) {
     const rate = item.vat_rate ?? 0.25
@@ -1188,8 +1211,7 @@ function groupVatByRate(
       ? Math.round((item.line_total ?? 0) * rate * 100) / 100
       : 0
     const sourceVat = storedVat > 0 ? storedVat : computedVat
-    let vatSek = toSekOrThrow(sourceVat, currency, exchangeRate)
-    if (useAbsoluteValues) vatSek = Math.abs(vatSek)
+    const vatSek = toSekOrThrow(sourceVat, currency, exchangeRate)
     vatByRate.set(rate, (vatByRate.get(rate) || 0) + vatSek)
   }
   return vatByRate
@@ -1222,14 +1244,12 @@ function groupReverseChargeByRate(
   bookedAccount: (item: SupplierInvoiceItem) => string,
   currency: string,
   exchangeRate: number | null,
-  useAbsoluteValues = false
 ): Map<number, { base: number; basisBase: number }> {
   const byRate = new Map<number, { base: number; basisBase: number }>()
   for (const item of items) {
     if (isSupplierInvoiceRoundingItem(item, item.line_total, currency)) continue
     const { rate, basisPair } = reverseChargeOnAccount(bookedAccount(item), resolveReverseChargeRate(item), chart)
-    let baseSek = toSekOrThrow(item.line_total, currency, exchangeRate)
-    if (useAbsoluteValues) baseSek = Math.abs(baseSek)
+    const baseSek = toSekOrThrow(item.line_total, currency, exchangeRate)
     const group = byRate.get(rate) ?? { base: 0, basisBase: 0 }
     group.base += baseSek
     if (basisPair) group.basisBase += baseSek
@@ -1249,15 +1269,12 @@ function slpBaseSek(
   items: SupplierInvoiceItem[],
   currency: string,
   exchangeRate: number | null | undefined,
-  useAbsoluteValues = false
 ): number {
   let base = 0
   for (const item of items) {
     if (item.apply_slp !== true) continue
     if (!isSlpPensionAccount(item.account_number)) continue
-    let sek = toSekOrThrow(item.line_total, currency, exchangeRate)
-    if (useAbsoluteValues) sek = Math.abs(sek)
-    base += sek
+    base += toSekOrThrow(item.line_total, currency, exchangeRate)
   }
   return base
 }

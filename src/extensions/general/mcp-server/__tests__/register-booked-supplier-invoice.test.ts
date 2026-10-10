@@ -70,9 +70,11 @@ describe('gnubok_register_booked_supplier_invoice: registration', () => {
     expect(TOOL_SCOPE_MAP.gnubok_register_booked_supplier_invoice).toBe('suppliers:write')
   })
 
-  it('tells the agent the limits before it calls: SEK, faktureringsmetoden, no reverse charge, no opening balance, no undo', () => {
+  it('tells the agent the limits before it calls: SEK, faktureringsmetoden, no opening balance, no undo', () => {
     const properties = (tool.inputSchema as { properties: Record<string, { description?: string }> }).properties
-    expect(tool.description).toMatch(/SEK, faktureringsmetoden, no reverse charge; cannot be undone/)
+    expect(tool.description).toMatch(/SEK and faktureringsmetoden only; cannot be undone/)
+    // A kreditfaktura reverses every row on its other side, the buyer's own VAT included.
+    expect(tool.description).not.toMatch(/reverse charge/)
     expect(properties.journal_entry_id.description).toMatch(/credits 244x by the total/)
     expect(properties.journal_entry_id.description).toMatch(/Never the opening balance/)
     expect(properties.arrival_number.description).toMatch(/next_arrival_number/)
@@ -159,20 +161,18 @@ describe('gnubok_register_booked_supplier_invoice: staging', () => {
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
-  it('refuses a reverse-charge purchase before staging anything', async () => {
+  it('stages a reverse-charge purchase with its rows, the buyer\'s own VAT kept out of the moms', async () => {
     const { supabase, findCall } = books([
       { account_number: '6540', debit_amount: 10000, credit_amount: 0, currency: 'SEK', line_description: null, dimensions: {} },
       { account_number: '2645', debit_amount: 2500, credit_amount: 0, currency: 'SEK', line_description: null, dimensions: {} },
       { account_number: '2614', debit_amount: 0, credit_amount: 2500, currency: 'SEK', line_description: null, dimensions: {} },
       { account_number: '2440', debit_amount: 0, credit_amount: 10000, currency: 'SEK', line_description: null, dimensions: {} },
     ])
-    const error = await tool.execute(ARGS, COMPANY_ID, USER_ID, supabase as never, ACTOR).catch((err: unknown) => err)
+    const result = (await tool.execute(ARGS, COMPANY_ID, USER_ID, supabase as never, ACTOR)) as { staged: boolean }
 
-    const envelope = toToolError(error).error
-    expect(envelope.code).toBe('SI_REGISTER_REVERSE_CHARGE')
-    expect(envelope.retryable).toBe(false)
-    expect(envelope.message_sv).toMatch(/omvänd betalningsskyldighet/)
-    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+    expect(result.staged).toBe(true)
+    const staged = findCall('pending_operations', 'insert')?.[0] as { preview_data: Record<string, unknown> }
+    expect(staged.preview_data).toMatchObject({ subtotal: 10000, vat_amount: 0, total: 10000, vat_treatment: 'exempt' })
   })
 
   it('refuses a company on kontantmetoden before staging anything', async () => {

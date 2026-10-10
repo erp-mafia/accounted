@@ -4803,6 +4803,19 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte kreditera leverantörsfakturan.',
     message_en: 'Failed to credit supplier invoice.',
   },
+  // crm#1094: a credit reverses the original's rows, so rows that do not add
+  // up to the invoice would take another amount off 2440 than it owes.
+  SI_CREDIT_ROWS_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturans rader summerar inte till fakturans belopp, så en kreditering från raderna skulle bokföra fel belopp på leverantörsskulder (2440). Ingenting har bokförts. Bokför kreditfakturan som en egen verifikation.',
+    message_en:
+      "The invoice's rows do not add up to its amount, so a credit built from them would book the wrong amount on accounts payable (2440). Nothing was booked. Book the credit note as a verifikat of its own.",
+    remediation: {
+      description:
+        'details carries rows_payable_sek (what the rows would take off 244x) and invoice_payable_sek (the invoice total in SEK); the approval of a staged credit returns the same two under data. The stored rows differ from the invoice, or it has no rows at all (rows_payable_sek 0), typically on one imported from another system. Do not retry. Hand over to the user: book the credit note as its own verifikat, reversing what the invoice\'s own verifikat booked (debit 2440 by the invoice total, credit the cost accounts and 2641). An original that is still unpaid then stays open in the leverantörsreskontra: once that verifikat is posted, close the invoice against it with gnubok_link_supplier_invoice_to_voucher (its debit on 244x settles the invoice, which then shows as paid; no second verifikat is posted).',
+    },
+  },
   // Issue #2980: a supplier's credit note from the inbox credits the invoice
   // it references, and only when it is for all of it.
   SI_CREDIT_PARTIAL: {
@@ -5943,22 +5956,12 @@ const SI_REGISTER_BOOKED: Record<string, StructuredErrorEntry> = {
     message_en:
       'The journal entry books a different amount on accounts payable (244x) than the invoice total. Pick the invoice\'s own verifikat; one covering several invoices cannot be linked to one of them.',
   },
-  SI_REGISTER_REVERSE_CHARGE: {
-    httpStatus: 400,
-    message_sv:
-      'Leverantörsfakturan kan inte registreras på det här sättet än: verifikationen bokför omvänd betalningsskyldighet eller importmoms (rutorna 20-24, 30-32, 50 och 60-62), köparens egen moms som en kreditfaktura måste vända i samma rutor. Fakturan står kvar utanför leverantörsreskontran och dess belopp blir en skillnad mot 2440.',
-    message_en:
-      'This supplier invoice cannot be registered this way yet: its verifikat books omvänd betalningsskyldighet or import VAT (rutor 20-24, 30-32, 50 and 60-62), the buyer\'s own VAT a kreditfaktura must reverse in the same rutor. It stays outside the leverantörsreskontra, and its amount is a difference against 2440.',
-    remediation: {
-      description: 'Leave this invoice out of the register and tell the user that purchases with reverse charge or import VAT cannot be registered yet and that its amount stays a difference between the leverantörsreskontra and 2440.',
-    },
-  },
   SI_REGISTER_VOUCHER_UNSUPPORTED: {
     httpStatus: 400,
     message_sv:
-      'Leverantörsfakturan kan inte registreras på det här sättet än: verifikationen har en rad som netto krediteras (öresavrundning nedåt eller en rabatt), som en kreditfaktura skulle kreditera en gång till i stället för att vända, eller bokför annan moms än ingående moms. Fakturan står kvar utanför leverantörsreskontran och dess belopp blir en skillnad mot 2440.',
+      'Leverantörsfakturan kan inte registreras på det här sättet än: verifikationen bokför annan moms än ingående moms och köparens egen moms vid omvänd betalningsskyldighet eller import, till exempel utgående moms på en försäljning eller momsredovisningskontot 2650. Fakturan står kvar utanför leverantörsreskontran och dess belopp blir en skillnad mot 2440.',
     message_en:
-      'This supplier invoice cannot be registered this way yet: its verifikat has a row that nets to a credit (öresavrundning downwards or a discount), which a kreditfaktura would credit once more instead of reversing, or books VAT other than input VAT. It stays outside the leverantörsreskontra, and its amount is a difference against 2440.',
+      'This supplier invoice cannot be registered this way yet: its verifikat books VAT other than input VAT and the buyer\'s own VAT on a reverse charge or import, such as output VAT on a sale or the VAT settlement account 2650. It stays outside the leverantörsreskontra, and its amount is a difference against 2440.',
     remediation: {
       description: 'Leave this invoice out of the register and tell the user why (message_en names the account) and that its amount stays a difference between the leverantörsreskontra and 2440.',
     },

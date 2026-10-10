@@ -5202,6 +5202,10 @@ async function commitCreditSupplierInvoice(
       error: outcome.messageSv || entry?.message_sv || outcome.code,
       errorCode: outcome.code,
       status: entry?.httpStatus ?? 400,
+      // The figures the remediations point at (both totals of a partial
+      // credit note, rows_payable_sek and invoice_payable_sek of rows that
+      // do not add up) reach the approver as they reach the routes' callers.
+      data: outcome.details,
     }
   }
   if (outcome.dryRun) return { data: outcome.preview }

@@ -166,7 +166,7 @@ export const CreateSupplierParamsSchema = z
 // intra-community SUPPLY, i.e. the SELLER's side, which is why only `customers`
 // carries vat_number_validated / vat_number_validated_at and `suppliers` never
 // has. Nothing downstream reads supplier.vat_number to decide reverse charge:
-// lib/bookkeeping/supplier-invoice-entries.ts and generateReverseChargeBasisLines()
+// lib/bookkeeping/supplier-invoice-entries.ts and reverseChargeKindForSupplierType()
 // key off supplier_type + invoice.reverse_charge alone.
 //
 // An EU supplier below its national registration threshold has no VAT number at

@@ -2,8 +2,9 @@
  * creditSupplierInvoice: the one credit service behind the dashboard, v1 and
  * MCP doors (issue #2980). Covers the plain credit, the credit of an inbox
  * credit note (date, number and document from the document; partial and
- * mismatching credit notes refused), and the guards that keep a credit from
- * landing half-way.
+ * mismatching credit notes refused), the refusal of rows that do not add up
+ * to the invoice (before an ankomstnummer is drawn, and on a dry run), and
+ * the guards that keep a credit from landing half-way.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -11,9 +12,15 @@ import { createTableMockSupabase, makeInvoiceInboxItem, makeSupplierInvoice } fr
 import type { Logger } from '@/lib/logger'
 
 const createCreditEntryMock = vi.fn()
-vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
-  createSupplierCreditNoteEntry: (...args: unknown[]) => createCreditEntryMock(...args),
-}))
+vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/bookkeeping/supplier-invoice-entries')>('@/lib/bookkeeping/supplier-invoice-entries')
+  // Only the posting is mocked: the rows are held to the payable by the real
+  // rule (assertSupplierCreditNoteRowsMatchPayable), as in production.
+  return {
+    ...actual,
+    createSupplierCreditNoteEntry: (...args: unknown[]) => createCreditEntryMock(...args),
+  }
+})
 
 const cancelSchedulesMock = vi.fn()
 vi.mock('@/lib/bookkeeping/accruals/service', () => ({
@@ -31,6 +38,11 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
 })
 
 import { creditSupplierInvoice, CreditSupplierInvoiceInputSchema } from '../credit'
+import {
+  SupplierCreditNoteRowsMismatchError,
+  SupplierInvoiceFxRateMissingError,
+} from '@/lib/bookkeeping/supplier-invoice-entries'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const { supabase, setTable, reset, findCall, findCalls, calls } = createTableMockSupabase()
 
@@ -123,6 +135,14 @@ function happyTables() {
   setTable('document_attachments', { data: { id: DOC_ID, journal_entry_id: null } })
 }
 
+/** Nothing reached the database: no ankomstnummer drawn, no row written, nothing posted. */
+function expectNothingWritten() {
+  expect(supabase.rpc).not.toHaveBeenCalled()
+  expect(calls.filter((c) => ['insert', 'update', 'delete'].includes(c.method))).toEqual([])
+  expect(createCreditEntryMock).not.toHaveBeenCalled()
+  expect(reverseEntryMock).not.toHaveBeenCalled()
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
@@ -149,6 +169,8 @@ describe('creditSupplierInvoice: plain Kreditera', () => {
     })
     // The reversal is computed from the ORIGINAL items (17xx interim account).
     expect(createCreditEntryMock.mock.calls[0]?.[4]).toBe(originalItems)
+    // ...and checked against what the original owes on 2440.
+    expect(createCreditEntryMock.mock.calls[0]?.[7]).toBe(10000)
     const flip = findCalls('supplier_invoices', 'update').find((args) => (args[0] as { status?: string }).status)
     expect(flip?.[0]).toEqual({ status: 'credited', remaining_amount: 0 })
     // Periodisering stops on the credit date.
@@ -197,6 +219,111 @@ describe('creditSupplierInvoice: plain Kreditera', () => {
     expect(outcome).toMatchObject({ ok: false, code: 'SI_CREDIT_FAILED' })
     expect(findCalls('supplier_invoices', 'delete').length).toBe(1)
     expect(findCalls('supplier_invoices', 'update')).toEqual([])
+  })
+
+  describe('rows that do not add up to the invoice (crm#1094)', () => {
+    // The rows carry twice what the invoice owes: 20 000 against 10 000.
+    const duplicatedRows = { ...original, items: [originalItems[0], { ...originalItems[0], id: 'item-2', sort_order: 1 }] }
+    // A header without rows, as a migration leaves some: 0 against 10 000.
+    const noRows = { ...original, items: [] }
+
+    it.each([
+      ['rows that miss the payable', duplicatedRows, 20000],
+      ['an invoice with no rows at all', noRows, 0],
+      ['an invoice whose rows were never read (null)', { ...original, items: null }, 0],
+    ])('refuses %s before an ankomstnummer is drawn or a row is written', async (_label, row, rowsPayableSek) => {
+      happyTables()
+      setTable('supplier_invoices', { data: row })
+
+      const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        code: 'SI_CREDIT_ROWS_MISMATCH',
+        details: { rows_payable_sek: rowsPayableSek, invoice_payable_sek: 10000 },
+      })
+      expect(getErrorEntry('SI_CREDIT_ROWS_MISMATCH')).toMatchObject({ httpStatus: 409, message_sv: expect.stringMatching(/Ingenting har bokförts/) })
+      expectNothingWritten()
+      expect(emit).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['rows that miss the payable', duplicatedRows, 20000],
+      ['an invoice with no rows at all', noRows, 0],
+    ])('refuses %s on a dry run, as the commit would', async (_label, row, rowsPayableSek) => {
+      happyTables()
+      setTable('supplier_invoices', { data: row })
+
+      const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { dryRun: true, emit })
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        code: 'SI_CREDIT_ROWS_MISMATCH',
+        details: { rows_payable_sek: rowsPayableSek, invoice_payable_sek: 10000 },
+      })
+      expectNothingWritten()
+    })
+
+    it('credits an unpaid invoice without rows under kontantmetoden: no verifikat is built from them', async () => {
+      happyTables()
+      setTable('supplier_invoices', [{ data: noRows }, { data: creditNoteRow }, { data: { id: ORIGINAL_ID } }])
+      setTable('company_settings', { data: { accounting_method: 'cash', bookkeeping_locked_through: null } })
+
+      const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+      expect(outcome.ok).toBe(true)
+      expect(createCreditEntryMock).not.toHaveBeenCalled()
+    })
+
+    it('stops before the ankomstnummer when the lines cannot be built at all (a foreign invoice without a rate)', async () => {
+      happyTables()
+      setTable('supplier_invoices', { data: { ...original, currency: 'EUR', exchange_rate: null, total_sek: 115000 } })
+
+      const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+      expect(outcome).toMatchObject({ ok: false, error: expect.any(SupplierInvoiceFxRateMissingError) })
+      expectNothingWritten()
+    })
+
+    it('keeps the builder as the backstop: its refusal deletes the credit note row and posts nothing', async () => {
+      // The rows fit when they are checked and no longer when the verifikat
+      // is built (changed in between): the builder refuses on its own.
+      happyTables()
+      createCreditEntryMock.mockRejectedValue(new SupplierCreditNoteRowsMismatchError(-500, 125))
+      const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+      expect(outcome).toMatchObject({
+        ok: false,
+        code: 'SI_CREDIT_ROWS_MISMATCH',
+        details: { rows_payable_sek: -500, invoice_payable_sek: 125 },
+      })
+      // Nothing was posted: the credit note row is deleted, never kept as reversed.
+      expect(findCalls('supplier_invoices', 'delete').length).toBe(1)
+      expect(findCalls('supplier_invoices', 'update')).toEqual([])
+      expect(reverseEntryMock).not.toHaveBeenCalled()
+    })
+  })
+
+  it('compares a foreign invoice without total_sek at its own rate', async () => {
+    happyTables()
+    const euro = {
+      ...original,
+      currency: 'EUR',
+      exchange_rate: 11.5,
+      subtotal: 800,
+      vat_amount: 200,
+      total: 1000,
+      total_sek: null,
+      items: [{ ...originalItems[0], unit_price: 800, line_total: 800, vat_amount: 200 }],
+    }
+    setTable('supplier_invoices', [
+      { data: euro },
+      { data: creditNoteRow },
+      { data: null },
+      { data: { id: ORIGINAL_ID } },
+    ])
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+    expect(outcome.ok).toBe(true)
+    expect(createCreditEntryMock.mock.calls[0]?.[7]).toBe(11500)
   })
 
   it('takes its own verifikat back when a concurrent credit won the race', async () => {

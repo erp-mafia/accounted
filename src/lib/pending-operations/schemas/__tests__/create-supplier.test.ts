@@ -10,7 +10,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { CreateSupplierParamsSchema } from '../create-supplier'
-import { generateReverseChargeBasisLines } from '@/lib/bookkeeping/vat-entries'
+import { generateReverseChargePurchaseLines, reverseChargeKindForSupplierType } from '@/lib/bookkeeping/vat-entries'
 
 describe('CreateSupplierParamsSchema org_number', () => {
   // #2391: the staged path stores the same 10-digit key as the dashboard.
@@ -98,9 +98,9 @@ describe('reverse charge does not consume supplier.vat_number', () => {
       name: 'Kleinanbieter GmbH',
       supplier_type: 'eu_business',
     })
-    const lines = generateReverseChargeBasisLines(1000, 0.25, parsed.supplier_type)
-    expect(lines.map((l) => l.account_number)).toEqual(['4535', '4598'])
-    expect(lines[0].debit_amount).toBe(1000)
-    expect(lines[1].credit_amount).toBe(1000)
+    const lines = generateReverseChargePurchaseLines({ base: 1000, kind: reverseChargeKindForSupplierType(parsed.supplier_type) })
+    expect(lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4535', '4598'])
+    expect(lines[2].debit_amount).toBe(1000)
+    expect(lines[3].credit_amount).toBe(1000)
   })
 })

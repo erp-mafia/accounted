@@ -65,6 +65,48 @@ const TAGGED_LINES: BookedSupplierInvoiceVoucherLine[] = [
   { account_number: '2440', debit_amount: 0, credit_amount: 10000, line_description: null, dimensions: { '6': 'P1' } },
 ]
 
+/** An EU service under omvänd betalningsskyldighet with its basbelopp rows: rutor 21, 30 and 48. */
+const EU_SERVICE_LINES: BookedSupplierInvoiceVoucherLine[] = [
+  { account_number: '6540', debit_amount: 1000, credit_amount: 0 },
+  { account_number: '4535', debit_amount: 1000, credit_amount: 0 },
+  { account_number: '4598', debit_amount: 0, credit_amount: 1000 },
+  { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+  { account_number: '2614', debit_amount: 0, credit_amount: 250 },
+  { account_number: '2440', debit_amount: 0, credit_amount: 1000 },
+]
+
+/** A byggtjänst under omvänd betalningsskyldighet in Sverige: rutor 24, 30 and 48 (2647). */
+const BYGGTJANST_LINES: BookedSupplierInvoiceVoucherLine[] = [
+  { account_number: '4425', debit_amount: 1000, credit_amount: 0 },
+  { account_number: '2647', debit_amount: 250, credit_amount: 0 },
+  { account_number: '2614', debit_amount: 0, credit_amount: 250 },
+  { account_number: '2440', debit_amount: 0, credit_amount: 1000 },
+]
+
+/** An import with its VAT in the momsdeklaration: rutor 50, 60 and 48. */
+const IMPORT_LINES: BookedSupplierInvoiceVoucherLine[] = [
+  { account_number: '4545', debit_amount: 1000, credit_amount: 0 },
+  { account_number: '2641', debit_amount: 250, credit_amount: 0 },
+  { account_number: '2615', debit_amount: 0, credit_amount: 250 },
+  { account_number: '2440', debit_amount: 0, credit_amount: 1000 },
+]
+
+/** An öresavrundning downwards: a row that nets to a credit. */
+const ROUNDED_DOWN_LINES: BookedSupplierInvoiceVoucherLine[] = [
+  { account_number: '6110', debit_amount: 799.6, credit_amount: 0 },
+  { account_number: '2641', debit_amount: 199.9, credit_amount: 0 },
+  { account_number: '3740', debit_amount: 0, credit_amount: 0.5 },
+  { account_number: '2440', debit_amount: 0, credit_amount: 999 },
+]
+
+/** A discount on an account of its own, on a project. */
+const DISCOUNT_LINES: BookedSupplierInvoiceVoucherLine[] = [
+  { account_number: '4010', debit_amount: 1000, credit_amount: 0, dimensions: { '6': 'P1' } },
+  { account_number: '4730', debit_amount: 0, credit_amount: 100, dimensions: { '6': 'P1' } },
+  { account_number: '2641', debit_amount: 225, credit_amount: 0 },
+  { account_number: '2440', debit_amount: 0, credit_amount: 1125 },
+]
+
 /** A purchase of `cost` on `account` with `vat` on 2641 and the skuld on `payable`. */
 const purchase = (account: string, cost: number, vat: number, payable = '2440'): BookedSupplierInvoiceVoucherLine[] => [
   { account_number: account, debit_amount: cost, credit_amount: 0 },
@@ -184,88 +226,94 @@ describe('supplierInvoiceRowsFromVoucher', () => {
     expect(shape.ok && shape.rows.map((row) => [row.account_number, row.amount])).toEqual([['6110', 900], ['2641', 225]])
   })
 
-  it.each<[string, BookedSupplierInvoiceVoucherLine[], string[]]>([
+  it.each<[string, BookedSupplierInvoiceVoucherLine[], Array<[string, number]>, number, number]>([
     [
-      'an EU service with omvänd betalningsskyldighet (2645 against 2614)',
-      [
-        { account_number: '6540', debit_amount: 1000, credit_amount: 0 },
-        { account_number: '2645', debit_amount: 250, credit_amount: 0 },
-        { account_number: '2614', debit_amount: 0, credit_amount: 250 },
-        { account_number: '2440', debit_amount: 0, credit_amount: 1000 },
-      ],
-      ['2614', '2645'],
-    ],
-    [
-      'an EU service with its basbelopp rows (ruta 21 on 4535 against 4598)',
-      [
-        { account_number: '6540', debit_amount: 1000, credit_amount: 0 },
-        { account_number: '4535', debit_amount: 1000, credit_amount: 0 },
-        { account_number: '4598', debit_amount: 0, credit_amount: 1000 },
-        { account_number: '2645', debit_amount: 250, credit_amount: 0 },
-        { account_number: '2614', debit_amount: 0, credit_amount: 250 },
-        { account_number: '2440', debit_amount: 0, credit_amount: 1000 },
-      ],
-      ['2614', '2645', '4535'],
-    ],
-    [
-      'a byggtjänst with omvänd betalningsskyldighet in Sverige (ruta 24, 2647)',
-      [
-        { account_number: '4425', debit_amount: 1000, credit_amount: 0 },
-        { account_number: '2647', debit_amount: 250, credit_amount: 0 },
-        { account_number: '2614', debit_amount: 0, credit_amount: 250 },
-        { account_number: '2440', debit_amount: 0, credit_amount: 1000 },
-      ],
-      ['2614', '2647', '4425'],
-    ],
-    [
-      'an import with its VAT in the momsdeklaration (ruta 50 and 60)',
-      [
-        { account_number: '4545', debit_amount: 1000, credit_amount: 0 },
-        { account_number: '2641', debit_amount: 250, credit_amount: 0 },
-        { account_number: '2615', debit_amount: 0, credit_amount: 250 },
-        { account_number: '2440', debit_amount: 0, credit_amount: 1000 },
-      ],
-      ['2615', '4545'],
-    ],
-  ])('refuses %s, naming every self-assessed account', (_label, lines, accounts) => {
-    expect(supplierInvoiceRowsFromVoucher(lines)).toEqual({ ok: false, reason: 'reverse_charge', accounts })
-  })
-
-  it.each<[string, BookedSupplierInvoiceVoucherLine[], string, string]>([
-    [
-      'an öresavrundning downwards (Cr 3740)',
-      [
-        { account_number: '6110', debit_amount: 799.6, credit_amount: 0 },
-        { account_number: '2641', debit_amount: 199.9, credit_amount: 0 },
-        { account_number: '3740', debit_amount: 0, credit_amount: 0.5 },
-        { account_number: '2440', debit_amount: 0, credit_amount: 999 },
-      ],
-      'credit_row',
-      '3740',
+      'an öresavrundning downwards',
+      ROUNDED_DOWN_LINES,
+      [['6110', 799.6], ['2641', 199.9], ['3740', -0.5]],
+      799.1,
+      199.9,
     ],
     [
       'a discount on an account of its own',
-      [
-        { account_number: '4010', debit_amount: 1000, credit_amount: 0 },
-        { account_number: '4730', debit_amount: 0, credit_amount: 100 },
-        { account_number: '2641', debit_amount: 225, credit_amount: 0 },
-        { account_number: '2440', debit_amount: 0, credit_amount: 1125 },
-      ],
-      'credit_row',
-      '4730',
+      DISCOUNT_LINES,
+      [['4010', 1000], ['4730', -100], ['2641', 225]],
+      900,
+      225,
+    ],
+  ])('takes %s as a row that nets to a credit', (_label, lines, rows, subtotal, vatAmount) => {
+    const shape = supplierInvoiceRowsFromVoucher(lines)
+    expect(shape.ok && shape.rows.map((row) => [row.account_number, row.amount])).toEqual(rows)
+    expect(shape).toMatchObject({ subtotal, vatAmount })
+  })
+
+  it.each<[string, BookedSupplierInvoiceVoucherLine[], Array<[string, number]>, number]>([
+    [
+      'an EU service with its basbelopp rows (rutor 21, 30 and 48)',
+      EU_SERVICE_LINES,
+      [['6540', 1000], ['4535', 1000], ['4598', -1000], ['2645', 250], ['2614', -250]],
+      1000,
     ],
     [
-      'VAT outside ingående moms (2650)',
+      'a byggtjänst with omvänd betalningsskyldighet in Sverige (ruta 24, 2647)',
+      BYGGTJANST_LINES,
+      [['4425', 1000], ['2647', 250], ['2614', -250]],
+      1000,
+    ],
+    [
+      'an import with its VAT in the momsdeklaration (rutor 50 and 60, deducted on 2641)',
+      IMPORT_LINES,
+      [['4545', 1000], ['2641', 250], ['2615', -250]],
+      1000,
+    ],
+    [
+      'a partly deductible reverse charge (the non-deductible part on the cost account)',
+      [
+        { account_number: '6540', debit_amount: 1125, credit_amount: 0 },
+        { account_number: '2645', debit_amount: 125, credit_amount: 0 },
+        { account_number: '2614', debit_amount: 0, credit_amount: 250 },
+        { account_number: '2440', debit_amount: 0, credit_amount: 1000 },
+      ],
+      [['6540', 1125], ['2645', 125], ['2614', -250]],
+      1000,
+    ],
+  ])('takes %s as its rows, the buyer\'s own VAT not counted as the invoice\'s moms', (_label, lines, rows, subtotal) => {
+    const shape = supplierInvoiceRowsFromVoucher(lines)
+    expect(shape.ok && shape.rows.map((row) => [row.account_number, row.amount])).toEqual(rows)
+    expect(shape).toMatchObject({ subtotal, vatAmount: 0 })
+  })
+
+  it('counts the moms the supplier charged beside a reverse charge on one verifikat', () => {
+    const shape = supplierInvoiceRowsFromVoucher([
+      ...EU_SERVICE_LINES.filter((line) => line.account_number !== '2440'),
+      { account_number: '4010', debit_amount: 400, credit_amount: 0 },
+      { account_number: '2641', debit_amount: 100, credit_amount: 0 },
+      { account_number: '2440', debit_amount: 0, credit_amount: 1500 },
+    ])
+    expect(shape).toMatchObject({ ok: true, subtotal: 1400, vatAmount: 100 })
+  })
+
+  it.each<[string, BookedSupplierInvoiceVoucherLine[], string]>([
+    [
+      'the VAT settlement account (2650)',
       [
         { account_number: '6110', debit_amount: 800, credit_amount: 0 },
         { account_number: '2650', debit_amount: 200, credit_amount: 0 },
         { account_number: '2440', debit_amount: 0, credit_amount: 1000 },
       ],
-      'other_vat',
       '2650',
     ],
-  ])('refuses %s', (_label, lines, reason, account) => {
-    expect(supplierInvoiceRowsFromVoucher(lines)).toEqual({ ok: false, reason, account })
+    [
+      'utgående moms on a sale (2611)',
+      [
+        { account_number: '6110', debit_amount: 1250, credit_amount: 0 },
+        { account_number: '2611', debit_amount: 0, credit_amount: 250 },
+        { account_number: '2440', debit_amount: 0, credit_amount: 1000 },
+      ],
+      '2611',
+    ],
+  ])('refuses VAT other than ingående moms and the buyer\'s own: %s', (_label, lines, account) => {
+    expect(supplierInvoiceRowsFromVoucher(lines)).toEqual({ ok: false, reason: 'other_vat', account })
   })
 })
 
@@ -402,6 +450,9 @@ describe('planBookedSupplierInvoiceRegistration', () => {
     ['moms at 6 %', purchase('4010', 1000, 60), 1060, 'reduced_6'],
     ['moms at no one rate (12 and 25 % on one line)', MIXED_LINES, 2745.4, 'standard_25'],
     ['no moms (a momsfri purchase, or moms the company cannot deduct)', purchase('6310', 1000, 0), 1000, 'exempt'],
+    // reverse_charge is the label of an invoice Accounted self-assesses (reverse_charge on).
+    ['omvänd betalningsskyldighet, the supplier charging no moms', EU_SERVICE_LINES, 1000, 'exempt'],
+    ['an import', IMPORT_LINES, 1000, 'exempt'],
   ])('labels %s', async (_label, lines, total, treatment) => {
     const { supabase } = books({ lines })
     const result = await planBookedSupplierInvoiceRegistration(supabase as never, COMPANY_ID, input({ total, remaining_amount: total }))
@@ -522,24 +573,11 @@ describe('planBookedSupplierInvoiceRegistration', () => {
       'SI_REGISTER_AMOUNT_MISMATCH',
     ],
     [
-      'a purchase with omvänd betalningsskyldighet',
+      'a verifikat that books the VAT settlement account',
       {
         lines: [
-          { account_number: '6540', debit_amount: 10000, credit_amount: 0 },
-          { account_number: '2645', debit_amount: 2500, credit_amount: 0 },
-          { account_number: '2614', debit_amount: 0, credit_amount: 2500 },
-          { account_number: '2440', debit_amount: 0, credit_amount: 10000 },
-        ],
-      },
-      'SI_REGISTER_REVERSE_CHARGE',
-    ],
-    [
-      'an öresavrundning downwards',
-      {
-        lines: [
-          { account_number: '6110', debit_amount: 8000.2, credit_amount: 0 },
-          { account_number: '2641', debit_amount: 2000.05, credit_amount: 0 },
-          { account_number: '3740', debit_amount: 0, credit_amount: 0.25 },
+          { account_number: '6110', debit_amount: 8000, credit_amount: 0 },
+          { account_number: '2650', debit_amount: 2000, credit_amount: 0 },
           { account_number: '2440', debit_amount: 0, credit_amount: 10000 },
         ],
       },
@@ -552,33 +590,49 @@ describe('planBookedSupplierInvoiceRegistration', () => {
     expect(!result.ok && result.code).toBe(code)
   })
 
-  it('names the self-assessed accounts and the leverantörsreskontra difference when it refuses a reverse charge', async () => {
-    const { supabase } = books({
-      lines: [
-        { account_number: '6540', debit_amount: 10000, credit_amount: 0 },
-        { account_number: '2645', debit_amount: 2500, credit_amount: 0 },
-        { account_number: '2614', debit_amount: 0, credit_amount: 2500 },
-        { account_number: '2440', debit_amount: 0, credit_amount: 10000 },
+  it('plans a reverse charge from its rows: no moms of the supplier\'s, net the whole total', async () => {
+    const { supabase } = books({ lines: EU_SERVICE_LINES })
+    const result = await planBookedSupplierInvoiceRegistration(supabase as never, COMPANY_ID, input({ total: 1000, remaining_amount: 1000 }))
+    expect(result.ok && result.plan).toMatchObject({
+      subtotal: 1000,
+      vatAmount: 0,
+      vatTreatment: 'exempt',
+      rows: [
+        expect.objectContaining({ account_number: '6540', amount: 1000 }),
+        expect.objectContaining({ account_number: '4535', amount: 1000 }),
+        expect.objectContaining({ account_number: '4598', amount: -1000 }),
+        expect.objectContaining({ account_number: '2645', amount: 250 }),
+        expect.objectContaining({ account_number: '2614', amount: -250 }),
       ],
     })
-    const result = await planBookedSupplierInvoiceRegistration(supabase as never, COMPANY_ID, input())
-    expect(!result.ok && result).toMatchObject({ code: 'SI_REGISTER_REVERSE_CHARGE', details: { accounts: ['2614', '2645'] } })
-    expect(!result.ok && result.message).toMatch(/D45 books omvänd betalningsskyldighet or import VAT on 2614 or 2645/)
-    expect(getErrorEntry('SI_REGISTER_REVERSE_CHARGE')?.message_sv).toMatch(/rutorna 20-24, 30-32, 50 och 60-62/)
   })
 
-  it('says why a credit row is refused: the kreditfaktura would credit it once more', async () => {
+  it('says which account books VAT it cannot hold', async () => {
     const { supabase } = books({
       lines: [
-        { account_number: '6110', debit_amount: 8000.2, credit_amount: 0 },
-        { account_number: '2641', debit_amount: 2000.05, credit_amount: 0 },
-        { account_number: '3740', debit_amount: 0, credit_amount: 0.25 },
+        { account_number: '6110', debit_amount: 8000, credit_amount: 0 },
+        { account_number: '2650', debit_amount: 2000, credit_amount: 0 },
         { account_number: '2440', debit_amount: 0, credit_amount: 10000 },
       ],
     })
     const result = await planBookedSupplierInvoiceRegistration(supabase as never, COMPANY_ID, input())
-    expect(!result.ok && result).toMatchObject({ code: 'SI_REGISTER_VOUCHER_UNSUPPORTED', details: { reason: 'credit_row', account: '3740' } })
-    expect(!result.ok && result.message).toMatch(/net credit on 3740 \(an öresavrundning downwards or a discount\)/)
+    expect(!result.ok && result).toMatchObject({ code: 'SI_REGISTER_VOUCHER_UNSUPPORTED', details: { reason: 'other_vat', account: '2650' } })
+    expect(!result.ok && result.message).toMatch(/D45 books 2650, VAT other than ingående moms \(264x\) and the buyer's own VAT/)
+    expect(getErrorEntry('SI_REGISTER_VOUCHER_UNSUPPORTED')?.message_sv).toMatch(/köparens egen moms vid omvänd betalningsskyldighet eller import/)
+  })
+
+  it('stores a reverse charge with reverse_charge off and rows that net to a credit as they are', async () => {
+    const { supabase, findCall, findCalls } = books({ lines: EU_SERVICE_LINES })
+    const result = await registerBookedSupplierInvoice(supabase as never, COMPANY_ID, USER_ID, input({ total: 1000, remaining_amount: 1000 }))
+    expect(result.ok).toBe(true)
+    // The rows carry the buyer's own VAT: the flag on would self-assess it once more on a kreditfaktura.
+    expect(findCall('supplier_invoices', 'insert')?.[0]).toMatchObject({
+      reverse_charge: false, vat_treatment: 'exempt', subtotal: 1000, vat_amount: 0, total: 1000,
+    })
+    const rows = findCalls('supplier_invoice_items', 'insert').map(([row]) => row as { account_number: string; line_total: number })
+    expect(rows.map((row) => [row.account_number, row.line_total])).toEqual([
+      ['6540', 1000], ['4535', 1000], ['4598', -1000], ['2645', 250], ['2614', -250],
+    ])
   })
 
   describe('the ankomstnummer', () => {
@@ -765,11 +819,12 @@ describe('registerBookedSupplierInvoice', () => {
 })
 
 /**
- * A kreditfaktura of a supplier invoice credits each of its rows and debits
- * 2440 by their sum under the invoice's default_dimensions
+ * A kreditfaktura of a supplier invoice books each of its rows on the other
+ * side and debits 2440 by their sum under the invoice's default_dimensions
  * (createSupplierCreditNoteEntry). With the verifikat's own rows and the
  * skuld's dimensions that is the verifikat turned around: every account,
- * dimension and momsruta returns to where the registration found it.
+ * dimension and momsruta returns to where the registration found it, a row
+ * that nets to a credit and the buyer's own VAT included.
  */
 describe('a kreditfaktura of a registered supplier invoice', () => {
   async function creditLinesFor(lines: BookedSupplierInvoiceVoucherLine[], total: number) {
@@ -796,6 +851,8 @@ describe('a kreditfaktura of a registered supplier invoice', () => {
       rows.map((row, index) => ({ ...row, id: `row-${index}` })) as unknown as SupplierInvoiceItem[],
       'swedish_business',
       'Leverantören AB',
+      // The payable creditSupplierInvoice holds the reversal to.
+      header.total_sek as number,
     )
     return (engine.createJournalEntry.mock.calls[0][3] as CreateJournalEntryInput).lines
   }
@@ -817,6 +874,11 @@ describe('a kreditfaktura of a registered supplier invoice', () => {
     ['rows on two kostnadsställen, moms at two rates and an öresavrundning upwards', MIXED_LINES, 2745.4],
     ['a purchase without moms', purchase('6310', 1000, 0), 1000],
     ['a purchase on a project throughout, the skuld included', TAGGED_LINES, 10000],
+    ['an öresavrundning downwards', ROUNDED_DOWN_LINES, 999],
+    ['a discount on an account of its own, on a project', DISCOUNT_LINES, 1125],
+    ['an EU service under omvänd betalningsskyldighet (rutor 21, 30 and 48)', EU_SERVICE_LINES, 1000],
+    ['a byggtjänst under omvänd betalningsskyldighet (rutor 24, 30 and 48)', BYGGTJANST_LINES, 1000],
+    ['an import (rutor 50, 60 and 48)', IMPORT_LINES, 1000],
   ])('reverses %s cell by cell', async (_label, lines, total) => {
     const credit = netByCell(await creditLinesFor(lines, total))
     const booked = netByCell(lines)

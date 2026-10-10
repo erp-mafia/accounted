@@ -29,20 +29,23 @@
  *    dimensions, the ingående moms as a row of its own without moms of its
  *    own: the shape the provider migration stores for Fortnox and Visma
  *    invoices, and the skuld's dimensions are the invoice's
- *    default_dimensions. A kreditfaktura reverses its original from the rows
- *    (createSupplierCreditNoteEntry credits each one and debits 2440 by their
- *    sum, under default_dimensions), so it returns every account, dimension
- *    and momsruta the verifikat booked; when the skuld's dimensions cannot be
- *    carried that way, the plan says so. Net and moms on the header are read
- *    from the same rows. The registration itself cannot be undone: a
- *    kreditfaktura is only for a credit note the supplier actually issued;
- *  - refused are the shapes that reversal cannot return: a row that nets to
- *    a credit (öresavrundning downwards, a discount, the output side of a
- *    reverse charge), because the credit note credits every row whatever its
- *    sign; omvänd betalningsskyldighet and import VAT (rutor 20-24, 30-32,
- *    50 and 60-62, beräknad ingående moms on 2645 or 2647), the buyer's own
- *    VAT whose sides a later reversal must return to the same rutor; and VAT
- *    other than ingående moms;
+ *    default_dimensions. A row that nets to a credit (an öresavrundning
+ *    downwards, a discount) is a negative row. Omvänd betalningsskyldighet
+ *    and import are rows too: the basis on 44xx/45xx against 4598, the
+ *    buyer's own VAT on 26x4/26x5 against its deduction on 264x, with
+ *    reverse_charge off so nothing self-assesses it a second time, and the
+ *    header labelled by the supplier's moms alone (exempt when none). A
+ *    kreditfaktura reverses its original from the rows
+ *    (createSupplierCreditNoteEntry books each one on its other side and
+ *    debits 2440 by their sum, under default_dimensions), so it returns
+ *    every account, dimension and momsruta the verifikat booked, rutor
+ *    20-24, 30-32, 48, 50 and 60-62 included; when the skuld's dimensions
+ *    cannot be carried that way, the plan says so. Net and moms on the header
+ *    are read from the same rows, the buyer's own VAT left out of the moms.
+ *    The registration itself cannot be undone: a kreditfaktura is only for a
+ *    credit note the supplier actually issued;
+ *  - refused is VAT on 26xx other than ingående moms and the buyer's own
+ *    VAT (2650, utgående moms on a sale): not the verifikat of a purchase;
  *  - a partly paid invoice carries paid_amount = total - remaining, and the
  *    part already paid is one supplier_invoice_payments row dated the
  *    reskontra's date (balance_as_of), without a verifikat: the as-of
@@ -97,7 +100,6 @@ export type RegisterBookedSupplierInvoiceErrorCode =
   | 'SI_REGISTER_VOUCHER_TAKEN'
   | 'SI_REGISTER_VOUCHER_NOT_PURCHASE'
   | 'SI_REGISTER_AMOUNT_MISMATCH'
-  | 'SI_REGISTER_REVERSE_CHARGE'
   | 'SI_REGISTER_VOUCHER_UNSUPPORTED'
 
 /** BAS 2440-2449 Leverantörsskulder: the verifikat of a supplier invoice credits it. */
@@ -112,17 +114,13 @@ const INPUT_VAT_PREFIX = '264'
 /** BAS 26xx: every VAT account. */
 const VAT_PREFIX = '26'
 
-/** Beräknad ingående moms: the buyer's own VAT on a purchase from abroad (2645) or in Sweden (2647). */
-const SELF_ASSESSED_INPUT_VAT = new Set(['2645', '2647'])
-
 /**
- * The momsdeklaration rutor of omvänd betalningsskyldighet and import: the
- * purchase's base (20-24, 50) and the buyer's own output VAT (30-32, 60-62),
- * read from the declaration's own map (ACCOUNT_RUTA) so the two cannot drift.
+ * The momsdeklaration rutor of the buyer's own output VAT on a purchase:
+ * omvänd betalningsskyldighet (30-32, 2614/2624/2634) and import (60-62,
+ * 2615/2625/2635), read from the declaration's own map (ACCOUNT_RUTA) so the
+ * two cannot drift.
  */
-const SELF_ASSESSED_RUTOR = new Set([
-  'ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32', 'ruta50', 'ruta60', 'ruta61', 'ruta62',
-])
+const SELF_ASSESSED_OUTPUT_RUTOR = new Set(['ruta30', 'ruta31', 'ruta32', 'ruta60', 'ruta61', 'ruta62'])
 
 /** journal_entries.source_type of entries that never book a supplier invoice. */
 const NOT_A_PURCHASE_SOURCE_TYPES = new Set(['year_end', 'storno'])
@@ -211,32 +209,37 @@ export function payableForeignCurrency(lines: readonly BookedSupplierInvoiceVouc
 export interface BookedSupplierInvoiceRow {
   account_number: string
   dimensions: LineDimensions
-  /** The net debit, always positive. */
+  /** The net debit: below zero for a row that nets to a credit (a discount, the output side of a reverse charge). */
   amount: number
   /** The first text the verifikat gives the account's lines, or null. */
   description: string | null
 }
 
 /** A purchase the registration cannot hold (see the module header). */
-export type UnsupportedSupplierVoucherShape = 'credit_row' | 'other_vat'
+export type UnsupportedSupplierVoucherShape = 'other_vat'
 
 export type SupplierInvoiceRowsFromVoucher =
-  | { ok: true; rows: BookedSupplierInvoiceRow[]; subtotal: number; vatAmount: number }
-  | { ok: false; reason: 'reverse_charge'; accounts: string[] }
+  | {
+      ok: true
+      rows: BookedSupplierInvoiceRow[]
+      subtotal: number
+      vatAmount: number
+    }
   | { ok: false; reason: UnsupportedSupplierVoucherShape; account: string }
 
-function isSelfAssessedVat(account: string): boolean {
-  if (SELF_ASSESSED_INPUT_VAT.has(account)) return true
-  const ruta = Object.hasOwn(ACCOUNT_RUTA, account) ? ACCOUNT_RUTA[account].box : null
-  return ruta !== null && SELF_ASSESSED_RUTOR.has(ruta)
+function isSelfAssessedOutputVat(account: string): boolean {
+  return Object.hasOwn(ACCOUNT_RUTA, account) && SELF_ASSESSED_OUTPUT_RUTOR.has(ACCOUNT_RUTA[account].box)
 }
 
 /**
  * The invoice's rows from the verifikat that booked it: every line but the
- * skuld on 244x, netted per account and dimensions, in the verifikat's order.
- * Net is the sum of the rows outside 264x, moms the sum on 264x. Refused, in
- * this order: a reverse charge or import (naming every such account), VAT on
- * a 26xx account other than ingående moms, and a row that nets to a credit.
+ * skuld on 244x, netted per account and dimensions, in the verifikat's order,
+ * a row that nets to a credit included. Moms is the ingående moms on 264x
+ * beyond the buyer's own VAT, which the verifikat declares on 26x4/26x5 and
+ * deducts on 264x: the supplier charged none of it. It is never below zero,
+ * since a partly deductible self-assessment deducts less than it declares.
+ * Net is the rest of the rows. Refused: VAT on a 26xx account other than
+ * ingående moms and the buyer's own.
  */
 export function supplierInvoiceRowsFromVoucher(
   lines: readonly BookedSupplierInvoiceVoucherLine[],
@@ -254,15 +257,18 @@ export function supplierInvoiceRowsFromVoucher(
   }
   const rows = [...groups.values()].filter((row) => Math.abs(row.amount) > ORE_TOLERANCE)
 
-  const selfAssessed = [...new Set(rows.map((row) => row.account_number).filter(isSelfAssessedVat))].sort()
-  if (selfAssessed.length > 0) return { ok: false, reason: 'reverse_charge', accounts: selfAssessed }
-  const otherVat = rows.find((row) => row.account_number.startsWith(VAT_PREFIX) && !row.account_number.startsWith(INPUT_VAT_PREFIX))
+  const otherVat = rows.find((row) =>
+    row.account_number.startsWith(VAT_PREFIX) &&
+    !row.account_number.startsWith(INPUT_VAT_PREFIX) &&
+    !isSelfAssessedOutputVat(row.account_number))
   if (otherVat) return { ok: false, reason: 'other_vat', account: otherVat.account_number }
-  const credit = rows.find((row) => row.amount < 0)
-  if (credit) return { ok: false, reason: 'credit_row', account: credit.account_number }
 
-  const vatAmount = roundOre(rows.filter((row) => row.account_number.startsWith(INPUT_VAT_PREFIX)).reduce((sum, row) => sum + row.amount, 0))
-  const subtotal = roundOre(rows.filter((row) => !row.account_number.startsWith(INPUT_VAT_PREFIX)).reduce((sum, row) => sum + row.amount, 0))
+  const sumOf = (selected: BookedSupplierInvoiceRow[]) => roundOre(selected.reduce((sum, row) => sum + row.amount, 0))
+  const inputVat = sumOf(rows.filter((row) => row.account_number.startsWith(INPUT_VAT_PREFIX)))
+  // Declared on the credit side, so its rows net below zero.
+  const ownVat = -sumOf(rows.filter((row) => isSelfAssessedOutputVat(row.account_number)))
+  const vatAmount = ownVat > ORE_TOLERANCE ? Math.max(0, roundOre(inputVat - ownVat)) : inputVat
+  const subtotal = roundOre(sumOf(rows) - vatAmount)
   return { ok: true, rows, subtotal, vatAmount }
 }
 
@@ -303,10 +309,13 @@ const TREATMENT_BY_RATE: ReadonlyArray<readonly [number, VatTreatment]> = [
 ]
 
 /**
- * The header's momsbehandling, a label: the rows carry the moms on 264x, so
- * nothing books from it. The rate the moms is of the net (within half a
- * percentage point, as the provider migration reads it), standard_25 for moms
- * at no one rate, and exempt when the verifikat books no moms.
+ * The header's momsbehandling, a label: the rows carry the moms on 264x and
+ * the buyer's own VAT, so nothing books from it. The rate the moms is of the
+ * net (within half a percentage point, as the provider migration reads it),
+ * standard_25 for moms at no one rate, and exempt when the supplier charged
+ * none. That includes omvänd betalningsskyldighet and import: the label
+ * reverse_charge belongs to invoices with reverse_charge on, which Accounted
+ * self-assesses, and the two never disagree (create.ts).
  */
 function treatmentOf(subtotal: number, vatAmount: number): VatTreatment {
   if (vatAmount <= ORE_TOLERANCE) return 'exempt'
@@ -314,14 +323,8 @@ function treatmentOf(subtotal: number, vatAmount: number): VatTreatment {
   return TREATMENT_BY_RATE.find(([rate]) => Math.abs(percent - rate) < 0.5)?.[1] ?? 'standard_25'
 }
 
-/** "a, b or c". */
-const orList = (items: readonly string[]) =>
-  items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}` : items.join('')
-
 const UNSUPPORTED_SHAPE_TEXT: Record<UnsupportedSupplierVoucherShape, (account: string) => string> = {
-  credit_row: (account) =>
-    `books a net credit on ${account} (an öresavrundning downwards or a discount), which a kreditfaktura of the invoice would credit once more instead of reversing`,
-  other_vat: (account) => `books ${account}, VAT other than ingående moms (264x)`,
+  other_vat: (account) => `books ${account}, VAT other than ingående moms (264x) and the buyer's own VAT on a reverse charge or import`,
 }
 
 export interface BookedSupplierInvoiceWarning {
@@ -601,22 +604,14 @@ export async function planBookedSupplierInvoiceRegistration(
 
   const shape = supplierInvoiceRowsFromVoucher(lines)
   if (!shape.ok) {
-    if (shape.reason === 'reverse_charge') {
-      return refuse(
-        'SI_REGISTER_REVERSE_CHARGE',
-        `Verifikat ${label} books omvänd betalningsskyldighet or import VAT on ${orList(shape.accounts)}: such a purchase cannot be registered this way yet. Leave it out of the register and tell the user its amount stays a difference between the leverantörsreskontra and 2440.`,
-        { accounts: shape.accounts },
-      )
-    }
     return refuse(
       'SI_REGISTER_VOUCHER_UNSUPPORTED',
       `Verifikat ${label} ${UNSUPPORTED_SHAPE_TEXT[shape.reason](shape.account)}: such an invoice cannot be registered this way yet. Leave it out of the register and tell the user its amount stays a difference between the leverantörsreskontra and 2440.`,
       { reason: shape.reason, account: shape.account },
     )
   }
-  // No row nets to a credit, and a posted verifikat balances
-  // (check_journal_entry_balance), so the rows sum to the skuld checked
-  // above: what a kreditfaktura debits 2440 by.
+  // A posted verifikat balances (check_journal_entry_balance), so the rows
+  // sum to the skuld checked above: what a kreditfaktura debits 2440 by.
 
   const remaining = roundOre(input.remaining_amount)
   const status = remaining < input.total - ORE_TOLERANCE ? 'partially_paid' : 'registered'

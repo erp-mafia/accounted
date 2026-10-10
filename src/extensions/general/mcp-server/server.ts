@@ -14522,7 +14522,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_register_booked_supplier_invoice',
     keywords: ['leverantörsreskontra', 'reskontra', 'importera reskontra', 'öppna poster', 'bokförd leverantörsfaktura', 'befintlig leverantörsfaktura', 'ankomstnummer', 'systembyte', 'sie', 'leverantörsfaktura', 'open items', 'accounts payable'],
     title: 'Register Booked Supplier Invoice (Leverantörsreskontra)',
-    description: 'Stage registering an already-booked supplier invoice (e.g. from SIE) in the leverantörsreskontra: linked to its verifikat, its rows copied, nothing posted. SEK, faktureringsmetoden, no reverse charge; cannot be undone.',
+    description: 'Stage registering an already-booked supplier invoice (e.g. from SIE) in the leverantörsreskontra: linked to its verifikat, its rows copied, nothing posted. SEK and faktureringsmetoden only; cannot be undone.',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
@@ -22284,8 +22284,8 @@ export const tools: McpTool[] = [
 
       // The approval runs this same service for real: the dry run refuses
       // now what the commit would refuse (already credited, a partial or
-      // mismatching credit note, a locked period), and says which date the
-      // credit books on.
+      // mismatching credit note, a locked period, rows that do not add up to
+      // the invoice), and says which date the credit books on.
       const preview = await creditSupplierInvoice(
         { supabase, companyId, userId, log },
         id,

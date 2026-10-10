@@ -1203,7 +1203,8 @@ describe('commitPendingOperation: credit_supplier_invoice', () => {
       },
     ]
     const original = {
-      ...makeSupplierInvoice({ id: 'supplier-invoice-1', status: 'registered' }),
+      // The header its rows add up to: the credit is refused otherwise.
+      ...makeSupplierInvoice({ id: 'supplier-invoice-1', status: 'registered', subtotal: 1000, vat_amount: 250, total: 1250 }),
       supplier: { name: 'Office Depot AB', supplier_type: 'swedish_business' },
       items: originalItems,
     }
@@ -1255,6 +1256,7 @@ describe('commitPendingOperation: credit_supplier_invoice', () => {
       originalItems,
       'swedish_business',
       'Office Depot AB',
+      original.total, // the original's payable, which the reversal must match
     )
   })
 
@@ -1291,7 +1293,52 @@ describe('commitPendingOperation: credit_supplier_invoice', () => {
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
     expect(result.code).toBe('SI_CREDIT_PARTIAL')
+    // The figures the remediation points at reach the approver.
+    expect(result.data).toMatchObject({ credit_total: 250, invoice_total: 1250 })
     expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+  })
+
+  it('rejects a staged credit whose rows do not add up, with both figures and no ankomstnummer drawn', async () => {
+    // Staged before the rows were held to the invoice, or changed since: an
+    // invoice without rows gives the reversal nothing to take off 2440.
+    const original = {
+      ...makeSupplierInvoice({ id: 'supplier-invoice-1', status: 'registered', total: 1250 }),
+      supplier: { name: 'Office Depot AB', supplier_type: 'swedish_business' },
+      items: [],
+    }
+    const { supabase, enqueueMany, findCall, calls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'op-1' }, error: null }, // CAS claim
+      { data: original, error: null },
+      { data: { bookkeeping_locked_through: null }, error: null }, // lock date
+      { data: null, error: null }, // fiscal period: none covering, not locked
+      { data: { accounting_method: 'accrual' }, error: null },
+      { data: null, error: null }, // the dispatcher's reject update
+    ])
+
+    const op = makePendingOp({
+      operation_type: 'credit_supplier_invoice',
+      params: { supplier_invoice_id: original.id },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.auto_rejected).toBe(true)
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('SI_CREDIT_ROWS_MISMATCH')
+    expect(result.data).toEqual({ rows_payable_sek: 0, invoice_payable_sek: 1250 })
+    // ...and are kept on the operation for whoever reads it later.
+    const rejected = calls
+      .filter((c) => c.table === 'pending_operations' && c.method === 'update')
+      .map((c) => c.args[0] as { status?: string; result_data?: Record<string, unknown> })
+      .find((payload) => payload.status === 'rejected')
+    expect(rejected?.result_data).toMatchObject({
+      error_code: 'SI_CREDIT_ROWS_MISMATCH',
+      details: { rows_payable_sek: 0, invoice_payable_sek: 1250 },
+    })
+    expect(calls.some((c) => c.table === 'rpc:get_next_arrival_number')).toBe(false)
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+    expect(createSupplierCreditNoteEntry).not.toHaveBeenCalled()
   })
 })
 

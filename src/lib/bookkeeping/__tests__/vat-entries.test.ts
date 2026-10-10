@@ -6,7 +6,6 @@ import {
   getVatRate,
   generateSalesVatLines,
   generateReverseChargePurchaseLines,
-  generateReverseChargeBasisLines,
   costAccountRcBasisRate,
   chartVatTreatmentsOf,
   reverseChargeOnAccount,
@@ -251,10 +250,12 @@ describe('generateReverseChargePurchaseLines: basis pair and invariants', () => 
     }
   })
 
-  it('keeps generateReverseChargeBasisLines (credit-note mirror) on the supplier-type mapping', () => {
-    expect(generateReverseChargeBasisLines(1000, 0.25, 'eu_business')[0].account_number).toBe('4535')
-    expect(generateReverseChargeBasisLines(1000, 0.25, 'non_eu_business')[0].account_number).toBe('4531')
-    expect(generateReverseChargeBasisLines(1000, 0.25, 'swedish_business')[0].account_number).toBe('4425')
+  it('books the basis of each supplier type on its own box: 4535, 4531 and 4425 at 25 %', () => {
+    const basisAccount = (supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business') =>
+      generateReverseChargePurchaseLines({ base: 1000, kind: reverseChargeKindForSupplierType(supplierType) })[2].account_number
+    expect(basisAccount('eu_business')).toBe('4535')
+    expect(basisAccount('non_eu_business')).toBe('4531')
+    expect(basisAccount('swedish_business')).toBe('4425')
     expect(reverseChargeKindForSupplierType('non_eu_business')).toBe('non_eu_services')
   })
 })

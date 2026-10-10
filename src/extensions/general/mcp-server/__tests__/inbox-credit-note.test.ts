@@ -2,7 +2,8 @@
  * The agent path for a supplier's credit note in the inbox (issue #2980):
  * gnubok_create_supplier_invoice_from_inbox stages nothing for a credit note
  * and hands over to gnubok_credit_supplier_invoice with the inbox item, which
- * refuses at staging what the commit would refuse (a partial credit note).
+ * refuses at staging what the commit would refuse (a partial credit note, an
+ * invoice whose rows do not add up to it).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CreditTargetResolution, CreditTargetCandidate } from '@/lib/supplier-invoices/credit-target'
@@ -220,5 +221,54 @@ describe('gnubok_credit_supplier_invoice', () => {
     expect(thrown).toBeDefined()
     const envelope = toToolError(thrown) as { structuredContent?: { error?: { code?: string } } }
     expect(JSON.stringify(envelope)).toContain('SI_CREDIT_PARTIAL')
+  })
+
+  it('refuses at staging an invoice whose rows do not add up to it, so no credit is promised and then refused at approval', async () => {
+    // The real service, as the approval runs it: the dry run the tool stages
+    // from holds the rows to the invoice's payable. A header without rows (a
+    // migrated invoice) gives the reversal nothing to take off 2440.
+    const { creditSupplierInvoice: realCredit } =
+      await vi.importActual<typeof import('@/lib/supplier-invoices/credit')>('@/lib/supplier-invoices/credit')
+    creditMock.mockImplementationOnce(realCredit)
+    const original = {
+      id: INVOICE_ID,
+      supplier_id: 'sup-1',
+      supplier_invoice_number: '10234',
+      arrival_number: 12,
+      invoice_date: '2026-09-01',
+      status: 'approved',
+      currency: 'SEK',
+      exchange_rate: null,
+      subtotal: 8000,
+      vat_amount: 2000,
+      total: 10000,
+      total_sek: 10000,
+      vat_treatment: 'standard_25',
+      reverse_charge: false,
+      is_credit_note: false,
+      supplier: { id: 'sup-1', name: 'Programvara AB', supplier_type: 'swedish_business' },
+      items: [],
+    }
+    const inserts: Array<{ table: string; payload: unknown }> = []
+    const db = client(original, inserts)
+
+    let thrown: unknown
+    try {
+      await tool.execute({ supplier_invoice_id: INVOICE_ID }, 'company-1', 'user-1', db)
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(creditMock).toHaveBeenCalledWith(expect.anything(), INVOICE_ID, {}, { dryRun: true })
+    expect(thrown).toMatchObject({
+      code: 'SI_CREDIT_ROWS_MISMATCH',
+      details: { rows_payable_sek: 0, invoice_payable_sek: 10000 },
+    })
+    const envelope = JSON.stringify(toToolError(thrown))
+    expect(envelope).toContain('SI_CREDIT_ROWS_MISMATCH')
+    expect(envelope).toContain('gnubok_link_supplier_invoice_to_voucher')
+    // Nothing staged, nothing written, no ankomstnummer drawn.
+    expect(inserts).toEqual([])
+    expect((db as { rpc: ReturnType<typeof vi.fn> }).rpc).not.toHaveBeenCalled()
   })
 })

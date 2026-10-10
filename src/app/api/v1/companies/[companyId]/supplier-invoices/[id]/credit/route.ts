@@ -50,6 +50,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'The credit note is dated credit_date, else the inbox item\'s credit note date, else today (Stockholm). That date must fall in an open fiscal period: a locked one returns 400 SI_CREDIT_PERIOD_LOCKED and is never re-dated for you.',
     'With inbox_item_id the credit note must be from the invoice\'s supplier and for its whole total in its currency: otherwise 400 SI_CREDIT_PARTIAL or SI_CREDIT_DOCUMENT_MISMATCH (details carry both totals). A credit_date or document date before the invoice date is a 400 VALIDATION_ERROR.',
+    'The reversal is built from the invoice\'s stored rows. Rows that do not add up to the invoice total, or no rows at all (typically an invoice imported from another system), return 409 SI_CREDIT_ROWS_MISMATCH with details.rows_payable_sek and details.invoice_payable_sek, on a dry run too and before anything is written. Do not retry: book the credit note as a verifikat of its own (debit 2440 by the invoice total, credit the cost accounts and 2641), then settle a still unpaid invoice against that verifikat in the app or with the MCP tool gnubok_link_supplier_invoice_to_voucher.',
     'Cash basis (kontantmetoden): an unpaid original gets no reversing JE; recognition waits for the refund. The credit-note row is still created so the AP audit trail stays consistent.',
     'The original SI is flipped to `credited` regardless of how much of it was already paid; reconcile the bank refund via the transactions endpoints.',
   ],

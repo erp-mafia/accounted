@@ -16,7 +16,7 @@ import type { VatDeclarationRutor, VatRevenueAccountWithoutRuta } from '@/types'
  * - Reverse charge: ruta 30-32 populated but ruta 20-24 empty. Caused by
  *   supplier invoices flagged as reverse charge that booked the fiktiv
  *   moms (2614/2624/2634) without the parallel basis lines on 44xx/45xx.
- *   Fixed at the data layer by generateReverseChargeBasisLines, but we
+ *   Fixed at the data layer by generateReverseChargePurchaseLines, but we
  *   keep the check here as a safety net for legacy verifikat and direct
  *   journal entries that bypass the supplier invoice flow.
  *
