@@ -93,12 +93,16 @@ export interface SalaryCalculationInput {
 /**
  * Line types summed into gross pay as additions (Step 2) when taxable and
  * not a gross or net deduction. Exported so the payslip line commands can
- * tell which lines the avgiftsunderlag always includes.
+ * tell which lines the avgiftsunderlag always includes. Traktamente and
+ * milersättning above Skatteverket's schablon are taxed as salary with full
+ * arbetsgivaravgifter (travel-expenses.md); left out, they reached neither
+ * gross, tax nor payout, and the booking took them off the base salary debit.
  */
 export const ADDITION_ITEM_TYPES: readonly SalaryLineItemType[] = [
   'overtime', 'overtime_50', 'overtime_100',
   'ob_weekday_evening', 'ob_weekend', 'ob_night', 'ob_holiday',
   'bonus', 'commission',
+  'traktamente_taxable', 'mileage_taxable',
   'other', 'correction', 'semesterersattning',
 ]
 

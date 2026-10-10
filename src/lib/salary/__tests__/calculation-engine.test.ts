@@ -1880,6 +1880,28 @@ describe('kostnadsersättning: tax-free reimbursements', () => {
   })
 })
 
+describe('kostnadsersättning above the schablon: taxed as salary', () => {
+  it.each(['traktamente_taxable', 'mileage_taxable'])(
+    '%s adds to gross, tax and avgifter but not to the vacation basis',
+    (itemType) => {
+      const base = calculateSalary(makeBasicInput({ lineItems: [baseLineItem(40000)] }), config2026, emptyTaxRates)
+      const r = calculateSalary(
+        makeBasicInput({ lineItems: [baseLineItem(40000), lineItem({ itemType, amount: 500 })] }),
+        config2026,
+        emptyTaxRates,
+      )
+      expect(r.grossSalary).toBe(40500)
+      expect(r.taxableIncome).toBe(base.taxableIncome + 500)
+      expect(r.taxWithheld).toBeGreaterThan(base.taxWithheld)
+      expect(r.avgifterBasis).toBe(base.avgifterBasis + 500)
+      expect(r.avgifterAmount).toBeGreaterThan(base.avgifterAmount)
+      expect(r.vacationAccrual).toBe(base.vacationAccrual)
+      expect(r.taxFreeReimbursements).toBe(0)
+      expect(r.netSalary + r.taxWithheld).toBeCloseTo(r.grossSalary, 2)
+    },
+  )
+})
+
 // ============================================================
 // Company calculation conventions (lib/salary/calculation-policy.ts)
 // ============================================================
