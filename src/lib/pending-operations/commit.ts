@@ -74,7 +74,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { booksInvoicesOnIssue, cashPartialBlockReason, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
-import { commitBulkBooking, createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { commitBulkBooking, commitMatchBatchAllocation, createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
   canApproveSupplierInvoice,
   resolveUnsettledStatus,
@@ -6979,11 +6979,11 @@ async function commitMatchBatchAllocate(
     }
   }
 
-  const { data, error } = await supabase.rpc('match_batch_allocate', {
-    p_tx_id: txId,
-    p_allocations: allocations,
-    p_company_id: companyId,
-    p_user_id: userId,
+  // Through the engine door, which also emits journal_entry.committed for
+  // the samlingsverifikat.
+  const { data, error } = await commitMatchBatchAllocation(supabase, companyId, userId, {
+    transactionId: txId,
+    allocations,
   })
   if (error) {
     // Sanitised log (A.8.11, CC7.2): only error code + message, no

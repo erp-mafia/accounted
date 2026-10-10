@@ -51,6 +51,7 @@ The first stable release of the public REST API. Six phases of development cover
 ### Webhooks (2026-10)
 
 - **Behaviour change: \`journal_entry.committed\` fires for bulk-booked bank transactions** (2026-10-07): a samlingsverifikat posted by \`POST /transactions/bulk-book\`, the dashboard bulk booking or an approved agent (MCP) bulk booking now emits \`journal_entry.committed\`, like every other posted voucher. Before, those vouchers were posted without the event. Linking rows to an existing voucher (\`existing_journal_entry_id\`) posts nothing new and still emits no \`journal_entry.committed\`; a dry run emits nothing. The payload and the API version date are unchanged.
+- **Behaviour change: \`journal_entry.committed\` fires for samlingsbetalningar, utlägg payouts and kursdifferens vouchers** (2026-10-08): the verifikat posted by \`POST /transactions/{id}/match-batch\` (and its dashboard and agent twins), by an expense payout (\`POST /expense-claims/payouts\`, \`POST /transactions/{id}/match-expense-payout\`), and the kursdifferens verifikat (3960/7960) a link of a foreign-currency invoice or supplier invoice to an existing payment voucher can post, now emit \`journal_entry.committed\`. A link without a kursdifferens posts nothing new and emits no \`journal_entry.committed\`; a dry run emits nothing. SIE imports, their undo and provider migrations stay silent on purpose: they bring in history that was posted elsewhere. The payload and the API version date are unchanged.
 
 ### Webhooks: endpoint verification (2026-09)
 

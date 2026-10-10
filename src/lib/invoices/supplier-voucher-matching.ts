@@ -32,6 +32,7 @@ import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/b
 import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
+import { commitSupplierInvoiceVoucherLink } from '@/lib/bookkeeping/engine'
 import type { SupplierInvoice, Supplier } from '@/types'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import {
@@ -792,12 +793,12 @@ export async function linkSupplierInvoiceToVoucher(
   // either rolls back automatically. The previous TS implementation did
   // UPDATE-then-INSERT with a manual rollback that could overwrite a
   // concurrent sibling's successful write: PR #602 review fix.
-  const { data, error } = await supabase.rpc('link_supplier_invoice_to_voucher', {
-    p_supplier_invoice_id: params.supplierInvoiceId,
-    p_journal_entry_id: params.journalEntryId,
-    p_user_id: userId,
-    p_company_id: companyId,
-    p_notes: params.notes ?? null,
+  // Through the engine door, which announces the kursdifferens verifikat the
+  // RPC posts for a foreign-currency invoice with journal_entry.committed.
+  const { data, error } = await commitSupplierInvoiceVoucherLink(supabase, companyId, userId, {
+    supplierInvoiceId: params.supplierInvoiceId,
+    journalEntryId: params.journalEntryId,
+    notes: params.notes ?? null,
   })
 
   if (error) {

@@ -29,6 +29,7 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
 })
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { eventBus } from '@/lib/events/bus'
 import { POST as matchPayout } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -175,6 +176,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
   })
 
   it('books the payout from the bank row: its date, its cash account, linked in the RPC', async () => {
+    const emit = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+    const posted = { id: JE_ID, company_id: COMPANY_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, lines: [] }
     const client = makeClient({
       company_members: MEMBER,
       transactions: { data: txRow(), error: null },
@@ -183,6 +186,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
         data: { ok: true, batch_id: BATCH_ID, journal_entry_id: JE_ID, voucher_number: 12, total_sek: 1596, claim_count: 2 },
         error: null,
       },
+      journal_entries: { data: posted, error: null },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await matchPayout(request(), params)
@@ -204,6 +208,11 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
       p_user_id: 'user-1',
       p_transaction_id: TX_ID,
     })
+    // The payout verifikat is announced like any commit.
+    expect(emit).toHaveBeenCalledWith({
+      type: 'journal_entry.committed',
+      payload: { entry: posted, userId: 'user-1', companyId: COMPANY_ID },
+    })
   })
 
   it('maps the RPC\'s amount refusal onto EXPENSE_PAYOUT_MATCH_AMOUNT', async () => {
@@ -221,6 +230,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
   })
 
   it('a dry run previews the booking on the row\'s account and writes nothing', async () => {
+    const emit = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
     const client = makeClient({
       company_members: MEMBER,
       transactions: { data: txRow(), error: null },
@@ -241,6 +251,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
     ])
     expect(client.rpc).not.toHaveBeenCalled()
     expect(wrote(client)).toBe(false)
+    expect(emit).not.toHaveBeenCalled()
   })
 
   it('a dry run refuses claims that do not sum to the transfer', async () => {

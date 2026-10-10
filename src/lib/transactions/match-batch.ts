@@ -1,7 +1,9 @@
 /**
  * Allocate one bank transaction across N customer OR N supplier invoices:
  * one combined verifikat (samlingsverifikation) and N payment rows, built
- * atomically by the match_batch_allocate RPC.
+ * atomically by the match_batch_allocate RPC behind the engine door
+ * commitMatchBatchAllocation (lib/bookkeeping/engine.ts), which also emits
+ * journal_entry.committed for the verifikat.
  *
  * One implementation behind the dashboard route
  * (POST /api/transactions/[id]/match-batch) and the v1 operation
@@ -40,6 +42,7 @@ import {
 } from '@/lib/invoices/batch-allocation-preview'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { commitMatchBatchAllocation } from '@/lib/bookkeeping/engine'
 import { roundOre } from '@/lib/money'
 
 export type MatchBatchAllocation =
@@ -167,14 +170,11 @@ export async function matchTransactionBatch(
     })
   }
 
-  // 4. The RPC is the atomicity boundary. p_user_id is honoured only for a
-  // service_role caller (the v1 door); a session caller resolves from its
-  // own auth.uid() (migration 20260824120000).
-  const { data, error } = await supabase.rpc('match_batch_allocate', {
-    p_tx_id: transactionId,
-    p_allocations: allocations,
-    p_company_id: companyId,
-    p_user_id: userId,
+  // 4. The RPC is the atomicity boundary, behind the engine door that also
+  // announces its verifikat with journal_entry.committed.
+  const { data, error } = await commitMatchBatchAllocation(supabase, companyId, userId, {
+    transactionId,
+    allocations,
   })
   if (error) {
     txLog.error('match_batch_allocate RPC error', error)

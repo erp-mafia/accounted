@@ -55,7 +55,15 @@ import type {
   VatTreatment,
 } from '@/types'
 
-/** The only application entry point for a durable SIE voucher commit. */
+/**
+ * The only application entry point for a durable SIE voucher commit.
+ *
+ * Deliberately emits no journal_entry.committed, unlike the other posting
+ * RPC doors in this file: an import brings in history that was posted
+ * elsewhere, often thousands of vouchers, and announcing each would flood
+ * webhook subscribers. The same holds for the undo below (DECISIONS.md
+ * 2026-10-08).
+ */
 export async function commitSIEImportChunk(supabase: SupabaseClient, job: SIEJob, chunk: number, phase: 'vouchers' | 'finalize'): Promise<SIEChunkResult> {
   const { data, error } = await supabase.rpc('import_sie_chunk', {
     p_company_id: job.company_id, p_import_id: job.id, p_worker_id: job.worker_id,
@@ -66,7 +74,10 @@ export async function commitSIEImportChunk(supabase: SupabaseClient, job: SIEJob
   return data as SIEChunkResult
 }
 
-/** Reversals and their receipt commit together under the execution lease. */
+/**
+ * Reversals and their receipt commit together under the execution lease.
+ * Silent like the import itself: no journal_entry.committed per storno.
+ */
 export async function reverseSIEImportChunk(supabase: SupabaseClient, job: SIEJob): Promise<{ reversed: number; done: boolean }> {
   const rpc = job.job_kind === 'duplicate_repair' ? 'undo_sie_duplicate_repair_chunk' : 'undo_sie_import_chunk'
   const { data, error } = await supabase.rpc(rpc, {
@@ -1399,7 +1410,7 @@ export async function commitBulkBooking(
   companyId: string,
   userId: string,
   input: BulkBookingInput,
-): Promise<{ data: unknown; error: { message: string; code?: string } | null }> {
+): Promise<PostingRpcAnswer> {
   const { data, error } = await supabase.rpc('bulk_book_transactions', {
     p_tx_ids: input.txIds,
     p_existing_journal_entry_id: input.existingJournalEntryId,
@@ -1414,26 +1425,210 @@ export async function commitBulkBooking(
 
   const result = data as { ok?: boolean; mode?: string; journal_entry_id?: string } | null
   if (result?.ok === true && result.mode === 'create_new' && result.journal_entry_id) {
-    // The verifikat is committed at this point. A failed reload must not turn
-    // the booking into a failure, so it is logged and the event skipped.
-    const { data: entry, error: fetchError } = await supabase
-      .from('journal_entries')
-      .select('*, lines:journal_entry_lines(*)')
-      .eq('id', result.journal_entry_id)
-      .eq('company_id', companyId)
-      .single()
-    if (entry && !fetchError) {
-      await eventBus.emit({
-        type: 'journal_entry.committed',
-        payload: { entry: entry as JournalEntry, userId, companyId },
-      })
-    } else {
-      log.error(
-        'bulk booking committed but posted entry reload failed: journal_entry.committed not emitted',
-        fetchError ?? new Error('posted entry not found'),
-        { operation: 'commit_bulk_booking', companyId, userId, journalEntryId: result.journal_entry_id },
-      )
-    }
+    await announceRpcPostedEntry(supabase, companyId, userId, result.journal_entry_id, 'commit_bulk_booking')
+  }
+  return { data, error: null }
+}
+
+/** The raw answer of a posting RPC: its jsonb result, or the transport error. */
+type PostingRpcAnswer = { data: unknown; error: { message: string; code?: string } | null }
+
+/**
+ * Announce a verifikat a SQL function has posted. The posting RPCs below
+ * insert, number and commit their verifikat in SQL via commit_journal_entry,
+ * so it never passes through commitEntry; their engine door calls this to
+ * emit the journal_entry.committed payload commitEntry emits, reloaded and
+ * scoped to the company. The verifikat is committed when this runs, so a
+ * failed reload is logged and the event skipped: the operation still
+ * succeeds.
+ */
+async function announceRpcPostedEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  journalEntryId: string,
+  operation: string,
+): Promise<void> {
+  const { data: entry, error: fetchError } = await supabase
+    .from('journal_entries')
+    .select('*, lines:journal_entry_lines(*)')
+    .eq('id', journalEntryId)
+    .eq('company_id', companyId)
+    .single()
+  if (entry && !fetchError) {
+    await eventBus.emit({
+      type: 'journal_entry.committed',
+      payload: { entry: entry as JournalEntry, userId, companyId },
+    })
+    return
+  }
+  log.error(
+    `${operation}: verifikat committed but its reload failed, journal_entry.committed not emitted`,
+    fetchError ?? new Error('posted entry not found'),
+    { operation, companyId, userId, journalEntryId },
+  )
+}
+
+export interface MatchBatchAllocationInput {
+  transactionId: string
+  /** The allocations exactly as match_batch_allocate takes them. */
+  allocations: unknown[]
+}
+
+/**
+ * Allocate one bank transaction across N customer or N supplier invoices
+ * through match_batch_allocate: one samlingsverifikat (BFL 5 kap 6 §) and N
+ * payment rows, atomically in SQL. This is the RPC's one application door,
+ * so that its verifikat is announced with journal_entry.committed. Every
+ * success posts one, so every success emits; a refusal or transport error
+ * emits nothing. A dry run must never reach this door.
+ *
+ * Returns the RPC's answer unchanged: callers translate its refusals.
+ */
+export async function commitMatchBatchAllocation(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: MatchBatchAllocationInput,
+): Promise<PostingRpcAnswer> {
+  const { data, error } = await supabase.rpc('match_batch_allocate', {
+    p_tx_id: input.transactionId,
+    p_allocations: input.allocations,
+    p_company_id: companyId,
+    // Honoured only for a service_role caller (the v1 and pending-operation
+    // doors); a session caller resolves from its own auth.uid()
+    // (migration 20260824120000).
+    p_user_id: userId,
+  })
+  if (error) return { data, error }
+
+  const result = data as { ok?: boolean; journal_entry_id?: string } | null
+  if (result?.ok === true && result.journal_entry_id) {
+    await announceRpcPostedEntry(supabase, companyId, userId, result.journal_entry_id, 'match_batch_allocate')
+  }
+  return { data, error: null }
+}
+
+export interface ExpensePayoutBatchInput {
+  claimIds: string[]
+  payoutDate: string
+  cashAccount: string
+  notes: string | null
+  /** The bank outflow the payout is matched to, linked in the same RPC. */
+  transactionId: string | null
+}
+
+/**
+ * Pay one claimant back for N registered expense claims through
+ * create_expense_payout_batch: the liability to cash verifikat, the batch and
+ * the claims marked paid, in one SQL transaction. This is the RPC's one
+ * application door, so that its verifikat is announced with
+ * journal_entry.committed. Every success posts one, so every success emits; a
+ * refusal or transport error emits nothing. A dry run must never reach this
+ * door.
+ *
+ * Returns the RPC's answer unchanged: callers translate its refusals.
+ */
+export async function commitExpensePayoutBatch(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: ExpensePayoutBatchInput,
+): Promise<PostingRpcAnswer> {
+  const { data, error } = await supabase.rpc('create_expense_payout_batch', {
+    p_company_id: companyId,
+    p_claim_ids: input.claimIds,
+    p_payout_date: input.payoutDate,
+    p_cash_account: input.cashAccount,
+    p_notes: input.notes,
+    // Honoured only for a service_role caller (API-key and MCP paths run on
+    // the cookieless service client where auth.uid() is NULL); a session
+    // caller is pinned to its own auth.uid() by the RPC.
+    p_user_id: userId,
+    p_transaction_id: input.transactionId,
+  })
+  if (error) return { data, error }
+
+  const result = data as { ok?: boolean; journal_entry_id?: string } | null
+  if (result?.ok === true && result.journal_entry_id) {
+    await announceRpcPostedEntry(supabase, companyId, userId, result.journal_entry_id, 'create_expense_payout_batch')
+  }
+  return { data, error: null }
+}
+
+export interface VoucherLinkInput {
+  /** The already-posted verifikat that paid the invoice. */
+  journalEntryId: string
+  notes: string | null
+}
+
+/**
+ * Link a posted verifikat to an open customer invoice as its payment through
+ * link_invoice_to_voucher. The link itself posts nothing: the linked voucher
+ * was announced when it was committed. Only when a foreign-currency invoice
+ * settles at another rate than it was booked at does the RPC post the
+ * kursdifferens as its own verifikat (3960/7960), and only that verifikat is
+ * announced with journal_entry.committed. This is the RPC's one application
+ * door.
+ *
+ * Returns the RPC's answer unchanged: callers translate its refusals.
+ */
+export async function commitInvoiceVoucherLink(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: VoucherLinkInput & { invoiceId: string },
+): Promise<PostingRpcAnswer> {
+  const { data, error } = await supabase.rpc('link_invoice_to_voucher', {
+    p_invoice_id: input.invoiceId,
+    p_journal_entry_id: input.journalEntryId,
+    p_user_id: userId,
+    p_company_id: companyId,
+    p_notes: input.notes,
+  })
+  if (error) return { data, error }
+
+  const result = data as { ok?: boolean; fx_journal_entry_id?: string | null } | null
+  if (result?.ok === true && result.fx_journal_entry_id) {
+    await announceRpcPostedEntry(supabase, companyId, userId, result.fx_journal_entry_id, 'link_invoice_to_voucher')
+  }
+  return { data, error: null }
+}
+
+/**
+ * Link a posted verifikat to an open supplier invoice as its payment through
+ * link_supplier_invoice_to_voucher. As for the customer side, the link posts
+ * nothing except the kursdifferens verifikat (3960/7960) a foreign-currency
+ * invoice settled on 244x at another rate can need, and only that verifikat
+ * is announced with journal_entry.committed. This is the RPC's one
+ * application door.
+ *
+ * Returns the RPC's answer unchanged: callers translate its refusals.
+ */
+export async function commitSupplierInvoiceVoucherLink(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: VoucherLinkInput & { supplierInvoiceId: string },
+): Promise<PostingRpcAnswer> {
+  const { data, error } = await supabase.rpc('link_supplier_invoice_to_voucher', {
+    p_supplier_invoice_id: input.supplierInvoiceId,
+    p_journal_entry_id: input.journalEntryId,
+    p_user_id: userId,
+    p_company_id: companyId,
+    p_notes: input.notes,
+  })
+  if (error) return { data, error }
+
+  const result = data as { ok?: boolean; fx_journal_entry_id?: string | null } | null
+  if (result?.ok === true && result.fx_journal_entry_id) {
+    await announceRpcPostedEntry(
+      supabase,
+      companyId,
+      userId,
+      result.fx_journal_entry_id,
+      'link_supplier_invoice_to_voucher',
+    )
   }
   return { data, error: null }
 }

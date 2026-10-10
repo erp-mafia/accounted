@@ -1840,6 +1840,9 @@ export async function importVouchers(
     return { ...results, preparedEntries: rpcPayload as SIEPreparedEntry[] }
   }
 
+  // Deliberately emits no journal_entry.committed per imported voucher: an
+  // import brings in history posted elsewhere, often thousands of vouchers,
+  // which would flood webhook subscribers (DECISIONS.md 2026-10-08).
   const { data: rpcResult, error: rpcError } = await supabase.rpc('import_sie_journal_entries', {
     p_company_id: companyId,
     p_user_id: userId,

@@ -33,6 +33,7 @@ import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/b
 import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
 import { anchorCustomerInvoiceDocument } from '@/lib/core/documents/customer-invoice-underlag'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
+import { commitInvoiceVoucherLink } from '@/lib/bookkeeping/engine'
 import type { Invoice, Customer } from '@/types'
 import {
   AMOUNT_TOLERANCE,
@@ -763,12 +764,12 @@ export async function linkInvoiceToVoucher(
   // pre-link snapshot: under concurrent linking it could clobber a sibling's
   // successful write while leaving its payment row in place (audit C2; mirrors
   // the supplier-side link_supplier_invoice_to_voucher fix from PR #602).
-  const { data: rpcData, error: rpcError } = await supabase.rpc('link_invoice_to_voucher', {
-    p_invoice_id: params.invoiceId,
-    p_journal_entry_id: params.journalEntryId,
-    p_user_id: userId,
-    p_company_id: companyId,
-    p_notes: params.notes ?? null,
+  // Through the engine door, which announces the kursdifferens verifikat the
+  // RPC posts for a foreign-currency invoice with journal_entry.committed.
+  const { data: rpcData, error: rpcError } = await commitInvoiceVoucherLink(supabase, companyId, userId, {
+    invoiceId: params.invoiceId,
+    journalEntryId: params.journalEntryId,
+    notes: params.notes ?? null,
   })
 
   if (rpcError) {

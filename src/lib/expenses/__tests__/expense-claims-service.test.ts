@@ -4,11 +4,17 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 const createJournalEntryMock = vi.fn()
 const findFiscalPeriodMock = vi.fn()
 const reverseEntryMock = vi.fn()
-vi.mock('@/lib/bookkeeping/engine', () => ({
-  createJournalEntry: (...args: unknown[]) => createJournalEntryMock(...args),
-  findFiscalPeriod: (...args: unknown[]) => findFiscalPeriodMock(...args),
-  reverseEntry: (...args: unknown[]) => reverseEntryMock(...args),
-}))
+vi.mock('@/lib/bookkeeping/engine', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/bookkeeping/engine')>()
+  return {
+    // The real payout door: it calls the RPC asserted below, then reloads the
+    // posted verifikat to announce it.
+    commitExpensePayoutBatch: actual.commitExpensePayoutBatch,
+    createJournalEntry: (...args: unknown[]) => createJournalEntryMock(...args),
+    findFiscalPeriod: (...args: unknown[]) => findFiscalPeriodMock(...args),
+    reverseEntry: (...args: unknown[]) => reverseEntryMock(...args),
+  }
+})
 
 const linkToJournalEntryMock = vi.fn()
 vi.mock('@/lib/core/documents/document-service', () => ({
@@ -405,6 +411,7 @@ describe('createPayoutBatch', () => {
         claim_count: 2,
       },
     })
+    enqueue({ data: { id: 'je-2', company_id: COMPANY, status: 'posted', lines: [] } }) // engine door reload
 
     const result = await createPayoutBatch(sb, COMPANY, USER, {
       claim_ids: ['c1', 'c2', 'c1'],
@@ -441,6 +448,7 @@ describe('createPayoutBatch', () => {
     enqueue({
       data: { ok: true, batch_id: 'batch-2', journal_entry_id: 'je-3', voucher_number: 8, total_sek: 1596, claim_count: 2 },
     })
+    enqueue({ data: { id: 'je-3', company_id: COMPANY, status: 'posted', lines: [] } }) // engine door reload
     const result = await createPayoutBatch(sb, COMPANY, USER, {
       claim_ids: ['c2', 'c3'],
       payout_date: '2026-09-10',

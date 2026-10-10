@@ -132,6 +132,8 @@ describe('POST /api/transactions/[id]/match-batch', () => {
       },
       error: null,
     })
+    // the engine door reloads the posted samlingsverifikat to announce it
+    enqueue({ data: { id: 'je-batch-1', company_id: 'company-1', status: 'posted', lines: [] }, error: null })
     // tx fetch for event payload
     enqueue({ data: { id: TX_UUID, amount: 1000, currency: 'SEK', date: '2026-05-20' }, error: null })
     // invoice fetch for event payload
@@ -169,11 +171,20 @@ describe('POST /api/transactions/[id]/match-batch', () => {
       INV_UUID,
       { exceptTransactionId: TX_UUID },
     )
+    // The samlingsverifikat is announced first, as commitEntry announces one.
     // The match is confirmed and, because it settled the invoice in full, the
     // public invoice.paid transition fires once with the applied amount.
     const emitted = vi.mocked(eventBus.emit).mock.calls.map(([event]) => event)
-    expect(emitted.map((e) => e.type)).toEqual(['invoice.match_confirmed', 'invoice.paid'])
-    expect(emitted[1]).toEqual({
+    expect(emitted.map((e) => e.type)).toEqual(['journal_entry.committed', 'invoice.match_confirmed', 'invoice.paid'])
+    expect(emitted[0]).toEqual({
+      type: 'journal_entry.committed',
+      payload: {
+        entry: { id: 'je-batch-1', company_id: 'company-1', status: 'posted', lines: [] },
+        userId: 'user-1',
+        companyId: 'company-1',
+      },
+    })
+    expect(emitted[2]).toEqual({
       type: 'invoice.paid',
       payload: {
         invoice: expect.objectContaining({ id: INV_UUID, status: 'paid' }),
@@ -218,6 +229,7 @@ describe('POST /api/transactions/[id]/match-batch', () => {
       },
       error: null,
     })
+    enqueue({ data: { id: 'je-batch-2', company_id: 'company-1', status: 'posted', lines: [] }, error: null }) // engine door reload
     enqueue({ data: { id: TX_UUID, amount: -1400, currency: 'SEK', date: '2026-05-20' }, error: null }) // tx fetch
     enqueue({ data: { id: SI_UUID, currency: 'SEK', status: 'paid' }, error: null })
     enqueue({ data: { amount: 1000 }, error: null }) // settled SI's payment row (applied amount)
@@ -247,11 +259,12 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     // Both matches are confirmed; only the settled one is supplier_invoice.paid.
     const emitted = vi.mocked(eventBus.emit).mock.calls.map(([event]) => event)
     expect(emitted.map((e) => e.type)).toEqual([
+      'journal_entry.committed',
       'supplier_invoice.match_confirmed',
       'supplier_invoice.paid',
       'supplier_invoice.match_confirmed',
     ])
-    expect(emitted[1]).toEqual({
+    expect(emitted[2]).toEqual({
       type: 'supplier_invoice.paid',
       payload: {
         supplierInvoice: expect.objectContaining({ id: SI_UUID, status: 'paid' }),
@@ -284,6 +297,8 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(400)
     expect(body.error.code).toBe('BATCH_OVERSHOOT')
+    // A refusal posts no verifikat, so nothing is announced.
+    expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
   it('maps a raw RPC error to BATCH_RPC_FAILED', async () => {
@@ -395,6 +410,7 @@ describe('POST /api/transactions/[id]/match-batch: already-explained guard', () 
       },
       error: null,
     })
+    enqueue({ data: { id: 'je-batch-9', company_id: 'company-1', status: 'posted', lines: [] }, error: null }) // engine door reload
     enqueue({ data: { id: TX_UUID, amount: 88250, currency: 'SEK' }, error: null })
     enqueue({ data: { id: INV_UUID, currency: 'SEK', status: 'paid' }, error: null })
   }

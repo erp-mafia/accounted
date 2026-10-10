@@ -80,6 +80,11 @@ function makePendingOp(params: Record<string, unknown>): PendingOperation {
   } as PendingOperation
 }
 
+// The samlingsverifikat as the engine door reloads it after the RPC, to
+// announce it with journal_entry.committed.
+const POSTED_ENTRY = { id: 'je-batch', company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 44, lines: [] }
+const POSTED_RELOAD = { data: POSTED_ENTRY, error: null }
+
 const REQUEST_ALLOCATIONS = [
   { kind: 'supplier_invoice', supplier_invoice_id: SI_ID, amount: 1000 },
   { kind: 'supplier_invoice', supplier_invoice_id: SI_PARTIAL_ID, amount: 400 },
@@ -128,6 +133,7 @@ describe('commitPendingOperation: match_batch_allocate suggestion cleanup', () =
       },
       error: null,
     }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: null, error: null }) // dispatcher finalize update
 
     const op = makePendingOp({ transaction_id: TX_ID, allocations: REQUEST_ALLOCATIONS })
@@ -171,6 +177,7 @@ describe('commitPendingOperation: match_batch_allocate suggestion cleanup', () =
       },
       error: null,
     }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: null, error: null }) // dispatcher finalize update
 
     const op = makePendingOp({
@@ -186,7 +193,9 @@ describe('commitPendingOperation: match_batch_allocate suggestion cleanup', () =
     })
   })
 
-  it('retires nothing when the RPC reports a structured failure', async () => {
+  it('retires nothing and announces no verifikat when the RPC reports a structured failure', async () => {
+    const committed = vi.fn()
+    eventBus.on('journal_entry.committed', committed)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { ok: false, code: 'BATCH_OVER_ALLOCATED' }, error: null }) // RPC
@@ -197,6 +206,7 @@ describe('commitPendingOperation: match_batch_allocate suggestion cleanup', () =
 
     expect(result.status).toBe('failed')
     expect(mockClearSuggestions).not.toHaveBeenCalled()
+    expect(committed).not.toHaveBeenCalled()
   })
 })
 
@@ -258,6 +268,7 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: rpcOk, error: null }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: null, error: null }) // dispatcher finalize update
 
     const op = makePendingOp({
@@ -331,6 +342,7 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: rpcOk, error: null }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: null, error: null }) // dispatcher finalize update
 
     const op = makePendingOp({ transaction_id: TX_ID, allocations })
@@ -386,6 +398,8 @@ describe('commitPendingOperation: match_batch_allocate events', () => {
   it('confirms every allocation and emits supplier_invoice.paid once, only for the one settled in full', async () => {
     const matched = vi.fn()
     const paid = vi.fn()
+    const committed = vi.fn()
+    eventBus.on('journal_entry.committed', committed)
     eventBus.on('supplier_invoice.match_confirmed', matched)
     eventBus.on('supplier_invoice.paid', paid)
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
@@ -422,6 +436,7 @@ describe('commitPendingOperation: match_batch_allocate events', () => {
       },
       error: null,
     }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: { id: TX_ID, amount: -1400, currency: 'SEK', date: '2026-05-20' }, error: null }) // tx re-read
     enqueue({ data: { id: SI_ID, status: 'paid', remaining_amount: 0 }, error: null }) // settled SI re-read
     enqueue({ data: { amount: 1000 }, error: null }) // its payment row (applied amount)
@@ -432,6 +447,13 @@ describe('commitPendingOperation: match_batch_allocate events', () => {
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('committed')
+    // The samlingsverifikat itself is announced, as commitEntry announces one.
+    expect(committed).toHaveBeenCalledTimes(1)
+    expect(committed).toHaveBeenCalledWith({ entry: POSTED_ENTRY, userId: 'user-1', companyId: 'company-1' })
+    expect(findCalls('journal_entries', 'eq')).toEqual([
+      ['id', 'je-batch-3'],
+      ['company_id', 'company-1'],
+    ])
     expect(matched).toHaveBeenCalledTimes(2)
     expect(paid).toHaveBeenCalledTimes(1)
     expect(paid).toHaveBeenCalledWith({
@@ -477,6 +499,7 @@ describe('commitPendingOperation: match_batch_allocate events', () => {
       },
       error: null,
     }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: { id: TX_ID, amount: 1000, currency: 'SEK', date: '2026-05-21' }, error: null }) // tx re-read
     enqueue({ data: { id: INV_ID, status: 'paid', remaining_amount: 0 }, error: null }) // invoice re-read
     enqueue({ data: { amount: 1000 }, error: null }) // its payment row (applied amount)

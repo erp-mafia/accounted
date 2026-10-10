@@ -427,6 +427,11 @@ async function followupBatch(supabase: SupabaseClient, job: ProviderMigrationJob
  * migration 20261005230200 is applied the function is missing (PGRST202):
  * such an invoice then stops for review as it did before, and a retry links
  * it once the function exists.
+ *
+ * Silent like the SIE import it follows: the settle phase reaches
+ * link_supplier_invoice_to_voucher inside SQL, and a kursdifferens verifikat
+ * it posts there emits no journal_entry.committed. A migration brings in
+ * history whose own vouchers were never announced (DECISIONS.md 2026-10-08).
  */
 async function commitFollowup(supabase: SupabaseClient, job: ProviderMigrationJob, records: Record<string, unknown>[],
   deadline: number): Promise<void> {

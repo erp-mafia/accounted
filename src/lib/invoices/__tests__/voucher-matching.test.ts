@@ -837,6 +837,67 @@ describe('linkInvoiceToVoucher', () => {
     })
   })
 
+  // The link posts nothing of its own, except the kursdifferens verifikat
+  // (3960/7960) a foreign invoice settled at another rate needs. That one is
+  // posted in SQL, so the engine door announces it.
+  it('announces the kursdifferens verifikat the link posts with journal_entry.committed', async () => {
+    const committed = vi.fn()
+    eventBus.on('journal_entry.committed', committed)
+    const fxEntry = { id: 'je-fx', company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 31, lines: [] }
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'pay-1',
+        invoice_status: 'paid',
+        paid_amount: 100,
+        remaining_amount: 0,
+        payment_amount: 100,
+        journal_entry_id: 'je-1',
+        currency: 'EUR',
+        payment_date: '2026-06-01',
+        fx_settled_sek: 1150,
+        fx_residual_sek: -12.5,
+        fx_journal_entry_id: 'je-fx',
+        fx_voucher_number: 31,
+      },
+      error: null,
+    })
+    enqueue({ data: fxEntry, error: null }) // the engine door reloads the kursdifferens verifikat
+    enqueue({ data: null, error: null }) // post-link invoice re-fetch
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(committed).toHaveBeenCalledTimes(1)
+    expect(committed).toHaveBeenCalledWith({ entry: fxEntry, userId: 'user-1', companyId: 'company-1' })
+    // The first journal_entries read is the door's reload, scoped to the
+    // company; later ones belong to the bank-feed reconcile.
+    expect(findCalls('journal_entries', 'eq').slice(0, 2)).toEqual([
+      ['id', 'je-fx'],
+      ['company_id', 'company-1'],
+    ])
+  })
+
+  it('announces nothing when the link posts no kursdifferens: the linked voucher was announced when posted', async () => {
+    const committed = vi.fn()
+    eventBus.on('journal_entry.committed', committed)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueRpcOk(enqueue, 'paid')
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(committed).not.toHaveBeenCalled()
+    expect(findCalls('journal_entries', 'select')).not.toContainEqual(['*, lines:journal_entry_lines(*)'])
+  })
+
   it('does not emit invoice.paid when the link only pays part of the invoice', async () => {
     const paid = vi.fn()
     eventBus.on('invoice.paid', paid)

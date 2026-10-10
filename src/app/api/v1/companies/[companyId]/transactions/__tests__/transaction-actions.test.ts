@@ -542,6 +542,8 @@ describe('POST /transactions/:id/match-batch', () => {
     expect(preview).toMatchObject({ total_allocated: 1250, allocations_count: 2, expected_lines_balanced: true })
     expect(preview.expected_lines.length).toBeGreaterThan(0)
     expect(wrote(client)).toBe(false)
+    expect(client.rpc).not.toHaveBeenCalled()
+    expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
   // Issue #3097: the RPC books the bank leg on the row's own cash account, so
@@ -571,6 +573,7 @@ describe('POST /transactions/:id/match-batch', () => {
   })
 
   it('200 commits through the RPC with the API key user as actor', async () => {
+    const posted = { id: JE_ID, company_id: COMPANY_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, lines: [] }
     const client = makeClient({
       company_members: OWNER,
       invoices,
@@ -578,12 +581,18 @@ describe('POST /transactions/:id/match-batch', () => {
         data: { ok: true, journal_entry_id: JE_ID, voucher_series: 'A', voucher_number: 12, tx_id: TX_ID, allocations: [], total_allocated: 1250, leftover: 0 },
         error: null,
       },
+      journal_entries: { data: posted, error: null },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ allocations })
     expect(res.status).toBe(200)
     expect((await res.json()).data).toMatchObject({ journal_entry_id: JE_ID, voucher_number: 12, total_allocated: 1250 })
     expect(client.rpc).toHaveBeenCalledWith('match_batch_allocate', expect.objectContaining({ p_company_id: COMPANY_ID, p_user_id: 'user-1', p_tx_id: TX_ID }))
+    // The integrator door announces the samlingsverifikat like any commit.
+    expect(eventBus.emit).toHaveBeenCalledWith({
+      type: 'journal_entry.committed',
+      payload: { entry: posted, userId: 'user-1', companyId: COMPANY_ID },
+    })
   })
 })
 

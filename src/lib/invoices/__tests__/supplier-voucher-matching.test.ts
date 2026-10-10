@@ -428,6 +428,8 @@ describe('linkSupplierInvoiceToVoucher', () => {
       expect(result.result.paymentId).toBe('sip-1')
     }
 
+    // supplier_invoice.paid only: a link with no kursdifferens posts no
+    // verifikat, so it announces no journal_entry.committed.
     expect(emitSpy).toHaveBeenCalledTimes(1)
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -449,6 +451,54 @@ describe('linkSupplierInvoiceToVoucher', () => {
     // The invoice's retained document is anchored to its verifikat right away
     // instead of waiting for the daily floating-document sweep.
     expect(mockAnchorSupplierDoc).toHaveBeenCalledWith(supabase, 'company-1', invoice.id)
+  })
+
+  // The link posts nothing of its own, except the kursdifferens verifikat
+  // (3960/7960) a foreign invoice settled on 244x at another rate needs. That
+  // one is posted in SQL, so the engine door announces it.
+  it('announces the kursdifferens verifikat the link posts with journal_entry.committed', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const fxEntry = { id: 'je-fx', company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 32, lines: [] }
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'sip-fx',
+        invoice_status: 'paid',
+        paid_amount: 100,
+        remaining_amount: 0,
+        payment_amount: 100,
+        journal_entry_id: 'je-1',
+        currency: 'EUR',
+        settlement_side: 'ap_debit',
+        fx_settled_sek: 1150,
+        fx_residual_sek: 12.5,
+        fx_journal_entry_id: 'je-fx',
+        fx_voucher_number: 32,
+      },
+      error: null,
+    })
+    enqueue({ data: fxEntry, error: null }) // the engine door reloads the kursdifferens verifikat
+    enqueue({ data: null, error: null }) // post-link invoice re-fetch
+
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-fx',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(emitSpy).toHaveBeenCalledTimes(1)
+    expect(emitSpy).toHaveBeenCalledWith({
+      type: 'journal_entry.committed',
+      payload: { entry: fxEntry, userId: 'user-1', companyId: 'company-1' },
+    })
+    // The first journal_entries read is the door's reload, scoped to the
+    // company; later ones belong to the bank-feed reconcile.
+    expect(findCalls('journal_entries', 'eq').slice(0, 2)).toEqual([
+      ['id', 'je-fx'],
+      ['company_id', 'company-1'],
+    ])
   })
 
   it('still returns success even if the post-link invoice re-fetch is empty (event is best-effort)', async () => {
