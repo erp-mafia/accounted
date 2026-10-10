@@ -4911,6 +4911,13 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
         "Check the supplier's bankgiro, plusgiro or bank account, then stage the batch again (gnubok_preview_supplier_payment_batch, then gnubok_create_supplier_payment_batch). details.invoices names each supplier and what changed.",
     },
   },
+  SI_DELETE_HAS_BANK_PAYMENT: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantörsfakturan har en betalning som skickats till banken och kan inte tas bort: betalningen är underlag för betalningsinstruktionen.',
+    message_en:
+      'The supplier invoice has a payment that was sent to the bank and cannot be deleted: the payment documents the payment instruction.',
+  },
   SI_DELETE_IN_PAYMENT_BATCH: {
     httpStatus: 409,
     message_sv:
@@ -7285,6 +7292,183 @@ export function conflictCode(dbMessage: unknown): keyof typeof DB_CONFLICTS | 'C
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
 
+// Payment orders: paying supplier invoices from the company's own account
+// through a bank API (src/lib/payments/orders/*), shared by the dashboard,
+// v1 and MCP.
+const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
+  PAYMENTS_UNAVAILABLE: {
+    httpStatus: 403,
+    message_sv: 'Betalningar via banken är inte aktiverade för det här företaget.',
+    message_en: 'Paying through the bank is not enabled for this company.',
+  },
+  PAYMENT_ORDERS_EMPTY_SELECTION: {
+    httpStatus: 400,
+    message_sv: 'Välj minst en faktura eller betalning.',
+    message_en: 'Select at least one invoice or payment.',
+  },
+  PAYMENT_ORDER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Betalningen hittades inte.',
+    message_en: 'The payment was not found.',
+  },
+  PAYMENT_ORDERS_INELIGIBLE: {
+    httpStatus: 409,
+    message_sv: 'En eller flera fakturor kan inte betalas via banken just nu.',
+    message_en: 'One or more invoices cannot be paid through the bank right now.',
+  },
+  PAYMENT_ORDERS_ALREADY_IN_PAYMENT: {
+    httpStatus: 409,
+    message_sv: 'En eller flera fakturor har redan en pågående betalning.',
+    message_en: 'One or more invoices already have a payment in progress.',
+  },
+  PAYMENT_ORDERS_IN_PAYMENT_FILE: {
+    httpStatus: 409,
+    message_sv: 'En eller flera fakturor ligger i en betalfil. Makulera betalfilen först om de ska betalas via banken.',
+    message_en: 'One or more invoices are in a payment file. Cancel the file first to pay them through the bank.',
+  },
+  PAYMENT_ORDERS_AMOUNT_EXCEEDS_REMAINING: {
+    httpStatus: 409,
+    message_sv: 'Beloppet är högre än det som återstår att betala på fakturan.',
+    message_en: 'The amount is higher than what remains to be paid on the invoice.',
+  },
+  PAYMENT_ORDERS_CURRENCY_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Betalningen måste göras i fakturans valuta.',
+    message_en: 'The payment must be made in the invoice currency.',
+  },
+  PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE: {
+    httpStatus: 400,
+    message_sv: 'Det valda kontot kan inte användas för betalningar via banken. Välj ett svenskt kronkonto med IBAN.',
+    message_en: 'The selected account cannot be used for bank payments. Choose a Swedish krona account with an IBAN.',
+  },
+  PAYMENT_ORDERS_PAYEE_CONFIRMATION_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Kontot har inte bekräftats för leverantören än, eller skiljer sig från kontot på leverantörskortet. Kontrollera kontot och bekräfta det för varje faktura innan du godkänner.',
+    message_en: 'The account has not been confirmed for the supplier yet, or differs from the one on the supplier card. Check it and confirm it for each invoice before approving.',
+  },
+  PAYMENT_ORDERS_PAYEE_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Kontot stämmer inte med det som fakturan eller leverantörskortet anger. Förbered betalningen igen.',
+    message_en: 'The account does not match the one the invoice or the supplier card states. Prepare the payment again.',
+  },
+  PAYMENT_ORDERS_IDEMPOTENCY_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Samma referens har redan använts för en annan faktura. Förbered betalningen igen.',
+    message_en: 'The same reference was already used for another invoice. Prepare the payment again.',
+  },
+  PAYMENT_ORDERS_MIXED_CURRENCY: {
+    httpStatus: 400,
+    message_sv: 'Betalningar i olika valutor signeras var för sig.',
+    message_en: 'Payments in different currencies are signed separately.',
+  },
+  PAYMENT_ORDERS_OUTCOME_UNKNOWN: {
+    httpStatus: 502,
+    message_sv: 'Vi vet inte om banken tog emot betalningen. Den ligger kvar som pågående tills dragningen syns på kontot eller tills du bekräftar att den aldrig nådde banken.',
+    message_en: 'We do not know whether the bank received the payment. It stays in progress until the debit shows on the account or you confirm it never reached the bank.',
+  },
+  PAYMENT_CANCEL_CONFIRMATION_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Betalningen kan ha nått banken. Kontrollera i internetbanken och bekräfta om den finns där eller har betalats.',
+    message_en: 'The payment may have reached the bank. Check the online bank and confirm whether it is there or was paid.',
+  },
+  PAYMENT_ORDER_CREATE_IN_PROGRESS: {
+    httpStatus: 409,
+    message_sv: 'En betalning skickas till banken just nu. Vänta några minuter och försök igen.',
+    message_en: 'A payment is being sent to the bank right now. Wait a few minutes and try again.',
+  },
+  PAYMENT_CANCEL_NEEDS_SIGNING: {
+    httpStatus: 409,
+    message_sv: 'Banken vill att makuleringen signeras. Makulera betalningen i internetbanken.',
+    message_en: 'The bank wants the cancellation signed. Cancel the payment in the online bank.',
+  },
+  PAYMENT_CANCEL_TOO_LATE: {
+    httpStatus: 409,
+    message_sv: 'Betalningen är redan genomförd eller för nära betaldagen för att makuleras.',
+    message_en: 'The payment has already been made or is too close to its payment date to cancel.',
+  },
+  PAYMENT_CANCEL_NOT_CONFIRMED: {
+    httpStatus: 502,
+    message_sv: 'Banken bekräftade inte makuleringen. Kontrollera betalningen i internetbanken.',
+    message_en: 'The bank did not confirm the cancellation. Check the payment in the online bank.',
+  },
+  PAYMENT_ORDER_AT_BANK: {
+    httpStatus: 409,
+    message_sv: 'Banken har betalningen. Makulera den i stället, så att banken bekräftar makuleringen.',
+    message_en: 'The bank has the payment. Cancel it instead, so the bank confirms the cancellation.',
+  },
+  PAYMENT_ORDER_NOT_RESOLVABLE: {
+    httpStatus: 409,
+    message_sv: 'Betalningen kan inte avgöras på det sättet i sitt nuvarande läge. Ladda om sidan.',
+    message_en: 'The payment cannot be resolved that way in its current state. Reload the page.',
+  },
+  PAYMENT_ORDER_PAYMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Hittade ingen sådan betalning på fakturan.',
+    message_en: 'No such payment was found on the invoice.',
+  },
+  PAYMENT_ORDER_PAYMENT_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Betalningen på fakturan har ett annat belopp eller hör redan till en annan bankbetalning.',
+    message_en: 'The payment on the invoice has another amount or already belongs to another bank payment.',
+  },
+  PAYMENT_ORDERS_WRONG_STATUS: {
+    httpStatus: 409,
+    message_sv: 'En eller flera betalningar har ändrats under tiden. Ladda om och försök igen.',
+    message_en: 'One or more payments changed in the meantime. Reload and try again.',
+  },
+  PAYMENT_ORDERS_MIXED_ACCOUNTS: {
+    httpStatus: 400,
+    message_sv: 'Betalningar från olika konton signeras var för sig.',
+    message_en: 'Payments from different accounts are signed separately.',
+  },
+  PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange personnumret för den som signerar med BankID.',
+    message_en: 'Enter the personal identity number of the person signing with BankID.',
+  },
+  PAYMENT_COMPANY_VERIFICATION_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Företaget behöver verifieras hos betalningsleverantören innan första betalningen.',
+    message_en: 'The company needs to be verified with the payment provider before its first payment.',
+  },
+  PAYMENT_SIGNING_NOT_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Signeringen är inte aktiv längre. Ladda om sidan för att se var betalningarna står.',
+    message_en: 'The signing is no longer active. Reload the page to see where the payments stand.',
+  },
+  PAYMENT_SIGNING_NOTHING_TO_SIGN: {
+    httpStatus: 409,
+    message_sv: 'Det finns inga betalningar kvar att signera i den här signeringen.',
+    message_en: 'There are no payments left to sign in this signing.',
+  },
+  PAYMENT_SIGNING_BASKET_UNSUPPORTED: {
+    httpStatus: 409,
+    message_sv: 'Banken kan inte signera flera betalningar med ett BankID. Signera en betalning i taget.',
+    message_en: 'The bank cannot sign several payments with one BankID. Sign one payment at a time.',
+  },
+  PAYMENT_SIGNING_BASKET_TOO_LARGE: {
+    httpStatus: 409,
+    message_sv: 'Banken tar emot färre betalningar per signering. Dela upp betalningarna i mindre omgångar.',
+    message_en: 'The bank takes fewer payments per signing. Split the payments into smaller rounds.',
+  },
+  PAYMENT_SIGNING_REDIRECT_UNSUPPORTED: {
+    httpStatus: 409,
+    message_sv: 'Banken kräver signering på sin egen webbsida, vilket inte stöds här ännu. Betala fakturorna med en betalfil i stället.',
+    message_en: 'The bank requires signing on its own website, which is not supported here yet. Pay the invoices with a payment file instead.',
+  },
+  PAYMENT_PROVIDER_REFUSED: {
+    httpStatus: 502,
+    message_sv: 'Banken tog inte emot betalningen. Kontrollera uppgifterna och försök igen.',
+    message_en: 'The bank did not accept the payment. Check the details and try again.',
+  },
+  PAYMENT_PROVIDER_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Banken svarar inte just nu. Försök igen om en stund.',
+    message_en: 'The bank is not responding right now. Try again in a moment.',
+    retryable: true,
+  },
+}
+
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -7338,6 +7522,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...RECONCILIATION_SIGNOFF,
   ...RECONCILIATION_LINK,
   ...NODE_SYSTEM,
+  ...PAYMENT_ORDERS,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

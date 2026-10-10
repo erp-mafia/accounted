@@ -224,6 +224,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
           'payee_invalid',
           'reference_missing',
           'not_found',
+          'in_bank_payment',
         ]),
       }),
     ),

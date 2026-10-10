@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   bankConnectorMode,
+  paymentsConnectorMode,
   peppolConnectorMode,
   skatteverketConnectorMode,
   hasOwnEnableBankingCredentials,
@@ -118,5 +119,26 @@ describe('skatteverket canary companies', () => {
     vi.stubEnv('SKATTEVERKET_OAUTH2_CLIENT_ID', 'client')
     vi.stubEnv('CONNECT_SKV_CANARY_COMPANIES', 'c-1')
     expect(skatteverketConnectorMode('c-1')).toBeNull()
+  })
+})
+
+describe('payments connector mode', () => {
+  it('is off without a key and on with one, whatever own credentials exist', () => {
+    clear()
+    expect(paymentsConnectorMode()).toBeNull()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
+    expect(paymentsConnectorMode()).toEqual({ baseUrl: 'https://connect.accounted.se/api/connect/payments', key: 'gnubok_ck_x' })
+    // Hosted holds Enable Banking and Skatteverket credentials; payments still route through Connect.
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'app-id')
+    vi.stubEnv('SKATTEVERKET_APIGW_CLIENT_ID', 'gw')
+    vi.stubEnv('QVALIA_PARTNER_REG_NO', '5560000000')
+    expect(paymentsConnectorMode()).not.toBeNull()
+  })
+
+  it('honours GNUBOK_CONNECT_URL', () => {
+    clear()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
+    vi.stubEnv('GNUBOK_CONNECT_URL', 'https://connect.example.se/')
+    expect(paymentsConnectorMode()?.baseUrl).toBe('https://connect.example.se/api/connect/payments')
   })
 })

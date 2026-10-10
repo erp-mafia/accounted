@@ -38,6 +38,7 @@ import {
   type BatchItemWarning,
 } from './batch-eligibility'
 import { formatPayeeLabel, type SupplierPayee, type SupplierPayeeSource } from './supplier-payee'
+import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from './orders/status'
 import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-supplier'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
@@ -145,6 +146,33 @@ export async function loadActiveBatchMap(
   return map
 }
 
+/**
+ * Invoices a bank payment order still covers (lib/payments/orders): a file
+ * must not pay them too. The database refuses such an item as well
+ * (refuse_batch_item_for_invoice_in_payment); reading it here turns that into
+ * a named exclusion instead of a failed create. Fails closed, like
+ * loadActiveBatchMap.
+ */
+export async function loadInvoicesInBankPayment(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoiceIds: string[],
+): Promise<Set<string>> {
+  if (invoiceIds.length === 0) return new Set()
+  const { data, error } = await supabase
+    .from('payment_orders')
+    .select('supplier_invoice_id, status, supplier_invoice_payment_id')
+    .eq('company_id', companyId)
+    .in('supplier_invoice_id', invoiceIds)
+    .in('status', OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES)
+  if (error) throw error
+  return new Set(
+    ((data ?? []) as Array<{ supplier_invoice_id: string; status: string; supplier_invoice_payment_id: string | null }>)
+      .filter((order) => isOpenPaymentOrder(order))
+      .map((order) => order.supplier_invoice_id),
+  )
+}
+
 export interface BatchPreviewLine {
   id: string
   supplier_name: string
@@ -160,7 +188,7 @@ export interface BatchPreviewLine {
 
 export interface BatchPreview {
   eligible: BatchPreviewLine[]
-  excluded: Array<{ id: string; reason: BatchExclusionReason | 'not_found' }>
+  excluded: Array<{ id: string; reason: BatchExclusionReason | 'not_found' | 'in_bank_payment' }>
   total: number
   debtor_ok: boolean
   debtor_missing?: 'iban' | 'bic' | 'org_number'
@@ -176,7 +204,7 @@ export async function previewSupplierPaymentBatch(
   // execution date the bank rejects as passed.
   const today = getSwedishLocalDate()
 
-  const [{ data: invoices }, activeBatchIdByInvoice, debtorResolution] = await Promise.all([
+  const [{ data: invoices }, activeBatchIdByInvoice, debtorResolution, inBankPayment] = await Promise.all([
     supabase
       .from('supplier_invoices')
       .select(INVOICE_SELECT)
@@ -184,6 +212,7 @@ export async function previewSupplierPaymentBatch(
       .in('id', input.ids),
     loadActiveBatchMap(supabase, companyId),
     resolveBatchDebtor(supabase, companyId),
+    loadInvoicesInBankPayment(supabase, companyId, input.ids),
   ])
 
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
@@ -196,6 +225,10 @@ export async function previewSupplierPaymentBatch(
     const invoice = byId.get(id)
     if (!invoice || !invoice.supplier) {
       excluded.push({ id, reason: invoice ? 'payee_missing' : 'not_found' })
+      continue
+    }
+    if (inBankPayment.has(id)) {
+      excluded.push({ id, reason: 'in_bank_payment' })
       continue
     }
     const evaluation = evaluateInvoiceForBatch(invoice, invoice.supplier, {
@@ -330,13 +363,14 @@ export async function planSupplierPaymentBatch(
   }
   const { debtor } = debtorResolution
 
-  const [{ data: invoices }, activeBatchIdByInvoice] = await Promise.all([
+  const [{ data: invoices }, activeBatchIdByInvoice, inBankPayment] = await Promise.all([
     supabase
       .from('supplier_invoices')
       .select(INVOICE_SELECT)
       .eq('company_id', companyId)
       .in('id', ids),
     loadActiveBatchMap(supabase, companyId),
+    loadInvoicesInBankPayment(supabase, companyId, ids),
   ])
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
   const byId = new Map(rows.map((row) => [row.id, row]))
@@ -354,6 +388,10 @@ export async function planSupplierPaymentBatch(
     const invoice = byId.get(item.supplier_invoice_id)
     if (!invoice || !invoice.supplier) {
       ineligible.push({ id: item.supplier_invoice_id, reason: invoice ? 'payee_missing' : 'not_found' })
+      continue
+    }
+    if (inBankPayment.has(invoice.id)) {
+      ineligible.push({ id: invoice.id, reason: 'in_bank_payment' })
       continue
     }
     const evaluation = evaluateInvoiceForBatch(invoice, invoice.supplier, {

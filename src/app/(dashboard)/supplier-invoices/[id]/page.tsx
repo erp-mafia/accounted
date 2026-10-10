@@ -800,7 +800,10 @@ export default function SupplierInvoiceDetailPage() {
       case 'approved':
         return invoice.approved_at ? t('strip_approved', { date: formatDate(invoice.approved_at) }) : t('strip_skipped')
       case 'in_file':
-        return t('strip_in_file', { date: lifecycle?.batch ? formatDate(lifecycle.batch.created_at) : '' })
+        // Same step, two kinds of evidence: a payment file or a bank payment.
+        return lifecycle?.payment_order
+          ? t('strip_in_bank_payment', { date: formatDate(lifecycle.payment_order.created_at) })
+          : t('strip_in_file', { date: lifecycle?.batch ? formatDate(lifecycle.batch.created_at) : '' })
       case 'paid':
         return t('strip_paid', {
           date: invoice.paid_at ? formatDate(invoice.paid_at) : lifecycle?.paid ? formatDate(lifecycle.paid.date) : '',
@@ -817,7 +820,8 @@ export default function SupplierInvoiceDetailPage() {
     !invoice.is_credit_note &&
     ['approved', 'overdue'].includes(invoice.status) &&
     !!invoice.approved_at &&
-    !lifecycle?.batch
+    !lifecycle?.batch &&
+    !lifecycle?.payment_order
   // "Inlagd i banken" (#2220) sits on the same rows as Markera som betald:
   // it is the step right before it. Viewers see the bock only when it is set.
   const showBankEntered =

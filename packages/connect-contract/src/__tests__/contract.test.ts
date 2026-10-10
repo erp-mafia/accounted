@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   CONNECTOR_ERROR_CODES,
+  CONNECTOR_HEADERS,
   CONNECTOR_KEY_PREFIX,
   CONTRACT_VERSION,
+  PAYMENTS_BASE_PATH,
+  PAYMENTS_OPERATIONS,
+  PAYMENTS_SCOPE,
+  PAYMENTS_WRITE_OPERATIONS,
   PEPPOL_OPERATIONS,
   bankSyncRequestSchema,
   bankSyncResponseSchema,
@@ -14,6 +19,12 @@ import {
   peppolParticipantSchema,
   peppolRecipientRegistrationRequestSchema,
   peppolSubmissionSchema,
+  paymentsCreateRequestSchema,
+  paymentsCreatedSchema,
+  paymentsPartySchema,
+  paymentsSigningStartRequestSchema,
+  paymentsSigningStartedSchema,
+  paymentsVerificationStartRequestSchema,
 } from '../index'
 
 const participant = { scheme: '0007', identifier: '5561234567' }
@@ -162,5 +173,95 @@ describe('bank sync operation', () => {
         raw_pages: ['{}'], skipped_pending: 0, returned_min_booking_date: '2026-09-01', returned_max_booking_date: '2026-09-01', effective_date_from: null, pages: 1,
       }).success,
     ).toBe(true)
+  })
+})
+
+describe('payments family', () => {
+  const party = {
+    orgNumber: '5595386219',
+    accountContext: 'corporate',
+    debtorBic: 'SWEDSESS',
+    signerPersonalNumber: '199001011239',
+    psuIpAddress: '203.0.113.10',
+    psuUserAgent: 'UA',
+  }
+  const instruction = {
+    endToEndId: 'E2E-1',
+    amount: 100,
+    currency: 'SEK',
+    requestedExecutionDate: '2026-10-12',
+    debtor: { iban: 'SE6380000832798443379915', bban: null, currency: 'SEK' },
+    payee: { type: 'bankgiro', bankgiro: '5050-1055', name: 'Leverantören AB' },
+    reference: { type: 'ocr', value: '12345678901' },
+  }
+
+  it('names the family, its scope, the version header and the connection header', () => {
+    expect(PAYMENTS_BASE_PATH).toBe('/api/connect/payments')
+    expect(PAYMENTS_SCOPE).toBe('payments')
+    expect(CONNECTOR_HEADERS.contractVersion).toBe('X-Connect-Contract-Version')
+    expect(CONNECTOR_HEADERS.connection).toBe('X-Connector-Connection')
+    expect(CONTRACT_VERSION).toBe('2026-10-10')
+  })
+
+  it('lists every operation as a company POST with schemas, and the writes among them', () => {
+    expect(Object.keys(PAYMENTS_OPERATIONS)).toHaveLength(10)
+    for (const [name, op] of Object.entries(PAYMENTS_OPERATIONS)) {
+      expect(op.method, name).toBe('POST')
+      expect(op.company, name).toBe(true)
+      expect(op.path.startsWith('/'), name).toBe(true)
+      expect(typeof op.request.safeParse).toBe('function')
+      expect(typeof op.response.safeParse).toBe('function')
+    }
+    for (const write of PAYMENTS_WRITE_OPERATIONS) {
+      expect(Object.keys(PAYMENTS_OPERATIONS[write].request.shape as object)).toContain('idempotencyKey')
+    }
+    for (const code of ['CONNECTOR_PAYMENTS_OUTCOME_UNKNOWN', 'CONNECTOR_PAYMENTS_REFUSED', 'CONNECTOR_PAYMENTS_NOT_FOUND', 'CONNECTOR_IDEMPOTENCY_IN_FLIGHT']) {
+      expect(CONNECTOR_ERROR_CODES).toContain(code)
+    }
+  })
+
+  it('validates the party: digits-only identifiers, a BIC, nullable signer details', () => {
+    expect(paymentsPartySchema.safeParse(party).success).toBe(true)
+    expect(paymentsPartySchema.safeParse({ ...party, signerPersonalNumber: null, psuIpAddress: null, psuUserAgent: null }).success).toBe(true)
+    expect(paymentsPartySchema.safeParse({ ...party, orgNumber: '559538-6219' }).success).toBe(false)
+    expect(paymentsPartySchema.safeParse({ ...party, signerPersonalNumber: '19900101-1239' }).success).toBe(false)
+    expect(paymentsPartySchema.safeParse({ ...party, debtorBic: 'swedsess' }).success).toBe(false)
+    expect(paymentsPartySchema.safeParse({ ...party, accountContext: 'business' }).success).toBe(false)
+  })
+
+  it('validates a create request and refuses a bad payee, amount or date', () => {
+    expect(paymentsCreateRequestSchema.safeParse({ idempotencyKey: 'pay:E2E-1', party, instruction }).success).toBe(true)
+    expect(paymentsCreateRequestSchema.safeParse({ party, instruction }).success).toBe(false)
+    expect(paymentsCreateRequestSchema.safeParse({ idempotencyKey: 'k', party, instruction: { ...instruction, amount: 0 } }).success).toBe(false)
+    expect(paymentsCreateRequestSchema.safeParse({ idempotencyKey: 'k', party, instruction: { ...instruction, requestedExecutionDate: '2026-02-30' } }).success).toBe(false)
+    expect(paymentsCreateRequestSchema.safeParse({ idempotencyKey: 'k', party, instruction: { ...instruction, payee: { type: 'swish', number: '123' } } }).success).toBe(false)
+    expect(
+      paymentsCreateRequestSchema.safeParse({ idempotencyKey: 'k', party, instruction: { ...instruction, payee: { type: 'iban', iban: 'SE1', bic: null, name: 'X' } } }).success,
+    ).toBe(true)
+  })
+
+  it('validates created payments and started signings, and keeps the status vocabulary closed', () => {
+    const created = { providerStatus: 'RCVD', status: 'submitted', messages: [], providerPaymentId: 'p-1', product: 'swedish-giro', sentPayeeName: null }
+    expect(paymentsCreatedSchema.safeParse(created).success).toBe(true)
+    expect(paymentsCreatedSchema.safeParse({ ...created, status: 'pending' }).success).toBe(false)
+    const started = {
+      state: 'pending',
+      challenge: { approach: 'decoupled', autostartToken: 't', qrData: 'q', qrImage: null, redirectUrl: null },
+      failureCode: null,
+      providerAuthorisationId: 'a-1',
+      method: 'qr',
+    }
+    expect(paymentsSigningStartedSchema.safeParse(started).success).toBe(true)
+    expect(paymentsSigningStartedSchema.safeParse({ ...started, challenge: null }).success).toBe(true)
+    expect(paymentsSigningStartedSchema.safeParse({ ...started, method: 'sms' }).success).toBe(false)
+  })
+
+  it('offers decoupled signing only in a start request, and defaults the verification country to SE', () => {
+    const target = { kind: 'basket', providerBasketId: 'b-1' }
+    expect(paymentsSigningStartRequestSchema.safeParse({ idempotencyKey: 'k', party, target, method: 'qr' }).success).toBe(true)
+    expect(paymentsSigningStartRequestSchema.safeParse({ idempotencyKey: 'k', party, target, method: 'redirect' }).success).toBe(false)
+    const start = paymentsVerificationStartRequestSchema.safeParse({ orgNumber: '5595386219' })
+    expect(start.success).toBe(true)
+    expect(start.data?.countryCode).toBe('SE')
   })
 })

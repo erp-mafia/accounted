@@ -33,6 +33,13 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
   return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'active' }), isMembershipDormant: () => false }
 })
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
+// Payment orders are written by server code only: the delete removes unsent
+// drafts through the service client, the same mocked client here.
+vi.mock('@/lib/supabase/server', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/supabase/server')>('@/lib/supabase/server')
+  const keys = await import('@/lib/auth/api-keys')
+  return { ...actual, createServiceClient: () => (keys.createServiceClientNoCookies as unknown as () => unknown)() }
+})
 const reverseEntryMock = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', async () => {
   const actual = await vi.importActual<typeof import('@/lib/bookkeeping/engine')>('@/lib/bookkeeping/engine')
@@ -222,6 +229,37 @@ describe('DELETE /api/v1/companies/:companyId/supplier-invoices/:id', () => {
     expect(res.status).toBe(409)
     expect((await res.json()).error.code).toBe('SI_DELETE_IN_PAYMENT_BATCH')
     expect(wrote(client)).toBe(false)
+  })
+
+  it('refuses an invoice whose payment was sent to a bank (409) and writes nothing', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: { data: invoice() },
+      // Released back to approved after a cancelled bank payment: still kept.
+      payment_orders: { data: [{ id: 'po-1', status: 'approved', submitted_at: '2026-10-01T08:00:00Z', provider_payment_id: null, batch_id: null }] },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await del()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('SI_DELETE_HAS_BANK_PAYMENT')
+    expect(wrote(client)).toBe(false)
+    expect(client.calls.some((c) => c.table === 'payment_orders' && c.method === 'delete')).toBe(false)
+  })
+
+  it('deletes unsent bank payment drafts first, then the lines and the invoice', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: { data: invoice() },
+      payment_orders: { data: [{ id: 'po-1', status: 'draft', submitted_at: null, provider_payment_id: null, batch_id: null }] },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await del()
+    expect(res.status).toBe(200)
+    const order = client.calls.map((c) => `${c.table}.${c.method}`)
+    const ordersGone = order.indexOf('payment_orders.delete')
+    expect(ordersGone).toBeGreaterThan(-1)
+    expect(ordersGone).toBeLessThan(order.indexOf('supplier_invoice_items.delete'))
+    expect(ordersGone).toBeLessThan(order.indexOf('supplier_invoices.delete'))
   })
 
   it('a dry run previews the delete and writes nothing', async () => {

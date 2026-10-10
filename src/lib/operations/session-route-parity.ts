@@ -70,6 +70,7 @@ const ASSISTANT = 'in-app assistant runtime; external agents are the API custome
 const CRON = 'machine endpoint: cron receiver'
 const WEBHOOK = 'machine endpoint: inbound webhook'
 const CONNECTOR = 'machine endpoint: self-hosted connector proxy, authenticated by a connector key'
+const PAYMENT_SIGNING = 'BankID signing of a bank payment: the account holder signs money out in person, no machine door signs'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
 
@@ -393,6 +394,18 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/supplier-invoices/payment-batches': covered([`POST ${V}/supplier-payment-batches`, 'gnubok_create_supplier_payment_batch']),
   'POST /api/supplier-invoices/payment-batches/:id/cancel': covered([`POST ${V}/supplier-payment-batches/:id/cancel`, 'gnubok_cancel_supplier_payment_batch']),
   'POST /api/supplier-invoices/payment-batches/preview': covered([`POST ${V}/supplier-payment-batches/preview`, 'gnubok_preview_supplier_payment_batch']),
+
+  // ── Bank payments (payment initiation, lib/payments/orders) ─────────
+  'POST /api/payments/orders': covered([`POST ${V}/payment-orders`, 'gnubok_prepare_payments'], 'an agent prepares drafts; a person approves and signs'),
+  'POST /api/payments/orders/approve': covered([`POST ${V}/payment-orders/approve`], 'attestation is a person\'s act: v1 only (an API key is a person\'s tool), no MCP tool'),
+  'POST /api/payments/orders/unapprove': covered([`POST ${V}/payment-orders/unapprove`]),
+  'POST /api/payments/orders/:id/cancel': covered([`POST ${V}/payment-orders/:id/cancel`, 'gnubok_cancel_payment_order']),
+  'POST /api/payments/orders/:id/resolve': uiOnly('a person attests what the bank cannot tell (a payment that never reached the bank, or one paid): never an agent'),
+  'POST /api/payments/signing': uiOnly(PAYMENT_SIGNING),
+  'POST /api/payments/signing/:id/poll': uiOnly(PAYMENT_SIGNING),
+  'POST /api/payments/signing/:id/restart': uiOnly(PAYMENT_SIGNING),
+  'POST /api/payments/verification': covered([`POST ${V}/payment-orders/verification/start`], 'answers the provider\'s know-your-customer form link, which a signatory fills in and signs'),
+  'POST /api/payments/orders/status/cron': machine(CRON),
 
   // ── Expenses, mileage, webshop ─────────────────────────────────────
   'POST /api/expense-claims': covered([`POST ${V}/expense-claims`, 'gnubok_create_expense_claim']),

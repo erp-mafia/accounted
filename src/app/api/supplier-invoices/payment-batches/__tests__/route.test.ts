@@ -201,6 +201,7 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { data: { ok: true, batch: batchRow() } },
     ])
     const response = await createBatch(

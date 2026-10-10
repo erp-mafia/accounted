@@ -116,7 +116,9 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
       },
       { href: '/expenses', labelKey: 'expenses', requiresExpenses: true },
       { href: '/mileage', labelKey: 'mileage', requiresMileage: true },
-      { href: '/supplier-invoices/payment-files', labelKey: 'v2_payment_files' },
+      // Betalningar took over Betalfiler (connections plan, milestone 1): bank
+      // payments by where they stand, and the payment files behind a link.
+      { href: '/payments', labelKey: 'v2_payments' },
       { href: '/suppliers', labelKey: 'suppliers' },
     ],
   },

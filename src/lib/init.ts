@@ -7,6 +7,7 @@ import { registerDocumentReadHandler } from '@/lib/events/handlers/document-read
 import { registerAgentFeedbackRelayHandler } from '@/lib/events/handlers/agent-feedback-relay-handler'
 import { registerWebhookHandler } from '@/lib/webhooks/handler'
 import { registerConfiguredPeppolTransports } from '@/lib/invoices/transports'
+import { registerConnectPaymentsProvider } from '@/lib/payments/initiation/connect'
 import { registerObservabilitySink } from '@/lib/observability'
 import { postHogSink } from '@/lib/analytics/posthog-observability'
 import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
@@ -104,6 +105,11 @@ export function ensureInitialized(): void {
   // Peppol Access Point adapters are registered from the environment here so
   // every route that reports transport availability sees the same answer.
   registerConfiguredPeppolTransports()
+  // Bank payments reach the payment initiation provider only through Accounted
+  // Connect, hosted and self-hosted alike: the adapter registers when this
+  // installation has a connector key, and with none every payments door
+  // answers unavailable.
+  registerConnectPaymentsProvider()
   loadExtensions()
 
   initialized = true

@@ -117,6 +117,18 @@ import {
   supplierPaymentBatchesPreview,
 } from './supplier-payment-batches'
 import {
+  paymentOrdersApprove,
+  paymentOrdersCancel,
+  paymentOrdersGet,
+  paymentOrdersList,
+  paymentOrdersPrepare,
+  paymentOrdersUnapprove,
+  paymentsAvailability,
+  paymentsSigningLink,
+  paymentsVerification,
+  paymentsVerificationStart,
+} from './payment-orders'
+import {
   documentsDelete,
   documentsGet,
   documentsList,
@@ -300,6 +312,17 @@ export const OPERATIONS: readonly AnyOperation[] = [
   supplierPaymentBatchesGet,
   supplierPaymentBatchesFile,
   supplierPaymentBatchesCancel,
+  // payment-orders (bank payments; approve is v1 only, signing is a person's act: no door starts a BankID signing)
+  paymentOrdersList,
+  paymentOrdersGet,
+  paymentOrdersPrepare,
+  paymentOrdersApprove,
+  paymentOrdersUnapprove,
+  paymentOrdersCancel,
+  paymentsAvailability,
+  paymentsVerification,
+  paymentsVerificationStart,
+  paymentsSigningLink,
   // documents
   documentsList,
   documentsGet,

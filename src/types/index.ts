@@ -1284,6 +1284,18 @@ export interface SupplierInvoice {
   reverse_charge: boolean
 
   payment_reference: string | null
+  /**
+   * The payee the invoice document states (scan, Peppol or typed), validated.
+   * The supplier card holds the known default; a payment compares the two.
+   * Null when the document stated none. Optional: rows read before
+   * 20261010090000 and narrow selects do not carry them.
+   */
+  payee_bankgiro?: string | null
+  payee_plusgiro?: string | null
+  payee_iban?: string | null
+  payee_bic?: string | null
+  payee_clearing?: string | null
+  payee_account?: string | null
   paid_at: string | null
   paid_amount: number
   remaining_amount: number
@@ -2761,6 +2773,10 @@ export type PendingOperationType =
   | 'attach_salary_expense_claims'
   | 'create_supplier_payment_batch'
   | 'cancel_supplier_payment_batch'
+  // Bank payments (lib/payments/orders): an agent prepares drafts or asks for
+  // a cancel; approval and BankID signing stay a person's acts in the app.
+  | 'prepare_payment_orders'
+  | 'cancel_payment_order'
   | 'book_invoice'
   | 'bulk_book_invoices'
   | 'book_supplier_invoice'

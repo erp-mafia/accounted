@@ -97,6 +97,7 @@ vi.mock('@/lib/bokslut/arsredovisning/version-service', async (importOriginal) =
 import { tools, isStagingTool, STAGE_BRIDGE_TARGETS } from '../server'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { registerPeppolTransport } from '@/lib/invoices/peppol-transport'
+import { registerPaymentInitiationProvider, type PaymentInitiationProvider } from '@/lib/payments/initiation/provider'
 
 // The Peppol tools refuse up front when no access point is configured. A
 // transport whose every network method throws: the previews must never call
@@ -117,6 +118,27 @@ registerPeppolTransport({
   registerRecipient: noNetwork,
   unregisterRecipient: noNetwork,
 })
+
+// The bank payment tools refuse up front when no payment provider serves the
+// company. A provider whose every bank method throws: the previews (prepare's
+// eligibility run, cancel's status check) must never call the bank; a call
+// would surface as the tool's failure instead of a staging insert.
+const noBank = async (): Promise<never> => {
+  throw new Error('a staging preview contacted the bank')
+}
+registerPaymentInitiationProvider({
+  id: 'open_payments',
+  isAvailableFor: () => true,
+  createPayment: noBank,
+  getPaymentState: noBank,
+  createSigningBasket: noBank,
+  startSigning: noBank,
+  pollSigning: noBank,
+  cancelPayment: noBank,
+  getBankCapabilities: noBank,
+  getCompanyVerification: noBank,
+  startCompanyVerification: noBank,
+} as PaymentInitiationProvider)
 
 type Tool = (typeof tools)[number]
 
@@ -689,6 +711,27 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     empty: ['supplier_payment_batch_items'],
   },
   gnubok_cancel_supplier_payment_batch: { rows: { supplier_payment_batches: { status: 'created', item_count: 1, total_amount: 737.5, download_count: 0 } } },
+  // Bank payments: a payable SEK invoice with a valid bankgiro on the card,
+  // a payable company account (Swedish IBAN in SEK at a known bank), and
+  // nothing holding the invoice (no active betalfil, no open order). The
+  // preview stops before create_payment_orders; the fake provider is never
+  // asked (prepare only checks that one serves the installation and that the
+  // company is on a paid plan: the grant row).
+  gnubok_prepare_payments: {
+    rows: {
+      'rpc:company_capability_grant_rows': { expires_at: null },
+      cash_accounts: { iban: 'SE3550000000054910000003', currency: 'SEK', name: 'Företagskonto', enabled: true, bank_connection: { bank_name: 'SEB' } },
+      supplier_invoices: {
+        status: 'approved', approved_at: '2026-08-01T10:00:00Z', due_date: '2099-08-20', remaining_amount: 737.5, currency: 'SEK',
+        is_credit_note: false, payment_reference: null, supplier_invoice_number: 'CD3014794407', supplier_id: SOME_UUID,
+        payee_bankgiro: null, payee_plusgiro: null, payee_clearing: null, payee_account: null,
+      },
+      suppliers: { name: 'Derome Bygg AB', bankgiro: '5050-1055', plusgiro: null, bank_account: null, clearing_number: null, account_number: null },
+    },
+    empty: ['supplier_payment_batch_items', 'payment_orders'],
+  },
+  // A draft the bank does not have: cancelled here, so the preview asks no bank.
+  gnubok_cancel_payment_order: { rows: { payment_orders: { status: 'draft', provider_payment_id: null, outcome_unknown_at: null } } },
   // A custom (non-system) dimension: system dimensions are never deleted.
   gnubok_delete_dimension: { rows: { dimensions: { is_system: false, sie_dim_no: 20, name: 'Avdelning' } } },
   // Arkiv: a fact about the company itself; the predicate must belong to the subject kind.

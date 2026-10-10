@@ -233,7 +233,15 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // the invoice columns, the same spread the web, v1, webshop and sales-order
 // inserts already carry. Listing the columns literally again would bring
 // back the hand copy this change removes.
-const UNRESOLVED_CEILING = 425
+// Payment orders (+1): lib/payments/orders/types.ts recordPaymentOrderEvents,
+// the one insert site for payment_order_events, inserts one row per event
+// built by a map, the same shape as the Arkiv phase 1 and 4 entries. The
+// headroom it once fitted in went to the MCP create_invoice entry above, so
+// the ceiling rises by exactly that one site.
+// Payment orders over v1 and MCP (+1): lib/operations/payment-orders.ts
+// paymentOrdersList pages with the (created_at, id) keyset .or() filter the
+// supplier payment batch list already carries (a runtime or-string).
+const UNRESOLVED_CEILING = 427
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

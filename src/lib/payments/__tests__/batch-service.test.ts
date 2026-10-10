@@ -132,6 +132,23 @@ describe('previewSupplierPaymentBatch', () => {
     expect(preview.debtor_ok).toBe(true)
   })
 
+  it('excludes an invoice a bank payment order still covers, by name', async () => {
+    const mock = createQueuedMockSupabase()
+    // from() order: supplier_invoices, batch items, companies, settings, open payment orders
+    mock.enqueueMany([
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [{ supplier_invoice_id: 'inv-1', status: 'awaiting_signature', supplier_invoice_payment_id: null }] },
+    ])
+
+    const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['inv-1'] })
+
+    expect(preview.eligible).toEqual([])
+    expect(preview.excluded).toEqual([{ id: 'inv-1', reason: 'in_bank_payment' }])
+  })
+
   it('excludes ineligible invoices with a reason and unknown ids as not_found', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueueMany([
@@ -201,6 +218,25 @@ describe('createSupplierPaymentBatch', () => {
   // settings (debtor first), then supplier_invoices, batch items (active-batch
   // fast path), then the single create_supplier_payment_batch RPC call that
   // writes header + items atomically.
+  it('refuses an invoice a bank payment order still covers before calling the RPC', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: [{ supplier_invoice_id: 'inv-1', status: 'executed', supplier_invoice_payment_id: null }] },
+    ])
+
+    const result = await createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
+      format: 'pain001',
+      items: [{ supplier_invoice_id: 'inv-1' }],
+    })
+
+    expect(result).toEqual({ ok: false, code: 'ineligible', details: [{ id: 'inv-1', reason: 'in_bank_payment' }] })
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('creates a batch through the atomic RPC with snapshotted payee rows and a derived msg_id', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueueMany([
@@ -208,6 +244,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { data: { ok: true, batch: batchRow() } },
     ])
 
@@ -277,6 +314,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       {
         data: {
           ok: false,
@@ -307,11 +345,13 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { data: { ok: false, code: 'ineligible', details: [{ id: 'inv-1', reason: 'not_payable' }] } },
       { data: companyRow },
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { data: { ok: false, code: 'amount_exceeds_remaining', details: [{ id: 'inv-1' }] } },
     ])
     const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
@@ -355,6 +395,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { error: rpcError },
     ])
 
@@ -401,6 +442,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { error: rpcError },
     ])
 
@@ -440,6 +482,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { error: rpcError },
     ])
 
@@ -468,11 +511,13 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { data: { ok: false, code: 'something_new' } },
       { data: companyRow },
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { data: null },
     ])
     const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
@@ -519,11 +564,13 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { data: { ok: true, batch: batchRow() } },
       { data: companyRow },
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { data: { ok: false, code: 'already_batched', details: [{ id: 'inv-1', batch_id: 'b' }] } },
     ])
     const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
@@ -552,6 +599,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow(), invoiceRow({ id: 'inv-2', currency: 'EUR' })] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -579,6 +627,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -606,6 +655,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: activeItems },
+      { data: [] }, // open bank payment orders: none
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -633,6 +683,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: activeItems },
+      { data: [] }, // open bank payment orders: none
       { data: { ok: true, batch: batchRow() } },
     ])
 
@@ -694,6 +745,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: { ...settingsRow, bankgiro: '1234-5678' } },
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
       { data: { ok: true, batch: batchRow() } },
     ])
 

@@ -45,6 +45,7 @@ import {
 } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { createServiceClient } from '@/lib/supabase/server'
 import {
   BANK_ENTERED_SUPPLIER_INVOICE_STATUSES,
   canMarkSupplierInvoiceBankEntered,
@@ -137,6 +138,25 @@ export async function deleteSupplierInvoice(
     return { ok: false, code: 'SI_DELETE_IN_PAYMENT_BATCH', details: { batchId: linkedBatchItem.batch_id } }
   }
 
+  // payment_orders.supplier_invoice_id is ON DELETE RESTRICT too. An order
+  // that was ever claimed for a bank documents a payment instruction and keeps
+  // the invoice; orders that never left the app (a draft, an approval, a
+  // cancel, nothing sent) go with it, so a wrong invoice can still be deleted.
+  // Checked before anything is deleted.
+  const { data: orderRows, error: orderLookupError } = await supabase
+    .from('payment_orders')
+    .select('id, status, submitted_at, provider_payment_id, batch_id')
+    .eq('company_id', companyId)
+    .eq('supplier_invoice_id', supplierInvoiceId)
+  if (orderLookupError) return failed(orderLookupError)
+  const orders = (orderRows ?? []) as Array<{ id: string; status: string; submitted_at: string | null; provider_payment_id: string | null; batch_id: string | null }>
+  const sentOrder = orders.find(
+    (o) => o.submitted_at || o.provider_payment_id || o.batch_id || !['draft', 'approved', 'cancelled'].includes(o.status),
+  )
+  if (sentOrder) {
+    return { ok: false, code: 'SI_DELETE_HAS_BANK_PAYMENT', details: { paymentOrderId: sentOrder.id } }
+  }
+
   if (options.dryRun) {
     return {
       ok: true,
@@ -148,8 +168,25 @@ export async function deleteSupplierInvoice(
         status: existing.status,
         total: existing.total ?? null,
         currency: existing.currency ?? null,
-        will: 'delete the unbooked supplier invoice and its rows; no verifikat exists, so nothing in the books changes',
+        will:
+          orders.length > 0
+            ? `delete the unbooked supplier invoice, its rows and ${orders.length} unsent bank payment draft(s); no verifikat exists, so nothing in the books changes`
+            : 'delete the unbooked supplier invoice and its rows; no verifikat exists, so nothing in the books changes',
       },
+    }
+  }
+
+  // Unsent bank payment drafts first: only server code writes payment orders.
+  if (orders.length > 0) {
+    const { error: orderDeleteError } = await createServiceClient()
+      .from('payment_orders')
+      .delete()
+      .eq('company_id', companyId)
+      .eq('supplier_invoice_id', supplierInvoiceId)
+      .in('id', orders.map((o) => o.id))
+    if (orderDeleteError) {
+      log.error('unsent payment orders could not be deleted with their invoice', orderDeleteError as unknown as Error, { supplierInvoiceId })
+      return failed(orderDeleteError)
     }
   }
 

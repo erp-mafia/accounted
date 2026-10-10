@@ -2,7 +2,7 @@
 
 # Suppliers (AP) endpoints
 
-Accounts payable: supplier register, received supplier invoices (register -> approve -> book if deferred -> pay via a supplier payment file or mark-paid, or credit), and expense claims (utlägg) with their payouts.
+Accounts payable: supplier register, received supplier invoices (register -> approve -> book if deferred -> pay via a supplier payment file, a bank payment order signed with BankID in Accounted, or mark-paid, or credit), and expense claims (utlägg) with their payouts.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -410,6 +410,752 @@ Example response `200`:
     "voucher_number": 118,
     "total_sek": 500,
     "claim_count": 1
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/payment-orders`
+
+**List bank payment orders (betalningar via banken), newest first.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Returns the company's bank payment orders, newest first, cursor-paginated: status, amount, execution date, the payee as the order carries it (with its check), the reference, the bank's own status, and the supplier invoice each order pays. Filter by one status, by open (everything not yet closed) or by supplier_invoice_id. Pass next_cursor from the answer as cursor to get the next page; it is null on the last page.
+
+**Use when:** Following up bank payments: what is waiting for approval or signing, what the bank holds, what is paid.
+**Do not use for:** Payment files (betalfiler): GET /supplier-payment-batches. Preparing a payment: POST /payment-orders.
+
+**Pitfalls:**
+- next_cursor rides in data (not meta): pass it back as ?cursor= until it is null.
+- An executed order stays open until its bank debit is matched to the invoice (matched_at); the invoice shows as unpaid until then.
+- outcome_unknown true means the bank may hold the payment while its answer was lost: nobody should pay the invoice again; a person resolves it in Accounted.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `status` | query | `"draft" \| "approved" \| "submitted" \| "awaiting_signature" \| "awaiting_second_signer" \| "accepted" \| "executed" \| "rejected" \| "cancelled" \| "failed" \| "open" \| "all"` | no | One status; open (every order not closed: drafts, approved, at the bank, and executed ones whose debit is not matched yet); or all (default). |
+| `supplier_invoice_id` | query | `string` | no | Only the orders that pay this supplier invoice. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). |
+| `cursor` | query | `string` | no | next_cursor from the previous page. Omit for the first page. |
+
+Response `200`:
+```ts
+{
+  data: {
+    payment_orders: { payment_order_id: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
+    next_cursor: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "payment_orders": [
+      {
+        "payment_order_id": "7c2e…",
+        "supplier_invoice_id": "9e2f…",
+        "payment_order_batch_id": null,
+        "status": "draft",
+        "amount": 737.5,
+        "currency": "SEK",
+        "requested_execution_date": "2026-10-20",
+        "cash_account_id": "41b0…",
+        "payee": {
+          "type": "bankgiro",
+          "label": "BG 5050-1055",
+          "name": "Derome Bygg AB",
+          "source": "supplier",
+          "check": "known"
+        },
+        "reference": {
+          "type": "ocr",
+          "value": "4400112233"
+        },
+        "end_to_end_id": "ACC7C2E1A2F3B4C5",
+        "provider_status": null,
+        "provider_error_code": null,
+        "outcome_unknown": false,
+        "approved_at": null,
+        "submitted_at": null,
+        "signed_at": null,
+        "executed_at": null,
+        "cancelled_at": null,
+        "matched_at": null,
+        "created_at": "2026-10-10T09:00:00Z",
+        "updated_at": "2026-10-10T09:00:00Z",
+        "supplier_invoice": {
+          "supplier_invoice_number": "CD3014794407",
+          "due_date": "2026-10-20",
+          "supplier_name": "Derome Bygg AB"
+        }
+      }
+    ],
+    "next_cursor": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/payment-orders`
+
+**Prepare draft bank payments (betalningar via banken) for supplier invoices.**
+`scope:suppliers:write · risk:medium · idempotent · dry-run · reversible`
+
+Creates one draft payment order per payable supplier invoice, from one of the company's own bank accounts: the remaining amount, the due date (or today when it has passed) unless execution_date is given, the supplier's bankgiro, plusgiro or bank account, and the OCR or invoice number as reference. Nothing reaches the bank: a draft is approved by a person (POST /payment-orders/approve) and then signed with BankID on the Betalningar page in Accounted. The database decides each order's payee check (known, new, changed) from the supplier card, the invoice and payments a person already approved; new and changed accounts need that person's confirmation at approval. Invoices that cannot be paid are skipped with a reason; the request fails only when nothing is payable. Dry-runnable: ?dry_run=true answers the lines without creating anything.
+
+**Use when:** The user wants to pay approved supplier invoices from their bank account in Accounted instead of a payment file. Call with the invoices and the account; then hand the person the Betalningar link (GET /payment-orders/signing-link).
+**Do not use for:** A payment file (POST /supplier-payment-batches), marking an invoice paid (mark-paid), or signing: no API or MCP door signs.
+
+**Pitfalls:**
+- PAYMENTS_UNAVAILABLE: bank payments are not switched on for the company (no provider, or a sandbox company). Check GET /payment-orders/availability first.
+- PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE: the account needs a Swedish IBAN in SEK, enabled, at a bank the provider reaches; details.reason says which.
+- PAYMENT_ORDERS_INELIGIBLE: no invoice in the selection is payable; details.skipped names each reason.
+- An invoice already in an open bank payment or an active betalfil is skipped (already_in_payment, in_payment_file), never paid twice.
+- use_stated_payee_for pays the account the invoice states instead of the supplier card for the listed invoices; the database then marks the order's payee changed and a person confirms it at approval.
+- Only SEK; at most 100 invoices per call; execution_date may not be in the past.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  supplier_invoice_ids: string[],
+  cash_account_id: string,
+  execution_date?: string,
+  use_stated_payee_for?: string[]
+}
+```
+
+Example request:
+```json
+{
+  "supplier_invoice_ids": [
+    "9e2f…"
+  ],
+  "cash_account_id": "41b0…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    payment_orders: { payment_order_id: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
+    skipped: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "not_found" | "in_bank_payment" | "in_payment_file" | "already_in_payment" }[],
+    warnings: { supplier_invoice_id: string, code: "unattested" | "ocr_invalid" | "payee_changed" | "payee_new", alternative_payee?: string | null }[],
+    next: { approve: string, sign_in_app: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "payment_orders": [
+      {
+        "payment_order_id": "7c2e…",
+        "supplier_invoice_id": "9e2f…",
+        "payment_order_batch_id": null,
+        "status": "draft",
+        "amount": 737.5,
+        "currency": "SEK",
+        "requested_execution_date": "2026-10-20",
+        "cash_account_id": "41b0…",
+        "payee": {
+          "type": "bankgiro",
+          "label": "BG 5050-1055",
+          "name": "Derome Bygg AB",
+          "source": "supplier",
+          "check": "known"
+        },
+        "reference": {
+          "type": "ocr",
+          "value": "4400112233"
+        },
+        "end_to_end_id": "ACC7C2E1A2F3B4C5",
+        "provider_status": null,
+        "provider_error_code": null,
+        "outcome_unknown": false,
+        "approved_at": null,
+        "submitted_at": null,
+        "signed_at": null,
+        "executed_at": null,
+        "cancelled_at": null,
+        "matched_at": null,
+        "created_at": "2026-10-10T09:00:00Z",
+        "updated_at": "2026-10-10T09:00:00Z",
+        "supplier_invoice": null
+      }
+    ],
+    "skipped": [],
+    "warnings": [],
+    "next": {
+      "approve": "/api/v1/companies/{companyId}/payment-orders/approve",
+      "sign_in_app": "https://app.accounted.se/payments"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/payment-orders/{id}`
+
+**Read one bank payment order.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Returns the order with its payee (as the order carries it, with its check), reference, status, the bank's own status and error code, its timestamps and the supplier invoice it pays.
+
+**Use when:** Checking where one payment stands.
+**Do not use for:** Several orders at once (GET /payment-orders).
+
+**Pitfalls:**
+- An order of another company answers 404, like one that does not exist.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    payment_order_id: string,
+    supplier_invoice_id: string | null,
+    payment_order_batch_id: string | null,
+    status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed",
+    amount: number,
+    currency: string,
+    requested_execution_date: string,
+    cash_account_id: string,
+    payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier", check: "unchecked" | "known" | "new" | "changed" },
+    reference: { type: "ocr" | "message", value: string },
+    end_to_end_id: string,
+    provider_status: string | null,
+    provider_error_code: string | null,
+    outcome_unknown: boolean,
+    approved_at: string | null,
+    submitted_at: string | null,
+    signed_at: string | null,
+    executed_at: string | null,
+    cancelled_at: string | null,
+    matched_at: string | null,
+    created_at: string,
+    updated_at: string,
+    supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "payment_order_id": "7c2e…",
+    "supplier_invoice_id": "9e2f…",
+    "payment_order_batch_id": null,
+    "status": "draft",
+    "amount": 737.5,
+    "currency": "SEK",
+    "requested_execution_date": "2026-10-20",
+    "cash_account_id": "41b0…",
+    "payee": {
+      "type": "bankgiro",
+      "label": "BG 5050-1055",
+      "name": "Derome Bygg AB",
+      "source": "supplier",
+      "check": "known"
+    },
+    "reference": {
+      "type": "ocr",
+      "value": "4400112233"
+    },
+    "end_to_end_id": "ACC7C2E1A2F3B4C5",
+    "provider_status": null,
+    "provider_error_code": null,
+    "outcome_unknown": false,
+    "approved_at": null,
+    "submitted_at": null,
+    "signed_at": null,
+    "executed_at": null,
+    "cancelled_at": null,
+    "matched_at": null,
+    "created_at": "2026-10-10T09:00:00Z",
+    "updated_at": "2026-10-10T09:00:00Z",
+    "supplier_invoice": {
+      "supplier_invoice_number": "CD3014794407",
+      "due_date": "2026-10-20",
+      "supplier_name": "Derome Bygg AB"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/payment-orders/{id}/cancel`
+
+**Cancel a bank payment order.**
+`scope:suppliers:write · risk:medium · idempotent · dry-run`
+
+Before the bank has the payment (draft, approved) the order is cancelled in Accounted. After that the bank is asked, and the order is cancelled only when the bank confirms the cancel; any other bank answer leaves the payment where it is and is reported as an error code. An executed payment cannot be cancelled. An order whose bank outcome is unknown is not cancelled here: a person resolves it in Accounted after checking the online bank. Dry-runnable.
+
+**Use when:** A prepared or approved payment should not be made, or a payment the bank holds must be stopped before execution.
+**Do not use for:** Un-paying an invoice, or an executed payment (ask the bank to recall it).
+
+**Pitfalls:**
+- PAYMENT_CANCEL_NEEDS_SIGNING: the bank wants the cancel signed; cancel it in the online bank.
+- PAYMENT_CANCEL_TOO_LATE: executed, or past the bank's cut-off.
+- PAYMENT_CANCEL_NOT_CONFIRMED: the bank did not confirm; check the payment in the online bank. The order is unchanged.
+- PAYMENT_CANCEL_CONFIRMATION_REQUIRED: the bank may hold the payment but its answer was lost; a person resolves the order in Accounted.
+- PAYMENT_ORDER_CREATE_IN_PROGRESS: the payment is on its way to the bank right now; wait a few minutes.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { payment_order_id: string, cancelled: boolean, status: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "payment_order_id": "7c2e…",
+    "cancelled": true,
+    "status": "cancelled"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/payment-orders/approve`
+
+**Approve (attest) draft bank payments so they can be signed.**
+`scope:suppliers:write · risk:high · idempotent · dry-run · reversible`
+
+Moves draft orders to approved: the attestation that these invoices are to be paid, from this account, to these payees. An order to an account that is new for the supplier or differs from the supplier card (payee.check new or changed) needs its invoice named in confirmed_payee_invoice_ids: one confirmation per invoice, never one flag for a whole selection. Nothing reaches the bank: signing with BankID happens on the Betalningar page, by a person. All or nothing: a draft that changed meanwhile fails the request. Undo with POST /payment-orders/unapprove.
+
+**Use when:** The person behind the API key has checked the drafts and attests them before signing in Accounted.
+**Do not use for:** Signing (only a person signs, in Accounted) or preparing (POST /payment-orders).
+
+**Pitfalls:**
+- PAYMENT_ORDERS_PAYEE_CONFIRMATION_REQUIRED: details.invoices lists the invoices whose account must be confirmed; resend with them in confirmed_payee_invoice_ids after checking the account.
+- PAYMENT_ORDERS_WRONG_STATUS: an order is no longer a draft (details.orders); reload and select again.
+- Not offered over MCP: attestation is a person's act. An agent prepares and hands out the Betalningar link.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ payment_order_ids: string[], confirmed_payee_invoice_ids?: string[] }
+```
+
+Example request:
+```json
+{
+  "payment_order_ids": [
+    "7c2e…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { approved_payment_order_ids: string[], sign_in_app: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "approved_payment_order_ids": [
+      "7c2e…"
+    ],
+    "sign_in_app": "https://app.accounted.se/payments"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/payment-orders/availability`
+
+**Whether the company can pay through its bank from Accounted, and from which accounts.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Answers available (a payment provider serves this installation, the company is on a paid plan and it is not a sandbox), why not when it is false (reason: no_provider, not_in_pilot, subscription, sandbox), the provider, and the company's bank accounts with payable true or a reason (account_disabled, not_sek, iban_missing, bank_unknown). signer_known says whether the calling person has a BankID login on file, so signing needs no typed personnummer. IBANs are masked.
+
+**Use when:** Before preparing a bank payment: pick a payable cash_account_id.
+**Do not use for:** Payment files, which need no provider (GET /supplier-payment-batches/preview).
+
+**Pitfalls:**
+- available false means POST /payment-orders answers PAYMENTS_UNAVAILABLE; pay with a payment file instead.
+- reason subscription: bank payments are part of the paid plan; the company upgrades under Inställningar, Abonnemang.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    available: boolean,
+    reason: "no_provider" | "not_in_pilot" | "subscription" | "sandbox" | null,
+    provider: string | null,
+    accounts: { cash_account_id: string, name: string | null, ledger_account: string, iban: string | null, payable: boolean, reason: "account_disabled" | "not_sek" | "iban_missing" | "bank_unknown" | null }[],
+    signer_known: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "available": true,
+    "reason": null,
+    "provider": "open_payments",
+    "accounts": [
+      {
+        "cash_account_id": "41b0…",
+        "name": "Företagskonto",
+        "ledger_account": "1930",
+        "iban": "SE35 **** 0003",
+        "payable": true,
+        "reason": null
+      }
+    ],
+    "signer_known": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/payment-orders/signing-link`
+
+**The Betalningar page link where a person approves and signs bank payments, with what is waiting there.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Answers the URL of the Betalningar page in Accounted (optionally with orders preselected), how many orders wait for approval, how many wait for a BankID signing, how many the bank holds, how many have an unknown bank outcome, and the company's verification at the provider when it answers. Approval and signing are a person's acts in Accounted; no door here does them.
+
+**Use when:** After preparing payments, to hand the person the place where they sign; or to report what is waiting.
+**Do not use for:** The orders themselves (GET /payment-orders).
+
+**Pitfalls:**
+- verification is null when the provider did not answer in time; it is informational here.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `payment_order_ids` | query | `string` | no | Comma-separated payment_order_id values to preselect on the page; omit for the page as it stands. |
+
+Response `200`:
+```ts
+{
+  data: {
+    url: string,
+    awaiting_approval: number,
+    awaiting_signature: number,
+    at_bank: number,
+    outcome_unknown: number,
+    verification: { status: "valid" | "invalid" | "unknown", valid_until: string | null } | null,
+    note: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "url": "https://app.accounted.se/payments?orders=7c2e…",
+    "awaiting_approval": 1,
+    "awaiting_signature": 0,
+    "at_bank": 0,
+    "outcome_unknown": 0,
+    "verification": {
+      "status": "valid",
+      "valid_until": "2027-10-03"
+    },
+    "note": "Approval and BankID signing happen in Accounted, by a person: open the url. No API or MCP door signs a payment."
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/payment-orders/unapprove`
+
+**Take approved bank payments back to draft.**
+`scope:suppliers:write · risk:low · idempotent · dry-run · reversible`
+
+Moves approved orders back to draft so they can be edited or cancelled before signing. Only orders the bank does not have yet (status approved) can go back; anything submitted is cancelled instead (POST /payment-orders/{id}/cancel). All or nothing.
+
+**Use when:** An attested payment should not be signed as it stands.
+**Do not use for:** Stopping a payment the bank has (cancel) or removing a draft (cancel).
+
+**Pitfalls:**
+- PAYMENT_ORDERS_WRONG_STATUS: an order is not approved any more (details.unapproved lists what did move).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ payment_order_ids: string[] }
+```
+
+Example request:
+```json
+{
+  "payment_order_ids": [
+    "7c2e…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { unapproved_payment_order_ids: string[] },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "unapproved_payment_order_ids": [
+      "7c2e…"
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/payment-orders/verification`
+
+**The company's verification (know your customer) at the payment provider.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Asks the provider whether it has verified the company. Payments are refused until the status is valid. A missing or lapsed verification is started with POST /payment-orders/verification/start, which answers a form a signatory fills in and signs.
+
+**Use when:** Bank payments are available but signing is refused for the company, or before the first payment.
+**Do not use for:** Whether payments are switched on at all (GET /payment-orders/availability).
+
+**Pitfalls:**
+- PAYMENT_PROVIDER_UNAVAILABLE is transient: the provider did not answer; try again shortly.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { status: "valid" | "invalid" | "unknown", valid_until: string | null },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "status": "valid",
+    "valid_until": "2027-10-03"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/payment-orders/verification/start`
+
+**Start the company's verification at the payment provider and get the form link.**
+`scope:suppliers:write · risk:low · dry-run · reversible`
+
+Creates a verification at the provider and answers the link to its form, which a signatory of the company fills in and signs with BankID (valid for a limited time; starting again makes a new form). The provider approves afterwards; read the result with GET /payment-orders/verification. Changes nothing in the books.
+
+**Use when:** GET /payment-orders/verification answers invalid.
+**Do not use for:** Checking the status (GET /payment-orders/verification).
+
+**Pitfalls:**
+- The link is for a person who may sign for the company; it is not an API.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { url: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "url": "https://kyc.openbankingplatform.com/…"
   },
   "meta": {
     "request_id": "req_…",
@@ -1836,7 +2582,7 @@ Response `200`:
 {
   data: {
     eligible: { supplier_invoice_id: string, supplier_name: string, supplier_invoice_number: string | null, amount: number, payment_date: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account", label: string }, reference: { type: "ocr" | "invoice_number", value: string }, warnings: ("unattested" | "already_batched" | "ocr_invalid" | "payee_city_missing")[], active_supplier_payment_batch_id: string | null }[],
-    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "not_found" }[],
+    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "not_found" | "in_bank_payment" }[],
     total_amount: number,
     currency: "SEK",
     debtor_ok: boolean,

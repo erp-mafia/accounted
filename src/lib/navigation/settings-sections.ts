@@ -18,6 +18,7 @@ export const SETTINGS_SECTION_PARENT: Record<string, string> = {
   whatsapp: 'connections',
   skatteverket: 'connections',
   peppol: 'connections',
+  'bank-payments': 'connections',
   mail: 'connections',
   assistant: 'connections',
 }

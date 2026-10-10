@@ -1,3 +1,4 @@
+import { PAYMENTS_BASE_PATH } from '@accounted/connect-contract'
 import { getConnectorConfig } from './config'
 import {
   hasOwnEnableBankingCredentials,
@@ -14,6 +15,10 @@ import {
  * hosted byte-identical. A self-host that pastes GNUBOK_CONNECTOR_KEY and
  * leaves ENABLE_BANKING_PRIVATE_KEY / SKATTEVERKET_OAUTH2_CLIENT_ID unset gets
  * routed through the hosted proxy instead.
+ *
+ * Bank payments have no own-credentials form at all: the provider client and
+ * its certificate live only in Connect, so a connector key is the only route
+ * for hosted and self-hosted alike (paymentsConnectorMode).
  *
  * The own-credentials checks live in lib/entitlements/own-credentials.ts:
  * they were forward-ported into the entitlement partition (PR #1747) so the
@@ -83,4 +88,15 @@ export function peppolConnectorMode(): ConnectorUpstream | null {
   const cfg = getConnectorConfig()
   if (!cfg) return null
   return { baseUrl: `${cfg.baseUrl}/api/connect/peppol`, key: cfg.key }
+}
+
+/**
+ * Bank payments through the payment initiation provider (lib/payments/orders).
+ * Connect is the only route: no installation holds the provider's credentials
+ * or client certificate, so there is no own-credentials branch.
+ */
+export function paymentsConnectorMode(): ConnectorUpstream | null {
+  const cfg = getConnectorConfig()
+  if (!cfg) return null
+  return { baseUrl: `${cfg.baseUrl}${PAYMENTS_BASE_PATH}`, key: cfg.key }
 }

@@ -7,7 +7,8 @@ import { z } from 'zod'
  * self-hosted instance) and the Accounted Connect service that operates the
  * provider integrations only Accounted can run: bank feeds through its PSD2
  * credentials, the Skatteverket API client, the Peppol access point, company
- * lookup, the migration sources.
+ * lookup, the migration sources, and bank payments through the payment
+ * initiation provider.
  *
  * Everything here is shape, never behaviour: constants, Zod schemas and the
  * TypeScript types inferred from them, plus the one normalizer that keeps a
@@ -20,7 +21,7 @@ import { z } from 'zod'
  * breaking change is a new operation or family name, never a changed one.
  */
 
-export const CONTRACT_VERSION = '2026-09-29'
+export const CONTRACT_VERSION = '2026-10-10'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -46,6 +47,8 @@ export const CONNECTOR_HEADERS = {
   company: 'X-Connector-Company',
   upstreamAuthorization: 'X-Connector-Upstream-Authorization',
   upstreamContentType: 'X-Connector-Upstream-Content-Type',
+  contractVersion: 'X-Connect-Contract-Version',
+  connection: 'X-Connector-Connection',
 } as const
 
 // ---------------------------------------------------------------------------
@@ -90,6 +93,8 @@ export const connectorErrorSchema = z.object({
   code: z.string(),
   retryable: z.boolean().optional(),
   detail: z.string().nullable().optional(),
+  /** The provider's own code when a provider refused or failed (payments: OCR_REF_INVALID, CREDITOR_ACCOUNT_FLAGGED, ...). */
+  providerCode: z.string().nullable().optional(),
 })
 export type ConnectorError = z.infer<typeof connectorErrorSchema>
 
@@ -123,6 +128,22 @@ export const CONNECTOR_ERROR_CODES = [
   // The access point already holds an invoice with this number for this
   // receiver; resend only with replacesSubmissionId.
   'PEPPOL_DUPLICATE_INVOICE_NUMBER',
+  // The caller's X-Connect-Contract-Version is older than the previous version.
+  'CONNECTOR_CONTRACT_VERSION_UNSUPPORTED',
+  // Same idempotency key, different request body: nothing was sent.
+  'CONNECTOR_IDEMPOTENCY_MISMATCH',
+  // Same idempotency key while the first call still runs; retryable.
+  'CONNECTOR_IDEMPOTENCY_IN_FLIGHT',
+  // The payments provider is not configured or not usable at the service (certificate, credentials): an operator must act.
+  'CONNECTOR_PAYMENTS_PROVIDER_UNAVAILABLE',
+  // The write may have reached the bank before the answer was lost: never sent again; a lookup, the debit or a person resolves it.
+  'CONNECTOR_PAYMENTS_OUTCOME_UNKNOWN',
+  // The provider or the bank refused the instruction for good; providerCode says why.
+  'CONNECTOR_PAYMENTS_REFUSED',
+  // The bank does not know this payment, basket or authorisation.
+  'CONNECTOR_PAYMENTS_NOT_FOUND',
+  // The provider failed or could not be reached on a read or a cancel; trying again later may help.
+  'CONNECTOR_PAYMENTS_PROVIDER_FAILED',
 ] as const
 export type ConnectorErrorCode = (typeof CONNECTOR_ERROR_CODES)[number]
 
@@ -439,3 +460,294 @@ export const PEPPOL_OPERATIONS = {
   inboundXml: { method: 'POST', path: '/inbound/xml', company: false, request: peppolInboundXmlRequestSchema, response: peppolInboundXmlResultSchema },
 } as const
 export type PeppolOperation = keyof typeof PEPPOL_OPERATIONS
+
+// ---------------------------------------------------------------------------
+// Payments (bank payments and BankID signing through a payment initiation
+// provider; milestone 1 of the connections plan)
+// ---------------------------------------------------------------------------
+
+/**
+ * The payments family: the installation's payment orders (lib/payments/orders)
+ * send one provider-neutral operation per bank interaction, and the service
+ * forwards it to the payment initiation provider with Accounted's credentials
+ * and client certificate. The service stores no instruction, payee, amount or
+ * person: writes leave only an idempotency row (key, sha256 of the body, the
+ * provider's ids and the first answer, 30 days), reads leave metering.
+ *
+ * - Every call is a POST with a JSON body and carries X-Connector-Company.
+ * - Every call carries the party: who pays, from which bank, who signs. The
+ *   service forwards it as the provider's PSU headers and never keeps it.
+ * - Writes (PAYMENTS_WRITE_OPERATIONS) carry an idempotency key. The service
+ *   answers a retry with the first result; a write whose outcome was lost is
+ *   answered with CONNECTOR_PAYMENTS_OUTCOME_UNKNOWN on every retry and is
+ *   never sent to the provider again (a payment API may have no idempotency).
+ * - Amounts are numbers in the instruction's currency; the service formats
+ *   them for the wire.
+ * - Status values are the installation's payment order lifecycle; the
+ *   provider's own code travels beside them verbatim (providerStatus).
+ */
+
+/** Base path of the payments family. */
+export const PAYMENTS_BASE_PATH = '/api/connect/payments'
+
+/** Scope a connector key needs for the payments family. */
+export const PAYMENTS_SCOPE = 'payments'
+
+/** Every write carries one: a row id from the installation's own database, so a retry reuses it by construction. */
+const paymentsIdempotencyKeySchema = z.string().trim().min(1).max(128)
+
+/** A calendar date, `YYYY-MM-DD`. */
+const paymentsIsoDateSchema = z.iso.date()
+
+const paymentsBicSchema = z.string().regex(/^[A-Z0-9]{8}([A-Z0-9]{3})?$/, 'BIC: 8 or 11 characters')
+
+/** A Swedish organisationsnummer, 10 digits, no separator. */
+const paymentsOrgNumberSchema = z.string().regex(/^\d{10}$/, 'organisationsnummer: 10 digits')
+
+export const paymentsAccountContextSchema = z.enum(['corporate', 'private'])
+export type PaymentsAccountContext = z.infer<typeof paymentsAccountContextSchema>
+
+/**
+ * Who pays, from which bank, and who signs. Sent with every payments call and
+ * forwarded to the provider as PSU headers; the service never stores it.
+ * `signerPersonalNumber` is the signer's personnummer (12 digits) when the
+ * installation knows it; banks use it to address the BankID.
+ */
+export const paymentsPartySchema = z.object({
+  orgNumber: paymentsOrgNumberSchema,
+  accountContext: paymentsAccountContextSchema,
+  debtorBic: paymentsBicSchema,
+  signerPersonalNumber: z.string().regex(/^\d{12}$/, 'personnummer: 12 digits').nullable(),
+  psuIpAddress: z.string().max(64).nullable(),
+  psuUserAgent: z.string().max(300).nullable(),
+})
+export type PaymentsParty = z.infer<typeof paymentsPartySchema>
+
+const paymentsPayeeNameSchema = z.string().trim().min(1).max(140)
+
+export const paymentsPayeeSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('bankgiro'), bankgiro: z.string().trim().min(1).max(20), name: paymentsPayeeNameSchema }),
+  z.object({ type: z.literal('plusgiro'), plusgiro: z.string().trim().min(1).max(20), name: paymentsPayeeNameSchema }),
+  z.object({
+    type: z.literal('bank_account'),
+    clearing: z.string().trim().min(1).max(10),
+    account: z.string().trim().min(1).max(20),
+    name: paymentsPayeeNameSchema,
+  }),
+  z.object({ type: z.literal('iban'), iban: z.string().trim().min(1).max(34), bic: paymentsBicSchema.nullable(), name: paymentsPayeeNameSchema }),
+])
+export type PaymentsPayee = z.infer<typeof paymentsPayeeSchema>
+
+export const paymentsInstructionSchema = z.object({
+  /** The installation's id for the payment at the bank; the debit on the statement carries it. */
+  endToEndId: z.string().trim().min(1).max(35),
+  amount: z.number().positive(),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  requestedExecutionDate: paymentsIsoDateSchema,
+  debtor: z.object({ iban: z.string().trim().min(1).max(34).nullable(), bban: z.string().trim().min(1).max(34).nullable(), currency: z.string().regex(/^[A-Z]{3}$/) }),
+  payee: paymentsPayeeSchema,
+  reference: z.object({ type: z.enum(['ocr', 'message']), value: z.string().trim().min(1).max(140) }),
+})
+export type PaymentsInstruction = z.infer<typeof paymentsInstructionSchema>
+
+/** The installation's payment order lifecycle (lib/payments/orders/status.ts); the service maps the provider's codes onto it. */
+export const paymentsStatusSchema = z.enum([
+  'draft',
+  'approved',
+  'submitted',
+  'awaiting_signature',
+  'awaiting_second_signer',
+  'accepted',
+  'executed',
+  'rejected',
+  'cancelled',
+  'failed',
+])
+export type PaymentsStatus = z.infer<typeof paymentsStatusSchema>
+
+export const paymentsStateSchema = z.object({
+  /** The provider's own status code, verbatim. */
+  providerStatus: z.string(),
+  status: paymentsStatusSchema,
+  /** Provider message codes worth showing or logging (codes, never prose). */
+  messages: z.array(z.string()),
+})
+export type PaymentsState = z.infer<typeof paymentsStateSchema>
+
+export const paymentsCreatedSchema = paymentsStateSchema.extend({
+  providerPaymentId: z.string().min(1),
+  /** The provider's payment product the instruction was sent as (swedish-giro, domestic, ...). */
+  product: z.string().min(1),
+  /** The payee name as it went to the bank, when the provider shortened or transliterated it. */
+  sentPayeeName: z.string().nullable(),
+})
+export type PaymentsCreated = z.infer<typeof paymentsCreatedSchema>
+
+export const paymentsSigningTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('payment'), providerPaymentId: z.string().min(1), product: z.string().min(1) }),
+  z.object({ kind: z.literal('basket'), providerBasketId: z.string().min(1) }),
+])
+export type PaymentsSigningTarget = z.infer<typeof paymentsSigningTargetSchema>
+
+export const paymentsSigningMethodSchema = z.enum(['same_device', 'qr', 'redirect'])
+export type PaymentsSigningMethod = z.infer<typeof paymentsSigningMethodSchema>
+
+/** What a person needs to sign with BankID right now. */
+export const paymentsSigningChallengeSchema = z.object({
+  /** Signing in the BankID app from our screen (decoupled) or on the bank's own page (redirect). */
+  approach: z.enum(['decoupled', 'redirect']),
+  /** Open the BankID app on this device. */
+  autostartToken: z.string().nullable(),
+  /** Animated QR: the data changes on every poll and must be re-rendered. */
+  qrData: z.string().nullable(),
+  /** The same QR as a base64 PNG, when the bank offered only that. */
+  qrImage: z.string().nullable(),
+  /** The bank's page, for the redirect approach; null when no redirect target was given. */
+  redirectUrl: z.string().nullable(),
+})
+export type PaymentsSigningChallenge = z.infer<typeof paymentsSigningChallengeSchema>
+
+export const paymentsSigningStateSchema = z.enum(['pending', 'finalised', 'failed'])
+
+export const paymentsSigningProgressSchema = z.object({
+  state: paymentsSigningStateSchema,
+  challenge: paymentsSigningChallengeSchema.nullable(),
+  /** Provider code when the signing failed (a cancelled or expired BankID, missing rights, redirect only). */
+  failureCode: z.string().nullable(),
+})
+export type PaymentsSigningProgress = z.infer<typeof paymentsSigningProgressSchema>
+
+export const paymentsSigningStartedSchema = paymentsSigningProgressSchema.extend({
+  providerAuthorisationId: z.string().min(1),
+  /** The method the bank actually offered (it may impose redirect). */
+  method: paymentsSigningMethodSchema,
+})
+export type PaymentsSigningStarted = z.infer<typeof paymentsSigningStartedSchema>
+
+/** Only 'cancelled' means the payment is gone; every other answer leaves it where it was. */
+export const paymentsCancelOutcomeSchema = z.enum(['cancelled', 'needs_authorisation', 'too_late', 'not_cancelled'])
+export type PaymentsCancelOutcome = z.infer<typeof paymentsCancelOutcomeSchema>
+
+export const paymentsCancelResultSchema = z.object({
+  outcome: paymentsCancelOutcomeSchema,
+  providerStatus: z.string().nullable(),
+})
+export type PaymentsCancelResult = z.infer<typeof paymentsCancelResultSchema>
+
+/** How a bank lets a person sign, asked before anything is created. */
+export const paymentsBankCapabilitiesSchema = z.object({
+  bic: paymentsBicSchema,
+  name: z.string(),
+  /** BankID in our screen: a QR code, or the app on this device. */
+  decoupled: z.boolean(),
+  /** Signing on the bank's own page. */
+  redirect: z.boolean(),
+  /** Several payments under one BankID, and how many at most (null = no stated limit). */
+  basket: z.object({ supported: z.boolean(), maxPayments: z.number().int().positive().nullable() }),
+  /** Bankgiro and PlusGiro payments (the swedish-giro product). */
+  swedishGiro: z.boolean(),
+})
+export type PaymentsBankCapabilities = z.infer<typeof paymentsBankCapabilitiesSchema>
+
+/** Know-your-customer status of a company at the provider; payments are refused until valid. */
+export const paymentsVerificationSchema = z.object({
+  status: z.enum(['valid', 'invalid', 'unknown']),
+  validUntil: paymentsIsoDateSchema.nullable(),
+  /** The provider's own word, verbatim. */
+  providerStatus: z.string().nullable(),
+})
+export type PaymentsVerification = z.infer<typeof paymentsVerificationSchema>
+
+// Requests
+
+export const paymentsBankRequestSchema = z.object({ bic: paymentsBicSchema })
+export type PaymentsBankRequest = z.infer<typeof paymentsBankRequestSchema>
+
+export const paymentsVerificationRequestSchema = z.object({ orgNumber: paymentsOrgNumberSchema })
+export type PaymentsVerificationRequest = z.infer<typeof paymentsVerificationRequestSchema>
+
+export const paymentsVerificationStartRequestSchema = z.object({
+  orgNumber: paymentsOrgNumberSchema,
+  countryCode: z.string().regex(/^[A-Z]{2}$/).default('SE'),
+})
+export type PaymentsVerificationStartRequest = z.infer<typeof paymentsVerificationStartRequestSchema>
+
+export const paymentsVerificationStartSchema = z.object({ url: z.url() })
+export type PaymentsVerificationStart = z.infer<typeof paymentsVerificationStartSchema>
+
+export const paymentsCreateRequestSchema = z.object({
+  idempotencyKey: paymentsIdempotencyKeySchema,
+  party: paymentsPartySchema,
+  instruction: paymentsInstructionSchema,
+})
+export type PaymentsCreateRequest = z.infer<typeof paymentsCreateRequestSchema>
+
+export const paymentsStatusRequestSchema = z.object({
+  party: paymentsPartySchema,
+  providerPaymentId: z.string().min(1),
+  product: z.string().min(1),
+})
+export type PaymentsStatusRequest = z.infer<typeof paymentsStatusRequestSchema>
+
+export const paymentsCancelRequestSchema = z.object({
+  idempotencyKey: paymentsIdempotencyKeySchema,
+  party: paymentsPartySchema,
+  providerPaymentId: z.string().min(1),
+  product: z.string().min(1),
+})
+export type PaymentsCancelRequest = z.infer<typeof paymentsCancelRequestSchema>
+
+export const paymentsBasketRequestSchema = z.object({
+  idempotencyKey: paymentsIdempotencyKeySchema,
+  party: paymentsPartySchema,
+  providerPaymentIds: z.array(z.string().min(1)).min(1).max(600),
+})
+export type PaymentsBasketRequest = z.infer<typeof paymentsBasketRequestSchema>
+
+export const paymentsBasketSchema = z.object({ providerBasketId: z.string().min(1) })
+export type PaymentsBasket = z.infer<typeof paymentsBasketSchema>
+
+export const paymentsBasketStatusRequestSchema = z.object({
+  party: paymentsPartySchema,
+  providerBasketId: z.string().min(1),
+})
+export type PaymentsBasketStatusRequest = z.infer<typeof paymentsBasketStatusRequestSchema>
+
+export const paymentsSigningStartRequestSchema = z.object({
+  idempotencyKey: paymentsIdempotencyKeySchema,
+  party: paymentsPartySchema,
+  target: paymentsSigningTargetSchema,
+  /** Decoupled BankID only: redirect (the bank's own page) needs the connection callback, which comes later. */
+  method: z.enum(['same_device', 'qr']),
+})
+export type PaymentsSigningStartRequest = z.infer<typeof paymentsSigningStartRequestSchema>
+
+export const paymentsSigningPollRequestSchema = z.object({
+  party: paymentsPartySchema,
+  target: paymentsSigningTargetSchema,
+  providerAuthorisationId: z.string().min(1),
+  method: paymentsSigningMethodSchema,
+})
+export type PaymentsSigningPollRequest = z.infer<typeof paymentsSigningPollRequestSchema>
+
+/**
+ * The operation table: method, path under PAYMENTS_BASE_PATH, whether the
+ * call carries X-Connector-Company, and the request and response schemas.
+ * Every operation is a POST so that the party never travels in a URL.
+ */
+export const PAYMENTS_OPERATIONS = {
+  bank: { method: 'POST', path: '/bank', company: true, request: paymentsBankRequestSchema, response: paymentsBankCapabilitiesSchema },
+  verification: { method: 'POST', path: '/verification', company: true, request: paymentsVerificationRequestSchema, response: paymentsVerificationSchema },
+  startVerification: { method: 'POST', path: '/verification/start', company: true, request: paymentsVerificationStartRequestSchema, response: paymentsVerificationStartSchema },
+  createPayment: { method: 'POST', path: '/payments', company: true, request: paymentsCreateRequestSchema, response: paymentsCreatedSchema },
+  paymentStatus: { method: 'POST', path: '/payments/status', company: true, request: paymentsStatusRequestSchema, response: paymentsStateSchema },
+  cancelPayment: { method: 'POST', path: '/payments/cancel', company: true, request: paymentsCancelRequestSchema, response: paymentsCancelResultSchema },
+  createBasket: { method: 'POST', path: '/baskets', company: true, request: paymentsBasketRequestSchema, response: paymentsBasketSchema },
+  basketStatus: { method: 'POST', path: '/baskets/status', company: true, request: paymentsBasketStatusRequestSchema, response: paymentsStateSchema },
+  startSigning: { method: 'POST', path: '/signings', company: true, request: paymentsSigningStartRequestSchema, response: paymentsSigningStartedSchema },
+  pollSigning: { method: 'POST', path: '/signings/poll', company: true, request: paymentsSigningPollRequestSchema, response: paymentsSigningProgressSchema },
+} as const
+export type PaymentsOperation = keyof typeof PAYMENTS_OPERATIONS
+
+/** Writes: they carry an idempotency key and are never sent to the provider twice. */
+export const PAYMENTS_WRITE_OPERATIONS = ['createPayment', 'cancelPayment', 'createBasket', 'startSigning'] as const satisfies readonly PaymentsOperation[]

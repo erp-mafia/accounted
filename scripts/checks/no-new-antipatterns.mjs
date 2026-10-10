@@ -690,6 +690,9 @@ function findDirectAiClients() {
 
 const DIALOG_NOWRAP_ALLOWED = new Set([
   'components/supplier-invoices/PaymentFileDialog.tsx',
+  // Betala via banken: the review table (payee, date, amount) sits in its own
+  // overflow-x-auto wrapper, the same shape as PaymentFileDialog's.
+  'components/payments/PayViaBankDialog.tsx',
 ])
 
 const DIALOG_CONTENT_IMPORT_RE =

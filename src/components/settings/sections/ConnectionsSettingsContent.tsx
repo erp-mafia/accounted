@@ -23,6 +23,7 @@ import {
 import { useCompany } from '@/contexts/CompanyContext'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
+import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
 
 // Bank logos shipped in public/logos/banks, matched against the connected
 // bank's display name (lowercased, spaces removed).
@@ -67,6 +68,8 @@ interface Status {
   peppolOn: boolean
   /** Null when the mailboxes could not be read (the row then shows no state). */
   mail: MailboxSummary | null
+  /** Bank payments are switched on for this company (the pilot list); the row shows only then. */
+  bankPayments: boolean
 }
 
 /**
@@ -121,7 +124,8 @@ export function ConnectionsSettingsContent() {
       skvCount,
       fetch('/api/settings/peppol').then((res) => (res.ok ? res.json() : null)),
       hasMail ? fetchMailConnections() : Promise.resolve(null),
-    ]).then(([bank, skv, peppol, mail]) => {
+      fetchPaymentsAvailability(),
+    ]).then(([bank, skv, peppol, mail, payments]) => {
       if (cancelled) return
       const banks = bank.status === 'fulfilled' ? ((bank.value.data ?? []) as Array<{ bank_name: string | null }>) : []
       const registration =
@@ -134,6 +138,7 @@ export function ConnectionsSettingsContent() {
         skvConnected: skv.status === 'fulfilled' && skv.value > 0,
         peppolOn: registration?.status === 'registered' || registration?.status === 'pending',
         mail: mail.status === 'fulfilled' && mail.value ? summarizeMailboxes(mail.value) : null,
+        bankPayments: payments.status === 'fulfilled' && payments.value.available,
       })
     })
     return () => {
@@ -224,6 +229,14 @@ export function ConnectionsSettingsContent() {
               state: status ? (status.skvConnected ? t('connected') : off) : null,
               href: '/settings/skatteverket',
               connected: status?.skvConnected ?? false,
+            })}
+          {status?.bankPayments &&
+            row({
+              logo: <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              name: t('bank_payments'),
+              help: t('bank_payments_help'),
+              href: '/settings/bank-payments',
+              connected: null,
             })}
         </SettingsGroup>
       ) : null}

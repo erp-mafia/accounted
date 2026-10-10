@@ -4,7 +4,8 @@ The wire contract between an Accounted ledger installation (the hosted service
 or a self-hosted instance) and Accounted Connect, the service that operates
 the provider integrations only Accounted can run: bank feeds through its PSD2
 credentials, the Skatteverket API client, the Peppol access point, company
-lookup, the migration sources.
+lookup, the migration sources, and bank payments through the payment
+initiation provider.
 
 This package is shape only: constants, Zod schemas and the TypeScript types
 inferred from them. There is no behaviour and no provider code in it. Both
@@ -17,7 +18,11 @@ What is in it:
 - the entitlements and sync-report payloads of the hourly key sync;
 - the error envelope and the stable error codes the service answers with;
 - the Peppol operations (`/api/connect/peppol/*`): request and response
-  schemas plus the operation table (method, path, company header required).
+  schemas plus the operation table (method, path, company header required);
+- the payments operations (`/api/connect/payments/*`): the party, the
+  instruction, payment and signing states, company verification, bank
+  capabilities, and the operation table with the writes that carry an
+  idempotency key.
 
 Versioning: `CONTRACT_VERSION` is a date. Fields are only ever added; a
 breaking change is a new operation or family, never a changed one.

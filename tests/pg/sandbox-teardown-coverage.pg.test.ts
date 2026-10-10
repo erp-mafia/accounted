@@ -37,6 +37,14 @@ const REFUSED_ON_PURPOSE: Record<string, string> = {
     'links a reset source to its replacement company; unwinding that is an operator decision',
   'company_migration_resets.source_company_id':
     'links a reset source to its replacement company; unwinding that is an operator decision',
+  'payment_orders.batch_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.cash_account_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.supplier_invoice_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.supplier_invoice_payment_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
   'peppol_deliveries.company_id':
     'Peppol send is refused for sandbox companies (isSandboxCompany in peppol-send-service); a row means the network saw it',
   'peppol_deliveries.invoice_id':
@@ -72,6 +80,8 @@ const CONDITIONAL_DELETE_GUARDS: Record<string, string> = {
   lock_cash_history_for_journal_line: 'takes a lock; raises only on lock contention',
   guard_bank_configuration_writer: 'takes the company cash-account lock; raises only on contention',
   guard_bank_provider_session_claim: 'takes the bank session lock; raises only on a started revocation for INSERT/UPDATE',
+  unsettle_payment_order_on_supplier_payment_delete:
+    'never refuses: it clears the settlement of the order the deleted row settled and returns OLD; a sandbox company holds no payment order',
   block_document_deletion:
     'only for a document on a posted voucher; the teardown unlinks documents before deleting them',
   block_sent_invoice_document_deletion:

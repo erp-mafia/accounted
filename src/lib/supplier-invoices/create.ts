@@ -51,6 +51,7 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
   backfillSupplierPaymentDetails,
+  statedPayeeColumns,
   type SupplierPaymentDetails,
 } from '@/lib/supplier-invoices/payment-details-backfill'
 import type { Logger } from '@/lib/logger'
@@ -509,6 +510,7 @@ export async function createSupplierInvoice(
   // a supplier that lacks them takes them now, so the invoice can go into
   // a betalfil without a detour to the supplier card.
   const scannedSupplier = (inboxItem?.extracted_data as { supplier?: SupplierPaymentDetails } | null)?.supplier
+  const statedPayee = statedPayeeColumns(scannedSupplier)
   if (scannedSupplier) {
     const written = await backfillSupplierPaymentDetails(supabase, companyId, supplier.id as string, scannedSupplier)
     if (Object.keys(written).length > 0) {
@@ -576,6 +578,13 @@ export async function createSupplierInvoice(
       vat_treatment: vatTreatment,
       reverse_charge: reverseCharge,
       payment_reference: body.payment_reference || null,
+      // What the document itself says to pay to, validated. Kept on the
+      // invoice even when the supplier card already has a different giro:
+      // a payment compares the two instead of trusting either blindly.
+      payee_bankgiro: statedPayee.payee_bankgiro,
+      payee_plusgiro: statedPayee.payee_plusgiro,
+      payee_iban: statedPayee.payee_iban,
+      payee_bic: statedPayee.payee_bic,
       paid_with_private_funds: paidPrivately,
       subtotal,
       subtotal_sek: subtotalSek,

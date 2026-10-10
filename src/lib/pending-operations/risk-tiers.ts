@@ -94,6 +94,10 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   delete_employee: 'medium',
   create_supplier_payment_batch: 'high',
   cancel_supplier_payment_batch: 'medium',
+  // Bank payments: a prepared order is a draft a person still approves and
+  // signs with BankID; a cancel only counts when the bank confirms it.
+  prepare_payment_orders: 'medium',
+  cancel_payment_order: 'medium',
   book_invoice: 'high',
   bulk_book_invoices: 'high',
   book_supplier_invoice: 'high',

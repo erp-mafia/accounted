@@ -53,6 +53,8 @@ describe('GET /api/supplier-invoices/lifecycle', () => {
     // open batches, then their items (B is in the batch)
     enqueue({ data: [{ id: 'batch-1', created_at: '2026-09-06T09:00:00Z' }] })
     enqueue({ data: [{ batch_id: 'batch-1', supplier_invoice_id: B }] })
+    // open bank payment orders for the unpaid invoices: none
+    enqueue({ data: [] })
     // paying rows for C, then sign-offs that cover them
     enqueue({ data: [{ id: 'tx-1', supplier_invoice_id: C, date: '2026-08-28', cash_account_id: 'acct-1' }] })
     enqueue({ data: [{ account_key: 'bank:acct-1', through_date: '2026-08-31' }] })
@@ -69,6 +71,35 @@ describe('GET /api/supplier-invoices/lifecycle', () => {
     expect(body.data.stages[C].paid).toEqual({ transaction_id: 'tx-1', date: '2026-08-28' })
     expect(body.data.stages[C].reconciled_through).toBe('2026-08-31')
     expect(body.data.counts).toMatchObject({ registered: 1, in_file: 1, reconciled: 1, paid: 0 })
+  })
+
+  it('an open bank payment order puts the invoice in payment, the same step as a file', async () => {
+    enqueue({ data: [{ id: A, status: 'approved', approved_at: '2026-09-05T08:00:00Z', is_credit_note: false }] })
+    // no open file batches
+    enqueue({ data: [] })
+    enqueue({
+      data: [
+        {
+          id: 'order-1',
+          supplier_invoice_id: A,
+          status: 'awaiting_signature',
+          created_at: '2026-09-30T08:00:00Z',
+          supplier_invoice_payment_id: null,
+        },
+      ],
+    })
+
+    const { body } = await parseJsonResponse<{
+      data: { stages: Record<string, { stage: string; batch: unknown; payment_order: unknown }> }
+    }>(await GET(createMockRequest('/api/supplier-invoices/lifecycle'), { params: Promise.resolve({}) }))
+
+    expect(body.data.stages[A].stage).toBe('in_file')
+    expect(body.data.stages[A].batch).toBeNull()
+    expect(body.data.stages[A].payment_order).toEqual({
+      id: 'order-1',
+      status: 'awaiting_signature',
+      created_at: '2026-09-30T08:00:00Z',
+    })
   })
 
   it('a paid invoice whose bank row is after the sign-off is paid, not reconciled', async () => {

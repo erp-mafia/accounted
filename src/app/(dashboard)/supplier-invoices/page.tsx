@@ -44,6 +44,7 @@ import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { FiscalPeriod, SupplierInvoice } from '@/types'
 import { useCompanySettings } from '@/components/settings/useSettings'
+import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
 
 const NewSupplierInvoiceDialog = dynamic(
   () => import('@/components/supplier-invoices/NewSupplierInvoiceDialog'),
@@ -52,6 +53,13 @@ const NewSupplierInvoiceDialog = dynamic(
 
 const PaymentFileDialog = dynamic(
   () => import('@/components/supplier-invoices/PaymentFileDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+
+// Betala via banken (connections plan, milestone 1): shown only for companies
+// where bank payments are switched on (GET /api/payments/availability).
+const PayViaBankDialog = dynamic(
+  () => import('@/components/payments/PayViaBankDialog'),
   { loading: DialogLoadingSkeleton },
 )
 
@@ -217,6 +225,11 @@ export default function SupplierInvoicesPage() {
   const shiftHeld = useRef(false)
   const [activeBatchInvoiceIds, setActiveBatchInvoiceIds] = useState<Set<string>>(new Set())
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
+  const [showPayViaBankDialog, setShowPayViaBankDialog] = useState(false)
+  // Whether this company can pay through the bank: read once per page load;
+  // false (the default) hides every bank-payment control, so companies outside
+  // the pilot see the list exactly as before.
+  const [bankPaymentsAvailable, setBankPaymentsAvailable] = useState(false)
 
   // The "Registrera leverantörsfaktura" modal is driven by the URL (?new=1,
   // optionally with inbox_item_id for the invoice-inbox conversion flow) so
@@ -455,6 +468,27 @@ export default function SupplierInvoicesPage() {
     fetchActiveBatchMembership()
   }
 
+  useEffect(() => {
+    let cancelled = false
+    fetchPaymentsAvailability()
+      .then((data) => {
+        if (!cancelled) setBankPaymentsAvailable(data.available)
+      })
+      .catch(() => {
+        if (!cancelled) setBankPaymentsAvailable(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Drafts made, approved or sent to the bank: the list and the chips move.
+  const handleBankPaymentDone = () => {
+    setSelectedIds(new Set())
+    fetchInvoices()
+    fetchActiveBatchMembership()
+  }
+
   async function handleApprove(id: string) {
     setApprovingId(id)
     try {
@@ -622,7 +656,12 @@ export default function SupplierInvoicesPage() {
             <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
             {t('bulkbar_selected', { count: selectedIds.size })}
           </span>
-          <Button size="sm" onClick={() => setShowPaymentDialog(true)}>
+          {bankPaymentsAvailable && (
+            <Button size="sm" onClick={() => setShowPayViaBankDialog(true)}>
+              {t('bulk_pay_via_bank')}
+            </Button>
+          )}
+          <Button size="sm" variant={bankPaymentsAvailable ? 'outline' : 'default'} onClick={() => setShowPaymentDialog(true)}>
             {t('bulk_create_file')}
           </Button>
           {!allSelectableSelected && (
@@ -942,6 +981,18 @@ export default function SupplierInvoicesPage() {
           invoiceIds={Array.from(selectedIds)}
           invoiceLabelById={invoiceLabelById}
           onCreated={handleBatchCreated}
+        />
+      )}
+
+      {showPayViaBankDialog && (
+        <PayViaBankDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setShowPayViaBankDialog(false)
+          }}
+          invoiceIds={Array.from(selectedIds)}
+          invoiceLabelById={invoiceLabelById}
+          onDone={handleBankPaymentDone}
         />
       )}
     </div>
