@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 60_300
+const SIMPLE_CATALOG_CEILING = 60_400
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -672,6 +672,11 @@ describe('tools/list payload size guard', () => {
     // SKV 4700 ruta the filing carries (no descriptions; the rutor `required`
     // list was dropped to pay for most of it). Measured about 60 256 with both
     // plus the batch's other MRs, ~44 headroom.
+    // 60 300 to 60 400 on 2026-10-10 (crm#1096): gnubok_create_voucher lines
+    // gain vat_code (omvänd moms the server expands; kind and rate as enums
+    // agents can validate against, and that its lines carry no dimensions)
+    // and the description names it, ~99 tokens. tax_code's long note now
+    // points at vat_code and paid 22 of them. Measured 60 362, ~38 headroom.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

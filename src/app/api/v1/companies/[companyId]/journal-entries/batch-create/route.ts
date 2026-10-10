@@ -23,8 +23,10 @@ import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { CreateApiJournalEntrySchema } from '@/lib/api/schemas'
-import { createDraftEntry } from '@/lib/bookkeeping/engine'
+import { createDraftEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
+import { expandVoucherLineVatCodes, type ExpandedVoucherLines } from '@/lib/bookkeeping/voucher-line-vat-code'
 import type { Logger } from '@/lib/logger'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -66,6 +68,7 @@ registerEndpoint({
     'all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.',
     'Each entry must balance independently. Per-item JOURNAL_ENTRY_NOT_BALANCED appears in the results array.',
     'source_type follows the single POST: "manual" by default, a business source type or "import" (history replayed from another system). An engine-owned, rule-exempt type (e.g. opening_balance, storno, accrual, system) fails the whole batch with 400 VALIDATION_ERROR.',
+    'lines[].vat_code (omvänd moms) works as on the single POST: the server adds the reverse-charge lines under the line, and the dry-run preview shows them. A vat_code its account or the voucher cannot take (the single POST\'s lines.N.vat_code refusals) fails only its own entry, with VALIDATION_ERROR and details.issues in the results array. A malformed vat_code (unknown kind, a rate other than 0.25, 0.12 or 0.06) is a schema error and fails the whole batch with 400, its field under journal_entries.i.lines.N.vat_code.',
   ],
   example: {
     request: {
@@ -190,9 +193,37 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       }
     }
 
+    // Each entry's vat_code lines expand as on the single POST (crm#1096),
+    // all before the first draft and with one chart read for the batch: a
+    // failed read writes nothing, and a refused code fails only its entry.
+    // As there, balance comes first: an entry that does not balance as sent
+    // goes on unexpanded, so the engine refuses it with the totals the caller
+    // sent, not totals that include lines the server would have added.
+    const loadChart = chartVatTreatmentsLoader(ctx.supabase, ctx.companyId!)
+    const expanded = await Promise.all(
+      body.journal_entries.map((entry): ExpandedVoucherLines | Promise<ExpandedVoucherLines> =>
+        validateBalance(entry.lines).valid
+          ? expandVoucherLineVatCodes(entry.lines, loadChart)
+          : { ok: true, lines: entry.lines },
+      ),
+    )
+
     const results: ResultItem[] = []
     for (let i = 0; i < body.journal_entries.length; i++) {
-      results.push(await createOne(ctx.supabase, ctx.companyId!, ctx.userId, i, body.journal_entries[i], ctx.dryRun, ctx.log))
+      const expansion = expanded[i]
+      results.push(
+        expansion.ok
+          ? await createOne(ctx.supabase, ctx.companyId!, ctx.userId, i, { ...body.journal_entries[i], lines: expansion.lines }, ctx.dryRun, ctx.log)
+          : {
+              ok: false,
+              request_index: i,
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: expansion.refusals.map(({ sv }) => sv).join(' '),
+                details: { issues: expansion.refusals.map(({ field, sv, en }) => ({ field, message: sv, message_en: en })) },
+              },
+            },
+      )
     }
     const summary = {
       total: results.length,

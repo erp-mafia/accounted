@@ -33,6 +33,8 @@ import { createDraftEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { DIM_COST_CENTER, DIM_PROJECT, normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
+import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
+import { expandVoucherLineVatCodes } from '@/lib/bookkeeping/voucher-line-vat-code'
 
 // `dimensions` is the line's whole SIE tag bag; cost_center/project only
 // mirror keys '1'/'6', so a read without the bag hid dims 2, 7-9 and 20+.
@@ -249,7 +251,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/journal-entries',
   summary: 'Create a draft journal entry (verifikation).',
   description:
-    'Creates a draft journal entry via the engine\'s createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance, the period lock and the lines\' accounts against the chart without inserting any row, so it fails with ACCOUNTS_NOT_IN_CHART for the same accounts the live call would reject.',
+    'Creates a draft journal entry via the engine\'s createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance, the period lock and the lines\' accounts against the chart without inserting any row, so it fails with ACCOUNTS_NOT_IN_CHART for the same accounts the live call would reject. A line may carry a vat_code (omvänd moms): the server adds that purchase\'s reverse-charge lines under it, as the manual verifikat form does.',
   useWhen:
     'You\'re posting an arbitrary verifikation (manual journal entries, accrual reversals, period closing adjustments) outside the invoicing / supplier-invoice / transaction flows.',
   doNotUseFor:
@@ -262,6 +264,8 @@ registerEndpoint({
     'voucher_series defaults to "A" if omitted. Must be a single uppercase letter.',
     'This creates a DRAFT only: call POST /{id}/commit to assign the voucher_number and post atomically, or DELETE /{id} to discard it. A draft left uncommitted blocks the year-end close (DRAFT_ENTRIES).',
     'source_type defaults to "manual". A business source type may label your own vouchers (e.g. "webshop_order", "bank_transaction", "invoice_created"), and "import" marks history replayed from another system. Engine-owned types exempt from the dimension rules (opening_balance, year_end, result_appropriation, currency_revaluation, storno, correction, credit_note, supplier_credit_note, system, accrual, vat_settlement, rot_rut_payout, rot_rut_reclaim, expense_payout, stripe_payout) are refused with 400 VALIDATION_ERROR: they belong to their own endpoints.',
+    'lines[].vat_code books a reverse-charge purchase (omvänd betalningsskyldighet) on a BAS class 4-6 cost line: {"kind": "eu_goods" (ruta 20) | "eu_services" (21) | "non_eu_services" (22) | "domestic_services" (24), "rate": 0.25 | 0.12 | 0.06}, the rate a fraction, not percent. The server adds the fiktiv moms pair (2645, or 2647 for domestic_services, debit; 2614/2624/2634 credit) and the basis pair (44xx/45xx debit, 4598 credit) directly under the line, on its SEK amount: the lines the manual verifikat form books. They net to zero, so balance your own lines as usual; the dry run and the created draft show every line. A credit line with a vat_code reverses them (a credit note). Explicit only: a line without vat_code gets nothing, even on 4531.',
+    'On an account that reports ruta 20-24 itself (4531, 4535, 4415, or one whose kontoplan momskod is reverse charge) vat_code must be the account\'s own kind and rate, and only the fiktiv moms is added. 400 VALIDATION_ERROR, details.issues[].field lines.N.vat_code, for a code on an account that takes none (balance sheet, revenue, class 7-8, 4598, 4512, 4545-4547), another code on an account with its own ruta, a code on a line without an amount, a code whose basis account (44xx/45xx) your kontoplan sets to another ruta or momssats than the code asks for (correct that account\'s momskod), and a code beside a line on an account it creates (e.g. 2645, 2614, 4598, or its 44xx/45xx basis account, also when that line carries a vat_code of its own): book a purchase\'s reverse charge with vat_code or by hand, never both, and put a second purchase booked directly on that basis account in a voucher of its own.',
   ],
   example: {
     request: {
@@ -320,6 +324,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
+    // A line's vat_code becomes the reverse-charge lines it generates, by the
+    // manual verifikat form's own derivation (crm#1096), so the dry run and
+    // the draft below are the verifikat that posts. Those lines net to zero:
+    // the balance above holds for them too.
+    const expanded = await expandVoucherLineVatCodes(
+      input.lines,
+      chartVatTreatmentsLoader(ctx.supabase, ctx.companyId!),
+    )
+    if (!expanded.ok) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { issues: expanded.refusals.map(({ field, sv, en }) => ({ field, message: sv, message_en: en })) },
+      })
+    }
+    const lines = expanded.lines
+
     // Period-lock pre-check: drafts CAN technically be inserted into locked
     // periods (no JE-trigger fires until commit), but rejecting up front is
     // cleaner UX and avoids leaving an undeletable draft behind.
@@ -340,13 +360,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       const missingAccounts = await findUnresolvableAccounts(
         ctx.supabase,
         ctx.companyId!,
-        input.lines.map((l) => l.account_number),
+        lines.map((l) => l.account_number),
       )
       if (missingAccounts.length > 0) {
         return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), ctx.log, {
           requestId: ctx.requestId,
         })
       }
+      const totals = validateBalance(lines)
       return dryRunPreview(
         {
           status: 'draft' as const,
@@ -358,7 +379,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           source_type: input.source_type ?? 'manual',
           source_id: input.source_id ?? null,
           notes: input.notes ?? null,
-          lines: input.lines.map((l, i) => {
+          lines: lines.map((l, i) => {
             // The bag the engine stores (the explicit bag wins over the
             // cost_center/project aliases), with the mirrors read from it
             // as the generated columns will be.
@@ -378,14 +399,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
               project: dimensions[DIM_PROJECT] ?? null,
             }
           }),
-          totals: { debit: balance.totalDebit, credit: balance.totalCredit },
+          totals: { debit: totals.totalDebit, credit: totals.totalCredit },
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
 
     try {
-      const entry = await createDraftEntry(ctx.supabase, ctx.companyId!, ctx.userId, input)
+      const entry = await createDraftEntry(ctx.supabase, ctx.companyId!, ctx.userId, { ...input, lines })
       // Refetch with lines to return the full detail shape.
       const { data: complete } = await ctx.supabase
         .from('journal_entries')

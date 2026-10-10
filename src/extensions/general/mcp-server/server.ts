@@ -98,6 +98,12 @@ import {
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
+import {
+  expandVoucherLineVatCodes,
+  VOUCHER_LINE_VAT_KINDS,
+  VOUCHER_LINE_VAT_RATES,
+  type VoucherLineVatCode,
+} from '@/lib/bookkeeping/voucher-line-vat-code'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { hasSIEFileExtension, SIE_FILE_EXTENSIONS_EN } from '@/lib/import/sie-file-extensions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
@@ -400,6 +406,7 @@ import {
   RegisterSalesOrderDeliverySchema,
   RotRutBeslutFileSchema,
   SalesOrderTransitionSchema,
+  VoucherLineVatCodeSchema,
 } from '@/lib/api/schemas'
 import { decorate as decorateSalesOrder, fetchInvoicedQuantities, loadSalesOrder } from '@/lib/sales-orders/load'
 import { normalizeSalesOrderLines } from '@/lib/sales-orders/lines'
@@ -23662,9 +23669,9 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_voucher',
-    keywords: ['verifikat', 'verifikation', 'manuell bokföring', 'bokföringsorder', 'manuellt verifikat'],
+    keywords: ['verifikat', 'verifikation', 'manuell bokföring', 'bokföringsorder', 'manuellt verifikat', 'omvänd moms', 'momskod'],
     title: 'Create Manual Voucher (Verifikation)',
-    description: 'Stage a manual verifikation with balanced lines: capitalization, accruals, FX, rättelser, IB. For a received handling pass inbox_item_id: the document becomes the verifikation (BFL 5 kap 6§); a filename in notes is not underlag. HIGH risk.',
+    description: 'Stage a manual verifikation with balanced lines: capitalization, accruals, FX, rättelser, IB. Omvänd moms: a line\'s vat_code. For a received handling pass inbox_item_id: the document becomes the verifikation (BFL 5 kap 6§); a filename in notes is not underlag. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -23694,7 +23701,16 @@ export const tools: McpTool[] = [
               currency: { type: 'string', description: 'ISO 4217, defaults to SEK' },
               amount_in_currency: { type: 'number', description: 'Original amount if currency is not SEK' },
               exchange_rate: { type: 'number' },
-              tax_code: { type: 'string', description: 'Free-text tag: does NOT drive momsdeklaration ruta mapping. The BAS account number is what determines which ruta the line lands in (e.g. 2641 → ruta 48, 2614 → ruta 30). Pick the correct account first.' },
+              tax_code: { type: 'string', description: 'Free-text tag: never drives the momsdeklaration, the account does (2641 → ruta 48). For omvänd moms use vat_code.' },
+              vat_code: {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string', enum: [...VOUCHER_LINE_VAT_KINDS] },
+                  rate: { type: 'number', enum: [...VOUCHER_LINE_VAT_RATES] },
+                },
+                required: ['kind', 'rate'],
+                description: 'Omvänd moms on this class 4-6 cost line: the server adds its fiktiv moms and basis lines, without dimensions. rate is a fraction.',
+              },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
@@ -23740,6 +23756,16 @@ export const tools: McpTool[] = [
       // Shape first: a line with neither amount key is a schema mismatch and
       // must say so, never coerce to 0/0 and fail the balance check instead.
       for (const [i, l] of rawLines.entries()) assertVoucherLineShape(l, `lines[${i}]`)
+      // A line's vat_code through the v1 line schema: both doors take the same codes.
+      const lineVatCode = (value: unknown, i: number): VoucherLineVatCode | undefined => {
+        if (value === undefined || value === null) return undefined
+        const parsed = VoucherLineVatCodeSchema.safeParse(value)
+        if (parsed.success) return parsed.data
+        throw fieldValidationError('Invalid vat_code', zodFieldIssues(parsed.error, value).map((issue) => ({
+          ...issue,
+          field: issue.field === 'arguments' ? `lines.${i}.vat_code` : `lines.${i}.vat_code.${issue.field}`,
+        })))
+      }
       const lines = rawLines.map((l, i) => ({
         account_number: String(l.account_number ?? ''),
         debit_amount: Number(l.debit_amount) || 0,
@@ -23752,6 +23778,7 @@ export const tools: McpTool[] = [
         dimensions: parseDimensionsArg(l.dimensions, `lines[${i}].dimensions`),
         cost_center: l.cost_center ? String(l.cost_center) : undefined,
         project: l.project ? String(l.project) : undefined,
+        vat_code: lineVatCode(l.vat_code, i),
       }))
 
       // Pre-flight: catch unbalanced lines before staging so the agent gets a
@@ -23833,6 +23860,16 @@ export const tools: McpTool[] = [
         }
       }
 
+      // A line's vat_code becomes the reverse-charge lines it generates, by
+      // the manual verifikat form's own derivation (crm#1096), the same as on
+      // v1. They are staged and previewed as lines, so the approver sees what
+      // posts and the executor needs no momskod of its own. They carry no
+      // dimensions, as in the form, and net to zero.
+      const expanded = await expandVoucherLineVatCodes(lines, chartVatTreatmentsLoader(supabase, companyId))
+      if (!expanded.ok) throw fieldValidationError('Invalid vat_code', expanded.refusals)
+      const bookedLines = expanded.lines
+      const bookedTotals = validateBalance(bookedLines)
+
       // Resolve account names for the preview so the approver reads
       // "1010 Balanserade utgifter / 2440 Leverantörsskulder" rather than
       // bare numbers. Also gate: refuse to stage when a line references an
@@ -23842,7 +23879,7 @@ export const tools: McpTool[] = [
       // numbers outside both the chart and the BAS catalog, plus rows a user
       // deliberately deactivated (the backfill never resurrects those), are
       // rejected here.
-      const accountNumbers = [...new Set(lines.map((l) => l.account_number))]
+      const accountNumbers = [...new Set(bookedLines.map((l) => l.account_number))]
       const { data: accounts } = await supabase
         .from('chart_of_accounts')
         .select('account_number, account_name, is_active')
@@ -23889,7 +23926,7 @@ export const tools: McpTool[] = [
         )
       }
 
-      const previewLines = lines.map((l) => ({
+      const previewLines = bookedLines.map((l) => ({
         account_number: l.account_number,
         // Fallback to the BAS catalog name for a seedable account that is not
         // in the chart yet, so the approver still reads a named line.
@@ -23956,16 +23993,16 @@ export const tools: McpTool[] = [
           is_opening_balance: isOpeningBalance,
           inbox_item_id: inboxItemId,
           document_id: inboxDocumentId,
-          lines,
+          lines: bookedLines,
         },
         {
           entry_date: entryDate,
           description,
           fiscal_period_id: fiscalPeriodId,
           voucher_series: (args.voucher_series as string) || 'A',
-          total_debit: balance.totalDebit,
-          total_credit: balance.totalCredit,
-          line_count: lines.length,
+          total_debit: bookedTotals.totalDebit,
+          total_credit: bookedTotals.totalCredit,
+          line_count: bookedLines.length,
           lines: previewLines,
           // BAS accounts not yet in the chart: the engine activates them at
           // commit. Surfaced so the approver sees the side-effect up front.

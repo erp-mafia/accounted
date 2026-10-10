@@ -80,7 +80,7 @@ Example response `200`:
 **Create a draft journal entry (verifikation).**
 `scope:bookkeeping:write · risk:high · idempotent · dry-run · reversible`
 
-Creates a draft journal entry via the engine's createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance, the period lock and the lines' accounts against the chart without inserting any row, so it fails with ACCOUNTS_NOT_IN_CHART for the same accounts the live call would reject.
+Creates a draft journal entry via the engine's createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance, the period lock and the lines' accounts against the chart without inserting any row, so it fails with ACCOUNTS_NOT_IN_CHART for the same accounts the live call would reject. A line may carry a vat_code (omvänd moms): the server adds that purchase's reverse-charge lines under it, as the manual verifikat form does.
 
 **Use when:** You're posting an arbitrary verifikation (manual journal entries, accrual reversals, period closing adjustments) outside the invoicing / supplier-invoice / transaction flows.
 **Do not use for:** Bookkeeping flows that have a dedicated endpoint (invoices, supplier-invoices, transactions). Editing an existing posted entry: use /correct instead.
@@ -93,6 +93,8 @@ Creates a draft journal entry via the engine's createDraftEntry(). The draft has
 - voucher_series defaults to "A" if omitted. Must be a single uppercase letter.
 - This creates a DRAFT only: call POST /{id}/commit to assign the voucher_number and post atomically, or DELETE /{id} to discard it. A draft left uncommitted blocks the year-end close (DRAFT_ENTRIES).
 - source_type defaults to "manual". A business source type may label your own vouchers (e.g. "webshop_order", "bank_transaction", "invoice_created"), and "import" marks history replayed from another system. Engine-owned types exempt from the dimension rules (opening_balance, year_end, result_appropriation, currency_revaluation, storno, correction, credit_note, supplier_credit_note, system, accrual, vat_settlement, rot_rut_payout, rot_rut_reclaim, expense_payout, stripe_payout) are refused with 400 VALIDATION_ERROR: they belong to their own endpoints.
+- lines[].vat_code books a reverse-charge purchase (omvänd betalningsskyldighet) on a BAS class 4-6 cost line: {"kind": "eu_goods" (ruta 20) | "eu_services" (21) | "non_eu_services" (22) | "domestic_services" (24), "rate": 0.25 | 0.12 | 0.06}, the rate a fraction, not percent. The server adds the fiktiv moms pair (2645, or 2647 for domestic_services, debit; 2614/2624/2634 credit) and the basis pair (44xx/45xx debit, 4598 credit) directly under the line, on its SEK amount: the lines the manual verifikat form books. They net to zero, so balance your own lines as usual; the dry run and the created draft show every line. A credit line with a vat_code reverses them (a credit note). Explicit only: a line without vat_code gets nothing, even on 4531.
+- On an account that reports ruta 20-24 itself (4531, 4535, 4415, or one whose kontoplan momskod is reverse charge) vat_code must be the account's own kind and rate, and only the fiktiv moms is added. 400 VALIDATION_ERROR, details.issues[].field lines.N.vat_code, for a code on an account that takes none (balance sheet, revenue, class 7-8, 4598, 4512, 4545-4547), another code on an account with its own ruta, a code on a line without an amount, a code whose basis account (44xx/45xx) your kontoplan sets to another ruta or momssats than the code asks for (correct that account's momskod), and a code beside a line on an account it creates (e.g. 2645, 2614, 4598, or its 44xx/45xx basis account, also when that line carries a vat_code of its own): book a purchase's reverse charge with vat_code or by hand, never both, and put a second purchase booked directly on that basis account in a voucher of its own.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -110,7 +112,7 @@ Request body:
   bank_booking_context?: { transaction_id: string, cash_account_id: string | null, target_cash_account_id?: string, settlement_account: string, date: string, amount: number, currency: string }[],
   voucher_series?: string,
   notes?: string,
-  lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[]
+  lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string, vat_code?: { kind: "eu_goods" | "eu_services" | "non_eu_services" | "domestic_services", rate: 0.25 | 0.12 | 0.06 } | null }[]
 }
 ```
 
@@ -1231,6 +1233,7 @@ Bulk-create endpoint mirroring /invoices/bulk-create and /suppliers/bulk-create.
 - all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.
 - Each entry must balance independently. Per-item JOURNAL_ENTRY_NOT_BALANCED appears in the results array.
 - source_type follows the single POST: "manual" by default, a business source type or "import" (history replayed from another system). An engine-owned, rule-exempt type (e.g. opening_balance, storno, accrual, system) fails the whole batch with 400 VALIDATION_ERROR.
+- lines[].vat_code (omvänd moms) works as on the single POST: the server adds the reverse-charge lines under the line, and the dry-run preview shows them. A vat_code its account or the voucher cannot take (the single POST's lines.N.vat_code refusals) fails only its own entry, with VALIDATION_ERROR and details.issues in the results array. A malformed vat_code (unknown kind, a rate other than 0.25, 0.12 or 0.06) is a schema error and fails the whole batch with 400, its field under journal_entries.i.lines.N.vat_code.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1240,7 +1243,7 @@ Bulk-create endpoint mirroring /invoices/bulk-create and /suppliers/bulk-create.
 Request body:
 ```ts
 {
-  journal_entries: { fiscal_period_id: string, entry_date: string, description: string, source_type?: "manual" | "bank_transaction" | "inbox_item" | "invoice_created" | "invoice_paid" | "invoice_cash_payment" | "supplier_invoice_registered" | "supplier_invoice_paid" | "supplier_invoice_cash_payment" | "supplier_invoice_privately_paid" | "salary_payment" | "webshop_order" | "expense_claim" | "reminder_fee" | "import", source_id?: string, bank_booking_context?: { transaction_id: string, cash_account_id: string | null, target_cash_account_id?: string, settlement_account: string, date: string, amount: number, currency: string }[], voucher_series?: string, notes?: string, lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[] }[],
+  journal_entries: { fiscal_period_id: string, entry_date: string, description: string, source_type?: "manual" | "bank_transaction" | "inbox_item" | "invoice_created" | "invoice_paid" | "invoice_cash_payment" | "supplier_invoice_registered" | "supplier_invoice_paid" | "supplier_invoice_cash_payment" | "supplier_invoice_privately_paid" | "salary_payment" | "webshop_order" | "expense_claim" | "reminder_fee" | "import", source_id?: string, bank_booking_context?: { transaction_id: string, cash_account_id: string | null, target_cash_account_id?: string, settlement_account: string, date: string, amount: number, currency: string }[], voucher_series?: string, notes?: string, lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string, vat_code?: { kind: "eu_goods" | "eu_services" | "non_eu_services" | "domestic_services", rate: 0.25 | 0.12 | 0.06 } | null }[] }[],
   all_or_nothing?: boolean
 }
 ```

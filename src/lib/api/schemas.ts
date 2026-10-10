@@ -28,6 +28,7 @@ import { validateJamkning } from '@/lib/salary/jamkning-rules'
 import { VACATION_DAYS_MINIMUM, vacationDaysBelowMinimum } from '@/lib/salary/employee-update-rules'
 import { SalaryCalculationPolicySchema } from '@/lib/salary/calculation-policy'
 import { EXPENSE_CLAIM_REVERSE_CHARGE_KINDS } from '@/lib/expenses/expense-claim-vat'
+import { VOUCHER_LINE_VAT_KINDS, VOUCHER_LINE_VAT_RATES } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
@@ -1996,8 +1997,43 @@ export const API_VOUCHER_SOURCE_TYPES: readonly JournalEntrySourceType[] = [
 ]
 export const DASHBOARD_VOUCHER_SOURCE_TYPES = ['manual', 'vat_settlement'] as const
 
+/**
+ * A konteringsrad's momskod on the voucher API and the MCP tool create_voucher
+ * (crm#1096): a reverse-charge purchase the server expands into its lines
+ * (expandVoucherLineVatCodes). The rate is a fraction like every
+ * self-assessed rate in the API (reverse_charge_rate, default_vat_rate).
+ */
+export const VoucherLineVatCodeSchema = z.object({
+  kind: z.enum(VOUCHER_LINE_VAT_KINDS),
+  // A union of literals, as vatRateDecimal: the v1 spec renders each rate.
+  // The reasons are Swedish, so they reach message_sv on the MCP door as well
+  // (zodFieldIssues keeps a schema's Swedish words, a union has no rendering
+  // of its own), and a missing rate is not answered with the percent hint.
+  rate: z.union(VOUCHER_LINE_VAT_RATES.map((rate) => z.literal(rate)), {
+    error: (issue) =>
+      issue.input === undefined
+        ? 'rate krävs: 0.25, 0.12 eller 0.06'
+        : 'rate måste vara ett decimaltal, inte procent: 0.25, 0.12 eller 0.06',
+  }),
+})
+
 /** POST /api/v1/companies/{companyId}/journal-entries (+ batch-create items). */
 export const CreateApiJournalEntrySchema = CreateJournalEntrySchema.extend({
+  lines: z
+    .array(
+      CreateJournalEntryLineSchema.extend({
+        vat_code: VoucherLineVatCodeSchema.nullish().describe(
+          'Momskod for a reverse-charge purchase (omvänd betalningsskyldighet) booked on this BAS class 4-6 cost line: ' +
+            'the server adds its lines directly under it, the fiktiv moms (2645, or 2647 for domestic_services, debit; ' +
+            '2614/2624/2634 credit) and the basis pair (44xx/45xx debit, 4598 credit), on the line\'s SEK amount. ' +
+            'kind: eu_goods (ruta 20), eu_services (21), non_eu_services (22), domestic_services (24, e.g. byggtjänster). ' +
+            'rate: 0.25, 0.12 or 0.06. On an account that reports ruta 20-24 itself (4531, or a kontoplan momskod that is ' +
+            'reverse charge) only the account\'s own kind and rate are accepted and no basis pair is added. ' +
+            'Omit or null for none: no line gets one by itself.',
+        ),
+      }),
+    )
+    .min(2, 'At least two lines are required for double-entry'),
   source_type: z
     .enum(API_VOUCHER_SOURCE_TYPES, {
       error:

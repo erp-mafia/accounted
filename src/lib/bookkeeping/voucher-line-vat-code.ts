@@ -1,6 +1,7 @@
 import type { CreateJournalEntryLineInput, VatDeclarationRutor } from '@/types'
 import {
   generateReverseChargePurchaseLines,
+  isReverseChargeBasisAccount,
   isReverseChargeKind,
   reverseChargeKindForBasisAccount,
   reverseChargeKindRuta,
@@ -8,8 +9,10 @@ import {
   RC_BASIS_OFFSET_ACCOUNT,
   REVERSE_CHARGE_KINDS,
   REVERSE_CHARGE_TREATMENT_KINDS,
+  type ChartVatTreatments,
   type ReverseChargeKind,
 } from './vat-entries'
+import type { FieldIssue } from '@/lib/errors/refusal'
 import {
   defaultRateForVatTreatment,
   isAccountVatTreatment,
@@ -46,6 +49,9 @@ import { roundOre } from '@/lib/money'
  * no base ruta (its 2641 line is its whole declaration effect) and its moms
  * line changes what the verifikat pays, so it stays a line the user types,
  * as before.
+ *
+ * The v1 voucher API and the MCP tool create_voucher take the same momskod
+ * as a line's vat_code, expanded here by expandVoucherLineVatCodes.
  */
 
 /** The self-assessed rates the producer has basis accounts for. */
@@ -429,4 +435,182 @@ export function foldGeneratedVatLines<T extends FoldableVoucherLine>(
     }
   }
   return changed ? out : lines
+}
+
+/**
+ * A voucher line as the v1 voucher API and the MCP tool create_voucher take
+ * it: the engine's line plus an optional momskod (crm#1096).
+ */
+export interface VatCodedVoucherLine extends CreateJournalEntryLineInput {
+  vat_code?: VoucherLineVatCode | null
+}
+
+/** The verifikat expandVoucherLineVatCodes posts, or why a line's momskod cannot post as asked. */
+export type ExpandedVoucherLines =
+  | { ok: true; lines: CreateJournalEntryLineInput[] }
+  | { ok: false; refusals: FieldIssue[] }
+
+function withoutVatCode({ vat_code: _vatCode, ...line }: VatCodedVoucherLine): CreateJournalEntryLineInput {
+  return line
+}
+
+/** A generated line in the engine's shape again, parsed as the form's submit parses it. */
+function toEngineShape(line: GeneratedVoucherLine): CreateJournalEntryLineInput {
+  return {
+    account_number: line.account_number,
+    debit_amount: parseAmount(line.debit_amount),
+    credit_amount: parseAmount(line.credit_amount),
+    line_description: line.line_description,
+  }
+}
+
+const vatCodeText = (code: VoucherLineVatCode) => `{"kind":"${code.kind}","rate":${code.rate}}`
+
+/**
+ * Why a requested momskod cannot post as asked, in both languages, or null
+ * when it can. The form needs none of this: its menu offers no code on an
+ * account that takes none and only on or off on an account with its own box,
+ * and it shows a conflict instead of posting it.
+ */
+function vatCodeRefusal(
+  account: string,
+  group: VoucherLineGroup<VoucherVatCodeLine>,
+  requested: VoucherLineVatCode,
+): Omit<FieldIssue, 'field'> | null {
+  if (!isReverseChargeKind(requested.kind) || !isVoucherLineVatRate(requested.rate)) {
+    const shape = `{"kind": ${VOUCHER_LINE_VAT_KINDS.join(' | ')}, "rate": ${VOUCHER_LINE_VAT_RATES.join(' | ')}}`
+    return { en: `vat_code must be ${shape}.`, sv: `Momskoden måste vara ${shape}.` }
+  }
+  const { rule } = group
+  if (rule.mode === 'none') {
+    return COST_ACCOUNT.test(account) && account !== RC_BASIS_OFFSET_ACCOUNT
+      ? {
+          en: `Account ${account} takes no vat_code: it reports a momsruta outside 20-24 (trepartshandel, import), or its reverse-charge momskod in the kontoplan has no momssats of 25, 12 or 6 %.`,
+          sv: `Konto ${account} kan inte ha en momskod: det redovisar en momsruta utanför 20-24 (trepartshandel, import), eller så har dess momskod för omvänd moms ingen momssats på 25, 12 eller 6 % i kontoplanen.`,
+        }
+      : {
+          en: `Account ${account} takes no vat_code: reverse charge (omvänd moms) goes on the purchase's cost account (BAS class 4-6, never 4598).`,
+          sv: `Konto ${account} kan inte ha en momskod: omvänd moms anges på inköpets kostnadskonto (BAS-klass 4-6, aldrig 4598).`,
+        }
+  }
+  if (rule.mode === 'fixed' && (requested.kind !== rule.code.kind || requested.rate !== rule.code.rate)) {
+    const box = rule.box.replace('ruta', '')
+    const rate = Math.round(rule.code.rate * 100)
+    return {
+      en: `Account ${account} reports ruta ${box} at ${rate} % itself, so its only vat_code is ${vatCodeText(rule.code)}. Send that, or book the purchase on an ordinary cost account to choose another.`,
+      sv: `Konto ${account} redovisar själv ruta ${box} med ${rate} %, så dess enda momskod är ${vatCodeText(rule.code)}. Ange den, eller bokför inköpet på ett vanligt kostnadskonto för att välja en annan.`,
+    }
+  }
+  if (group.generated.length === 0) {
+    return {
+      en: 'A vat_code needs a debit or credit amount on its line: that amount is the beskattningsunderlag.',
+      sv: 'En momskod kräver ett belopp i debet eller kredit på raden: beloppet är beskattningsunderlaget.',
+    }
+  }
+  if (group.conflicts.length > 0) {
+    const accounts = vatCodeConflictAccounts([group]).join(', ')
+    return {
+      en: `The vat_code creates ${accounts} itself and the voucher also books ${accounts} on lines of its own: the purchase would be counted twice. Remove the vat_code or those lines; if they are another purchase, book it in a voucher of its own.`,
+      sv: `Momskoden skapar ${accounts} själv och verifikatet bokför också ${accounts} på egna rader: köpet skulle räknas två gånger. Ta bort momskoden eller de raderna; är de ett annat inköp bokförs det i ett eget verifikat.`,
+    }
+  }
+  return null
+}
+
+const rutaAtRate = (box: string, rate: number) => {
+  const text = `ruta ${box.replace('ruta', '')}`
+  const percent = Math.round(rate * 100)
+  return { en: `${text} at ${percent} %`, sv: `${text} med ${percent} %` }
+}
+
+/**
+ * Why the basis pair of a requested code would not declare what was asked, or
+ * null when it does. The producer books the pair on the BAS basis account of
+ * the kind and rate (4426 for domestic services at 12 %), and the declaration
+ * and its basis check read that account as they read every account: by its
+ * kontoplan momskod and momssats when it has them, by its number otherwise
+ * (fetchDynamicVatAccounts). So where a company has set the basis account to
+ * another box or sats, the basis would land there, away from the fiktiv moms
+ * the same code books, and the verifikat would be one the momsdeklaration
+ * flags (rutor 30-32 without their basis). The form and the bank doors share
+ * the producer and still post it; a request that names its ruta is refused.
+ */
+function basisAccountRefusal(
+  group: VoucherLineGroup<VoucherVatCodeLine>,
+  requested: VoucherLineVatCode,
+  rowOf: VoucherVatCodeRowLookup,
+): Omit<FieldIssue, 'field'> | null {
+  const account = group.generated.find((line) => isReverseChargeBasisAccount(line.account_number))?.account_number
+  if (!account) return null
+  const reports = vatCodeRuleForAccount(account, rowOf(account))
+  const box = vatCodeBasisBox(group.rule, requested)
+  if (reports.mode === 'fixed' && reports.box === box && reports.code.rate === requested.rate) return null
+  const asked = rutaAtRate(box, requested.rate)
+  const actual = reports.mode === 'fixed'
+    ? rutaAtRate(reports.box, reports.code.rate)
+    : { en: 'no ruta 20-24 at 25, 12 or 6 %', sv: 'ingen ruta 20-24 med 25, 12 eller 6 %' }
+  return {
+    en: `The vat_code books its basis on ${account}, which the kontoplan sets to report ${actual.en}, not ${asked.en}: the purchase would be declared in another ruta or momssats than asked. Correct the momskod and momssats of ${account} in the kontoplan, or book the purchase on an account that reports ${asked.en} itself.`,
+    sv: `Momskoden bokför underlaget på ${account}, som enligt kontoplanen redovisar ${actual.sv}, inte ${asked.sv}: inköpet skulle deklareras i en annan ruta eller momssats än den begärda. Rätta momskod och momssats på ${account} i kontoplanen, eller bokför inköpet på ett konto som självt redovisar ${asked.sv}.`,
+  }
+}
+
+/**
+ * The verifikat a voucher request posts (crm#1096): each line followed by the
+ * lines its vat_code generates, derived by groupVoucherLinesWithVatCodes, the
+ * derivation the manual verifikat form posts, so the form, the v1 voucher
+ * routes and the MCP tool create_voucher cannot book one momskod differently.
+ *
+ * Explicit only: a line without a vat_code generates nothing, also on an
+ * account with its own box (4531), where the form switches the account's code
+ * on by itself. An integration posts the lines it sends unless it asks for
+ * more, as it always has.
+ *
+ * A code that cannot post as asked is refused per line (field
+ * `lines.N.vat_code`), never adjusted: a code on an account that takes none;
+ * on an account with its own box, any code but the account's own (the form
+ * books the account's code whatever was chosen, an API caller is told which
+ * one would post); a code on a line without an amount; the form's conflict
+ * rule, a code beside lines that book the accounts it creates by hand; and a
+ * code whose basis account the kontoplan sets to another box or sats
+ * (basisAccountRefusal).
+ *
+ * `loadChart` (chartVatTreatmentsLoader on the server) runs only when a line
+ * carries a code: the kontoplan's momskoder decide each account's rule, read
+ * as the momsdeklaration reads them.
+ */
+export async function expandVoucherLineVatCodes(
+  lines: readonly VatCodedVoucherLine[],
+  loadChart: () => Promise<ChartVatTreatments>,
+): Promise<ExpandedVoucherLines> {
+  const typed = lines.map(withoutVatCode)
+  if (!lines.some((line) => line.vat_code)) return { ok: true, lines: typed }
+
+  const chart = await loadChart()
+  const rowOf: VoucherVatCodeRowLookup = (account) => chart.get(account)
+  const groups = groupVoucherLinesWithVatCodes<VoucherVatCodeLine>(
+    lines.map((line) => ({
+      account_number: line.account_number,
+      debit_amount: String(line.debit_amount || 0),
+      credit_amount: String(line.credit_amount || 0),
+      // A line without a code is switched off: never the account's own code by itself.
+      vat_code: line.vat_code ?? null,
+    })),
+    rowOf,
+  )
+
+  const refusals: FieldIssue[] = []
+  groups.forEach((group, index) => {
+    const requested = lines[index].vat_code
+    const refusal = requested
+      ? vatCodeRefusal(lines[index].account_number, group, requested) ?? basisAccountRefusal(group, requested, rowOf)
+      : null
+    if (refusal) refusals.push({ field: `lines.${index}.vat_code`, ...refusal })
+  })
+  if (refusals.length > 0) return { ok: false, refusals }
+
+  return {
+    ok: true,
+    lines: groups.flatMap((group, index) => [typed[index], ...group.generated.map(toEngineShape)]),
+  }
 }
