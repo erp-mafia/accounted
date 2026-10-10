@@ -1,5 +1,6 @@
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { isSystemAccount, isValidBASRange, suggestMappings, type MappableAccount } from './account-mapper'
+import { rcBasisPairsByAccount } from './rc-basis-pairs'
 import type { AccountMapping, ParsedSIEFile, SIEAccount, SIEAccountMappingRecord } from './types'
 
 /** BAS 2999 OBS-konto: where a source system's class 9 observation postings land. */
@@ -69,6 +70,7 @@ export function prepareSIEPreviewMappings(parsed: ParsedSIEFile, suggested: Acco
     else if (isSystemAccount(account.number)) excludedSystemAccounts.push(account)
   }
   const excluded = new Set([...archivedOnlyAccounts, ...excludedSystemAccounts].map(a => a.number))
+  const rcBasisPairs = rcBasisPairsByAccount(parsed.vouchers)
   const mappings = suggested.filter(m => !excluded.has(m.sourceAccount)).map(mapping => {
     const used = financial.has(mapping.sourceAccount)
     if (isAccountNumber(mapping.targetAccount) && (!used || isValidBASRange(mapping.targetAccount))) return mapping
@@ -88,6 +90,11 @@ export function prepareSIEPreviewMappings(parsed: ParsedSIEFile, suggested: Acco
       return { ...mapping, targetAccount: OBS_ACCOUNT, targetName: OBS_ACCOUNT_NAME, confidence: 0.5, matchType: 'class' as const, isOverride: false }
     }
     return { ...mapping, targetAccount: '', targetName: '', confidence: 0, matchType: 'manual' as const }
+  }).map(mapping => {
+    // How the file reports the reverse-charge basis beside the account, which
+    // decides whether a reverse-charge momskod may be prefilled (crm#1096).
+    const rcBasisPair = rcBasisPairs.get(mapping.sourceAccount)
+    return rcBasisPair ? { ...mapping, rcBasisPair } : mapping
   })
   return { mappings, archivedOnlyAccounts, excludedSystemAccounts }
 }

@@ -46,6 +46,12 @@ import {
   type AccountVatTreatment,
 } from '@/lib/vat/account-vat-treatment'
 import {
+  countsRcBasisTwice,
+  rcBasisPairFindings,
+  rcMomskodSetAside,
+} from '@/lib/import/account-vat-treatment'
+import type { RcBasisPairFinding } from '@/lib/import/rc-basis-pairs'
+import {
   InfoTooltip,
   Tooltip,
   TooltipContent,
@@ -114,6 +120,31 @@ function untranslatedAccountList(
   })
 }
 
+/**
+ * The line under a row whose file books the reverse-charge basis on a separate
+ * pair beside the account (crm#1096), or null. A warning whenever the row's
+ * momskod would count those purchases twice, whoever set it. Otherwise only
+ * where the prefill set a reverse-charge momskod aside and the row carries
+ * none: why, with the source code named when it was the code's. Then it takes
+ * the source-code line's place; every other row keeps that line.
+ */
+function rcBasisNote(
+  mapping: AccountMapping,
+  finding: RcBasisPairFinding | undefined,
+  t: ReturnType<typeof useTranslations<'chart_of_accounts'>>,
+): string | null {
+  if (!finding) return null
+  const values = { count: finding.vouchers, accounts: finding.accounts.join(', ') }
+  if (countsRcBasisTwice(mapping.sourceAccount, mapping.defaultVatTreatment, finding)) {
+    return t('vat_treatment_rc_basis_twice', values)
+  }
+  const setAside = rcMomskodSetAside(mapping, finding)
+  if (!setAside) return null
+  return mapping.providerVatCode && mapping.providerVatTreatment === setAside
+    ? t('vat_treatment_rc_basis_apart_code', { ...values, code: mapping.providerVatCode })
+    : t('vat_treatment_rc_basis_apart', values)
+}
+
 export default function AccountMappingStep({
   mappings,
   basAccounts,
@@ -148,6 +179,10 @@ export default function AccountMappingStep({
     () => new Set(basAccounts.map((a) => a.account_number)),
     [basAccounts],
   )
+
+  // Which rows the file books beside a basis pair that reports ruta 20-24,
+  // judged over all rows: a pair's legs are other rows (crm#1096).
+  const rcBasisFindings = useMemo(() => rcBasisPairFindings(mappings), [mappings])
 
   // Filter and search mappings
   const filteredMappings = useMemo(() => {
@@ -513,7 +548,13 @@ export default function AccountMappingStep({
                             <SelectTrigger
                               className={cn(
                                 'min-w-0 flex-1',
-                                mapping.requiresVatTreatmentReview && 'border-warning/60',
+                                (mapping.requiresVatTreatmentReview ||
+                                  countsRcBasisTwice(
+                                    mapping.sourceAccount,
+                                    mapping.defaultVatTreatment,
+                                    rcBasisFindings.get(mapping.sourceAccount),
+                                  )) &&
+                                  'border-warning/60',
                               )}
                             >
                               <SelectValue />
@@ -585,7 +626,11 @@ export default function AccountMappingStep({
                             one the label is the last line of defence, which is
                             why a descriptive account name lands in the third
                             state instead. */}
-                        {mapping.providerVatCode ? (
+                        {rcBasisNote(mapping, rcBasisFindings.get(mapping.sourceAccount), t) ? (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {rcBasisNote(mapping, rcBasisFindings.get(mapping.sourceAccount), t)}
+                          </p>
+                        ) : mapping.providerVatCode ? (
                           <p className="mt-1 text-xs text-muted-foreground">
                             {mapping.providerVatTreatment
                               ? t('vat_treatment_source_code', { code: mapping.providerVatCode })

@@ -220,6 +220,40 @@ export interface ValidationResult {
   warnings: string[]
 }
 
+/** One set of basis legs a file's vouchers book beside a cost account. */
+export interface RcBasisPairShape {
+  /** The basis legs, ascending: 44xx/45xx accounts opposite the offset. */
+  legs: string[]
+  /** The offsets they balance, ascending: 4598, or a chart's own 4599. */
+  offsets: string[]
+  /** How many vouchers book the account beside these legs. */
+  vouchers: number
+  /** The latest of those vouchers' dates, in epoch milliseconds. */
+  lastAt: number
+  /**
+   * The latest date among those that also book reverse-charge output VAT
+   * (2614/2624/2634), absent when none does. Where the legs report nothing in
+   * ruta 20-24, such a purchase is reported by the account's momskod alone.
+   */
+  lastSelfAssessedAt?: number
+}
+
+/**
+ * How a file's vouchers book the reverse-charge basis beside one cost account,
+ * read by rcBasisPairsByAccount (rc-basis-pairs.ts). Raw: whether a pair
+ * reports ruta 20-24 at all depends on the momskod its legs get, which only
+ * the mapping set knows (rcBasisPairFinding). See AccountMapping.rcBasisPair.
+ */
+export interface RcBasisPairEvidence {
+  pairs: RcBasisPairShape[]
+  /**
+   * The latest date of a voucher that reports the basis on the account itself
+   * (reverse-charge output VAT, no pair at all), in epoch milliseconds; absent
+   * when none does.
+   */
+  ownBasisLastAt?: number
+}
+
 /**
  * Account mapping suggestion
  */
@@ -251,6 +285,14 @@ export interface AccountMapping {
    * not lose it.
    */
   providerVatTreatment?: import('@/lib/vat/account-vat-treatment').AccountVatTreatment | null
+  /**
+   * The file's vouchers book this account beside a separate basis pair (a
+   * 44xx/45xx basis leg and its 4598/4599 offset). Where the legs report ruta
+   * 20-24, a reverse-charge momskod on this account would report those
+   * purchases a second time (crm#1096). A fact about the source account, set
+   * by prepareSIEPreviewMappings from the file and absent when there is none.
+   */
+  rcBasisPair?: RcBasisPairEvidence
 }
 
 /**

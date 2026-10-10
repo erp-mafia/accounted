@@ -41,6 +41,53 @@ describe('applySourceChartCsv', () => {
     expect(summary).toMatchObject({ codesApplied: 1, treatmentsApplied: 1, codesWithoutTreatment: 0 })
   })
 
+  it('reads a reverse-charge code the vouchers rule out without applying it or its rate (crm#1096)', () => {
+    // The file books this account beside a separate 4535/4599 basis pair and
+    // ends that way: the code would count those purchases twice in ruta 21.
+    const row: AccountMapping = {
+      ...mapping('5420', 'Programvaror'),
+      rcBasisPair: { pairs: [{ legs: ['4535'], offsets: ['4599'], vouchers: 3, lastAt: Date.UTC(2026, 8, 22) }] },
+    }
+    const { mappings, summary } = applySourceChartCsv([row], csv('True;5420;Programvaror;21-25%'))
+    expect(mappings[0]).toMatchObject({
+      providerVatCode: '21-25%',
+      providerVatTreatment: 'reverse_charge_eu_services',
+      defaultVatTreatment: null,
+      defaultVatRate: null,
+      vatTreatmentReviewed: false,
+      requiresVatTreatmentReview: true,
+    })
+    expect(summary).toMatchObject({ codesApplied: 1, treatmentsApplied: 0, codesWithoutTreatment: 0 })
+  })
+
+  it('judges a pair by its legs\' own rows, also when restoring a row the next chart omits (crm#1096)', () => {
+    // 5460 is booked beside 4505/4599, a basis account of the chart's own:
+    // the pair reports ruta 20 only because 4505's row gets a reverse-charge
+    // momskod, here from its label.
+    const rows = enrichAccountMappingsWithVat([
+      {
+        ...mapping('5460', 'Inköp varor EU'),
+        rcBasisPair: { pairs: [{ legs: ['4505'], offsets: ['4599'], vouchers: 3, lastAt: Date.UTC(2026, 8, 22) }] },
+      },
+      mapping('4505', 'Inköp varor från annat EU-land 25%'),
+      mapping('3041', 'Försäljning tjänst 25% sv'),
+    ], [])
+    expect(rows[0].defaultVatTreatment).toBeNull()
+
+    const first = applySourceChartCsv(rows, csv('True;5460;Inköp varor EU;20-25%'))
+    expect(first.mappings[0]).toMatchObject({ providerVatCode: '20-25%', defaultVatTreatment: null })
+    expect(first.summary).toMatchObject({ codesApplied: 1, treatmentsApplied: 0 })
+
+    // The next chart does not mention 5460: the row goes back to what the
+    // label says, which the pair still rules out.
+    const second = applySourceChartCsv(first.mappings, csv('True;3041;Försäljning tjänst 25% sv;05-25%'))
+    expect(second.mappings[0]).toMatchObject({
+      providerVatCode: null,
+      defaultVatTreatment: null,
+      requiresVatTreatmentReview: true,
+    })
+  })
+
   it('beats the label guess, which is the whole point', () => {
     // The label says EG and varor, so suggestVatTreatment would reach for the
     // momsfri ruta 35 treatment. The source system says this one carries

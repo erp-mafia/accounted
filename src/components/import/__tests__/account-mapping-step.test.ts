@@ -228,3 +228,85 @@ describe('AccountMappingStep VAT review gate (crm#1118)', () => {
     expect(html).not.toContain(gate(60))
   })
 })
+
+describe('AccountMappingStep reverse-charge basis on a separate pair (crm#1096)', () => {
+  const MARCH = new Date(2026, 2, 1).getTime()
+  const pairOf = (legs: string[], offsets: string[], vouchers = 8) => ({ legs, offsets, vouchers, lastAt: MARCH })
+  /** A row 8 vouchers book beside a 4535/4599 pair that the file ends on, with no momskod on it. */
+  const row = (account: string, name: string, overrides: Partial<AccountMapping> = {}): AccountMapping => ({
+    ...pendingRow({ account_number: account, account_name: name }),
+    defaultVatTreatment: null,
+    defaultVatRate: null,
+    vatTreatmentSuggested: false,
+    rcBasisPair: { pairs: [pairOf(['4535'], ['4599'])] },
+    ...overrides,
+  })
+  const PAIR_NOTE = 'redovisar underlaget för omvänd moms på ett separat kontopar'
+
+  it('says why no reverse-charge momskod is suggested where the prefill set one aside', () => {
+    const coded = render([row('5420', 'Programvaror', {
+      providerVatCode: 'ITEU',
+      providerVatTreatment: 'reverse_charge_eu_services',
+    })])
+    expect(coded).toContain(
+      'Momskod i källsystemet: ITEU. Den används inte: 8 verifikat på kontot redovisar underlaget för omvänd moms på ett separat kontopar (4535, 4599), så momskoden skulle räkna de inköpen två gånger.',
+    )
+
+    const labelled = render([row('6545', 'Inköp tjänster utanför EU 25%')])
+    expect(labelled).toContain(
+      '8 verifikat på kontot redovisar underlaget för omvänd moms på ett separat kontopar (4535, 4599), så ingen momskod för omvänd moms föreslås: den skulle räkna de inköpen två gånger.',
+    )
+  })
+
+  it('warns on a reverse-charge momskod that counts those purchases twice, whoever set it', () => {
+    const html = render([row('5420', 'Programvaror', {
+      defaultVatTreatment: 'reverse_charge_eu_services',
+      // The file ends on the account's own basis: the momskod stays, with the cost.
+      rcBasisPair: { pairs: [pairOf(['4535'], ['4599'], 1)], ownBasisLastAt: MARCH + 1 },
+    })])
+    expect(html).toContain(
+      '1 verifikat på kontot redovisar underlaget för omvänd moms på ett separat kontopar (4535, 4599): med den här momskoden räknas det inköpet två gånger i momsdeklarationen.',
+    )
+  })
+
+  it('keeps the source-code line on a row where no reverse-charge momskod was set aside', () => {
+    // No code and a label that names no reverse charge: nothing was on the table.
+    expect(render([row('5420', 'Programvaror')])).not.toContain(PAIR_NOTE)
+
+    // A code nothing could translate still says so.
+    const unreadable = render([row('5420', 'Programvaror', { providerVatCode: 'XYZ', providerVatTreatment: null })])
+    expect(unreadable).toContain('Momskod i källsystemet: XYZ. Den gick inte att tolka och kontonamnet ger ingen ledtråd')
+    expect(unreadable).not.toContain(PAIR_NOTE)
+
+    // A code that is applied and reports elsewhere (trepartshandel, ruta 37) is in use.
+    const applied = render([row('4056', 'Inköp varor trepartshandel', {
+      providerVatCode: '37',
+      providerVatTreatment: 'triangulation_eu_goods',
+      defaultVatTreatment: 'triangulation_eu_goods',
+    })])
+    expect(applied).toContain('Momskod i källsystemet: 37')
+    expect(applied).not.toContain('Den används inte')
+    expect(applied).not.toContain(PAIR_NOTE)
+  })
+
+  it('says nothing about a pair whose leg does not report ruta 20-24, and warns once it does', () => {
+    const cost = row('4051', 'Inköp varor EU 25%', {
+      defaultVatTreatment: 'reverse_charge_eu_goods',
+      rcBasisPair: { pairs: [pairOf(['4505'], ['4599'])] },
+    })
+    const leg = (treatment: AccountMapping['defaultVatTreatment']) => row('4505', 'Underlag', {
+      defaultVatTreatment: treatment,
+      rcBasisPair: undefined,
+    })
+    expect(render([cost, leg(null)])).not.toContain(PAIR_NOTE)
+    expect(render([cost, leg('import_goods')])).not.toContain(PAIR_NOTE)
+    expect(render([cost, leg('reverse_charge_eu_goods')])).toContain(
+      '8 verifikat på kontot redovisar underlaget för omvänd moms på ett separat kontopar (4505, 4599): med den här momskoden',
+    )
+  })
+
+  it('adds nothing to a row without a pair beside it', () => {
+    const html = render([pendingRow({ account_number: '5420', account_name: 'Programvaror' })])
+    expect(html).not.toContain(PAIR_NOTE)
+  })
+})

@@ -93,6 +93,19 @@ describe('SIE preview account boundaries', () => {
     expect(result.mappings.find(m => m.sourceAccount === '9999')?.targetAccount).toBe('9999')
   })
 
+  it('records the reverse-charge basis pair the file books beside a cost account (crm#1096)', () => {
+    const source = '#SIETYP 4\n#RAR 0 20260101 20261231\n#KONTO 1930 "Bank"\n#KONTO 5420 "Programvaror"\n' +
+      '#KONTO 4535 "Inköp tjänster EU"\n#KONTO 4599 "Justering omvänd moms"\n' +
+      '#VER A 1 20260129 "Inköp"\n{\n#TRANS 1930 {} -100\n#TRANS 5420 {} 100\n#TRANS 4535 {} 100\n#TRANS 4599 {} -100\n}'
+    const { mappings } = preview(source)
+    expect(mappings.filter(m => m.rcBasisPair).map(m => [m.sourceAccount, m.rcBasisPair]))
+      .toEqual([['5420', {
+        pairs: [{ legs: ['4535'], offsets: ['4599'], vouchers: 1, lastAt: new Date(2026, 0, 29).getTime() }],
+      }]])
+    // Preview evidence for the VAT prefill: the job's mappings do not carry it.
+    expect(SIEJobMappingsSchema.parse(mappings).some(m => 'rcBasisPair' in m)).toBe(false)
+  })
+
   it('clears invalid stored targets but preserves a valid explicit remapping', () => {
     const parsed = parseSIEFile(ledger)
     const mappings = suggestMappings(parsed.accounts, BAS_REFERENCE)
