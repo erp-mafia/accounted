@@ -343,6 +343,52 @@ describe('rcBasisGapFinding', () => {
     expect(rcBasisGapFinding(1).message).toContain('Korrigera verifikationen')
     expect(rcBasisGapFinding(5).message).toContain('Korrigera verifikationerna')
   })
+
+})
+
+// crm#1096: an account whose momskod reports ruta 20-24 at a momssats other
+// than 25, 12 or 6 % puts its basis in the box (rutorFromTotals) but in no
+// rate group (rcBasisTotalsByRate). With a basis pair beside it the period
+// shows RC_OUTPUT_MISSING, without one the verifikat shows RC_BASIS_MISSING,
+// and Korrigera refuses it: both findings say where the fix is.
+describe('withRcBasisGapFindings, basis bucketed at no momssats', () => {
+  const pointer = /Obs: en del av ruta 20-24 .*ingen Standard moms på 25, 12 eller 6 %.*under Standard moms .*kontoplanen/
+
+  it('points the per-verifikat finding at the kontoplan', () => {
+    const evidence = makeEvidence({ ruta20: 1000, ruta30: 250, ruta48: 250 }, {})
+    const [finding] = withRcBasisGapFindings([], { status: 'scanned', gapCount: 1 }, evidence)
+    expect(finding.status).toBe('ERROR')
+    expect(finding.message).toMatch(pointer)
+  })
+
+  it('points RC_OUTPUT_MISSING there too, the state a basis pair beside such an account leaves', () => {
+    // 1 000 kr in ruta 20 from the account at 0 %, 1 000 kr in ruta 21 from
+    // the 4535 pair, which alone is bucketed at 25 %.
+    const evidence = makeEvidence({ ruta20: 1000, ruta21: 1000, ruta30: 250 }, { r25: 1000 })
+    const result = withRcBasisGapFindings(
+      [aggregateRcOutputMissing, warningOnly],
+      { status: 'scanned', gapCount: 0 },
+      evidence,
+    )
+    expect(result.map((c) => c.code)).toEqual(['RC_OUTPUT_MISSING', 'RC_INPUT_VAT_MISMATCH'])
+    expect(result[0].message).toMatch(new RegExp(`^aggregate surplus finding ${pointer.source}`))
+    expect(result[1]).toBe(warningOnly)
+  })
+
+  it('says nothing of it when every basis in ruta 20-24 is bucketed, or the evidence is not numeric', () => {
+    const bucketed = makeEvidence({ ruta21: 398500, ruta30: 100000 }, { r25: 398500 })
+    const notNumeric = makeEvidence({ ruta20: Number.NaN, ruta30: 250 }, {})
+    const stringFigure = makeEvidence(
+      { ruta20: 1000, ruta30: 250 },
+      { r25: '5' as unknown as number },
+    )
+    for (const evidence of [bucketed, notNumeric, stringFigure]) {
+      const [finding] = withRcBasisGapFindings([], { status: 'scanned', gapCount: 1 }, evidence)
+      expect(finding.status).toBe('ERROR')
+      expect(finding.message).not.toMatch(/Obs:/)
+    }
+    expect(withRcBasisGapFindings([], { status: 'scanned', gapCount: 1 })[0].message).not.toMatch(/Obs:/)
+  })
 })
 
 describe('rcBasisScanUnavailableFinding', () => {

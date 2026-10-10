@@ -3436,8 +3436,12 @@ export const UNCATEGORIZED_TRANSACTIONS_HINT =
  */
 export const RC_BASIS_MISSING_HINT =
   'Verifikat med fiktiv moms (2614/2624/2634) saknar basbelopp: hitta dem i huvudboken för 2614/2624/2634 ' +
-  '(gnubok_get_general_ledger) och lägg till 45xx D / 4598 K med inköpets belopp via gnubok_correct_entry ' +
-  '(4535 EU-tjänster ruta 21, 4531 tjänster utanför EU ruta 22, 4515 EU-varor ruta 20), eller Korrigera i momsvyn.'
+  '(gnubok_get_general_ledger) och lägg till 45xx D / 4598 K via gnubok_correct_entry, per momssats bara det ' +
+  'som saknas: fiktiv moms / sats minus det basbelopp verifikatet redan redovisar på den satsen i ruta 20-24, ' +
+  'på 44xx/45xx eller på ett konto vars momskod redovisar ruta 20-24. Konton för 25/12/6 %: 4535-4537 ' +
+  'EU-tjänster ruta 21, 4531-4533 tjänster utanför EU ruta 22, 4515-4517 EU-varor ruta 20. Eller Korrigera i ' +
+  'momsvyn. Har ett konto en momskod för omvänd skattskyldighet utan Standard moms 25, 12 eller 6 %, rätta ' +
+  'kontot i kontoplanen först.'
 
 /**
  * Hint for the bank_unreconciled blocker when every bank row in the period is

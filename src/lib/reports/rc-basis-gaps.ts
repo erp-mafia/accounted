@@ -4,9 +4,11 @@ import {
   fetchLinesByEntryIds,
   type EntryLinesQuery,
 } from '@/lib/bookkeeping/entry-lines'
+import { RC_BASIS_BOXES } from '@/lib/bookkeeping/vat-entries'
+import { roundOre } from '@/lib/money'
 import { resolvePeriodDates } from './vat-declaration'
 import { RC_BASIS_ACCOUNTS_BY_RATE } from './vat-filing-gate'
-import { fetchDynamicVatAccounts } from './vat-revenue-accounts'
+import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-accounts'
 import type { VatPeriodType } from '@/types'
 
 /**
@@ -16,6 +18,11 @@ import type { VatPeriodType } from '@/types'
  * Used by the momsdeklaration UI to give the user a concrete list of
  * verifikationer to correct, rather than a generic "ruta 30-32 utan
  * ruta 20-24" warning that doesn't tell them what to fix.
+ *
+ * The per-verifikat rule (readVerifikatRcBasis, isRcBasisGap) is exported
+ * because the worklist's Korrigera route reads the verifikat again with it
+ * at correction time: the row is a snapshot, and a basis the verifikat
+ * already reports must not be added twice (crm#1096).
  */
 
 const RC_OUTPUT_ACCOUNTS = ['2614', '2624', '2634'] as const
@@ -46,6 +53,116 @@ const DEFAULT_BASIS_BY_OUTPUT: Record<RcOutputAccount, string> = {
   '2634': '4537',
 }
 
+/**
+ * The scan's tolerance in kronor: fiktiv moms at or below it is ignored, and
+ * a momssats is a gap only when its basis falls short by more than it. The
+ * filing gate's per-rate identity uses the same 0.5 kr.
+ */
+export const RC_BASIS_TOLERANCE = 0.5
+
+/**
+ * The declaration's account resolution as the basis is read with it
+ * (fetchDynamicVatAccounts): the accounts with a configured momskod, the box
+ * each one feeds, and the momssats the filing gate buckets its basis at.
+ */
+export type RcBasisAccounts = Pick<
+  DynamicVatAccounts,
+  'explicitAccounts' | 'mappingByAccount' | 'rcBasisRateByAccount'
+>
+
+/**
+ * How the declaration reads a line on `account` as the basis of a
+ * reverse-charge purchase, by the rule the filing gate buckets the basis with
+ * (rcBasisTotalsByRate):
+ *  - the momssats it is bucketed at: a configured account's own, otherwise a
+ *    static BAS basis account's (4536 is 12 %);
+ *  - 'unrated' for an account whose momskod puts it in ruta 20-24 while its
+ *    momssats is none of 25, 12 and 6 %. The declaration counts the box but
+ *    the gate buckets no basis there, so nothing pairs it with fiktiv moms:
+ *    a configuration error that only the kontoplan can fix;
+ *  - null for any other account.
+ */
+export function rcBasisReading(account: string, accounts: RcBasisAccounts): number | 'unrated' | null {
+  if (!accounts.explicitAccounts.has(account)) return STATIC_RC_BASIS_RATE.get(account) ?? null
+  const rate = accounts.rcBasisRateByAccount.get(account)
+  if (rate !== undefined) return rate
+  const box = accounts.mappingByAccount.get(account)?.box
+  return box !== undefined && RC_BASIS_BOXES.has(box) ? 'unrated' : null
+}
+
+/** One momssats of a verifikat, as the scan reads it. */
+export interface RcBasisAtRate {
+  rcOutputAccount: RcOutputAccount
+  rate: number
+  /** Net fiktiv moms credited on the output account (ruta 30, 31 or 32). */
+  rcOutputAmount: number
+  /** The basis that fiktiv moms implies: moms / sats, to the öre. */
+  expectedBasisAmount: number
+  /** Net basis the verifikat reports at this momssats (rcBasisReading). */
+  reportedBasisAmount: number
+}
+
+export interface VerifikatRcBasis {
+  /** 2614, 2624 and 2634 in that order, zeros included. */
+  rates: RcBasisAtRate[]
+  /** Accounts with a non-zero net in the verifikat whose basis is 'unrated', sorted. */
+  unratedAccounts: string[]
+}
+
+type LineAmounts = {
+  account_number: string
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+}
+
+/** One verifikat's fiktiv moms and basis per momssats, from all of its lines. */
+export function readVerifikatRcBasis(
+  lines: ReadonlyArray<LineAmounts>,
+  accounts: RcBasisAccounts,
+): VerifikatRcBasis {
+  const output = new Map<string, number>()
+  const basis = new Map<number, number>()
+  const unrated = new Map<string, number>()
+  for (const line of lines) {
+    const debitNet = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
+    const account = line.account_number
+    if ((RC_OUTPUT_ACCOUNTS as readonly string[]).includes(account)) {
+      output.set(account, roundOre((output.get(account) ?? 0) - debitNet))
+      continue
+    }
+    const reading = rcBasisReading(account, accounts)
+    if (reading === 'unrated') unrated.set(account, roundOre((unrated.get(account) ?? 0) + debitNet))
+    else if (reading !== null) basis.set(reading, roundOre((basis.get(reading) ?? 0) + debitNet))
+  }
+  return {
+    rates: RC_OUTPUT_ACCOUNTS.map((rcOutputAccount) => {
+      const rate = RATE_BY_OUTPUT[rcOutputAccount]
+      const rcOutputAmount = output.get(rcOutputAccount) ?? 0
+      return {
+        rcOutputAccount,
+        rate,
+        rcOutputAmount,
+        expectedBasisAmount: roundOre(rcOutputAmount / rate),
+        reportedBasisAmount: basis.get(rate) ?? 0,
+      }
+    }),
+    unratedAccounts: [...unrated].filter(([, net]) => net !== 0).map(([account]) => account).sort(),
+  }
+}
+
+/** The scan's verdict on one momssats: fiktiv moms whose basis falls short. */
+export function isRcBasisGap(rate: RcBasisAtRate): boolean {
+  return (
+    rate.rcOutputAmount > RC_BASIS_TOLERANCE &&
+    rate.reportedBasisAmount + RC_BASIS_TOLERANCE < rate.expectedBasisAmount
+  )
+}
+
+/** What a momssats lacks: the basis its fiktiv moms implies less the basis reported at it. */
+export function missingRcBasis(rate: RcBasisAtRate): number {
+  return roundOre(rate.expectedBasisAmount - rate.reportedBasisAmount)
+}
+
 export interface RcBasisGap {
   entryId: string
   voucherNumber: number
@@ -55,6 +172,8 @@ export interface RcBasisGap {
   rcOutputAccount: RcOutputAccount
   rcOutputAmount: number
   expectedBasisAmount: number
+  /** The part of expectedBasisAmount the verifikat does not report: what Korrigera adds. */
+  missingBasisAmount: number
   suggestedBasisAccount: string
   rate: number
 }
@@ -140,68 +259,47 @@ export async function findRcBasisGaps(
 
   if (rcLines.length === 0) return []
 
-  const entryIds = [...new Set(rcLines.map((l) => l.journal_entry_id))]
+  // The verifikat behind the fiktiv moms lines; each is read whole below.
+  const entries = new Map<string, EntryFields>()
+  for (const line of rcLines) {
+    if (entries.has(line.journal_entry_id)) continue
+    const entry = pickEntry(line)
+    if (entry) entries.set(line.journal_entry_id, entry)
+  }
 
   const siblingLines = await fetchLinesByEntryIds<SiblingLineRow>(
     supabase,
-    entryIds,
+    [...new Set(rcLines.map((l) => l.journal_entry_id))],
     'id, journal_entry_id, account_number, debit_amount, credit_amount',
   )
-
-  const basisByEntryAndRate = new Map<string, number>()
+  const linesByEntry = new Map<string, SiblingLineRow[]>()
   for (const line of siblingLines) {
-    const rate = dynamicVatAccounts.explicitAccounts.has(line.account_number)
-      ? dynamicVatAccounts.rcBasisRateByAccount.get(line.account_number)
-      : STATIC_RC_BASIS_RATE.get(line.account_number)
-    if (rate) {
-      const key = `${line.journal_entry_id}:${rate}`
-      const prev = basisByEntryAndRate.get(key) || 0
-      basisByEntryAndRate.set(
-        key,
-        prev + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0),
-      )
-    }
+    const lines = linesByEntry.get(line.journal_entry_id)
+    if (lines) lines.push(line)
+    else linesByEntry.set(line.journal_entry_id, [line])
   }
 
-  // Aggregate RC output per (entry, account): a voucher may have multiple
-  // 2614 lines (rare) and we want to flag the total shortfall.
-  const aggregated = new Map<string, { row: RcLineRow; amount: number }>()
-  for (const line of rcLines) {
-    const key = `${line.journal_entry_id}:${line.account_number}`
-    const amount = (Number(line.credit_amount) || 0) - (Number(line.debit_amount) || 0)
-    const existing = aggregated.get(key)
-    if (existing) {
-      existing.amount += amount
-    } else {
-      aggregated.set(key, { row: line, amount })
-    }
-  }
-
-  const eps = 0.5
+  // One row per momssats that falls short: a voucher may carry fiktiv moms at
+  // two sats, and a basis at one sats never covers moms at another.
   const gaps: RcBasisGap[] = []
-  for (const { row, amount } of aggregated.values()) {
-    if (amount <= eps) continue
-    const account = row.account_number as RcOutputAccount
-    const rate = RATE_BY_OUTPUT[account]
-    if (!rate) continue
-    const expectedBasis = Math.round((amount / rate) * 100) / 100
-    const actualBasis = basisByEntryAndRate.get(`${row.journal_entry_id}:${rate}`) || 0
-    if (actualBasis + eps >= expectedBasis) continue
-
-    const entry = pickEntry(row)
-    if (!entry) continue
-    gaps.push({
-      entryId: row.journal_entry_id,
-      voucherNumber: entry.voucher_number,
-      voucherSeries: entry.voucher_series,
-      entryDate: entry.entry_date,
-      description: entry.description,
-      rcOutputAccount: account,
-      rcOutputAmount: amount,
-      expectedBasisAmount: expectedBasis,
-      suggestedBasisAccount: DEFAULT_BASIS_BY_OUTPUT[account],
-      rate,
-    })
+  for (const [entryId, entry] of entries) {
+    const { rates } = readVerifikatRcBasis(linesByEntry.get(entryId) ?? [], dynamicVatAccounts)
+    for (const rate of rates) {
+      if (!isRcBasisGap(rate)) continue
+      gaps.push({
+        entryId,
+        voucherNumber: entry.voucher_number,
+        voucherSeries: entry.voucher_series,
+        entryDate: entry.entry_date,
+        description: entry.description,
+        rcOutputAccount: rate.rcOutputAccount,
+        rcOutputAmount: rate.rcOutputAmount,
+        expectedBasisAmount: rate.expectedBasisAmount,
+        missingBasisAmount: missingRcBasis(rate),
+        suggestedBasisAccount: DEFAULT_BASIS_BY_OUTPUT[rate.rcOutputAccount],
+        rate: rate.rate,
+      })
+    }
   }
 
   gaps.sort((a, b) => {

@@ -3030,6 +3030,49 @@ const VAT_REPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Momsdeklarationen kunde inte beräknas.',
     message_en: 'Failed to calculate VAT declaration.',
   },
+  // Korrigera on the reverse-charge basis worklist (crm#1096): the route reads
+  // the verifikat again at correction time and refuses rather than add a basis
+  // the declaration would count twice.
+  VAT_RC_BASIS_NOTHING_MISSING: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen redovisar redan hela basbeloppet för sin fiktiva moms, så det finns inget att korrigera. ' +
+      'Ladda om sidan så uppdateras listan.',
+    message_en:
+      'The voucher already reports the full basis for its reverse-charge VAT, so there is nothing to correct. ' +
+      'Reload the page to refresh the list.',
+  },
+  VAT_RC_BASIS_RATE_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen redovisar redan basbelopp i ruta 20-24, men med en annan momssats än den fiktiva momsen. ' +
+      'Rätta momssatsen med rättelse eller storno av verifikationen, eller kontrollera kontots Standard moms i kontoplanen.',
+    message_en:
+      'The voucher already reports a basis in boxes 20-24, but at another VAT rate than its reverse-charge VAT. ' +
+      'Correct the rate by correcting or reversing the voucher, or check the account\'s "Standard moms" in the chart of accounts.',
+  },
+  VAT_RC_BASIS_ACCOUNT_WITHOUT_RATE: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen bokför på ett konto som har en momskod för omvänd skattskyldighet men ingen Standard moms ' +
+      'på 25, 12 eller 6 %. Välj samma sats som den fiktiva momsen under Standard moms på kontot i kontoplanen, ' +
+      'eller ta bort momskoden om kontot inte ska redovisas i ruta 20-24, och ladda sedan om sidan.',
+    message_en:
+      'The voucher books on an account with a reverse-charge VAT code but no "Standard moms" (default VAT rate) ' +
+      'of 25, 12 or 6 %. Set it to the rate of the reverse-charge VAT in the chart of accounts, or remove the VAT ' +
+      'code if the account should not report in boxes 20-24, and reload the page.',
+  },
+  VAT_RC_BASIS_ACCOUNT_RATE_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'Kontot som basbeloppet ska bokföras på redovisas inte i ruta 20-24 med den fiktiva momsens sats enligt ' +
+      'kontoplanen, så det skulle inte täcka den fiktiva momsen. Kontrollera kontots momskod och Standard moms ' +
+      'i kontoplanen och ladda sedan om sidan.',
+    message_en:
+      'The account the basis goes on does not report in boxes 20-24 at the rate of the reverse-charge VAT ' +
+      'according to the chart of accounts, so it would not cover that VAT. Check its VAT code and "Standard moms" ' +
+      'in the chart of accounts and reload the page.',
+  },
 }
 
 // Marking a momsperiod as filed by hand (issue #2746): the record is the

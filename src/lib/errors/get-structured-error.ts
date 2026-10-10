@@ -567,7 +567,12 @@ function mergeDetails(
   return base
 }
 
-function extractBookkeepingDetails(err: unknown): { code: string; details?: unknown } {
+/**
+ * The registry code and structured details of a typed bookkeeping error, as
+ * errorResponse answers them. Exported for a route that keeps both but writes
+ * the message itself.
+ */
+export function extractBookkeepingDetails(err: unknown): { code: string; details?: unknown } {
   if (err instanceof AccountsNotInChartError) {
     return { code: err.code, details: { account_numbers: err.accountNumbers } }
   }

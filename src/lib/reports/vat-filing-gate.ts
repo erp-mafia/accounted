@@ -220,6 +220,49 @@ export function rcBasisGapFinding(gapCount: number): VatDeclarationCheck {
 }
 
 /**
+ * The part of rutor 20-24 the gate buckets at no momssats: the basis on
+ * accounts whose momskod reports ruta 20-24 while their momssats is none of
+ * 25, 12 and 6 %. rutorFromTotals counts such an account's box and
+ * rcBasisTotalsByRate skips it, while both read every other basis account
+ * alike, so it is exactly the difference between the two halves of the
+ * evidence. Zero for evidence that is not numeric (it can arrive as JSON).
+ */
+function unratedRcBasis({ rutor, rcBasisByRate }: RcGapDowngradeEvidence): number {
+  const declared = [rutor.ruta20, rutor.ruta21, rutor.ruta22, rutor.ruta23, rutor.ruta24]
+  const bucketed = [rcBasisByRate.r25, rcBasisByRate.r12, rcBasisByRate.r6]
+  if (![...declared, ...bucketed].every(Number.isFinite)) return 0
+  const sum = (figures: number[]) => figures.reduce((total, figure) => total + figure, 0)
+  return roundOre(sum(declared) - sum(bucketed))
+}
+
+/**
+ * Said beside the blocking reverse-charge findings when part of rutor 20-24
+ * is bucketed at no momssats (unratedRcBasis). That basis lifts the box past
+ * the fiktiv moms (RC_OUTPUT_MISSING) while its verifikat stays short at its
+ * own sats (RC_BASIS_MISSING), so the two alternate however the ledger is
+ * corrected, and Korrigera refuses such a verifikat (crm#1096): the fix is the
+ * account's Standard moms (or its momskod) in the kontoplan.
+ */
+const UNRATED_BASIS_POINTER =
+  ' Obs: en del av ruta 20-24 kommer från konton som har en momskod för omvänd ' +
+  'skattskyldighet men ingen Standard moms på 25, 12 eller 6 %, så det basbeloppet kan inte ' +
+  'knytas till någon fiktiv moms. Välj samma sats som den fiktiva momsen under Standard moms ' +
+  'på de kontona i kontoplanen (eller ta bort momskoden om kontot inte ska redovisas i ruta 20-24) ' +
+  'innan du korrigerar.'
+
+function pointAtUnratedBasis(
+  findings: VatDeclarationCheck[],
+  evidence: RcGapDowngradeEvidence | undefined,
+): VatDeclarationCheck[] {
+  if (!evidence || Math.abs(unratedRcBasis(evidence)) <= 0.5) return findings
+  return findings.map((finding) =>
+    finding.status === 'ERROR' && (finding.code === 'RC_BASIS_MISSING' || finding.code === 'RC_OUTPUT_MISSING')
+      ? { ...finding, message: `${finding.message}${UNRATED_BASIS_POINTER}` }
+      : finding,
+  )
+}
+
+/**
  * Shown when the per-verifikat scan could not run. A WARNING, not an ERROR: a
  * network hiccup must not lock a user out of a statutory filing deadline, and
  * there is nothing for them to correct. But it must exist, because an empty
@@ -248,6 +291,14 @@ export function withRcBasisGapFindings(
   checks: VatDeclarationCheck[],
   scan: RcBasisGapScan,
   evidence?: RcGapDowngradeEvidence,
+): VatDeclarationCheck[] {
+  return pointAtUnratedBasis(foldRcBasisGapScan(checks, scan, evidence), evidence)
+}
+
+function foldRcBasisGapScan(
+  checks: VatDeclarationCheck[],
+  scan: RcBasisGapScan,
+  evidence: RcGapDowngradeEvidence | undefined,
 ): VatDeclarationCheck[] {
   // The aggregate check already says this, and already blocks; don't say it
   // twice, and don't stack a "could not check" note on top of a live finding.

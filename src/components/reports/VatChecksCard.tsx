@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -70,8 +71,16 @@ const supplyItemsFor = (supplierType: SupplierType) =>
         { id: 'goods', label: 'Vara' },
       ]
 
-/** How many gap rows render before the "Visa alla" toggle. */
+/** How many verifikat render before the "Visa alla" toggle. */
 const GAP_PREVIEW_COUNT = 5
+
+/**
+ * A worklist row is one momssats of a verifikat: its expansion and its
+ * classification are its own (EU goods at 12 % and an EU service at 25 % on
+ * one verifikat land in different rutor), while one korrigering covers every
+ * row of the verifikat.
+ */
+const rowKey = (gap: RcBasisGap) => `${gap.entryId}:${gap.rcOutputAccount}`
 
 /**
  * "Kontroll av underlaget": the local pre-flight checks for the
@@ -96,6 +105,7 @@ export function VatChecksCard({
   onCorrected: () => void
 }) {
   const router = useRouter()
+  const t = useTranslations('reports')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -176,6 +186,7 @@ export function VatChecksCard({
   const gaps = gapsFetched
     ? gapsResult.gaps.filter((g) => !removedIds.has(g.entryId))
     : []
+  const verifikatCount = new Set(gaps.map((g) => g.entryId)).size
   const gapsLoading = hasRcBasisGaps && !gapsFetched
   const gapsFailed = gapsFetched && !!gapsResult.failed
   // The worklist stays mounted while unfixed rows remain, even after the
@@ -186,12 +197,19 @@ export function VatChecksCard({
   const busy = fixingId !== null || bulkProgress !== null
 
   const classificationFor = (gap: RcBasisGap): GapClassification =>
-    overrides[gap.entryId] ?? sharedSel
+    overrides[rowKey(gap)] ?? sharedSel
 
+  // One korrigering per verifikat, each momssats with its own row's
+  // classification. `resolved`: the verifikat has nothing left to correct
+  // (already corrected elsewhere, a click that lost the race to another
+  // included, or the kontoplan changed), so the row goes and the list is read
+  // again rather than kept as a failure.
   const postFix = async (
     gap: RcBasisGap,
-    sel: GapClassification,
-  ): Promise<{ ok: true; correctedId?: string } | { ok: false; message: string }> => {
+  ): Promise<
+    { ok: true; correctedId?: string } | { ok: false; resolved: boolean; message: string }
+  > => {
+    const sel = classificationFor(gap)
     try {
       const res = await fetch('/api/reports/vat-declaration/rc-basis-gaps/fix', {
         method: 'POST',
@@ -200,15 +218,22 @@ export function VatChecksCard({
           entryId: gap.entryId,
           supplierType: sel.supplierType,
           supplyType: sel.supplyType,
+          perOutputAccount: gaps
+            .filter((g) => g.entryId === gap.entryId)
+            .map((g) => ({ rcOutputAccount: g.rcOutputAccount, ...classificationFor(g) })),
         }),
       })
       const json = await res.json().catch(() => null)
       if (!res.ok || json?.error) {
-        return { ok: false, message: apiErrorMessage(json, 'Kunde inte korrigera verifikationen') }
+        return {
+          ok: false,
+          resolved: json?.error?.code === 'VAT_RC_BASIS_NOTHING_MISSING',
+          message: apiErrorMessage(json, 'Kunde inte korrigera verifikationen'),
+        }
       }
       return { ok: true, correctedId: json?.data?.correctedId }
     } catch {
-      return { ok: false, message: 'Kunde inte korrigera verifikationen' }
+      return { ok: false, resolved: false, message: 'Kunde inte korrigera verifikationen' }
     }
   }
 
@@ -219,8 +244,15 @@ export function VatChecksCard({
       delete next[gap.entryId]
       return next
     })
-    const result = await postFix(gap, classificationFor(gap))
+    const result = await postFix(gap)
     setFixingId(null)
+    if (!result.ok && result.resolved) {
+      setRemovedIds((prev) => new Set(prev).add(gap.entryId))
+      toast({ title: `${gap.voucherSeries}-${gap.voucherNumber}`, description: result.message })
+      setGapsResult(null)
+      onCorrected()
+      return
+    }
     if (!result.ok) {
       setRowErrors((prev) => ({ ...prev, [gap.entryId]: result.message }))
       return
@@ -243,9 +275,11 @@ export function VatChecksCard({
   }
 
   const handleFixAll = async () => {
-    const targets = [...gaps]
+    // One korrigering per verifikat: it adds the basis for every momssats the
+    // verifikat lacks, so a second row for the same verifikat has nothing left.
+    const targets = [...new Map(gaps.map((g) => [g.entryId, g])).values()]
     if (targets.length === 0) return
-    const overriddenCount = targets.filter((g) => overrides[g.entryId]).length
+    const overriddenCount = gaps.filter((g) => overrides[rowKey(g)]).length
     const ok = await confirm({
       title: `Korrigera ${targets.length} verifikationer?`,
       description:
@@ -262,9 +296,11 @@ export function VatChecksCard({
 
     setBulkProgress({ done: 0, total: targets.length })
     const failures: Record<string, string> = {}
+    let resolvedCount = 0
     for (const [index, gap] of targets.entries()) {
-      const result = await postFix(gap, classificationFor(gap))
-      if (!result.ok) failures[gap.entryId] = result.message
+      const result = await postFix(gap)
+      if (!result.ok && result.resolved) resolvedCount += 1
+      else if (!result.ok) failures[gap.entryId] = result.message
       setBulkProgress({ done: index + 1, total: targets.length })
     }
     // Fixed rows leave the list; failures stay with their inline error note.
@@ -278,20 +314,32 @@ export function VatChecksCard({
     setRowErrors(failures)
     setBulkProgress(null)
     const failureCount = Object.keys(failures).length
-    const fixedCount = targets.length - failureCount
+    const fixedCount = targets.length - failureCount - resolvedCount
+    // Every outcome is accounted for: a resolved row is neither corrected nor
+    // left in the list, and no storno is claimed when none was made.
     toast({
-      title: `${fixedCount} av ${targets.length} verifikationer korrigerade`,
-      description:
+      title: t('vat_basis_fix_all_title', { fixed: fixedCount, total: targets.length }),
+      description: [
         failureCount > 0
-          ? `${failureCount} kunde inte korrigeras och ligger kvar i listan.`
-          : 'Storno + nya verifikationer skapade.',
+          ? t('vat_basis_fix_all_failed', { count: failureCount })
+          : fixedCount > 0
+            ? t('vat_basis_fix_all_created')
+            : null,
+        resolvedCount > 0 ? t('vat_basis_fix_all_resolved', { count: resolvedCount }) : null,
+      ]
+        .filter(Boolean)
+        .join(' '),
     })
     // One refetch at the end: per-row refetches would remount the page once
-    // per verifikat.
+    // per verifikat. A resolved row means the list was stale: read it again.
+    if (resolvedCount > 0) setGapsResult(null)
     onCorrected()
   }
 
-  const visibleGaps = showAll ? gaps : gaps.slice(0, GAP_PREVIEW_COUNT)
+  // The fold counts verifikat, like the header and its own label: every row
+  // of a verifikat with two momssatser stays on the same side of it.
+  const previewIds = new Set([...new Set(gaps.map((g) => g.entryId))].slice(0, GAP_PREVIEW_COUNT))
+  const visibleGaps = showAll ? gaps : gaps.filter((g) => previewIds.has(g.entryId))
 
   return (
     <div className="space-y-4">
@@ -330,7 +378,7 @@ export function VatChecksCard({
                 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground"
                 aria-live="polite"
               >
-                Verifikationer som saknar basbelopp ({gaps.length})
+                Verifikationer som saknar basbelopp ({verifikatCount})
               </h3>
               <div className="h-px flex-1 bg-border/60" />
             </div>
@@ -390,7 +438,7 @@ export function VatChecksCard({
                   />
                   <Button size="sm" onClick={handleFixAll} disabled={!canWrite || busy} loading={bulkProgress !== null}>
                     {bulkProgress === null && <CheckCircle2 className="h-4 w-4 mr-2" />}
-                    Korrigera alla ({gaps.length})
+                    Korrigera alla ({verifikatCount})
                   </Button>
                 </div>
 
@@ -407,18 +455,18 @@ export function VatChecksCard({
                 <DataList className="rounded-none border-0 bg-transparent">
                   {visibleGaps.map((gap) => {
                     const sel = classificationFor(gap)
-                    const expanded = expandedId === gap.entryId
+                    const expanded = expandedId === rowKey(gap)
                     const rowError = rowErrors[gap.entryId]
                     return (
                       <DataListRow
-                        key={gap.entryId}
+                        key={rowKey(gap)}
                         expanded={expanded}
-                        onClick={() => setExpandedId(expanded ? null : gap.entryId)}
+                        onClick={() => setExpandedId(expanded ? null : rowKey(gap))}
                         rowClassName="items-center px-1 py-[9px]"
                         trailing={
                           <>
                             <span className="text-sm tabular-nums text-muted-foreground">
-                              {formatAmount(gap.expectedBasisAmount)} kr
+                              {formatAmount(gap.missingBasisAmount)} kr
                             </span>
                             <button
                               type="button"
@@ -445,7 +493,7 @@ export function VatChecksCard({
                               }
                               onClick={(e) => {
                                 e.stopPropagation()
-                                setExpandedId(expanded ? null : gap.entryId)
+                                setExpandedId(expanded ? null : rowKey(gap))
                               }}
                             >
                               {expanded ? (
@@ -461,7 +509,7 @@ export function VatChecksCard({
                             <p className="text-sm tabular-nums">
                               {gap.rcOutputAccount} har {formatAmount(gap.rcOutputAmount)} kr
                               fiktiv moms: saknar basbelopp{' '}
-                              {formatAmount(gap.expectedBasisAmount)} kr
+                              {formatAmount(gap.missingBasisAmount)} kr
                             </p>
                             {/* Same chips as the toolbar, scoped to this row:
                                 a changed value becomes a per-row override. */}
@@ -473,7 +521,7 @@ export function VatChecksCard({
                                   const supplierType = value as SupplierType
                                   setOverrides((prev) => ({
                                     ...prev,
-                                    [gap.entryId]: {
+                                    [rowKey(gap)]: {
                                       supplierType,
                                       supplyType:
                                         supplierType === 'non_eu_business'
@@ -492,7 +540,7 @@ export function VatChecksCard({
                                 onChange={(value) =>
                                   setOverrides((prev) => ({
                                     ...prev,
-                                    [gap.entryId]: {
+                                    [rowKey(gap)]: {
                                       ...sel,
                                       supplyType: value as SupplyType,
                                     },
@@ -525,9 +573,9 @@ export function VatChecksCard({
                   })}
                 </DataList>
 
-                {gaps.length > GAP_PREVIEW_COUNT && (
+                {verifikatCount > GAP_PREVIEW_COUNT && (
                   <button type="button" onClick={() => setShowAll((v) => !v)} className={QUIET_LINK_CLASS}>
-                    {showAll ? 'Visa färre' : `Visa alla ${gaps.length} verifikationer`}
+                    {showAll ? 'Visa färre' : `Visa alla ${verifikatCount} verifikationer`}
                   </button>
                 )}
               </>
