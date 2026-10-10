@@ -183,7 +183,24 @@ describe('fetchProviderSieFiles', () => {
       // The failed year must NOT be dropped silently: importing only the
       // surviving years would break IB/UB continuity unnoticed.
       expect(result.failedYears).toEqual([
-        { year: CY - 2, error: expect.stringContaining('404') },
+        { year: CY - 2, error: expect.stringContaining('404'), code: 'PROVIDER_SIE_FETCH_FAILED' },
+      ])
+    })
+
+    it('classifies a refused export as a closed ledger, since the year list already answered on the token (crm#1118)', async () => {
+      routeFetch(fetchSpy, [
+        yearRoutes,
+        // 403 is non-retryable. Briox says nothing more than the status, so
+        // only the year list that came back first tells this from a dead token.
+        { match: '/sie/', respond: () => new Response('forbidden', { status: 403 }) },
+      ])
+
+      const result = await fetchProviderSieFiles('briox', 'token', undefined)
+
+      expect(result.files).toEqual([])
+      expect(result.failedYears).toEqual([
+        { year: CY - 2, error: expect.stringContaining('403'), code: 'PROVIDER_RESOURCE_FORBIDDEN', reason: 'permission' },
+        { year: CY - 1, error: expect.stringContaining('403'), code: 'PROVIDER_RESOURCE_FORBIDDEN', reason: 'permission' },
       ])
     })
   })
@@ -315,6 +332,30 @@ describe('fetchProviderSieFiles', () => {
       expect(result.files).toHaveLength(2)
       expect(result.files[1].rawContent).toContain(`Företagskonto ${CY - 1}`)
       expect(result.files[1].rawContent).not.toContain('�')
+    })
+
+    it('classifies an export Fortnox refuses for a missing licence, with the reason that names the remedy (crm#1118)', async () => {
+      routeFetch(fetchSpy, [
+        yearRoutes,
+        {
+          match: '/sie/4?financialyear=',
+          respond: () =>
+            new Response(
+              JSON.stringify({
+                ErrorInformation: { error: 1, message: 'Det finns ingen aktiv licens för önskat scope.', code: 2001101 },
+              }),
+              { status: 400 },
+            ),
+        },
+      ])
+
+      const result = await fetchProviderSieFiles('fortnox', 'token', undefined)
+
+      expect(result.files).toEqual([])
+      expect(result.failedYears.map(({ year, code, reason }) => ({ year, code, reason }))).toEqual([
+        { year: CY - 2, code: 'PROVIDER_RESOURCE_FORBIDDEN', reason: 'license' },
+        { year: CY - 1, code: 'PROVIDER_RESOURCE_FORBIDDEN', reason: 'license' },
+      ])
     })
   })
 
@@ -576,7 +617,7 @@ describe('fetchProviderSieFiles: wint (SIE rendered from voucher data)', () => {
     expect(result.files.map((f) => f.fiscalYear)).toEqual([CY])
     expect(result.files[0].rawContent).toContain('#IB 0 1930 1000.00')
     expect(result.failedYears).toEqual([
-      { year: CY - 1, error: expect.stringContaining('404') },
+      { year: CY - 1, error: expect.stringContaining('404'), code: 'PROVIDER_SIE_FETCH_FAILED' },
     ])
   })
 })

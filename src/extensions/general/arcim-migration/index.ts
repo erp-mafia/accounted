@@ -29,8 +29,10 @@ import {
   providerSupportsSie,
   fetchProviderSieFiles,
   getAllowedFiscalYears,
+  classifySieFetchFailure,
   FiscalYearSelectionError,
   MAX_SELECTED_FISCAL_YEARS,
+  type SieFetchFailure,
   type SourceFiscalYear,
 } from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
@@ -1058,6 +1060,12 @@ export const arcimMigrationExtension: Extension = {
           // Try to fetch SIE data (Fortnox and Briox serve SIE over the API)
           let sieAvailable = false
           let sieStats: ProviderPreviewCounts | null = null
+          // Why the SIE fetch failed, in the classification /sie-data and the
+          // migration job use. A bare sieAvailable: false read as "SIE-import
+          // krävs" in the wizard, so a rate limit, an outage or a missing
+          // permission asked for a file the provider can serve (crm#1118).
+          // Stays null for Visma and Bokio, which serve no SIE over the API.
+          let sieError: SieFetchFailure | null = null
           // Every fiscal year the source has, with the default selection
           // marked: the preview step renders them as the year picker, so the
           // user chooses BEFORE the import runs and no year is left out
@@ -1074,7 +1082,7 @@ export const arcimMigrationExtension: Extension = {
               // "0 verifikationer" and then imported 4153). Costs one SIE
               // export per extra year, the same work /sie-data repeats right
               // after: honest numbers are worth it.
-              const { files, sourceYears: source } = await fetchProviderSieFiles(
+              const { files, sourceYears: source, failedYears } = await fetchProviderSieFiles(
                 provider,
                 resolved.accessToken,
                 resolved.providerCompanyId,
@@ -1092,9 +1100,24 @@ export const arcimMigrationExtension: Extension = {
                   // are ticked (previewCountsForSelection, crm#1037).
                   fiscalYears: files.map((f) => f.fiscalYear),
                 }
+              } else if (failedYears.length > 0) {
+                // The year list came back, but no year's export did: the
+                // first failed year says why. Logged in the same shape as a
+                // failed year list below, so either path names its class.
+                const [{ code, reason }] = failedYears
+                sieError = { code, reason }
+                log.info(
+                  `SIE export failed (${code}):`,
+                  failedYears.map((f) => `${f.year}: ${f.error}`).join('; '),
+                )
               }
             } catch (err) {
-              log.info('SIE export failed:', err instanceof Error ? err.message : String(err))
+              // The year list itself failed. A company card that came back
+              // above proves the token answers, so a 403 here is the provider
+              // closing the ledger, not a dead grant: the migration
+              // orchestrator reads its company step the same way.
+              sieError = classifySieFetchFailure(err, { grantProven: mapped !== null })
+              log.info(`SIE export failed (${sieError.code}):`, err instanceof Error ? err.message : String(err))
             }
           }
 
@@ -1127,6 +1150,7 @@ export const arcimMigrationExtension: Extension = {
             companyInfo: mapped,
             sieAvailable,
             sieStats,
+            sieError,
             sourceYears,
             // The picker enforces the same cap as /sie-data, read from here
             // rather than duplicated in the client.

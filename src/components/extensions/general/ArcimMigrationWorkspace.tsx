@@ -268,6 +268,7 @@ import type {
   SkipReasons,
   AssetSkipReasons,
 } from '@/extensions/general/arcim-migration/types'
+import type { SieFetchFailure } from '@/extensions/general/arcim-migration/lib/sie-fetcher'
 import {
   buildMigrateRequests,
   mergeMigrationResults,
@@ -333,6 +334,16 @@ const DEFAULT_OPTIONS: MigrationOptions = {
   voucherSeries: 'B',
 }
 
+/**
+ * The options a freshly loaded preview leaves for the options step: the SIE
+ * import follows what this preview could fetch, both ways. A retry or a
+ * reconnect after a failed fetch (crm#1118) must tick it again, or the
+ * options step would open with the ledger unticked.
+ */
+export function optionsAfterPreview(options: MigrationOptions, sieAvailable: boolean): MigrationOptions {
+  return { ...options, importSIEData: sieAvailable }
+}
+
 interface PreviewData {
   consent: {
     id: string
@@ -355,6 +366,9 @@ interface PreviewData {
   // Counts over the default years the preview read, naming them: shown only
   // while exactly those years are ticked (previewCountsForSelection).
   sieStats: ProviderPreviewCounts | null
+  // Why a provider that serves SIE over the API could not hand it over
+  // (crm#1118). Null when the fetch worked, and for Visma and Bokio.
+  sieError?: SieFetchFailure | null
   // Every fiscal year the source has, oldest first, with the default
   // selection marked: rendered as the year picker so the user chooses
   // before the import runs and no year is left out silently (#2211, #2238).
@@ -1075,7 +1089,100 @@ function ConnectStep({
 
 // ── Preview step ────────────────────────────────────────────────
 
-function PreviewStep({
+/**
+ * What a failed SIE fetch asks of the user: the sentence that names the cause
+ * (ext_arcim_sie_error_<kind>), the one action, and where a SIE file would
+ * come from (null where reconnecting is the whole fix). The classification is
+ * the server's (classifyProviderError, the same one /sie-data and the
+ * migration job use); this only picks the remedy for it.
+ */
+export interface SieErrorRemedy {
+  kind: 'reconnect' | 'permission' | 'module' | 'license' | 'rate_limited' | 'unavailable' | 'failed'
+  action: 'reconnect' | 'retry'
+  file: 'provider' | 'elsewhere' | null
+}
+
+export function sieErrorRemedy(sieError: SieFetchFailure): SieErrorRemedy {
+  switch (sieError.code) {
+    case 'PROVIDER_AUTH_EXPIRED':
+      return { kind: 'reconnect', action: 'reconnect', file: null }
+    case 'PROVIDER_RESOURCE_FORBIDDEN':
+      // Fortnox 2001101: the plan lacks Bokföring. A company that keeps its
+      // books in another program has no ledger here, so its file comes from
+      // that program, not from the provider.
+      return sieError.reason === 'license'
+        ? { kind: 'module', action: 'retry', file: 'elsewhere' }
+        : { kind: 'permission', action: 'reconnect', file: 'provider' }
+    case 'PROVIDER_LICENSE_MISSING':
+    case 'PROVIDER_API_MODULE_INACTIVE':
+      return { kind: 'license', action: 'retry', file: 'provider' }
+    case 'PROVIDER_RATE_LIMITED':
+      return { kind: 'rate_limited', action: 'retry', file: 'provider' }
+    case 'PROVIDER_UPSTREAM_ERROR':
+    case 'PROVIDER_UNREACHABLE':
+      return { kind: 'unavailable', action: 'retry', file: 'provider' }
+    default:
+      // PROVIDER_SIE_FETCH_FAILED: a timeout, an empty export, an error the
+      // classifier has no class for. Nothing says it will pass, so the
+      // sentence does not promise that it is temporary.
+      return { kind: 'failed', action: 'retry', file: 'provider' }
+  }
+}
+
+/**
+ * A provider that serves SIE over the API did not hand the bookkeeping over:
+ * the cause and the way forward, in place of "SIE-import krävs", which asked
+ * for a file the provider can serve (crm#1118). The SIE upload stays on offer
+ * as the way around, except after an expired connection, where reconnecting
+ * is the whole fix (as in the error block above).
+ */
+function SieFetchErrorNotice({
+  sieError,
+  providerName,
+  onReconnect,
+  onRetry,
+}: {
+  sieError: SieFetchFailure
+  providerName: string
+  onReconnect: () => void
+  onRetry: () => void
+}) {
+  const t = useTranslations('extensions')
+  const { kind, action, file } = sieErrorRemedy(sieError)
+  return (
+    <div className="animate-fade-in space-y-3">
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-destructive">
+          {t('ext_arcim_sie_error_title', { provider: providerName })}
+        </p>
+        <p className="text-sm text-muted-foreground">
+          {t(`ext_arcim_sie_error_${kind}`, { provider: providerName })}
+        </p>
+      </div>
+      {action === 'reconnect' ? (
+        <Button size="sm" onClick={onReconnect}>
+          <RotateCcw className="mr-2 h-4 w-4" />
+          {t('ext_arcim_sie_error_reconnect_action', { provider: providerName })}
+        </Button>
+      ) : (
+        <Button size="sm" onClick={onRetry}>
+          <RefreshCw className="mr-2 h-4 w-4" />
+          {t('ext_arcim_sie_error_retry_action')}
+        </Button>
+      )}
+      {file && (
+        <SieFallbackLine
+          message={t(file === 'elsewhere' ? 'ext_arcim_sie_error_file_elsewhere' : 'ext_arcim_sie_error_file', {
+            provider: providerName,
+          })}
+          label={t('ext_arcim_sie_error_file_link')}
+        />
+      )}
+    </div>
+  )
+}
+
+export function PreviewStep({
   preview,
   isLoading,
   error,
@@ -1084,6 +1191,7 @@ function PreviewStep({
   selectedYears,
   onSelectedYearsChange,
   onReconnect,
+  onRetry,
   onContinue,
   onBack,
 }: {
@@ -1096,6 +1204,8 @@ function PreviewStep({
   selectedYears: number[]
   onSelectedYearsChange: (years: number[]) => void
   onReconnect: () => void
+  /** Load the preview again: the way forward after a passing provider failure. */
+  onRetry: () => void
   onContinue: () => void
   onBack: () => void
 }) {
@@ -1229,7 +1339,18 @@ function PreviewStep({
         </div>
       )}
 
-      {preview && !preview.sieAvailable && !isLoading && !preview.hasSieData && (
+      {/* A failed preview reload keeps the previous preview in state: the
+          error block above speaks for it then. */}
+      {preview?.sieError && !isLoading && !error && (
+        <SieFetchErrorNotice
+          sieError={preview.sieError}
+          providerName={providerName}
+          onReconnect={onReconnect}
+          onRetry={onRetry}
+        />
+      )}
+
+      {preview && !preview.sieAvailable && !preview.sieError && !isLoading && !preview.hasSieData && (
         <div className="space-y-3">
           <div className="space-y-1">
             <p className="text-sm font-medium text-destructive">SIE-import krävs</p>
@@ -2860,7 +2981,10 @@ export default function ArcimMigrationWorkspace({
 
   // ── Step handlers ──────────────────────────────────────────────
 
-  const loadPreview = useCallback(async (cId: string) => {
+  // `previewOnly`: the preview step's own "Försök igen" after a failed SIE
+  // fetch (crm#1118) reloads the preview. Every other caller (connect, the
+  // OAuth return, the token submit, Synka igen) resumes a pending job instead.
+  const loadPreview = useCallback(async (cId: string, options?: { previewOnly?: boolean }) => {
     setStep('preview')
     setIsLoading(true)
     setError(null)
@@ -2869,7 +2993,7 @@ export default function ArcimMigrationWorkspace({
     setConsentId(cId)
 
     try {
-      if (reconnectJobRef.current) {
+      if (reconnectJobRef.current && !options?.previewOnly) {
         const jobId = reconnectJobRef.current
         const response = await fetch('/api/extensions/ext/arcim-migration/migration-jobs/retry', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId, consentId: cId }),
@@ -2912,10 +3036,7 @@ export default function ArcimMigrationWorkspace({
         setSelectedProvider(previewProvider as ArcimProvider)
       }
 
-      // If SIE is not available, disable SIE import by default
-      if (!data.sieAvailable) {
-        setMigrationOptions(prev => ({ ...prev, importSIEData: false }))
-      }
+      setMigrationOptions(prev => optionsAfterPreview(prev, data.sieAvailable))
     } catch (err) {
       setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte hämta förhandsgranskning')
     } finally {
@@ -3923,6 +4044,9 @@ export default function ArcimMigrationWorkspace({
           onSelectedYearsChange={setSelectedYears}
           onReconnect={() => {
             if (selectedProvider && consentId) handleReconnect(selectedProvider, consentId)
+          }}
+          onRetry={() => {
+            if (consentId) void loadPreview(consentId, { previewOnly: true })
           }}
           onContinue={handlePreviewContinue}
           onBack={() => setStep('provider')}

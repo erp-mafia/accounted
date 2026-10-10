@@ -24,10 +24,43 @@ import {
   type WintSieYear,
 } from '@/lib/providers/wint/sie-builder'
 import type { ProviderName } from '@/lib/providers/types'
+import {
+  classifyProviderError,
+  providerRefusalReason,
+  type ClassifyProviderErrorOptions,
+  type ProviderCallErrorCode,
+  type ProviderRefusalReason,
+} from '@/lib/providers/with-provider-call'
 import { detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('extensions/arcim-migration/sie-fetcher')
+
+/**
+ * Why a SIE fetch failed, in the classification /sie-data answers with and
+ * the migration job records (classifyProviderError, providerRefusalReason).
+ * GET /preview hands it to the wizard, which then names the cause and the way
+ * forward instead of asking for a SIE file the provider can serve (crm#1118).
+ */
+export interface SieFetchFailure {
+  /**
+   * The classified provider code, or PROVIDER_SIE_FETCH_FAILED (the code
+   * /sie-data falls back to) when nothing in the failure is provider-shaped:
+   * an empty export, a timeout, an unknown error.
+   */
+  code: ProviderCallErrorCode | 'PROVIDER_SIE_FETCH_FAILED'
+  /** PROVIDER_RESOURCE_FORBIDDEN only: a missing licence and a missing permission are fixed differently. */
+  reason?: ProviderRefusalReason
+}
+
+export function classifySieFetchFailure(
+  error: unknown,
+  options?: ClassifyProviderErrorOptions,
+): SieFetchFailure {
+  const code = classifyProviderError(error, options)
+  if (!code) return { code: 'PROVIDER_SIE_FETCH_FAILED' }
+  return code === 'PROVIDER_RESOURCE_FORBIDDEN' ? { code, reason: providerRefusalReason(error) } : { code }
+}
 
 /**
  * The DEFAULT selection of fiscal years: the current year and the two before
@@ -95,8 +128,10 @@ export interface ProviderSieFetchResult {
    * Allowed years whose export failed (or came back empty). Callers MUST
    * surface these to the user: silently importing e.g. 2024+2026 without 2025
    * breaks IB/UB continuity between the years without anyone noticing.
+   * `error` is the provider's message; `code` (and `reason`) say why in the
+   * shared classification, so a caller can name the cause and the remedy.
    */
-  failedYears: { year: number; error: string }[]
+  failedYears: (SieFetchFailure & { year: number; error: string })[]
   /**
    * Source fiscal years that were NOT part of this fetch (outside the
    * selection), oldest first. Until issue #2211 these were never mentioned:
@@ -193,21 +228,30 @@ export async function fetchProviderSieFiles(
   const omittedYears = allYears.filter((fy) => !selectedFiscalYears.has(fy.year)).map(describe)
 
   const files: ProviderSieFile[] = []
-  const failedYears: { year: number; error: string }[] = []
+  const failedYears: ProviderSieFetchResult['failedYears'] = []
   for (const fy of toFetch) {
     try {
       const rawContent = await fetcher.fetchSie(accessToken, fy)
       if (rawContent) {
         files.push({ fiscalYear: fy.year, rawContent })
       } else {
-        failedYears.push({ year: fy.year, error: 'Provider returned an empty SIE export' })
+        failedYears.push({
+          year: fy.year,
+          error: 'Provider returned an empty SIE export',
+          code: 'PROVIDER_SIE_FETCH_FAILED',
+        })
       }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err)
+      const message = err instanceof Error ? err.message : String(err)
+      // Classified here, where the thrown error still exists. The year list
+      // just came back on this token, so the grant is proven: a 403 on the
+      // export is the provider closing the ledger, not a dead connection.
+      const failure = classifySieFetchFailure(err, { grantProven: true })
       log.warn(`Failed to fetch SIE for ${provider} fiscal year ${fy.year} (id ${fy.id})`, {
-        reason,
+        reason: message,
+        code: failure.code,
       })
-      failedYears.push({ year: fy.year, error: reason })
+      failedYears.push({ year: fy.year, error: message, ...failure })
     }
   }
 
