@@ -29,15 +29,29 @@ function buildSupabase(
   invoicesResult: QueryResult,
   entriesResult: QueryResult,
   /** The second journal_entries read: the verifikat invoices are linked to. */
-  linkedEntriesResult?: QueryResult
+  linkedEntriesResult?: QueryResult,
+  /** Payment rows naming a credit note's verifikat (crm#1059). */
+  paymentsResult: QueryResult = { data: [], error: null }
 ) {
   const invoicesIn = vi.fn().mockReturnThis()
   const entriesIn = vi.fn().mockReturnThis()
+  const paymentsIn = vi.fn().mockReturnThis()
   let entryReads = 0
   return {
     invoicesIn,
     entriesIn,
+    paymentsIn,
     from: vi.fn().mockImplementation((table: string) => {
+      if (table === 'invoice_payments') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          in: paymentsIn,
+          order: vi.fn().mockReturnThis(),
+          range: vi.fn().mockReturnThis(),
+          then: (resolve: (v: QueryResult) => void) => resolve(paymentsResult),
+        }
+      }
       if (table === 'customers') {
         return {
           select: vi.fn().mockReturnThis(),
@@ -280,5 +294,55 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
 
     const body = (await res.json()) as { data: { lines: Array<{ invoice_id: string }> } }
     expect(body.data.lines.map((line) => line.invoice_id)).toEqual(['inv-open'])
+  })
+})
+
+describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: credit note set-off (crm#1059)', () => {
+  const row = { currency: 'SEK', exchange_rate: null, notes: null }
+  const invoices = [
+    { ...row, id: 'cn', invoice_number: 'KR-F-1', invoice_date: '2026-09-10', due_date: '2026-09-10', total: -40000, paid_amount: null, remaining_amount: 0, status: 'sent', journal_entry_id: 'je-cn' },
+    { ...row, id: 'new', invoice_number: 'F-2', invoice_date: '2026-09-20', due_date: '2026-10-20', total: 50000, paid_amount: 40000, remaining_amount: 10000, status: 'partially_paid', journal_entry_id: 'je-new' },
+  ]
+  const setOff = {
+    id: 'pay-setoff', invoice_id: 'new', journal_entry_id: 'je-cn', amount: 40000, currency: 'SEK',
+    payment_exchange_rate: null, payment_date: '2026-09-10', invoice: { invoice_date: '2026-09-20' },
+  }
+
+  it('shows a credit note whose credit paid the new invoice as used, like the aggregate', async () => {
+    const supabase = buildSupabase(
+      { id: 'cust-1', name: 'Kunden AB' },
+      { data: invoices, error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [setOff], error: null }
+    )
+    authWith(supabase)
+    const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
+    const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
+    expect(res.status).toBe(200)
+
+    expect(supabase.paymentsIn).toHaveBeenCalledWith('journal_entry_id', ['je-cn'])
+    const body = (await res.json()) as {
+      data: { lines: Array<{ invoice_id: string; outstanding: number; debit: number; paid_amount: number }> }
+    }
+    const lines = Object.fromEntries(body.data.lines.map((line) => [line.invoice_id, line]))
+    // paid_amount is total - outstanding, as generateARLedger reports it.
+    expect(lines.cn).toMatchObject({ outstanding: 0, debit: 0, paid_amount: -40000 })
+    expect(lines.new).toMatchObject({ outstanding: 10000, debit: 10000, paid_amount: 40000 })
+  })
+
+  it('answers with an error when the set-off rows cannot be read', async () => {
+    authWith(
+      buildSupabase(
+        { id: 'cust-1', name: 'Kunden AB' },
+        { data: invoices, error: null },
+        { data: [], error: null },
+        { data: [], error: null },
+        { data: null, error: { message: 'boom' } }
+      )
+    )
+    const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
+    const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
+    expect(res.status).toBe(500)
   })
 })

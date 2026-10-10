@@ -75,9 +75,9 @@ Only when the original was paid in full. After the credit, 1510 has a credit bal
 2. **Refund.** The user pays it from the bank; you do not move money. When the outgoing row arrives (\`gnubok_list_uncategorized_transactions\`), book it against kundfordringar: \`gnubok_categorize_transaction({ transaction_id, category: "expense_other", account_override: "1510", notes: "Återbetalning kreditfaktura KR-1042" })\`. Leave out \`vat_treatment\`: the override then books gross with no moms line, which is right because the credit note already reversed the moms. \`gnubok_match_transaction_to_invoice\` does not work here: it only takes incoming rows.
 3. If the user already booked the refund by hand, do not book it again: link the bank row to that verifikat with \`gnubok_reconcile_match\` (see \`bank-reconciliation\`).
 4. Check the amount. The refund must equal what was paid, in the invoice currency. A different amount, or a refund in another currency than the invoice, means a remaining balance or a kursdifferens: ask, do not guess the difference.
-5. **Offset instead of refund**: no tool applies a credit note against a new invoice. Issue the new invoice, and hand the allocation (kvittning) over to the user in the app.
+5. **Offset instead of refund** (faktureringsmetoden, invoices in SEK only): issue and send the new invoice. When the kreditfaktura and the new invoice are both in SEK (\`currency\` on each, from \`gnubok_get_invoice\`), stage \`gnubok_link_invoice_to_voucher({ invoice_id: <new invoice>, journal_entry_id: <the kreditfaktura's journal_entry_id from gnubok_get_invoice> })\`. The kreditfaktura's own verifikat becomes the new invoice's payment; no new verifikat is needed because 1510 already nets the two, and the kundreskontra then shows the kreditfaktura as used. Link one kreditfaktura's verifikat to one invoice only. If either is in another currency, do not offset by link: hand the offset over to the user. On a foreign-currency invoice the link falls back to kronor, settles the invoice's whole remaining amount and books a real amount difference as kursdifferens (7960/3960). Hand the offset over too when the link refuses with \`LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING\` (the credit is larger than what remains on the new invoice) or \`LINK_VOUCHER_CURRENCY_MISMATCH\` (the verifikat's currency does not match the invoice's), and under kontantmetoden (the link reads a 19xx debit there, which a kreditfaktura's verifikat lacks).
 
-Afterwards the kreditfaktura can still show as a negative open item in the kundreskontra (\`gnubok_call_tool({ tool: "gnubok_get_ar_ledger" })\`) even though account 1510 nets to zero (\`gnubok_get_general_ledger\` on "1510"). Report it; never use \`gnubok_mark_invoice_as_paid\` on a kreditfaktura to make it disappear.
+After a refund the kreditfaktura can still show as a negative open item in the kundreskontra (\`gnubok_call_tool({ tool: "gnubok_get_ar_ledger" })\`) even though account 1510 nets to zero (\`gnubok_get_general_ledger\` on "1510"): no tool records a refund against it yet. Report it; never use \`gnubok_mark_invoice_as_paid\` on a kreditfaktura to make it disappear.
 
 ## Supplier side: a kreditfaktura you receive
 
@@ -112,7 +112,7 @@ Every write here stages a pending operation. With a widget (claude.ai, Desktop) 
 
 ## Stop conditions: this needs a human
 
-- The customer has partially paid, or wants the credit offset against another invoice.
+- The customer has partially paid, or wants an offset the link cannot record (credit larger than the new invoice, kontantmetoden, or the kreditfaktura or the new invoice in another currency than SEK).
 - ROT/RUT on the original, especially if the begäran om utbetalning is already sent to Skatteverket.
 - A rättelse in a locked or closed period, or in a period whose momsdeklaration is filed.
 - The VAT treatment of the reissued invoice is unclear (EU customer, omvänd betalningsskyldighet, export).
@@ -147,6 +147,7 @@ In the user's language, short groups:
 - \`gnubok_credit_supplier_invoice\`, \`gnubok_create_document_upload\`, \`gnubok_complete_document_upload\`, \`gnubok_list_unmatched_documents\`, \`gnubok_link_document_to_voucher\` (supplier side)
 - \`gnubok_correct_entry\`, \`gnubok_reverse_journal_entry\` (wrong bookkeeping only, staged, high risk)
 - \`gnubok_list_uncategorized_transactions\`, \`gnubok_categorize_transaction\`, \`gnubok_reconcile_match\` (refund bank rows, staged)
+- \`gnubok_link_invoice_to_voucher\` (offset a kreditfaktura against a new invoice, both in SEK, staged)
 - \`gnubok_get_ar_ledger\` and \`gnubok_get_supplier_ledger\` (via \`gnubok_call_tool\`), \`gnubok_get_general_ledger\`, \`gnubok_get_vat_report\` (verify, read)
 - \`gnubok_list_pending_operations\`, \`gnubok_approve_pending_operation\` (approval)
 `

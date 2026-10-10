@@ -871,3 +871,160 @@ describe('generateARLedger: migrated credit notes', () => {
     expect(report.total_outstanding).toBe(-1000)
   })
 })
+
+describe('generateARLedger: a credit note set off against a new invoice (crm#1059)', () => {
+  // F-1 was paid, then credited in full by KR-F-1: the customer has a credit
+  // of 40 000 on 1510. The new invoice F-2 (50 000) is settled against that
+  // credit by linking KR-F-1's own verifikat to it (link_invoice_to_voucher),
+  // so F-2 has 10 000 left and 1510 stands at 10 000. Nothing is stored on
+  // the credit note: the set-off is the payment row naming its verifikat.
+  const base = {
+    customer_id: 'cust-a',
+    customer: { id: 'cust-a', name: 'Kunden AB' },
+    currency: 'SEK',
+    exchange_rate: null,
+  }
+  const original = {
+    ...base, id: 'orig', invoice_number: 'F-1', invoice_date: '2026-09-01', due_date: '2026-10-01',
+    total: 40000, paid_amount: 40000, paid_at: '2026-09-05T12:00:00Z', status: 'credited', journal_entry_id: 'je-orig',
+  }
+  const creditNote = {
+    ...base, id: 'cn', invoice_number: 'KR-F-1', invoice_date: '2026-09-10', due_date: '2026-09-10',
+    total: -40000, paid_amount: null, remaining_amount: 0, status: 'sent', credited_invoice_id: 'orig', journal_entry_id: 'je-cn',
+  }
+  const newInvoice = {
+    ...base, id: 'new', invoice_number: 'F-2', invoice_date: '2026-09-20', due_date: '2026-10-20',
+    total: 50000, paid_amount: 40000, remaining_amount: 10000, status: 'partially_paid', journal_entry_id: 'je-new',
+  }
+  // The row the link wrote on F-2: dated on the credit note's verifikat.
+  const setOff = {
+    id: 'pay-setoff', invoice_id: 'new', journal_entry_id: 'je-cn', amount: 40000, currency: 'SEK',
+    payment_exchange_rate: null, payment_date: '2026-09-10', invoice: { invoice_date: '2026-09-20' },
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-10T12:00:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('live view: the credit used on the new invoice is no longer open, so the ledger matches 1510', async () => {
+    results = [
+      { data: [original, creditNote, newInvoice], error: null },
+      { data: [setOff], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(calls).toContainEqual({ method: 'in', args: ['journal_entry_id', ['je-cn']] })
+    expect(report.total_outstanding).toBe(10000)
+    expect(report.entries).toHaveLength(1)
+    const rows = Object.fromEntries(report.entries[0].invoices.map((inv) => [inv.invoice_id, inv]))
+    expect(rows.cn).toMatchObject({ total: -40000, outstanding: 0, outstanding_sek: 0, paid_amount: -40000 })
+    expect(rows.new).toMatchObject({ outstanding: 10000 })
+    expect(report.unpaid_count).toBe(1)
+  })
+
+  it('live view: a credit used only in part keeps its rest open', async () => {
+    // The link cannot write this today (it refuses a credit larger than the
+    // invoice's remaining); the rule reads the payment rows, whatever they
+    // hold. A 25 000 invoice paid by the credit is not in the live population;
+    // 15 000 of the credit is still the customer's.
+    results = [
+      { data: [original, creditNote], error: null },
+      { data: [{ ...setOff, amount: 25000 }], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    const cn = report.entries[0].invoices.find((inv) => inv.invoice_id === 'cn')
+    expect(cn?.outstanding).toBe(-15000)
+    expect(report.total_outstanding).toBe(-15000)
+  })
+
+  it('live view: a verifikat linked to two invoices shows on the credit note and still matches 1510', async () => {
+    // The link refuses a second link to the same invoice only. KR-F-1's
+    // verifikat paid 40 000 on F-2 (50 000) and again on F-3 (60 000): 1510 is
+    // 50 000 + 60 000 - 40 000 = 70 000. The credit note reads +40 000, the
+    // credit used twice, so the anomaly sits on its row and the total ties out.
+    const third = {
+      ...newInvoice, id: 'third', invoice_number: 'F-3', invoice_date: '2026-09-25', due_date: '2026-10-25',
+      total: 60000, paid_amount: 40000, remaining_amount: 20000, journal_entry_id: 'je-third',
+    }
+    results = [
+      { data: [original, creditNote, newInvoice, third], error: null },
+      {
+        data: [
+          setOff,
+          { ...setOff, id: 'pay-setoff-2', invoice_id: 'third', invoice: { invoice_date: '2026-09-25' } },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    const rows = Object.fromEntries(report.entries[0].invoices.map((inv) => [inv.invoice_id, inv]))
+    expect(rows.cn.outstanding).toBe(40000)
+    expect(rows.new.outstanding).toBe(10000)
+    expect(rows.third.outstanding).toBe(20000)
+    expect(report.total_outstanding).toBe(70000)
+  })
+
+  it('as of a date before the new invoice existed, the credit is still open', async () => {
+    results = [
+      // invoice_date <= 2026-09-15: the new invoice is not in the population yet.
+      { data: [original, creditNote], error: null },
+      { data: [setOff], error: null },
+      {
+        data: [
+          { invoice_id: 'orig', amount: 40000, payment_date: '2026-09-05' },
+          { invoice_id: 'new', amount: 40000, payment_date: '2026-09-10' },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2026-09-15')
+
+    expect(report.total_outstanding).toBe(-40000)
+    const cn = report.entries[0].invoices.find((inv) => inv.invoice_id === 'cn')
+    expect(cn?.outstanding).toBe(-40000)
+  })
+
+  it('as of a date after the set-off, the ledger matches 1510', async () => {
+    results = [
+      { data: [original, creditNote, newInvoice], error: null },
+      { data: [setOff], error: null },
+      {
+        data: [
+          { invoice_id: 'orig', amount: 40000, payment_date: '2026-09-05' },
+          { invoice_id: 'new', amount: 40000, payment_date: '2026-09-10' },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2026-09-30')
+
+    expect(report.total_outstanding).toBe(10000)
+    const rows = Object.fromEntries(report.entries[0].invoices.map((inv) => [inv.invoice_id, inv]))
+    expect(rows.cn.outstanding).toBe(0)
+    expect(rows.new.outstanding).toBe(10000)
+  })
+
+  it('returns the empty report when the set-off rows cannot be read, like any other failed read', async () => {
+    results = [
+      { data: [original, creditNote, newInvoice], error: null },
+      { data: null, error: { message: 'boom' } },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.entries).toEqual([])
+    expect(report.total_outstanding).toBe(0)
+  })
+})

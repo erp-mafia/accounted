@@ -3,6 +3,7 @@ import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { hasPreRegisterArInPeriod } from '@/lib/invoices/invoice-register-coverage'
+import { fetchCreditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
 
 export interface ARReconciliationResult {
   ar_ledger_total: number
@@ -62,10 +63,11 @@ export async function generateARReconciliation(
     paid_amount: number | null
     currency: string | null
     exchange_rate: number | null
+    journal_entry_id: string | null
   }>(({ from, to }) =>
     supabase
       .from('invoices')
-      .select('id, total, paid_amount, currency, exchange_rate')
+      .select('id, total, paid_amount, currency, exchange_rate, journal_entry_id')
       .eq('company_id', companyId)
       // Proformas, delivery notes and quotes are never receivables.
       .eq('document_type', 'invoice')
@@ -75,6 +77,9 @@ export async function generateARReconciliation(
       .order('id', { ascending: true })
       .range(from, to)
   )
+  // A credit note whose verifikat paid another invoice has used that much of
+  // its credit: the kundreskontra's rule (credit-note-settlement.ts).
+  const creditUsed = await fetchCreditNoteCreditUsed(supabase, companyId, invoices)
 
   let unconvertedFxCount = 0
   const arLedgerTotal = (invoices || [])
@@ -87,7 +92,10 @@ export async function generateARReconciliation(
         unconvertedFxCount += 1
         return sum
       }
-      const outstanding = (Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)
+      const outstanding = outstandingWithCreditUsed(
+        (Number(inv.total) || 0) - (Number(inv.paid_amount) || 0),
+        creditUsed.get(inv.id)
+      )
       const sek = resolveSekAmount(outstanding, null, inv.currency, inv.exchange_rate)
       return Math.round((sum + sek) * 100) / 100
     }, 0)

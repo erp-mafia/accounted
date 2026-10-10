@@ -276,6 +276,29 @@ describe('Skills registry', () => {
     }
   })
 
+  it('limits the kreditfaktura offset by link to invoices in SEK (crm#1059)', () => {
+    const body = skills.find((s) => s.slug === 'kreditfaktura-process')!.body
+    const offsetStep = body.split('\n').find((line) => line.startsWith('5. **Offset instead of refund**'))
+    expect(offsetStep).toBeDefined()
+
+    // On a foreign-currency invoice the link falls back to kronor, settles the whole remaining
+    // amount and books a real amount difference as kursdifferens, so the step stops at SEK.
+    expect(offsetStep).toMatch(/invoices in SEK only/)
+    expect(offsetStep).toMatch(/When the kreditfaktura and the new invoice are both in SEK[^.]*, stage `gnubok_link_invoice_to_voucher\(/)
+    expect(offsetStep).toMatch(/If either is in another currency, do not offset by link: hand the offset over to the user\./)
+    expect(offsetStep).toMatch(/kursdifferens \(7960\/3960\)/)
+
+    // Both refusals are hand-over signals, never something to retry around.
+    const handOver = offsetStep!.slice(offsetStep!.indexOf('Hand the offset over too'))
+    expect(handOver).toContain('`LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING`')
+    expect(handOver).toContain('`LINK_VOUCHER_CURRENCY_MISMATCH`')
+
+    // The stop conditions and the tool list repeat the limit.
+    const stopConditions = body.slice(body.indexOf('## Stop conditions'), body.indexOf('## Rules'))
+    expect(stopConditions).toMatch(/an offset the link cannot record \([^)]*in another currency than SEK\)/)
+    expect(body).toContain('`gnubok_link_invoice_to_voucher` (offset a kreditfaktura against a new invoice, both in SEK, staged)')
+  })
+
   it('findSkill resolves the workflow skill or null (sync workflow lookup)', async () => {
     const supabase = makeSupabaseWithEmptyAtomRegistry()
     expect(await findSkill('month-end-close', supabase as never)).toBeTruthy()

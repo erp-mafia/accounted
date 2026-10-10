@@ -358,3 +358,51 @@ describe('generateARReconciliation', () => {
     expect(result.is_reconciled).toBe(true)
   })
 })
+
+describe('generateARReconciliation: a credit note set off against a new invoice (crm#1059)', () => {
+  // A paid invoice credited in full (40 000 back to the customer on 1510),
+  // then that credit linked as the payment of a new 50 000 invoice: the
+  // credit note's own verifikat is the new invoice's payment row.
+  it('counts the used credit once, so the kundreskontra ties out against 1510', async () => {
+    results = [
+      // 0: open invoices (the credited original is not in this population)
+      {
+        data: [
+          { id: 'cn', total: -40000, paid_amount: null, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-cn' },
+          { id: 'new', total: 50000, paid_amount: 40000, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-new' },
+        ],
+        error: null,
+      },
+      // 1: the payment row the link wrote on the new invoice
+      {
+        data: [
+          {
+            id: 'pay-setoff', invoice_id: 'new', journal_entry_id: 'je-cn', amount: 40000, currency: 'SEK',
+            payment_exchange_rate: null, payment_date: '2026-09-10', invoice: { invoice_date: '2026-09-20' },
+          },
+        ],
+        error: null,
+      },
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
+      // 1510: original, its payment, the credit note, the new invoice
+      {
+        data: [
+          { debit_amount: 40000, credit_amount: 0, journal_entry_id: 'je-orig' },
+          { debit_amount: 0, credit_amount: 40000, journal_entry_id: 'je-pay' },
+          { debit_amount: 0, credit_amount: 40000, journal_entry_id: 'je-cn' },
+          { debit_amount: 50000, credit_amount: 0, journal_entry_id: 'je-new' },
+        ],
+        error: null,
+      },
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(calls).toContainEqual({ method: 'in', args: ['journal_entry_id', ['je-cn']] })
+    expect(result.ar_ledger_total).toBe(10000)
+    expect(result.account_1510_balance).toBe(10000)
+    expect(result.difference).toBe(0)
+    expect(result.is_reconciled).toBe(true)
+  })
+})

@@ -8,6 +8,7 @@ import {
   NO_INVOICE_REGISTER_COVERAGE,
   type InvoiceRegisterCoverage,
 } from '@/lib/invoices/invoice-register-coverage'
+import { fetchCreditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
 
 export interface ARInvoiceDetail {
   invoice_id: string
@@ -122,6 +123,7 @@ export async function generateARLedger(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let invoices: any[]
   let payments: PaymentsAsOf | null = null
+  let creditUsed = new Map<string, number>()
   try {
     invoices = await fetchAllRows(({ from, to }) => {
       let query = supabase
@@ -138,6 +140,14 @@ export async function generateARLedger(
         .order('id', { ascending: true })
         .range(from, to)
     })
+    // A credit note whose verifikat paid another invoice has used that much
+    // of its credit (credit-note-settlement.ts).
+    creditUsed = await fetchCreditNoteCreditUsed(
+      supabase,
+      companyId,
+      withoutSettledCreditNotes(invoices),
+      isHistorical ? asOfDate : undefined
+    )
 
     if (isHistorical) {
       payments = await fetchPaymentsAsOf(supabase, 'invoice_payments', 'invoice_id', companyId, asOfDate!)
@@ -190,9 +200,10 @@ export async function generateARLedger(
     const daysOverdue = Math.floor((refDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
     const total = Number(inv.total) || 0
     const liveOutstanding = roundOre(total - (Number(inv.paid_amount) || 0))
-    const outstanding = payments
-      ? outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!)
-      : liveOutstanding
+    const outstanding = outstandingWithCreditUsed(
+      payments ? outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!) : liveOutstanding,
+      creditUsed.get(inv.id)
+    )
     const paidAmount = roundOre(total - outstanding)
 
     // Historical view: 'paid' invoices are only fetched to catch ones still

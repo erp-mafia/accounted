@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { AR_LEDGER_STATUSES, withoutSettledCreditNotes } from '@/lib/reports/ar-ledger'
+import { fetchCreditNoteCreditUsed, outstandingWithCreditUsed } from '@/lib/reports/credit-note-settlement'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { roundOre } from '@/lib/money'
 
 /**
  * GET /api/reports/ar-ledger/customer/[customerId]/invoices
@@ -75,6 +77,8 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
   // generateARLedger.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const invoices = withoutSettledCreditNotes((data || []) as any[])
+  // Credit a credit note used to pay another invoice, as in generateARLedger.
+  const creditUsed = await fetchCreditNoteCreditUsed(supabase, companyId, invoices)
   const ids = invoices.map((i) => i.id)
   const entryMap = new Map<
     string,
@@ -140,7 +144,10 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
     const entry = entryMap.get(inv.id)
     const paidAmount = Number(inv.paid_amount) || 0
     const total = Number(inv.total) || 0
-    const outstanding = Math.round((total - paidAmount) * 100) / 100
+    const outstanding = outstandingWithCreditUsed(
+      roundOre(total - paidAmount),
+      creditUsed.get(inv.id)
+    )
     const isFx = inv.currency && inv.currency !== 'SEK'
     const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
     const outstandingSek =
@@ -162,7 +169,9 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
       outstanding,
       outstanding_sek: outstandingSek,
       currency: inv.currency || 'SEK',
-      paid_amount: paidAmount,
+      // total - outstanding, as generateARLedger reports it, so a credit
+      // note's used credit reads as paid in both.
+      paid_amount: roundOre(total - outstanding),
       due_date: inv.due_date,
     }
   })
