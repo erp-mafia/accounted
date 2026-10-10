@@ -18,6 +18,8 @@ import {
   templateAppliesToForm,
 } from '../booking-templates'
 import { applySettlementAccount } from '../mapping-engine'
+import { reconcileRcBasisWithCostLines } from '../rc-basis-reconcile'
+import { chartVatTreatmentsOf } from '../vat-entries'
 import { getCategoryAccountMapping } from '../category-mapping'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 import { resolveVatTreatmentRuta } from '@/lib/vat/account-vat-treatment'
@@ -605,18 +607,35 @@ describe('buildMappingResultFromTemplate', () => {
     expect(result.vat_lines[2].account_number).toBe('4425')
   })
 
-  it('skips basbelopp emission when template already debits a basis account', () => {
+  it('books no basbelopp when the template already debits a basis account, once the door settles it', () => {
     const template: BookingTemplate = {
       ...getTemplate('it_cloud_hosting'),
       debit_account: '4535', // user-customized template that books directly to basis
     }
     const tx = makeTransaction({ amount: -1000 })
-    const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+    // The builder books the complete set; the booking door settles the pair
+    // on the debit account with the chart (rc-basis-reconcile.ts).
+    const result = reconcileRcBasisWithCostLines(buildMappingResultFromTemplate(template, tx, 'enskild_firma'), new Map())
 
     // Only the fiktiv-moms pair: basbelopp would double-count.
     expect(result.vat_lines).toHaveLength(2)
     expect(result.vat_lines[0].account_number).toBe('2645')
     expect(result.vat_lines[1].account_number).toBe('2614')
+  })
+
+  it('books no basbelopp when the debit account has a reverse-charge momskod, once the door settles it (crm#1096)', () => {
+    const template = getTemplate('it_saas_eu') // 5420 Programvaror
+    const tx = makeTransaction({ amount: -1000 })
+    const built = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+    expect(built.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4535', '4598'])
+
+    const configured = reconcileRcBasisWithCostLines(
+      built,
+      chartVatTreatmentsOf([{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }]),
+    )
+    expect(configured.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+    // An ordinary 5420 keeps the pair.
+    expect(reconcileRcBasisWithCostLines(built, chartVatTreatmentsOf([{ account_number: '5420' }]))).toBe(built)
   })
 
   it('produces no VAT lines for exempt expenses', () => {

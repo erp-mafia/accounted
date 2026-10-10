@@ -5,7 +5,10 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { buildMappingResultFromCategory, getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
+import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
+import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { getVatRate, isReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import type { EntityType, Transaction, TransactionCategory, VatTreatment } from '@/types'
@@ -194,6 +197,42 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       mapping = applySettlementAccount(mapping, settlementAccount, (tx as Transaction).amount)
     } catch (err) {
       log.error('pending-operation edit: settlement account lookup failed', err as Error, {
+        operationId: id,
+        transactionId: txId,
+      })
+      return NextResponse.json(
+        { error: getUserErrorMessage(err) },
+        { status: 500 },
+      )
+    }
+
+    // The staged account_override survives the edit (newParams keeps it), and
+    // the commit applies it before it settles the reverse-charge set
+    // (categorizeMatchedTransaction), so the re-derived preview does the same.
+    const accountOverride = typeof oldParams.account_override === 'string' ? oldParams.account_override : undefined
+    if (accountOverride) {
+      if (!isBusiness) {
+        return NextResponse.json(
+          { error: 'account_override kan inte kombineras med category "private".' },
+          { status: 400 },
+        )
+      }
+      try {
+        mapping = await applyAccountOverride(
+          supabase, companyId, accountOverride, (tx as Transaction).amount, mapping,
+          newVatTreatment != null || newVatAmount != null,
+        )
+      } catch (err) {
+        return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 400 })
+      }
+    }
+
+    try {
+      // As the commit settles it: no basis pair on a cost account that
+      // reports ruta 20-24 itself, which also gives the fiktiv moms its sats.
+      mapping = await reconcileRcBasisWithChart(mapping, chartVatTreatmentsLoader(supabase, companyId))
+    } catch (err) {
+      log.error('pending-operation edit: momskod lookup failed', err as Error, {
         operationId: id,
         transactionId: txId,
       })

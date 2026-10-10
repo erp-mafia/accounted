@@ -28,6 +28,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
+import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import {
   getTemplateById,
   buildMappingResultFromTemplate,
@@ -180,6 +182,8 @@ async function categorizeOne(
   log: Logger,
   /** Transactions / verifikat booked earlier in THIS batch (see BookingDuplicateExclusions). */
   exclude: BookingDuplicateExclusions,
+  /** The company's momskoder, shared by the whole batch so they are read once at most. */
+  loadChart: ChartVatTreatmentsLoader,
 ): Promise<Item> {
   const { data: transaction, error: fetchErr } = await supabase
     .from('transactions')
@@ -303,8 +307,11 @@ async function categorizeOne(
       transaction.currency,
     )
     mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
+    // A reverse-charge purchase keeps its 45xx/4598 basis pair only when its
+    // cost account does not report ruta 20-24 itself (crm#1096).
+    mappingResult = await reconcileRcBasisWithChart(mappingResult, loadChart)
   } catch (err) {
-    log.error('batch-categorize: settlement account lookup failed', err as Error, {
+    log.error('batch-categorize: settlement account or momskod lookup failed', err as Error, {
       request_index: index,
       transactionId,
     })
@@ -662,6 +669,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // driver (lib/transactions/categorize-core.ts).
     const bookedTransactionIds: string[] = []
     const bookedJournalEntryIds: string[] = []
+    const loadChart = chartVatTreatmentsLoader(ctx.supabase, ctx.companyId!)
     for (let i = 0; i < body.items.length; i++) {
       const item = body.items[i]
       const r = await categorizeOne(
@@ -679,6 +687,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           excludeTransactionIds: [...bookedTransactionIds],
           excludeJournalEntryIds: [...bookedJournalEntryIds],
         },
+        loadChart,
       )
       results.push(r)
       const booked = r.data as { journal_entry_created?: boolean; journal_entry_id?: string | null } | undefined

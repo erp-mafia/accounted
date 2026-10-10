@@ -10,7 +10,6 @@ import type {
 import {
   getVatRate,
   generateReverseChargePurchaseLines,
-  costAccountReportsRcBasis,
   reverseChargeKindForSupplierType,
   generateInputVatLine,
 } from './vat-entries'
@@ -2658,13 +2657,14 @@ export function buildMappingResultFromTemplate(
       // Skatteverket rejects with FK004 ("ruta 30-32 utan motsvarande
       // basbelopp i 20-24", ML 13 kap kräver båda sidor).
       //
-      // No basbelopp pair when the template already books the expense
-      // directly to a basis account (44xx/45xx series): would double-count.
+      // A template whose debit account reports the basis itself (4515, or an
+      // account with a reverse-charge momskod) loses the pair, and takes that
+      // account's momssats, when the booking door settles it with the chart
+      // (reconcileRcBasisWithChart): keeping the pair would double-count.
       const rcLines = generateReverseChargePurchaseLines({
         base: absAmount,
         rate: 0.25, // fiktiv moms rate; current templates are 25%
         kind: reverseChargeKindForSupplierType(template.reverse_charge_supplier_type ?? 'eu_business'),
-        basisBase: costAccountReportsRcBasis(debitAccount) ? 0 : absAmount,
       })
       for (const rcl of rcLines) {
         vatLines.push({

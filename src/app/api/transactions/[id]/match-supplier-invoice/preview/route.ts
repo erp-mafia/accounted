@@ -12,6 +12,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildSupplierBankMatchLines } from '@/lib/bookkeeping/supplier-bank-match-entry'
+import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { planSupplierBankMatch } from '@/lib/invoices/apply-supplier-payment'
@@ -113,9 +114,14 @@ export const GET = withRouteContext(
     }
     const { plan } = planned
 
+    // The momskoder the cash booking reads for a reverse-charge invoice.
+    const chartVatTreatments = plan.booking.kind === 'cash' && si.reverse_charge
+      ? await fetchChartVatTreatments(supabase, companyId!)
+      : undefined
+
     let built: ReturnType<typeof buildSupplierBankMatchLines>
     try {
-      built = buildSupplierBankMatchLines(si, plan.booking, paymentAccount)
+      built = buildSupplierBankMatchLines(si, plan.booking, paymentAccount, chartVatTreatments)
     } catch (err) {
       // The cash builder routes every leg through toSekOrThrow, which refuses
       // a foreign invoice with no usable rate rather than posting it as if

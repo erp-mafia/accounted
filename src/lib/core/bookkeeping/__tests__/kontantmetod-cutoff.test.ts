@@ -1156,6 +1156,56 @@ describe('collectKontantmetodCutoff', () => {
     expect(lines.find((line) => line.account_number === '4536')?.debit_amount).toBe(9200)
   })
 
+  it('takes no basis pair for an item on an account whose momskod reports ruta 20-24 itself (crm#1096)', async () => {
+    const result = await collectKontantmetodCutoff(makePagedSupabase({
+      chart_of_accounts: [{ account_number: '4056', default_vat_treatment: 'reverse_charge_eu_goods' }],
+      supplier_invoices: [{
+        id: 'si-rc-own', supplier_invoice_number: 'L-RC2', invoice_date: '2026-12-01',
+        status: 'registered', total: 1000, total_sek: 1000, remaining_amount: 1000,
+        vat_amount: 0, vat_amount_sek: 0, reverse_charge: true,
+        is_credit_note: false, currency: 'SEK', exchange_rate: 1,
+        supplier: { supplier_type: 'eu_business' },
+        items: [
+          { account_number: '4056', line_total: 600, vat_rate: 0, reverse_charge_rate: null },
+          { account_number: '6540', line_total: 400, vat_rate: 0, reverse_charge_rate: null },
+        ],
+      }],
+    }) as never, 'co-1', '2026-01-01', '2026-12-31')
+    expect(result.payables[0].reverseChargeGroups).toEqual([{
+      rate: 0.25, base: 1000, nonBasisBase: 400, supplierType: 'eu_business',
+    }])
+    const lines = buildCutoffLines([], result.payables, 'aktiebolag').payableLines
+    expect(lines.find((line) => line.account_number === '2614')?.credit_amount).toBe(250)
+    expect(lines.find((line) => line.account_number === '4535')?.debit_amount).toBe(400)
+    expect(lines.find((line) => line.account_number === '4598')?.credit_amount).toBe(400)
+  })
+
+  it('self-assesses an item on an account at 12 % at that sats, without a pair (crm#1096)', async () => {
+    const result = await collectKontantmetodCutoff(makePagedSupabase({
+      chart_of_accounts: [{ account_number: '4057', default_vat_treatment: 'reverse_charge_eu_goods', default_vat_rate: 0.12 }],
+      supplier_invoices: [{
+        id: 'si-rc-12', supplier_invoice_number: 'L-RC3', invoice_date: '2026-12-01',
+        status: 'registered', total: 1000, total_sek: 1000, remaining_amount: 1000,
+        vat_amount: 0, vat_amount_sek: 0, reverse_charge: true,
+        is_credit_note: false, currency: 'SEK', exchange_rate: 1,
+        supplier: { supplier_type: 'eu_business' },
+        items: [
+          { account_number: '4057', line_total: 600, vat_rate: 0, reverse_charge_rate: null },
+          { account_number: '6540', line_total: 400, vat_rate: 0, reverse_charge_rate: null },
+        ],
+      }],
+    }) as never, 'co-1', '2026-01-01', '2026-12-31')
+    expect(result.payables[0].reverseChargeGroups).toEqual([
+      { rate: 0.12, base: 600, nonBasisBase: 0, supplierType: 'eu_business' },
+      { rate: 0.25, base: 400, nonBasisBase: 400, supplierType: 'eu_business' },
+    ])
+    const lines = buildCutoffLines([], result.payables, 'aktiebolag').payableLines
+    expect(lines.find((line) => line.account_number === '2624')?.credit_amount).toBe(72)
+    expect(lines.find((line) => line.account_number === '2614')?.credit_amount).toBe(100)
+    expect(lines.find((line) => line.account_number === '4535')?.debit_amount).toBe(400)
+    expect(lines.some((line) => line.account_number === '4516')).toBe(false)
+  })
+
   it('reads every PostgREST page instead of silently stopping at 1000 rows', async () => {
     const invoices = Array.from({ length: 1001 }, (_, index) => ({
       id: `inv-${String(index).padStart(4, '0')}`,

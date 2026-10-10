@@ -5,6 +5,9 @@ import { validateBody } from '@/lib/api/validate'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
+import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
+import { costAccountRcBasisRate } from '@/lib/bookkeeping/vat-entries'
+import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput, JournalEntryLine } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { ensureInitialized } from '@/lib/init'
@@ -16,8 +19,14 @@ ensureInitialized()
  *
  * Adds the missing basbelopp pair (44xx/45xx debit + 4598 credit) to a
  * posted journal entry that has reverse-charge output VAT (2614/2624/2634)
- * but no corresponding basis lines. Uses correctEntry() so the original
+ * but not the basis it implies. Uses correctEntry() so the original
  * voucher is preserved in compliance with BFL (storno + corrected entry).
+ *
+ * Only the shortfall is added, read off the verifikat itself as the gap scan
+ * and the declaration read it (costAccountRcBasisRate with the company's
+ * momskoder): a worklist can be stale, and a cost line whose momskod reports
+ * ruta 20-24 already carries its share, so the whole basis on top of it would
+ * count the purchase twice (crm#1096).
  */
 
 const SUPPLIER_TYPE = z.enum(['eu_business', 'non_eu_business', 'swedish_business'])
@@ -132,8 +141,63 @@ export const POST = withRouteContext(
     }
     const basisAccount: string = pick.account
 
-    const basisAmount = Math.round((outputAmount / rate) * 100) / 100
     const rateLabel = `${Math.round(rate * 100)}%`
+
+    // The basis the verifikat already reports, by the sats the declaration
+    // buckets it at: a static basis account, or a cost line whose momskod
+    // reports ruta 20-24 itself.
+    const chart = await fetchChartVatTreatments(supabase, companyId).catch((err: unknown) => {
+      log.error('rc-basis-gap fix: momskod lookup failed', err as Error, { entryId })
+      return null
+    })
+    if (!chart) {
+      return errorResponseFromCode('VAT_REPORT_GENERATION_FAILED', log, {
+        requestId,
+        details: { reason: 'Kontoplanens momskoder kunde inte läsas.' },
+      })
+    }
+    let reportedAtRate = 0
+    let reportedAtOtherRates = 0
+    for (const line of originalLines) {
+      const lineRate = costAccountRcBasisRate(line.account_number, chart.get(line.account_number))
+      if (lineRate === null) continue
+      const net = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
+      if (lineRate === rate) reportedAtRate = roundOre(reportedAtRate + net)
+      else reportedAtOtherRates = roundOre(reportedAtOtherRates + net)
+    }
+    // A basis reported at another sats than the fiktiv moms is a sats error,
+    // not a missing basis: a pair at the sats of the fiktiv moms would count
+    // the purchase twice in ruta 20-24.
+    if (reportedAtOtherRates > 0.5) {
+      return errorResponseFromCode('VAT_REPORT_GENERATION_FAILED', log, {
+        requestId,
+        status: 409,
+        messageSv:
+          'Verifikationen redovisar redan sitt basbelopp i ruta 20-24, men till en annan momssats än ' +
+          `den fiktiva momsen (${rateLabel}). Ett basbelopp till skulle räkna inköpet två gånger. ` +
+          'Rätta momssatsen med rättelse eller storno av verifikationen, eller kontrollera kontots momssats i kontoplanen.',
+        messageEn:
+          'The voucher already reports its basis in boxes 20-24, but at another VAT rate than its ' +
+          `reverse-charge VAT (${rateLabel}). Another basis would count the purchase twice. ` +
+          'Correct the rate by correcting or reversing the voucher, or check the account\'s VAT rate in the chart of accounts.',
+        details: { entryId, reportedAtOtherRates },
+      })
+    }
+    // The scan's own tolerance: what it would not flag needs nothing.
+    const basisAmount = roundOre(roundOre(outputAmount / rate) - reportedAtRate)
+    if (basisAmount <= 0.5) {
+      return errorResponseFromCode('VAT_REPORT_GENERATION_FAILED', log, {
+        requestId,
+        status: 409,
+        messageSv:
+          'Verifikationen redovisar redan basbeloppet för den fiktiva momsen i ruta 20-24, ' +
+          'så inget saknas. Ladda om sidan för att uppdatera listan.',
+        messageEn:
+          'The voucher already reports the basis for its reverse-charge VAT in boxes 20-24, ' +
+          'so nothing is missing. Reload the page to refresh the list.',
+        details: { entryId, reportedAtRate },
+      })
+    }
 
     // Build corrected lines = original lines + basis pair (44xx debit + 4598
     // credit). The original lines are copied whole, dimensions bag included,

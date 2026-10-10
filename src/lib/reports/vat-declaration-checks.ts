@@ -238,7 +238,9 @@ export function runVatDeclarationChecks(
 
   // Mirror: more basis than the output VAT accounts for, fiktiv moms missing
   // for some vouchers. Covers both the all-output-missing case and a partial
-  // one; often a half-finished manual posting.
+  // one; often a half-finished manual posting, or a purchase whose basis is
+  // counted twice: a 44xx/45xx pair beside a cost account whose momskod
+  // already reports ruta 20-24 (crm#1096).
   if (rcBasis > eps && rcBasis > expectedRcBasis + rcTolerance) {
     findings.push({
       code: 'RC_OUTPUT_MISSING',
@@ -248,7 +250,10 @@ export function runVatDeclarationChecks(
         'vad den utgående momsen (ruta 30-32) motsvarar. Vid omvänd ' +
         'skattskyldighet måste köparen redovisa både underlag och fiktiv ' +
         'moms (ML 13 kap). Kontrollera att fiktiv moms är bokförd på ' +
-        '2614/2624/2634 för varje inköp.',
+        '2614/2624/2634 för varje inköp, och att inget inköp har ett ' +
+        'basbelopp på 44xx/45xx bredvid ett konto vars momskod i kontoplanen ' +
+        'redan redovisar ruta 20-24: då räknas inköpet två gånger och ' +
+        'basbeloppet ska bort med rättelse eller storno.',
       rutor: ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32'],
     })
   }

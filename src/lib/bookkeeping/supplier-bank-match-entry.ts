@@ -19,6 +19,7 @@ import {
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import type { SupplierBankMatchBooking } from '@/lib/invoices/apply-supplier-payment'
+import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
 import type {
   CreateJournalEntryLineInput,
   JournalEntry,
@@ -88,18 +89,21 @@ export async function createSupplierBankMatchEntry(
  * The lines createSupplierBankMatchEntry books for the same plan, without
  * booking them. Throws SupplierInvoiceFxRateMissingError (code
  * SI_FX_RATE_MISSING) for a kontantmetoden foreign invoice with no usable rate,
- * as the booking does.
+ * as the booking does. `chartVatTreatments` are the company's momskoder, which
+ * the booking reads for a reverse-charge invoice (fetchChartVatTreatments).
  */
 export function buildSupplierBankMatchLines(
   invoice: SupplierInvoice,
   booking: SupplierBankMatchBooking,
   paymentAccount: string,
+  chartVatTreatments?: ChartVatTreatments,
 ): { lines: CreateJournalEntryLineInput[]; oreDiffSek: number } {
   if (booking.kind === 'cash') {
     const built = buildSupplierInvoiceCashLines(invoice, invoice.items ?? [], supplierType(invoice), {
       paymentAccount,
       settledBankSek: booking.settledBankSek,
       bankFeeSek: booking.bankFeeSek,
+      chartVatTreatments,
     })
     return { lines: built.lines, oreDiffSek: built.oreDiffSek }
   }

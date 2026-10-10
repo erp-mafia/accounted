@@ -40,10 +40,11 @@ import type {
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-entries'
 import {
   generateReverseChargePurchaseLines,
-  isReverseChargeBasisAccount,
   resolveReverseChargeRate,
   reverseChargeKindForSupplierType,
+  reverseChargeOnAccount,
 } from '@/lib/bookkeeping/vat-entries'
+import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { invoiceCustomerOutstanding, invoiceCustomerShare } from '@/lib/invoices/customer-share'
 import { createLogger } from '@/lib/logger'
@@ -979,6 +980,11 @@ export async function collectKontantmetodCutoff(
   }
 
   const payables: CutoffPayable[] = []
+  // The company's momskoder, read once and only if a reverse-charge invoice
+  // is still open: an item on an account that reports ruta 20-24 itself
+  // takes no basis pair and that account's momssats (reverseChargeOnAccount,
+  // crm#1096).
+  const loadChart = chartVatTreatmentsLoader(supabase, companyId)
   for (const row of supplierInvoices) {
     const sign = row.is_credit_note ? -1 : 1
     const totalAbs = Math.abs(Number(row.total ?? 0))
@@ -1019,21 +1025,24 @@ export async function collectKontantmetodCutoff(
         )
       }
       const groups = new Map<number, { base: number; nonBasisBase: number }>()
+      const chart = await loadChart()
       for (const item of items) {
-        const rate = resolveReverseChargeRate({
-          vat_rate: item.vat_rate == null ? null : Number(item.vat_rate),
-          reverse_charge_rate: item.reverse_charge_rate == null
-            ? null
-            : Number(item.reverse_charge_rate),
-        })
+        const { rate, basisPair } = reverseChargeOnAccount(
+          String(item.account_number ?? ''),
+          resolveReverseChargeRate({
+            vat_rate: item.vat_rate == null ? null : Number(item.vat_rate),
+            reverse_charge_rate: item.reverse_charge_rate == null
+              ? null
+              : Number(item.reverse_charge_rate),
+          }),
+          chart,
+        )
         const itemBase = totalOwn === 0
           ? 0
           : roundOre(Math.abs(Number(item.line_total ?? 0)) * Math.abs(total / totalOwn) * ratio)
         const current = groups.get(rate) ?? { base: 0, nonBasisBase: 0 }
         current.base = roundOre(current.base + itemBase)
-        if (!isReverseChargeBasisAccount(String(item.account_number ?? ''))) {
-          current.nonBasisBase = roundOre(current.nonBasisBase + itemBase)
-        }
+        if (basisPair) current.nonBasisBase = roundOre(current.nonBasisBase + itemBase)
         groups.set(rate, current)
       }
       reverseChargeGroups = [...groups.entries()].map(([rate, group]) => ({

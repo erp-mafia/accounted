@@ -13,7 +13,7 @@ import {
   type VoucherVatCodeLine,
   type VoucherVatCodeRowLookup,
 } from '../voucher-line-vat-code'
-import { costAccountReportsRcBasis, generateReverseChargePurchaseLines } from '../vat-entries'
+import { chartVatTreatmentsOf, costAccountRcBasisRate, generateReverseChargePurchaseLines } from '../vat-entries'
 import { buildMappingResultFromCategory } from '../category-mapping'
 import { buildTransactionEntryLines } from '../transaction-entries'
 import { computeProposalLines, proposalLinesToFormLines } from '../proposal-lines'
@@ -254,7 +254,9 @@ describe('vatCodeRuleForAccount', () => {
     ]
     for (const [account, row] of cases) {
       const rule = vatCodeRuleForAccount(account, row)
-      expect(rule.mode === 'fixed').toBe(costAccountReportsRcBasis(account, row?.default_vat_treatment ?? null))
+      // The same box AND the same sats as the producers' rule (crm#1096).
+      const code = row ? chartVatTreatmentsOf([{ account_number: account, ...row }]).get(account) : undefined
+      expect(rule.mode === 'fixed' ? rule.code.rate : null).toBe(costAccountRcBasisRate(account, code))
       if (rule.mode !== 'fixed') continue
       const rutor = rutorFromTotals(
         totalsOf([{ account_number: account, debit_amount: 1000, credit_amount: 0 }]),

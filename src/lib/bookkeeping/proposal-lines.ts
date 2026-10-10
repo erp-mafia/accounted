@@ -37,9 +37,10 @@ import {
   isGeneratedVatAccount,
   isReverseChargeBasisLeg,
   generateReverseChargePurchaseLines,
-  costAccountReportsRcBasis,
+  reverseChargePurchasesOn,
   reverseChargeKindForSupplierType,
   DEFAULT_REVERSE_CHARGE_KIND,
+  type ChartVatTreatments,
   type ReverseChargeKind,
   type ReverseChargePurchase,
 } from '@/lib/bookkeeping/vat-entries'
@@ -147,7 +148,18 @@ export interface ProposalLinesInput {
    * rate-based VAT leg (reverse charge, exempt, counterparty patterns).
    */
   vatAmountSek?: number
+  /**
+   * The company's momskoder (chartVatTreatmentsOf over the accounts the
+   * booking can land on, the inactive ones too where a pick activates one at
+   * booking). A reverse-charge purchase on a cost line whose account reports
+   * ruta 20-24 itself books no basis pair for it and takes that account's
+   * momssats, as the engine settles it (reconcileRcBasisWithChart). Omitted:
+   * no account has a momskod.
+   */
+  chartVatTreatments?: ChartVatTreatments
 }
+
+const NO_CHART_VAT_TREATMENTS: ChartVatTreatments = new Map()
 
 
 /**
@@ -244,6 +256,7 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
     counterpartyLegacy,
     linePattern,
     settlementAccount = '1930',
+    chartVatTreatments = NO_CHART_VAT_TREATMENTS,
   } = input
 
   const result: ProposalLine[] = []
@@ -251,6 +264,16 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
   // distinguishes income vs expense) but magnitude always comes from SEK.
   const absAmount = Math.abs(amountSek ?? amount)
   const isIncome = amount > 0
+  // The reverse-charge set of a purchase on a single cost line `account`:
+  // without the basis pair, at the account's own momssats, when the account
+  // reports ruta 20-24 itself (ENGINE PARITY: reconcileRcBasisWithChart).
+  const reverseChargeOn = (
+    account: string,
+    purchase: { rate: number; kind: ReverseChargeKind },
+    mirror = false,
+  ): ProposalLine[] =>
+    reverseChargePurchasesOn({ ...purchase, base: absAmount }, [{ account, amount: absAmount }], chartVatTreatments)
+      .flatMap((settled) => reverseChargeProposalLines(settled, mirror))
 
   // ---- Multi-line counterparty template (buildMultiLineMappingResult) ----
   if (linePattern && linePattern.length > 0) {
@@ -308,9 +331,21 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
       }
     }
 
-    // The reverse-charge set on the purchase (engine step 3b)
+    // The reverse-charge set on the purchase (engine step 3b), settled on
+    // the cost lines beside the pair: the share of those that report ruta
+    // 20-24 themselves leaves the pair and takes their own momssats
+    // (ENGINE PARITY: reconcileRcBasisWithChart).
     if (plan.rcPair) {
-      for (const line of patternReverseChargeLines(plan.rcPair, nonVatAmt)) {
+      const pairSide = plan.rcPair.basis.side
+      const costLines = plan.entries
+        .filter((entry) => entry.type === 'business' && entry.ratio !== undefined && entry.side === pairSide)
+        .map((entry) => ({ account: entry.account, amount: engineRound(nonVatAmt * entry.ratio! * plan.ratioScale) }))
+      const purchases = reverseChargePurchasesOn(
+        { base: nonVatAmt, rate: plan.rcPair.rate, kind: plan.rcPair.kind },
+        costLines,
+        chartVatTreatments,
+      )
+      for (const line of patternReverseChargeLines(plan.rcPair, purchases)) {
         result.push({ side: side(line.side), account: line.account, amount: line.amount })
       }
     }
@@ -337,7 +372,7 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
   // Mirrors buildMappingResultFromCounterpartyTemplate's legacy path plus
   // buildTransactionEntryLines' net assembly: VAT legs on expenses only
   // (reverse charge = the complete set, basbelopp on EU services unless the
-  // learned business account is a basis account), and sign mismatches
+  // learned business account reports ruta 20-24 itself), and sign mismatches
   // mirrored via buildLegacyMismatchResult.
   if (counterpartyLegacy && templateDebitAccount && templateCreditAccount) {
     const treatment = templateVatTreatment ?? null
@@ -351,11 +386,7 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
         if (treatment === 'reverse_charge') {
           result.push({ side: 'debet', account: templateDebitAccount, amount: absAmount })
           result.push({ side: 'kredit', account: templateCreditAccount, amount: absAmount, settlement: true })
-          result.push(...reverseChargeProposalLines({
-            base: absAmount,
-            kind: DEFAULT_REVERSE_CHARGE_KIND,
-            basisBase: costAccountReportsRcBasis(templateDebitAccount) ? 0 : absAmount,
-          }))
+          result.push(...reverseChargeOn(templateDebitAccount, { rate: 0.25, kind: DEFAULT_REVERSE_CHARGE_KIND }))
         } else {
           const vatRate = treatment ? getVatRate(treatment) : 0
           const vatAmt = vatRate > 0 ? engineRound(absAmount * vatRate / (1 + vatRate)) : 0
@@ -382,11 +413,7 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
       if (treatment === 'reverse_charge') {
         result.push({ side: 'debet', account: templateCreditAccount, amount: absAmount, settlement: true })
         result.push({ side: 'kredit', account: templateDebitAccount, amount: absAmount })
-        result.push(...reverseChargeProposalLines({
-          base: absAmount,
-          kind: DEFAULT_REVERSE_CHARGE_KIND,
-          basisBase: costAccountReportsRcBasis(templateDebitAccount) ? 0 : absAmount,
-        }, true))
+        result.push(...reverseChargeOn(templateDebitAccount, { rate: 0.25, kind: DEFAULT_REVERSE_CHARGE_KIND }, true))
       } else {
         const vatRate = treatment ? getVatRate(treatment) : 0
         const vatAmt = vatRate > 0 ? engineRound(absAmount * vatRate / (1 + vatRate)) : 0
@@ -435,13 +462,11 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
       result.push({ side: 'kredit', account: templateCreditAccount, amount: absAmount, settlement: true })
 
       // Fiktiv moms pair 2645 (or 2647 domestic) / 2614, and the basbelopp
-      // pair 44xx|45xx / 4598 for rutor 20-24 unless the debit account is
-      // already a basis account.
-      result.push(...reverseChargeProposalLines({
-        base: absAmount,
+      // pair 44xx|45xx / 4598 for rutor 20-24 unless the debit account
+      // reports them itself.
+      result.push(...reverseChargeOn(templateDebitAccount, {
         rate: 0.25,
         kind: reverseChargeKindForSupplierType(templateSupplierType ?? 'eu_business'),
-        basisBase: costAccountReportsRcBasis(templateDebitAccount) ? 0 : absAmount,
       }))
     } else {
       // Expense: debit expense net + input VAT, credit bank gross
@@ -491,13 +516,9 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
   }
 
   // Reverse charge: the complete set (fiktiv moms + basbelopp pair), as
-  // buildMappingResultFromCategory books it on the final cost account.
+  // buildMappingResultFromCategory books it, settled on the final cost account.
   if (treatment === 'reverse_charge' && amount < 0) {
-    result.push(...reverseChargeProposalLines({
-      base: absAmount,
-      kind: reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND,
-      basisBase: costAccountReportsRcBasis(debitAccount) ? 0 : absAmount,
-    }))
+    result.push(...reverseChargeOn(debitAccount, { rate: 0.25, kind: reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND }))
   }
 
   return result
@@ -562,12 +583,16 @@ export function proposalLinesToFormLines(
  * verifikation and Bokför från mall apply a template exactly the way a bank
  * row would be booked with it. Expense templates are booked as a payment
  * out (negative amount); income templates as money in; a transfer books the
- * template's own debit and credit legs as written.
+ * template's own debit and credit legs as written. `chartVatTreatments` as for
+ * computeProposalLines, and required: these lines are posted as they are, so
+ * a reverse-charge template on an account that reports ruta 20-24 itself must
+ * already be settled here.
  */
 export function staticTemplateToFormLines(
   template: BookingTemplate,
   totalAmount: number,
-  entityType?: EntityType,
+  entityType: EntityType | undefined,
+  chartVatTreatments: ChartVatTreatments,
 ): FormLine[] {
   const accounts = resolveTemplateAccountsForEntity(template, entityType)
   const abs = Math.abs(totalAmount)
@@ -587,6 +612,7 @@ export function staticTemplateToFormLines(
     templateVatRate: template.vat_rate,
     templateVatTreatment: template.vat_treatment,
     templateSupplierType: template.reverse_charge_supplier_type,
+    chartVatTreatments,
   })
   return proposalLinesToFormLines(lines)
 }

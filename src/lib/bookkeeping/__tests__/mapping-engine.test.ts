@@ -560,6 +560,61 @@ describe('mapping-engine', () => {
       expect(result.vat_lines[1].account_number).toBe('2614')
     })
 
+    // crm#1096: the rule's account decides with the company's momskoder, as
+    // every booking door settles it (reconcileRcBasisWithChart). Ingestion and
+    // the inbox suggestion book or show what evaluateMappingRules returns.
+    describe('reverse-charge rule on an account with its own momskod (crm#1096)', () => {
+      const rcRule = (debitAccount: string) => ({
+        id: 'rule-rc-momskod', user_id: 'user-1', rule_name: 'SaaS reverse charge', rule_type: 'merchant_name',
+        priority: 10, mcc_codes: null, merchant_pattern: 'AWS', description_pattern: null,
+        amount_min: null, amount_max: null, debit_account: debitAccount, credit_account: '1930',
+        vat_treatment: 'reverse_charge', vat_debit_account: null, vat_credit_account: null,
+        risk_level: 'LOW', default_private: false, requires_review: false, confidence_score: 0.9,
+        capitalization_threshold: null, capitalized_debit_account: null, is_active: true, source: 'user',
+        user_description: null, template_id: null, created_at: '2024-01-01', updated_at: '2024-01-01',
+      })
+      const momskoder = (account: string, treatment: string, rate: number | null = null) =>
+        vi.fn(async () => new Map([[account, { default_vat_treatment: treatment, default_vat_rate: rate }]]))
+      const shape = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
+        lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+      const tx = () => makeTransaction({ amount: -1000, merchant_name: 'AWS' })
+
+      it('books no basis pair on an account whose momskod reports ruta 20-24', async () => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        mockResult({ data: [rcRule('6540')], error: null })
+        const loadChart = momskoder('6540', 'reverse_charge_eu_services')
+
+        const result = await evaluateMappingRules(mockSupabase as never, 'company-1', tx(), 'enskild_firma', undefined, undefined, loadChart)
+
+        expect(shape(result.vat_lines)).toEqual([['2645', 250, 0], ['2614', 0, 250]])
+        expect(loadChart).toHaveBeenCalledTimes(1)
+      })
+
+      it('self-assesses at the momssats of the account, 12 %', async () => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        mockResult({ data: [rcRule('4057')], error: null })
+
+        const result = await evaluateMappingRules(
+          mockSupabase as never, 'company-1', tx(), 'enskild_firma', undefined, undefined,
+          momskoder('4057', 'reverse_charge_eu_goods', 0.12),
+        )
+
+        expect(shape(result.vat_lines)).toEqual([['2645', 120, 0], ['2624', 0, 120]])
+      })
+
+      it('keeps the pair on an ordinary account', async () => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        mockResult({ data: [rcRule('6541')], error: null })
+
+        const result = await evaluateMappingRules(
+          mockSupabase as never, 'company-1', tx(), 'enskild_firma', undefined, undefined,
+          momskoder('6540', 'reverse_charge_eu_services'),
+        )
+
+        expect(result.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4535', '4598'])
+      })
+    })
+
     // Journal entry lines are SEK; VAT from a rule match must be derived from
     // the transaction's SEK value, not the raw foreign amount. Sibling of the
     // buildMappingResultFromCategory FX fix (PR #1842).

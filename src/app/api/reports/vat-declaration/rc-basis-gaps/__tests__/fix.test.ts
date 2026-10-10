@@ -4,7 +4,8 @@
  * Exercises the route through the real withRouteContext wrapper, mocking its
  * auth/company/write dependencies and correctEntry(). Covers: 401, viewer 403
  * (the route corrects posted entries, so requireWrite must gate it),
- * validation 400, entry 404, and the happy-path correction.
+ * validation 400, entry 404, the happy-path correction, and that only the
+ * shortfall the verifikat itself leaves is added (crm#1096).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -175,5 +176,69 @@ describe('POST /api/reports/vat-declaration/rc-basis-gaps/fix', () => {
     for (const account of ['2645', '2614', '1930', '4535', '4598']) {
       expect(lines.find((l) => l.account_number === account)?.dimensions, account).toBeUndefined()
     }
+  })
+
+  // crm#1096: a cost line whose momskod in the kontoplan reports ruta 20-24
+  // already carries its share of the basis. A worklist row can be stale, or
+  // the verifikat only partly covered, so the route adds what is missing and
+  // never the whole basis on top.
+  describe('only the missing basis (crm#1096)', () => {
+    const purchase = (costAccount: string, amount: number) => [
+      { account_number: costAccount, debit_amount: amount, credit_amount: 0 },
+    ]
+    const rcLines = [
+      { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+      { account_number: '2614', debit_amount: 0, credit_amount: 250 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ]
+
+    it('refuses with 409 when a cost line\'s momskod already reports the basis at the sats of the fiktiv moms', async () => {
+      enqueue({ data: { id: ENTRY_ID, status: 'posted', lines: [...purchase('4056', 1000), ...rcLines] } })
+      enqueue({ data: [{ account_number: '4056', default_vat_treatment: 'reverse_charge_eu_goods' }] })
+
+      const response = await POST(fixRequest(validBody), { params: Promise.resolve({}) })
+      const { status, body } = await parseJsonResponse<{ error: { message: string } }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.message).toMatch(/inget saknas/)
+      expect(correctEntryMock).not.toHaveBeenCalled()
+    })
+
+    it('adds only the shortfall the cost lines leave', async () => {
+      enqueue({
+        data: {
+          id: ENTRY_ID,
+          status: 'posted',
+          lines: [...purchase('4056', 600), ...purchase('6540', 400), ...rcLines],
+        },
+      })
+      enqueue({ data: [{ account_number: '4056', default_vat_treatment: 'reverse_charge_eu_goods' }] })
+      correctEntryMock.mockResolvedValue({ reversal: { id: 'rev-1' }, corrected: { id: 'cor-1' } })
+
+      const response = await POST(fixRequest(validBody), { params: Promise.resolve({}) })
+      const { status, body } = await parseJsonResponse<{ data: { basisAccount: string; basisAmount: number } }>(response)
+
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({ basisAccount: '4535', basisAmount: 400 })
+      const lines = correctEntryMock.mock.calls[0][4] as Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+      expect(lines.filter((l) => l.account_number === '4535' || l.account_number === '4598')
+        .map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['4535', 400, 0],
+        ['4598', 0, 400],
+      ])
+    })
+
+    it('refuses with 409 when the verifikat reports its basis at another sats than its fiktiv moms', async () => {
+      enqueue({ data: { id: ENTRY_ID, status: 'posted', lines: [...purchase('6540', 1000), ...rcLines] } })
+      enqueue({ data: [{ account_number: '6540', default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0.12 }] })
+
+      const response = await POST(fixRequest(validBody), { params: Promise.resolve({}) })
+      const { status, body } = await parseJsonResponse<{ error: { message: string; message_en: string } }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.message).toMatch(/annan momssats/)
+      expect(body.error.message_en).toMatch(/another VAT rate/)
+      expect(correctEntryMock).not.toHaveBeenCalled()
+    })
   })
 })

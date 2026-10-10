@@ -23,7 +23,8 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { roundOre } from '@/lib/money'
 import { ArrowLeft, Check } from 'lucide-react'
 import type { BookingTemplateLibrary } from '@/types'
-import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
 interface Props {
@@ -51,6 +52,10 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
 
   const { company } = useCompany()
   const { periods } = useFiscalPeriods()
+  // The company's momskoder: a reverse-charge template on an account that
+  // reports ruta 20-24 itself gets no basis pair (staticTemplateToFormLines).
+  const { accounts } = useAccounts()
+  const chartVatTreatments = useMemo(() => chartVatTreatmentsOf(accounts), [accounts])
   const [selected, setSelected] = useState<
     { kind: 'library'; raw: BookingTemplateLibrary } | { kind: 'static'; template: BookingTemplate } | null
   >(null)
@@ -77,8 +82,8 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
     if (!selected || amount <= 0) return []
     return selected.kind === 'library'
       ? applyTemplate(selected.raw.lines, amount)
-      : staticTemplateToFormLines(selected.template, amount, company?.entity_type)
-  }, [selected, amount, company?.entity_type])
+      : staticTemplateToFormLines(selected.template, amount, company?.entity_type, chartVatTreatments)
+  }, [selected, amount, company?.entity_type, chartVatTreatments])
   const selectedName = selected ? (selected.kind === 'library' ? selected.raw.name : selected.template.name_sv) : null
   const totalDebit = sumSide(lines, 'debit_amount')
   const totalCredit = sumSide(lines, 'credit_amount')

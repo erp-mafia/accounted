@@ -6,7 +6,6 @@ import {
 import {
   generateInputVatLine,
   generateReverseChargePurchaseLines,
-  costAccountReportsRcBasis,
   DEFAULT_REVERSE_CHARGE_KIND,
   getVatRate,
   isReverseChargeBasisAccount,
@@ -14,6 +13,7 @@ import {
   RC_BASIS_OFFSET_ACCOUNT,
   reverseChargeKindForBasisAccount,
   type ReverseChargeKind,
+  type ReverseChargePurchase,
 } from './vat-entries'
 import {
   isNotVatRegistered,
@@ -693,19 +693,22 @@ export function patternReplayPlan(pattern: readonly LinePatternEntry[]): Pattern
 }
 
 /**
- * The complete reverse-charge set a pattern's basis pair stands for, on the
- * purchase amount: fiktiv moms on 2645 (2647 for domestic) and 2614, 2624 or
- * 2634 (rutor 48 and 30-32) plus the basis pair on the learned basis and
- * offset accounts (ruta 20-24), all from generateReverseChargePurchaseLines.
- * Oriented like the learned basis leg, so a pattern learned from a credit note
- * reverses it; a caller's mirror applies on top.
+ * The complete reverse-charge set a pattern's basis pair stands for: fiktiv
+ * moms on 2645 (2647 for domestic) and 2614, 2624 or 2634 (rutor 48 and 30-32)
+ * plus the basis pair on the learned basis and offset accounts (ruta 20-24),
+ * all from generateReverseChargePurchaseLines. `purchases` is the pair's
+ * purchase at its learned rate and kind on the replay's non-VAT amount, as the
+ * replay books it, or that purchase settled on the pattern's cost lines
+ * (reverseChargePurchasesOn), as the proposal preview shows it. Oriented like
+ * the learned basis leg, so a pattern learned from a credit note reverses it;
+ * a caller's mirror applies on top.
  */
 export function patternReverseChargeLines(
   pair: PatternReverseChargePair,
-  base: number,
+  purchases: readonly ReverseChargePurchase[],
 ): { account: string; side: 'debit' | 'credit'; amount: number; description: string }[] {
   const asLearned = pair.basis.side === 'debit'
-  return generateReverseChargePurchaseLines({ base, rate: pair.rate, kind: pair.kind }).map((line) => {
+  return purchases.flatMap(generateReverseChargePurchaseLines).map((line) => {
     const isDebit = line.debit_amount > 0
     return {
       account: line.account_number === RC_BASIS_OFFSET_ACCOUNT ? pair.offset.account : line.account_number,
@@ -766,14 +769,15 @@ export function bindTemplateToSettlementAccount(
  * complete set from generateReverseChargePurchaseLines, so a learned
  * reverse-charge counterparty books the basis pair (ruta 20-24) too. The
  * template stores no supplier country, so the basis lands on EU services
- * (the mapping-rule default); a template whose business account is itself a
- * basis account gets no pair.
+ * (the mapping-rule default). A template whose business account reports the
+ * basis itself (a basis account, or an account with a reverse-charge momskod)
+ * loses the pair, and takes that account's momssats, when the booking door
+ * settles it with the chart (reconcileRcBasisWithChart).
  */
-function learnedReverseChargeLines(debitAccount: string, absAmount: number) {
+function learnedReverseChargeLines(absAmount: number) {
   return generateReverseChargePurchaseLines({
     base: absAmount,
     kind: DEFAULT_REVERSE_CHARGE_KIND,
-    basisBase: costAccountReportsRcBasis(debitAccount) ? 0 : absAmount,
   })
 }
 
@@ -833,7 +837,7 @@ export function buildMappingResultFromCounterpartyTemplate(
   const vatLines: VatJournalLine[] = []
   if (isExpense && vatTreatment) {
     if (vatTreatment === 'reverse_charge') {
-      for (const rcl of learnedReverseChargeLines(tmpl.debit_account, absAmount)) {
+      for (const rcl of learnedReverseChargeLines(absAmount)) {
         vatLines.push({
           account_number: rcl.account_number,
           debit_amount: rcl.debit_amount,
@@ -903,7 +907,7 @@ function buildLegacyMismatchResult(
     if (vatTreatment === 'reverse_charge') {
       // Both pairs flip, so the refund also takes the basis back out of
       // ruta 20-24, not only the moms out of ruta 30/48.
-      for (const rcl of learnedReverseChargeLines(tmpl.debit_account, absAmount)) {
+      for (const rcl of learnedReverseChargeLines(absAmount)) {
         vatLines.push({
           account_number: rcl.account_number,
           debit_amount: rcl.credit_amount,
@@ -1028,7 +1032,8 @@ function buildMultiLineMappingResult(
   // 3b. The reverse-charge set on the purchase, in place of the learned pair.
   // It nets to zero, so it plays no part in the rounding below.
   if (plan.rcPair) {
-    for (const line of patternReverseChargeLines(plan.rcPair, nonVatAmount)) {
+    const purchase = { base: nonVatAmount, rate: plan.rcPair.rate, kind: plan.rcPair.kind }
+    for (const line of patternReverseChargeLines(plan.rcPair, [purchase])) {
       allLines.push({
         account_number: line.account,
         debit_amount: side(line.side) === 'debit' ? line.amount : 0,
@@ -1332,10 +1337,15 @@ export async function upsertCounterpartyTemplate(
   // learnedReverseChargeLines (EU services, 25 %). A purchase that replay would
   // book with another basis, such as 4531 for a supplier outside the EU, would
   // come back in the wrong ruta, so it teaches nothing: the catalog template or
-  // a saved rule keeps proposing it (crm#1028).
+  // a saved rule keeps proposing it (crm#1028). A booking with no basis pair
+  // at all had a cost account that reports ruta 20-24 itself
+  // (reconcileRcBasisWithChart dropped the pair), and a replay on the same
+  // account is settled the same way, so that one is learned.
+  const bookedBasis = rcBasisKey(mappingResult.vat_lines)
   if (
     detectVatTreatment(mappingResult) === 'reverse_charge' &&
-    rcBasisKey(mappingResult.vat_lines) !== rcBasisKey(learnedReverseChargeLines(mappingResult.debit_account, 100))
+    bookedBasis !== '' &&
+    bookedBasis !== rcBasisKey(learnedReverseChargeLines(100))
   ) {
     return
   }

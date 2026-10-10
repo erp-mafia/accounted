@@ -41,6 +41,7 @@ import { TemplateForm } from '@/components/settings/TemplateForm'
 import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { BOOKING_TEMPLATES, findMatchingTemplates } from '@/lib/bookkeeping/booking-templates'
 import { computeProposalLines } from '@/lib/bookkeeping/proposal-lines'
+import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { roundOre, sumOre } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
@@ -370,6 +371,8 @@ export default function ExpenseClaimsPage() {
       templateCreditAccount: liabilityAccount,
       templateVatTreatment: 'reverse_charge',
       templateSupplierType: sellerCountry === 'eu' ? 'eu_business' : 'non_eu_business',
+      // No basis pair on an account that reports ruta 20-24 itself.
+      chartVatTreatments: chartVatTreatmentsOf(accounts),
     })
       .filter((line) => !line.settlement)
       .map((line, i) => ({
@@ -378,7 +381,7 @@ export default function ExpenseClaimsPage() {
         debit: line.side === 'debet' ? line.amount.toFixed(2) : '',
         credit: line.side === 'kredit' ? line.amount.toFixed(2) : '',
       }))
-  }, [sellerCountry, reverseCharge, expenseAccount, liabilityAccount, netAmount, parsedAmount, parsedVat])
+  }, [sellerCountry, reverseCharge, expenseAccount, liabilityAccount, netAmount, parsedAmount, parsedVat, accounts])
 
   const editorRows = bookingRows ?? generatedRows
   const rowSum = (side: 'debit' | 'credit') => sumOre(editorRows.map((r) => parseFloat(r[side]) || 0))

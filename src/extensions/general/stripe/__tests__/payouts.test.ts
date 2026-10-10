@@ -94,6 +94,7 @@ describe('processPayoutPaidEvent', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'po-row-1' }] }) // claim
     enqueue({ data: { vat_registered: true } }) // company_settings
+    enqueue({ data: [] }) // the company's momskoder: none configured
     enqueue({ data: null }) // finalize row
 
     const outcome = await processPayoutPaidEvent(
@@ -127,6 +128,69 @@ describe('processPayoutPaidEvent', () => {
     const debits = input.lines.reduce((s, l) => s + (l.debit_amount || 0), 0)
     const credits = input.lines.reduce((s, l) => s + (l.credit_amount || 0), 0)
     expect(Math.round(debits * 100)).toBe(Math.round(credits * 100))
+  })
+
+  it('books no basis pair when the momskod on 6570 already reports the fees in ruta 21 (crm#1096)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'po-row-1' }] }) // claim
+    enqueue({ data: { vat_registered: true } }) // company_settings
+    enqueue({ data: [{ account_number: '6570', default_vat_treatment: 'reverse_charge_eu_services' }] }) // momskoder
+    enqueue({ data: null }) // finalize row
+
+    const outcome = await processPayoutPaidEvent(
+      supabase as unknown as SupabaseClient,
+      CONNECTION,
+      makePayoutEvent(),
+    )
+
+    expect(outcome).toEqual({ status: 'booked', reason: null })
+    const input = vi.mocked(createJournalEntry).mock.calls[0][3] as CreateJournalEntryInput
+    expect(input.lines.map((l) => l.account_number)).toEqual(['1930', '6570', '2645', '2614', '1686'])
+    const debits = input.lines.reduce((s, l) => s + (l.debit_amount || 0), 0)
+    const credits = input.lines.reduce((s, l) => s + (l.credit_amount || 0), 0)
+    expect(Math.round(debits * 100)).toBe(Math.round(credits * 100))
+  })
+
+  it('self-assesses the fees at the momssats of 6570 when its momskod reports them at 12 % (crm#1096)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'po-row-1' }] }) // claim
+    enqueue({ data: { vat_registered: true } }) // company_settings
+    enqueue({ data: [{ account_number: '6570', default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: '0.12' }] })
+    enqueue({ data: null }) // finalize row
+
+    const outcome = await processPayoutPaidEvent(
+      supabase as unknown as SupabaseClient,
+      CONNECTION,
+      makePayoutEvent(),
+    )
+
+    expect(outcome).toEqual({ status: 'booked', reason: null })
+    const input = vi.mocked(createJournalEntry).mock.calls[0][3] as CreateJournalEntryInput
+    expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 974.5, 0],
+      ['6570', 25.5, 0],
+      ['2645', 3.06, 0],
+      ['2624', 0, 3.06],
+      ['1686', 0, 1000],
+    ])
+  })
+
+  it('sends the payout to review, not stuck in processing, when the momskoder cannot be read', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'po-row-1' }] }) // claim
+    enqueue({ data: { vat_registered: true } }) // company_settings
+    enqueue({ error: { message: 'canceling statement due to statement timeout' } }) // momskoder
+    enqueue({ data: null }) // finalize row
+
+    const outcome = await processPayoutPaidEvent(
+      supabase as unknown as SupabaseClient,
+      CONNECTION,
+      makePayoutEvent(),
+    )
+
+    expect(outcome).toEqual({ status: 'needs_review', reason: 'momskod_lookup_failed' })
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+    expect(findCall('stripe_payouts', 'update')?.[0]).toMatchObject({ status: 'needs_review', reason: 'momskod_lookup_failed' })
   })
 
   it('claims the payout feed rows against the booked entry', async () => {

@@ -16,6 +16,21 @@ vi.mock('../engine', () => ({
   ),
 }))
 
+// The company's momskoder (chart_of_accounts.default_vat_treatment and
+// default_vat_rate): none configured unless a test says otherwise.
+// Reverse-charge paths read them.
+type Momskoder = Map<string, { default_vat_treatment: string | null; default_vat_rate: number | null }>
+const mockFetchChartVatTreatments = vi.fn(async (_supabase: unknown, _companyId: string): Promise<Momskoder> => new Map())
+vi.mock('../chart-vat-treatments', () => ({
+  fetchChartVatTreatments: (supabase: unknown, companyId: string) => mockFetchChartVatTreatments(supabase, companyId),
+}))
+/** account -> momskod, or [momskod, momssats]. */
+const momskoder = (codes: Record<string, string | [string, number]>): Momskoder =>
+  new Map(Object.entries(codes).map(([account, code]) => [account, {
+    default_vat_treatment: Array.isArray(code) ? code[0] : code,
+    default_vat_rate: Array.isArray(code) ? code[1] : null,
+  }]))
+
 // Mock currency-utils with real logic
 vi.mock('../currency-utils', () => ({
   resolveSekAmount: vi.fn().mockImplementation(
@@ -406,6 +421,113 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     expect(credit2440[0].credit_amount).toBe(10000)
 
     assertBalanced(input)
+  })
+
+  // crm#1096: an item on a cost account whose momskod in the kontoplan is a
+  // reverse-charge purchase already reports ruta 20-24 itself (the
+  // declaration reads the chart's momskoder), so a 45xx/4598 pair on top of it
+  // counted the purchase twice and broke the per-rate basis/moms identity.
+  it('books no basis pair for an item on an account whose momskod reports ruta 20-24 (crm#1096)', async () => {
+    mockFetchChartVatTreatments.mockResolvedValueOnce(momskoder({ '4056': 'reverse_charge_eu_goods' }))
+    const invoice = makeSupplierInvoice({ subtotal: 10000, vat_amount: 0, total: 10000, reverse_charge: true })
+    const items = [makeItem({ line_total: 10000, account_number: '4056', vat_rate: 0 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    expect(mockFetchChartVatTreatments).toHaveBeenCalledWith(null, 'company-1')
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.map((l: CreateJournalEntryLineInput) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['4056', 10000, 0],
+      ['2645', 2500, 0],
+      ['2614', 0, 2500],
+      ['2440', 0, 10000],
+    ])
+    assertBalanced(input)
+  })
+
+  it('books the basis pair only for the items on accounts that report nothing themselves (crm#1096)', async () => {
+    mockFetchChartVatTreatments.mockResolvedValueOnce(momskoder({ '4056': 'reverse_charge_eu_goods' }))
+    const invoice = makeSupplierInvoice({ subtotal: 10000, vat_amount: 0, total: 10000, reverse_charge: true })
+    const items = [
+      makeItem({ id: 'i1', line_total: 6000, account_number: '4056', vat_rate: 0 }),
+      makeItem({ id: 'i2', line_total: 4000, account_number: '6540', vat_rate: 0 }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    // Fiktiv moms on the whole purchase, basis pair on the 6540 part only:
+    // ruta 20 gets 6 000 from 4056, ruta 21 gets 4 000 from 4535.
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(2500)
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBe(2500)
+    expect(findByAccount(input.lines, '4535')[0].debit_amount).toBe(4000)
+    expect(findByAccount(input.lines, '4598')[0].credit_amount).toBe(4000)
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(10000)
+    assertBalanced(input)
+  })
+
+  it('self-assesses an item on an account at 12 % at that sats, where the declaration buckets its basis (crm#1096)', async () => {
+    mockFetchChartVatTreatments.mockResolvedValueOnce(momskoder({ '4057': ['reverse_charge_eu_goods', 0.12] }))
+    const invoice = makeSupplierInvoice({ subtotal: 10000, vat_amount: 0, total: 10000, reverse_charge: true })
+    const items = [
+      // The form's reverse-charge rate defaults to 25 %; the account says 12 %.
+      makeItem({ id: 'i1', line_total: 6000, account_number: '4057', vat_rate: 0, reverse_charge_rate: 0.25 }),
+      makeItem({ id: 'i2', line_total: 4000, account_number: '6540', vat_rate: 0 }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.map((l: CreateJournalEntryLineInput) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['4057', 6000, 0],
+      ['6540', 4000, 0],
+      ['2645', 720, 0],
+      ['2624', 0, 720],
+      ['2645', 1000, 0],
+      ['2614', 0, 1000],
+      ['4535', 4000, 0],
+      ['4598', 0, 4000],
+      ['2440', 0, 10000],
+    ])
+    assertBalanced(input)
+  })
+
+  it('keeps the basis pair for a periodiserad item, whose net sits on the 17xx interim account (crm#1096)', async () => {
+    mockFetchChartVatTreatments.mockResolvedValueOnce(momskoder({ '6540': 'reverse_charge_eu_services' }))
+    const invoice = makeSupplierInvoice({ subtotal: 12000, vat_amount: 0, total: 12000, reverse_charge: true })
+    const items = [makeItem({
+      line_total: 12000, account_number: '6540', vat_rate: 0,
+      accrual_period_start: '2024-07-01', accrual_period_end: '2025-06-30', accrual_balance_account: '1790',
+    })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.map((l: CreateJournalEntryLineInput) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1790', 12000, 0],
+      ['2645', 3000, 0],
+      ['2614', 0, 3000],
+      ['4535', 12000, 0],
+      ['4598', 0, 12000],
+      ['2440', 0, 12000],
+    ])
+    assertBalanced(input)
+  })
+
+  it('reads no momskoder for an invoice without reverse charge', async () => {
+    const invoice = makeSupplierInvoice()
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, [makeItem()], 'swedish_business'
+    )
+    expect(mockFetchChartVatTreatments).not.toHaveBeenCalled()
   })
 
   it('books reverse charge VAT for a 0%-rate line item: defaults to 25% huvudregeln (regression)', async () => {
@@ -1375,6 +1497,23 @@ describe('createSupplierInvoiceCashEntry', () => {
     assertBalanced(input)
   })
 
+  it('books no basis pair at payment for an item whose account reports ruta 20-24 itself (crm#1096)', async () => {
+    mockFetchChartVatTreatments.mockResolvedValueOnce(momskoder({ '6540': 'reverse_charge_eu_services' }))
+    const invoice = makeSupplierInvoice({ subtotal: 10000, vat_amount: 0, total: 10000, reverse_charge: true })
+    const items = [makeItem({ line_total: 10000, account_number: '6540', vat_rate: 0 })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(2500)
+    expect(findByAccount(input.lines, '4535')).toHaveLength(0)
+    expect(findByAccount(input.lines, '4598')).toHaveLength(0)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(10000)
+    assertBalanced(input)
+  })
+
   it('EU reverse charge with a 0%-rate line item self-assesses at 25% (regression)', async () => {
     const invoice = makeSupplierInvoice({
       subtotal: 12000, vat_amount: 0, total: 12000, reverse_charge: true,
@@ -1677,6 +1816,50 @@ describe('createSupplierCreditNoteEntry', () => {
     expect(findByAccount(input.lines, '6200')[0].credit_amount).toBe(5000)
     expect(findByAccount(input.lines, '2641')).toHaveLength(0)
 
+    assertBalanced(input)
+  })
+
+  it('reverses no basis pair for an item whose account reports ruta 20-24 itself, as registration booked none (crm#1096)', async () => {
+    mockFetchChartVatTreatments.mockResolvedValueOnce(momskoder({ '4056': 'reverse_charge_eu_goods' }))
+    const creditNote = makeSupplierInvoice({
+      subtotal: -10000, vat_amount: 0, total: -10000, reverse_charge: true, is_credit_note: true,
+    })
+    const items = [
+      makeItem({ id: 'i1', line_total: 6000, account_number: '4056', vat_rate: 0 }),
+      makeItem({ id: 'i2', line_total: 4000, account_number: '6540', vat_rate: 0 }),
+    ]
+
+    await createSupplierCreditNoteEntry(
+      null as never, 'company-1', 'user-1', creditNote, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2645')[0].credit_amount).toBe(2500)
+    expect(findByAccount(input.lines, '2614')[0].debit_amount).toBe(2500)
+    // Only the 6540 part had a basis pair at registration.
+    expect(findByAccount(input.lines, '4535')[0].credit_amount).toBe(4000)
+    expect(findByAccount(input.lines, '4598')[0].debit_amount).toBe(4000)
+    assertBalanced(input)
+  })
+
+  it('reverses the basis pair of a periodiserad item, as registration booked it on the interim account (crm#1096)', async () => {
+    mockFetchChartVatTreatments.mockResolvedValueOnce(momskoder({ '6540': 'reverse_charge_eu_services' }))
+    const creditNote = makeSupplierInvoice({
+      subtotal: -12000, vat_amount: 0, total: -12000, reverse_charge: true, is_credit_note: true,
+    })
+    const items = [makeItem({
+      line_total: 12000, account_number: '6540', vat_rate: 0,
+      accrual_period_start: '2024-07-01', accrual_period_end: '2025-06-30', accrual_balance_account: '1790',
+    })]
+
+    await createSupplierCreditNoteEntry(
+      null as never, 'company-1', 'user-1', creditNote, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '1790')[0].credit_amount).toBe(12000)
+    expect(findByAccount(input.lines, '4535')[0].credit_amount).toBe(12000)
+    expect(findByAccount(input.lines, '4598')[0].debit_amount).toBe(12000)
     assertBalanced(input)
   })
 

@@ -6,6 +6,7 @@ import {
   findMatchingTemplates,
   getTemplateById,
 } from '../booking-templates'
+import { reconcileRcBasisWithCostLines } from '../rc-basis-reconcile'
 
 /**
  * The templates added 2026-09-10 for the accounts that twelve months of bank
@@ -153,7 +154,11 @@ describe('gap templates book the VAT they promise', () => {
 
   it('EU goods: cost on 4515 with fiktiv moms 2614/2645 and no extra basis pair', () => {
     const t = getTemplateById('goods_purchase_eu')!
-    const r = buildMappingResultFromTemplate(t, makeTransaction({ amount: -1000 }), ab)
+    // As the booking door settles it: 4515 reports ruta 20 itself.
+    const r = reconcileRcBasisWithCostLines(
+      buildMappingResultFromTemplate(t, makeTransaction({ amount: -1000 }), ab),
+      new Map(),
+    )
     expect(r.debit_account).toBe('4515')
     const acc = accounts(r.vat_lines)
     expect(acc).toContain('2614')

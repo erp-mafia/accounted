@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest'
+import { createQueuedMockSupabase } from '@/tests/helpers'
+import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
+import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import {
   getVatRate,
   generateSalesVatLines,
   generateReverseChargePurchaseLines,
   generateReverseChargeBasisLines,
-  costAccountReportsRcBasis,
+  costAccountRcBasisRate,
+  chartVatTreatmentsOf,
+  reverseChargeOnAccount,
+  reverseChargePurchasesOn,
   reverseChargeKindForSupplierType,
   reverseChargeKindRuta,
   reverseChargeKindForBasisAccount,
@@ -253,30 +259,140 @@ describe('generateReverseChargePurchaseLines: basis pair and invariants', () => 
   })
 })
 
-describe('costAccountReportsRcBasis', () => {
-  it('without a chart row, treats the 44xx/45xx range as reporting the basis (pure producers)', () => {
-    expect(costAccountReportsRcBasis('4535')).toBe(true)
-    expect(costAccountReportsRcBasis('4538')).toBe(true)
-    expect(costAccountReportsRcBasis('6540')).toBe(false)
-    expect(costAccountReportsRcBasis('5420')).toBe(false)
+describe('costAccountRcBasisRate', () => {
+  const code = (treatment: string | null, rate: number | null = null) => ({
+    default_vat_treatment: treatment,
+    default_vat_rate: rate,
   })
 
-  it('with a chart row, follows the declaration: a configured treatment decides', () => {
-    // Pattern B: a cost account configured to feed ruta 21 itself.
-    expect(costAccountReportsRcBasis('6540', 'reverse_charge_eu_services')).toBe(true)
-    expect(costAccountReportsRcBasis('4056', 'reverse_charge_eu_goods')).toBe(true)
-    expect(costAccountReportsRcBasis('4400', 'reverse_charge_domestic')).toBe(true)
+  it('reads an account the chart holds no momskod for as unconfigured, never as a 44xx/45xx range (crm#1096)', () => {
+    expect(costAccountRcBasisRate('4535', undefined)).toBe(0.25)
+    expect(costAccountRcBasisRate('4536', undefined)).toBe(0.12)
+    expect(costAccountRcBasisRate('4417', undefined)).toBe(0.06)
+    expect(costAccountRcBasisRate('4538', undefined)).toBeNull()
+    expect(costAccountRcBasisRate('4512', undefined)).toBeNull()
+    expect(costAccountRcBasisRate('4545', undefined)).toBeNull()
+    expect(costAccountRcBasisRate('4598', undefined)).toBeNull()
+    expect(costAccountRcBasisRate('6540', undefined)).toBeNull()
+  })
+
+  it('with a momskod, follows the declaration: a reverse-charge purchase reports its own box at its momssats', () => {
+    // Pattern B: a cost account configured to feed ruta 20-24 itself.
+    expect(costAccountRcBasisRate('6540', code('reverse_charge_eu_services'))).toBe(0.25)
+    expect(costAccountRcBasisRate('4400', code('reverse_charge_domestic'))).toBe(0.25)
+    expect(costAccountRcBasisRate('4057', code('reverse_charge_eu_goods', 0.12))).toBe(0.12)
+    expect(costAccountRcBasisRate('4043', code('reverse_charge_domestic', 0.06))).toBe(0.06)
     // Configured, but not to a basis box: the pair is still needed.
-    expect(costAccountReportsRcBasis('4535', 'standard_25')).toBe(false)
-    expect(costAccountReportsRcBasis('6540', 'standard_25')).toBe(false)
+    expect(costAccountRcBasisRate('4535', code('standard_25'))).toBeNull()
+    expect(costAccountRcBasisRate('6540', code('standard_25', 0.25))).toBeNull()
+    expect(costAccountRcBasisRate('4056', code('import_goods'))).toBeNull()
+    expect(costAccountRcBasisRate('4056', code('triangulation_eu_goods'))).toBeNull()
+  })
+
+  it('reports no basis at a sats the declaration buckets none at (0 %), so the pair books it', () => {
+    expect(costAccountRcBasisRate('4538', code('reverse_charge_eu_services', 0))).toBeNull()
+    expect(costAccountRcBasisRate('4518', code('reverse_charge_eu_goods', 0))).toBeNull()
   })
 
   it('with an unconfigured chart row, only the static BAS basis accounts report', () => {
-    expect(costAccountReportsRcBasis('4535', null)).toBe(true)
-    expect(costAccountReportsRcBasis('4531', null)).toBe(true)
+    expect(costAccountRcBasisRate('4535', code(null))).toBe(0.25)
+    expect(costAccountRcBasisRate('4531', code(null))).toBe(0.25)
     // A company-numbered 45xx without a treatment feeds no box at all.
-    expect(costAccountReportsRcBasis('4538', null)).toBe(false)
-    expect(costAccountReportsRcBasis('6540', null)).toBe(false)
+    expect(costAccountRcBasisRate('4538', code(null))).toBeNull()
+    expect(costAccountRcBasisRate('6540', code(null))).toBeNull()
+  })
+
+  it('agrees with the declaration for every reverse-charge purchase momskod on a cost account outside 44xx/45xx', () => {
+    for (const treatment of [
+      'reverse_charge_eu_goods', 'reverse_charge_eu_services',
+      'reverse_charge_non_eu_services', 'reverse_charge_domestic',
+    ]) {
+      expect(costAccountRcBasisRate('4056', code(treatment))).toBe(0.25)
+      expect(costAccountRcBasisRate('5420', code(treatment, 0.12))).toBe(0.12)
+    }
+  })
+
+  it('is the per-rate bucketing of the momsdeklaration, account by account', async () => {
+    const rows = [
+      { account_number: '4057', account_name: 'Inköp varor EU 12%', account_class: 4, default_vat_rate: '0.12', default_vat_treatment: 'reverse_charge_eu_goods' },
+      { account_number: '6540', account_name: 'IT-tjänster', account_class: 6, default_vat_rate: null, default_vat_treatment: 'reverse_charge_eu_services' },
+      { account_number: '4538', account_name: 'Inköp tjänster EU momsfri', account_class: 4, default_vat_rate: 0, default_vat_treatment: 'reverse_charge_eu_services' },
+      { account_number: '4535', account_name: 'Inköp tjänster EU', account_class: 4, default_vat_rate: null, default_vat_treatment: 'import_goods' },
+      { account_number: '4043', account_name: 'Inköp bygg 6%', account_class: 4, default_vat_rate: 0.06, default_vat_treatment: 'reverse_charge_domestic' },
+      { account_number: '5420', account_name: 'Programvaror', account_class: 5, default_vat_rate: 0.25, default_vat_treatment: 'standard_25' },
+      { account_number: '4512', account_name: 'Trepartshandel', account_class: 4, default_vat_rate: 0, default_vat_treatment: 'triangulation_eu_goods' },
+    ]
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const declaration = await fetchDynamicVatAccounts(supabase as never, 'company-1')
+    const chart = chartVatTreatmentsOf(rows)
+    for (const account of [...rows.map((r) => r.account_number), '4531', '4536', '4416', '4598', '6990']) {
+      const bucketed = declaration.explicitAccounts.has(account)
+        ? declaration.rcBasisRateByAccount.get(account) ?? null
+        : rcBasisAccountRate(account)
+      expect(costAccountRcBasisRate(account, chart.get(account)), account).toBe(bucketed)
+    }
+  })
+})
+
+describe('chartVatTreatmentsOf', () => {
+  it('keys each account to its momskod and momssats, null when it has none', () => {
+    const chart = chartVatTreatmentsOf([
+      { account_number: '4056', default_vat_treatment: 'reverse_charge_eu_goods', default_vat_rate: '0.12' },
+      { account_number: '6540', default_vat_treatment: null, default_vat_rate: null },
+      { account_number: '5420' },
+    ])
+    expect(chart.get('4056')).toEqual({ default_vat_treatment: 'reverse_charge_eu_goods', default_vat_rate: 0.12 })
+    expect(chart.get('6540')).toEqual({ default_vat_treatment: null, default_vat_rate: null })
+    expect(chart.get('5420')).toEqual({ default_vat_treatment: null, default_vat_rate: null })
+    expect(chart.get('6991')).toBeUndefined()
+  })
+})
+
+describe('reverseChargeOnAccount / reverseChargePurchasesOn', () => {
+  const chart = chartVatTreatmentsOf([
+    { account_number: '4056', default_vat_treatment: 'reverse_charge_eu_goods', default_vat_rate: 0.25 },
+    { account_number: '4057', default_vat_treatment: 'reverse_charge_eu_goods', default_vat_rate: 0.12 },
+    { account_number: '4538', default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0 },
+  ])
+  const purchase = { base: 1000, rate: 0.25, kind: 'eu_services' as const }
+
+  it('self-assesses on an account that reports ruta 20-24 itself at its momssats, without the pair', () => {
+    expect(reverseChargeOnAccount('6540', 0.25, chart)).toEqual({ rate: 0.25, basisPair: true })
+    expect(reverseChargeOnAccount('4056', 0.25, chart)).toEqual({ rate: 0.25, basisPair: false })
+    expect(reverseChargeOnAccount('4057', 0.25, chart)).toEqual({ rate: 0.12, basisPair: false })
+    expect(reverseChargeOnAccount('4535', 0.12, chart)).toEqual({ rate: 0.25, basisPair: false })
+    expect(reverseChargeOnAccount('4538', 0.25, chart)).toEqual({ rate: 0.25, basisPair: true })
+  })
+
+  it('gives back the purchase with its whole pair when no cost line reports the basis', () => {
+    expect(reverseChargePurchasesOn(purchase, [{ account: '6540', amount: 1000 }], chart))
+      .toEqual([{ ...purchase, basisBase: 1000 }])
+    expect(reverseChargePurchasesOn(purchase, [{ account: '4538', amount: 1000 }], chart))
+      .toEqual([{ ...purchase, basisBase: 1000 }])
+  })
+
+  it('drops the pair for a cost line that reports at the purchase rate, and re-rates one at another', () => {
+    expect(reverseChargePurchasesOn(purchase, [{ account: '4056', amount: 1000 }], chart))
+      .toEqual([{ ...purchase, basisBase: 0 }])
+    expect(reverseChargePurchasesOn(purchase, [{ account: '4057', amount: 1000 }], chart))
+      .toEqual([{ base: 1000, rate: 0.12, kind: 'eu_services', basisBase: 0 }])
+  })
+
+  it('splits a purchase over cost lines by what each one reports', () => {
+    expect(reverseChargePurchasesOn(purchase, [
+      { account: '6540', amount: 500.4 },
+      { account: '4056', amount: 99.6 },
+      { account: '4057', amount: 400 },
+    ], chart)).toEqual([
+      { ...purchase, base: 600, basisBase: 500.4 },
+      { base: 400, rate: 0.12, kind: 'eu_services', basisBase: 0 },
+    ])
+  })
+
+  it('never goes below zero', () => {
+    expect(reverseChargePurchasesOn({ ...purchase, base: 100 }, [{ account: '4056', amount: 150 }], chart))
+      .toEqual([{ ...purchase, base: 100, basisBase: 0 }])
   })
 })
 

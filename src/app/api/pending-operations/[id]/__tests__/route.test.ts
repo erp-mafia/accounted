@@ -579,4 +579,104 @@ describe('PATCH /api/pending-operations/[id]', () => {
     )
     expect(res.status).toBe(400)
   })
+  // crm#1096: the re-derived preview settles the reverse-charge set the way
+  // the commit does (categorizeMatchedTransaction): on the account the cost
+  // line finally lands on, after the staged account_override, with the
+  // company's momskoder.
+  describe('reverse-charge set (crm#1096)', () => {
+    const rcMapping = () => ({
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2645', debit_amount: 250, credit_amount: 0, description: '' },
+        { account_number: '2614', debit_amount: 0, credit_amount: 250, description: '' },
+        { account_number: '4535', debit_amount: 1000, credit_amount: 0, description: '' },
+        { account_number: '4598', debit_amount: 0, credit_amount: 1000, description: '' },
+      ],
+    })
+    const rcOp = (params: Record<string, unknown> = {}) => ({
+      data: {
+        id: 'op-1',
+        company_id: 'company-1',
+        operation_type: 'categorize_transaction',
+        status: 'pending',
+        params: { transaction_id: 'tx-1', category: 'expense_software', vat_treatment: 'reverse_charge', ...params },
+        preview_data: {},
+        title: '',
+      },
+    })
+    const patch = () => PATCH(
+      createMockRequest('/api/pending-operations/op-1', { method: 'PATCH', body: { category: 'expense_software' } }),
+      createMockRouteParams({ id: 'op-1' }),
+    )
+    const previewVatAccounts = () =>
+      (findCall('pending_operations', 'update')?.[0] as { preview_data: { vat_lines: Array<{ account: string }> } })
+        .preview_data.vat_lines.map((l) => l.account)
+
+    beforeEach(() => {
+      accountMappingMock.mockReturnValue({
+        debitAccount: '5420', creditAccount: '1930', vatTreatment: 'reverse_charge',
+        vatDebitAccount: null, vatCreditAccount: null,
+      })
+      mappingMock.mockImplementation(rcMapping)
+    })
+
+    it('drops the basis pair when the category account reports ruta 20-24 itself', async () => {
+      enqueue(rcOp())
+      enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -1000, currency: 'SEK' } })
+      enqueue({ data: { entity_type: 'aktiebolag' } })
+      enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+      enqueue({ data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }] }) // momskoder
+      enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
+
+      expect((await patch()).status).toBe(200)
+      expect(previewVatAccounts()).toEqual(['2645', '2614'])
+    })
+
+    it('applies the staged account_override before it settles, as the commit does', async () => {
+      enqueue(rcOp({ account_override: '6540' }))
+      enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -1000, currency: 'SEK' } })
+      enqueue({ data: { entity_type: 'aktiebolag' } })
+      enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+      enqueue({ data: { account_number: '6540', account_class: 6, is_active: true } }) // the override account
+      enqueue({ data: [{ account_number: '6540', default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0.12 }] })
+      enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
+
+      expect((await patch()).status).toBe(200)
+      const update = findCall('pending_operations', 'update')?.[0] as {
+        params: { account_override: string }
+        preview_data: { debit_account: string; vat_lines: Array<{ account: string; amount: number }> }
+      }
+      expect(update.params.account_override).toBe('6540')
+      expect(update.preview_data.debit_account).toBe('6540')
+      expect(update.preview_data.vat_lines).toEqual([
+        { account: '2645', amount: 120 },
+        { account: '2624', amount: 120 },
+      ])
+    })
+
+    it('keeps the pair on an ordinary override account', async () => {
+      enqueue(rcOp({ account_override: '6541' }))
+      enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -1000, currency: 'SEK' } })
+      enqueue({ data: { entity_type: 'aktiebolag' } })
+      enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+      enqueue({ data: { account_number: '6541', account_class: 6, is_active: true } }) // the override account
+      enqueue({ data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }] }) // momskoder
+      enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
+
+      expect((await patch()).status).toBe(200)
+      expect(previewVatAccounts()).toEqual(['2645', '2614', '4535', '4598'])
+    })
+
+    it('refuses an override the commit would refuse (an inactive account)', async () => {
+      enqueue(rcOp({ account_override: '6540' }))
+      enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -1000, currency: 'SEK' } })
+      enqueue({ data: { entity_type: 'aktiebolag' } })
+      enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+      enqueue({ data: { account_number: '6540', account_class: 6, is_active: false } }) // the override account
+
+      expect((await patch()).status).toBe(400)
+      expect(findCall('pending_operations', 'update')).toBeUndefined()
+    })
+  })
 })

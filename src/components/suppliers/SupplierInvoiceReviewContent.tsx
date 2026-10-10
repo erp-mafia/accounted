@@ -8,9 +8,10 @@ import { AccountNumber } from '@/components/ui/account-number'
 import { formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import {
   resolveReverseChargeRate,
-  isReverseChargeBasisAccount,
   generateReverseChargePurchaseLines,
   reverseChargeKindForSupplierType,
+  reverseChargeOnAccount,
+  type ChartVatTreatments,
 } from '@/lib/bookkeeping/vat-entries'
 import { generateSlpLines, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
@@ -66,6 +67,12 @@ interface SupplierInvoiceReviewContentProps {
    * booking ('manual') by the explicit Bokför step, so no preview is shown.
    */
   bookingMoment: InvoiceBookingMoment
+  /**
+   * The company's momskoder (chartVatTreatmentsOf over the kontoplan): an
+   * item on an account that reports ruta 20-24 itself previews no basis pair
+   * and that account's momssats, as the registration books it.
+   */
+  chartVatTreatments: ChartVatTreatments
 }
 
 interface JournalPreviewLine {
@@ -94,6 +101,7 @@ function buildJournalPreview(
   // reviewing "Verifikation som bokförs" saw "5615" where the books would say
   // "Leverantörsfaktura 123, ACME AB".
   desc: string,
+  chartVatTreatments: ChartVatTreatments,
 ): JournalPreviewLine[] {
   const lines: JournalPreviewLine[] = []
   const toSek = (n: number) => Math.round(n * fxRate * 100) / 100
@@ -160,20 +168,24 @@ function buildJournalPreview(
         ? supplierType
         : 'eu_business'
 
-    // Base per self-assessed rate, plus the non-basis-account portion that needs
-    // parallel basbeloppsrader (items booked straight to a 44xx/45xx basis
-    // account already populate ruta 20-24 via the expense line, so they're
-    // excluded there to avoid double-counting).
+    // Base per self-assessed rate, plus the portion that needs parallel
+    // basbeloppsrader, decided on the account each item is booked on, as
+    // groupReverseChargeByRate does: an item on an account that reports ruta
+    // 20-24 itself (a 44xx/45xx basis account or one whose momskod is a
+    // reverse-charge purchase) already populates it via the expense line, so
+    // it takes no basis pair and that account's momssats.
     const baseByRate = new Map<number, number>()
     const nonBasisBaseByRate = new Map<number, number>()
     for (const item of items) {
       if (isSupplierInvoiceRoundingItem(item, item.amount, currency)) continue
-      const rate = resolveReverseChargeRate(item)
+      const { rate, basisPair } = reverseChargeOnAccount(
+        resolveBookingAccount('expense', item, item.account_number),
+        resolveReverseChargeRate(item),
+        chartVatTreatments,
+      )
       const sek = toSek(item.amount)
       baseByRate.set(rate, (baseByRate.get(rate) || 0) + sek)
-      if (!isReverseChargeBasisAccount(item.account_number)) {
-        nonBasisBaseByRate.set(rate, (nonBasisBaseByRate.get(rate) || 0) + sek)
-      }
+      if (basisPair) nonBasisBaseByRate.set(rate, (nonBasisBaseByRate.get(rate) || 0) + sek)
     }
 
     for (const [rate, netAmount] of baseByRate) {
@@ -252,6 +264,7 @@ export function SupplierInvoiceReviewContent({
   items,
   oreRounding,
   bookingMoment,
+  chartVatTreatments,
 }: SupplierInvoiceReviewContentProps) {
   const t = useTranslations('supplier_invoice_editor')
   const { itemTotals, subtotal, totalVat, total, figures, roundingItem } = supplierInvoiceEditorAmounts(
@@ -289,6 +302,7 @@ export function SupplierInvoiceReviewContent({
     currency,
     fxRate,
     voucherDescription,
+    chartVatTreatments,
   )
   const totalDebit = journalLines.reduce((sum, l) => sum + l.debit, 0)
   const totalCredit = journalLines.reduce((sum, l) => sum + l.credit, 0)

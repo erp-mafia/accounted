@@ -2,9 +2,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   generateInputVatLine,
   generateReverseChargePurchaseLines,
-  costAccountReportsRcBasis,
   DEFAULT_REVERSE_CHARGE_KIND,
 } from './vat-entries'
+import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from './chart-vat-treatments'
+import { reconcileRcBasisWithChart } from './rc-basis-reconcile'
 // Aliased: this file already has a local resolveSekAmountOrNull(transaction)
 // for account-selection decisions, which refuses when unconvertible.
 import { resolveSekAmount as resolveSekAmountLenient } from './currency-utils'
@@ -95,6 +96,12 @@ function resolveSekAmountOrNull(transaction: Transaction): number | null {
  * A matched rule (1-4) still takes the learned dimensions of the counterparty
  * template the transaction matches, when that template books the same
  * business account (withLearnedDimensions).
+ *
+ * A reverse-charge result is settled on its cost account with the company's
+ * chart before it is returned (reconcileRcBasisWithChart), so a caller books
+ * it as it is. A caller that evaluates many transactions passes one
+ * `loadChart` for all of them, so the chart is read once; omitted, it is read
+ * only when a reverse-charge set needs it.
  */
 export async function evaluateMappingRules(
   supabase: SupabaseClient,
@@ -103,6 +110,21 @@ export async function evaluateMappingRules(
   entityType: EntityType,
   settlementAccount?: string,
   /** company_settings.vat_registered as the caller loaded it (lib/bookkeeping/vat-registration.ts). */
+  vatRegistered?: VatRegistration,
+  loadChart: ChartVatTreatmentsLoader = chartVatTreatmentsLoader(supabase, companyId),
+): Promise<MappingResult> {
+  return reconcileRcBasisWithChart(
+    await evaluateMappingRulesUnsettled(supabase, companyId, transaction, entityType, settlementAccount, vatRegistered),
+    loadChart,
+  )
+}
+
+async function evaluateMappingRulesUnsettled(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaction: Transaction,
+  entityType: EntityType,
+  settlementAccount?: string,
   vatRegistered?: VatRegistration
 ): Promise<MappingResult> {
   const bankAccount = settlementAccount || '1930'
@@ -438,13 +460,13 @@ function buildResult(
       // Reverse charge: the complete set, fiktiv moms (2645/2614) AND the
       // basbelopp pair (44xx|45xx / 4598) for rutor 20-24 (FK004 without it).
       // Mapping rules don't carry supplier-country today, so we default to EU
-      // services: the most common reverse-charge scenario. A rule that already
-      // books to a basis account gets no pair (it would double-count).
+      // services: the most common reverse-charge scenario. A rule whose
+      // account reports the basis itself loses the pair, and takes that
+      // account's momssats, in evaluateMappingRules (reconcileRcBasisWithChart).
       const rcLines = generateReverseChargePurchaseLines({
         base: absSekAmount,
         rate: 0.25,
         kind: DEFAULT_REVERSE_CHARGE_KIND,
-        basisBase: costAccountReportsRcBasis(debitAccount) ? 0 : absSekAmount,
       })
       for (const rcl of rcLines) {
         vatLines.push({

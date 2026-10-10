@@ -5,9 +5,22 @@ import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import { buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
+import { buildMappingResultFromTemplate } from '@/lib/bookkeeping/booking-templates'
+import { reconcileRcBasisWithCostLines } from '@/lib/bookkeeping/rc-basis-reconcile'
+import { chartVatTreatmentsOf, type ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
+import type { MappingResult, Transaction } from '@/types'
 import { makeCategorizationTemplate, makeTransaction } from '@/tests/helpers'
 import { roundOre } from '@/lib/money'
 import type { LinePatternEntry } from '@/types'
+
+/** The company's momskoder: account -> momskod, or [momskod, momssats]. */
+function chartOf(codes: Record<string, string | [string, number]> = {}): ChartVatTreatments {
+  return chartVatTreatmentsOf(Object.entries(codes).map(([account_number, code]) => ({
+    account_number,
+    default_vat_treatment: Array.isArray(code) ? code[0] : code,
+    default_vat_rate: Array.isArray(code) ? code[1] : null,
+  })))
+}
 
 function sumSide(lines: ProposalLine[], side: 'debet' | 'kredit'): number {
   return roundOre(lines.filter(l => l.side === side).reduce((s, l) => s + l.amount, 0))
@@ -615,6 +628,130 @@ describe('computeProposalLines', () => {
   })
 })
 
+// crm#1096: a cost account the company gave a reverse-charge momskod reports
+// ruta 20-24 itself, at its momssats. The engine settles the reverse-charge
+// set on the final account with the chart (reconcileRcBasisWithChart); the
+// preview, and the lines "Ändra rader" hands to the manual form, must book
+// exactly that.
+describe('company momskoder: the preview books the set the engine settles (crm#1096)', () => {
+  type Shape = Array<[string, 'debet' | 'kredit', number]>
+  const previewShape = (lines: ProposalLine[]): Shape =>
+    lines.map((l): [string, 'debet' | 'kredit', number] => [l.account, l.side, l.amount]).sort()
+  const engineShape = (tx: Transaction, result: MappingResult, chart: ChartVatTreatments): Shape =>
+    buildTransactionEntryLines(tx, reconcileRcBasisWithCostLines(result, chart))
+      .map((l): [string, 'debet' | 'kredit', number] =>
+        [l.account_number, l.debit_amount > 0 ? 'debet' : 'kredit', l.debit_amount || l.credit_amount])
+      .sort()
+
+  it('category with an account_override onto a configured account: no pair, as booked', () => {
+    const chart = chartOf({ '6540': 'reverse_charge_eu_services' })
+    const tx = makeTransaction({ amount: -1000, amount_sek: -1000, currency: 'SEK', exchange_rate: 1 })
+    const preview = computeProposalLines({
+      amount: -1000, category: 'expense_software', vatTreatment: 'reverse_charge',
+      accountOverride: '6540', chartVatTreatments: chart,
+    })
+    expect(preview.map((l) => l.account)).not.toContain('4598')
+    const engine = buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma', 'reverse_charge')
+    engine.debit_account = '6540'
+    expect(previewShape(preview)).toEqual(engineShape(tx, engine, chart))
+  })
+
+  it('category with an account_override onto an account at 12 %: no pair, fiktiv moms at 12 %, as booked', () => {
+    const chart = chartOf({ '4057': ['reverse_charge_eu_goods', 0.12] })
+    const tx = makeTransaction({ amount: -1000, amount_sek: -1000, currency: 'SEK', exchange_rate: 1 })
+    const preview = computeProposalLines({
+      amount: -1000, category: 'expense_software', vatTreatment: 'reverse_charge',
+      accountOverride: '4057', chartVatTreatments: chart,
+    })
+    expect(previewShape(preview)).toEqual([
+      ['1930', 'kredit', 1000],
+      ['2624', 'kredit', 120],
+      ['2645', 'debet', 120],
+      ['4057', 'debet', 1000],
+    ])
+    const engine = buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma', 'reverse_charge')
+    engine.debit_account = '4057'
+    expect(previewShape(preview)).toEqual(engineShape(tx, engine, chart))
+  })
+
+  it('a static reverse-charge template on a configured account: no pair, as booked; without the chart the pair stays', () => {
+    const chart = chartOf({ '5420': 'reverse_charge_eu_services' })
+    const template = getTemplateById('it_saas_eu')!
+    const tx = makeTransaction({ amount: -1000, amount_sek: -1000, currency: 'SEK', exchange_rate: 1 })
+    const input = {
+      amount: -1000,
+      templateDebitAccount: template.debit_account,
+      templateCreditAccount: template.credit_account,
+      templateVatRate: template.vat_rate,
+      templateVatTreatment: template.vat_treatment,
+      templateSupplierType: template.reverse_charge_supplier_type,
+    }
+    const preview = computeProposalLines({ ...input, chartVatTreatments: chart })
+    expect(preview.map((l) => l.account)).toEqual(['5420', '1930', '2645', '2614'])
+    expect(previewShape(preview)).toEqual(engineShape(tx, buildMappingResultFromTemplate(template, tx, 'enskild_firma'), chart))
+    expect(computeProposalLines(input).map((l) => l.account)).toContain('4598')
+  })
+
+  it('a legacy counterparty pair on a configured account, purchase and refund: no pair, as booked', () => {
+    const chart = chartOf({ '4056': 'reverse_charge_eu_goods' })
+    const template = makeCategorizationTemplate({ debit_account: '4056', credit_account: '1930', vat_treatment: 'reverse_charge' })
+    for (const amount of [-1000, 1000]) {
+      const tx = makeTransaction({ amount, amount_sek: amount, currency: 'SEK', exchange_rate: 1 })
+      const preview = computeProposalLines({
+        amount, templateDebitAccount: '4056', templateCreditAccount: '1930',
+        templateVatTreatment: 'reverse_charge', counterpartyLegacy: true, chartVatTreatments: chart,
+      })
+      expect(preview.map((l) => l.account)).not.toContain('4535')
+      const engine = buildMappingResultFromCounterpartyTemplate({ template, matchMethod: 'exact_alias', confidence: 0.9 }, tx, 'aktiebolag')
+      expect(previewShape(preview)).toEqual(engineShape(tx, engine, chart))
+    }
+  })
+
+  it('a learned line pattern: the pair shrinks by the cost lines that report the basis themselves, as booked', () => {
+    const chart = chartOf({ '6540': 'reverse_charge_non_eu_services' })
+    const linePattern: LinePatternEntry[] = [
+      { account: '4531', type: 'business', side: 'debit', ratio: 0.5 },
+      { account: '4598', type: 'business', side: 'credit', ratio: 0.5 },
+      { account: '5420', type: 'business', side: 'debit', ratio: 0.25 },
+      { account: '6540', type: 'business', side: 'debit', ratio: 0.25 },
+    ]
+    const tx = makeTransaction({ amount: -1000, amount_sek: -1000, currency: 'SEK', exchange_rate: 1 })
+    const preview = computeProposalLines({
+      amount: -1000, linePattern, templateDebitAccount: '5420', templateCreditAccount: '1930', chartVatTreatments: chart,
+    })
+    expect(preview.find((l) => l.account === '4531')?.amount).toBe(500)
+    const template = makeCategorizationTemplate({ debit_account: '5420', credit_account: '1930', vat_treatment: null, line_pattern: linePattern })
+    const engine = buildMappingResultFromCounterpartyTemplate({ template, matchMethod: 'exact_alias', confidence: 0.9 }, tx, 'aktiebolag')
+    expect(previewShape(preview)).toEqual(engineShape(tx, engine, chart))
+  })
+
+  it('a learned line pattern with a cost line at 6 %: that share re-rated, the rest keeps the pair, as booked', () => {
+    const chart = chartOf({ '6540': ['reverse_charge_non_eu_services', 0.06] })
+    const linePattern: LinePatternEntry[] = [
+      { account: '4531', type: 'business', side: 'debit', ratio: 0.5 },
+      { account: '4598', type: 'business', side: 'credit', ratio: 0.5 },
+      { account: '5420', type: 'business', side: 'debit', ratio: 0.25 },
+      { account: '6540', type: 'business', side: 'debit', ratio: 0.25 },
+    ]
+    const tx = makeTransaction({ amount: -1000, amount_sek: -1000, currency: 'SEK', exchange_rate: 1 })
+    const preview = computeProposalLines({
+      amount: -1000, linePattern, templateDebitAccount: '5420', templateCreditAccount: '1930', chartVatTreatments: chart,
+    })
+    expect(preview.find((l) => l.account === '4531')?.amount).toBe(500)
+    expect(preview.find((l) => l.account === '2634')?.amount).toBe(30)
+    const template = makeCategorizationTemplate({ debit_account: '5420', credit_account: '1930', vat_treatment: null, line_pattern: linePattern })
+    const engine = buildMappingResultFromCounterpartyTemplate({ template, matchMethod: 'exact_alias', confidence: 0.9 }, tx, 'aktiebolag')
+    expect(previewShape(preview)).toEqual(engineShape(tx, engine, chart))
+  })
+
+  it('staticTemplateToFormLines hands the manual form no pair on a configured account', () => {
+    const lines = staticTemplateToFormLines(
+      getTemplateById('it_services_foreign')!, 2000, 'aktiebolag', chartOf({ '6540': 'reverse_charge_non_eu_services' }),
+    )
+    expect(lines.map((l) => l.account_number)).toEqual(['6540', '1930', '2645', '2614'])
+  })
+})
+
 describe('proposalLinesToFormLines', () => {
   const lines: ProposalLine[] = [
     { side: 'debet', account: '5420', amount: 98.76 },
@@ -741,7 +878,7 @@ describe('staticTemplateToFormLines', () => {
     roundOre(lines.reduce((acc, l) => acc + (parseFloat(l[side]) || 0), 0))
 
   it('books an expense template with its VAT out of the total, balanced', () => {
-    const lines = staticTemplateToFormLines(getTemplateById('travel_transport')!, 376, 'aktiebolag')
+    const lines = staticTemplateToFormLines(getTemplateById('travel_transport')!, 376, 'aktiebolag', chartOf())
     expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
       ['5810', '354.72', ''],
       ['2641', '21.28', ''],
@@ -751,20 +888,20 @@ describe('staticTemplateToFormLines', () => {
   })
 
   it('books an income template as money in', () => {
-    const lines = staticTemplateToFormLines(getTemplateById('revenue_standard_25')!, 1250, 'aktiebolag')
+    const lines = staticTemplateToFormLines(getTemplateById('revenue_standard_25')!, 1250, 'aktiebolag', chartOf())
     expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('1250.00')
     expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('1000.00')
     expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('250.00')
   })
 
   it('books a transfer template as its two legs, no VAT', () => {
-    expect(staticTemplateToFormLines(getTemplateById('financial_tax_account')!, 5000, 'aktiebolag')).toEqual([
+    expect(staticTemplateToFormLines(getTemplateById('financial_tax_account')!, 5000, 'aktiebolag', chartOf())).toEqual([
       { account_number: '1630', debit_amount: '5000.00', credit_amount: '', line_description: '' },
       { account_number: '1930', debit_amount: '', credit_amount: '5000.00', line_description: '' },
     ])
   })
 
   it('returns nothing for a non-positive total', () => {
-    expect(staticTemplateToFormLines(getTemplateById('travel_transport')!, 0)).toEqual([])
+    expect(staticTemplateToFormLines(getTemplateById('travel_transport')!, 0, undefined, chartOf())).toEqual([])
   })
 })

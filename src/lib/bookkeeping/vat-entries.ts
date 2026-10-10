@@ -1,5 +1,11 @@
 import type { CreateJournalEntryLineInput, VatTreatment } from '@/types'
-import { isAccountVatTreatment, resolveVatTreatmentRuta } from '@/lib/vat/account-vat-treatment'
+import {
+  defaultRateForVatTreatment,
+  isAccountVatTreatment,
+  resolveVatTreatmentRuta,
+} from '@/lib/vat/account-vat-treatment'
+import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
+import { roundOre } from '@/lib/money'
 
 /**
  * Generate VAT journal entry lines based on VAT treatment
@@ -262,29 +268,131 @@ export function reverseChargeKindForBasisAccount(account: string): { kind: Rever
 export const RC_BASIS_BOXES: ReadonlySet<string> = new Set(['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24'])
 
 /**
- * Whether a debit on `account` already reports the reverse-charge basis in
- * ruta 20-24 by itself, so a producer must not add the 44xx/45xx / 4598 pair
- * on top of it (the pair would count the purchase twice).
- *
- * With the account's chart row (`accountVatTreatment` is its
- * default_vat_treatment, null when unset) this is the declaration's own rule
- * (fetchDynamicVatAccounts + rutorFromTotals): a configured treatment decides,
- * so a class 4-6 account set to a reverse_charge_* purchase treatment reports
- * its own box whatever its number, and an unconfigured account reports only
- * when it is one of the static BAS basis accounts (RC_BASIS_ACCOUNTS).
- *
- * Without the row (`undefined`) the 44xx/45xx range stands in, as it always
- * has for the pure producers (mapping rules, booking templates): it covers the
- * static accounts and the company-numbered basis accounts (4518, 4534, 4538)
- * that carry a configured treatment in practice.
+ * An account's momskod and momssats in the company's kontoplan, as the
+ * momsdeklaration reads them: chart_of_accounts.default_vat_treatment and
+ * .default_vat_rate (fetchDynamicVatAccounts).
  */
-export function costAccountReportsRcBasis(account: string, accountVatTreatment?: string | null): boolean {
-  if (accountVatTreatment === undefined) return /^4[45]\d{2}$/.test(account)
-  if (isAccountVatTreatment(accountVatTreatment)) {
-    const mapping = resolveVatTreatmentRuta(accountVatTreatment, Number(account.charAt(0)), account)
-    return mapping !== null && RC_BASIS_BOXES.has(mapping.box)
+export interface ChartVatCode {
+  default_vat_treatment: string | null
+  default_vat_rate: number | null
+}
+
+/**
+ * The company's own momskoder and momssatser by account number, as the caller
+ * loaded them (fetchChartVatTreatments on the server, the reference-data
+ * accounts in the browser). An account the map does not hold has neither
+ * configured.
+ */
+export type ChartVatTreatments = ReadonlyMap<string, ChartVatCode>
+
+/** A ChartVatTreatments from chart rows (a query result, the reference-data accounts). */
+export function chartVatTreatmentsOf(
+  rows: ReadonlyArray<{
+    account_number: string
+    default_vat_treatment?: string | null
+    default_vat_rate?: number | string | null
+  }>,
+): ChartVatTreatments {
+  return new Map(rows.map((row) => {
+    // PostgREST can serialise the numeric column as a string.
+    const rate = row.default_vat_rate == null ? null : Number(row.default_vat_rate)
+    return [row.account_number, {
+      default_vat_treatment: row.default_vat_treatment ?? null,
+      default_vat_rate: rate !== null && Number.isFinite(rate) ? rate : null,
+    }]
+  }))
+}
+
+/** The momssatser the declaration buckets a reverse-charge basis at (ruta 30, 31, 32). */
+const RC_BASIS_RATES: readonly number[] = [0.25, 0.12, 0.06]
+
+/**
+ * The momssats at which a debit on `account` reports a reverse-charge
+ * purchase's basis in ruta 20-24 by itself, or null when it reports none, so a
+ * producer books the 44xx/45xx / 4598 pair beside it. A pair on top of an
+ * account that reports would count the purchase twice (crm#1096).
+ *
+ * This is the declaration's own rule, the one the filing gate buckets the
+ * basis by (fetchDynamicVatAccounts' rcBasisRateByAccount, the static rates of
+ * rcBasisTotalsByRate):
+ *  - a configured momskod decides: a class 4-6 account whose momskod is a
+ *    reverse-charge purchase reports its own box (resolveVatTreatmentRuta) at
+ *    its momssats, the configured one or else the momskod's default (25 %).
+ *    Only 25, 12 and 6 % count: the gate buckets a basis at no other sats,
+ *    so an account at 0 % gets the pair like any other account. Its box
+ *    still counts in the declaration, so that configuration double-counts
+ *    ruta 20-24 whatever is booked; it is a configuration error the gate
+ *    flags (RC_OUTPUT_MISSING), and the fix is to set the account's momssats;
+ *  - an unconfigured account reports only when it is one of the static BAS
+ *    basis accounts, at that account's sats (4536 is 12 %).
+ *
+ * `code` is the account's entry in the company's ChartVatTreatments
+ * (`chart.get(account)`, undefined when it has none). It is required on
+ * purpose: there is no answer without reading the chart. A 44xx/45xx stand-in
+ * used to answer for callers that had no row, and it gave every configured
+ * cost account outside that range (4056, 5420, 6540) a second basis pair.
+ */
+export function costAccountRcBasisRate(account: string, code: ChartVatCode | undefined): number | null {
+  const treatment = code?.default_vat_treatment ?? null
+  if (isAccountVatTreatment(treatment)) {
+    const accountClass = Number(account.charAt(0))
+    const mapping = resolveVatTreatmentRuta(treatment, accountClass, account)
+    if (!mapping || !RC_BASIS_BOXES.has(mapping.box)) return null
+    const rate = code?.default_vat_rate ?? defaultRateForVatTreatment(treatment, accountClass)
+    return rate !== null && RC_BASIS_RATES.includes(rate) ? rate : null
   }
-  return isReverseChargeBasisAccount(account)
+  return rcBasisAccountRate(account)
+}
+
+/**
+ * How a reverse-charge purchase booked on `account` is self-assessed, by
+ * costAccountRcBasisRate. On an account that reports ruta 20-24 itself: at
+ * that account's momssats and without a basis pair, since the account carries
+ * the basis and the per-rate identity the filing gate checks needs the fiktiv
+ * moms at the sats the basis is bucketed at (the manual verifikat's fixed
+ * momskod, vatCodeRuleForAccount, does the same). On any other account: at
+ * the purchase's own rate, with the pair.
+ */
+export function reverseChargeOnAccount(
+  account: string,
+  purchaseRate: number,
+  chart: ChartVatTreatments,
+): { rate: number; basisPair: boolean } {
+  const own = costAccountRcBasisRate(account, chart.get(account))
+  return own === null ? { rate: purchaseRate, basisPair: true } : { rate: own, basisPair: false }
+}
+
+/**
+ * A reverse-charge purchase settled against the cost lines it is booked on
+ * (crm#1096), as the purchases generateReverseChargePurchaseLines books. Each
+ * cost line is assessed by reverseChargeOnAccount: a line on an account that
+ * reports ruta 20-24 itself takes its share out of the basis pair and is
+ * self-assessed at that account's momssats; the rest stays at the purchase's
+ * rate with the pair. With no such line it is the purchase itself, pair whole.
+ */
+export function reverseChargePurchasesOn(
+  purchase: { base: number; rate: number; kind: ReverseChargeKind },
+  costLines: ReadonlyArray<{ account: string; amount: number }>,
+  chart: ChartVatTreatments,
+): ReverseChargePurchase[] {
+  let reported = 0
+  const reRated = new Map<number, number>()
+  for (const line of costLines) {
+    const { rate, basisPair } = reverseChargeOnAccount(line.account, purchase.rate, chart)
+    if (basisPair) continue
+    reported = roundOre(reported + line.amount)
+    if (rate !== purchase.rate) reRated.set(rate, roundOre((reRated.get(rate) ?? 0) + line.amount))
+  }
+  const reRatedBase = roundOre([...reRated.values()].reduce((sum, base) => sum + base, 0))
+  const ownRateBase = reRatedBase === 0 ? purchase.base : Math.max(0, roundOre(purchase.base - reRatedBase))
+  const purchases: ReverseChargePurchase[] = []
+  if (ownRateBase > 0) {
+    purchases.push({ ...purchase, base: ownRateBase, basisBase: Math.max(0, roundOre(purchase.base - reported)) })
+  }
+  for (const [rate, base] of reRated) {
+    if (base > 0) purchases.push({ base, rate, kind: purchase.kind, basisBase: 0 })
+  }
+  return purchases
 }
 
 /** One reverse-charge purchase (or one rate group of one). */
@@ -297,7 +405,7 @@ export interface ReverseChargePurchase {
   /**
    * The part of `base` that still needs the basis pair. Defaults to all of
    * it. Pass 0, or the share booked elsewhere, when the cost line already sits
-   * on an account that reports ruta 20-24 itself (costAccountReportsRcBasis).
+   * on an account that reports ruta 20-24 itself (reverseChargeOnAccount).
    */
   basisBase?: number
 }

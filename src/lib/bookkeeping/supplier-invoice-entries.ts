@@ -6,10 +6,12 @@ import { buildSupplierDescription, supplierInvoiceReference } from './supplier-i
 import {
   generateReverseChargePurchaseLines,
   generateReverseChargeBasisLines,
-  isReverseChargeBasisAccount,
   resolveReverseChargeRate,
   reverseChargeKindForSupplierType,
+  reverseChargeOnAccount,
+  type ChartVatTreatments,
 } from './vat-entries'
+import { fetchChartVatTreatments } from './chart-vat-treatments'
 import { generateSlpLines, isSlpPensionAccount } from './slp-lines'
 import { treatmentDeductsInputVat } from '@/lib/vat/supplier-invoice-line-checks'
 import {
@@ -180,8 +182,9 @@ export async function createSupplierInvoiceRegistrationEntry(
 
 /**
  * The registration verifikat createSupplierInvoiceRegistrationEntry would
- * post, without posting it: the fiscal period lookup is the only database
- * read, and nothing is written. The deferred "Bokför" dry run previews these
+ * post, without posting it: the fiscal period lookup (and, for a
+ * reverse-charge invoice, the company's momskoder) are the only database
+ * reads, and nothing is written. The deferred "Bokför" dry run previews these
  * lines. Returns null when no open fiscal period covers invoice_date. Throws
  * the same generator errors (SupplierInvoiceFxRateMissingError) the
  * committing path throws.
@@ -244,28 +247,33 @@ export async function buildSupplierInvoiceRegistrationEntryInput(
     // but ruta 20-24 stay at 0, which Skatteverket rejects with felkod
     // FK004 ("silent netting prohibited"; ML 13 kap kräver båda sidor).
     //
-    // The basis-account check is done per (rate, account) bucket: if the user
-    // booked an item directly to a 44xx/45xx basis account at a given rate,
-    // that item's belopp already populates ruta 20-24 via the expense line:
-    // we only emit basbeloppsrader for the portion of that rate's base that
-    // went to NON-basis accounts. Mixed invoices (4535 + 6540 at 25%) used to
-    // skip basis lines entirely under a per-invoice flag, leaving ruta 30
-    // larger than ruta 21 by the 6540 portion, the exact FK004 pattern.
+    // The basis-account check is done per item, on the account its net is
+    // booked on (groupReverseChargeByRate): an item on an account that reports
+    // ruta 20-24 itself (a 44xx/45xx basis account, or one whose momskod in
+    // the kontoplan is a reverse-charge purchase) already populates ruta 20-24
+    // via the expense line, so it takes no basbeloppsrader and is
+    // self-assessed at that account's momssats; only the rest of a rate's base
+    // gets them. Mixed invoices (4535 + 6540 at 25%) used to skip basis lines
+    // entirely under a per-invoice flag, leaving ruta 30 larger than ruta 21
+    // by the 6540 portion, the exact FK004 pattern.
     //
     // Drive iteration off the basis (line_total per rate), not stored
     // vat_amount: fiktiv moms is always statutory base × rate. This keeps
     // RC immune to per-line manual VAT overrides (which only make sense for
     // domestic deductible-VAT adjustments).
-    const baseByRate = groupBaseByRate(items, invoice.currency, invoice.exchange_rate)
-    const nonBasisBaseByRate = groupNonBasisBaseByRate(items, invoice.currency, invoice.exchange_rate)
+    const chart = await fetchChartVatTreatments(supabase, companyId)
+    const rcByRate = groupReverseChargeByRate(
+      items, chart, (item) => resolveBookingAccount('expense', item, item.account_number),
+      invoice.currency, invoice.exchange_rate,
+    )
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
-    for (const [rate, baseAmount] of baseByRate) {
-      if (rate > 0 && baseAmount > 0) {
+    for (const [rate, { base, basisBase }] of rcByRate) {
+      if (rate > 0 && base > 0) {
         const rcLines = generateReverseChargePurchaseLines({
-          base: baseAmount,
+          base,
           rate,
           kind: reverseChargeKindForSupplierType(rcSupplierType),
-          basisBase: nonBasisBaseByRate.get(rate) || 0,
+          basisBase,
         })
         lines.push(...rcLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
       }
@@ -533,6 +541,13 @@ export interface SupplierInvoiceCashLinesOptions {
   settledBankSek?: number
   /** Bank fee on top of the invoice (splitSupplierBankFee), booked on 6570. */
   bankFeeSek?: number
+  /**
+   * The company's momskoder (fetchChartVatTreatments), required for a
+   * reverse-charge invoice (the builder throws without them): an item on an
+   * account that reports ruta 20-24 itself gets no basis pair and is
+   * self-assessed at that account's momssats. Unread otherwise.
+   */
+  chartVatTreatments?: ChartVatTreatments
 }
 
 export interface SupplierInvoiceCashLinesResult {
@@ -563,7 +578,7 @@ export function buildSupplierInvoiceCashLines(
   supplierType: string,
   options: SupplierInvoiceCashLinesOptions = {},
 ): SupplierInvoiceCashLinesResult {
-  const { supplierName, paymentAccount, settledBankSek, bankFeeSek } = options
+  const { supplierName, paymentAccount, settledBankSek, bankFeeSek, chartVatTreatments } = options
   const creditAccount = paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
 
   // Under kontantmetoden the booked affärshändelse IS the payment (BFL 5 kap:
@@ -634,16 +649,23 @@ export function buildSupplierInvoiceCashLines(
     // always statutory base × rate; manual vat_amount overrides don't apply.
     // effectiveRate (payment-date rate under kontantmetoden) keeps the fiktiv
     // moms base consistent with the expense lines above.
-    const baseByRate = groupBaseByRate(items, invoice.currency, effectiveRate)
-    const nonBasisBaseByRate = groupNonBasisBaseByRate(items, invoice.currency, effectiveRate)
+    // No answer without the chart (costAccountRcBasisRate): read as "no
+    // momskod", it would put a basis pair beside an account that reports
+    // ruta 20-24 itself (crm#1096).
+    if (!chartVatTreatments) {
+      throw new Error('buildSupplierInvoiceCashLines: a reverse-charge invoice needs the company momskoder (fetchChartVatTreatments)')
+    }
+    const rcByRate = groupReverseChargeByRate(
+      items, chartVatTreatments, (item) => item.account_number, invoice.currency, effectiveRate,
+    )
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
-    for (const [rate, baseAmount] of baseByRate) {
-      if (rate > 0 && baseAmount > 0) {
+    for (const [rate, { base, basisBase }] of rcByRate) {
+      if (rate > 0 && base > 0) {
         const rcLines = generateReverseChargePurchaseLines({
-          base: baseAmount,
+          base,
           rate,
           kind: reverseChargeKindForSupplierType(rcSupplierType),
-          basisBase: nonBasisBaseByRate.get(rate) || 0,
+          basisBase,
         })
         lines.push(...rcLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
       }
@@ -772,6 +794,7 @@ export async function createSupplierInvoiceCashEntry(
     paymentAccount,
     settledBankSek,
     bankFeeSek,
+    chartVatTreatments: invoice.reverse_charge ? await fetchChartVatTreatments(supabase, companyId) : undefined,
   })
 
   const input: CreateJournalEntryInput = {
@@ -979,14 +1002,19 @@ export async function createSupplierCreditNoteEntry(
     // Input VAT account: 2647 for domestic RC, 2645 for EU/non-EU
     // Drive iteration off the basis: fiktiv moms is always statutory base × rate.
     const inputAccount = isDomesticRC ? '2647' : '2645'
-    const baseByRate = groupBaseByRate(items, creditNote.currency, creditNote.exchange_rate, true)
-    const nonBasisBaseByRate = groupNonBasisBaseByRate(items, creditNote.currency, creditNote.exchange_rate, true)
+    // Grouped as the registration grouped them, on the same booked accounts.
+    const chart = await fetchChartVatTreatments(supabase, companyId)
+    const rcByRate = groupReverseChargeByRate(
+      items, chart, (item) => resolveBookingAccount('expense', item, item.account_number),
+      creditNote.currency, creditNote.exchange_rate, true,
+    )
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
     // Only reverse basbeloppsraderna for the portion the registration would
-    // have emitted them, namely the non-basis-account base per rate. Items
-    // booked directly to 44xx/45xx had no parallel basis lines in registration
-    // and so are reversed only via the expense credit line above.
-    for (const [rate, baseAmount] of baseByRate) {
+    // have emitted them, namely the base per rate on accounts that do not
+    // report ruta 20-24 themselves. Items on an account that does (44xx/45xx,
+    // or a reverse-charge momskod) had no parallel basis lines in
+    // registration and so are reversed only via the expense credit line above.
+    for (const [rate, { base: baseAmount, basisBase: nonBasisBase }] of rcByRate) {
       if (rate > 0 && baseAmount > 0) {
         const fiktivVat = Math.round(baseAmount * rate * 100) / 100
         // Determine the output account for this rate
@@ -1010,7 +1038,6 @@ export async function createSupplierCreditNoteEntry(
           line_description: `Omvänd fiktiv utgående moms ${Math.round(rate * 100)}% ${desc}`,
           dimensions: defaultDimensions,
         })
-        const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
         if (nonBasisBase > 0) {
           // Reverse the basbeloppsrader (44xx/45xx debit & 4598 credit on the
           // registration entry become credits & debits here). Without this the
@@ -1111,8 +1138,8 @@ export async function createSupplierCreditNoteEntry(
  * the column DEFAULT of 0. Silently dropping input VAT to 2641 would
  * understate ruta 48 in the momsdeklaration.
  *
- * Reverse-charge fiktiv moms doesn't use this: see groupBaseByRate, which
- * derives the basis directly so fiktiv VAT is always base × statutory rate.
+ * Reverse-charge fiktiv moms doesn't use this: see groupReverseChargeByRate,
+ * which derives the basis directly so fiktiv VAT is always base × statutory rate.
  */
 /**
  * True if any item would produce a non-zero ingående moms line: mirrors the
@@ -1169,31 +1196,46 @@ function groupVatByRate(
 }
 
 /**
- * Group items by their self-assessed reverse-charge rate and sum the base
- * (line_total) per rate. Used by reverse-charge paths to compute fiktiv moms
- * from the basis, decoupled from any manual VAT override on the items.
+ * Group items by their self-assessed reverse-charge rate and sum, per rate,
+ * the base (line_total in SEK) and the part of it that needs the basis pair.
+ * Used by reverse-charge paths to compute fiktiv moms from the basis,
+ * decoupled from any manual VAT override on the items.
  *
- * The grouping key is the *self-assessed* rate (resolveReverseChargeRate), not
- * the line's vat_rate: under omvänd skattskyldighet the supplier charges 0%, so
- * the line vat_rate is 0, but the buyer self-assesses at 25% (huvudregeln) or
- * the explicit per-item reverse_charge_rate. Without this a 0%-rate RC line
- * would key on rate 0 and the `rate > 0` guard below would skip its VAT lines.
+ * Each item is assessed on the account its net is booked on (`bookedAccount`:
+ * a periodiserad line sits on its 17xx interim account, which reports
+ * nothing) by reverseChargeOnAccount with the company's momskoder (crm#1096).
+ * An item on an account that reports ruta 20-24 itself (a 44xx/45xx basis
+ * account, or a class 4-6 account whose momskod in the kontoplan is a
+ * reverse-charge purchase) populates ruta 20-24 directly via the expense
+ * line, so it takes no basis pair (that would count it twice) and is
+ * self-assessed at that account's momssats, where the declaration buckets its
+ * basis. Any other item keys on its *self-assessed* rate
+ * (resolveReverseChargeRate), not the line's vat_rate: under omvänd
+ * skattskyldighet the supplier charges 0%, so the line vat_rate is 0, but the
+ * buyer self-assesses at 25% (huvudregeln) or the explicit per-item
+ * reverse_charge_rate. Without this a 0%-rate RC line would key on rate 0 and
+ * the `rate > 0` guard of the callers would skip its VAT lines.
  */
-function groupBaseByRate(
+function groupReverseChargeByRate(
   items: SupplierInvoiceItem[],
+  chart: ChartVatTreatments,
+  bookedAccount: (item: SupplierInvoiceItem) => string,
   currency: string,
   exchangeRate: number | null,
   useAbsoluteValues = false
-): Map<number, number> {
-  const baseByRate = new Map<number, number>()
+): Map<number, { base: number; basisBase: number }> {
+  const byRate = new Map<number, { base: number; basisBase: number }>()
   for (const item of items) {
     if (isSupplierInvoiceRoundingItem(item, item.line_total, currency)) continue
-    const rate = resolveReverseChargeRate(item)
+    const { rate, basisPair } = reverseChargeOnAccount(bookedAccount(item), resolveReverseChargeRate(item), chart)
     let baseSek = toSekOrThrow(item.line_total, currency, exchangeRate)
     if (useAbsoluteValues) baseSek = Math.abs(baseSek)
-    baseByRate.set(rate, (baseByRate.get(rate) || 0) + baseSek)
+    const group = byRate.get(rate) ?? { base: 0, basisBase: 0 }
+    group.base += baseSek
+    if (basisPair) group.basisBase += baseSek
+    byRate.set(rate, group)
   }
-  return baseByRate
+  return byRate
 }
 
 /**
@@ -1218,28 +1260,4 @@ function slpBaseSek(
     base += sek
   }
   return base
-}
-
-/**
- * Sum, per VAT rate, the base (line_total in SEK) of items booked to
- * non-basis expense accounts. Items already booked to a 44xx/45xx basis
- * account populate ruta 20-24 directly via the expense line, so they must be
- * excluded here to avoid double-counting in basbeloppsraderna.
- */
-function groupNonBasisBaseByRate(
-  items: SupplierInvoiceItem[],
-  currency: string,
-  exchangeRate: number | null,
-  useAbsoluteValues = false
-): Map<number, number> {
-  const baseByRate = new Map<number, number>()
-  for (const item of items) {
-    if (isSupplierInvoiceRoundingItem(item, item.line_total, currency)) continue
-    if (isReverseChargeBasisAccount(item.account_number)) continue
-    const rate = resolveReverseChargeRate(item)
-    let itemSek = toSekOrThrow(item.line_total, currency, exchangeRate)
-    if (useAbsoluteValues) itemSek = Math.abs(itemSek)
-    baseByRate.set(rate, (baseByRate.get(rate) || 0) + itemSek)
-  }
-  return baseByRate
 }

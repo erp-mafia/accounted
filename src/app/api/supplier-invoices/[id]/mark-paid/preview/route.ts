@@ -22,6 +22,7 @@ import {
   DEFAULT_SUPPLIER_PAYMENT_ACCOUNT,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
+import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { ensureInitialized } from '@/lib/init'
@@ -152,6 +153,8 @@ export const GET = withRouteContext(
             supplierName: si.supplier?.name ?? undefined,
             paymentAccount: creditAccount,
             settledBankSek: amount_sek,
+            // As createSupplierInvoiceCashEntry reads them for the POST.
+            chartVatTreatments: si.reverse_charge ? await fetchChartVatTreatments(supabase, companyId!) : undefined,
           },
         )
         lines.push(...built.lines.map(toPreviewLine))

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { activateBasAccounts, pickNeedsActivation } from '@/lib/bookkeeping/bas-catalog-client'
@@ -20,6 +20,7 @@ import { needsUnderlagPrompt, templateVatMismatch, vatDisagrees, vatTreatmentAft
 import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-documents'
 import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, Inbox } from 'lucide-react'
 import { computeProposalLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
+import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
 import type { ProposalLine, ProposalLinesInput } from '@/lib/bookkeeping/proposal-lines'
 import { accountProposal, businessAccount, previewInputFor, templateBehind, withAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { useProposalWhy } from './proposal-why'
@@ -124,6 +125,11 @@ export default function QuickReviewDialog({
   // same; handleConfirm activates the one the person picks here, and no
   // other (pickedToActivate below).
   const { catalog: basCatalog, chart: wholeChart } = useBasCatalog({ includeDeactivated: true })
+  // The company's momskoder over the whole kontoplan, deactivated accounts
+  // included since a pick activates one: a reverse-charge proposal on an
+  // account that reports ruta 20-24 itself previews, and hands "Ändra rader",
+  // the set as it is booked.
+  const chartVatTreatments = useMemo(() => chartVatTreatmentsOf(wholeChart ?? accounts), [wholeChart, accounts])
   const { settings: companySettings } = useCompanySettings()
   // The AI proposal shown this session, kept so we can log a calibration sample
   // (proposed vs actually booked) once the user confirms.
@@ -444,7 +450,10 @@ export default function QuickReviewDialog({
   // "Andra rader", computed into editable prefill lines. One function for
   // every kind of booking (lib/bookkeeping/proposal.ts) mirrors the engine
   // path that posts it, so the person edits exactly the lines they were shown.
-  const baseProposalInput: ProposalLinesInput = previewInputFor(proposal, { amount: tx.amount, amountSek: sekAmount, entityType })
+  const baseProposalInput: ProposalLinesInput = {
+    ...previewInputFor(proposal, { amount: tx.amount, amountSek: sekAmount, entityType }),
+    chartVatTreatments,
+  }
 
   // The document's moms against the proposal's. The VAT leg of the lines the
   // preview shows (ingående 264x on a purchase, utgående 261x-263x on a sale)
@@ -497,7 +506,7 @@ export default function QuickReviewDialog({
   // the change is seen, not inferred.
   const changedAccounts = previous
     ? (() => {
-        const before = new Set(computeProposalLines(previewInputFor(previous, { amount: tx.amount, amountSek: sekAmount, entityType })).map((l) => l.account))
+        const before = new Set(computeProposalLines({ ...previewInputFor(previous, { amount: tx.amount, amountSek: sekAmount, entityType }), chartVatTreatments }).map((l) => l.account))
         return computeProposalLines(proposalInput).map((l) => l.account).filter((a) => !before.has(a))
       })()
     : []

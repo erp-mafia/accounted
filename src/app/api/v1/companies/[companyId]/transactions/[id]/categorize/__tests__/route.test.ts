@@ -578,9 +578,10 @@ describe('VAT registration (lib/bookkeeping/vat-registration.ts)', () => {
 
 describe('reverse-charge basis pair (#2919)', () => {
   // The real category builder runs: a reverse-charge purchase posts the
-  // 45xx/4598 basis pair next to the fiktiv moms, and an account_override onto
-  // an account that reports ruta 20-24 itself drops that pair again.
-  function rcSupabase(chartRow?: Record<string, unknown>) {
+  // 45xx/4598 basis pair next to the fiktiv moms, and the route drops it again
+  // when the account the cost line lands on (after any account_override)
+  // reports ruta 20-24 itself, by the company's momskoder (crm#1096).
+  function rcSupabase(chartRow?: Record<string, unknown>, momskoder: Array<Record<string, unknown>> = []) {
     return makeFlexibleSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
@@ -601,24 +602,37 @@ describe('reverse-charge basis pair (#2919)', () => {
       ],
       company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
       fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-      ...(chartRow ? { chart_of_accounts: { data: chartRow, error: null } } : {}),
+      // The override row first (when there is one), then the momskoder
+      // reconcileRcBasisWithChart reads.
+      chart_of_accounts: chartRow
+        ? [{ data: chartRow, error: null }, { data: momskoder, error: null }]
+        : { data: momskoder, error: null },
     })
   }
 
   it.each([
-    { account_override: undefined, chartRow: undefined, expected: ['2645', '2614', '4535', '4598'] },
+    { account_override: undefined, chartRow: undefined, momskoder: [], expected: ['2645', '2614', '4535', '4598'] },
     {
       account_override: '4531',
-      chartRow: { account_number: '4531', account_class: 4, is_active: true, default_vat_treatment: null },
+      chartRow: { account_number: '4531', account_class: 4, is_active: true },
+      momskoder: [],
       expected: ['2645', '2614'],
     },
     {
       account_override: '6541',
-      chartRow: { account_number: '6541', account_class: 6, is_active: true, default_vat_treatment: 'reverse_charge_eu_services' },
+      chartRow: { account_number: '6541', account_class: 6, is_active: true },
+      momskoder: [{ account_number: '6541', default_vat_treatment: 'reverse_charge_eu_services' }],
       expected: ['2645', '2614'],
     },
-  ])('posts $expected with account_override $account_override', async ({ account_override, chartRow, expected }) => {
-    const { supabase } = rcSupabase(chartRow)
+    {
+      // crm#1096: no override, but the category's own 5420 has a reverse-charge momskod.
+      account_override: undefined,
+      chartRow: undefined,
+      momskoder: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }],
+      expected: ['2645', '2614'],
+    },
+  ])('posts $expected with account_override $account_override', async ({ account_override, chartRow, momskoder, expected }) => {
+    const { supabase } = rcSupabase(chartRow, momskoder)
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(

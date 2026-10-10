@@ -15,6 +15,8 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   findFiscalPeriod: vi.fn().mockResolvedValue('period-1'),
   createJournalEntry: vi.fn(async (_db, _company, _user, input: CreateJournalEntryInput) => ({ id: 'entry-1', ...input })),
 }))
+// No momskoder configured: the reverse-charge registration reads them (crm#1096).
+vi.mock('@/lib/bookkeeping/chart-vat-treatments', () => ({ fetchChartVatTreatments: vi.fn(async () => new Map()) }))
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }))
 vi.mock('@/components/ui/account-number', () => ({ AccountNumber: ({ number }: { number: string }) => number }))
 
@@ -72,6 +74,7 @@ it.each([false, true])('renders a rounding credit and the actual 2440 total (exp
     supplier: makeSupplier(), invoiceNumber: form.supplier_invoice_number,
     invoiceDate: form.invoice_date, dueDate: form.due_date,
     currency: 'SEK', reverseCharge: false, items, oreRounding: true, bookingMoment: 'issue',
+    chartVatTreatments: new Map(),
   }))
   const body = [...html.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].at(-1)![1]
   const cellsFor = (account: string) => {
@@ -121,6 +124,7 @@ it.each([
     supplier: makeSupplier({ supplier_type: 'swedish_business' }), invoiceNumber: form.supplier_invoice_number,
     invoiceDate: form.invoice_date, dueDate: form.due_date, exchangeRate: data.exchange_rate,
     currency, reverseCharge: true, items: data.items, oreRounding: false, bookingMoment: 'issue',
+    chartVatTreatments: new Map(),
   }))
   const body = [...html.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].at(-1)![1]
   const vatRow = [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].find(row => row[1].includes('2647'))![1]

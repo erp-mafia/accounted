@@ -142,10 +142,20 @@ describe('buildSupplierInvoiceCashLines: öresavrundning without a bank row (mar
       subtotal: 1000.4, vat_amount: 0, total: 1000.4, remaining_amount: 1000.4,
       reverse_charge: true, vat_treatment: 'reverse_charge', ore_rounding: true,
     })
-    const built = buildSupplierInvoiceCashLines(invoice, items, 'swedish_business')
+    // No momskoder configured: the reverse-charge lines need them (crm#1096).
+    const built = buildSupplierInvoiceCashLines(invoice, items, 'swedish_business', { chartVatTreatments: new Map() })
     expect(find(built.lines, '1930')[0].credit_amount).toBe(1000)
     expect(find(built.lines, '3740')[0].credit_amount).toBe(0.4)
     expect(balance(built.lines)).toBe(0)
+  })
+
+  it('refuses a reverse-charge invoice without the company momskoder instead of guessing (crm#1096)', () => {
+    const items = [item({ line_total: 1000, unit_price: 1000, vat_rate: 0, reverse_charge_rate: 0.25 })]
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 0, total: 1000, remaining_amount: 1000,
+      reverse_charge: true, vat_treatment: 'reverse_charge',
+    })
+    expect(() => buildSupplierInvoiceCashLines(invoice, items, 'eu_business')).toThrow(/momskoder/)
   })
 
   it('stamps the invoice default dimensions on the 3740 leg like every other leg', () => {

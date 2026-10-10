@@ -2135,7 +2135,9 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
   // #2919: the category path now adds the 45xx/4598 basis pair for a
   // reverse-charge purchase. An account_override onto a basis account (the
-  // cost line reports ruta 22 itself) must drop it, or ruta 22 doubles.
+  // cost line reports ruta 22 itself) must drop it, or ruta 22 doubles. The
+  // route settles it on the final account with the company's momskoder
+  // (crm#1096), read once the mapping carries a pair.
   it.each([
     ['4531', null, ['2645', '2614']],
     ['6540', null, ['2645', '2614', '4535', '4598']],
@@ -2157,7 +2159,9 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    enqueue({ data: { account_number: account, account_class: Number(account[0]), default_vat_treatment: treatment }, error: null })
+    enqueue({ data: { account_number: account, account_class: Number(account[0]) }, error: null })
+    // reconcileRcBasisWithChart: the company's momskoder on class 4-6 accounts
+    enqueue({ data: treatment ? [{ account_number: account, default_vat_treatment: treatment }] : [], error: null })
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
     mockSaveUserMappingRule.mockResolvedValue(undefined)
@@ -2178,5 +2182,43 @@ describe('POST /api/transactions/[id]/categorize', () => {
     }
     expect(mapping.debit_account).toBe(account)
     expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(expected)
+  })
+
+  it('posts no basis pair when the category account itself has a reverse-charge momskod (crm#1096)', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -250, merchant_name: 'Google Play', journal_entry_id: null })
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2645', debit_amount: 62.5, credit_amount: 0, description: '' },
+        { account_number: '2614', debit_amount: 0, credit_amount: 62.5, description: '' },
+        { account_number: '4535', debit_amount: 250, credit_amount: 0, description: '' },
+        { account_number: '4598', debit_amount: 0, credit_amount: 250, description: '' },
+      ],
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    // reconcileRcBasisWithChart: 5420 reports ruta 21 itself
+    enqueue({ data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+    expect(status, JSON.stringify(body)).toBe(200)
+    const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
+    expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+    expect(findCalls('chart_of_accounts', 'not')).toEqual([['default_vat_treatment', 'is', null]])
   })
 })

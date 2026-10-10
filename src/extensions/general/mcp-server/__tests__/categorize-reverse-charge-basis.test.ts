@@ -9,7 +9,8 @@
  *     kind rides along in the staged params for the commit executor;
  *   - plain reverse_charge keeps working and books the EU-services default,
  *     which the preview states;
- *   - an override onto a basis account gets no second basis pair.
+ *   - an override onto a basis account gets no second basis pair;
+ *   - nor does a cost account whose momskod reports ruta 20-24 (crm#1096).
  * Companion suites: lib/bookkeeping/__tests__/category-mapping.test.ts (the
  * mapping), account-override.test.ts (override reconciliation) and
  * lib/pending-operations/__tests__ (commit threading).
@@ -61,12 +62,18 @@ const settingsRow = { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }
 type Line = { account_number: string; debit_amount: number; credit_amount: number }
 type Staged = { staged: boolean; preview: Record<string, unknown> }
 
-async function stage(args: Record<string, unknown>, overrideRow?: Record<string, unknown>) {
+async function stage(
+  args: Record<string, unknown>,
+  overrideRow?: Record<string, unknown>,
+  momskoder: Array<Record<string, unknown>> = [],
+) {
   const { supabase, enqueue, findCall } = createQueuedMockSupabase()
   enqueue({ data: coreTxRow }) // core: transactions
   enqueue({ data: settingsRow }) // core: company_settings
   enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
   if (overrideRow) enqueue({ data: overrideRow }) // applyAccountOverride: chart row
+  // reconcileRcBasisWithChart reads the momskoder once the mapping carries a basis pair.
+  if (String(args.vat_treatment ?? '').startsWith('reverse_charge')) enqueue({ data: momskoder })
   enqueue({ data: guardTxRow }) // tool: transactions re-fetch
   enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
   enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
@@ -155,7 +162,7 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
   it('adds no second basis pair when account_override is itself a basis account', async () => {
     const { lines, result } = await stage(
       { vat_treatment: 'reverse_charge_non_eu_services', account_override: '4531' },
-      { account_number: '4531', account_class: 4, is_active: true, default_vat_treatment: null },
+      { account_number: '4531', account_class: 4, is_active: true },
     )
     expect(lines.map((l) => l.account_number).sort()).toEqual(['1930', '2614', '2645', '4531'])
     expect(lines.find((l) => l.account_number === '4531')?.debit_amount).toBe(250)
@@ -163,10 +170,26 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
     expect(result.preview.reverse_charge).toMatchObject({ basis_account: null, ruta: null })
   })
 
+  it('stages no basis pair on a cost account whose momskod reports ruta 20-24 itself (crm#1096)', async () => {
+    const { lines, result } = await stage(
+      { vat_treatment: 'reverse_charge' },
+      undefined,
+      [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }],
+    )
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount]).sort()).toEqual([
+      ['1930', 0, 250],
+      ['2614', 0, 62.5],
+      ['2645', 62.5, 0],
+      ['5420', 250, 0],
+    ])
+    expect(balanced(lines)).toBe(true)
+    expect(result.preview.reverse_charge).toMatchObject({ basis_account: null, ruta: null })
+  })
+
   it('keeps the basis pair on the issue override account (6540)', async () => {
     const { lines } = await stage(
       { vat_treatment: 'reverse_charge', account_override: '6540' },
-      { account_number: '6540', account_class: 6, is_active: true, default_vat_treatment: null },
+      { account_number: '6540', account_class: 6, is_active: true },
     )
     expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual(expect.arrayContaining([
       ['6540', 250, 0],

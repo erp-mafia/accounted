@@ -2,7 +2,8 @@ import type Stripe from 'stripe'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getStripe } from '@/lib/stripe/client'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { generateReverseChargePurchaseLines } from '@/lib/bookkeeping/vat-entries'
+import { generateReverseChargePurchaseLines, reverseChargeOnAccount } from '@/lib/bookkeeping/vat-entries'
+import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { createLogger, type Logger } from '@/lib/logger'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
 import { connectedAccountOptions } from './connect'
@@ -183,6 +184,22 @@ async function evaluateAndBook(
   }
 
   const round = (n: number) => Math.round(n * 100) / 100
+  // The company's momskod on 6570 decides the fees' reverse-charge set
+  // (crm#1096). A failed read sends the payout to review: thrown, it would
+  // leave the claimed row in 'processing' for good.
+  let feeAssessment: { rate: number; basisPair: boolean } = { rate: 0.25, basisPair: true }
+  if (fees > 0) {
+    try {
+      feeAssessment = reverseChargeOnAccount('6570', 0.25, await fetchChartVatTreatments(supabase, connection.company_id))
+    } catch (err) {
+      log.warn('momskod lookup failed for stripe payout fees', {
+        connectionId: connection.id,
+        payoutId: payout.id,
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return { status: 'needs_review', reason: 'momskod_lookup_failed', gross, fees }
+    }
+  }
   const lines: CreateJournalEntryLineInput[] = [
     {
       account_number: '1930',
@@ -200,8 +217,14 @@ async function evaluateAndBook(
     })
     // Fiktiv moms (2645 / 2614) + ruta 21 basis pair (4535 / 4598): the
     // same generator as the supplier reverse-charge flow, so the VAT report
-    // picks the fees up identically.
-    lines.push(...generateReverseChargePurchaseLines({ base: round(fees), rate: 0.25, kind: 'eu_services' }))
+    // picks the fees up identically. No pair, and 6570's own momssats, when
+    // the company's momskod on 6570 already puts the fees in ruta 20-24.
+    lines.push(...generateReverseChargePurchaseLines({
+      base: round(fees),
+      rate: feeAssessment.rate,
+      kind: 'eu_services',
+      basisBase: feeAssessment.basisPair ? round(fees) : 0,
+    }))
   }
   lines.push({
     account_number: '1686',

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
+import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { getBestInvoiceMatch } from '@/lib/invoices/invoice-matching'
@@ -692,6 +693,9 @@ export async function ingestTransactions(
   const matchedInvoiceIds = new Set<string>()
   const matchedSupplierInvoiceIds = new Set<string>()
   const matchedRotRutRequestIds = new Set<string>()
+  // The company's momskoder for auto-categorized reverse-charge rows: read
+  // once for the whole ingestion, and only if such a row is booked.
+  const loadChart = chartVatTreatmentsLoader(supabase, companyId)
 
   for (const raw of rawTransactions) {
     // Normalize the source title once. Guarantees a non-empty, Swedish-first
@@ -1294,7 +1298,9 @@ export async function ingestTransactions(
           companyId,
           newTransaction as Transaction,
           await resolveCompanyEntityType(supabase, companyId),
-          options?.settlementAccount
+          options?.settlementAccount,
+          undefined,
+          loadChart,
         )
 
         if (mappingResult.confidence >= 0.8 && !mappingResult.requires_review) {

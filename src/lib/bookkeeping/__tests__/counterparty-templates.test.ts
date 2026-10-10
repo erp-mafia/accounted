@@ -20,6 +20,8 @@ import {
   patternReplayPlan,
 } from '../counterparty-templates'
 import { buildTransactionEntryLines } from '../transaction-entries'
+import { reconcileRcBasisWithCostLines } from '../rc-basis-reconcile'
+import { chartVatTreatmentsOf, type ChartVatTreatments } from '../vat-entries'
 import { buildMappingResultFromCategory } from '../category-mapping'
 import { buildMappingResultFromTemplate, findMatchingTemplates, getTemplateById } from '../booking-templates'
 import { roundOre } from '@/lib/money'
@@ -27,6 +29,15 @@ import type { TemplateUpsertParams } from '../counterparty-templates'
 import type { LinePatternEntry } from '@/types'
 import type { SIETransactionLine } from '@/lib/import/types'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
+
+/** The company's momskoder: account -> momskod, or [momskod, momssats]. */
+function chartOf(codes: Record<string, string | [string, number]>): ChartVatTreatments {
+  return chartVatTreatmentsOf(Object.entries(codes).map(([account_number, code]) => ({
+    account_number,
+    default_vat_treatment: Array.isArray(code) ? code[0] : code,
+    default_vat_rate: Array.isArray(code) ? code[1] : null,
+  })))
+}
 
 describe('counterparty-templates', () => {
   // ── Normalization ──────────────────────────────────────────
@@ -564,8 +575,42 @@ describe('counterparty-templates', () => {
         vat_treatment: 'reverse_charge',
       })
       const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.8 }
-      const result = buildMappingResultFromCounterpartyTemplate(match, makeTransaction({ amount: -5000 }), 'aktiebolag')
+      // The booking door settles the pair on the debit account (rc-basis-reconcile.ts).
+      const result = reconcileRcBasisWithCostLines(
+        buildMappingResultFromCounterpartyTemplate(match, makeTransaction({ amount: -5000 }), 'aktiebolag'),
+        new Map(),
+      )
       expect(result.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+    })
+
+    it('replays a learned reverse-charge pair on an account whose momskod reports ruta 20-24 without a second basis pair (crm#1096)', () => {
+      // An SIE-learned purchase on the company's own EU-goods account: the
+      // chart's momskod puts 4056 in ruta 20, so 4535/4598 would count it twice.
+      const template = makeCategorizationTemplate({
+        debit_account: '4056',
+        credit_account: '1930',
+        vat_treatment: 'reverse_charge',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.8 }
+      const tx = makeTransaction({ amount: -5000 })
+      const built = buildMappingResultFromCounterpartyTemplate(match, tx, 'aktiebolag')
+      const chart = chartOf({ '4056': 'reverse_charge_eu_goods' })
+
+      const result = reconcileRcBasisWithCostLines(built, chart)
+      expect(result.vat_lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['2645', 1250, 0],
+        ['2614', 0, 1250],
+      ])
+      const lines = buildTransactionEntryLines(tx, result)
+      expect(roundOre(lines.reduce((s, l) => s + l.debit_amount, 0))).toBe(roundOre(lines.reduce((s, l) => s + l.credit_amount, 0)))
+      expect(lines.find((l) => l.account_number === '4056')?.debit_amount).toBe(5000)
+
+      // A refund against the same template takes neither pair leg back out.
+      const refund = reconcileRcBasisWithCostLines(
+        buildMappingResultFromCounterpartyTemplate(match, makeTransaction({ amount: 5000 }), 'aktiebolag'),
+        chart,
+      )
+      expect(refund.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
     })
 
     /** A client that records every categorization_templates insert; no template exists yet. */
@@ -637,14 +682,75 @@ describe('counterparty-templates', () => {
 
     it('still learns a purchase booked straight on a basis account, which the pair replays as booked', async () => {
       const tx = makeTransaction({ merchant_name: 'Upwork', amount: -1000, date: '2026-09-01' })
-      const booked = buildMappingResultFromTemplate(
-        { ...getTemplateById('it_saas_non_eu')!, debit_account: '4531' }, tx, 'aktiebolag',
+      const booked = reconcileRcBasisWithCostLines(
+        buildMappingResultFromTemplate({ ...getTemplateById('it_saas_non_eu')!, debit_account: '4531' }, tx, 'aktiebolag'),
+        new Map(),
       )
       expect(booked.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
       const { supabase, inserted } = recordingClient()
       await upsertCounterpartyTemplate(supabase, 'company-1', tx, booked, 'user_approved')
       expect(inserted).toHaveLength(1)
       expect(inserted[0]).toMatchObject({ debit_account: '4531', vat_treatment: 'reverse_charge' })
+    })
+
+    it('learns a purchase on an account whose momskod reports ruta 20-24, and replays it without a basis pair (crm#1096)', async () => {
+      const chart = chartOf({ '6540': 'reverse_charge_eu_services' })
+      const tx = makeTransaction({ merchant_name: 'Google Play', amount: -250, date: '2026-09-01' })
+      const category = buildMappingResultFromCategory(
+        'expense_software', tx, true, 'aktiebolag', 'reverse_charge', null, null, 'eu_services',
+      )
+      category.debit_account = '6540' // account_override
+      const booked = reconcileRcBasisWithCostLines(category, chart)
+      expect(booked.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+
+      const { supabase, inserted } = recordingClient()
+      await upsertCounterpartyTemplate(supabase, 'company-1', tx, booked, 'user_approved')
+      expect(inserted).toHaveLength(1)
+      expect(inserted[0]).toMatchObject({ debit_account: '6540', vat_treatment: 'reverse_charge' })
+
+      const template = makeCategorizationTemplate({
+        debit_account: '6540',
+        credit_account: '1930',
+        vat_treatment: 'reverse_charge',
+      })
+      const next = reconcileRcBasisWithCostLines(
+        buildMappingResultFromCounterpartyTemplate(
+          { template, matchMethod: 'exact_alias', confidence: 0.8 },
+          makeTransaction({ merchant_name: 'Google Play', amount: -250 }),
+          'aktiebolag',
+        ),
+        chart,
+      )
+      expect(next.vat_lines.map((l) => l.account_number)).toEqual(booked.vat_lines.map((l) => l.account_number))
+    })
+
+    it('learns a purchase self-assessed at its account\'s 12 %, and replays it the same way (crm#1096)', async () => {
+      const chart = chartOf({ '4057': ['reverse_charge_eu_goods', 0.12] })
+      const tx = makeTransaction({ merchant_name: 'Livsmedel EU', amount: -1000, date: '2026-09-01' })
+      const category = buildMappingResultFromCategory('expense_software', tx, true, 'aktiebolag', 'reverse_charge')
+      category.debit_account = '4057' // account_override
+      const booked = reconcileRcBasisWithCostLines(category, chart)
+      const shape = (lines: typeof booked.vat_lines) => lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+      expect(shape(booked.vat_lines)).toEqual([
+        ['2645', 120, 0],
+        ['2624', 0, 120],
+      ])
+
+      const { supabase, inserted } = recordingClient()
+      await upsertCounterpartyTemplate(supabase, 'company-1', tx, booked, 'user_approved')
+      expect(inserted).toHaveLength(1)
+      expect(inserted[0]).toMatchObject({ debit_account: '4057', vat_treatment: 'reverse_charge' })
+
+      const template = makeCategorizationTemplate({ debit_account: '4057', credit_account: '1930', vat_treatment: 'reverse_charge' })
+      const next = reconcileRcBasisWithCostLines(
+        buildMappingResultFromCounterpartyTemplate(
+          { template, matchMethod: 'exact_alias', confidence: 0.8 },
+          makeTransaction({ merchant_name: 'Livsmedel EU', amount: -1000 }),
+          'aktiebolag',
+        ),
+        chart,
+      )
+      expect(shape(next.vat_lines)).toEqual(shape(booked.vat_lines))
     })
 
     it('books a second Supabase row on 4531 (ruta 22) too: the first booking teaches no template that would outrank the catalog (crm#1028)', async () => {
@@ -2558,6 +2664,62 @@ describe('reverse-charge basis pair in a learned line pattern', () => {
       { account: '4599', debit: 0, credit: 1000 },
       { account: '1930', debit: 0, credit: 1000 },
     ])
+    expect(debits).toBe(credits)
+  })
+
+  // crm#1096: a learned pair beside a cost line whose momskod already reports
+  // ruta 20-24 (the provider-code prefill gives 65xx a reverse-charge
+  // treatment) counts the purchase twice. The booking door settles the pair
+  // on the cost lines with the chart (reconcileRcBasisWithCostLines).
+  function settled(pattern: LinePatternEntry[], amount: number, chart: ChartVatTreatments) {
+    const template = makeCategorizationTemplate({
+      debit_account: '6540', credit_account: '1930', vat_treatment: null, line_pattern: pattern,
+    })
+    const tx = makeTransaction({ amount })
+    const result = reconcileRcBasisWithCostLines(
+      buildMappingResultFromCounterpartyTemplate({ template, matchMethod: 'exact_alias', confidence: 0.9 }, tx, 'aktiebolag'),
+      chart,
+    )
+    const entry = buildTransactionEntryLines(tx, result)
+    return {
+      lines: entry.map((l) => ({ account: l.account_number, debit: l.debit_amount, credit: l.credit_amount })),
+      debits: roundOre(entry.reduce((s, l) => s + l.debit_amount, 0)),
+      credits: roundOre(entry.reduce((s, l) => s + l.credit_amount, 0)),
+    }
+  }
+
+  it('drops the learned pair beside a cost line whose momskod reports ruta 20-24 itself (crm#1096)', () => {
+    const { lines, debits, credits } = settled([
+      { account: '4535', type: 'business', side: 'debit', ratio: 0.3334 },
+      { account: '4599', type: 'business', side: 'credit', ratio: 0.3333 },
+      { account: '6540', type: 'business', side: 'debit', ratio: 0.3333 },
+    ], -1000, chartOf({ '6540': 'reverse_charge_eu_services' }))
+    expect(lines).toEqual([
+      { account: '6540', debit: 1000, credit: 0 },
+      { account: '2645', debit: 250, credit: 0 },
+      { account: '2614', debit: 0, credit: 250 },
+      { account: '1930', debit: 0, credit: 1000 },
+    ])
+    expect(debits).toBe(credits)
+  })
+
+  it('keeps the pair for the share of the purchase on cost lines that report nothing themselves (crm#1096)', () => {
+    const { lines, debits, credits } = settled([
+      { account: '4531', type: 'business', side: 'debit', ratio: 0.5 },
+      { account: '4598', type: 'business', side: 'credit', ratio: 0.5 },
+      { account: '5420', type: 'business', side: 'debit', ratio: 0.25 },
+      { account: '6540', type: 'business', side: 'debit', ratio: 0.25 },
+    ], -1000, chartOf({ '6540': 'reverse_charge_non_eu_services' }))
+    expect(lines).toEqual(expect.arrayContaining([
+      { account: '5420', debit: 500, credit: 0 },
+      { account: '6540', debit: 500, credit: 0 },
+      { account: '2645', debit: 250, credit: 0 },
+      { account: '2614', debit: 0, credit: 250 },
+      { account: '4531', debit: 500, credit: 0 },
+      { account: '4598', debit: 0, credit: 500 },
+      { account: '1930', debit: 0, credit: 1000 },
+    ]))
+    expect(lines).toHaveLength(7)
     expect(debits).toBe(credits)
   })
 

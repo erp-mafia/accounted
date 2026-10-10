@@ -43,7 +43,8 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
-import { reconcileRcBasisWithCostAccount } from '@/lib/bookkeeping/account-override'
+import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
+import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import {
   getTemplateById,
   buildMappingResultFromTemplate,
@@ -334,7 +335,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     ) {
       const { data: accountExists } = await ctx.supabase
         .from('chart_of_accounts')
-        .select('account_number, account_class, default_vat_treatment')
+        .select('account_number, account_class')
         .eq('company_id', ctx.companyId!)
         .eq('account_number', body.account_override)
         .eq('is_active', true)
@@ -361,15 +362,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       if (accountExists.account_class === 2 && !isMomsLineAccount) {
         mappingResult.vat_lines = []
       }
-      // A reverse-charge cost line moved onto an account that reports ruta
-      // 20-24 itself must not keep the category's basis pair (#2919).
-      mappingResult = reconcileRcBasisWithCostAccount(
-        mappingResult,
-        transaction.amount,
-        body.account_override,
-        accountExists.default_vat_treatment ?? null,
-      )
     }
+
+    // A reverse-charge purchase keeps its 45xx/4598 basis pair only when the
+    // account its cost line lands on (after any account_override) does not
+    // report ruta 20-24 itself, by the company's momskoder (crm#1096, #2919).
+    mappingResult = await reconcileRcBasisWithChart(
+      mappingResult,
+      chartVatTreatmentsLoader(ctx.supabase, ctx.companyId!),
+    )
 
     // Dimensions: an explicitly supplied bag tags the business lines of the
     // generated verifikat (bank/VAT legs stay untagged). Wins over a learned

@@ -24,6 +24,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { SupplierInvoiceReviewContent } from '@/components/suppliers/SupplierInvoiceReviewContent'
+import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
@@ -2519,6 +2520,7 @@ export default function NewSupplierInvoiceForm({
               items={pendingData.items}
               oreRounding={oreRounding}
               bookingMoment={bookingMoment}
+              chartVatTreatments={chartVatTreatmentsOf(accounts)}
             />
           </ConfirmationDialog>
         )

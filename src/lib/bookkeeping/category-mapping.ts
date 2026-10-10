@@ -2,7 +2,6 @@ import type { TransactionCategory, MappingResult, VatJournalLine, Transaction, E
 import {
   getVatRate,
   generateReverseChargePurchaseLines,
-  costAccountReportsRcBasis,
   DEFAULT_REVERSE_CHARGE_KIND,
   type ReverseChargeKind,
 } from './vat-entries'
@@ -264,9 +263,11 @@ export function getCategoryAccountMapping(
  * `reverseChargeKind` picks the basis account of a reverse-charge purchase
  * (ruta 20 EU goods, 21 EU services, 22 non-EU services). A bank line says
  * nothing reliable about the seller's country, so without an explicit kind the
- * purchase books as EU services, the same default the mapping rules use. When
- * the cost account is itself a basis account the pair is left out (an
- * account_override onto one is reconciled in applyAccountOverride).
+ * purchase books as EU services, the same default the mapping rules use. The
+ * basis pair is always booked here: whether the account the cost line finally
+ * lands on reports ruta 20-24 itself, and at which momssats, is settled with
+ * the company's chart by reconcileRcBasisWithChart
+ * (lib/bookkeeping/rc-basis-reconcile.ts).
  */
 export function buildMappingResultFromCategory(
   category: TransactionCategory,
@@ -351,7 +352,6 @@ export function buildMappingResultFromCategory(
       const rcLines = generateReverseChargePurchaseLines({
         base: absSekAmount,
         kind: reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND,
-        basisBase: costAccountReportsRcBasis(mapping.debitAccount) ? 0 : absSekAmount,
       })
       for (const rcl of rcLines) {
         vatLines.push({

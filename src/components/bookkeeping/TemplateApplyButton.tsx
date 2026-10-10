@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { BookOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,8 @@ import { applyTemplate } from '@/lib/bookkeeping/template-library'
 import { staticTemplateToFormLines } from '@/lib/bookkeeping/proposal-lines'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useAccounts } from '@/lib/reference-data/hooks'
+import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
 import { roundOre } from '@/lib/money'
 import type { BookingTemplateCategory, BookingTemplateLibrary, EntityType } from '@/types'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -45,6 +47,12 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
   const [picked, setPicked] = useState<Picked | null>(null)
   const amountRef = useRef<HTMLInputElement>(null)
   const resolvedEntity = entityType ?? company?.entity_type
+  // The company's momskoder over the whole kontoplan, since the manual form
+  // activates an inactive account when it posts: the applied lines are posted
+  // as they are, so a reverse-charge template on an account that reports ruta
+  // 20-24 itself must already be settled (staticTemplateToFormLines).
+  const { accounts: wholeChart } = useAccounts(false)
+  const chartVatTreatments = useMemo(() => chartVatTreatmentsOf(wholeChart), [wholeChart])
 
   const close = useCallback(() => setAnchor(null), [])
 
@@ -60,11 +68,11 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
       if (choice.kind === 'library') {
         onApply(applyTemplate(choice.raw.lines, total), choice.raw.name, choice.raw.category)
       } else {
-        onApply(staticTemplateToFormLines(choice.template, total, resolvedEntity), choice.template.name_sv)
+        onApply(staticTemplateToFormLines(choice.template, total, resolvedEntity, chartVatTreatments), choice.template.name_sv)
       }
       setAnchor(null)
     },
-    [onApply, resolvedEntity],
+    [onApply, resolvedEntity, chartVatTreatments],
   )
 
   const choose = (choice: Picked) => {

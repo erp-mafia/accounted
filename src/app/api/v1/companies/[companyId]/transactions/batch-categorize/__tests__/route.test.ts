@@ -875,6 +875,50 @@ describe('POST batch-categorize', () => {
   )
 })
 
+// crm#1096: a reverse-charge purchase on an account whose momskod reports
+// ruta 20-24 itself gets no 45xx/4598 pair. The batch reads the company's
+// momskoder once, however many reverse-charge items it books.
+describe('POST batch-categorize reverse-charge basis pair', () => {
+  it('settles every item on the company momskoder, read once for the whole batch', async () => {
+    const txRow = (id: string) => ({
+      data: {
+        id, company_id: COMPANY_ID, date: '2026-05-12', amount: -1000, currency: 'SEK',
+        merchant_name: 'SAAS', cash_account_id: null, journal_entry_id: null,
+      },
+      error: null,
+    })
+    const { supabase } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        txRow(TX_A), { data: [{ id: TX_A }], error: null },
+        txRow(TX_B), { data: [{ id: TX_B }], error: null },
+      ],
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      chart_of_accounts: { data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const categorization = { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge' }
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        { items: [{ transaction_id: TX_A, categorization }, { transaction_id: TX_B, categorization }] },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(createTxJE).toHaveBeenCalledTimes(2)
+    for (const call of createTxJE.mock.calls) {
+      const mapping = call[4] as { debit_account: string; vat_lines: Array<{ account_number: string }> }
+      expect(mapping.debit_account).toBe('5420')
+      expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
+    }
+    expect(supabase.from.mock.calls.filter(([table]) => table === 'chart_of_accounts')).toHaveLength(1)
+  })
+})
+
 describe('POST batch-categorize double-booking guards (parity with :categorize and the dashboard route)', () => {
   const URL = `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`
   const EXISTING_JE = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'

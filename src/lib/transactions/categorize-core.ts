@@ -29,6 +29,8 @@ import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
+import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
+import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { guardCounterLegs } from '@/lib/cash-accounts/service'
@@ -103,6 +105,12 @@ export interface CategorizeMatchedTransactionOpts {
    * 'private'. See lib/bookkeeping/account-override.ts.
    */
   accountOverride?: string
+  /**
+   * The company's momskoder for settling a reverse-charge basis pair
+   * (reconcileRcBasisWithChart). The bulk driver shares one loader across its
+   * batch so they are read once at most; omitted, they are read on demand.
+   */
+  loadChart?: ChartVatTreatmentsLoader
 }
 
 // ── Helper: duplicate-guard claim text ───────────────────────────────
@@ -253,7 +261,7 @@ export async function categorizeMatchedTransaction(
    */
   exclude?: BookingDuplicateExclusions,
 ): Promise<CategorizeCoreResult> {
-  const { category, vatTreatment, reverseChargeKind, vatAmount, notes, allowDuplicate, dimensions, accountOverride } = opts
+  const { category, vatTreatment, reverseChargeKind, vatAmount, notes, allowDuplicate, dimensions, accountOverride, loadChart } = opts
 
   // The junction rows ride along on the same read: a row bulk-booked into a
   // samlingsverifikat or split over several verifikat (1:N, #1553) carries
@@ -420,6 +428,13 @@ export async function categorizeMatchedTransaction(
       return { error: err instanceof Error ? err.message : 'account_override failed', status: 400 }
     }
   }
+  // A reverse-charge purchase keeps its 45xx/4598 basis pair only when the
+  // account its cost line lands on (after any account_override) does not
+  // report ruta 20-24 itself, by the company's momskoder (crm#1096).
+  mappingResult = await reconcileRcBasisWithChart(
+    mappingResult,
+    loadChart ?? chartVatTreatmentsLoader(supabase, companyId),
+  )
   // Dimensions PR7: tag the business lines of the generated verifikat.
   if (dimensions && Object.keys(dimensions).length > 0) {
     mappingResult.dimensions = dimensions
@@ -666,6 +681,9 @@ export async function bulkBookMatchedInboxItems(
   // these lists, so the guard still catches them (see BookingDuplicateExclusions).
   const bookedTransactionIds: string[] = []
   const bookedJournalEntryIds: string[] = []
+  // One read of the company's momskoder for the whole batch, and none unless
+  // a reverse-charge item needs it.
+  const loadChart = chartVatTreatmentsLoader(supabase, companyId)
 
   for (const itemId of item_ids) {
     const { data: item, error: itemError } = await supabase
@@ -725,7 +743,7 @@ export async function bulkBookMatchedInboxItems(
         userId,
         companyId,
         item.matched_transaction_id as string,
-        { category, vatTreatment: vat_treatment, vatAmount: vat_amount, notes: itemNotes, allowDuplicate: allow_duplicate, dimensions },
+        { category, vatTreatment: vat_treatment, vatAmount: vat_amount, notes: itemNotes, allowDuplicate: allow_duplicate, dimensions, loadChart },
         // Snapshot copies so the guard sees only the prior bookings of this batch.
         { excludeTransactionIds: [...bookedTransactionIds], excludeJournalEntryIds: [...bookedJournalEntryIds] },
       )

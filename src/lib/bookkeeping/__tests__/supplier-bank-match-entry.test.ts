@@ -22,6 +22,12 @@ vi.mock('../engine', () => ({
   ),
 }))
 
+// The company's momskoder: 6540 carries a reverse-charge purchase code.
+const MOMSKODER = new Map([['6540', { default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: null }]])
+vi.mock('../chart-vat-treatments', () => ({
+  fetchChartVatTreatments: vi.fn(async () => MOMSKODER),
+}))
+
 import { createJournalEntry } from '../engine'
 import {
   buildSupplierBankMatchLines,
@@ -147,6 +153,30 @@ describe('createSupplierBankMatchEntry / buildSupplierBankMatchLines', () => {
       ['1930', 0, 1010],
       ['6570', 10, 0],
     ])
+    expect(input.lines).toEqual(preview.lines)
+  })
+  it('kontantmetoden reverse charge on an account whose momskod reports ruta 20-24: no basis pair, the preview identical (crm#1096)', async () => {
+    const rcItem: SupplierInvoiceItem = {
+      ...item, account_number: '6540', unit_price: 1000, line_total: 1000, vat_rate: 0, vat_amount: 0,
+    }
+    const inv = invoice({
+      subtotal: 1000, vat_amount: 0, total: 1000, remaining_amount: 1000, reverse_charge: true,
+      registration_journal_entry_id: null, items: [rcItem],
+      supplier: makeSupplier({ name: 'Leverantor AB', supplier_type: 'eu_business' }),
+    })
+    const booking: SupplierBankMatchBooking = { kind: 'cash', settledBankSek: 1000, bankFeeSek: 0 }
+    const entry = await createSupplierBankMatchEntry(supabase, 'company-1', 'user-1', {
+      invoice: inv, booking, paymentAccount: '1930', transaction,
+    })
+    expect(entry).not.toBeNull()
+    const input = vi.mocked(createJournalEntry).mock.calls[0][3] as CreateJournalEntryInput
+    expect(shape(input.lines)).toEqual([
+      ['6540', 1000, 0],
+      ['2645', 250, 0],
+      ['2614', 0, 250],
+      ['1930', 0, 1000],
+    ])
+    const preview = buildSupplierBankMatchLines(inv, booking, '1930', MOMSKODER)
     expect(input.lines).toEqual(preview.lines)
   })
 })

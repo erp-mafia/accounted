@@ -96,6 +96,8 @@ import {
   type ReverseChargeKind,
 } from '@/lib/bookkeeping/vat-entries'
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
+import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
+import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { hasSIEFileExtension, SIE_FILE_EXTENSIONS_EN } from '@/lib/import/sie-file-extensions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
@@ -2279,6 +2281,10 @@ async function categorizeTransactionCore(
       vatTreatment != null || vatAmount != null,
     )
   }
+  // The basis pair the approval will post: none when the cost account (after
+  // any account_override) reports ruta 20-24 itself (crm#1096). The commit
+  // (categorizeMatchedTransaction) settles it the same way.
+  mappingResult = await reconcileRcBasisWithChart(mappingResult, chartVatTreatmentsLoader(supabase, companyId))
 
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
     throw new Error(
