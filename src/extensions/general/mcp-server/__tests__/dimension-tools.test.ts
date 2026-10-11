@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { tools } from '../server'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import {
   resolveValueInDimension,
   resolveDimensionBags,
@@ -20,6 +21,17 @@ import {
   parseDimensionsArg,
   type DimensionRegistryEntry,
 } from '../dimensions'
+
+// Real detector by default; the bulk-book staging tests stub one "no
+// duplicate" answer per row so their queued mocks stay about dimensions.
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/transactions/booking-duplicate-detection')>()
+  return { ...actual, detectBookingDuplicate: vi.fn(actual.detectBookingDuplicate) }
+})
+
+function noDuplicateFor(rows: number) {
+  for (let i = 0; i < rows; i++) vi.mocked(detectBookingDuplicate).mockResolvedValueOnce(null)
+}
 
 const listDimensions = tools.find((t) => t.name === 'gnubok_list_dimensions')!
 const listDimensionValues = tools.find((t) => t.name === 'gnubok_list_dimension_values')!
@@ -985,6 +997,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
 describe('gnubok_bulk_book_transactions: dimensions bag', () => {
   it('merges default_dimensions into per-line bags and drops the default from staged params', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    noDuplicateFor(1)
     const inserts = captureInserts(supabase)
     // resolveDimensionBags: settings → ensure rpc → dimensions → dimension_values
     enqueue({ data: { dimensions_enabled: true }, error: null })
@@ -1108,6 +1121,7 @@ describe('gnubok_bulk_book_transactions: approval-queue title', () => {
   // phone could not tell what he was authorising.
   it('carries direction, amount, currency, date and the lead counterparty', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    noDuplicateFor(2)
     const inserts = captureInserts(supabase)
     enqueue({ data: { dimensions_enabled: true }, error: null })
     enqueue({ data: null, error: null })
@@ -1206,6 +1220,7 @@ describe('gnubok_bulk_book_transactions: dimension policy at stage', () => {
 
   it('stages the tag a default rule applies, so the approval matches the commit', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    noDuplicateFor(1)
     const inserts = captureInserts(supabase)
     enqueue({ data: [ruleRow({})], error: null }) // account_dimension_rules
     enqueue({ data: { dimensions_enabled: true }, error: null }) // registry validation: settings

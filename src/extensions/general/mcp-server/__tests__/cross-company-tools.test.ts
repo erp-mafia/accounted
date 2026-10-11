@@ -99,11 +99,22 @@ function supabaseDouble(pendingRows: Array<Record<string, unknown>> = []) {
   const settingsChain = {
     select: vi.fn(() => ({ in: vi.fn(() => ({ order: vi.fn(() => ({ range: vi.fn().mockResolvedValue({ data: [], error: null }) })) })) })),
   }
+  // A draft invoice for gnubok_delete_draft_invoice, a high-risk staging tool.
+  const invoiceChain: Record<string, ReturnType<typeof vi.fn>> = {}
+  Object.assign(invoiceChain, {
+    select: vi.fn(() => invoiceChain),
+    eq: vi.fn(() => invoiceChain),
+    single: vi.fn(async () => ({
+      data: { id: 'inv-1', invoice_number: null, status: 'draft', total: 100, currency: 'SEK', customer: { name: 'Kund AB' } },
+      error: null,
+    })),
+  })
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === 'company_members') return membershipChain
       if (table === 'pending_operations') return pendingChain
       if (table === 'company_settings') return settingsChain
+      if (table === 'invoices') return invoiceChain
       throw new Error(`Unexpected table: ${table}`)
     }),
     auth: { admin: { getUserById: vi.fn().mockResolvedValue({ data: { user: { email: 'a@b.se' } } }) } },
@@ -376,7 +387,6 @@ describe('gnubok_stage_across_companies', () => {
   it('refuses high-risk tools, non-staging tools, unresolved ids and dry_run on tools without it', async () => {
     const { supabase } = supabaseDouble()
     mocks.resolveCompanyScope.mockResolvedValue(scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB')))
-    await expect(stageTool.execute({ tool: 'gnubok_run_year_end' }, '', 'user-1', supabase as never)).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
     await expect(stageTool.execute({ tool: 'gnubok_fake_read' }, '', 'user-1', supabase as never)).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
     expect(fakeStaged.execute).not.toHaveBeenCalled()
 
@@ -398,6 +408,30 @@ describe('gnubok_stage_across_companies', () => {
       await expect(
         stageTool.execute({ tool: noDryRun.name, dry_run: true }, '', 'user-1', supabase as never)
       ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    }
+  })
+
+  it('refuses a high-risk staging tool by its risk tier, once, staging nothing and skipping the rest', async () => {
+    mocks.resolveCompanyScope.mockResolvedValue(
+      scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB'), scoped(OTHER_COMPANY_ID, 'Other AB'))
+    )
+    const { supabase } = supabaseDouble()
+    for (const dryRun of [false, true]) {
+      supabase.from.mockClear()
+      await expect(
+        stageTool.execute(
+          { tool: 'gnubok_delete_draft_invoice', arguments: { invoice_id: 'inv-1' }, dry_run: dryRun },
+          '',
+          'user-1',
+          supabase as never
+        )
+      ).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+        message: expect.stringMatching(/gnubok_delete_draft_invoice stages delete_draft_invoice, a high-risk operation/),
+      })
+      expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+      // The first company's refusal stopped the batch: one invoice read only.
+      expect(supabase.from.mock.calls.filter(([table]) => table === 'invoices')).toHaveLength(1)
     }
   })
 

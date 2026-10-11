@@ -68,15 +68,19 @@ export const GET = withRouteContext(
     if (!validation.success) return validation.response
     const { status, limit, offset } = validation.data
 
+    // The exact count lets the list offer "Ladda fler" only while older files
+    // remain; the id tiebreak keeps offset pages from repeating or skipping a
+    // file created in the same instant as another.
     let query = supabase
       .from('supplier_payment_batches')
-      .select('*')
+      .select('*', { count: 'exact' })
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .range(offset, offset + limit - 1)
     if (status !== 'all') query = query.eq('status', status)
 
-    const { data: batches, error } = await query
+    const { data: batches, error, count } = await query
     if (error) throw error
 
     const batchRows = (batches ?? []) as SupplierPaymentBatch[]
@@ -92,6 +96,7 @@ export const GET = withRouteContext(
           ? { supplier_invoice_ids: invoiceIdsByBatch.get(batch.id) ?? [] }
           : {}),
       })),
+      count: count ?? null,
     })
   },
 )

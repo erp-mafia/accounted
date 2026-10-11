@@ -166,9 +166,10 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   categorize_transaction: 'medium',
   match_transaction_invoice: 'medium',
   // Skatteverkets ROT/RUT utbetalning matched to its begäran: one bank row
-  // booked debit 19xx / credit 1513 and linked. Storno-reversible like the
-  // other bank-row matches, so the same tier as match_transaction_invoice.
-  settle_rot_rut_payout: 'medium',
+  // booked debit 19xx / credit 1513 and linked. Storno-reversible, but
+  // 'high' (2026-10-11) so it stays out of cross-company batch staging and
+  // bulk approval, where the old hand-kept batch list kept it.
+  settle_rot_rut_payout: 'high',
   // Linking an existing payout verifikat books nothing and a storno of that
   // verifikat releases the link, so it sits with the other link operations.
   link_rot_rut_payout_voucher: 'medium',
@@ -177,8 +178,9 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   create_asset: 'low',
   update_asset: 'low',
   // Posts the avyttring voucher (gain/loss, VAT, jämkning). Reversible via
-  // storno: same tier as post_annual_depreciation.
-  dispose_asset: 'medium',
+  // storno, but 'high' (2026-10-11) so it stays out of cross-company batch
+  // staging and bulk approval, where the old hand-kept batch list kept it.
+  dispose_asset: 'high',
   // Link an existing posted verifikat as payment for an invoice. Reversible by
   // deleting the invoice_payments row and reverting invoice status; no journal
   // entry is created or modified. Sits next to match_transaction_invoice
@@ -345,9 +347,9 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // ── Multi-tx flows (PRs #603/#606/#608/#610) ───────────────────────
   // Allocate 1 bank tx across N customer or supplier invoices into one
   // combined verifikat. Reversible via storno + invoice_payments delete,
-  // so 'medium' (same tier as match_transaction_invoice: its single-
-  // invoice counterpart).
-  match_batch_allocate: 'medium',
+  // but 'high' (2026-10-11) so it stays out of cross-company batch staging
+  // and bulk approval, where the old hand-kept batch list kept it.
+  match_batch_allocate: 'high',
   // Bulk-book N bank txs into 1 verifikat. The create-new branch posts
   // a verifikat with caller-supplied lines (template-expanded or manual),
   // the same compliance-critical surface as create_voucher. 'high'.

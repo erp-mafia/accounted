@@ -19,6 +19,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { runDeviationWindow } from './deviation-period'
 import {
   effectiveVacationAsOfDate,
@@ -154,19 +155,23 @@ export async function syncVacationLedgerForEmployees(
     // Booked vacation days per employee, bucketed later per year bounds. The
     // embedded vacation lines carry the category split; vacation_days_taken
     // stays the authoritative total (a run without categorized lines
-    // contributes exactly what it always did).
-    const { data: bookedRows, error: bookedErr } = await supabase
-      .from('salary_run_employees')
-      .select(
-        'employee_id, vacation_days_taken, ' +
-          'line_items:salary_line_items(item_type, quantity, vacation_category, vacation_saved_year), ' +
-          'salary_run:salary_runs!inner(period_year, period_month, status, deviation_period_start, deviation_period_end)',
-      )
-      .eq('company_id', companyId)
-      .eq('salary_run.status', 'booked')
-      .in('employee_id', employeeIds)
-    if (bookedErr) return { ok: false, message: bookedErr.message }
-    const booked = ((bookedRows ?? []) as unknown as BookedRunRow[])
+    // contributes exactly what it always did). Paged on id: past 1,000
+    // payslips the rest of the taken days were silently dropped.
+    const bookedRows = await fetchAllRows<BookedRunRow>(({ from, to }) =>
+      supabase
+        .from('salary_run_employees')
+        .select(
+          'employee_id, vacation_days_taken, ' +
+            'line_items:salary_line_items(item_type, quantity, vacation_category, vacation_saved_year), ' +
+            'salary_run:salary_runs!inner(period_year, period_month, status, deviation_period_start, deviation_period_end)',
+        )
+        .eq('company_id', companyId)
+        .eq('salary_run.status', 'booked')
+        .in('employee_id', employeeIds)
+        .order('id', { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: BookedRunRow[] | null; error: { message: string } | null }>,
+    )
+    const booked = bookedRows
       .filter((r) => r.salary_run?.status === 'booked')
       // Chronological by the leave the run deducts, so a 'saved' line without
       // an origin year takes the oldest saved year first across runs.

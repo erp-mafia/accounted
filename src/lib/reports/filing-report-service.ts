@@ -12,7 +12,6 @@
  * the company's, a stable code for the wrong legal form, and the refusals
  * the dashboard answers before it builds a file.
  */
-import JSZip from 'jszip'
 import { generateINK2Declaration } from '@/lib/reports/ink2/ink2-engine'
 import {
   generateSRUSubmission as generateInk2SruSubmission,
@@ -127,6 +126,7 @@ function declarationFailure(ctx: OperationContext, err: unknown, report: string)
  * mojibakes å/ä/ö and is rejected at upload).
  */
 export async function buildSruZip(submission: { infoSru: string; blanketterSru: string }): Promise<Uint8Array> {
+  const { default: JSZip } = await import('jszip')
   const zip = new JSZip()
   zip.file('INFO.SRU', encodeISO88591(submission.infoSru))
   zip.file('BLANKETTER.SRU', encodeISO88591(submission.blanketterSru))

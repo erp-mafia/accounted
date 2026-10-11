@@ -44,6 +44,7 @@ import useSWR from 'swr'
 import { StageSteps } from '@/components/supplier-invoices/StagePipeline'
 import { stagesFor, type InvoiceLifecycle, type SupplierInvoiceLadderStage } from '@/lib/supplier-invoices/stages'
 import { formatAmount, formatCurrency } from '@/lib/utils'
+import { parseAmountInput } from '@/lib/money'
 import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-figures'
 import {
   canApproveSupplierInvoice,
@@ -68,8 +69,7 @@ interface EditableLine {
 }
 
 function parseAmount(s: string): number {
-  const n = Number(s.replace(',', '.'))
-  return Number.isFinite(n) ? n : 0
+  return parseAmountInput(s) ?? 0
 }
 
 function round2(n: number): number {
@@ -351,8 +351,8 @@ export default function SupplierInvoiceDetailPage() {
   }, [payAmount])
 
   const isForeignInvoice = !!invoice && invoice.currency !== 'SEK'
-  const paySekNum = parseAmount(paySek)
-  const paySekOverride = isForeignInvoice && paySekNum > 0 ? round2(paySekNum) : undefined
+  const paySekNum = isForeignInvoice ? parseAmountInput(paySek) : null
+  const paySekOverride = paySekNum !== null && paySekNum > 0 ? paySekNum : undefined
 
   // Mirror the preview into the editable working copy. Only resets when not
   // currently editing: otherwise typing in the inputs would clobber on

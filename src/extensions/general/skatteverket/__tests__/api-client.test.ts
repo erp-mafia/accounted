@@ -300,6 +300,16 @@ describe('skvRequest: error mapping', () => {
   })
 })
 
+describe('skvRequest: gateway credentials', () => {
+  it('refuses redirects, so a 307/308 never resends Client_Secret and the bearer', async () => {
+    mockFetchStatus(200, '{}')
+    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
+    const [, init] = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit]
+    expect((init.headers as Record<string, string>).Client_Secret).toBe('gw-secret')
+    expect(init.redirect).toBe('error')
+  })
+})
+
 describe('SkatteverketAuthError', () => {
   it('exposes the new TOKEN_CORRUPTED and RATE_LIMITED codes', () => {
     const a = new SkatteverketAuthError('msg', 'TOKEN_CORRUPTED')

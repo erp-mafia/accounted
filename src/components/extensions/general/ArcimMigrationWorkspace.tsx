@@ -4,6 +4,7 @@ import { SIEJobFailedError, uploadSIEFile, waitForSIEJob } from '@/lib/import/si
 import InvoiceCompletionRecovery from './InvoiceCompletionRecovery'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
+import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useTranslations } from 'next-intl'
@@ -68,8 +69,9 @@ type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | '
 // no manual SIE upload needed. Deliberately duplicated from
 // extensions/general/arcim-migration/types.ts (core code must not import from
 // @/extensions/: CI enforces it). Keep both lists in sync.
-// WINT is env-gated server-side (WINT_MIGRATION_ENABLED): the wizard renders
-// whatever GET /providers returns, so no client-side gate is needed here.
+// WINT is env-gated server-side (WINT_MIGRATION_ENABLED): GET /status names
+// the providers this deployment can connect and the provider list shows only
+// those (offeredProviders below).
 const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
   { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
   { id: 'visma', name: 'Visma', authType: 'oauth', sieViaApi: false },
@@ -569,12 +571,29 @@ interface ConnectionStatus {
     suppliers: number
     invoices: number
   }
+  /**
+   * The providers this deployment can connect (WINT only behind
+   * WINT_MIGRATION_ENABLED). Optional only for a server that predates the
+   * field.
+   */
+  enabledProviders?: ArcimProvider[]
 }
 
 // Providers listed here render as a disabled "Kommer snart" card. WINT was
 // the last entry: it is released now, so the set is empty. WINT still depends
 // on WINT_MIGRATION_ENABLED=true, the server-side /connect gate.
 const COMING_SOON_PROVIDERS = new Set<ArcimProvider>([])
+
+/**
+ * The provider cards to show: the ones the server says it can connect. Until
+ * it has said (no status yet, or a server that predates the field), WINT, the
+ * one provider that ships dark, stays hidden rather than offering a connection
+ * the /connect gate would refuse.
+ */
+export function offeredProviders(status: Pick<ConnectionStatus, 'enabledProviders'> | null) {
+  const enabled = status?.enabledProviders
+  return ARCIM_PROVIDERS.filter((provider) => (enabled ? enabled.includes(provider.id) : provider.id !== 'wint'))
+}
 
 const PROVIDER_LOGOS: Record<ArcimProvider, string> = {
   fortnox: '/logos/fortnox.svg',
@@ -778,7 +797,7 @@ export function ProviderStep({
         </div>
       ) : (
         <div className="stagger-enter divide-y divide-border" data-no-stagger>
-          {ARCIM_PROVIDERS.map((provider) => {
+          {offeredProviders(connectionStatus).map((provider) => {
             const comingSoon = COMING_SOON_PROVIDERS.has(provider.id)
             const alreadyConnected = activeConsents.some(c => c.provider === provider.id)
             // Providers without SIE-over-API only expose entity data
@@ -2926,6 +2945,59 @@ export default function ArcimMigrationWorkspace({
   const documentReconnectActionRef = useRef<'discover' | 'import' | null>(null)
   const documentReconnectFailureCleanupRef = useRef<number | null>(null)
   const stopOAuthPopupWatchRef = useRef<(() => void) | null>(null)
+  // Listen for postMessage from the OAuth popup: only the window this
+  // workspace opened (handleOpenProviderWindow, handleReconnect) is heard.
+  // Declared before those callbacks so they can list the ref; the handler
+  // runs on a message, after every function it calls is defined.
+  const oauthPopupRef = useOAuthPopup<{ type?: string; consentId?: string; reason?: unknown; cancelled?: unknown }>((data) => {
+    if (data?.type === 'arcim-oauth-success' && data.consentId) {
+      clearOAuthPopupWatch()
+      clearDocumentReconnectFailureCleanup()
+      const reconnectAction = documentReconnectActionRef.current
+      if (reconnectAction) {
+        documentReconnectActionRef.current = null
+        clearDocumentOAuthResume()
+        setConsentId(data.consentId)
+        setSelectedProvider('fortnox')
+        setStep('result')
+        if (reconnectAction === 'discover') {
+          void runDocumentDiscovery(data.consentId, 'fortnox', true)
+        } else {
+          void runDocumentImport(data.consentId)
+        }
+        return
+      }
+      finishConnectAttempt('success')
+      loadPreview(data.consentId)
+    } else if (data?.type === 'arcim-oauth-error') {
+      clearOAuthPopupWatch()
+      clearDocumentReconnectFailureCleanup()
+      const reason = typeof data.reason === 'string' && data.reason
+        ? data.reason
+        : 'OAuth-anslutningen misslyckades. Försök igen.'
+      const reconnectAction = documentReconnectActionRef.current
+      if (reconnectAction) {
+        documentReconnectActionRef.current = null
+        clearDocumentOAuthResume()
+        const problem = documentImportState.problem ?? {
+          code: null,
+          requestId: null,
+          reconnectRequired: true,
+        }
+        dispatchDocumentImport(
+          reconnectAction === 'discover'
+            ? { type: 'discovery-failed', problem }
+            : { type: 'import-failed', problem },
+        )
+        return
+      }
+      // access_denied at the provider arrives flagged `cancelled` by the
+      // callback: the customer chose to stop, the provider did not fail.
+      finishConnectAttempt(data.cancelled === true ? 'cancelled' : 'provider_error')
+      setError(reason)
+      toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
+    }
+  })
   // Knowledge-graph theater for the migrating step, built from the already
   // client-held parsed SIE. Null falls back to the plain progress card.
   const [theaterModel, setTheaterModel] = useState<TheaterModel | null>(null)
@@ -3147,6 +3219,7 @@ export default function ArcimMigrationWorkspace({
       window.location.href = url
       return
     }
+    oauthPopupRef.current = popup
     // Closing the login window before it answers is an outcome of its own.
     // The popup posts its result and then closes, but the message can reach
     // this window after the close is observed. Here the close only records
@@ -3157,7 +3230,7 @@ export default function ArcimMigrationWorkspace({
       stopOAuthPopupWatchRef.current = null
       finishConnectAttempt('window_closed')
     }, 500, 3000)
-  }, [selectedProvider, startConnectAttempt, clearOAuthPopupWatch, finishConnectAttempt])
+  }, [selectedProvider, startConnectAttempt, clearOAuthPopupWatch, finishConnectAttempt, oauthPopupRef])
 
   const clearDocumentReconnectFailureCleanup = useCallback(() => {
     if (documentReconnectFailureCleanupRef.current) {
@@ -3237,6 +3310,7 @@ export default function ArcimMigrationWorkspace({
           }
         }
         if (activePopup) {
+          oauthPopupRef.current = activePopup
           clearOAuthPopupWatch()
           stopOAuthPopupWatchRef.current = watchArcimOAuthPopup(activePopup, () => {
             stopOAuthPopupWatchRef.current = null
@@ -3268,7 +3342,7 @@ export default function ArcimMigrationWorkspace({
     } finally {
       setIsLoading(false)
     }
-  }, [clearOAuthPopupWatch])
+  }, [clearOAuthPopupWatch, oauthPopupRef])
 
   const runDocumentDiscovery = useCallback(async (
     currentConsentId: string,
@@ -3533,71 +3607,6 @@ export default function ArcimMigrationWorkspace({
     void handleSelectProvider(provider.id)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialProvider, isLoadingStatus, connectionStatus])
-
-  // Listen for postMessage from OAuth popup
-  useEffect(() => {
-    function handleMessage(event: MessageEvent) {
-      if (event.origin !== window.location.origin) return
-      if (event.data?.type === 'arcim-oauth-success' && event.data.consentId) {
-        clearOAuthPopupWatch()
-        clearDocumentReconnectFailureCleanup()
-        const reconnectAction = documentReconnectActionRef.current
-        if (reconnectAction) {
-          documentReconnectActionRef.current = null
-          clearDocumentOAuthResume()
-          setConsentId(event.data.consentId)
-          setSelectedProvider('fortnox')
-          setStep('result')
-          if (reconnectAction === 'discover') {
-            void runDocumentDiscovery(event.data.consentId, 'fortnox', true)
-          } else {
-            void runDocumentImport(event.data.consentId)
-          }
-          return
-        }
-        finishConnectAttempt('success')
-        loadPreview(event.data.consentId)
-      } else if (event.data?.type === 'arcim-oauth-error') {
-        clearOAuthPopupWatch()
-        clearDocumentReconnectFailureCleanup()
-        const reason = typeof event.data.reason === 'string' && event.data.reason
-          ? event.data.reason
-          : 'OAuth-anslutningen misslyckades. Försök igen.'
-        const reconnectAction = documentReconnectActionRef.current
-        if (reconnectAction) {
-          documentReconnectActionRef.current = null
-          clearDocumentOAuthResume()
-          const problem = documentImportState.problem ?? {
-            code: null,
-            requestId: null,
-            reconnectRequired: true,
-          }
-          dispatchDocumentImport(
-            reconnectAction === 'discover'
-              ? { type: 'discovery-failed', problem }
-              : { type: 'import-failed', problem },
-          )
-          return
-        }
-        // access_denied at the provider arrives flagged `cancelled` by the
-        // callback: the customer chose to stop, the provider did not fail.
-        finishConnectAttempt(event.data.cancelled === true ? 'cancelled' : 'provider_error')
-        setError(reason)
-        toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
-      }
-    }
-    window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
-  }, [
-    clearOAuthPopupWatch,
-    clearDocumentReconnectFailureCleanup,
-    documentImportState.problem,
-    finishConnectAttempt,
-    loadPreview,
-    runDocumentDiscovery,
-    runDocumentImport,
-    toast,
-  ])
 
   // Load SIE data when entering mapping step
   const loadSIEData = useCallback(async () => {

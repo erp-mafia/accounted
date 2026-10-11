@@ -17,6 +17,8 @@ import { K3ComponentSchema } from '@/lib/api/schemas'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
 import {
   BAS_RANGES_BY_CATEGORY,
   defaultAccountsForCategory,
@@ -425,15 +427,26 @@ export async function loadPostedDepreciationAssetIds(
   assetIds: string[],
 ): Promise<Set<string>> {
   const posted = new Set<string>()
-  if (assetIds.length === 0) return posted
-  const { data, error } = await supabase
-    .from('depreciation_schedules')
-    .select('asset_id')
-    .eq('company_id', companyId)
-    .in('asset_id', assetIds)
-    .not('journal_entry_id', 'is', null)
-  if (error) throw new Error(`Failed to load depreciation status: ${error.message}`)
-  for (const row of (data ?? []) as { asset_id: string }[]) posted.add(row.asset_id)
+  // One row per asset and posted year: paged on id, the ids in slices so a
+  // long asset register stays inside the request URL. Past 1,000 rows an
+  // asset whose rows came later read as never depreciated.
+  for (const ids of chunk(assetIds, 200)) {
+    try {
+      const rows = await fetchAllRows<{ asset_id: string }>(({ from, to }) =>
+        supabase
+          .from('depreciation_schedules')
+          .select('asset_id')
+          .eq('company_id', companyId)
+          .in('asset_id', ids)
+          .not('journal_entry_id', 'is', null)
+          .order('id', { ascending: true })
+          .range(from, to),
+      )
+      for (const row of rows) posted.add(row.asset_id)
+    } catch (error) {
+      throw new Error(`Failed to load depreciation status: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   return posted
 }
 

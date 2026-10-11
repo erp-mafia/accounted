@@ -69,6 +69,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
+import { collectPages } from '@/lib/lists/collect-pages'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
 // Shared source of truth (lib/worklist/types.ts) so the per-row chip and
@@ -189,14 +190,12 @@ function SortableHeader({
 // Persisted per company, mirroring the sort key convention.
 
 // Page-size selector. Persisted per company, mirroring the sort key convention.
-// 'all' fetches everything in the current scope (capped server-side at MAX_LIMIT);
-// the numeric options paginate normally.
+// 'all' collects everything in the current scope in chunks of the most rows
+// one response may carry (collectPages); the numeric options paginate normally.
 type PageSizeChoice = '20' | '50' | '100' | 'all'
 const PAGE_SIZE_STORAGE_KEY_PREFIX = 'Accounted:journal-page-size:'
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
 const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
-// Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
-const ALL_PAGE_SIZE = 100000
 
 export default function JournalEntryList({
   pristineSlot,
@@ -327,7 +326,7 @@ export default function JournalEntryList({
   const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
   const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
   const showingAll = pageSizeChoice === 'all'
-  const pageSize = showingAll ? ALL_PAGE_SIZE : Number(pageSizeChoice)
+  const pageSize = showingAll ? Number.POSITIVE_INFINITY : Number(pageSizeChoice)
 
   const normalizeDate = (v: string): string | null => {
     const trimmed = v.trim()
@@ -600,8 +599,6 @@ export default function JournalEntryList({
     setLoading(true)
     if (!preserveSelection) setSelectedIds(new Set()) // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
-      limit: String(pageSize),
-      offset: String(page * pageSize),
       sort_by: serializeSortStack(sortStack),
     })
     if (listMode === 'drafts') {
@@ -623,22 +620,26 @@ export default function JournalEntryList({
     }
     if (search) params.set('search', search)
 
+    // One request per page. "Alla" collects the whole scope in chunks of the
+    // most rows one response may carry: a single large request came back cut
+    // at 1,000 rows while the count promised every verifikat. A failed chunk
+    // fails the load, so a partial list never renders as all of them.
+    const fetchChunk = async (offset: number, limit: number) => {
+      const chunkParams = new URLSearchParams(params)
+      chunkParams.set('limit', String(limit))
+      chunkParams.set('offset', String(offset))
+      const res = await fetch(`/api/bookkeeping/journal-entries?${chunkParams}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const { data, count } = await res.json()
+      return { data: (data || []) as JournalEntry[], count: typeof count === 'number' ? count : 0 }
+    }
+
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
+      const { data: loadedEntries, count: total } = showingAll
+        ? await collectPages(fetchChunk, { want: Number.POSITIVE_INFINITY })
+        : await fetchChunk(page * pageSize, pageSize)
       if (!isCurrent()) return
-      if (!res.ok) {
-        // Surface the failure: stale rows (if any) stay on screen, the empty
-        // case renders the error state below, and the toast covers refetches.
-        setLoadFailed(true)
-        setMissingCount(null)
-        toast({ title: t('load_failed_title'), variant: 'destructive' })
-        setHasLoaded(true)
-        return
-      }
       setLoadFailed(false)
-      const { data, count: total } = await res.json()
-      if (!isCurrent()) return
-      const loadedEntries = data || []
       setEntries(loadedEntries)
       setCount(total || 0)
       setMissingCount(showMissingOnly && listMode === 'committed' ? total || 0 : null)
@@ -682,8 +683,10 @@ export default function JournalEntryList({
       fetchAttachmentCounts(ids, isCurrent)
       fetchRattelseFlags(ids, isCurrent)
     } catch {
-      // Network-level rejection (offline, aborted response body): same
-      // surfacing as a non-OK response, or the list stays dimmed forever.
+      // A non-OK response or a network-level rejection (offline, aborted
+      // response body): stale rows (if any) stay on screen, the empty case
+      // renders the error state below, and the toast covers refetches.
+      // Without this the list stays dimmed forever.
       if (!isCurrent()) return
       setLoadFailed(true)
       setMissingCount(null)
@@ -2081,8 +2084,12 @@ export default function JournalEntryList({
               </SelectContent>
             </Select>
             <span className="tabular-nums whitespace-nowrap">
-              {showingAll
+              {/* "Alla" says all only when every counted row is on screen;
+                  otherwise it states the range it actually holds. */}
+              {showingAll && entries.length >= count
                 ? t('showing_all', { total: count })
+                : showingAll
+                ? t('showing_range', { from: entries.length === 0 ? 0 : 1, to: entries.length, total: count })
                 : t('showing_range', {
                     from: count === 0 ? 0 : page * pageSize + 1,
                     to: Math.min((page + 1) * pageSize, count),

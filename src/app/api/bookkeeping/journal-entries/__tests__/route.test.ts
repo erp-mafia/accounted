@@ -380,19 +380,38 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     )
   })
 
-  it('accepts a large limit (the "Alla" page size) and a negative offset without erroring', async () => {
+  it('clamps a large limit to the 1,000 rows one request can return, and floors a negative offset', async () => {
     enqueue({ data: [], error: null, count: 0 })
 
     const request = createMockRequest('/api/bookkeeping/journal-entries', {
-      // 'Alla' sends a large limit; the route clamps it to MAX_LIMIT. A negative
-      // offset is floored to 0. Both are bounded server-side (ASVS V1.2.5).
+      // PostgREST cuts every response at 1,000 rows, so a larger limit would
+      // come back truncated under a count that claims more. "Alla" collects
+      // the list in 1,000-row chunks instead. Both bounds are server-side
+      // (ASVS V1.2.5).
       searchParams: { limit: '999999', offset: '-5', include_related: 'false' },
     })
-    const response = await GET(request)
+    const response = await GET(request, { params: Promise.resolve({}) })
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
     expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
+    expect(findCalls('journal_entries', 'range')).toEqual([[0, 999]])
+  })
+
+  it('passes the clamped limit to the fiscal-period RPC as well', async () => {
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', limit: '100000', offset: '2000' },
+    })
+    const response = await GET(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'list_fiscal_period_entries_with_related',
+      expect.objectContaining({ p_limit: 1000, p_offset: 2000 }),
+    )
   })
 
   it('returns 500 on database error', async () => {

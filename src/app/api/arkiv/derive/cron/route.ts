@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { arkivBrainRollout, isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { deriveCompanyFacts } from '@/lib/arkiv/facts/derive-company'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -33,9 +34,17 @@ export const GET = withCronContext('arkiv.derive', async (_request, ctx) => {
   const supabase = createServiceRoleClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
   const today = todayIso()
   try {
-    const { data, error } = await supabase.from('agreements').select('company_id, source_document_id, derived_at').order('derived_at', { ascending: true }).limit(2000)
-    if (error) throw new Error(`agreements fetch failed: ${error.message}`)
-    const agreements = ((data ?? []) as AgreementRow[]).filter((a) => isArkivBrainEnabled(a.company_id))
+    // Paged, oldest derivation first: PostgREST cuts a single read at 1000 rows, which hid the
+    // rollout companies whose agreements sorted past it. id breaks derived_at ties for stable pages.
+    const data = await fetchAllRows<AgreementRow>((range) =>
+      supabase
+        .from('agreements')
+        .select('company_id, source_document_id, derived_at')
+        .order('derived_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    )
+    const agreements = data.filter((a) => isArkivBrainEnabled(a.company_id))
     const companies = [...new Set(agreements.map((a) => a.company_id))].slice(0, MAX_COMPANIES)
 
     const totals = { companies: companies.length, checked: 0, matched: 0, missed: 0, rederived: 0 }

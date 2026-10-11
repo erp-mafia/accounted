@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-vi.mock('../rate-limiter', () => ({ TokenBucketRateLimiter: class { async acquire() {} } }));
+vi.mock('../rate-limiter', () => ({ TokenBucketRateLimiter: class { async acquire() {} }, connectionRateKey: (credential: string) => credential }));
 import { fetchMigrationPage, fetchSalesInvoicesHydrated, fetchSupplierInvoicesHydrated, hydrateSalesInvoices, hydrateSupplierInvoices } from '../provider-data-fetcher';
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '../bokio/mapper';
 import type { SupplierInvoiceDto } from '../dto';

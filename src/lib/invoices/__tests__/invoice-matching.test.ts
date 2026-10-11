@@ -462,6 +462,62 @@ describe('findMatchingInvoices', () => {
 })
 
 // ============================================================
+// findMatchingInvoices: a reference in the bank text is a whole number
+// ============================================================
+
+describe('findMatchingInvoices: reference in bank text', () => {
+  const { supabase, mockResult } = createMockSupabase()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // The amount never lines up (9 000 against 12 500), so any suggestion can
+  // only come from the reference fallback.
+  async function suggestFor(description: string, invoiceNumber: string) {
+    const tx = makeTransaction({ amount: 9000, description, merchant_name: null, reference: null })
+    mockResult({
+      data: [
+        { ...makeInvoice({ invoice_number: invoiceNumber, total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }) },
+      ],
+      error: null,
+    })
+    return findMatchingInvoices(supabase as never, 'company-1', tx)
+  }
+
+  it.each([
+    ['an ISO date', 'Inbetalning 2026-10-11', '1011'],
+    ['a compact date', 'BG inbet 261011', '1011'],
+    ['an amount with a thousands separator', 'Inbetalning 12 345,00 kr', '2345'],
+    ['an amount with öre', 'Belopp 31 011,00', '1011'],
+    ['the OCR of another invoice', `OCR ${generateOcrReference('41011')}`, '1011'],
+    ['a bankgiro number', 'Insättning BG 5050-1055', '5010'],
+  ])('does not read invoice digits inside %s as the reference', async (_label, description, invoiceNumber) => {
+    expect(await suggestFor(description, invoiceNumber)).toEqual([])
+  })
+
+  it('still reads a reference the bank text states on its own', async () => {
+    const result = await suggestFor('Faktura 1011', '1011')
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe(0.85)
+    expect(result[0].matchReason).toContain('banktexten')
+  })
+
+  it('still reads the printed OCR when the bank wrote it in groups', async () => {
+    expect(generateOcrReference('F-2024001')).toBe('20240016')
+    const result = await suggestFor('BG inbet 2024 0016', 'F-2024001')
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe(0.85)
+  })
+
+  it('still reads an invoice number whose series prefix carries digits and a dash', async () => {
+    const result = await suggestFor('Faktura 2026-001', '2026-001')
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe(0.85)
+  })
+})
+
+// ============================================================
 // getBestInvoiceMatch
 // ============================================================
 

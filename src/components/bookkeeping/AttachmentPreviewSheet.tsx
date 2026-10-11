@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { Skeleton } from '@/components/ui/skeleton'
 import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
+import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 
 interface DocumentRecord {
   id: string
@@ -241,7 +242,7 @@ export default function AttachmentPreviewSheet({
         <input
           ref={replaceFileInputRef}
           type="file"
-          accept="application/pdf,image/jpeg,image/png,image/webp"
+          accept={DOCUMENT_UPLOAD_ACCEPT}
           className="hidden"
           onChange={(e) => handleReplaceFileSelected(e.target.files?.[0] ?? null)}
         />

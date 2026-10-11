@@ -105,7 +105,7 @@ async function handleSupplierInvoiceRetroMatch(
       .eq('id', best.tx.id)
       .is('supplier_invoice_id', null)
 
-    logMatchEvent(supabase, userId, best.tx.id, 'auto_suggested', {
+    await logMatchEvent(supabase, userId, best.tx.id, 'auto_suggested', {
       supplierInvoiceId: invoice.id,
       matchConfidence: best.confidence,
       matchMethod: best.matchMethod,

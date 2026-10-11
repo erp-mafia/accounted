@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import type { PipelineView } from '@/app/api/documents/[id]/pipeline/route'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
+import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { cn } from '@/lib/utils'
 import { ARKIV } from './palette'
 
@@ -151,10 +152,10 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
               ref={input}
               type="file"
               multiple
-              // No image/heic here on purpose: when HEIC is absent from accept, iOS
-              // Safari transcodes photo-library picks to JPEG (the inbox does the
-              // same). A HEIC dropped from a Mac is still taken and decoded server-side.
-              accept="application/pdf,image/jpeg,image/png,image/webp,image/gif,.docx,.xlsx,.txt,.html"
+              // What POST /api/documents takes, minus HEIC so iOS Safari transcodes
+              // photo-library picks to JPEG (lib/documents/upload-types). A HEIC
+              // dropped from a Mac is still taken and decoded server-side.
+              accept={DOCUMENT_UPLOAD_ACCEPT}
               className="sr-only"
               onChange={(e) => void upload(Array.from(e.target.files ?? []))}
             />

@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { FinancialStatementPDF } from '@/lib/reports/financial-statement-pdf-template'
 import { buildIncomeStatementPdfModel } from '@/lib/reports/financial-statement-pdf'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
@@ -65,6 +63,10 @@ export const GET = withRouteContext('report.income_statement.pdf', async (reques
 
     const { groups, summary } = buildIncomeStatementPdfModel(report)
 
+    const [{ renderToBuffer }, { FinancialStatementPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/reports/financial-statement-pdf-template'),
+    ])
     const pdfBuffer = await renderToBuffer(
       FinancialStatementPDF({
         // Partial-view disclosure in the document title (BFNAR 2013:2).

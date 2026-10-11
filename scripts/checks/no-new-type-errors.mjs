@@ -50,7 +50,17 @@ const HEAP_MB = 8192
 
 function runTsc() {
   const tscBin = path.join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
-  const result = spawnSync(process.execPath, [tscBin, '--noEmit', '--pretty', 'false'], {
+  const args = [tscBin, '--noEmit', '--pretty', 'false']
+  // CI keeps tsc's incremental state between pipelines (CHECKS_CACHE_DIR, see
+  // .gitlab-ci.yml). A warm run rechecks only the changed files and their
+  // dependents, and the stored diagnostics still report every error in the
+  // unchanged ones, so the per-file counts below stay complete.
+  if (process.env.CHECKS_CACHE_DIR) {
+    const cacheDir = path.resolve(ROOT, process.env.CHECKS_CACHE_DIR)
+    fs.mkdirSync(cacheDir, { recursive: true })
+    args.push('--incremental', '--tsBuildInfoFile', path.join(cacheDir, 'tsc.tsbuildinfo'))
+  }
+  const result = spawnSync(process.execPath, args, {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,

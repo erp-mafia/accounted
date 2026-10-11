@@ -2,7 +2,10 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { guardBrowserWrite } from '@/lib/company/tab-guard'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { useCompany } from '@/contexts/CompanyContext'
+import { useCustomers } from '@/lib/reference-data/hooks'
+import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
 import { useToast } from '@/components/ui/use-toast'
 import { PaymentCalendar } from '@/extensions/general/calendar/components/PaymentCalendar'
 import type { DeadlineFormValues } from '@/components/deadlines/DeadlineForm'
@@ -10,44 +13,47 @@ import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registr
 import type { Invoice, Deadline } from '@/types'
 import { Skeleton } from '@/components/ui/skeleton'
 
-export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
+// Everything here is scoped to the ACTIVE company. The SELECT policies are
+// membership-wide (user_company_ids()), so a bare browser read showed a user
+// in two companies both companies' rows. Deadlines go through /api/deadlines,
+// customers through the reference-data hook, and the invoice read filters on
+// company_id explicitly.
+export default function CalendarWorkspace(_props: WorkspaceComponentProps) {
+  const { company } = useCompany()
+  const companyId = company?.id ?? null
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [deadlines, setDeadlines] = useState<Deadline[]>([])
-  const [customers, setCustomers] = useState<{ id: string; name: string }[]>([])
+  const { customers } = useCustomers()
   const [isLoading, setIsLoading] = useState(true)
   const { toast } = useToast()
-  const supabase = createClient()
 
   const fetchData = useCallback(async () => {
+    if (!companyId) {
+      setIsLoading(false)
+      return
+    }
     setIsLoading(true)
 
     try {
-      const { data: invoicesData, error: invoicesError } = await supabase
-        .from('invoices')
-        .select('*, customer:customers(name)')
-        .order('due_date', { ascending: true })
+      const supabase = createClient()
+      const [invoicesData, deadlinesRes] = await Promise.all([
+        fetchAllRows<Invoice>(({ from, to }) =>
+          supabase
+            .from('invoices')
+            .select('*, customer:customers(name)')
+            .eq('company_id', companyId)
+            .order('due_date', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to),
+        ),
+        fetch('/api/deadlines'),
+      ])
 
-      if (invoicesError) throw invoicesError
+      if (!deadlinesRes.ok) throw new Error(await getResponseErrorMessage(deadlinesRes))
+      const deadlinesBody = (await deadlinesRes.json()) as { data?: Deadline[] }
 
-      const { data: deadlinesData, error: deadlinesError } = await supabase
-        .from('deadlines')
-        .select('*, customer:customers(name)')
-        .is('dismissed_at', null)
-        .order('due_date', { ascending: true })
-
-      if (deadlinesError) throw deadlinesError
-
-      const { data: customersData, error: customersError } = await supabase
-        .from('customers')
-        .select('id, name')
-        .is('archived_at', null)
-        .order('name', { ascending: true })
-
-      if (customersError) throw customersError
-
-      setInvoices(invoicesData || [])
-      setDeadlines(deadlinesData || [])
-      setCustomers(customersData || [])
+      setInvoices(invoicesData)
+      setDeadlines(deadlinesBody.data ?? [])
     } catch {
       toast({
         title: 'Kunde inte hämta data',
@@ -56,60 +62,60 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
     } finally {
       setIsLoading(false)
     }
-  }, [supabase, toast])
+  }, [companyId, toast])
 
   useEffect(() => {
     fetchData()
   }, [fetchData])
 
   const handleDeadlineCreate = async (data: DeadlineFormValues) => {
-    // Cross-tab guard (WL-09): browser-direct Supabase write, outside the
-    // patched-fetch seam. The blocking dialog is the user feedback.
-    if (!guardBrowserWrite()) return
-    try {
-      const { error } = await supabase.from('deadlines').insert([data])
+    const response = await fetch('/api/deadlines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }).catch(() => null)
 
-      if (error) throw error
-
-      toast({
-        title: 'Deadline skapad',
-        description: 'Din deadline har sparats',
-      })
-
-      fetchData()
-    } catch (error) {
+    if (!response?.ok) {
       toast({
         title: 'Kunde inte skapa deadline',
+        description: response ? await getResponseErrorMessage(response) : undefined,
         variant: 'destructive',
       })
-      throw error
+      // Rejecting keeps the form open with the user's input.
+      throw new Error('deadline create failed')
     }
+
+    toast({
+      title: 'Deadline skapad',
+      description: 'Din deadline har sparats',
+    })
+
+    fetchData()
   }
 
   const handleDeadlineToggle = async (deadline: Deadline) => {
-    if (!guardBrowserWrite()) return
-    try {
-      const { error } = await supabase
-        .from('deadlines')
-        .update({
-          is_completed: !deadline.is_completed,
-          completed_at: !deadline.is_completed ? new Date().toISOString() : null,
-        })
-        .eq('id', deadline.id)
+    const response = await fetch(`/api/deadlines/${deadline.id}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // The target state, not a toggle: a row something else already changed
+      // must not flip back.
+      body: JSON.stringify({ is_completed: !deadline.is_completed }),
+    }).catch(() => null)
 
-      if (error) throw error
-
-      toast({
-        title: deadline.is_completed ? 'Markerad som ej klar' : 'Markerad som klar',
-      })
-
-      fetchData()
-    } catch {
+    if (!response?.ok) {
       toast({
         title: 'Kunde inte uppdatera deadline',
+        description: response ? await getResponseErrorMessage(response) : undefined,
         variant: 'destructive',
       })
+      return
     }
+
+    toast({
+      title: deadline.is_completed ? 'Markerad som ej klar' : 'Markerad som klar',
+    })
+
+    fetchData()
   }
 
   if (isLoading) {

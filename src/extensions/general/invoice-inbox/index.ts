@@ -65,6 +65,8 @@ import {
 } from './lib/custom-domains'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { roundOre } from '@/lib/money'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
@@ -87,6 +89,8 @@ import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
 import { buildFallbackKonteringLines } from './lib/fallback-kontering'
 import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -109,7 +113,6 @@ import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
 import { lookupPortal } from '@/lib/receipt-hunt/portal-directory'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
-import { simpleParser } from 'mailparser'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
@@ -594,31 +597,44 @@ export const invoiceInboxExtension: Extension = {
 
         const url = new URL(request.url)
         const status = url.searchParams.get('status')
-        // Cap raised from 50 → 500: the inbox is a workqueue and booked items
-        // now drop out of the default view client-side, so a low cap silently
-        // hid active underlag behind older booked ones. 500 covers realistic
-        // single-company volumes; pagination is the next step beyond that.
-        const limit = Math.min(Math.max(1, Number(url.searchParams.get('limit')) || 50), 500)
+        // The inbox is a workqueue and booked items drop out of the view
+        // client-side, so any cap on the read hides open underlag behind
+        // older booked ones (it was 50, then 500). Without ?limit every item
+        // is read, paged; ?limit asks for the newest N only (at most 1,000).
+        const limitParam = Number(url.searchParams.get('limit'))
+        const limit = Number.isInteger(limitParam) && limitParam >= 1 ? Math.min(limitParam, 1000) : null
 
-        let query = ctx.supabase
-          .from('invoice_inbox_items')
-          .select(`
-            id, status, source, created_at, extracted_data,
-            matched_supplier_id, document_id, email_from, email_subject,
-            email_received_at, email_body_text, error_message,
-            created_supplier_invoice_id,
-            matched_transaction_id, created_journal_entry_id,
-            resend_email_id, extraction_skipped, channel_context, kind_hint,
-            routed_to_arkiv_at, routed_doc_type
-          `)
-          .eq('company_id', ctx.companyId)
-          .order('created_at', { ascending: false })
-          .limit(limit)
+        const itemsQuery = () => {
+          let query = ctx.supabase
+            .from('invoice_inbox_items')
+            .select(`
+              id, status, source, created_at, extracted_data,
+              matched_supplier_id, document_id, email_from, email_subject,
+              email_received_at, email_body_text, error_message,
+              created_supplier_invoice_id,
+              matched_transaction_id, created_journal_entry_id,
+              resend_email_id, extraction_skipped, channel_context, kind_hint,
+              routed_to_arkiv_at, routed_doc_type
+            `)
+            .eq('company_id', ctx.companyId)
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: true })
+          if (status) query = query.eq('status', status)
+          return query
+        }
 
-        if (status) query = query.eq('status', status)
-
-        const { data, error } = await query
-        if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+        let data: unknown[]
+        try {
+          if (limit === null) {
+            data = await fetchAllRows<unknown>(({ from, to }) => itemsQuery().range(from, to))
+          } else {
+            const { data: page, error } = await itemsQuery().range(0, limit - 1)
+            if (error) throw error
+            data = page ?? []
+          }
+        } catch (error) {
+          return NextResponse.json({ error: (error as { message?: string }).message ?? String(error) }, { status: 500 })
+        }
 
         // Enrich matched-but-unstamped items with the verifikat that anchors
         // their transaction, when it is already booked. The stamp
@@ -693,10 +709,15 @@ export const invoiceInboxExtension: Extension = {
         // own reading stands in for the item's.
         const unread = items.filter((i) => i.extracted_data == null && i.document_id).map((i) => i.document_id as string)
         if (unread.length > 0) {
-          const { data: docs, error: docsError } = await ctx.supabase.from('document_attachments').select('id, extracted_data').in('id', unread)
-          if (docsError) return NextResponse.json({ error: docsError.message }, { status: 500 })
+          // In slices: the list is no longer capped, so the id list is not either.
+          const docs: Array<{ id: string; extracted_data: Record<string, unknown> | null }> = []
+          for (const ids of chunk(unread, 200)) {
+            const { data: part, error: docsError } = await ctx.supabase.from('document_attachments').select('id, extracted_data').in('id', ids)
+            if (docsError) return NextResponse.json({ error: docsError.message }, { status: 500 })
+            docs.push(...((part ?? []) as typeof docs))
+          }
           const readingOf = new Map(
-            ((docs ?? []) as Array<{ id: string; extracted_data: Record<string, unknown> | null }>).filter((d) => d.extracted_data).map((d) => [d.id, d.extracted_data]),
+            docs.filter((d) => d.extracted_data).map((d) => [d.id, d.extracted_data]),
           )
           for (const item of items) {
             if (item.extracted_data == null && item.document_id && readingOf.has(item.document_id)) {
@@ -2114,6 +2135,9 @@ export const invoiceInboxExtension: Extension = {
               // Unwrap it and process the inner attachments as if they had arrived
               // directly, carrying the inner email's subject/from into our metadata.
               if (download.contentType === 'message/rfc822') {
+                // mailparser loads here, on a forwarded mail, not with every
+                // route that loads the extension registry.
+                const { simpleParser } = await import('mailparser')
                 const parsed = await simpleParser(Buffer.from(download.buffer))
                 const innerAttachments = parsed.attachments || []
                 const innerFrom = parsed.from?.text || from
@@ -2637,18 +2661,23 @@ export const invoiceInboxExtension: Extension = {
         if (sourceTransactionId) {
           const { data: tx, error: txError } = await ctx.supabase
             .from('transactions')
-            .select('id, journal_entry_id, cash_account_id, date, amount, currency')
+            .select('id, journal_entry_id, cash_account_id, date, amount, currency, transaction_voucher_links(journal_entry_id, role)')
             .eq('id', sourceTransactionId)
             .eq('company_id', ctx.companyId)
             .maybeSingle()
           if (txError || !tx) {
             return NextResponse.json({ error: 'Transaktion hittades inte' }, { status: 404 })
           }
-          if (tx.journal_entry_id) {
-            return NextResponse.json(
-              { error: 'Transaktionen är redan bokförd' },
-              { status: 409 }
-            )
+          // The booking doors' shared answer: the pointer OR a bank_line voucher
+          // link naming a posted verifikat (a bulk-booked or split row has a
+          // NULL pointer). A stale pointer at a reversed verifikat does not
+          // block; the locked link below replaces exactly that observed value.
+          const bookable = await assertTransactionBookable(ctx.supabase, ctx.companyId, tx)
+          if (!bookable.ok) {
+            return errorResponseFromCode(bookable.code, ctx.log, {
+              requestId: ctx.requestId,
+              details: { journal_entry_id: bookable.journalEntryId, via: bookable.via },
+            })
           }
           transaction = tx
         }
@@ -2698,6 +2727,45 @@ export const invoiceInboxExtension: Extension = {
           )
         }
 
+        // The transaction this verifikat settles: the one the caller named, or
+        // the one the item was already matched to. Preserving the match without
+        // booking it was half a fix, and the worse half: the item then looked
+        // resolved while the bank line stayed open forever. Both are read and
+        // checked above, so `transaction` is set whenever there is one.
+        const bookedTransactionId = transaction?.id ?? null
+
+        if (transaction) {
+          // CAS on the pointer value read above (NULL, or a stale pointer at a
+          // reversed verifikat), like the manual book route: a concurrent
+          // booking that changed it wins. The losing verifikat is posted and
+          // immutable, so it is reversed through the storno service.
+          const linkQuery = ctx.supabase
+            .from('transactions')
+            .update({
+              journal_entry_id: journalEntry.id,
+              is_business: true,
+              category: 'uncategorized',
+            })
+            .eq('id', transaction.id)
+            .eq('company_id', ctx.companyId)
+          const { data: linkedRows, error: txUpdateError } = await (transaction.journal_entry_id
+            ? linkQuery.eq('journal_entry_id', transaction.journal_entry_id)
+            : linkQuery.is('journal_entry_id', null)
+          ).select('id')
+
+          if (txUpdateError || !linkedRows || linkedRows.length === 0) {
+            await reverseOrphanedJournalEntry(
+              ctx.supabase,
+              ctx.companyId,
+              ctx.userId,
+              journalEntry.id,
+              'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+            )
+            if (txUpdateError) return errorResponse(txUpdateError, ctx.log, { requestId: ctx.requestId })
+            return errorResponseFromCode('TX_CATEGORIZE_RACE', ctx.log, { requestId: ctx.requestId })
+          }
+        }
+
         // Link the source document to the new entry. Best-effort: the
         // entry itself is already posted; surfacing the failure shouldn't
         // roll it back, but log so support can re-link manually.
@@ -2711,28 +2779,6 @@ export const invoiceInboxExtension: Extension = {
             )
           } catch (err) {
             console.error('[invoice-inbox/book-direct] Document link failed:', err)
-          }
-        }
-
-        // The transaction this verifikat settles: the one the caller named, or
-        // the one the item was already matched to. Preserving the match without
-        // booking it was half a fix, and the worse half: the item then looked
-        // resolved while the bank line stayed open forever. The fallback needs
-        // no ownership check because it was read off a company-scoped item.
-        const bookedTransactionId = transaction?.id ?? item.matched_transaction_id ?? null
-
-        if (bookedTransactionId) {
-          const { error: txUpdateError } = await ctx.supabase
-            .from('transactions')
-            .update({
-              journal_entry_id: journalEntry.id,
-              is_business: true,
-              category: 'uncategorized',
-            })
-            .eq('id', bookedTransactionId)
-            .eq('company_id', ctx.companyId)
-          if (txUpdateError) {
-            console.error('[invoice-inbox/book-direct] Transaction link failed:', txUpdateError)
           }
         }
 

@@ -11,6 +11,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 
 const createJournalEntryMock = vi.fn()
 const linkToJournalEntryMock = vi.fn()
+const reverseOrphanedJournalEntryMock = vi.fn()
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => createJournalEntryMock(...args),
@@ -18,6 +19,10 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 
 vi.mock('@/lib/core/documents/document-service', () => ({
   linkToJournalEntry: (...args: unknown[]) => linkToJournalEntryMock(...args),
+}))
+
+vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
+  reverseOrphanedJournalEntry: (...args: unknown[]) => reverseOrphanedJournalEntryMock(...args),
 }))
 
 function findRoute(method: string, path: string) {
@@ -61,6 +66,8 @@ describe('POST /items/:id/book-direct', () => {
   beforeEach(() => {
     createJournalEntryMock.mockReset()
     linkToJournalEntryMock.mockReset()
+    reverseOrphanedJournalEntryMock.mockReset()
+    reverseOrphanedJournalEntryMock.mockResolvedValue(undefined)
     createJournalEntryMock.mockResolvedValue({
       id: 'je-1',
       voucher_series: 'A',
@@ -251,7 +258,8 @@ describe('POST /items/:id/book-direct', () => {
   it('returns 409 when transaction is already booked', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({}) })
-    enqueue({ data: { id: TX_UUID, journal_entry_id: 'je-old' } })
+    enqueue({ data: { id: TX_UUID, journal_entry_id: 'je-old', transaction_voucher_links: [] } })
+    enqueue({ data: [{ id: 'je-old', status: 'posted' }] }) // the pointer's verifikat is live
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -263,6 +271,120 @@ describe('POST /items/:id/book-direct', () => {
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(409)
     expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  // A bulk-booked or split row carries a NULL pointer and is booked through a
+  // bank_line voucher link. Checking only the pointer let Bokför direkt post
+  // a second verifikat for the same bank row.
+  it('returns 409 when the bank row is already booked through a voucher link', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({}) })
+    enqueue({
+      data: {
+        ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }),
+        transaction_voucher_links: [{ journal_entry_id: 'je-bulk', role: 'bank_line' }],
+      },
+    })
+    enqueue({ data: [{ id: 'je-bulk', status: 'posted' }] })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, transaction_id: TX_UUID },
+      searchParams: { _id: 'item-1' },
+    })
+    const { status, body } = await parseJsonResponse(await route.handler(request, ctx))
+
+    expect(status).toBe(409)
+    expect(body).toMatchObject({
+      error: { code: 'TRANSACTION_ALREADY_CATEGORIZED', details: { journal_entry_id: 'je-bulk', via: 'link' } },
+    })
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('books a row whose pointer names a reversed verifikat, replacing exactly that pointer', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: null }) })
+    enqueue({
+      data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: 'je-reversed', amount: -99 }), transaction_voucher_links: [] },
+    })
+    enqueue({ data: [{ id: 'je-reversed', status: 'reversed' }] })
+    enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
+    enqueue({ data: [{ id: TX_UUID }] }) // transaction link
+    enqueue({ data: null }) // inbox item update
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, transaction_id: TX_UUID },
+      searchParams: { _id: 'item-1' },
+    })
+    const { status } = await parseJsonResponse(await route.handler(request, ctx))
+
+    expect(status).toBe(200)
+    expect(findCalls('transactions', 'eq')).toContainEqual(['journal_entry_id', 'je-reversed'])
+  })
+
+  // Two requests can both pass the bookable check before either links the
+  // row. The loser's verifikat is posted and immutable, so it is reversed
+  // through the storno service, never deleted, and the item stays unbooked.
+  it('reverses the new verifikat when a concurrent booking linked the row first', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+    enqueue({
+      data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] },
+    })
+    enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
+    enqueue({ data: [] }) // transaction link: CAS matched no row
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, transaction_id: TX_UUID },
+      searchParams: { _id: 'item-1' },
+    })
+    const { status, body } = await parseJsonResponse(await route.handler(request, ctx))
+
+    expect(status).toBe(409)
+    expect(body).toMatchObject({ error: { code: 'TX_CATEGORIZE_RACE' } })
+    expect(findCalls('transactions', 'is')).toContainEqual(['journal_entry_id', null])
+    expect(reverseOrphanedJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-1',
+      expect.any(String),
+    )
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+    expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
+  })
+
+  it('reverses the new verifikat when the transaction link fails', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: null }) })
+    enqueue({
+      data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] },
+    })
+    enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
+    enqueue({ error: { message: 'connection reset', code: '08006' } }) // transaction link
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, transaction_id: TX_UUID },
+      searchParams: { _id: 'item-1' },
+    })
+    const { status } = await parseJsonResponse(await route.handler(request, ctx))
+
+    expect(status).toBeGreaterThanOrEqual(400)
+    expect(reverseOrphanedJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-1',
+      expect.any(String),
+    )
+    expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
   })
 
   // ── WhatsApp channel-context notes default ──────────────────
@@ -471,9 +593,9 @@ describe('POST /items/:id/book-direct', () => {
   it('books with transaction link: source_type=bank_transaction, source_id=transaction.id', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
-    enqueue({ data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }) })
+    enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] } })
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
-    enqueue({ data: null })  // transaction update
+    enqueue({ data: [{ id: TX_UUID }] })  // transaction link
     enqueue({ data: null })  // inbox item update
 
     const ctx = buildCtx(supabase)
@@ -511,8 +633,9 @@ describe('POST /items/:id/book-direct', () => {
     enqueue({
       data: makeInvoiceInboxItem({ document_id: 'doc-1', matched_transaction_id: TX_UUID }),
     })
-    enqueue({ data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }) })
+    enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] } })
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
+    enqueue({ data: [{ id: TX_UUID }] }) // transaction link
     enqueue({ data: null }) // inbox item update
 
     const ctx = buildCtx(supabase)

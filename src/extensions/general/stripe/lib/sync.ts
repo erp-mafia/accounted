@@ -2,7 +2,6 @@ import type Stripe from 'stripe'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getStripe } from '@/lib/stripe/client'
-import { eventBus } from '@/lib/events/bus'
 import {
   settleInvoicePayment,
   type InvoiceWithCustomerName,
@@ -11,6 +10,7 @@ import { createLogger, type Logger } from '@/lib/logger'
 import type { EntityType } from '@/types'
 import { connectedAccountOptions, isRevokedConnectionError } from './connect'
 import { processPayoutPaidEvent } from './payouts'
+import { markConnectionRevokedUpstream } from './revoked'
 import type { StripeConnection } from '../types'
 
 const defaultLog = createLogger('stripe/sync')
@@ -124,33 +124,7 @@ export async function syncStripeConnection(
       .autoPagingToArray({ limit: 1000 })
   } catch (err) {
     if (isRevokedConnectionError(err)) {
-      log.warn('connection revoked upstream; marking revoked', {
-        connectionId: connection.id,
-      })
-      await supabase
-        .from('stripe_connections')
-        .update({
-          status: 'revoked',
-          disconnected_at: new Date().toISOString(),
-          error_message: 'Åtkomsten återkallades hos Stripe.',
-        })
-        .eq('id', connection.id)
-      // An upstream revocation is the same outward-facing consent transition
-      // as a user-initiated disconnect: land it in the audit trail too.
-      try {
-        await eventBus.emit({
-          type: 'stripe.disconnected',
-          payload: {
-            connectionId: connection.id,
-            stripeAccountId: connection.stripe_account_id,
-            reason: 'revoked_upstream',
-            userId: connection.user_id,
-            companyId: connection.company_id,
-          },
-        })
-      } catch {
-        // Audit event failure must not block marking the connection revoked.
-      }
+      await markConnectionRevokedUpstream(supabase, connection, log)
       summary.revoked = true
       return summary
     }

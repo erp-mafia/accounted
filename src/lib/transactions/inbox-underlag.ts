@@ -39,8 +39,29 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { createLogger } from '@/lib/logger'
+import { chunk } from '@/lib/utils'
 
 const log = createLogger('transactions/inbox-underlag')
+
+/**
+ * Ids per read. The inbox list reads every item, so the id lists below are
+ * unbounded; one PostgREST `in` filter that long outgrows the request URL.
+ */
+const IDS_PER_READ = 200
+
+/** Run `read` over `ids` in slices; the first error stops it. */
+async function readInChunks(
+  ids: string[],
+  read: (part: string[]) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>,
+): Promise<{ data: unknown[]; error: { message: string } | null }> {
+  const data: unknown[] = []
+  for (const part of chunk(ids, IDS_PER_READ)) {
+    const { data: rows, error } = await read(part)
+    if (error) return { data, error }
+    data.push(...(rows ?? []))
+  }
+  return { data, error: null }
+}
 
 /**
  * Map each booked transaction id to the journal entry that anchors it:
@@ -61,11 +82,9 @@ export async function resolveBookedJournalEntryIds(
   const map = new Map<string, string>()
   if (txIds.length === 0) return map
 
-  const { data: txs, error: txError } = await supabase
-    .from('transactions')
-    .select('id, journal_entry_id')
-    .in('id', txIds)
-    .eq('company_id', companyId)
+  const { data: txs, error: txError } = await readInChunks(txIds, (part) =>
+    supabase.from('transactions').select('id, journal_entry_id').in('id', part).eq('company_id', companyId),
+  )
   if (txError) {
     log.error('Failed to resolve transactions for booked-entry lookup', {
       company_id: companyId,
@@ -99,11 +118,13 @@ export async function resolveVoucherLinkedEntryIds(
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>()
   if (txIds.length === 0) return map
-  const { data: links, error: linkError } = await supabase
-    .from('transaction_voucher_links')
-    .select('transaction_id, journal_entry_id')
-    .in('transaction_id', txIds)
-    .eq('company_id', companyId)
+  const { data: links, error: linkError } = await readInChunks(txIds, (part) =>
+    supabase
+      .from('transaction_voucher_links')
+      .select('transaction_id, journal_entry_id')
+      .in('transaction_id', part)
+      .eq('company_id', companyId),
+  )
   if (linkError) {
     log.error('Failed to resolve voucher links for booked-entry lookup', {
       company_id: companyId,
@@ -169,11 +190,9 @@ export async function resolveUnderlagAnchoring(
   if (withDocument.length === 0) return map
 
   const docIds = Array.from(new Set(withDocument.map((i) => i.document_id as string)))
-  const { data: docs, error } = await supabase
-    .from('document_attachments')
-    .select('id, journal_entry_id')
-    .in('id', docIds)
-    .eq('company_id', companyId)
+  const { data: docs, error } = await readInChunks(docIds, (part) =>
+    supabase.from('document_attachments').select('id, journal_entry_id').in('id', part).eq('company_id', companyId),
+  )
   if (error) {
     log.error('Failed to resolve document anchoring for inbox items', {
       company_id: companyId,
@@ -227,14 +246,16 @@ async function resolveLockedJournalEntryIds(
 ): Promise<Set<string>> {
   const locked = new Set<string>()
   if (entryIds.length === 0) return locked
-  const { data, error } = await supabase
-    .from('journal_entries')
-    // fiscal_periods also points back at journal_entries (closing_entry_id,
-    // opening_balance_entry_id), so PostgREST refuses the bare embed as
-    // ambiguous; name the FK explicitly.
-    .select('id, fiscal_period:fiscal_periods!journal_entries_fiscal_period_id_fkey(is_closed, locked_at)')
-    .in('id', entryIds)
-    .eq('company_id', companyId)
+  const { data, error } = await readInChunks(entryIds, (part) =>
+    supabase
+      .from('journal_entries')
+      // fiscal_periods also points back at journal_entries (closing_entry_id,
+      // opening_balance_entry_id), so PostgREST refuses the bare embed as
+      // ambiguous; name the FK explicitly.
+      .select('id, fiscal_period:fiscal_periods!journal_entries_fiscal_period_id_fkey(is_closed, locked_at)')
+      .in('id', part)
+      .eq('company_id', companyId),
+  )
   if (error) {
     log.error('Failed to resolve period lock state for inbox underlag anchoring', {
       company_id: companyId,

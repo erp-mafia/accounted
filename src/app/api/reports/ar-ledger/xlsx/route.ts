@@ -77,7 +77,7 @@ export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { s
       }
     }
 
-    const buffer = reportToWorkbook([
+    const buffer = await reportToWorkbook([
       {
         name: 'Åldersfördelning',
         columns: [

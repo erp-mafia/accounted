@@ -1,10 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { useBookingTemplates, useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
-import { useCompany } from '@/contexts/CompanyContext'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { bankNetAccountTest } from '@/lib/bookkeeping/bank-leg'
 import type { CashAccount } from '@/types'
@@ -29,7 +27,7 @@ import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
 import { FileText, AlertTriangle, Check, Plus, Trash2, Paperclip } from 'lucide-react'
-import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
+import type { BookingTemplateLibraryLine } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import type { TransactionWithInvoice } from './transaction-types'
 
@@ -80,13 +78,16 @@ export default function BulkBookDialog({
   onSuccess,
 }: BulkBookDialogProps) {
   const { toast } = useToast()
-  const { company } = useCompany()
-  const supabase = useMemo(() => createClient(), [])
   const t = useTranslations('tx_bulk_book')
 
   const [tab, setTab] = useState<Tab>('template')
-  const [templates, setTemplates] = useState<BookingTemplateLibrary[]>([])
-  const [loadingTemplates, setLoadingTemplates] = useState(true)
+  // Session-cached and scoped to the active company (system + company + its
+  // team) by /api/settings/booking-templates. A bare browser read of
+  // booking_template_library leaned on RLS, which is membership-wide, and so
+  // listed every company's templates for a user in several companies.
+  // Templates the company hid are left out, as in the other pickers.
+  const { templates: allTemplates, isLoading: loadingTemplates } = useBookingTemplates()
+  const templates = useMemo(() => allTemplates.filter((tpl) => !tpl.is_hidden), [allTemplates])
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
   // null = fetch pending; array = loaded (may be empty on error: falls back to '1930')
   // Session-cached (lib/reference-data); null only while the list is still
@@ -152,46 +153,6 @@ export default function BulkBookDialog({
     () => templates.find((tpl) => tpl.id === selectedTemplateId) ?? null,
     [templates, selectedTemplateId],
   )
-
-  // Load templates when the dialog opens. RLS scopes to user's companies +
-  // system templates; no company_id filter needed. Templates the company hid
-  // (booking_template_hidden, per-company opt-in) are excluded like in the
-  // other pickers; if that lookup fails we show everything (safe direction).
-  useEffect(() => {
-    if (!open || !company) return
-    const companyId = company.id
-    let cancelled = false
-    async function load() {
-      setLoadingTemplates(true)
-      try {
-        const [templatesRes, hiddenRes] = await Promise.all([
-          supabase
-            .from('booking_template_library')
-            .select('*')
-            .eq('is_active', true)
-            .order('is_system', { ascending: false })
-            .order('name', { ascending: true }),
-          supabase
-            .from('booking_template_hidden')
-            .select('template_id')
-            .eq('company_id', companyId),
-        ])
-        if (cancelled) return
-        const hiddenIds = new Set(
-          (hiddenRes.error ? [] : hiddenRes.data ?? []).map((r) => r.template_id as string),
-        )
-        const rows = (templatesRes.data ?? []) as BookingTemplateLibrary[]
-        setTemplates(rows.filter((tpl) => !hiddenIds.has(tpl.id)))
-      } finally {
-        if (!cancelled) setLoadingTemplates(false)
-      }
-    }
-    load()
-    return () => {
-      cancelled = true
-    }
-  }, [open, company, supabase])
-
 
   // Reset state when dialog closes so the next open starts clean.
   useEffect(() => {

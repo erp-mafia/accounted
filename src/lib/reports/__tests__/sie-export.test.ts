@@ -933,11 +933,14 @@ describe('generateSIEExport: previous year balances (#IB -1, #UB -1, #RES -1)', 
     { id: 'p7', journal_entry_id: 'e-close', account_number: '2099', debit_amount: 0, credit_amount: 400 },
   ]
 
-  function twoYearQueue() {
+  function twoYearQueue(excludeClosing = false) {
     return [
       { data: { id: 'period-2', period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: 'ob-2025' }, error: null },
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null }, // prevPeriod
       { data: [], error: null }, // accounts
+      // reversed year_end entries (fetchReversedYearEndEntryIds), read only
+      // when the flag excludes the year-end chain
+      ...(excludeClosing ? [{ data: [], error: null }] : []),
       // journal_entries, year 0: one sale
       { data: [{ id: 'e-2025', entry_date: '2025-02-01', voucher_number: 1, voucher_series: 'A', description: 'Sale 2025', status: 'posted' }], error: null },
       {
@@ -977,7 +980,7 @@ describe('generateSIEExport: previous year balances (#IB -1, #UB -1, #RES -1)', 
   it.each([false, true])(
     'with exclude_year_end_closing=%s: #UB -1 equals #IB 0 for every balance account and #RES -1 keeps the depreciation',
     async (excludeClosing) => {
-      results = twoYearQueue()
+      results = twoYearQueue(excludeClosing)
 
       const output = await generateSIEExport(supabase, 'company-1', {
         ...baseOptions,
@@ -1055,5 +1058,124 @@ describe('generateSIEExport: previous year balances (#IB -1, #UB -1, #RES -1)', 
     expect(output).toContain('#UB 0 1930 200.00')
     expect(output).not.toMatch(/^#(RAR|IB|UB|RES) -1 /m)
     expect(supabase.rpc).not.toHaveBeenCalledWith('result_closing_entry_ids', expect.anything())
+  })
+})
+
+// An undone bokslut leaves its year_end entries reversed and a storno of each
+// in the year. With exclude_year_end_closing the export dropped the reversed
+// originals by source_type but kept their storno, so #VER, #UB and #RES carried
+// the negation of a bokslut that, net, never happened.
+describe('generateSIEExport: exclude_year_end_closing with an undone bokslut', () => {
+  type Row = Record<string, unknown>
+
+  // 2025: one sale (A1); a wrong cost reversed by an ordinary storno (A2, A3);
+  // the bokslut depreciation J1, undone by its storno J2.
+  const entries: Row[] = [
+    { id: 'e-sale', entry_date: '2025-03-01', voucher_series: 'A', voucher_number: 1, description: 'Sale', status: 'posted', source_type: 'manual', reverses_id: null, correction_of_id: null },
+    { id: 'e-wrong', entry_date: '2025-04-01', voucher_series: 'A', voucher_number: 2, description: 'Wrong cost', status: 'reversed', source_type: 'manual', reverses_id: null, correction_of_id: null },
+    { id: 'e-wrong-storno', entry_date: '2025-04-02', voucher_series: 'A', voucher_number: 3, description: 'Storno A2', status: 'posted', source_type: 'storno', reverses_id: 'e-wrong', correction_of_id: null },
+    { id: 'e-ye', entry_date: '2025-12-31', voucher_series: 'J', voucher_number: 1, description: 'Avskrivning', status: 'reversed', source_type: 'year_end', reverses_id: null, correction_of_id: null },
+    { id: 'e-ye-storno', entry_date: '2025-12-31', voucher_series: 'J', voucher_number: 2, description: 'Storno J1', status: 'posted', source_type: 'storno', reverses_id: 'e-ye', correction_of_id: null },
+  ]
+  const line = (id: string, entry: string, account: string, debit: number, credit: number): Row => ({
+    id, journal_entry_id: entry, account_number: account, debit_amount: debit, credit_amount: credit, line_description: null, dimensions: {},
+  })
+  const lines: Row[] = [
+    line('l1', 'e-sale', '1930', 1000, 0),
+    line('l2', 'e-sale', '3001', 0, 1000),
+    line('l3', 'e-wrong', '6110', 50, 0),
+    line('l4', 'e-wrong', '1930', 0, 50),
+    line('l5', 'e-wrong-storno', '1930', 50, 0),
+    line('l6', 'e-wrong-storno', '6110', 0, 50),
+    line('l7', 'e-ye', '7832', 100, 0),
+    line('l8', 'e-ye', '1229', 0, 100),
+    line('l9', 'e-ye-storno', '1229', 100, 0),
+    line('l10', 'e-ye-storno', '7832', 0, 100),
+  ]
+
+  // Applies the filters the export puts on journal_entries and
+  // journal_entry_lines, so the test reads what the query would return. A
+  // filter on a column the fixture rows do not carry (company_id) passes.
+  function ledgerClient() {
+    function builder(table: string) {
+      const filters: Array<(row: Row) => boolean> = []
+      let page: [number, number] | null = null
+      let priorYearRead = false
+      const has = (row: Row, col: string) => Object.prototype.hasOwnProperty.call(row, col)
+      const b: Row = {}
+      const add = (f: (row: Row) => boolean) => {
+        filters.push(f)
+        return b
+      }
+      b.select = () => b
+      b.order = () => b
+      b.limit = () => b
+      b.lt = () => {
+        priorYearRead = true
+        return b
+      }
+      b.range = (from: number, to: number) => {
+        page = [from, to]
+        return b
+      }
+      b.eq = (col: string, val: unknown) => add((r) => !has(r, col) || r[col] === val)
+      b.neq = (col: string, val: unknown) => add((r) => !has(r, col) || r[col] !== val)
+      b.in = (col: string, vals: unknown[]) => add((r) => !has(r, col) || vals.includes(r[col]))
+      b.or = (expr: string) => {
+        const m = /^(\w+)\.is\.null,\1\.not\.in\.\((.*)\)$/.exec(expr)
+        if (!m) throw new Error(`unsupported or(): ${expr}`)
+        const ids = m[2].split(',')
+        return add((r) => r[m[1]] == null || !ids.includes(String(r[m[1]])))
+      }
+      b.single = async () => ({
+        data: table === 'fiscal_periods' && !priorYearRead
+          ? { id: 'period-2025', period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: null }
+          : null,
+        error: null,
+      })
+      b.then = (resolve: (v: unknown) => void) => {
+        const source = table === 'journal_entries' ? entries : table === 'journal_entry_lines' ? lines : []
+        const rows = source.filter((r) => filters.every((f) => f(r)))
+        resolve({ data: page ? rows.slice(page[0], page[1] + 1) : rows, error: null })
+      }
+      return b
+    }
+    return {
+      from: vi.fn((table: string) => builder(table)),
+      rpc: vi.fn(async (name: string) => (name === 'acquire_sie_period_read' ? { data: 'read-lease', error: null } : { data: [], error: null })),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+  }
+
+  const options = { ...baseOptions, fiscal_period_id: 'period-2025', exclude_year_end_closing: true }
+
+  it('drops the undone bokslut together with its storno', async () => {
+    const records = (await generateSIEExport(ledgerClient(), 'company-1', options)).split('\r\n')
+
+    expect(records.filter((r) => r.startsWith('#VER "J"'))).toEqual([])
+    expect(records.some((r) => r.startsWith('#RES 0 7832 '))).toBe(false)
+    expect(records.some((r) => r.startsWith('#UB 0 1229 '))).toBe(false)
+  })
+
+  it('keeps everything else, an ordinary storno pair included', async () => {
+    const records = (await generateSIEExport(ledgerClient(), 'company-1', options)).split('\r\n')
+
+    expect(records.filter((r) => r.startsWith('#VER '))).toEqual([
+      '#VER "A" 1 20250301 "Sale"',
+      '#VER "A" 2 20250401 "Wrong cost"',
+      '#VER "A" 3 20250402 "Storno A2"',
+    ])
+    expect(records).toContain('#UB 0 1930 1000.00')
+    expect(records).toContain('#RES 0 3001 -1000.00')
+    expect(records).toContain('#RES 0 6110 0.00')
+  })
+
+  it('keeps the bokslut and its storno when the year-end entries are not excluded', async () => {
+    const records = (await generateSIEExport(ledgerClient(), 'company-1', { ...options, exclude_year_end_closing: false })).split('\r\n')
+
+    expect(records).toContain('#VER "J" 1 20251231 "Avskrivning"')
+    expect(records).toContain('#VER "J" 2 20251231 "Storno J1"')
+    expect(records).toContain('#RES 0 7832 0.00')
+    expect(records).toContain('#UB 0 1229 0.00')
   })
 })

@@ -1,11 +1,10 @@
-import * as XLSX from 'xlsx'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { formatCurrency } from '@/lib/utils'
 import { detectColumns } from './column-detector'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { detectFileFormat } from '../bank-file/parser'
 import { decodeFileContent } from '../shared/encoding'
-import { readWorkbookFromBuffer } from '../shared/workbook-reader'
+import { readBestSheet } from '../shared/workbook-reader'
 import type {
   DetectedColumns,
   ParsedOpeningBalanceRow,
@@ -62,32 +61,13 @@ function detectBankStatementFormat(buffer: ArrayBuffer, filename: string): strin
  * @param filename - Original filename (used for format detection)
  * @param columnOverrides - Optional manual column mapping (from column mapping step)
  */
-export function parseOpeningBalanceFile(
+export async function parseOpeningBalanceFile(
   buffer: ArrayBuffer,
   filename: string,
   columnOverrides?: DetectedColumns,
-): OpeningBalanceParseResult {
-  const workbook = readWorkbookFromBuffer(buffer, filename)
-
-  // Pick the sheet with the most rows (heuristic for multi-sheet workbooks)
-  let bestSheet = workbook.SheetNames[0]
-  let bestRowCount = 0
-  for (const name of workbook.SheetNames) {
-    const sheet = workbook.Sheets[name]
-    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1')
-    const rowCount = range.e.r - range.s.r + 1
-    if (rowCount > bestRowCount) {
-      bestRowCount = rowCount
-      bestSheet = name
-    }
-  }
-
-  const sheet = workbook.Sheets[bestSheet]
-  const rawData: string[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: '',
-    raw: false,
-  })
+): Promise<OpeningBalanceParseResult> {
+  // The sheet with the most rows (heuristic for multi-sheet workbooks), as rows.
+  const { sheetName: bestSheet, rawData } = await readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     return {

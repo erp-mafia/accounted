@@ -13,6 +13,7 @@ import {
 import { createLogger, type Logger } from '@/lib/logger'
 import type { RawTransaction, TransactionMethod } from '@/types'
 import { connectedAccountOptions, isRevokedConnectionError } from './connect'
+import { markConnectionRevokedUpstream } from './revoked'
 import type { StripeConnection } from '../types'
 
 const defaultLog = createLogger('stripe/transaction-sync')
@@ -534,8 +535,7 @@ export async function syncStripeBalanceTransactions(
       .autoPagingToArray({ limit: MAX_TXNS_PER_RUN })
   } catch (err) {
     if (isRevokedConnectionError(err)) {
-      // The event sync polls every 15 minutes and owns the revoked-status
-      // transition + audit event; this nightly pass just reports and stops.
+      await markConnectionRevokedUpstream(supabase, connection, log)
       summary.revoked = true
       return summary
     }

@@ -22,7 +22,12 @@ const CREDENTIAL_PAIRS = [
   ['UPSTASH_STORAGE_KV_REST_API_URL', 'UPSTASH_STORAGE_KV_REST_API_TOKEN'],
 ] as const
 
-function restCredentials(): { url: string; token: string } | null {
+/**
+ * The Upstash REST pair to use, or null. Exported for callers that need a
+ * client with per-call options (the provider limiter's budgeted path); every
+ * other caller takes the shared client from getRedis().
+ */
+export function upstashRestCredentials(): { url: string; token: string } | null {
   for (const [urlKey, tokenKey] of CREDENTIAL_PAIRS) {
     const url = process.env[urlKey]
     const token = process.env[tokenKey]
@@ -37,13 +42,13 @@ function restCredentials(): { url: string; token: string } | null {
  * caller re-reading the env.
  */
 export function isRateLimiterConfigured(): boolean {
-  return restCredentials() !== null
+  return upstashRestCredentials() !== null
 }
 
-/** The shared Upstash client, or null without credentials. Also used for short-lived MCP session marks (mcp-server/unattended.ts). */
+/** The shared Upstash client, or null without credentials. Also used by the provider limiter (providers/rate-limiter.ts) and for short-lived MCP session marks (mcp-server/unattended.ts). */
 export function getRedis(): Redis | null {
   if (redis) return redis
-  const credentials = restCredentials()
+  const credentials = upstashRestCredentials()
   if (!credentials) return null
   redis = new Redis(credentials)
   return redis

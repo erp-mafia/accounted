@@ -108,6 +108,7 @@ describe('commitPendingOperation(bulk_book_transactions): dimension policy at ap
       { data: { id: 'op-bulk-dims' }, error: null },
       { data: [ruleRow()], error: null }, // account_dimension_rules
       { data: { dimensions_enabled: false }, error: null }, // registry validation: free text
+      { data: [], error: null }, // duplicate guard: row fetch (nothing to compare)
       { data: { ok: true, journal_entry_id: 'je-1', mode: 'create_new', linked_tx_count: 1 }, error: null }, // RPC
       { data: POSTED, error: null }, // engine door: reload of the posted samlingsverifikat
       { data: null, error: null }, // finalize committed

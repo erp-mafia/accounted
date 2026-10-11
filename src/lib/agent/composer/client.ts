@@ -30,7 +30,7 @@ let cached: AiClient | null = null
 // default, while the direct API honours the hour. Cache effectiveness on
 // multi-minute gaps is therefore better on the direct path; the loop works
 // either way.
-export function getAnthropic(): AiClient {
+export async function getAnthropic(): Promise<AiClient> {
   if (cached) return cached
 
   // Startup diagnostic: make a misconfiguration visible in the logs instead of
@@ -54,7 +54,7 @@ export function getAnthropic(): AiClient {
     })
   }
 
-  cached = createAiClient()
+  cached = await createAiClient()
   return cached
 }
 

@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
-import { ReskontraPDF, type ReskontraInvoiceRow } from '@/lib/reports/reskontra-pdf-template'
+import type { ReskontraInvoiceRow } from '@/lib/reports/reskontra-pdf-template'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { slugifyCompanyName } from '@/lib/reports/xlsx-export'
 import type { CompanySettings } from '@/types'
@@ -51,6 +50,10 @@ export const GET = withRouteContext('report.ar_ledger.pdf', async (request, { su
       }
     }
 
+    const [{ renderToBuffer }, { ReskontraPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/reports/reskontra-pdf-template'),
+    ])
     const pdfBuffer = await renderToBuffer(
       ReskontraPDF({
         title: 'Kundreskontra',

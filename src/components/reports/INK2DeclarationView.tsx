@@ -17,6 +17,7 @@ import {
   INK2R_INCOME_CODES,
 } from '@/lib/reports/ink2/types'
 import { parseApiError } from './api-error'
+import { downloadFile, RENDERED_DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
 
 export function INK2DeclarationView({ periodId }: { periodId: string }) {
   // Fetch outcome tagged with the key it was requested under: switching
@@ -68,16 +69,15 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
     setDownloading(true)
     setDownloadError(null)
     try {
-      const res = await fetch(`/api/reports/ink2?period_id=${periodId}&format=sru`)
-      if (!res.ok) throw new Error('Download failed')
-      const blob = await res.blob()
-      const filename = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] || 'INK2_SRU.zip'
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename
-      a.click()
-      URL.revokeObjectURL(url)
+      const result = await downloadFile({
+        url: `/api/reports/ink2?period_id=${periodId}&format=sru`,
+        filename: 'INK2_SRU.zip',
+        preferServerFilename: true,
+        timeoutMs: RENDERED_DOWNLOAD_TIMEOUT_MS,
+      })
+      if (!result.ok) {
+        setDownloadError(result.reason === 'server' ? result.message : 'Kunde inte ladda ner SRU-filer')
+      }
     } catch {
       setDownloadError('Kunde inte ladda ner SRU-filer')
     } finally {

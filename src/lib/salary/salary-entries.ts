@@ -1,7 +1,8 @@
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { createJournalEntries } from '@/lib/bookkeeping/journal-entry-batch'
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
-import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { activateAccounts } from '@/lib/bookkeeping/chart-of-accounts-service'
+import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import {
   coerceDimensionsBag,
   dimensionsBagKey,
@@ -333,7 +334,7 @@ export async function createSalaryRunEntries(
   // account, the same resolver the preview route calls (issue #3097).
   const bankAccount = await resolvePrimaryBankAccount(supabase, companyId, log)
 
-  await ensureSalaryAccountsExist(supabase, companyId, userId, postingRun, bankAccount)
+  await activateSalaryAccounts(supabase, companyId, userId, postingRun, bankAccount)
 
   // The four line sets come from the same builder the preview route renders,
   // so what the user approved on screen is what posts.
@@ -1010,12 +1011,14 @@ function getEmployeeSalaryAccount(employmentType: string): string {
 }
 
 /**
- * Ensure every BAS account referenced by the salary run exists in
- * chart_of_accounts. Users who seeded the minimal chart via
- * seed_chart_of_accounts will be missing many 7xxx/29xx accounts: we
- * auto-create them from BAS reference data on first salary booking.
+ * Make every account the salary run posts to usable before the engine
+ * resolves them: standard BAS accounts missing from the chart are created,
+ * deactivated ones (a 7210 switched off before the first employee) are
+ * reactivated. Both go through activateAccounts, the one activation path the
+ * chart page and the API use. A number that is neither in the chart nor in
+ * BAS 2026 is refused instead of invented.
  */
-async function ensureSalaryAccountsExist(
+async function activateSalaryAccounts(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
@@ -1035,65 +1038,18 @@ async function ensureSalaryAccountsExist(
     }
   }
 
-  if (needed.size === 0) return
-
-  const { data: existing, error } = await supabase
-    .from('chart_of_accounts')
-    .select('account_number')
-    .eq('company_id', companyId)
-    .in('account_number', [...needed])
-
-  if (error) {
-    throw new Error(`Kunde inte läsa kontoplanen: ${error.message}`)
+  const outcome = await activateAccounts({ supabase, companyId, userId, log }, [...needed])
+  // activateAccounts has logged the database error behind the failure.
+  if (!outcome.ok) throw new Error(`Kunde inte aktivera lönekontona (${outcome.code})`)
+  if (outcome.dryRun) return
+  if (outcome.data.unknown.length > 0) {
+    throw new AccountsNotInChartError(outcome.data.unknown)
   }
 
-  const existingSet = new Set((existing || []).map(a => a.account_number))
-  const missing = [...needed].filter(num => !existingSet.has(num))
-  if (missing.length === 0) return
-
-  const inserts = missing.map(accountNumber => {
-    const basRef = getBASReference(accountNumber)
-    if (basRef) {
-      return {
-        user_id: userId,
-        company_id: companyId,
-        account_number: accountNumber,
-        account_name: basRef.account_name,
-        account_class: basRef.account_class,
-        account_group: basRef.account_group,
-        account_type: basRef.account_type,
-        normal_balance: basRef.normal_balance,
-        sru_code: basRef.sru_code,
-        k2_excluded: basRef.k2_excluded,
-        plan_type: 'full_bas',
-        is_active: true,
-        is_system_account: false,
-      }
-    }
-    // Fallback: shouldn't happen for salary accounts, but keeps us safe.
-    const classNum = parseInt(accountNumber.charAt(0), 10)
-    const group = accountNumber.substring(0, 2)
-    return {
-      user_id: userId,
-      company_id: companyId,
-      account_number: accountNumber,
-      account_name: `Konto ${accountNumber}`,
-      account_class: classNum,
-      account_group: group,
-      account_type: classNum >= 4 ? 'expense' : classNum === 2 ? 'liability' : 'asset',
-      normal_balance: classNum <= 1 || classNum >= 4 ? 'debit' : 'credit',
-      plan_type: 'full_bas',
-      is_active: true,
-      is_system_account: false,
-    }
-  })
-
-  const { error: insertError } = await supabase.from('chart_of_accounts').insert(inserts)
-  if (insertError && !insertError.message.includes('duplicate')) {
-    throw new Error(`Kunde inte skapa saknade konton: ${insertError.message}`)
+  const { activated, reactivated, accounts } = outcome.data
+  if (activated + reactivated > 0) {
+    log.info(`Activated ${activated} and reactivated ${reactivated} salary accounts: ${accounts.map((a) => a.account_number).join(', ')}`)
   }
-
-  log.info(`Auto-created ${missing.length} missing salary accounts: ${missing.join(', ')}`)
 }
 
 function accountLabel(account: string): string {

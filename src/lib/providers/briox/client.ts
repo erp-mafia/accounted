@@ -1,5 +1,5 @@
 import { fetchInExecutionBudget } from '@/lib/http/execution-budget';
-import { TokenBucketRateLimiter } from '../rate-limiter';
+import { TokenBucketRateLimiter, connectionRateKey } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { BRIOX_BASE_URL, BRIOX_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
@@ -68,7 +68,7 @@ export class BrioxClient {
   async get<T>(accessToken: string, path: string): Promise<T> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: this.authHeaders(accessToken),
@@ -103,7 +103,7 @@ export class BrioxClient {
   async getBytes(accessToken: string, path: string): Promise<ArrayBuffer> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: { Authorization: accessToken },

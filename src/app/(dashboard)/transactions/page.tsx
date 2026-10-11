@@ -98,6 +98,7 @@ import {
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { collectPages } from '@/lib/lists/collect-pages'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -1236,22 +1237,34 @@ export default function TransactionsPage() {
       // pending affarshandelser to be booked promptly, so every pending row
       // must stay in state regardless of the filter. The inbox applies the
       // period client-side and the footer surfaces what falls outside it.
-      let windowQuery = supabase
-        .from('transactions')
-        .select(TRANSACTION_LIST_SELECT)
-        .eq('company_id', companyId)
-      if (periodBounds) {
-        windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
-      }
-
-      const [{ data: txData, error: txError }, pendingRows] = await Promise.all([
+      const windowPage = async (offset: number, limit: number) => {
+        let windowQuery = supabase
+          .from('transactions')
+          .select(TRANSACTION_LIST_SELECT)
+          .eq('company_id', companyId)
+        if (periodBounds) {
+          windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+        }
         // The id tie-breaker keeps offset paging deterministic when many
         // rows share a date; without it .range() pages can skip or repeat
         // same-date rows.
-        windowQuery
+        const { data, error } = await windowQuery
           .order('date', { ascending: false })
           .order('id', { ascending: true })
-          .range(0, windowSize - 1),
+          .range(offset, offset + limit - 1)
+        if (error) throw error
+        return { data: (data ?? []) as TransactionWithInvoice[] }
+      }
+
+      const [{ data: txData, error: txError }, pendingRows] = await Promise.all([
+        // A refresh after "Visa fler" reloads the whole window the user paged
+        // through. One request is cut at 1,000 rows, which shrank a larger
+        // window and hid the button although older rows remained, so the
+        // window is collected in chunks.
+        collectPages(windowPage, { want: windowSize }).then(
+          ({ data }) => ({ data, error: null }),
+          (error: unknown) => ({ data: null, error }),
+        ),
         // The inbox is a worklist: it must contain every pending row, even ones
         // older than the newest-first window above. Falls back to null so the
         // page still renders the windowed rows if this fetch dies; the failure

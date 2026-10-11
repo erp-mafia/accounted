@@ -55,7 +55,7 @@ export const POST = withRouteContext(
 
     try {
       const buffer = await file.arrayBuffer()
-      const parsed = parseSuppliersFile(buffer, file.name, columnOverrides)
+      const parsed = await parseSuppliersFile(buffer, file.name, columnOverrides)
 
       const existing = await fetchAllRows(({ from, to }) =>
         supabase

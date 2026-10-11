@@ -181,6 +181,38 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     )
   })
 
+  it('approval fills the bankgiro the supplier lacks, as staged from the scan', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-100', voucher_number: 7, voucher_series: 'L' })
+    )
+
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // dispatcher CAS claim
+    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null }) // inbox fetch
+    enqueue({ data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' }, error: null }) // supplier fetch
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
+    enqueue({ data: 42, error: null }) // get_next_arrival_number RPC
+    enqueue({ data: makeSupplierInvoice({ id: 'inv-1', supplier_invoice_number: 'INV-100' }), error: null }) // supplier_invoices insert
+    enqueue({ data: null, error: null }) // supplier_invoice_items insert
+    enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: [], error: null }) // still-pending twins of the same item
+    enqueue({ data: { bankgiro: null, plusgiro: null, iban: null, bic: null }, error: null }) // supplier payment columns
+    enqueue({ data: null, error: null }) // suppliers update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const base = makePendingOp()
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { ...base.params, supplier_payment_details: { bankgiro: '5050-1055' } } }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(findCall('suppliers', 'update')).toEqual([{ bankgiro: '5050-1055', plusgiro: null, iban: null, bic: null }])
+  })
+
   it('idempotency: re-fired commit on an already-converted inbox returns the existing invoice without rework', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

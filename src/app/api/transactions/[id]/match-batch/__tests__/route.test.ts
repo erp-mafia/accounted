@@ -6,7 +6,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -66,6 +66,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 import { POST } from '../route'
 import { eventBus } from '@/lib/events/bus'
+import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
 
 const TX_UUID = '11111111-1111-4111-8111-111111111111'
 const INV_UUID = '22222222-2222-4222-8222-222222222222'
@@ -331,6 +332,41 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(400)
     expect(body.error.code).toBe('MATCH_INVOICE_NOT_INVOICE_TYPE')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('takes a ROT/RUT payout batch of 150 invoices and reads them in URL-safe slices: a quote in the second slice is still refused (crm#1144)', async () => {
+    const ids = Array.from({ length: 150 }, () => crypto.randomUUID())
+    const docs = ids.map((id, i) => ({ id, document_type: i === 130 ? 'quote' : 'invoice' }))
+    enqueue({ data: docs.slice(0, ID_READ_CHUNK), error: null })
+    enqueue({ data: docs.slice(ID_READ_CHUNK), error: null })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: { allocations: ids.map((id) => ({ kind: 'customer_invoice', invoice_id: id, amount: 500 })) },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_INVOICE_NOT_INVOICE_TYPE')
+    expect(findCalls('invoices', 'in').map(([, part]) => (part as string[]).length)).toEqual([ID_READ_CHUNK, 50])
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for one allocation more than MAX_BANK_ROW_SPLIT, before any read', async () => {
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: Array.from({ length: MAX_BANK_ROW_SPLIT + 1 }, () => ({
+          kind: 'customer_invoice',
+          invoice_id: crypto.randomUUID(),
+          amount: 500,
+        })),
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    expect(response.status).toBe(400)
+    expect(findCalls('invoices', 'in')).toEqual([])
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 

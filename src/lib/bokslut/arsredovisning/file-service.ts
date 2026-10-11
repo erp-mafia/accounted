@@ -20,7 +20,6 @@
  *
  * Nothing here sends anything to Bolagsverket.
  */
-import { renderToBuffer } from '@react-pdf/renderer'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { ReportFile } from '@/lib/reports/filing-report-service'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
@@ -32,8 +31,6 @@ import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
 import { buildCanonicalAnnualReport } from './model'
 import { getAnnualReportVersion } from './version-service'
 import { getVersionIxbrlInput } from './version-ixbrl'
-import { ArsredovisningPDF } from './arsredovisning-pdf'
-import { ArsredovisningK3PDF } from './arsredovisning-k3-pdf'
 import type { ArsredovisningData } from './types'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -76,6 +73,13 @@ export async function getArsredovisningPdfFile(
   const { fiscal_period_id: fiscalPeriodId, version_id: versionId } = query
   try {
     const render = async (data: ArsredovisningData, versionStatus: string | null) => {
+      // react-pdf and the templates load here, not with every route that
+      // reaches this module through the operations registry.
+      const [{ renderToBuffer }, { ArsredovisningPDF }, { ArsredovisningK3PDF }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('./arsredovisning-pdf'),
+        import('./arsredovisning-k3-pdf'),
+      ])
       // K3 documents need the kassaflöde + equity-changes pages and the
       // richer noter; K2 (the default) keeps its template unchanged.
       const PdfComponent = data.accounting_framework === 'k3' ? ArsredovisningK3PDF : ArsredovisningPDF

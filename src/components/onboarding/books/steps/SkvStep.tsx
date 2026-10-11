@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useFormat } from '@/lib/hooks/use-format'
+import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
+import { isSkvPopupOrigin, type SkvPopupMessage } from '@/lib/skatteverket/popup-origin'
 import { InkText } from '@/components/onboarding/journey/ink'
 import { fmtKr } from '../engines/cash-draw'
 import { SkvHandshake } from '../ui/SkvHandshake'
@@ -37,7 +39,6 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
   const [saldo, setSaldo] = useState<number | null>(null)
   const [attn, setAttn] = useState<string | null>(landedError)
   const timers = useRef<number[]>([])
-  const tabRef = useRef<Window | null>(null)
   const watchRef = useRef<number | null>(null)
   const phaseRef = useRef(phase)
   useEffect(() => {
@@ -54,7 +55,6 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
   const stopWatch = useCallback(() => {
     if (watchRef.current) window.clearInterval(watchRef.current)
     watchRef.current = null
-    tabRef.current = null
   }, [])
 
   useEffect(() => {
@@ -107,21 +107,17 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
     }
   }, [phase, findings?.skv.connected, dispatch])
 
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      if (event.origin !== window.location.origin) return
-      const type = (event.data as { type?: string } | null)?.type
-      if (type === 'skatteverket-oauth-success') {
-        if (phaseRef.current === 'leaving' || phaseRef.current === 'away') arrive()
-      } else if (type === 'skatteverket-oauth-error') {
-        stopWatch()
-        setAttn(t('skv_failed'))
-        dispatch({ type: 'SKV_PHASE', phase: 'open' })
-      }
+  // The Skatteverket tab connect() opened: only its messages count. It stays
+  // set after the tab closes, since the callback posts and then closes.
+  const tabRef = useOAuthPopup<SkvPopupMessage>((data) => {
+    if (data?.type === 'skatteverket-oauth-success') {
+      if (phaseRef.current === 'leaving' || phaseRef.current === 'away') arrive()
+    } else if (data?.type === 'skatteverket-oauth-error') {
+      stopWatch()
+      setAttn(t('skv_failed'))
+      dispatch({ type: 'SKV_PHASE', phase: 'open' })
     }
-    window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
-  }, [arrive, dispatch, stopWatch, t])
+  }, isSkvPopupOrigin)
 
   // Back from signing at Skatteverket: one register check per return.
   useEffect(() => {

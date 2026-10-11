@@ -8,7 +8,17 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
+import {
+  detectBookingDuplicate,
+  type BookedDuplicateCandidate,
+} from '@/lib/transactions/booking-duplicate-detection'
 import { tools } from '../server'
+
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/transactions/booking-duplicate-detection')>()
+  return { ...actual, detectBookingDuplicate: vi.fn() }
+})
 
 const bulkBook = tools.find((t) => t.name === 'gnubok_bulk_book_transactions')!
 
@@ -51,5 +61,90 @@ describe('gnubok_bulk_book_transactions: BFL 5 kap 6 § refusals', () => {
     expect((err as Error).message).toContain('BFL 5 kap 6')
     expect((err as Error).message).toMatch(/once for the income rows and once for the expense rows/)
     expect((err as Error & { code?: string }).code).toBe('BULK_BOOK_DIRECTION_MISMATCH')
+  })
+})
+
+/**
+ * The booking-time duplicate guard the dashboard and v1 bulk-book doors run
+ * (runBulkBookDuplicateGuard): a bank line the ledger already books, e.g. a
+ * supplier invoice marked paid, is refused at stage with the same code
+ * instead of being queued for a second verifikat. allow_duplicate is the
+ * override, staged with the operation so the executor honours it and records
+ * the dismissal.
+ */
+describe('gnubok_bulk_book_transactions: duplicate-booking guard at stage', () => {
+  const ROW = {
+    id: 'tx-1',
+    amount: -1250,
+    currency: 'SEK',
+    date: '2026-05-12',
+    journal_entry_id: null,
+    description: 'BG 5050-1055',
+    merchant_name: null,
+    amount_sek: null,
+    exchange_rate: null,
+    cash_account_id: null,
+  }
+  const CANDIDATE: BookedDuplicateCandidate = {
+    transaction_id: null,
+    journal_entry_id: 'je-paid',
+    voucher_label: 'A142',
+    entry_date: '2026-05-12',
+    description: 'Leverantörsfaktura betald',
+    amount: 1250,
+    account_number: '1930',
+    currency: null,
+    amount_in_currency: null,
+    amount_verified: true,
+    unverified_reason: null,
+  }
+
+  it('refuses a bank line the ledger already books, before staging', async () => {
+    vi.mocked(detectBookingDuplicate).mockResolvedValueOnce(CANDIDATE)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [ROW], error: null }) // transactions fetch
+
+    const err = await bulkBook
+      .execute({ tx_ids: ['tx-1'], existing_journal_entry_id: 'je-1' }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)
+
+    expect(getStructuredError(err).code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+    expect((err as Error).message).toContain('verifikat A142')
+    expect((err as Error).message).toContain('allow_duplicate=true')
+    // The batch's own rows and the link target never count as the duplicate.
+    expect(detectBookingDuplicate).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      expect.objectContaining({ id: 'tx-1', amount: -1250, date: '2026-05-12' }),
+      { excludeTransactionIds: ['tx-1'], excludeJournalEntryIds: ['je-1'] },
+    )
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
+  })
+
+  it('stages with allow_duplicate=true and carries the override to the executor', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [ROW], error: null }) // transactions fetch
+    enqueue({ data: { id: 'je-1', entry_date: '2026-05-12', status: 'posted' }, error: null }) // link target
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-dup' }, error: null }) // pending_operations insert
+
+    await bulkBook.execute(
+      { tx_ids: ['tx-1'], existing_journal_entry_id: 'je-1', allow_duplicate: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    // Staging writes nothing, so the override needs no detection here: the
+    // executor re-detects at approval and records the dismissal.
+    expect(detectBookingDuplicate).not.toHaveBeenCalled()
+    const inserts = findCalls('pending_operations', 'insert')
+    expect(inserts).toHaveLength(1)
+    expect((inserts[0]![0] as { params: Record<string, unknown> }).params).toMatchObject({
+      tx_ids: ['tx-1'],
+      existing_journal_entry_id: 'je-1',
+      allow_duplicate: true,
+    })
   })
 })

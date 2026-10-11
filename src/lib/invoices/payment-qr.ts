@@ -74,7 +74,7 @@ export const INVOICE_QR_REASONS = [
   'no_org_number',
   /** The printed giro has a wrong check digit: a wrong machine-read account is worse than none. */
   'invalid_giro',
-  /** No giro prints and the printed bank account is malformed or has a wrong check digit. */
+  /** No giro prints and the printed bank account is malformed, too long or short for its bank, or has a wrong check digit. */
   'invalid_bank_account',
   /** No giro prints and the printed bank account's bank has no check-digit rule we know, so it cannot be verified. */
   'unverified_bank_account',

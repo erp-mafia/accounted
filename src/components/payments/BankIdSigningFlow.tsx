@@ -109,8 +109,17 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     [locale, toast],
   )
 
+  /**
+   * A poll answers where the signing stands; some banks repeat the challenge
+   * on every poll (the animated QR), others send it once at the start. A
+   * waiting view without a challenge keeps the one on screen.
+   */
+  function merge(prev: SigningView | null, view: SigningView): SigningView {
+    return view.status === 'awaiting_signature' && !view.challenge && prev?.challenge ? { ...view, challenge: prev.challenge } : view
+  }
+
   function applyView(view: SigningView) {
-    setSigning(view)
+    setSigning((prev) => merge(prev, view))
     if (signingFinished(view)) setStage('done')
   }
 
@@ -191,7 +200,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
       try {
         const view = await pollSigning({ batchId, personalNumber: typedNumber }, controller.signal)
         if (stopped) return
-        setSigning(view)
+        setSigning((prev) => merge(prev, view))
         if (signingFinished(view)) {
           setStage('done')
           return
@@ -273,7 +282,14 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
             <p className="text-[13px] text-muted-foreground">{t('signing_qr_hint')}</p>
           </>
         )}
-        {waiting && !signing.challenge?.qrData && signing.challenge?.autostartToken && (
+        {waiting && !signing.challenge?.qrData && signing.challenge?.qrImage && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={signing.challenge.qrImage} alt={t('qr_label')} className="mx-auto h-[200px] w-[200px] rounded-lg border border-border bg-white p-1" />
+            <p className="text-[13px] text-muted-foreground">{t('signing_qr_hint')}</p>
+          </>
+        )}
+        {waiting && !signing.challenge?.qrData && !signing.challenge?.qrImage && signing.challenge?.autostartToken && (
           <>
             <p className="text-[13px] text-muted-foreground">{t('signing_same_device_hint')}</p>
             <Button asChild>
@@ -281,7 +297,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
             </Button>
           </>
         )}
-        {waiting && !signing.challenge?.qrData && !signing.challenge?.autostartToken && (
+        {waiting && !signing.challenge?.qrData && !signing.challenge?.qrImage && !signing.challenge?.autostartToken && (
           <p className="text-[13px] text-muted-foreground">{t('signing_waiting')}</p>
         )}
         {!waiting && failure && (

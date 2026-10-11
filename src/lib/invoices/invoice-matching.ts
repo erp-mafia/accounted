@@ -382,21 +382,29 @@ export async function findInvoiceMatchCandidates(
   }
 
   // Fallback: plenty of banks drop the OCR into the free text instead of the
-  // reference field ("Faktura 202600425", "BG inbet 2026 0042 5"). Comparing
-  // digit runs is weaker than an exact reference, so it scores lower and,
-  // unlike the exact branch above, it does NOT short-circuit: every invoice is
-  // still scored on amount below and the stronger of the two reasons wins.
-  // Each field is normalised on its own: concatenating first would let the
-  // last digits of the description and the first of the merchant name form a
-  // run that exists in neither.
+  // reference field ("Faktura 202600425", "BG inbet 2026 0042 5"). Free text
+  // is weaker than an exact reference, so it scores lower and, unlike the
+  // exact branch above, it does NOT short-circuit: every invoice is still
+  // scored on amount below and the stronger of the two reasons wins.
+  // The reference must stand in the text as a whole number
+  // (descriptionMentionsReference), never as digits inside a longer run:
+  // "Inbetalning 2026-10-11" is a date, not invoice 1011. The invoice number
+  // as written is a needle too, so a series prefix with digits and a dash
+  // ("2026-001") is still found where its bare digits are not. That holds
+  // only when the bare digits are distinctive themselves; otherwise "701"
+  // would slip under the floor that its 4-digit OCR clears. Each field is
+  // searched on its own, so the end of the description and the start of the
+  // merchant name never form a reference that exists in neither.
   const referenceHaystacks = [transaction.description, transaction.merchant_name]
-    .map((value) => normalizeOcrReference(value))
-    .filter((digits) => digits.length > 0)
+    .filter((value): value is string => Boolean(value))
   const referenceInTextIds = new Set<string>()
   if (referenceHaystacks.length > 0) {
     for (const invoice of filteredInvoices) {
       const keys = distinctiveReferenceKeys(invoice.invoice_number)
-      if (keys.some((key) => referenceHaystacks.some((digits) => digits.includes(key)))) {
+      const needles = keys.includes(normalizeOcrReference(invoice.invoice_number))
+        ? [...keys, invoice.invoice_number as string]
+        : keys
+      if (needles.some((needle) => referenceHaystacks.some((text) => descriptionMentionsReference(text, needle)))) {
         referenceInTextIds.add(invoice.id as string)
       }
     }

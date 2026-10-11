@@ -17,7 +17,7 @@ import {
 } from '@/lib/invoices/matchable-statuses'
 import { CheckCircle2, AlertTriangle, Trash2, Plus, Pencil } from 'lucide-react'
 import { withLineDimensions, type LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
-import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, parseAmountInput } from '@/lib/money'
 import type { TransactionWithInvoice } from './transaction-types'
 
 interface DuplicateCandidate {
@@ -137,6 +137,11 @@ function previewToEditable(line: PreviewLine): EditableLine {
 }
 
 function parseAmount(s: string): number {
+  return parseAmountInput(s) ?? 0
+}
+
+/** An exchange rate keeps its decimals: it must not be rounded to the öre. */
+function parseRate(s: string): number {
   const n = Number(s.replace(',', '.'))
   return Number.isFinite(n) ? n : 0
 }
@@ -384,7 +389,7 @@ export default function InvoiceMatchDialog({
     // the auto-fetched cross-currency case both skip this field.
     const fx = preview?.fx_conversion
     const fxNeedsManualRate = fx?.required === true && 'error' in fx
-    const manualRateNum = fxNeedsManualRate ? parseAmount(manualRate) : 0
+    const manualRateNum = fxNeedsManualRate ? parseRate(manualRate) : 0
     const manualRatePayload =
       fxNeedsManualRate && manualRateNum > 0 ? { manual_exchange_rate: manualRateNum } : {}
     // The account and the excess the preview booked them with.
@@ -1114,7 +1119,7 @@ export default function InvoiceMatchDialog({
               // paths pass through unaffected.
               (preview?.fx_conversion?.required === true &&
                 'error' in preview.fx_conversion &&
-                parseAmount(manualRate) <= 0) ||
+                parseRate(manualRate) <= 0) ||
               // Cross-currency invoice with no booked exchange rate: the FX
               // result of the settlement is uncomputable, so there is no
               // honest entry to approve and the POST would reject it with the

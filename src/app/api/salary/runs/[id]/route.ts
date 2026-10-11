@@ -5,6 +5,7 @@ import { formatRedovisare } from '@/lib/skatteverket/format'
 import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { ISO_DATE_RE } from '@/lib/invariants'
+import { deleteDraftSalaryRun } from '@/lib/salary/delete-run'
 
 ensureInitialized()
 
@@ -280,42 +281,25 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   async (_request, { supabase, companyId }, { params }) => {
     const { id } = await params
 
-    // Only draft runs can be deleted. Once a run reaches review/approved/paid/
-    // booked it carries compliance weight: a booked run created immutable
-    // verifikat (storno to undo, never delete). A draft has produced no journal
-    // entries and no AGI (the arbetsgivardeklaration is filed monthly from the
-    // booked/paid run, never from a draft), so removing it touches no posted
-    // accounting data.
-    const { data: run, error: fetchError } = await supabase
-      .from('salary_runs')
-      .select('id, status')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single()
+    // Only draft runs can be deleted: past draft the run carries compliance
+    // weight and storno is the only way back. The guarded write (status lock
+    // plus null journal-entry FKs) lives in lib/salary/delete-run.ts, shared
+    // with the v1 DELETE.
+    const result = await deleteDraftSalaryRun(supabase, { companyId, salaryRunId: id })
 
-    if (fetchError || !run) {
-      return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
-    }
-
-    if (run.status !== 'draft') {
-      return NextResponse.json(
-        { error: 'Bara utkast kan raderas. En bokförd lönekörning måste vändas (storno).' },
-        { status: 400 }
-      )
-    }
-
-    // salary_run_employees and their salary_line_items are removed via
-    // ON DELETE CASCADE. An agi_declarations row (never present on a draft)
-    // would block the delete via its RESTRICT FK, the safety net for the
-    // impossible case.
-    const { error } = await supabase
-      .from('salary_runs')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', companyId)
-
-    if (error) {
-      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    if (!result.ok) {
+      switch (result.code) {
+        case 'SALARY_RUN_NOT_FOUND':
+          return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
+        case 'DB_ERROR':
+          return NextResponse.json({ error: getUserErrorMessage(result.error) }, { status: 500 })
+        default:
+          // Not a draft, or it left draft (or got a verifikat) after the check.
+          return NextResponse.json(
+            { error: 'Bara utkast kan raderas. En bokförd lönekörning måste vändas (storno).' },
+            { status: 400 }
+          )
+      }
     }
 
     return NextResponse.json({ data: { id, deleted: true } })

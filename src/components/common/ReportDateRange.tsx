@@ -65,7 +65,7 @@ interface Props {
 }
 
 const STORAGE_KEY_PREFIX = 'Accounted:report-range-preset:'
-const MENU_PRESETS: Exclude<Preset, 'custom'>[] = ['full_year', 'ytd', 'this_month', 'last_month', 'this_quarter']
+const MENU_PRESETS: Exclude<Preset, 'custom'>[] = ['full_year', 'ytd', 'this_month', 'last_month', 'this_quarter', 'last_quarter']
 
 function todayIso(): string {
   // Local calendar date: using toISOString() returns UTC, which falls a day
@@ -222,6 +222,7 @@ export function ReportDateRange({
       this_month: t('date_range_preset_this_month'),
       last_month: t('date_range_preset_last_month'),
       this_quarter: t('date_range_preset_this_quarter'),
+      last_quarter: t('date_range_preset_last_quarter'),
       custom: t('date_range_preset_custom'),
     }),
     [t],

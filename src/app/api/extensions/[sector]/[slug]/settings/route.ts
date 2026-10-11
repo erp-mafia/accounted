@@ -50,7 +50,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ sector: string; slug: 
         key: 'settings',
         value: mergedSettings,
       },
-      { onConflict: 'user_id,extension_id,key' }
+      { onConflict: 'company_id,extension_id,key' }
     )
     .select()
     .single()

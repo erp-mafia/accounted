@@ -18,7 +18,9 @@ import {
   type CashAccountSiblings,
 } from '@/lib/cash-accounts/service'
 import { createLogger } from '@/lib/logger'
+import { chunk } from '@/lib/utils'
 import { resolveLedgerSettlements } from './ledger-settlement-store'
+import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from './limits'
 
 const log = createLogger('reconciliation.bank')
 
@@ -1561,8 +1563,8 @@ export async function linkTransactionToVouchers(
   if (journalEntryIds.length < 2) {
     return refused('INVALID_SPLIT', 'En delning kräver minst två verifikat.')
   }
-  if (journalEntryIds.length > 50) {
-    return refused('INVALID_SPLIT', 'En delning kan omfatta högst 50 verifikat.')
+  if (journalEntryIds.length > MAX_BANK_ROW_SPLIT) {
+    return refused('INVALID_SPLIT', `En delning kan omfatta högst ${MAX_BANK_ROW_SPLIT} verifikat.`)
   }
 
   const { data: txRow, error: txError } = await supabase
@@ -1627,19 +1629,24 @@ export async function linkTransactionToVouchers(
     }
   }
 
-  const { data: entries } = await supabase
-    .from('journal_entries')
-    .select('id, status, voucher_series, voucher_number')
-    .eq('company_id', companyId)
-    .in('id', journalEntryIds)
-  const entryById = new Map(
-    ((entries ?? []) as Array<{
-      id: string
-      status: string
-      voucher_series: string | null
-      voucher_number: number | null
-    }>).map((e) => [e.id, e]),
-  )
+  // The verifikat are read in slices of ID_READ_CHUNK: a full split in one
+  // `.in()` would overrun the gateway's URL limit (lib/reconciliation/limits.ts).
+  const idParts = chunk(journalEntryIds, ID_READ_CHUNK)
+  const entries: Array<{
+    id: string
+    status: string
+    voucher_series: string | null
+    voucher_number: number | null
+  }> = []
+  for (const part of idParts) {
+    const { data } = await supabase
+      .from('journal_entries')
+      .select('id, status, voucher_series, voucher_number')
+      .eq('company_id', companyId)
+      .in('id', part)
+    entries.push(...((data ?? []) as typeof entries))
+  }
+  const entryById = new Map(entries.map((e) => [e.id, e]))
   const labelOf = (id: string): string => {
     const e = entryById.get(id)
     return e && e.voucher_number != null ? `${e.voucher_series ?? 'A'}-${e.voucher_number}` : id.slice(0, 8)
@@ -1659,13 +1666,17 @@ export async function linkTransactionToVouchers(
   // (the split persists a reconciliation link, so it must compare in the
   // account's own unit; see ledgerLineAmountIn).
   const currency = typeof tx.currency === 'string' && tx.currency ? tx.currency : 'SEK'
-  const { data: lines } = await supabase
-    .from('journal_entry_lines')
-    .select('journal_entry_id, debit_amount, credit_amount, currency, amount_in_currency')
-    .in('journal_entry_id', journalEntryIds)
-    .eq('account_number', accountNumber)
+  const lines: Array<LedgerLineAmount & { journal_entry_id: string }> = []
+  for (const part of idParts) {
+    const { data } = await supabase
+      .from('journal_entry_lines')
+      .select('journal_entry_id, debit_amount, credit_amount, currency, amount_in_currency')
+      .in('journal_entry_id', part)
+      .eq('account_number', accountNumber)
+    lines.push(...((data ?? []) as typeof lines))
+  }
   const netByEntry = new Map<string, number | null>()
-  for (const line of (lines ?? []) as Array<LedgerLineAmount & { journal_entry_id: string }>) {
+  for (const line of lines) {
     const amount = ledgerLineAmountIn(line, currency)
     const prev = netByEntry.has(line.journal_entry_id) ? netByEntry.get(line.journal_entry_id) : 0
     netByEntry.set(line.journal_entry_id, prev === null || amount === null ? null : roundOre((prev ?? 0) + amount))
@@ -1676,25 +1687,29 @@ export async function linkTransactionToVouchers(
   // samlingsverifikat). A verifikat can only give this row the rest: two
   // full-size slices on one verifikat would count its line twice. Same cash
   // account and currency as this row, so the slices are in the unit of `net`.
-  const { data: heldRows, error: heldError } = await supabase
-    .from('transaction_voucher_links')
-    .select('journal_entry_id, allocated_amount, transactions(cash_account_id, currency)')
-    .eq('company_id', companyId)
-    .eq('role', 'bank_line')
-    .in('journal_entry_id', journalEntryIds)
-  if (heldError) {
-    return refused('WRITE_FAILED', 'Kunde inte läsa verifikatens befintliga kopplingar. Försök igen.')
-  }
-  const ownCashAccountId = typeof tx.cash_account_id === 'string' ? tx.cash_account_id : null
-  const heldByEntry = new Map<string, number>()
-  for (const row of (heldRows ?? []) as Array<{
+  const heldRows: Array<{
     journal_entry_id: string
     allocated_amount: number | string
     transactions?:
       | { cash_account_id: string | null; currency: string | null }
       | Array<{ cash_account_id: string | null; currency: string | null }>
       | null
-  }>) {
+  }> = []
+  for (const part of idParts) {
+    const { data, error: heldError } = await supabase
+      .from('transaction_voucher_links')
+      .select('journal_entry_id, allocated_amount, transactions(cash_account_id, currency)')
+      .eq('company_id', companyId)
+      .eq('role', 'bank_line')
+      .in('journal_entry_id', part)
+    if (heldError) {
+      return refused('WRITE_FAILED', 'Kunde inte läsa verifikatens befintliga kopplingar. Försök igen.')
+    }
+    heldRows.push(...((data ?? []) as typeof heldRows))
+  }
+  const ownCashAccountId = typeof tx.cash_account_id === 'string' ? tx.cash_account_id : null
+  const heldByEntry = new Map<string, number>()
+  for (const row of heldRows) {
     const holder = Array.isArray(row.transactions) ? row.transactions[0] : row.transactions
     if (!holder) continue
     if ((holder.cash_account_id ?? null) !== ownCashAccountId || (holder.currency || 'SEK') !== currency) continue
@@ -1931,7 +1946,7 @@ export async function unlinkReconciliation(
     .eq('company_id', companyId)
     .eq('transaction_id', transactionId)
 
-  logMatchEvent(supabase, userId, transactionId, 'unmatched', {
+  await logMatchEvent(supabase, userId, transactionId, 'unmatched', {
     previousState: {
       journal_entry_id: previousJournalEntryIds[0] ?? null,
       journal_entry_ids: previousJournalEntryIds,
@@ -2141,7 +2156,7 @@ export async function autoReconcileTransactionForLinkedVoucher(
       .eq('company_id', companyId)
   }
 
-  logMatchEvent(supabase, userId, transactionId, 'linked_to_existing_voucher', {
+  await logMatchEvent(supabase, userId, transactionId, 'linked_to_existing_voucher', {
     invoiceId: options.invoiceId,
     supplierInvoiceId: options.supplierInvoiceId,
     matchMethod: 'invoice_voucher_link',

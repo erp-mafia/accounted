@@ -143,10 +143,13 @@ export function assertLinesWellFormed(lines: CreateJournalEntryLineInput[]): voi
 }
 
 /**
- * Get the next voucher number for a company/period/series
- * Uses the concurrent-safe INSERT ON CONFLICT implementation in the database
+ * Allocate the next voucher number for a company/period/series.
+ * Uses the concurrent-safe INSERT ON CONFLICT implementation in the database.
+ * This ADVANCES the sequence: a number allocated and then not posted is a gap
+ * that needs a documented explanation. To show a number without taking it,
+ * use peekNextVoucherNumber.
  */
-export async function getNextVoucherNumber(
+export async function allocateVoucherNumber(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
@@ -164,6 +167,32 @@ export async function getNextVoucherNumber(
   }
 
   return data as number
+}
+
+/**
+ * The number the next commit in a company/period/series would get, read
+ * without advancing the sequence (for previews and dry runs). A projection:
+ * a concurrent commit can take the number before the caller commits.
+ */
+export async function peekNextVoucherNumber(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  series: string = 'A'
+): Promise<number> {
+  const { data, error } = await supabase
+    .from('voucher_sequences')
+    .select('last_number')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
+    .eq('voucher_series', series)
+    .maybeSingle()
+
+  if (error) {
+    throw new BookkeepingDatabaseError('peek_next_voucher_number', error.message)
+  }
+
+  return ((data as { last_number: number } | null)?.last_number ?? 0) + 1
 }
 
 /**
@@ -1811,7 +1840,7 @@ export async function reverseEntry(
   const entryDate = reversalDate ?? original.entry_date
 
   // Get voucher number for the reversal
-  const voucherNumber = await getNextVoucherNumber(
+  const voucherNumber = await allocateVoucherNumber(
     supabase,
     companyId,
     original.fiscal_period_id,

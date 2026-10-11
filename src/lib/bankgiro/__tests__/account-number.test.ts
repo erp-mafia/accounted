@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateSwedishAccountChecksum } from '@/lib/bankgiro/account-number'
+import { hasSwedishAccountChecksumRule, validateSwedishAccountChecksum } from '@/lib/bankgiro/account-number'
 import { luhnCheckDigit } from '@/lib/bankgiro/luhn'
 
 /** Build a mod10 (Luhn) valid number of `len` digits from a numeric seed. */
@@ -70,5 +70,27 @@ describe('validateSwedishAccountChecksum', () => {
   it('returns unknown when the account is too long for a Type 1 bank', () => {
     // Type 1 accounts are max 7 digits; do not warn on an over-length entry.
     expect(validateSwedishAccountChecksum('5000', '12345678901')).toBe('unknown')
+  })
+})
+
+describe('hasSwedishAccountChecksumRule', () => {
+  it('knows the banks in the rule table, a 5-digit Swedbank clearing included', () => {
+    for (const clearing of ['1100', '3300', '3410', '5000', '6000', '7000', '8169', '8169-5', '9400']) {
+      expect(hasSwedishAccountChecksumRule(clearing), clearing).toBe(true)
+    }
+  })
+
+  it('has no rule for banks outside the table, or for a clearing that is too short', () => {
+    // Länsförsäkringar (3400, 9020) and Plusgirot (9500) are not mapped.
+    for (const clearing of ['3400', '9020', '9500', '12', '', null]) {
+      expect(hasSwedishAccountChecksumRule(clearing), String(clearing)).toBe(false)
+    }
+  })
+
+  it('tells a wrong length at a known bank from a bank without a rule (both validate as unknown)', () => {
+    expect(validateSwedishAccountChecksum('5000', '12345678')).toBe('unknown')
+    expect(hasSwedishAccountChecksumRule('5000')).toBe(true)
+    expect(validateSwedishAccountChecksum('9020', '1234567')).toBe('unknown')
+    expect(hasSwedishAccountChecksumRule('9020')).toBe(false)
   })
 })

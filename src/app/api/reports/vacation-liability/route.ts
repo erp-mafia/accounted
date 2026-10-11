@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { VacationLiabilityQuerySchema } from '@/lib/api/schemas'
@@ -8,7 +7,6 @@ import { privateNoStore } from '@/lib/api/private-no-store'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { generateVacationLiability, vacationLiabilityCheck } from '@/lib/reports/vacation-liability'
 import { bookedVacationBalances } from '@/lib/salary/semesterberedning'
-import { SemesterskuldPDF } from '@/lib/reports/semesterskuld-pdf-template'
 import {
   currencyColumn,
   decimalColumn,
@@ -81,6 +79,10 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
     }
 
     if (format === 'pdf') {
+      const [{ renderToBuffer }, { SemesterskuldPDF }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('@/lib/reports/semesterskuld-pdf-template'),
+      ])
       const pdf = await renderToBuffer(SemesterskuldPDF({ report, check, company: companyInfo }))
       const filename = `semesterskuld-${slugifyCompanyName(companyInfo.name)}-${asOfDate.replace(/-/g, '')}.pdf`
       return new NextResponse(new Uint8Array(pdf), {
@@ -92,7 +94,7 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
       })
     }
 
-    const buffer = reportToWorkbook([
+    const buffer = await reportToWorkbook([
       {
         name: 'Semesterskuld',
         columns: [

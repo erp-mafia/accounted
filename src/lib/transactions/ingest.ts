@@ -1475,7 +1475,7 @@ export async function ingestTransactions(
             .update({ potential_invoice_id: bestMatch.invoice.id })
             .eq('id', newTransaction.id)
 
-          logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
+          await logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
             invoiceId: bestMatch.invoice.id,
             matchConfidence: bestMatch.confidence,
             matchMethod: bestMatch.matchReason,
@@ -1513,7 +1513,7 @@ export async function ingestTransactions(
             .update({ potential_supplier_invoice_id: match.supplierInvoice.id })
             .eq('id', newTransaction.id)
 
-          logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
+          await logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
             supplierInvoiceId: match.supplierInvoice.id,
             matchConfidence: match.confidence,
             matchMethod: match.matchMethod,
@@ -1556,7 +1556,7 @@ export async function ingestTransactions(
             .eq('id', newTransaction.id)
           if (hintError) throw hintError
 
-          logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
+          await logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
             matchConfidence: match.confidence,
             matchMethod: match.matchMethod,
             newState: { rot_rut_payout_request_id: match.request.id },
@@ -1583,7 +1583,7 @@ export async function ingestTransactions(
           const set = findRotRutPayoutSetMatch(newTransaction as Transaction, openRotRutPayoutRequests)
           if (set && set.requests.length > 1) {
             const requestIds = set.requests.map((req) => req.id)
-            logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
+            await logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
               matchConfidence: set.confidence,
               matchMethod: set.matchMethod,
               newState: { rot_rut_payout_request_ids: requestIds },

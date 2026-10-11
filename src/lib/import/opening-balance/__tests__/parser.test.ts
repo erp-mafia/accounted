@@ -71,7 +71,7 @@ describe('parseOpeningBalanceFile', () => {
     XLSX.utils.book_append_sheet(wb, ws, 'Balans')
 
     const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
-    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+    const result = await parseOpeningBalanceFile(buffer, 'test.xlsx')
 
     expect(result.filename).toBe('test.xlsx')
     expect(result.sheet_name).toBe('Balans')
@@ -102,7 +102,7 @@ describe('parseOpeningBalanceFile', () => {
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
 
     const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
-    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+    const result = await parseOpeningBalanceFile(buffer, 'test.xlsx')
 
     expect(result.rows.length).toBe(2)
 
@@ -129,7 +129,7 @@ describe('parseOpeningBalanceFile', () => {
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
 
     const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
-    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+    const result = await parseOpeningBalanceFile(buffer, 'test.xlsx')
 
     const revenueRow = result.rows.find((r) => r.account_number === '3001')
     expect(revenueRow).toBeDefined()
@@ -152,7 +152,7 @@ describe('parseOpeningBalanceFile', () => {
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
 
     const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
-    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+    const result = await parseOpeningBalanceFile(buffer, 'test.xlsx')
 
     // Should merge duplicates
     const row1930 = result.rows.find((r) => r.account_number === '1930')
@@ -185,7 +185,7 @@ describe('parseOpeningBalanceFile', () => {
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
 
     const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
-    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+    const result = await parseOpeningBalanceFile(buffer, 'test.xlsx')
 
     const merged = result.rows.find((r) => r.account_number === '3001')
     expect(merged).toBeDefined()
@@ -211,7 +211,7 @@ describe('parseOpeningBalanceFile', () => {
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
 
     const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
-    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+    const result = await parseOpeningBalanceFile(buffer, 'test.xlsx')
 
     const matches = result.rows.filter((r) => r.account_number === '1930')
     expect(matches.length).toBe(1)
@@ -234,7 +234,7 @@ describe('parseOpeningBalanceFile', () => {
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
 
     const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
-    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+    const result = await parseOpeningBalanceFile(buffer, 'test.xlsx')
 
     expect(result.rows.length).toBe(2) // 1930 + 2099 (1510 skipped)
   })
@@ -253,7 +253,7 @@ describe('parseOpeningBalanceFile', () => {
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
 
     const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
-    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+    const result = await parseOpeningBalanceFile(buffer, 'test.xlsx')
 
     expect(result.is_balanced).toBe(false)
     expect(result.total_debit).toBe(50000)
@@ -274,7 +274,7 @@ describe('bank statement detection (issue #918)', () => {
       '2,8385-9,9350000000,Företagskonto,SEK,2026-05-03,2026-05-03,2026-05-03,Kundbetalning,Insättning,25000.00,79321.00',
     ].join('\n')
 
-    const result = parseOpeningBalanceFile(toBuffer(csv), 'kontoutdrag.csv')
+    const result = await parseOpeningBalanceFile(toBuffer(csv), 'kontoutdrag.csv')
 
     expect(result.rows.length).toBe(0)
     expect(result.detected_bank_format).toBe('Swedbank')
@@ -289,7 +289,7 @@ describe('bank statement detection (issue #918)', () => {
       '2026-05-03;2026-05-03;5501234568;Kundbetalning;25000,00;79321,00',
     ].join('\n')
 
-    const result = parseOpeningBalanceFile(toBuffer(csv), 'export.csv')
+    const result = await parseOpeningBalanceFile(toBuffer(csv), 'export.csv')
 
     expect(result.rows.length).toBe(0)
     expect(result.detected_bank_format).toBe('SEB')
@@ -304,7 +304,7 @@ describe('bank statement detection (issue #918)', () => {
       'Beta,Malmö,7',
     ].join('\n')
 
-    const result = parseOpeningBalanceFile(toBuffer(csv), 'annat.csv')
+    const result = await parseOpeningBalanceFile(toBuffer(csv), 'annat.csv')
 
     expect(result.rows.length).toBe(0)
     expect(result.detected_bank_format).toBeNull()
@@ -319,7 +319,7 @@ describe('bank statement detection (issue #918)', () => {
       '2099,Årets resultat,0,50000',
     ].join('\n')
 
-    const result = parseOpeningBalanceFile(toBuffer(csv), 'ib.csv')
+    const result = await parseOpeningBalanceFile(toBuffer(csv), 'ib.csv')
 
     expect(result.rows.length).toBe(2)
     expect(result.detected_bank_format).toBeNull()

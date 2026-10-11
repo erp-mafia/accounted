@@ -57,7 +57,7 @@ function fail(step: string, err: unknown): void {
 async function ping(model: string): Promise<void> {
   const start = Date.now()
   try {
-    const resp = await getAnthropic().messages.create({
+    const resp = await (await getAnthropic()).messages.create({
       model,
       max_tokens: 10,
       messages: [{ role: 'user', content: 'Säg "hej" på svenska.' }],
@@ -83,7 +83,7 @@ async function ping(model: string): Promise<void> {
 async function streamingWithTool(): Promise<void> {
   const start = Date.now()
   try {
-    const stream = getAnthropic().messages.stream({
+    const stream = (await getAnthropic()).messages.stream({
       model: SONNET_MODEL,
       max_tokens: MAX_TOKENS_DEEP,
       system: 'Du är en svensk redovisningsassistent. Använd verktyget när du behöver ett kontosaldo.',
@@ -138,7 +138,7 @@ async function thinkingTurn(): Promise<void> {
   const start = Date.now()
   const filler = 'Svara alltid på svenska och hänvisa till BAS-konton med nummer. '.repeat(120)
   try {
-    const stream = getAnthropic().messages.stream({
+    const stream = (await getAnthropic()).messages.stream({
       model: SONNET_MODEL,
       max_tokens: MAX_TOKENS_DEEP,
       thinking: { type: 'adaptive', display: 'summarized' },

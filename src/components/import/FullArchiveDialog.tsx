@@ -19,6 +19,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFormat } from '@/lib/hooks/use-format'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { downloadFile } from '@/lib/browser/download-file'
+import { failureDescription } from '@/lib/browser/action-failure'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import type { ApiResponse, ArchiveEstimate } from '@/types'
 import { Download } from 'lucide-react'
@@ -27,6 +29,13 @@ type Scope = 'all' | 'period'
 type ArchiveMode = 'active-company' | 'migration-reset-source'
 
 const LAST_DOWNLOAD_STORAGE_KEY = 'Accounted:last-backup-download'
+
+/**
+ * The archive routes run for up to 300 s (maxDuration) and the ZIP can run to
+ * hundreds of MB, so the deadline covers the build and a slow transfer; it
+ * only exists so a hung instance cannot leave the button spinning forever.
+ */
+const ARCHIVE_DOWNLOAD_TIMEOUT_MS = 10 * 60_000
 
 /**
  * Direct download of the complete company archive (SIE + reports + all
@@ -47,6 +56,7 @@ export function FullArchiveDialog({
 }) {
   const t = useTranslations('import')
   const tCompany = useTranslations('settings_company')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { company } = useCompany()
@@ -124,11 +134,19 @@ export function FullArchiveDialog({
 
     setIsDownloading(true)
     try {
-      const res = await fetch(archiveUrl)
-      if (!res.ok) {
-        if (res.status === 413) {
-          const body = await res.json().catch(() => ({}))
-          const sizeMb = body.size_bytes ? Math.round(body.size_bytes / (1024 * 1024)) : null
+      const result = await downloadFile({
+        url: archiveUrl,
+        filename: isMigrationResetSource ? 'migration_reset_archive.zip' : 'arkiv.zip',
+        preferServerFilename: true,
+        locale: errorLocale,
+        timeoutMs: ARCHIVE_DOWNLOAD_TIMEOUT_MS,
+      })
+      if (!result.ok) {
+        if (result.reason === 'server' && result.status === 413) {
+          const sizeBytes = (result.body as { size_bytes?: unknown } | null)?.size_bytes
+          const sizeMb = typeof sizeBytes === 'number' && sizeBytes > 0
+            ? Math.round(sizeBytes / (1024 * 1024))
+            : null
           toast({
             title: t('archive_toast_too_large_title'),
             description: isMigrationResetSource
@@ -142,25 +160,17 @@ export function FullArchiveDialog({
           })
           return
         }
-        const body = await res.json().catch(() => ({}))
-        throw new Error(readArchiveError(body, t('archive_toast_failed')))
+        toast({
+          title: t('archive_toast_failed'),
+          description: failureDescription(result, {
+            timeout: tCommon('download_timeout'),
+            network: tCommon('download_network'),
+          }),
+          variant: 'destructive',
+        })
+        return
       }
-
-      const blob = await res.blob()
-      const contentDisposition = res.headers.get('Content-Disposition') || ''
-      const match = contentDisposition.match(/filename="?([^";]+)"?/)
-      const filename = match?.[1] || (isMigrationResetSource
-        ? 'migration_reset_archive.zip'
-        : 'arkiv.zip')
-
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
+      const filename = result.filename
 
       const now = new Date().toISOString()
       if (storageKey) {
@@ -189,6 +199,7 @@ export function FullArchiveDialog({
     scope,
     storageKey,
     t,
+    tCommon,
     tCompany,
     toast,
   ])
@@ -324,15 +335,4 @@ function formatBytes(bytes: number): string {
   const mb = kb / 1024
   if (mb < 1024) return `${mb.toFixed(1)} MB`
   return `${(mb / 1024).toFixed(2)} GB`
-}
-
-function readArchiveError(body: unknown, fallback: string): string {
-  if (!body || typeof body !== 'object') return fallback
-  const error = (body as { error?: unknown }).error
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === 'string') return message
-  }
-  return fallback
 }

@@ -44,7 +44,6 @@
  * when its check digit is valid (a bank account only when the bank's rule is
  * known, lib/bankgiro/account-number.ts).
  */
-import QRCode from 'qrcode'
 import { formatOrgNumber } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import {
@@ -55,7 +54,7 @@ import {
   validateBankgiroNumber,
   validatePlusgiroNumber,
 } from '@/lib/bankgiro/luhn'
-import { validateSwedishAccountChecksum } from '@/lib/bankgiro/account-number'
+import { hasSwedishAccountChecksumRule, validateSwedishAccountChecksum } from '@/lib/bankgiro/account-number'
 import {
   lookupBicByClearing,
   normalizeBankNumber,
@@ -122,7 +121,7 @@ export type BankPaymentQrPayeeProblem =
   | 'no_printed_giro'
   /** The printed giro has a wrong check digit. */
   | 'invalid_giro'
-  /** The printed bank account is malformed or its check digit is wrong. */
+  /** The printed bank account is malformed, its length does not fit its bank, or its check digit is wrong. */
   | 'invalid_bank_account'
   /** The printed bank account's bank has no check-digit rule we know: it cannot be verified. */
   | 'unverified_bank_account'
@@ -156,7 +155,14 @@ function bankAccountPayee(company: BankPaymentQrCompany): BankPaymentQrPayee {
   const account = clearing.length === 5 ? resolved.accountDigits.slice(1) : resolved.accountDigits
   const checksum = validateSwedishAccountChecksum(clearing, account)
   if (checksum === 'invalid') return { ok: false, reason: 'invalid_bank_account' }
-  if (checksum === 'unknown') return { ok: false, reason: 'unverified_bank_account' }
+  // 'unknown' is either a bank without a rule here (cannot be verified) or an
+  // account too long or short for its bank's rule (a wrong number).
+  if (checksum === 'unknown') {
+    return {
+      ok: false,
+      reason: hasSwedishAccountChecksumRule(clearing) ? 'invalid_bank_account' : 'unverified_bank_account',
+    }
+  }
 
   // acc in the forms the spec shows. Swedbank and the savings banks (8xxxx)
   // as "8169-5 9139876057": the fifth clearing digit is the mod 10 check
@@ -258,11 +264,14 @@ export interface BankPaymentQrSymbol {
 /**
  * Encode a payload as a QR symbol the PDF draws as vector paths: model 2,
  * byte mode (spec 2.3), error correction M (the "low to medium" redundancy
- * the format's site recommends), with the 4-module quiet zone. Synchronous,
- * so the template can draw it from the very amounts it prints. Null when the
+ * the format's site recommends), with the 4-module quiet zone. Null when the
  * payload does not fit a QR code.
+ *
+ * qrcode is imported here, at render time, so the invoice editor (a client
+ * bundle) can use this module's payload and payee helpers without it.
  */
-export function bankPaymentQrSymbol(payload: string): BankPaymentQrSymbol | null {
+export async function bankPaymentQrSymbol(payload: string): Promise<BankPaymentQrSymbol | null> {
+  const { default: QRCode } = await import('qrcode')
   let modules: { size: number; data: Uint8Array }
   try {
     modules = QRCode.create([{ mode: 'byte', data: new TextEncoder().encode(payload) }], {

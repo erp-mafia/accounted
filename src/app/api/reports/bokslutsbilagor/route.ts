@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { contentDisposition } from '@/lib/api/content-disposition'
@@ -8,7 +7,6 @@ import { privateNoStore } from '@/lib/api/private-no-store'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
 import { generateBokslutsbilagor } from '@/lib/reports/bokslutsbilagor'
-import { BokslutsbilagorPDF } from '@/lib/reports/bokslutsbilagor-pdf-template'
 import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import { slugifyCompanyName } from '@/lib/reports/xlsx-export'
@@ -48,6 +46,10 @@ export const GET = withRouteContext('report.bokslutsbilagor', async (request, ct
     if (format === 'json') {
       return privateNoStore(NextResponse.json({ data: report }))
     }
+    const [{ renderToBuffer }, { BokslutsbilagorPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/reports/bokslutsbilagor-pdf-template'),
+    ])
     const pdf = await renderToBuffer(BokslutsbilagorPDF({ report }))
     const filename = `bokslutsbilagor-${slugifyCompanyName(report.company.name)}-${report.period.end.replace(/-/g, '')}.pdf`
     return new NextResponse(new Uint8Array(pdf), {

@@ -1,8 +1,6 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { generateResultatrapport } from '@/lib/reports/resultatrapport'
-import { ResultatrapportPDF } from '@/lib/reports/operational-report-pdf-template'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
@@ -58,6 +56,10 @@ export const GET = withRouteContext('report.resultatrapport.pdf', async (request
       dimensions: dimFilter.dimensions,
     })
 
+    const [{ renderToBuffer }, { ResultatrapportPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/reports/operational-report-pdf-template'),
+    ])
     const pdfBuffer = await renderToBuffer(
       ResultatrapportPDF({
         report,

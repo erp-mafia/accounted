@@ -1,5 +1,6 @@
 import { after } from 'next/server'
 import { uploadDocument } from '@/lib/core/documents/document-service'
+import { INBOX_UPLOAD_TYPES } from '@/lib/documents/upload-types'
 import { extractInvoiceFields, emptyResult, fetchOwnCompanyIdentity } from './extract-invoice-fields'
 import { mirrorExtractionToDocument } from './mirror-extraction'
 import type { InboxKindHint } from './resend-inbound'
@@ -11,7 +12,6 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { routeClassifiedDocument, VOUCHER_TYPES } from './route-from-arkiv'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import type { InvoiceExtractionResult } from '@/types'
-import { PDFDocument } from 'pdf-lib'
 import path from 'node:path'
 
 // Verdicts decidable before touching the file. `ai_unconfigured` is the
@@ -68,6 +68,8 @@ export function maxPagesForAutoExtract(): number {
 // as "small enough": preserves today's behavior on malformed inputs.
 export async function countPdfPages(buffer: ArrayBuffer): Promise<number | null> {
   try {
+    // pdf-lib loads on the first PDF, not with every route that loads extensions.
+    const { PDFDocument } = await import('pdf-lib')
     const pdf = await PDFDocument.load(buffer, { updateMetadata: false })
     return pdf.getPageCount()
   } catch {
@@ -87,6 +89,7 @@ export async function slicePdfForExtraction(
   maxPages: number
 ): Promise<ArrayBuffer | null> {
   try {
+    const { PDFDocument } = await import('pdf-lib')
     const src = await PDFDocument.load(buffer, { updateMetadata: false })
     const dst = await PDFDocument.create()
     const total = src.getPageCount()
@@ -124,14 +127,9 @@ export async function isSandboxCompany(
   return data.is_sandbox === true
 }
 
-export const UPLOAD_ALLOWED_MIME_TYPES = new Set([
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/heic',
-  'image/heif',
-  'image/webp',
-])
+// One list with the pickers that feed this route (lib/documents/upload-types),
+// so a picker never offers a format the route refuses.
+export const UPLOAD_ALLOWED_MIME_TYPES = new Set(INBOX_UPLOAD_TYPES)
 
 // The email pipeline additionally accepts HTML: many suppliers send the
 // invoice as the mail body or an attached .html file, and for those the mail

@@ -106,6 +106,7 @@ Every delivery wraps the event in a Stripe-style envelope:
 - \`id\` matches the \`webhook_delivery_id\` you can poll at [\`GET /api/v1/companies/{companyId}/webhooks/{webhookId}/deliveries\`](/docs/api/reference/webhooks#get-webhooks-deliveries-list).
 - \`api_version\` is the version pinned to your webhook at creation time. Payload shapes for *your* webhook will not change until you explicitly upgrade.
 - \`previous_attributes\` is reserved for a future field-diff feature and is currently always \`null\` for every event type.
+- \`data.object\` never carries personnummer or internal user ids, at any depth: \`personal_number\`, \`personnummer\`, \`deduction_personnummer_encrypted\`, \`deduction_personnummer_last4\`, \`personnummer_encrypted\`, \`personnummer_last4\`, \`user_id\` and \`userId\` are removed from the event and from every nested row (an \`invoice.created\` invoice's \`customer\` and \`items\` included). \`GET /api/events\` returns the same projection.
 
 ## Request headers
 

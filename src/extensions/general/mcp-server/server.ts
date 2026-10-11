@@ -30,6 +30,8 @@ import {
   OAUTH_MCP_KEY_NAME,
   RATE_LIMIT_RETRY_AFTER_SECONDS,
   TOOL_SCOPE_MAP,
+  UNSCOPED_TOOLS,
+  argumentScopeFor,
   type ApiKeyMode,
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
@@ -132,13 +134,13 @@ import {
 } from './invoice-stage-preview'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
-import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
-import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
+import { findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
-import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
+import { planSupplierPaymentBackfill, type SupplierPaymentColumns, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { eventBus } from '@/lib/events/bus'
 import {
   explainVatTreatment,
@@ -336,7 +338,13 @@ import {
   type CompanyEcho,
   type McpCompanyScope,
 } from './company-routing'
-import { currentStagingBatchId, runWithStagingBatch } from '@/lib/pending-operations/batch-context'
+import {
+  assertStageableInBatch,
+  batchHighRiskRefusal,
+  currentStagingBatchId,
+  highRiskInBatchError,
+  runWithStagingBatch,
+} from '@/lib/pending-operations/batch-context'
 import { runAcrossCompanies, summarizeCompanyResult } from '@/lib/portfolio/runner'
 import { fetchPortfolioOverview, type DeadlineKindFilter, type PortfolioCompanyRow } from '@/lib/portfolio/overview'
 import { getByraMembership } from '@/lib/clients/fetch-client-overview'
@@ -389,7 +397,7 @@ import {
   type AgiSubmissionState,
 } from '@/lib/salary/agi-submission-state'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
-import { fetchJunctionLinkedTxIds, getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
@@ -441,7 +449,7 @@ import {
   isKontantmetodCutoffSuspended,
   KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
-import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
+import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
@@ -453,7 +461,11 @@ import { agentBookingFor, businessAccount, whyTextSv } from '@/lib/bookkeeping/p
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { buildDuplicateBookingClaim } from '@/lib/transactions/categorize-core'
-import { enforceBulkBookDimensionPolicy } from '@/lib/transactions/bulk-book'
+import {
+  enforceBulkBookDimensionPolicy,
+  runBulkBookDuplicateGuard,
+  type BulkBookDuplicateTx,
+} from '@/lib/transactions/bulk-book'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import {
   describeExplainingSet,
@@ -1653,6 +1665,9 @@ async function stagePendingOperation(
       ? { ...params, ...(changesBag as Record<string, unknown>) }
       : params
   const riskLevel = getRiskLevel(operationType, riskParams)
+  // Inside gnubok_stage_across_companies, a dry run included, a high-risk
+  // operation is refused here on the tier this row would carry.
+  assertStageableInBatch(operationType, riskLevel)
   const branding = getBranding().appName.toLowerCase()
 
   // Resolve period_status once. The caller can pass `dateForPeriodCheck`
@@ -2172,7 +2187,6 @@ async function categorizeTransactionCore(
   userId: string,
   companyId: string,
   supabase: SupabaseClient,
-  confirm: boolean = false
 ): Promise<{
   preview?: boolean
   success?: boolean
@@ -2293,7 +2307,7 @@ async function categorizeTransactionCore(
   // Get entity type and VAT registration
   const { data: settings } = await supabase
     .from('company_settings')
-    .select('entity_type, fiscal_year_start_month, vat_registered')
+    .select('entity_type, vat_registered')
     .eq('company_id', companyId)
     .single()
 
@@ -2347,137 +2361,40 @@ async function categorizeTransactionCore(
     )
   }
 
-  // Preview mode: return what would happen without executing
-  if (!confirm) {
-    // Materialize the exact lines the commit executor will post — including
-    // the gross→net split on the cost line. Historically the preview only
-    // carried { debit/credit account, gross amount, vat_lines }, which reads
-    // as an unbalanced "gross on cost account + VAT debit" entry and misled
-    // both users and agents into rejecting correct proposals.
-    const entryLines = buildTransactionEntryLines(transaction as Transaction, mappingResult)
-    const reverseCharge = transaction.amount < 0
-      ? reverseChargeBasisSummary(mappingResult.vat_lines, reverseChargeKind, mappingResult.debit_account)
-      : undefined
-    return {
-      preview: true,
-      category,
-      debit_account: mappingResult.debit_account,
-      credit_account: mappingResult.credit_account,
-      amount: Math.abs(transaction.amount),
-      currency: transaction.currency,
-      lines: entryLines.map(l => ({
-        account_number: l.account_number,
-        debit_amount: l.debit_amount,
-        credit_amount: l.credit_amount,
-        description: l.line_description ?? '',
-      })),
-      vat_lines: mappingResult.vat_lines.map(v => ({
-        account_number: v.account_number,
-        debit_amount: v.debit_amount,
-        credit_amount: v.credit_amount,
-        description: v.description,
-      })),
-      message: 'Preview only: no changes made. Call again with confirm: true to create the journal entry.',
-      ...(reverseCharge ? { reverse_charge: reverseCharge } : {}),
-      underlag: underlagSummary,
-    }
-  }
-
-  // Ensure fiscal period exists
-  const fiscalYearStartMonth = settings?.fiscal_year_start_month ?? 1
-  const txDate = new Date(transaction.date)
-  const txMonth = txDate.getMonth() + 1
-  const txYear = txDate.getFullYear()
-
-  let periodStartYear: number
-  if (fiscalYearStartMonth === 1) {
-    periodStartYear = txYear
-  } else if (txMonth >= fiscalYearStartMonth) {
-    periodStartYear = txYear
-  } else {
-    periodStartYear = txYear - 1
-  }
-
-  const startMonth = String(fiscalYearStartMonth).padStart(2, '0')
-  const periodStart = `${periodStartYear}-${startMonth}-01`
-
-  const endYear = fiscalYearStartMonth === 1 ? periodStartYear : periodStartYear + 1
-  const endMonth = fiscalYearStartMonth === 1 ? 12 : fiscalYearStartMonth - 1
-  const lastDay = new Date(endYear, endMonth, 0).getDate()
-  const periodEnd = `${endYear}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-
-  const periodName = fiscalYearStartMonth === 1
-    ? `Räkenskapsår ${periodStartYear}`
-    : `Räkenskapsår ${periodStartYear}/${endYear}`
-
-  await supabase
-    .from('fiscal_periods')
-    .upsert(
-      { user_id: userId, name: periodName, period_start: periodStart, period_end: periodEnd },
-      { onConflict: 'user_id,period_start,period_end' }
-    )
-
-  // Create journal entry
-  let journalEntryId: string | null = null
-  let journalEntryError: string | null = null
-
-  try {
-    const journalEntry = await createTransactionJournalEntry(
-      supabase,
-      companyId,
-      userId,
-      transaction as Transaction,
-      mappingResult
-    )
-    if (journalEntry) {
-      journalEntryId = journalEntry.id
-    }
-  } catch (err) {
-    journalEntryError = err instanceof Error ? err.message : 'Unknown error'
-  }
-
-  // Update transaction
-  await supabase
-    .from('transactions')
-    .update({
-      is_business: isBusiness,
-      category,
-      journal_entry_id: journalEntryId,
-    })
-    .eq('id', txId)
-
-  // Emit event so extensions (mapping rules, etc.) can react
-  await eventBus.emit({
-    type: 'transaction.categorized',
-    payload: {
-      transaction: transaction as Transaction,
-      account: mappingResult.debit_account,
-      taxCode: mappingResult.vat_lines[0]?.account_number || '',
-      userId,
-      companyId,
-    },
-  })
-
-  // Upsert counterparty template for future auto-matching
-  try {
-    await upsertCounterpartyTemplate(
-      supabase, companyId, transaction as Transaction, mappingResult, 'user_approved'
-    )
-  } catch {
-    // Non-critical
-  }
-
+  // Preview only: the approval executes through categorizeMatchedTransaction
+  // (lib/transactions/categorize-core.ts), the one booking path every
+  // surface shares.
+  // Materialize the exact lines the commit executor will post, including
+  // the gross→net split on the cost line. Historically the preview only
+  // carried { debit/credit account, gross amount, vat_lines }, which reads
+  // as an unbalanced "gross on cost account + VAT debit" entry and misled
+  // both users and agents into rejecting correct proposals.
+  const entryLines = buildTransactionEntryLines(transaction as Transaction, mappingResult)
+  const reverseCharge = transaction.amount < 0
+    ? reverseChargeBasisSummary(mappingResult.vat_lines, reverseChargeKind, mappingResult.debit_account)
+    : undefined
   return {
-    success: true,
-    journal_entry_created: !!journalEntryId,
-    journal_entry_id: journalEntryId,
-    journal_entry_error: journalEntryError,
+    preview: true,
     category,
     debit_account: mappingResult.debit_account,
     credit_account: mappingResult.credit_account,
     amount: Math.abs(transaction.amount),
     currency: transaction.currency,
-    transaction: transaction as Transaction,
+    lines: entryLines.map(l => ({
+      account_number: l.account_number,
+      debit_amount: l.debit_amount,
+      credit_amount: l.credit_amount,
+      description: l.line_description ?? '',
+    })),
+    vat_lines: mappingResult.vat_lines.map(v => ({
+      account_number: v.account_number,
+      debit_amount: v.debit_amount,
+      credit_amount: v.credit_amount,
+      description: v.description,
+    })),
+    message: 'Preview only: no changes made. Call again with confirm: true to create the journal entry.',
+    ...(reverseCharge ? { reverse_charge: reverseCharge } : {}),
+    underlag: underlagSummary,
   }
 }
 
@@ -5042,45 +4959,6 @@ async function commitStagedOperation(params: {
   return result
 }
 
-/**
- * Staging tools never batched: their operations are high risk (irreversible
- * postings, period state, external sends, filings) and must be staged and
- * approved one company at a time with an explicit confirmed=true. The
- * approve-side gate (batch approval skips risk_level=high) is the backstop
- * for anything that escalates to high at staging time.
- */
-const BATCH_EXCLUDED_TOOLS = new Set([
-  'gnubok_run_year_end',
-  'gnubok_lock_period',
-  'gnubok_close_period',
-  'gnubok_unlock_period',
-  'gnubok_set_opening_balances',
-  'gnubok_post_kontantmetod_cutoff',
-  'gnubok_run_currency_revaluation',
-  'gnubok_reverse_journal_entry',
-  'gnubok_correct_entry',
-  'gnubok_create_voucher',
-  'gnubok_send_invoice',
-  'gnubok_mark_invoice_as_paid',
-  'gnubok_mark_invoice_as_sent',
-  'gnubok_credit_invoice',
-  'gnubok_credit_supplier_invoice',
-  'gnubok_approve_supplier_invoice',
-  'gnubok_delete_draft_invoice',
-  'gnubok_import_sie',
-  'gnubok_undo_sie_import',
-  'gnubok_generate_agi',
-  'gnubok_agi_submit',
-  'gnubok_vat_declaration_submit',
-  'gnubok_book_salary_run',
-  'gnubok_close_vacation_year',
-  'gnubok_bulk_book_transactions',
-  'gnubok_bulk_book_inbox_items',
-  'gnubok_settle_rot_rut_payout',
-  'gnubok_match_batch_allocate',
-  'gnubok_dispose_asset',
-])
-
 export const tools: McpTool[] = [
   {
     // The bridge that makes `catalogVisibility: 'search'` usable on hosts that
@@ -5797,6 +5675,10 @@ export const tools: McpTool[] = [
         throw new Error(`Insufficient scope: this API key does not have the "${innerScope}" scope`)
       }
       const innerArgs = readInnerArguments(inner, args.arguments)
+      const innerArgumentScope = argumentScopeFor(innerName, innerArgs)
+      if (innerArgumentScope && keyScopes && !hasScope(keyScopes, innerArgumentScope)) {
+        throw new Error(`Insufficient scope: this API key does not have the "${innerArgumentScope}" scope`)
+      }
       const mode: 'summary' | 'full' = args.response_format === 'full' ? 'full' : 'summary'
       const scope = await resolveMcpCompanyScope({
         supabase,
@@ -5899,9 +5781,6 @@ export const tools: McpTool[] = [
       if (inner.outputSchema !== STAGED_OPERATION_SCHEMA) {
         throw codedError('VALIDATION_ERROR', `${innerName} does not stage a pending operation: use gnubok_run_across_companies for reads, or call the tool per company.`)
       }
-      if (BATCH_EXCLUDED_TOOLS.has(innerName)) {
-        throw codedError('VALIDATION_ERROR', `${innerName} is a high-risk operation and is never staged in batch: call it per company and approve each one with confirmed=true.`)
-      }
       if (!isCompanyDependentTool(innerName) || isScopedTool(innerName)) {
         throw codedError('VALIDATION_ERROR', `${innerName} is not a company-scoped tool.`)
       }
@@ -5933,8 +5812,15 @@ export const tools: McpTool[] = [
         throw codedError('NOT_FOUND', `Not accessible: ${scope.unresolved.join(', ')}. Call gnubok_list_companies for the companies this key can reach.`)
       }
       const runnerActor: ActorContext = actor ?? { type: 'api_key' }
-      const batchId = dryRun ? null : randomUUID()
+      // A dry run also runs in the batch context (its id is never stored), so
+      // it answers the same high-risk refusal the real batch would.
+      const batchId = randomUUID()
       const stageOne = async (company: { companyId: string; name: string }) => {
+        // The staging helper refuses a high-risk operation inside a batch
+        // (assertStageableInBatch). One refusal stops the batch: the remaining
+        // companies are not previewed only to be refused the same way.
+        const refused = batchHighRiskRefusal()
+        if (refused) throw highRiskInBatchError(refused)
         const context = await resolveMcpCompanyContext({
           supabase,
           userId,
@@ -5966,9 +5852,13 @@ export const tools: McpTool[] = [
       // Writes stage one company at a time: the staging helper stamps the
       // batch id from the async context, and sequential staging keeps
       // idempotency and period checks in a predictable order.
-      const run = batchId
-        ? await runWithStagingBatch(batchId, () => runAcrossCompanies(companies, stageOne, { concurrency: 1 }))
-        : await runAcrossCompanies(companies, stageOne, { concurrency: 1 })
+      const { run, refused } = await runWithStagingBatch(batchId, async () => ({
+        run: await runAcrossCompanies(companies, stageOne, { concurrency: 1 }),
+        refused: batchHighRiskRefusal(),
+      }))
+      if (refused && run.succeeded === 0) {
+        throw codedError('VALIDATION_ERROR', `${innerName} stages ${refused}, a high-risk operation that is never staged in batch: call it per company and approve each one with confirmed=true.`)
+      }
       const results = run.results.map((row) => {
         const company = { company_id: row.company.companyId, name: row.company.name }
         if (!row.ok) return { company, ok: false, error: row.error }
@@ -5985,7 +5875,7 @@ export const tools: McpTool[] = [
       })
       const stagedCount = results.filter((r) => r.ok && 'operation_id' in r).length
       return {
-        batch_id: batchId,
+        batch_id: dryRun ? null : batchId,
         tool: innerName,
         scope: scopeTail(scope),
         results,
@@ -5994,7 +5884,7 @@ export const tools: McpTool[] = [
         dry_run: dryRun,
         message: dryRun
           ? `Dry run across ${companies.length} companies: nothing staged.`
-          : `Staged ${stagedCount} operation${stagedCount === 1 ? '' : 's'} under batch ${batchId}. Review per company, then gnubok_approve_pending_operation with batch_id (low and medium risk) or operation_id; high-risk operations are approved one by one with confirmed=true.`,
+          : `Staged ${stagedCount} operation${stagedCount === 1 ? '' : 's'} under batch ${batchId}. Review per company, then gnubok_approve_pending_operation with batch_id or operation_id.`,
       }
     },
   },
@@ -7811,18 +7701,15 @@ export const tools: McpTool[] = [
         throw new Error('cash_account_id must be a cash account UUID (cash_accounts.id), not a ledger account number')
       }
 
-      // is_ignored = false on every query: a transaction ignored via
-      // gnubok_ignore_transaction has no journal entry by CHECK constraint, so
-      // journal_entry_id IS NULL alone kept listing it as work to do
-      // (feedback seq 330091). Same predicate as the Att göra worklist.
-      //
-      // journal_entry_id IS NULL is only the first of the "booked" anchors
-      // (lib/transactions/is-booked.ts): a row split over several verifikat
-      // (#1553) or bulk-booked into a samlingsverifikat is anchored through
-      // transaction_voucher_links alone and was listed here as unbooked
-      // (crm#48). Ids first, junction rows subtracted, then the page: the
-      // offset and total_count stay exact instead of a page shrinking after a
-      // post-hoc filter.
+      // The rows countUnbookedBankTransactions counts (lib/transactions/
+      // unbooked.ts), so total_count is the number Accounted://attention, the
+      // company context and the period-lock guard report: not ignored, not
+      // triaged as private, and anchored to no verifikat. journal_entry_id IS
+      // NULL is only the first anchor: a row split over several verifikat
+      // (#1553), bulk-booked into a samlingsverifikat or settled through an
+      // invoice allocation keeps it NULL. Ids first, anchored rows subtracted,
+      // then the page: the offset and total_count stay exact instead of a
+      // page shrinking after a post-hoc filter.
       const candidateIds = await fetchAllRows<{ id: string }>(({ from, to }) => {
         let idQuery = supabase
           .from('transactions')
@@ -7830,14 +7717,15 @@ export const tools: McpTool[] = [
           .eq('company_id', companyId)
           .is('journal_entry_id', null)
           .eq('is_ignored', false)
+          .or('is_business.is.null,is_business.eq.true')
         if (cashAccountId) idQuery = idQuery.eq('cash_account_id', cashAccountId)
         return idQuery.order('date', { ascending: false }).order('id', { ascending: true }).range(from, to)
       })
-      const junctionLinked =
+      const anchored =
         candidateIds.length > 0
-          ? await fetchJunctionLinkedTxIds(supabase, companyId, candidateIds.map((row) => row.id))
+          ? await fetchAnchoredTransactionIds(supabase, companyId, candidateIds.map((row) => row.id))
           : new Set<string>()
-      const openIds = candidateIds.filter((row) => !junctionLinked.has(row.id)).map((row) => row.id)
+      const openIds = candidateIds.filter((row) => !anchored.has(row.id)).map((row) => row.id)
       const totalCount = openIds.length
       const pageIds = openIds.slice(offset, offset + limit)
 
@@ -8206,7 +8094,6 @@ export const tools: McpTool[] = [
         userId,
         companyId,
         supabase,
-        false // preview mode: execution happens at approval time via gnubok_approve_pending_operation
       ).then(
         (previewResult) => ({ previewResult, missingSek: null }),
         (err: unknown) => {
@@ -13984,6 +13871,7 @@ export const tools: McpTool[] = [
           additionalProperties: { type: 'string' },
           description: 'Dims bag keyed by SIE dim no, value = code OR name. Applied to every new_entry line not setting the key. Only valid with new_entry: a posted verifikat is immutable.',
         },
+        allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard. True ONLY after the user confirms the bank lines are separate events.' },
       },
       required: ['tx_ids'],
     },
@@ -14083,7 +13971,9 @@ export const tools: McpTool[] = [
 
       const { data: txs, error: txError } = await supabase
         .from('transactions')
-        .select('id, amount, currency, date, journal_entry_id, description, merchant_name')
+        // amount_sek / exchange_rate / cash_account_id are projected for the
+        // duplicate guard below.
+        .select('id, amount, currency, date, journal_entry_id, description, merchant_name, amount_sek, exchange_rate, cash_account_id')
         .in('id', txIds)
         .eq('company_id', companyId)
       if (txError || !txs || txs.length !== txIds.length) {
@@ -14132,6 +14022,35 @@ export const tools: McpTool[] = [
         // than letting it retry with hand-built FX lines.
         throw new Error(
           'All transactions must share the same currency. For cross-currency allocations, use gnubok_match_batch_allocate (which handles the FX diff on 7960/3960).'
+        )
+      }
+
+      // Booking-time duplicate guard, the one the dashboard and v1 bulk-book
+      // run (runBulkBookDuplicateGuard): surface a bank line the ledger
+      // already books NOW, before staging, so the agent links it instead of
+      // queuing a second verifikat. The executor re-checks at approval.
+      // Staging writes nothing, so a dismissal is recorded at commit only.
+      const duplicate = await runBulkBookDuplicateGuard(
+        supabase,
+        companyId,
+        userId,
+        txs as BulkBookDuplicateTx[],
+        {
+          txIds,
+          existingJournalEntryId: existingJeId,
+          force: args.allow_duplicate === true,
+          recordDismissal: false,
+          via: 'allow_duplicate',
+        },
+        log,
+      )
+      if (!duplicate.ok) {
+        const dup = duplicate.details.candidate
+        throw codedRefusal(
+          'TRANSACTION_BOOK_POSSIBLE_DUPLICATE',
+          `Possible double booking: transaction ${duplicate.details.transaction_id} looks already booked by verifikat ${dup.voucher_label} (${dup.entry_date})` +
+            `${dup.amount_verified ? '' : ', though the amounts could not be compared in SEK'}. ` +
+            'Link the transaction to that verifikat instead. Call again with allow_duplicate=true only after the user confirms it is a genuinely separate business event.',
         )
       }
 
@@ -14222,6 +14141,7 @@ export const tools: McpTool[] = [
           tx_ids: txIds,
           existing_journal_entry_id: existingJeId,
           new_entry: stagedNewEntry,
+          allow_duplicate: args.allow_duplicate === true,
         },
         // GDPR Art.25: preview_data carries aggregate counts, the shared
         // date/direction/currency, and the staged kontering (see previewLines
@@ -14834,7 +14754,7 @@ export const tools: McpTool[] = [
         supplier_invoice_id: { type: 'string', description: 'UUID of the supplier invoice to mark paid' },
         journal_entry_id: { type: 'string', description: 'UUID of the existing posted verifikat to link' },
         notes: { type: 'string', description: 'Optional note stored on the supplier_invoice_payments row' },
-        amount: { type: 'number', description: 'This invoice\'s share when the verifikat pays several debts (invoice currency, max its remainder)' },
+        amount: { type: 'number', description: 'This invoice\'s share of the verifikat' },
       },
       required: ['supplier_invoice_id', 'journal_entry_id'],
     },
@@ -15328,8 +15248,9 @@ export const tools: McpTool[] = [
       // No host enforces inputSchema: a pair without both id arrays used to
       // crash the engine ("Cannot read properties of undefined"). The same
       // schema as the dashboard and v1 links routes, so the limits are one
-      // definition too: at most 200 pairs of at most 50 ids each, which also
-      // bounds the ledger reads a stage-time dry run makes.
+      // definition too (lib/reconciliation/limits.ts): at most 200 pairs and
+      // MAX_LINK_REQUEST_ENTRIES verifikat in all, which also bounds the
+      // ledger reads a stage-time dry run makes.
       const pairsCheck = reconciliationLinksBodyFields.pairs.safeParse(rawPairs)
       if (!pairsCheck.success) {
         throw fieldValidationError('Invalid pairs', zodFieldIssues(pairsCheck.error, rawPairs).map((issue) => ({
@@ -16682,7 +16603,7 @@ export const tools: McpTool[] = [
       // staged operation would fail opaquely at commit time instead.
       const { data: resolvedSupplier } = await supabase
         .from('suppliers')
-        .select('id, default_expense_account, default_payment_terms')
+        .select('id, default_expense_account, default_payment_terms, bankgiro, plusgiro, iban, bic')
         .eq('id', supplierId)
         .eq('company_id', companyId)
         .single()
@@ -16704,11 +16625,14 @@ export const tools: McpTool[] = [
           : 30
 
       // The scan read the supplier's giro or IBAN with everything else: a
-      // supplier that lacks them takes them now, so the staged invoice can
-      // go into a betalfil once approved. A write, so never on a dry run.
-      if (!dryRun) {
-        await backfillSupplierPaymentDetails(supabase, companyId, supplierId, supplierExt as SupplierPaymentDetails | null)
-      }
+      // supplier that lacks them takes them on approval, so the invoice can
+      // go into a betalfil. Staged and shown here, written by the executor:
+      // staging is a proposal and writes nothing outside pending_operations.
+      const supplierPaymentFill = planSupplierPaymentBackfill(
+        resolvedSupplier as SupplierPaymentColumns,
+        supplierExt as SupplierPaymentDetails | null,
+      )
+      const hasSupplierPaymentFill = Object.keys(supplierPaymentFill).length > 0
 
       // Assemble core invoice fields
       const currency = (invoiceExt?.currency as string) || 'SEK'
@@ -17258,6 +17182,7 @@ export const tools: McpTool[] = [
         ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
           ? { default_dimensions: resolvedDefaultDimensions }
           : {}),
+        ...(hasSupplierPaymentFill ? { supplier_payment_details: supplierPaymentFill } : {}),
       }
 
       const previewData = {
@@ -17326,6 +17251,9 @@ export const tools: McpTool[] = [
           : {}),
         line_count: lineItems.length,
         items_preview: lineItems.slice(0, 5),
+        // What confirming also writes to the supplier card: only details it
+        // lacks, never overwriting one a person entered.
+        ...(hasSupplierPaymentFill ? { supplier_payment_details_fill: supplierPaymentFill } : {}),
         // Echoed for every non-exact dimension resolution (resolve-don't-
         // select) so the agent can verify what a name attached to.
         ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
@@ -27649,17 +27577,25 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
 
       // Enforce scope: surface structured error so the agent can dispatch.
+      // A tool in neither TOOL_SCOPE_MAP nor UNSCOPED_TOOLS is refused: a new
+      // tool nobody gave a scope fails closed instead of opening to every key.
       const requiredScope = toolName === 'gnubok_load_skill' && typeof rawToolArgs.slug === 'string' && rawToolArgs.slug.trim().startsWith('own/')
         ? 'agent:read'
         : TOOL_SCOPE_MAP[toolName]
-      if (requiredScope && !hasScope(keyScopes, requiredScope)) {
+      const missingScope = [requiredScope, argumentScopeFor(toolName, rawToolArgs)].find(
+        (scope): scope is ApiKeyScope => scope !== undefined && scope !== null && !hasScope(keyScopes, scope)
+      )
+      const unmapped = !requiredScope && !UNSCOPED_TOOLS.has(toolName)
+      if (missingScope || unmapped) {
         const scopeError = toToolError(
-          new Error(`Insufficient scope: this API key does not have the "${requiredScope}" scope`),
+          missingScope
+            ? new Error(`Insufficient scope: this API key does not have the "${missingScope}" scope`)
+            : codedError('FORBIDDEN', `${toolName} has no scope assigned, so no key may call it until it gets one.`),
           { toolName }
         )
         emitToolCallTelemetry({
           tool: toolName,
-          requiredScope,
+          requiredScope: missingScope ?? null,
           actor,
           latencyMs: 0,
           success: false,

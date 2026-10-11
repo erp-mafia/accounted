@@ -57,6 +57,16 @@ describe('GET /api/arkiv/derive/cron', () => {
     expect(enqueueDocumentJob).toHaveBeenCalledWith(mockSupabase, 'co-1', 'doc-old', 'derive')
   })
 
+  it('reads agreements past the 1000-row page, so a rollout company on the second page is observed', async () => {
+    enqueue({ data: Array.from({ length: 1000 }, (_, i) => ({ company_id: 'co-outside', source_document_id: `doc-${i}`, derived_at: yesterday })) })
+    enqueue({ data: [{ company_id: 'co-1', source_document_id: 'doc-late', derived_at: yesterday }] })
+    ;(observeObligations as ReturnType<typeof vi.fn>).mockResolvedValue({ checked: 0, matched: 0, missed: 0 })
+    const { status, body } = await parseJsonResponse(await call())
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ companies: 1 })
+    expect(observeObligations).toHaveBeenCalledWith(mockSupabase, 'co-1', expect.any(String))
+  })
+
   it('answers 500 when the agreements cannot be read', async () => {
     enqueue({ error: { message: 'boom' } })
     const { status, body } = await parseJsonResponse(await call())

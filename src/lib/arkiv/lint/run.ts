@@ -114,15 +114,23 @@ async function fileFindings(supabase: SupabaseClient, companyId: string, drafts:
 
 /** Audits per schema type in the window, written as the company's autonomy levels. */
 export async function computeAutonomy(supabase: SupabaseClient, companyId: string, today: string): Promise<number> {
-  const { data, error } = await supabase
-    .from('activities')
-    .select('schema_type, detail')
-    .eq('company_id', companyId)
-    .eq('kind', 'review')
-    .gte('started_at', addDays(today, -AUDIT_WINDOW_DAYS))
-    .limit(5000)
-  if (error) throw new Error(`activities fetch failed: ${error.message}`)
-  const tallies = tallyAudits((data ?? []) as Array<{ schema_type: string | null; detail: unknown }>)
+  // Every audit in the window, paged: an autonomy level read off the first 1000 is a different level.
+  let data: Array<{ schema_type: string | null; detail: unknown }>
+  try {
+    data = await fetchAllRows<{ schema_type: string | null; detail: unknown }>((range) =>
+      supabase
+        .from('activities')
+        .select('schema_type, detail')
+        .eq('company_id', companyId)
+        .eq('kind', 'review')
+        .gte('started_at', addDays(today, -AUDIT_WINDOW_DAYS))
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    )
+  } catch (error) {
+    throw new Error(`activities fetch failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const tallies = tallyAudits(data)
   const now = new Date().toISOString()
   let written = 0
   for (const [schemaType, tally] of tallies) {
@@ -190,12 +198,15 @@ async function loadLedgerLines(supabase: SupabaseClient, companyId: string, toda
       // A reversed original stays in the ledger and its storno cancels it; the reports sum both, so must this.
       .in('journal_entries.status', ['posted', 'reversed'])
   // Literal on purpose: the phantom-column guard can only check what it can read. run.test.ts pins both to EXPECTATION_RULES.
+  // Both paged: a cost or a balance is the sum of every posting, and PostgREST caps a single read.
   const [cost, balance] = await Promise.all([
-    base()
-      .gte('journal_entries.entry_date', since.toISOString().slice(0, 10))
-      .or('and(account_number.gte.8410,account_number.lte.8419),and(account_number.gte.5010,account_number.lte.5019)')
-      .limit(5000),
-    // Every posting, paged: a balance is the sum of all of them, and PostgREST caps a single read.
+    fetchAllRows((range) =>
+      base()
+        .gte('journal_entries.entry_date', since.toISOString().slice(0, 10))
+        .or('and(account_number.gte.8410,account_number.lte.8419),and(account_number.gte.5010,account_number.lte.5019)')
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    ),
     fetchAllRows((range) =>
       base()
         .or('and(account_number.gte.2350,account_number.lte.2359),and(account_number.gte.2390,account_number.lte.2399),and(account_number.gte.2840,account_number.lte.2849)')
@@ -203,8 +214,7 @@ async function loadLedgerLines(supabase: SupabaseClient, companyId: string, toda
         .range(range.from, range.to),
     ),
   ])
-  if (cost.error) throw new Error(`ledger fetch failed: ${cost.error.message}`)
-  const rows = [...(cost.data ?? []), ...balance] as unknown as Array<{
+  const rows = [...cost, ...balance] as unknown as Array<{
     account_number: string | number
     debit_amount: number | string | null
     credit_amount: number | string | null
@@ -227,15 +237,23 @@ async function loadAgreements(supabase: SupabaseClient, companyId: string): Prom
 }
 
 async function loadDocumentContents(supabase: SupabaseClient, companyId: string): Promise<DocumentContent[]> {
-  const { data, error } = await supabase
-    .from('document_classifications')
-    .select('document_id, content_sha256, document_attachments!inner(file_name, admission_state)')
-    .eq('company_id', companyId)
-    .eq('is_current', true)
-    .not('content_sha256', 'is', null)
-    .limit(5000)
-  if (error) throw new Error(`classifications fetch failed: ${error.message}`)
-  const rows = (data ?? []) as unknown as Array<{
+  // Paged: a duplicate is two documents with the same text, and the second may sit past the first 1000 rows.
+  let data: unknown[]
+  try {
+    data = await fetchAllRows((range) =>
+      supabase
+        .from('document_classifications')
+        .select('document_id, content_sha256, document_attachments!inner(file_name, admission_state)')
+        .eq('company_id', companyId)
+        .eq('is_current', true)
+        .not('content_sha256', 'is', null)
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    )
+  } catch (error) {
+    throw new Error(`classifications fetch failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const rows = data as unknown as Array<{
     document_id: string
     content_sha256: string | null
     document_attachments: { file_name: string; admission_state: string } | Array<{ file_name: string; admission_state: string }>

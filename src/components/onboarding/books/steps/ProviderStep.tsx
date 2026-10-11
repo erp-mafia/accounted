@@ -131,7 +131,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     if (cId) void loadPreview(cId)
   }, [loadPreview])
 
-  useProviderMessage(
+  const popupRef = useProviderMessage(
     (cId) => void loadPreview(cId),
     (reason) => { setError(getErrorMessage(reason, { locale })); setPhase('connect') },
   )
@@ -153,6 +153,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     setError(null)
     setPhase('connecting')
     const popup = openProviderWindow()
+    popupRef.current = popup
     login.current.popup = popup
     try {
       const r = await providerConnect(providerId)

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { detectPeriodisering } from '../auto-detect'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createPagedMockSupabase, createQueuedMockSupabase, manyRows } from '@/tests/helpers'
 
 describe('detectPeriodisering', () => {
   let mock: ReturnType<typeof createQueuedMockSupabase>
@@ -580,5 +580,36 @@ describe('detectPeriodisering', () => {
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe('low')
     expect(result[0].reason).toContain('Under 5 000 kr')
+  })
+
+  it('reads every invoice and every löpande schedule past 1,000 rows', async () => {
+    const supplierInvoice = (i: number) => ({
+      id: `sup-inv-${i}`,
+      supplier_invoice_number: `LF-${i}`,
+      invoice_date: '2025-07-01',
+      subtotal: 12000,
+      notes: 'Mjukvarulicens period: 2025-07-01 till 2026-06-30',
+      suppliers: { name: 'Acme SaaS AB' },
+      supplier_invoice_items: [{ description: 'Årslicens', account_number: '5800' }],
+    })
+    const { supabase, findCalls } = createPagedMockSupabase({
+      fiscal_periods: [{ id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' }],
+      // The schedule that already periodiserar sup-inv-0 sits past the first 1,000.
+      accrual_schedules: [
+        ...manyRows(1000, (i) => ({ supplier_invoice_id: `other-${i}`, invoice_id: null })),
+        { supplier_invoice_id: 'sup-inv-0', invoice_id: null },
+      ],
+      supplier_invoices: manyRows(1001, supplierInvoice),
+    })
+
+    const result = await detectPeriodisering(supabase as never, 'company-1', 'period-1')
+
+    const ids = result.map((r) => r.source_invoice_id)
+    expect(ids).not.toContain('sup-inv-0')
+    expect(ids).toContain('sup-inv-1000')
+    expect(result).toHaveLength(1000)
+    for (const table of ['accrual_schedules', 'invoices', 'supplier_invoices']) {
+      expect(findCalls(table, 'order').map((a) => a[0])).toContain('id')
+    }
   })
 })

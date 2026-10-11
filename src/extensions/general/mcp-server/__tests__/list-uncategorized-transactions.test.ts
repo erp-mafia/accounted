@@ -4,11 +4,25 @@ import { tools } from '../server'
 
 const tool = tools.find((t) => t.name === 'gnubok_list_uncategorized_transactions')!
 
-// Query order per call: (1) ids of pointer-unbooked rows, (2) their
-// transaction_voucher_links rows, (3) the page, (4) cash_accounts when a page
-// row carries a cash_account_id. (2) and (3) are skipped on an empty result.
-function enqueueIds(enqueue: (r: { data?: unknown; error?: unknown; count?: number | null }) => void, ids: string[]) {
+type Enqueue = (r: { data?: unknown; error?: unknown; count?: number | null }) => void
+
+// Query order per call: (1) ids of pointer-unbooked rows, (2) their anchors in
+// transaction_voucher_links, invoice_payments and supplier_invoice_payments
+// (lib/transactions/unbooked.ts fetchAnchoredTransactionIds), (3) the page,
+// (4) cash_accounts when a page row carries a cash_account_id. (2) and (3)
+// are skipped on an empty result.
+function enqueueIds(enqueue: Enqueue, ids: string[]) {
   enqueue({ data: ids.map((id) => ({ id })), error: null })
+}
+
+function enqueueAnchors(
+  enqueue: Enqueue,
+  anchors: { links?: string[]; invoicePayments?: string[]; supplierPayments?: string[] } = {},
+) {
+  const rows = (ids: string[] = []) => ({ data: ids.map((transaction_id) => ({ transaction_id })), error: null })
+  enqueue(rows(anchors.links))
+  enqueue(rows(anchors.invoicePayments))
+  enqueue(rows(anchors.supplierPayments))
 }
 
 beforeEach(() => {
@@ -40,7 +54,7 @@ describe('gnubok_list_uncategorized_transactions', () => {
     ]
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueueIds(enqueue, ['t-uncat-1'])
-    enqueue({ data: [], error: null }) // transaction_voucher_links
+    enqueueAnchors(enqueue)
     enqueue({ data: rows, error: null })
 
     const result = (await tool.execute(
@@ -72,7 +86,7 @@ describe('gnubok_list_uncategorized_transactions', () => {
     ]
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueueIds(enqueue, ['t-1', 't-2'])
-    enqueue({ data: [], error: null }) // transaction_voucher_links
+    enqueueAnchors(enqueue)
     enqueue({ data: rows, error: null })
     enqueue({ data: [{ id: 'ca-1930', ledger_account: '1930' }], error: null })
 
@@ -90,7 +104,7 @@ describe('gnubok_list_uncategorized_transactions', () => {
   it('narrows both the id read and the page to one bank account when cash_account_id is given', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueueIds(enqueue, ['t-1'])
-    enqueue({ data: [], error: null }) // transaction_voucher_links
+    enqueueAnchors(enqueue)
     enqueue({ data: [{ id: 't-1', date: '2026-03-09', description: 'A', amount: -10, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null }], error: null })
 
     const CA = '550e8400-e29b-41d4-a716-446655441940'
@@ -102,7 +116,7 @@ describe('gnubok_list_uncategorized_transactions', () => {
     expect(findCalls('cash_accounts', 'in')).toHaveLength(0)
   })
 
-  it('skips the junction and page reads when nothing is unbooked', async () => {
+  it('skips the anchor and page reads when nothing is unbooked', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueueIds(enqueue, [])
 
@@ -127,11 +141,11 @@ describe('gnubok_list_uncategorized_transactions', () => {
   it('excludes ignored transactions from both the id read and the page', async () => {
     // A transaction ignored via gnubok_ignore_transaction has journal_entry_id
     // NULL by CHECK constraint, so "no journal entry yet" alone kept listing
-    // it as work to do (feedback seq 330091). Same predicate as the worklist:
-    // journal_entry_id IS NULL AND is_ignored = false, on both queries.
+    // it as work to do (feedback seq 330091): journal_entry_id IS NULL AND
+    // is_ignored = false, on both queries.
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueueIds(enqueue, ['t-1'])
-    enqueue({ data: [], error: null }) // transaction_voucher_links
+    enqueueAnchors(enqueue)
     enqueue({ data: [{ id: 't-1', date: '2026-03-09', description: 'A', amount: -10, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null }], error: null })
 
     await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)
@@ -151,7 +165,7 @@ describe('gnubok_list_uncategorized_transactions', () => {
     // two bank_line junction rows: it is booked, not work to do.
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueueIds(enqueue, ['t-split', 't-open', 't-open-2'])
-    enqueue({ data: [{ transaction_id: 't-split' }, { transaction_id: 't-split' }], error: null })
+    enqueueAnchors(enqueue, { links: ['t-split', 't-split'] })
     enqueue({
       data: [
         { id: 't-open', date: '2026-08-19', description: 'Open', amount: -10, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null },
@@ -173,5 +187,39 @@ describe('gnubok_list_uncategorized_transactions', () => {
     expect(result.total_count).toBe(2)
     expect(result.has_more).toBe(true)
     expect(result.next_offset).toBe(1)
+  })
+  it('lists and counts the rows the shared unbooked count counts: no private rows, no invoice-settled rows', async () => {
+    // total_count used to subtract transaction_voucher_links only and keep
+    // private rows, so it disagreed with Accounted://attention, the company
+    // context and the period-lock guard (lib/transactions/unbooked.ts).
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueIds(enqueue, ['t-paid-invoice', 't-paid-supplier', 't-open'])
+    enqueueAnchors(enqueue, { invoicePayments: ['t-paid-invoice'], supplierPayments: ['t-paid-supplier'] })
+    enqueue({
+      data: [
+        { id: 't-open', date: '2026-08-19', description: 'Open', amount: -10, currency: 'SEK', merchant_name: null, reference: null, is_business: true, category: null, cash_account_id: null },
+      ],
+      error: null,
+    })
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      transactions: Array<{ transaction_id: string }>
+      total_count: number
+    }
+
+    expect(findCalls('transactions', 'or')[0]).toEqual(['is_business.is.null,is_business.eq.true'])
+    expect(findCalls('transactions', 'in')).toEqual([['id', ['t-open']]])
+    expect(result.transactions.map((t) => t.transaction_id)).toEqual(['t-open'])
+    expect(result.total_count).toBe(1)
+  })
+
+  it('fails instead of listing a booked row when an anchor lookup fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueIds(enqueue, ['t-1'])
+    enqueue({ data: [], error: null })
+    enqueue({ data: null, error: { message: 'statement timeout' } })
+    enqueue({ data: [], error: null })
+
+    await expect(tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)).rejects.toThrow(/anchor lookup failed/)
   })
 })

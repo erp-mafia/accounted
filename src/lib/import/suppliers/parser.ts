@@ -58,11 +58,11 @@ function cleanGiroNumber(value: string | null): string | null {
   return cleaned === '' ? null : cleaned
 }
 
-export function parseSuppliersFile(
+export async function parseSuppliersFile(
   buffer: ArrayBuffer,
   filename: string,
   columnOverrides?: DetectedSupplierColumns,
-): {
+): Promise<{
   filename: string
   sheet_name: string
   total_rows: number
@@ -71,8 +71,8 @@ export function parseSuppliersFile(
   preview_rows: string[][]
   rows: ParsedSupplierRow[]
   warnings: string[]
-} {
-  const { sheetName, rawData } = readBestSheet(buffer, filename)
+}> {
+  const { sheetName, rawData } = await readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     const fallbackColumns: DetectedSupplierColumns = columnOverrides ?? {

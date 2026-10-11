@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolvePayslipToken, isValidPayslipTokenFormat } from '@/lib/salary/payslips/links'
 import { buildPayslipData, payslipFileName } from '@/lib/salary/payslips/build-payslip-data'
 import { issuePayslipSections } from '@/lib/salary/payslips/section-snapshot'
-import { PayslipPDF } from '@/lib/salary/pdf/payslip-template'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 
@@ -112,6 +110,10 @@ export async function GET(
   })
   const fileName = payslipFileName(run, emp)
 
+  const [{ renderToBuffer }, { PayslipPDF }] = await Promise.all([
+    import('@react-pdf/renderer'),
+    import('@/lib/salary/pdf/payslip-template'),
+  ])
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const buffer = await renderToBuffer(PayslipPDF({ data }) as any)
 

@@ -67,7 +67,7 @@ describe('DELETE /api/salary/runs/[id]', () => {
     })
 
     enqueueMany([
-      { data: null, error: { message: 'Not found' } }, // salary_runs lookup
+      { data: null }, // salary_runs lookup: no row
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
@@ -98,6 +98,34 @@ describe('DELETE /api/salary/runs/[id]', () => {
     expect(body.error).toContain('utkast')
   })
 
+  it('refuses when the run left draft between the check and the delete (status lock)', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: supabase as never,
+      error: null,
+    })
+
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup sees a draft
+      { data: null, count: 0 },                    // the locked delete matches no row
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('utkast')
+    // The write itself is locked to a draft with no posted verifikat.
+    expect(findCalls('salary_runs', 'eq')).toContainEqual(['status', 'draft'])
+    expect(findCalls('salary_runs', 'is')).toEqual([
+      ['salary_entry_id', null],
+      ['avgifter_entry_id', null],
+      ['vacation_entry_id', null],
+    ])
+  })
+
   it('deletes a draft run and returns success', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     vi.mocked(requireAuth).mockResolvedValue({
@@ -108,7 +136,7 @@ describe('DELETE /api/salary/runs/[id]', () => {
 
     enqueueMany([
       { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup
-      { data: null },                              // salary_runs delete (cascade handles children)
+      { data: null, count: 1 },                    // salary_runs delete (cascade handles children)
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })

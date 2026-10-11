@@ -5,7 +5,7 @@ import { NextIntlClientProvider } from 'next-intl'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 
-import { ProviderStep } from '../ArcimMigrationWorkspace'
+import { ProviderStep, offeredProviders } from '../ArcimMigrationWorkspace'
 
 const IntlProvider = NextIntlClientProvider as (
   props: Omit<ComponentProps<typeof NextIntlClientProvider>, 'children'>,
@@ -128,5 +128,25 @@ describe('ProviderStep in English', () => {
       expect(html).toContain(`Use &quot;${action}&quot; above`)
       expect(html).not.toContain(sv.extensions.ext_arcim_resync)
     }
+  })
+})
+
+describe('ProviderStep, the provider cards', () => {
+  const ALL = ['fortnox', 'visma', 'bokio', 'bjornlunden', 'briox', 'wint'] as const
+
+  it('shows no WINT card when the server leaves WINT out', () => {
+    const html = render({ ...status(true, []), enabledProviders: ['fortnox', 'visma', 'bokio', 'bjornlunden', 'briox'] })
+    expect(html).not.toContain('/logos/wint.png')
+    expect(html).toContain('/logos/fortnox.svg')
+  })
+
+  it('shows the WINT card once the server names it', () => {
+    const html = render({ ...status(true, []), enabledProviders: [...ALL] })
+    expect(html).toContain('/logos/wint.png')
+  })
+
+  it('keeps WINT hidden for a server that does not say which providers it can connect', () => {
+    expect(offeredProviders(null).map((p) => p.id)).not.toContain('wint')
+    expect(offeredProviders({}).map((p) => p.id)).toEqual(['fortnox', 'visma', 'bokio', 'bjornlunden', 'briox'])
   })
 })

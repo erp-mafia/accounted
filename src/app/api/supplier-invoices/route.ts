@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
 
@@ -17,28 +18,32 @@ export const GET = withRouteContext(
     const status = searchParams.get('status')
     const supplierId = searchParams.get('supplier_id')
 
-    let query = supabase
-      .from('supplier_invoices')
-      .select('*, supplier:suppliers(id, name)')
-      .eq('company_id', companyId)
+    // Paged: the list used to end at 1,000 invoices.
+    let data: unknown[]
+    try {
+      data = await fetchAllRows<unknown>(({ from, to }) => {
+        let query = supabase
+          .from('supplier_invoices')
+          .select('*, supplier:suppliers(id, name)')
+          .eq('company_id', companyId)
 
-    // Optional narrowing to one supplier — the supplier detail page only
-    // needs that supplier's invoices, not the whole company ledger.
-    if (supplierId) {
-      query = query.eq('supplier_id', supplierId)
-    }
+        // Optional narrowing to one supplier: the supplier detail page only
+        // needs that supplier's invoices, not the whole company ledger.
+        if (supplierId) {
+          query = query.eq('supplier_id', supplierId)
+        }
 
-    if (status && status !== 'all') {
-      if (status === 'to_pay') {
-        query = query.in('status', ['approved', 'overdue'])
-      } else {
-        query = query.eq('status', status)
-      }
-    }
+        if (status && status !== 'all') {
+          if (status === 'to_pay') {
+            query = query.in('status', ['approved', 'overdue'])
+          } else {
+            query = query.eq('status', status)
+          }
+        }
 
-    const { data, error } = await query.order('due_date', { ascending: true })
-
-    if (error) {
+        return query.order('due_date', { ascending: true }).order('id', { ascending: true }).range(from, to)
+      })
+    } catch (error) {
       log.error('supplier_invoice list failed', error)
       return errorResponse(error, log, { requestId })
     }

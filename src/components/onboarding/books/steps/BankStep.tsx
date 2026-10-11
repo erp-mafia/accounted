@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useFormat } from '@/lib/hooks/use-format'
+import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useAccounts, useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -136,38 +137,32 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   // page posts its outcome back and closes itself, so this page never
   // navigates. A blocked popup falls back to the full-page flow, which the
   // first-session gate carries back here with ?select_accounts=.
-  const popupRef = useRef<Window | null>(null)
   const popupWatch = useRef<number | null>(null)
   // The popup posts and then closes: the close watcher must not undo an outcome that already arrived.
   const outcomeRef = useRef(false)
   const stopPopupWatch = useCallback(() => {
     if (popupWatch.current) window.clearInterval(popupWatch.current)
     popupWatch.current = null
-    popupRef.current = null
   }, [])
   useEffect(() => stopPopupWatch, [stopPopupWatch])
 
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      if (event.origin !== window.location.origin) return
-      const data = event.data as { type?: string; url?: string } | null
-      if (data?.type !== 'enable-banking-connected' || typeof data.url !== 'string') return
-      outcomeRef.current = true
-      stopPopupWatch()
-      let target: URL
-      try { target = new URL(data.url, window.location.origin) } catch { return }
-      const id = target.searchParams.get('select_accounts')
-      const bankError = target.searchParams.get('bank_error')
-      if (id) {
-        dispatch({ type: 'BANK_AUTHED', name: state.bankName ?? '', connectionId: id })
-      } else {
-        setAttn(bankError || t('bank_connect_failed'))
-        dispatch({ type: 'BANK_PICK_FAILED' })
-      }
+  // Only the bank popup pickBank opened is heard; it stays set after the
+  // popup closes so a message that lands after the close still counts.
+  const popupRef = useOAuthPopup<{ type?: string; url?: string }>((data) => {
+    if (data?.type !== 'enable-banking-connected' || typeof data.url !== 'string') return
+    outcomeRef.current = true
+    stopPopupWatch()
+    let target: URL
+    try { target = new URL(data.url, window.location.origin) } catch { return }
+    const id = target.searchParams.get('select_accounts')
+    const bankError = target.searchParams.get('bank_error')
+    if (id) {
+      dispatch({ type: 'BANK_AUTHED', name: state.bankName ?? '', connectionId: id })
+    } else {
+      setAttn(bankError || t('bank_connect_failed'))
+      dispatch({ type: 'BANK_PICK_FAILED' })
     }
-    window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
-  }, [dispatch, state.bankName, stopPopupWatch, t])
+  })
 
   async function pickBank(b: Bank) {
     setAttn(null)

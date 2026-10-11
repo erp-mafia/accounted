@@ -622,7 +622,7 @@ describe('pollPaymentSigning', () => {
 
   it('returns fresh QR data to the person signing', async () => {
     const provider = fakeProvider({
-      pollSigning: vi.fn().mockResolvedValue({ state: 'pending', challenge: { approach: 'decoupled', autostartToken: null, qrData: 'bankid.qr.2', redirectUrl: null }, failureCode: null }),
+      pollSigning: vi.fn().mockResolvedValue({ state: 'pending', challenge: { approach: 'decoupled', autostartToken: null, qrData: 'bankid.qr.2', qrImage: null, redirectUrl: null }, failureCode: null }),
     })
     registerPaymentInitiationProvider(provider)
     db.setTable('payment_order_batches', { data: signing })

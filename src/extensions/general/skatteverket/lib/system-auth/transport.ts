@@ -167,6 +167,9 @@ export const privateKeyJwtTransport: SystemAuthTransport = {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params.toString(),
       signal: AbortSignal.timeout(15_000),
+      // A 307/308 would hand the signed client_assertion to the redirect
+      // target, which could replay it at the token endpoint until it expires.
+      redirect: 'error',
     })
     const body = await response.text()
     return parseTokenResponse(response.status, body)

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/input'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
@@ -13,6 +14,10 @@ import {
   normalizeCurrency,
   rankInvoicesByAmountProximity,
 } from './invoice-candidate-ranking'
+import { PICKER_LIMIT, searchOpenSupplierInvoices } from '@/lib/invoices/open-invoice-search'
+
+/** Pause after the last keystroke before the search goes to the database. */
+const SEARCH_DEBOUNCE_MS = 250
 
 type OpenSupplierInvoice = SupplierInvoice & { supplier?: Supplier }
 
@@ -25,87 +30,100 @@ export default function SupplierInvoicePicker({
   transaction,
   onSelect,
 }: SupplierInvoicePickerProps) {
+  const t = useTranslations('tx_invoice_picker')
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
+  // Rows for the applied search term (the newest open invoices without one).
   const [invoices, setInvoices] = useState<OpenSupplierInvoice[]>([])
+  // Whether the request came back full: older rows exist past the limit.
+  const [capped, setCapped] = useState(false)
+  // Whether the company has any open supplier invoice at all (the unsearched
+  // load): decides between the empty state and the search box.
+  const [hasOpenInvoices, setHasOpenInvoices] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [isSearching, setIsSearching] = useState(false)
   const [search, setSearch] = useState('')
+  // The term the database was asked for, trailing the input by a short pause.
+  const [appliedSearch, setAppliedSearch] = useState('')
+
+  useEffect(() => {
+    const handle = setTimeout(() => setAppliedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(handle)
+  }, [search])
 
   useEffect(() => {
     if (!company) return
     const companyId = company.id
     let cancelled = false
     async function load() {
-      setIsLoading(true)
-      // Status filter mirrors match-supplier-invoice route expectations: only
-      // approved/overdue/partially_paid invoices can take a payment. Registered
-      // invoices haven't passed the approval gate yet; paid/credited/reversed
-      // are terminal.
-      const { data } = await supabase
-        .from('supplier_invoices')
-        .select('*, supplier:suppliers(*)')
-        .eq('company_id', companyId)
-        .in('status', ['approved', 'overdue', 'partially_paid'])
-        .gt('remaining_amount', 0)
-        .order('invoice_date', { ascending: false })
-        .limit(200)
-      if (cancelled) return
-      const all = ((data as OpenSupplierInvoice[]) || [])
-
-      // Status-leak guard: if a supplier invoice still says 'approved'/'overdue'
-      // but already has a payment voucher attached, hide it. Partially-paid
-      // invoices intentionally pass through: they may take more payments.
-      // Mirrors the customer-side guard in InvoicePicker.
-      const fullIds = all
-        .filter((inv) => inv.status === 'approved' || inv.status === 'overdue')
-        .map((inv) => inv.id)
-      let visible = all
-      if (fullIds.length > 0) {
-        const { data: paid } = await supabase
-          .from('supplier_invoice_payments')
-          .select('supplier_invoice_id')
-          .eq('company_id', companyId)
-          .in('supplier_invoice_id', fullIds)
-          .not('journal_entry_id', 'is', null)
+      if (appliedSearch) setIsSearching(true)
+      else setIsLoading(true)
+      try {
+        // The search runs in the database across every open supplier invoice:
+        // the newest-first list is capped, so filtering it here could never
+        // find an older one. The status filter (approved/overdue/
+        // partially_paid, the ones that can take a payment) lives there too
+        // (lib/invoices/open-invoice-search).
+        const all = await searchOpenSupplierInvoices<OpenSupplierInvoice>(supabase, companyId, appliedSearch)
         if (cancelled) return
-        const paidSet = new Set<string>(
-          ((paid as { supplier_invoice_id: string }[] | null) ?? []).map(
-            (r) => r.supplier_invoice_id,
-          ),
-        )
-        visible = all.filter((inv) => !paidSet.has(inv.id))
-      }
 
-      setInvoices(visible)
-      setIsLoading(false)
+        // Status-leak guard: if a supplier invoice still says 'approved'/'overdue'
+        // but already has a payment voucher attached, hide it. Partially-paid
+        // invoices intentionally pass through: they may take more payments.
+        // Mirrors the customer-side guard in InvoicePicker.
+        const fullIds = all
+          .filter((inv) => inv.status === 'approved' || inv.status === 'overdue')
+          .map((inv) => inv.id)
+        let visible = all
+        if (fullIds.length > 0) {
+          const { data: paid } = await supabase
+            .from('supplier_invoice_payments')
+            .select('supplier_invoice_id')
+            .eq('company_id', companyId)
+            .in('supplier_invoice_id', fullIds)
+            .not('journal_entry_id', 'is', null)
+          if (cancelled) return
+          const paidSet = new Set<string>(
+            ((paid as { supplier_invoice_id: string }[] | null) ?? []).map(
+              (r) => r.supplier_invoice_id,
+            ),
+          )
+          visible = all.filter((inv) => !paidSet.has(inv.id))
+        }
+
+        setInvoices(visible)
+        setCapped(all.length >= PICKER_LIMIT)
+        if (!appliedSearch) setHasOpenInvoices(visible.length > 0)
+      } catch {
+        if (cancelled) return
+        setInvoices([])
+        setCapped(false)
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false)
+          setIsSearching(false)
+        }
+      }
     }
     load()
     return () => {
       cancelled = true
     }
-  }, [company, supabase])
+  }, [company, supabase, appliedSearch])
 
-  const sorted = useMemo(() => {
-    const filtered = !search
-      ? invoices
-      : invoices.filter((inv) => {
-          const q = search.toLowerCase()
-          return (
-            (inv.supplier_invoice_number ?? '').toLowerCase().includes(q) ||
-            (inv.supplier?.name ?? '').toLowerCase().includes(q)
-          )
-        })
-
-    // Amount proximity is only meaningful between comparable amounts: ranking
-    // a 1 000 EUR invoice as a perfect hit for a 1 000 SEK payment put the
-    // wrong row first. Foreign invoices stay in the list either way; see
-    // ./invoice-candidate-ranking.
-    return rankInvoicesByAmountProximity(filtered, {
-      amount: transaction.amount,
-      currency: transaction.currency,
-      amountSek: transaction.amount_sek,
-    })
-  }, [invoices, search, transaction.amount, transaction.currency, transaction.amount_sek])
+  const sorted = useMemo(
+    () =>
+      // Amount proximity is only meaningful between comparable amounts: ranking
+      // a 1 000 EUR invoice as a perfect hit for a 1 000 SEK payment put the
+      // wrong row first. Foreign invoices stay in the list either way; see
+      // ./invoice-candidate-ranking.
+      rankInvoicesByAmountProximity(invoices, {
+        amount: transaction.amount,
+        currency: transaction.currency,
+        amountSek: transaction.amount_sek,
+      }),
+    [invoices, transaction.amount, transaction.currency, transaction.amount_sek],
+  )
 
   if (isLoading) {
     return (
@@ -116,7 +134,7 @@ export default function SupplierInvoicePicker({
     )
   }
 
-  if (invoices.length === 0) {
+  if (!hasOpenInvoices) {
     return (
       <div className="text-center py-8 text-muted-foreground">
         <p className="text-sm">Inga öppna leverantörsfakturor att matcha mot.</p>
@@ -127,7 +145,11 @@ export default function SupplierInvoicePicker({
   return (
     <div className="space-y-3">
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        {isSearching ? (
+          <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+        ) : (
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        )}
         <Input
           placeholder="Sök fakturanummer eller leverantör..."
           value={search}
@@ -210,7 +232,14 @@ export default function SupplierInvoicePicker({
         })}
         {sorted.length === 0 && (
           <p className="text-center text-sm text-muted-foreground py-4">
-            Ingen faktura matchar &quot;{search}&quot;
+            Ingen faktura matchar &quot;{appliedSearch}&quot;
+          </p>
+        )}
+        {capped && (
+          <p className="text-center text-xs text-muted-foreground py-2">
+            {appliedSearch
+              ? t('capped_search_hint', { limit: PICKER_LIMIT })
+              : t('capped_hint', { limit: PICKER_LIMIT })}
           </p>
         )}
       </div>

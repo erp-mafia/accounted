@@ -28,7 +28,8 @@
  */
 
 import { fetchWithTimeout, isTimeoutError } from '@/lib/http/fetch-with-timeout'
-import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorContext, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { contentDispositionFilename } from '@/lib/api/content-disposition'
 
 /**
  * Default deadline for an interactive artefact download.
@@ -43,22 +44,38 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
  */
 export const DOWNLOAD_TIMEOUT_MS = 15_000
 
+/**
+ * Deadline for a file the route renders on request (an invoice PDF, an SRU
+ * archive computed from the whole year): a cold render can take several
+ * seconds more than a single query, and aborting one that was about to land
+ * only makes the user click again.
+ */
+export const RENDERED_DOWNLOAD_TIMEOUT_MS = 60_000
+
 export type DownloadFileResult =
-  /** 2xx and a complete body: the file was handed to the browser. */
+  /** 2xx and a complete body: the file was handed to the browser under `filename`. */
   | { ok: true; filename: string }
   /** The deadline passed. Nothing was saved; report it as a timeout, not as a generic failure. */
   | { ok: false; reason: 'timeout' }
-  /** The server answered non-2xx. `message` is the envelope's own message when it carries one. */
-  | { ok: false; reason: 'server'; status: number; message: string }
+  /**
+   * The server answered non-2xx. `message` is the envelope's own message when
+   * it carries one; `body` is the parsed envelope (null when it was not JSON),
+   * for a caller that acts on a specific refusal.
+   */
+  | { ok: false; reason: 'server'; status: number; message: string; body: unknown }
   /** The request never completed (offline, DNS, connection reset, truncated body). */
   | { ok: false; reason: 'network'; message: string }
 
 export interface DownloadFileOptions {
   url: string
-  /** Name the file is saved under. */
+  /** Name the file is saved under, or the fallback when `preferServerFilename` finds none. */
   filename: string
+  /** Save under the name the response's Content-Disposition gives, when it gives one. */
+  preferServerFilename?: boolean
   /** UI locale, so a server error is reported in the language the user reads. */
   locale?: ErrorLocale
+  /** Context for reading a refusal envelope (an invoice route's codes read differently from a salary route's). */
+  errorContext?: ErrorContext
   timeoutMs?: number
   /** Seam for tests; defaults to the DOM anchor implementation below. */
   saveBlob?: (blob: Blob, filename: string) => void
@@ -111,11 +128,14 @@ export function saveBlobToDisk(blob: Blob, filename: string): void {
 export async function downloadFile({
   url,
   filename,
+  preferServerFilename = false,
   locale = 'sv',
+  errorContext,
   timeoutMs = DOWNLOAD_TIMEOUT_MS,
   saveBlob = saveBlobToDisk,
 }: DownloadFileOptions): Promise<DownloadFileResult> {
   let blob: Blob
+  let savedAs = filename
 
   try {
     const res = await fetchWithTimeout(
@@ -128,15 +148,19 @@ export async function downloadFile({
       // Read the body only now that we know it is not the file. A body that is
       // not JSON (an HTML error page, an empty 502) leaves `null`, and
       // getErrorMessage falls back to the status map.
-      const body = await res.json().catch(() => null)
+      const body: unknown = await res.json().catch(() => null)
       return {
         ok: false,
         reason: 'server',
         status: res.status,
-        message: getErrorMessage(body, { statusCode: res.status, locale }),
+        message: getErrorMessage(body, { statusCode: res.status, locale, context: errorContext }),
+        body,
       }
     }
 
+    if (preferServerFilename) {
+      savedAs = contentDispositionFilename(res.headers.get('Content-Disposition')) || filename
+    }
     blob = await res.blob()
   } catch (err) {
     if (isTimeoutError(err)) return { ok: false, reason: 'timeout' }
@@ -144,6 +168,6 @@ export async function downloadFile({
   }
 
   // Only reached with a 2xx and a body that was read in full.
-  saveBlob(blob, filename)
-  return { ok: true, filename }
+  saveBlob(blob, savedAs)
+  return { ok: true, filename: savedAs }
 }

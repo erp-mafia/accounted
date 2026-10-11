@@ -2,8 +2,6 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getCompanyDisplayName } from '@/lib/company/context'
-import { renderToBuffer } from '@react-pdf/renderer'
-import { PayslipPDF } from '@/lib/salary/pdf/payslip-template'
 import {
   buildPayslipData,
   parsePayslipAudienceParam,
@@ -146,6 +144,10 @@ export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: 
     })
     const fileName = payslipFileName(run, emp)
 
+    const [{ renderToBuffer }, { PayslipPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/salary/pdf/payslip-template'),
+    ])
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const buffer = await renderToBuffer(PayslipPDF({ data }) as any)
 

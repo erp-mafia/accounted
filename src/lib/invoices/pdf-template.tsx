@@ -162,8 +162,11 @@ function renderPaymentArea(area: PdfPaymentArea, styles: PdfStyles, lang: PdfLan
             <View key={row.key} style={styles.areaRow}>
               <Text style={styles.areaRowLabel} hyphenationCallback={wrapDescriptionWords}>{row.label}</Text>
               {row.href ? (
-                <Link src={row.href} style={styles.areaRowValue}>
-                  {row.value}
+                // The text in its own Text: the area is laid out by a
+                // `render` callback, where react-pdf drops a bare string
+                // child of a Link and prints only the empty link box.
+                <Link src={row.href} style={[styles.areaRowValue, styles.areaRowLink]}>
+                  <Text>{row.value}</Text>
                 </Link>
               ) : (
                 <Text

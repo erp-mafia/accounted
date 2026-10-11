@@ -129,8 +129,8 @@ export function buildAnthropicDocumentContent(
 
 export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
   let client: AiClient | null = null
-  const getClient = (): AiClient => {
-    if (!client) client = createAiClient()
+  const getClient = async (): Promise<AiClient> => {
+    if (!client) client = await createAiClient()
     return client
   }
   const modelFor = (tier: AiTier): string =>
@@ -155,7 +155,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
           ...(req.system ? { system: req.system } : {}),
           messages: messagesFor(req.prompt, req.history),
         }
-        const resp = await getClient().messages.create(params)
+        const resp = await (await getClient()).messages.create(params)
         return { text: textOf(resp), model, usage: usageOf(resp) }
       }
 
@@ -173,7 +173,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
       let usage = EMPTY_USAGE
 
       for (let step = 0; step < maxSteps; step++) {
-        const resp = await getClient().messages.create({
+        const resp = await (await getClient()).messages.create({
           model,
           max_tokens: req.maxTokens,
           ...(req.system ? { system: req.system } : {}),
@@ -219,7 +219,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
       // transcript above holds tool_use/tool_result blocks, and the Messages
       // API rejects a request that replays those without declaring the tools
       // they refer to. tool_choice none is the sanctioned "answer in text" knob.
-      const final = await getClient().messages.create({
+      const final = await (await getClient()).messages.create({
         model,
         max_tokens: req.maxTokens,
         ...(req.system ? { system: req.system } : {}),
@@ -248,7 +248,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         tool_choice: { type: 'tool', name: req.schema.name },
         messages: [{ role: 'user', content: req.prompt }],
       }
-      const resp = await getClient().messages.create(params)
+      const resp = await (await getClient()).messages.create(params)
       const toolUse = resp.content.find(
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use' && b.name === req.schema.name
       )
@@ -271,7 +271,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: buildAnthropicDocumentContent(req.document, req.instruction) }],
       }
-      const resp = await getClient().messages.create(params)
+      const resp = await (await getClient()).messages.create(params)
       return {
         ok: true,
         text: textOf(resp),

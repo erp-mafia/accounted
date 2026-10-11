@@ -757,9 +757,9 @@ describe('salary-runs.correct', () => {
     expect((error as PartialCommitError).message).toContain('1 of 3')
   })
 
-  it('reports a correction run that could not be created after the stornos as a partial commit', async () => {
+  it.each(['insert_correction_run', 'copy_roster'] as const)('reports a correction run that could not be created after the stornos (%s) as a partial commit', async (stage) => {
     const dbError = { code: '57014', message: 'statement timeout' }
-    services.correctSalaryRun.mockResolvedValue({ ok: false, code: 'DB_ERROR', stage: 'insert_correction_run', error: dbError })
+    services.correctSalaryRun.mockResolvedValue({ ok: false, code: 'DB_ERROR', stage, error: dbError })
 
     const outcome = await salaryRunsCorrect.run(ctx, input, { dryRun: false })
 

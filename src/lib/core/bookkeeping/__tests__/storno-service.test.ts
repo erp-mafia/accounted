@@ -39,7 +39,7 @@ function makeClient() {
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   validateBalance: vi.fn().mockReturnValue({ valid: true, totalDebit: 1000, totalCredit: 1000 }),
-  getNextVoucherNumber: vi.fn(async () => ++resultIdx), // just increment
+  allocateVoucherNumber: vi.fn(async () => ++resultIdx), // just increment
   // The gated cleanup door (cancel_orphaned_entry RPC). Consumes no queued
   // result: rollbacks no longer issue client-side UPDATE/DELETE statements.
   cancelOrphanedEntry: vi.fn(async () => ({ error: null })),
@@ -53,7 +53,7 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
 
 import { correctEntry } from '../storno-service'
 import { CORRECTION_COLUMN_POLICY } from '../correction-column-policy'
-import { validateBalance, getNextVoucherNumber, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
+import { validateBalance, allocateVoucherNumber, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -65,7 +65,7 @@ beforeEach(() => {
   // Reset the mock implementations after clearAllMocks
   vi.mocked(validateBalance).mockReturnValue({ valid: true, totalDebit: 1000, totalCredit: 1000 })
   let voucherNum = 0
-  vi.mocked(getNextVoucherNumber).mockImplementation(async () => ++voucherNum)
+  vi.mocked(allocateVoucherNumber).mockImplementation(async () => ++voucherNum)
   vi.mocked(cancelOrphanedEntry).mockResolvedValue({ error: null })
   mockBackfill.mockResolvedValue([])
 })
@@ -508,7 +508,7 @@ describe('correctEntry', () => {
 
     // Guard fires before any write or voucher-number draw.
     expect(inserts).toHaveLength(0)
-    expect(getNextVoucherNumber).not.toHaveBeenCalled()
+    expect(allocateVoucherNumber).not.toHaveBeenCalled()
   })
 
   it('allowDeepChain: true bypasses the chain-depth guard without walking the chain', async () => {
@@ -570,7 +570,7 @@ describe('correctEntry', () => {
     // Nothing was written to the journal and no voucher number was fetched.
     expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(0)
     expect(inserts.filter((i) => i.table === 'journal_entry_lines')).toHaveLength(0)
-    expect(getNextVoucherNumber).not.toHaveBeenCalled()
+    expect(allocateVoucherNumber).not.toHaveBeenCalled()
   })
 
   it('seeds a standard BAS account missing from the chart and proceeds', async () => {

@@ -12,15 +12,18 @@
  * structured `PERIOD_LOCKED` response with enough context for an agent to
  * decide between (a) post to a later period or (b) ask the user to unlock.
  *
- * This helper performs the same check the trigger would, returning a
- * { locked, reason, fiscal_period_id } verdict. Run it BEFORE the JE insert
- * so callers get the structured error instead of the trigger exception.
+ * The verdict is resolvePeriodStatusForDate's (lib/core/bookkeeping/
+ * period-service.ts), the one definition MCP staging, storno and the
+ * pending-operation commit read, put in v1's shape. It used to repeat the
+ * queries and drop their errors, so a failed lookup answered "open"; it now
+ * answers locked with reason `lookup_failed`, which is retryable.
  *
  * Note: this is a TOCTOU-window check (a period could be locked between
  * the check and the insert), but the trigger is still authoritative. The
  * helper is for ergonomics, not security.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolvePeriodLockForDate } from '@/lib/core/bookkeeping/period-service'
 
 export interface PeriodLockVerdict {
   locked: boolean
@@ -29,6 +32,7 @@ export interface PeriodLockVerdict {
     | 'period_locked_at_set'
     | 'period_is_closed'
     | 'no_fiscal_period'
+    | 'lookup_failed'
   fiscal_period_id?: string
 }
 
@@ -37,38 +41,16 @@ export async function checkPeriodLock(
   companyId: string,
   date: string,
 ): Promise<PeriodLockVerdict> {
-  // Company-wide lock date covers everything on/before bookkeeping_locked_through.
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('bookkeeping_locked_through')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  const lockThrough = settings?.bookkeeping_locked_through ?? null
-  if (lockThrough && date <= lockThrough) {
-    return { locked: true, reason: 'company_lock_date_covers' }
-  }
+  const { status, layer } = await resolvePeriodLockForDate(supabase, companyId, date)
+  if (status.lookup_failed) return { locked: true, reason: 'lookup_failed' }
 
-  // Find the fiscal period covering the date.
-  const { data: period } = await supabase
-    .from('fiscal_periods')
-    .select('id, is_closed, locked_at')
-    .eq('company_id', companyId)
-    .lte('period_start', date)
-    .gte('period_end', date)
-    .maybeSingle()
-
-  if (!period) {
-    // No covering period. The engine's own ensure-period helper will create
-    // one (open, unlocked) for ad-hoc booking dates, so this is not a hard
-    // lock; let the JE insert proceed and surface engine errors normally.
-    return { locked: false, reason: 'no_fiscal_period' }
-  }
-  if (period.is_closed) {
-    return { locked: true, reason: 'period_is_closed', fiscal_period_id: period.id }
-  }
-  if (period.locked_at) {
-    return { locked: true, reason: 'period_locked_at_set', fiscal_period_id: period.id }
-  }
-
-  return { locked: false, fiscal_period_id: period.id }
+  const period = status.period_id ? { fiscal_period_id: status.period_id } : {}
+  if (layer === 'company_lock_date') return { locked: true, reason: 'company_lock_date_covers', ...period }
+  if (status.status === 'closed') return { locked: true, reason: 'period_is_closed', ...period }
+  if (status.status === 'locked') return { locked: true, reason: 'period_locked_at_set', ...period }
+  // No covering period. The engine's own ensure-period helper creates one
+  // (open, unlocked) for ad-hoc booking dates, so this is not a hard lock;
+  // let the JE insert proceed and surface engine errors normally.
+  if (!status.period_id) return { locked: false, reason: 'no_fiscal_period' }
+  return { locked: false, ...period }
 }

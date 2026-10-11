@@ -106,7 +106,7 @@ export function PurchasesFlow() {
   const t = useTranslations('purchases_flow')
   const tInv = useTranslations('supplier_invoices')
 
-  const items = useSWR<{ data?: { items?: InboxItem[] } }>('/api/extensions/ext/invoice-inbox/items?limit=500', getJson)
+  const items = useSWR<{ data?: { items?: InboxItem[] } }>('/api/extensions/ext/invoice-inbox/items', getJson)
   const purchases = useSWR<{ data?: { purchases?: unknown[] } }>('/api/extensions/ext/invoice-inbox/purchases', getJson)
   const lifecycle = useSWR<{ data?: { counts?: Partial<Record<SupplierInvoiceStage, number>> } }>('/api/supplier-invoices/lifecycle', getJson)
 

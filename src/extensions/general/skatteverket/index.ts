@@ -1,4 +1,6 @@
 import { sleep } from '@/lib/utils'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import type { StoredSkattekontoTransaction } from '@/types/skatteverket'
 import { z } from 'zod'
 import { requestCspNonce } from '@/lib/security/csp'
 import { parseEntityType } from '@/lib/company/entity-type'
@@ -261,7 +263,7 @@ const SkattekontoGroupMatchSchema = z.object({
  * surface a Testmiljö / Produktion badge.
  */
 
-const AGI_WRITE_ROLES = new Set(['owner', 'admin', 'member'])
+const SKV_WRITE_ROLES = new Set(['owner', 'admin', 'member'])
 
 /** agi_declarations statuses that do not yet carry a filing receipt. */
 const AGI_UNFILED_STATUSES: readonly string[] = ['pending_signature', 'generated', 'exported']
@@ -348,14 +350,18 @@ function readAuthFailureResponse(reason: 'no_token' | 'needs_reconsent'): NextRe
 }
 
 /**
- * Defense-in-depth RBAC check for AGI write/validate endpoints. Ctx
- * presence alone (set by middleware) only confirms the user is signed in
- * and has a resolved company; it does NOT prove they are entitled to
- * submit tax declarations for that company. Viewers must be blocked.
+ * RBAC check for every route that acts at Skatteverket for the company
+ * (VAT utkast, lås, submit; AGI underlag, spara, lås, granskningsunderlag;
+ * the ombud system connection). Ctx presence alone (set by middleware) only
+ * confirms the user is signed in and has a resolved company; it does NOT
+ * prove they are entitled to file for that company. Viewers must be blocked,
+ * and here the route is the only gate: the effect lands at Skatteverket, so
+ * RLS (current_user_can_write) never sees it. write-role-gate.test.ts derives
+ * the gated set from the registered routes.
  *
  * Returns null on success, a NextResponse on failure.
  */
-async function requireAgiWriteRole(ctx: ExtensionContext): Promise<NextResponse | null> {
+async function requireSkvWriteRole(ctx: ExtensionContext): Promise<NextResponse | null> {
   const { data, error } = await ctx.supabase
     .from('company_members')
     .select('role')
@@ -369,9 +375,9 @@ async function requireAgiWriteRole(ctx: ExtensionContext): Promise<NextResponse 
       { status: 500 },
     )
   }
-  if (!data?.role || !AGI_WRITE_ROLES.has(data.role as string)) {
+  if (!data?.role || !SKV_WRITE_ROLES.has(data.role as string)) {
     return NextResponse.json(
-      { error: 'Otillräcklig behörighet för att lämna in AGI för det här företaget.' },
+      { error: 'Otillräcklig behörighet för att lämna uppgifter till Skatteverket för det här företaget.' },
       { status: 403 },
     )
   }
@@ -970,7 +976,7 @@ export const skatteverketExtension: Extension = {
         }
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
-        const roleBlocked = await requireAgiWriteRole(ctx)
+        const roleBlocked = await requireSkvWriteRole(ctx)
         if (roleBlocked) return roleBlocked
 
         if (getSystemAuthMode() === 'off' || !isSystemAuthConfigured()) {
@@ -1046,7 +1052,7 @@ export const skatteverketExtension: Extension = {
         }
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
-        const roleBlocked = await requireAgiWriteRole(ctx)
+        const roleBlocked = await requireSkvWriteRole(ctx)
         if (roleBlocked) return roleBlocked
 
         if (getSystemAuthMode() === 'off' || !isSystemAuthConfigured()) {
@@ -1125,7 +1131,7 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
-        const roleBlocked = await requireAgiWriteRole(ctx)
+        const roleBlocked = await requireSkvWriteRole(ctx)
         if (roleBlocked) return roleBlocked
 
         // Marks the local row revoked (kept for history). Withdrawing the
@@ -1192,6 +1198,8 @@ export const skatteverketExtension: Extension = {
         }
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
 
         try {
           const { redovisare, redovisningsperiod, momsuppgift } =
@@ -1291,6 +1299,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
 
         try {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
@@ -1332,6 +1342,8 @@ export const skatteverketExtension: Extension = {
         }
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
 
         try {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
@@ -1383,6 +1395,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
 
         try {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
@@ -1435,6 +1449,8 @@ export const skatteverketExtension: Extension = {
         }
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
 
         try {
           const body = (await request.json()) as {
@@ -1630,6 +1646,8 @@ export const skatteverketExtension: Extension = {
         }
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
         try {
           const { arbetsgivare, period, salaryRunId, xml } = await loadAGIXml(request, ctx)
 
@@ -1761,6 +1779,8 @@ export const skatteverketExtension: Extension = {
         }
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
         try {
           const body = (await request.json()) as { inlamningId?: number; salaryRunId?: string }
           const inlamningId = Number(body.inlamningId)
@@ -1851,6 +1871,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
         try {
           const url = new URL(request.url)
           const inlamningId = Number(url.searchParams.get('inlamningId'))
@@ -1916,6 +1938,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
         try {
           const url = new URL(request.url)
           const arbetsgivare = url.searchParams.get('arbetsgivare')
@@ -1955,6 +1979,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
         try {
           const url = new URL(request.url)
           const arbetsgivare = url.searchParams.get('arbetsgivare')
@@ -2224,7 +2250,7 @@ export const skatteverketExtension: Extension = {
         }
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
-        const rbac = await requireAgiWriteRole(ctx)
+        const rbac = await requireSkvWriteRole(ctx)
         if (rbac) return rbac
 
         // Read body as bytes first so we can enforce a hard size cap before
@@ -2311,7 +2337,7 @@ export const skatteverketExtension: Extension = {
         }
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
-        const rbac = await requireAgiWriteRole(ctx)
+        const rbac = await requireSkvWriteRole(ctx)
         if (rbac) return rbac
 
         const rawBytes = Buffer.byteLength(await request.clone().text(), 'utf8')
@@ -2396,6 +2422,8 @@ export const skatteverketExtension: Extension = {
         if (!ctx) return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
         try {
           const url = new URL(request.url)
           const arbetsgivare = url.searchParams.get('arbetsgivare')
@@ -2426,6 +2454,8 @@ export const skatteverketExtension: Extension = {
       path: '/agi/lasUpp',
       handler: async (request: Request, ctx?: ExtensionContext) => {
         if (!ctx) return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        const roleBlocked = await requireSkvWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
         try {
           const url = new URL(request.url)
           const arbetsgivare = url.searchParams.get('arbetsgivare')
@@ -2539,20 +2569,26 @@ export const skatteverketExtension: Extension = {
         const includeIgnored =
           includeIgnoredParam === '1' || includeIgnoredParam === 'true'
 
-        let query = ctx.supabase
-          .from('skattekonto_transactions')
-          .select('*')
-          .eq('company_id', ctx.companyId)
-          .order('transaktionsdatum', { ascending: false })
+        // Paged, id as the unique tiebreaker: past 1,000 rows the oldest
+        // fell out of every bucket.
+        let rows: StoredSkattekontoTransaction[]
+        try {
+          rows = await fetchAllRows<StoredSkattekontoTransaction>(({ from: rangeFrom, to: rangeTo }) => {
+            let query = ctx.supabase
+              .from('skattekonto_transactions')
+              .select('*')
+              .eq('company_id', ctx.companyId)
+              .order('transaktionsdatum', { ascending: false })
+              .order('id', { ascending: true })
 
-        if (from) query = query.gte('transaktionsdatum', from)
+            if (from) query = query.gte('transaktionsdatum', from)
 
-        const { data, error } = await query
-        if (error) {
-          return NextResponse.json({ error: error.message }, { status: 500 })
+            return query.range(rangeFrom, rangeTo)
+          })
+        } catch (error) {
+          return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 })
         }
 
-        const rows = data ?? []
         const today = new Date().toISOString().slice(0, 10)
         const { booked, overdue, upcoming, ignored } = splitTransactions(rows, today)
 

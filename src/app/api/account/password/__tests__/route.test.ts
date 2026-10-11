@@ -118,7 +118,7 @@ describe('POST /api/account/password', () => {
     expect(status).toBe(400)
   })
 
-  describe('first-time set (has_password !== true)', () => {
+  describe('first-time set (no known password per userHasPassword)', () => {
     it('writes the password via admin API and flips the flag', async () => {
       const { updateUser } = mockUserClient({
         user: {
@@ -159,11 +159,11 @@ describe('POST /api/account/password', () => {
       ])
     })
 
-    it('treats unset has_password as first-time set', async () => {
+    it('treats a BankID-linked user with no flag as first-time set', async () => {
       const { updateUser } = mockUserClient({
-        user: { id: 'user-1' /* no app_metadata */ },
+        user: { id: 'user-1', app_metadata: { bankid_linked: true } },
       })
-      const { updateUserById } = mockService({})
+      const { updateUserById } = mockService({ priorAppMetadata: { bankid_linked: true } })
 
       const req = createMockRequest('/api/account/password', {
         method: 'POST',
@@ -221,7 +221,27 @@ describe('POST /api/account/password', () => {
     })
   })
 
-  describe('change-password (has_password === true)', () => {
+  describe('change-password (a known password per userHasPassword)', () => {
+    // An email signup never gets the flag written at signup. It still chose
+    // its password, so a change must go through the session's AAL2 guard,
+    // never the admin API that skips it.
+    it('treats an email signup with no flag as a password change', async () => {
+      const { updateUser } = mockUserClient({
+        user: { id: 'user-1' /* no app_metadata */ },
+      })
+      const { updateUserById } = mockService({})
+
+      const req = createMockRequest('/api/account/password', {
+        method: 'POST',
+        body: { password: STRONG_PASSWORD },
+      })
+      const { status } = await parseJsonResponse(await POST(req))
+
+      expect(status).toBe(200)
+      expect(updateUser).toHaveBeenCalledWith({ password: STRONG_PASSWORD })
+      expect(passwordSetCall(updateUserById)).toBeUndefined()
+    })
+
     it('writes via the user session so Supabase enforces AAL2', async () => {
       const { updateUser } = mockUserClient({
         user: { id: 'user-1', app_metadata: { has_password: true } },

@@ -39,7 +39,7 @@ function makeClient() {
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   validateBalance: vi.fn().mockReturnValue({ valid: true, totalDebit: 1008.75, totalCredit: 1008.75 }),
-  getNextVoucherNumber: vi.fn(async () => 1),
+  allocateVoucherNumber: vi.fn(async () => 1),
 }))
 
 // On-demand BAS backfill: never triggered here (accounts resolve on the
@@ -56,7 +56,7 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
 }))
 
 import { recordateEntry } from '../storno-service'
-import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
+import { validateBalance, allocateVoucherNumber } from '@/lib/bookkeeping/engine'
 
 const original = makeJournalEntry({
   id: 'orig-1',
@@ -79,7 +79,7 @@ beforeEach(() => {
   inserts = []
   vi.mocked(validateBalance).mockReturnValue({ valid: true, totalDebit: 1008.75, totalCredit: 1008.75 })
   let v = 0
-  vi.mocked(getNextVoucherNumber).mockImplementation(async () => ++v)
+  vi.mocked(allocateVoucherNumber).mockImplementation(async () => ++v)
 })
 
 describe('recordateEntry', () => {

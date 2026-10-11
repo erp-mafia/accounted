@@ -151,6 +151,26 @@ describe('Accounted://recent-activity', () => {
     expect(result.uncategorized_transaction_count).toBe(1)
   })
 
+  it('counts as lib/transactions/unbooked.ts does: ignored, private and invoice-settled rows are not unbooked', async () => {
+    const { supabase } = createRecordingSupabase({
+      transactions: {
+        data: [
+          { id: 't-ignored', journal_entry_id: null, is_ignored: true, is_business: null },
+          { id: 't-private', journal_entry_id: null, is_ignored: false, is_business: false },
+          { id: 't-settled', journal_entry_id: null, is_ignored: false, is_business: true },
+          { id: 't-open', journal_entry_id: null, is_ignored: false, is_business: null },
+        ],
+      },
+      invoice_payments: { data: [{ transaction_id: 't-settled' }] },
+    })
+
+    const result = (await recentActivityResource.read(ctx(supabase))) as {
+      uncategorized_transaction_count: number
+    }
+
+    expect(result.uncategorized_transaction_count).toBe(1)
+  })
+
   it('surfaces a query failure instead of reporting zero invoices', async () => {
     const { supabase } = createRecordingSupabase({
       invoices: { error: { message: 'column invoices.total_amount does not exist' } },

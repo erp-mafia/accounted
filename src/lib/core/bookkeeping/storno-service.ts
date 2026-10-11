@@ -5,7 +5,7 @@ import type {
   JournalEntry,
   JournalEntryLine,
 } from '@/types'
-import { validateBalance, getNextVoucherNumber, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
+import { validateBalance, allocateVoucherNumber, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
 import {
   dimensionsBagKey,
   normalizeLineDimensions,
@@ -299,7 +299,7 @@ export async function correctEntry(
   // ===== Step 1: Create storno (reversal) entry =====
   // No note on the storno: the note describes the affärshändelse, which the
   // correction now represents (correction-column-policy.ts).
-  const reversalVoucherNumber = await getNextVoucherNumber(
+  const reversalVoucherNumber = await allocateVoucherNumber(
     supabase,
     companyId,
     original.fiscal_period_id,
@@ -377,7 +377,7 @@ export async function correctEntry(
   let correctedEntry: typeof reversalEntry
 
   try {
-    const correctedVoucherNumber = await getNextVoucherNumber(
+    const correctedVoucherNumber = await allocateVoucherNumber(
       supabase,
       companyId,
       correctedPeriodId,

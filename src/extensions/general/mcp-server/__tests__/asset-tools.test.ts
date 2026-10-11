@@ -120,7 +120,7 @@ describe('asset tools: registration', () => {
     expect(TOOL_SCOPE_MAP.gnubok_dispose_asset).toBe('bookkeeping:write')
     expect(OPERATION_RISK_TIERS.create_asset).toBe('low')
     expect(OPERATION_RISK_TIERS.update_asset).toBe('low')
-    expect(OPERATION_RISK_TIERS.dispose_asset).toBe('medium')
+    expect(OPERATION_RISK_TIERS.dispose_asset).toBe('high')
   })
 
   it('declares the required write arguments', () => {

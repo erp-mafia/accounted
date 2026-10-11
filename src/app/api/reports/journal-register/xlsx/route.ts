@@ -63,7 +63,7 @@ export const GET = withRouteContext('report.journal_register.xlsx', async (reque
       }
     }
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Grundbok',
         columns: [

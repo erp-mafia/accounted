@@ -42,7 +42,7 @@ export const GET = withRouteContext('report.supplier_ledger.xlsx', async (reques
       total_outstanding: e.total_outstanding,
     }))
 
-    const buffer = reportToWorkbook<AgingRow>([
+    const buffer = await reportToWorkbook<AgingRow>([
       {
         name: 'Leverantörsreskontra',
         columns: [

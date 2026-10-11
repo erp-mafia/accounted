@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import QRCode from 'qrcode'
 
 /**
  * A BankID QR code from data the bank hands over. Unlike the login QR
@@ -15,7 +14,11 @@ export function BankIdChallengeQr({ data, label }: { data: string; label: string
 
   useEffect(() => {
     let cancelled = false
-    QRCode.toString(data, { type: 'svg', margin: 1, width: 200, color: { dark: '#141414', light: '#ffffff' } })
+    // qrcode loads with the first frame, not with every page that can sign.
+    import('qrcode')
+      .then(({ default: QRCode }) =>
+        QRCode.toString(data, { type: 'svg', margin: 1, width: 200, color: { dark: '#141414', light: '#ffffff' } }),
+      )
       .then((out) => {
         if (!cancelled) setSvg(out)
       })

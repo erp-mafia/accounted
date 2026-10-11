@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   alignLinkedTransactionsToWindow,
   fetchJunctionLinkMap,
@@ -347,18 +348,22 @@ export async function listAccountItems(
       ['proposed', 'unmatched_external', 'matched', 'ignored'].includes(b),
     )
     if (wantsExternal) {
-      let query = supabase
-        .from('transactions')
-        .select(
-          'id, date, description, merchant_name, amount, currency, journal_entry_id, potential_journal_entry_id, potential_match_method, potential_match_confidence, is_ignored, reconciliation_method',
-        )
-        .eq('company_id', companyId)
-      query = scopeTransactionsToAccount(query, account.id, currency, Boolean(account.is_primary))
-      if (options.windowFrom) query = query.gte('date', options.windowFrom)
-      if (options.windowTo) query = query.lte('date', options.windowTo)
-      const { data, error: txError } = await query.order('date', { ascending: false }).order('id', { ascending: true })
-      if (txError) throw new Error(`Kunde inte hämta transaktioner: ${txError.message}`)
-      const ownDateRows = (data ?? []) as BankTxRow[]
+      // Paged: an account with more than 1,000 rows lost the rest, so its
+      // buckets and total_count stopped at the first page.
+      const ownDateRows = await fetchAllRows<BankTxRow>(({ from, to }) => {
+        let query = supabase
+          .from('transactions')
+          .select(
+            'id, date, description, merchant_name, amount, currency, journal_entry_id, potential_journal_entry_id, potential_match_method, potential_match_confidence, is_ignored, reconciliation_method',
+          )
+          .eq('company_id', companyId)
+        query = scopeTransactionsToAccount(query, account.id, currency, Boolean(account.is_primary))
+        if (options.windowFrom) query = query.gte('date', options.windowFrom)
+        if (options.windowTo) query = query.lte('date', options.windowTo)
+        return query.order('date', { ascending: false }).order('id', { ascending: true }).range(from, to)
+      }).catch((txError: Error) => {
+        throw new Error(`Kunde inte hämta transaktioner: ${txError.message}`)
+      })
       // Rows anchored only through transaction_voucher_links (bulk-book,
       // residual bookings) are matched too; their pointer column is NULL.
       // The map (not just the id set) so a junction-anchored row can report

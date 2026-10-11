@@ -219,6 +219,10 @@ export async function ensureFiscalPeriod(
     ? `Räkenskapsår ${periodStartYear}`
     : `Räkenskapsår ${periodStartYear}/${endYear}`
 
+  // The arbiter must name a real unique constraint, or Postgres refuses the
+  // insert (42P10): the key is per company since the multi-tenant refactor.
+  // An existing row with these dates (a closed year the select above skips)
+  // is left as it is; the booking then meets that year's lock.
   const { error } = await supabase
     .from('fiscal_periods')
     .upsert({
@@ -227,7 +231,7 @@ export async function ensureFiscalPeriod(
       name: periodName,
       period_start: periodStart,
       period_end: periodEnd,
-    }, { onConflict: 'user_id,period_start,period_end' })
+    }, { onConflict: 'company_id,period_start,period_end', ignoreDuplicates: true })
 
   if (error) {
     log.error('Failed to create fiscal period:', error)

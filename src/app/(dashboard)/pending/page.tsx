@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
@@ -36,6 +37,7 @@ import { ToastAction } from '@/components/ui/toast'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
+import { collectPages } from '@/lib/lists/collect-pages'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import {
   ClipboardCheck,
@@ -148,6 +150,10 @@ const GACT_CLASS =
   'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-[5px] text-xs transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50'
 const GACT_OK_CLASS = 'border-success/40 text-success hover:bg-success/10'
 const SORT_ORDER_STORAGE_KEY = 'pending.sortOrder'
+// Operations per page of a status stream, and the most the list API returns
+// per request (PendingOperationsQuerySchema).
+const LIST_PAGE_SIZE = 50
+const PENDING_API_MAX_LIMIT = 100
 const GACT_NO_CLASS = 'border-destructive/40 text-destructive hover:bg-destructive/10'
 
 /**
@@ -274,6 +280,7 @@ type ViewTab = 'pending' | 'history'
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
   const tSkills = useTranslations('skills_registry')
+  const tCommon = useTranslations('common')
   const complianceWarningText = useComplianceWarningText()
   const router = useRouter()
   const accountNames = useAccountNamesSource()
@@ -334,6 +341,7 @@ export default function PendingOperationsPage() {
   // Derived from the session-cached settings row (lib/reference-data); false
   // until the row is available, suppressing being the safe direction.
   const { settings: companySettings } = useCompanySettings()
+  const companyId = useCompanyOptional()?.company?.id ?? null
   const invoiceDraftsCtaUseful = companySettings ? booksInvoicesOnIssue(companySettings) : false
 
   // Read ?conversation= once on mount so deep-links from the agent context
@@ -362,6 +370,20 @@ export default function PendingOperationsPage() {
   // responses bail out and leave the newer request's state alone.
   const fetchSequenceRef = useRef(0)
 
+  // Rows loaded per status stream. "Ladda fler" grows it; a refetch (an
+  // approval, a realtime echo) reloads the whole grown window in chunks so it
+  // never collapses back to the first page. A new tab or sort order starts
+  // from one page again: the window belongs to the view it was grown in.
+  const viewKey = `${activeTab}:${sortOrder}`
+  const [listWindow, setListWindow] = useState({ viewKey, size: LIST_PAGE_SIZE })
+  const windowSize = listWindow.viewKey === viewKey ? listWindow.size : LIST_PAGE_SIZE
+  const [hasMore, setHasMore] = useState(false)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const loadMore = () => {
+    setIsLoadingMore(true)
+    setListWindow({ viewKey, size: windowSize + LIST_PAGE_SIZE })
+  }
+
   const fetchOperations = useCallback(async () => {
     const sequence = ++fetchSequenceRef.current
     const isCurrent = () => sequence === fetchSequenceRef.current
@@ -374,35 +396,49 @@ export default function PendingOperationsPage() {
     if (takeover) setIsLoading(true)
     else setIsRefreshing(true)
     try {
+      // One status stream, collected up to the window in chunks the API
+      // accepts. The tab counts ride along on every page.
+      const tabCounts: { pending: number | null } = { pending: null }
+      const loadStream = (status: 'pending' | 'committed' | 'rejected', order: 'asc' | 'desc') =>
+        collectPages<PendingOperation>(
+          async (offset, limit) => {
+            const res = await fetch(
+              `/api/pending-operations?status=${status}&order=${order}&limit=${limit}&offset=${offset}`,
+            )
+            // A JSON error body parses fine but carries no data: without this
+            // check a failed refresh would blank the list and zero the badge
+            // instead of keeping current rows and surfacing the error toast.
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            const json = await res.json()
+            if (typeof json.counts?.pending === 'number') tabCounts.pending = json.counts.pending
+            return { data: (json.data ?? []) as PendingOperation[], count: json.count ?? null }
+          },
+          { want: windowSize, chunkSize: PENDING_API_MAX_LIMIT },
+        )
+      const moreThanLoaded = (stream: { data: unknown[]; count: number | null }) =>
+        stream.count !== null && stream.count > stream.data.length
+
       if (activeTab === 'pending') {
-        const res = await fetch(`/api/pending-operations?status=pending&order=${sortOrder}`)
-        // A JSON error body parses fine but carries no data: without this
-        // check a failed refresh would blank the list and zero the badge
-        // instead of keeping current rows and surfacing the error toast.
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const json = await res.json()
+        const pending = await loadStream('pending', sortOrder)
         if (!isCurrent()) return
-        setOperations(json.data ?? [])
-        setPendingCount(json.count ?? json.data?.length ?? 0)
+        setOperations(pending.data)
+        setPendingCount(pending.count ?? pending.data.length)
+        setHasMore(moreThanLoaded(pending))
         loadedTabRef.current = 'pending'
       } else {
         // The API is single-status per fetch: Historik merges godkända and
         // avvisade, newest resolution first.
-        const [committedRes, rejectedRes] = await Promise.all([
-          fetch('/api/pending-operations?status=committed'),
-          fetch('/api/pending-operations?status=rejected'),
+        const [committed, rejected] = await Promise.all([
+          loadStream('committed', 'desc'),
+          loadStream('rejected', 'desc'),
         ])
-        if (!committedRes.ok || !rejectedRes.ok) {
-          throw new Error(`HTTP ${committedRes.status}/${rejectedRes.status}`)
-        }
-        const [committed, rejected] = await Promise.all([committedRes.json(), rejectedRes.json()])
         if (!isCurrent()) return
-        const merged = ([...(committed.data ?? []), ...(rejected.data ?? [])] as PendingOperation[]).sort(
+        const merged = [...committed.data, ...rejected.data].sort(
           (a, b) => (b.resolved_at ?? b.created_at).localeCompare(a.resolved_at ?? a.created_at),
         )
         setOperations(merged)
-        const pc = committed.counts?.pending ?? rejected.counts?.pending
-        if (typeof pc === 'number') setPendingCount(pc)
+        if (tabCounts.pending !== null) setPendingCount(tabCounts.pending)
+        setHasMore(moreThanLoaded(committed) || moreThanLoaded(rejected))
         loadedTabRef.current = 'history'
       }
     } catch {
@@ -418,28 +454,36 @@ export default function PendingOperationsPage() {
     if (!isCurrent()) return
     setIsLoading(false)
     setIsRefreshing(false)
-  }, [activeTab, sortOrder, toast])
+    setIsLoadingMore(false)
+  }, [activeTab, sortOrder, windowSize, toast])
 
   useEffect(() => {
     fetchOperations()
   }, [fetchOperations])
 
   // Realtime subscription: refetch when ANY pending_operations row changes for
-  // this company. RLS scopes the channel automatically: we don't see other
-  // tenants' events. We refetch the whole list (rather than patching state
+  // the active company. The filter is required: realtime applies the SELECT
+  // policy, which is membership-wide, so without it a user in two companies
+  // got the other company's events too. We refetch the whole list (rather than patching state
   // in-place) so server-side filtering, sorting, and computed fields stay in
   // sync with whatever the API route returned, including all tab counts.
   // Trailing debounce: bulk actions emit one event per row, which previously
   // stampeded 4 requests per event (list + 3 counts); the burst now collapses
   // into a single refetch after the last event.
   useEffect(() => {
+    if (!companyId) return
     const supabase = createClient()
     let debounce: ReturnType<typeof setTimeout> | null = null
     const channel = supabase
-      .channel('pending_operations:list')
+      .channel(`pending_operations:list:${companyId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'pending_operations' },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'pending_operations',
+          filter: `company_id=eq.${companyId}`,
+        },
         () => {
           if (debounce) clearTimeout(debounce)
           debounce = setTimeout(() => {
@@ -452,7 +496,7 @@ export default function PendingOperationsPage() {
       if (debounce) clearTimeout(debounce)
       void supabase.removeChannel(channel)
     }
-  }, [fetchOperations])
+  }, [companyId, fetchOperations])
 
   // Clear selection when filters/tab change
   useEffect(() => {
@@ -1182,6 +1226,16 @@ export default function PendingOperationsPage() {
                 </div>
               )
             })}
+          </div>
+        )}
+
+        {/* The list is paged: keep the way to older operations reachable
+            whenever the server holds more than the loaded window. */}
+        {!isLoading && hasMore && (
+          <div className="flex justify-center pt-3">
+            <Button variant="outline" onClick={loadMore} loading={isLoadingMore}>
+              {tCommon('load_more')}
+            </Button>
           </div>
         )}
       </div>

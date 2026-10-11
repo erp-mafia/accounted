@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { generateKU10Xml } from '@/lib/salary/ku/ku10-generator'
 import type { KU10EmployeeData, KU10CompanyData } from '@/lib/salary/ku/ku10-generator'
 import { resolveTaxableBenefits, staleBenefitTotalRefusal } from '@/lib/salary/benefit-payments'
@@ -47,22 +48,30 @@ export const GET = withRouteContext<{ params: Promise<{ year: string }> }>(
       .eq('id', user.id)
       .single()
 
-    // Load all booked salary run employees for the year, grouped by employee
-    const { data: runEmployees, error } = await supabase
-      .from('salary_run_employees')
-      .select(`
-        employee_id, gross_salary, benefit_values, tax_withheld, tax_withheld_override,
-        avgifter_basis, avgifter_basis_override,
-        employee:employees(personnummer, specification_number, employment_start, employment_end),
-        salary_run:salary_runs!inner(period_year, period_month, status),
-        line_items:salary_line_items(item_type, amount)
-      `)
-      .eq('company_id', companyId)
-
-    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    // Load all booked salary run employees for the year, grouped by employee.
+    // Paged on id: past 1,000 payslips the kontrolluppgift left the rest out.
+    let runEmployees
+    try {
+      runEmployees = await fetchAllRows(({ from, to }) =>
+        supabase
+          .from('salary_run_employees')
+          .select(`
+            employee_id, gross_salary, benefit_values, tax_withheld, tax_withheld_override,
+            avgifter_basis, avgifter_basis_override,
+            employee:employees(personnummer, specification_number, employment_start, employment_end),
+            salary_run:salary_runs!inner(period_year, period_month, status),
+            line_items:salary_line_items(item_type, amount)
+          `)
+          .eq('company_id', companyId)
+          .order('id', { ascending: true })
+          .range(from, to),
+      )
+    } catch (error) {
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    }
 
     // Filter to booked runs for the year
-    const bookedForYear = (runEmployees || []).filter(sre => {
+    const bookedForYear = runEmployees.filter(sre => {
       const run = sre.salary_run as unknown as { period_year: number; status: string } | null
       return run && run.period_year === yearNum && run.status === 'booked'
     })

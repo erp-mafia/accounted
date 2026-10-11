@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createPagedMockSupabase, createQueuedMockSupabase, manyRows } from '@/tests/helpers'
 
 const linkMock = vi.fn()
 const linkGroupMock = vi.fn()
@@ -272,6 +272,25 @@ describe('matchPairs', () => {
     })
   })
 
+  it('hands a split over more than 50 verifikat to the engine, which owns the cap (crm#1144)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1930' } })
+    const ids = Array.from({ length: 138 }, (_, i) => `je-rut-${i}`)
+    linkToVouchersMock.mockResolvedValue({
+      success: true,
+      allocations: ids.map((id) => ({ journal_entry_id: id, amount: 500 })),
+    })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      pairs: [{ external_ids: [R1], journal_entry_ids: ids }],
+    })
+
+    expect(linkToVouchersMock).toHaveBeenCalledTimes(1)
+    expect(linkToVouchersMock.mock.calls[0][3]).toHaveLength(138)
+    expect(result?.skipped).toEqual([])
+    expect(result?.applied).toHaveLength(138)
+  })
+
   it('forwards explicit allocations, refuses a set that does not name exactly the pair\'s verifikat, and never writes on dry run', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { ledger_account: '1931' } })
@@ -450,6 +469,23 @@ describe('matchPairs', () => {
     expect(result?.applied).toEqual([])
     expect(result?.skipped.map((s) => s.code)).toEqual(['ENTRY_NOT_FOUND', 'ALREADY_LINKED'])
     expect(result?.skipped[0].message).toContain(E2)
+  })
+
+  it('applies every bank proposal with use_proposals when there are more than 1,000', async () => {
+    const { supabase } = createPagedMockSupabase({
+      transactions: manyRows(1001, (i) => ({
+        id: `tx-${i}`,
+        potential_journal_entry_id: `je-${i}`,
+        potential_match_confidence: 0.95,
+      })),
+      cash_accounts: [{ ledger_account: '1930' }],
+    })
+    manualLinkMock.mockResolvedValue({ success: true })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, { use_proposals: true })
+
+    expect(result?.considered).toBe(1001)
+    expect(result?.applied).toHaveLength(1001)
   })
 })
 

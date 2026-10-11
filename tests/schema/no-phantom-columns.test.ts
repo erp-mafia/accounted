@@ -67,7 +67,16 @@ const KNOWN_PHANTOM_TABLES: Record<string, string> = {}
 /** Pre-existing literal values that no CHECK constraint allows. */
 const KNOWN_PHANTOM_VALUES: Record<string, string> = {}
 
-/** Pre-existing `onConflict` targets with no matching unique constraint. */
+/**
+ * Pre-existing `onConflict` targets with no matching unique constraint.
+ *
+ * 2026-10-11: these two surfaced when the replay learned the names Postgres
+ * gives unnamed UNIQUE/PK constraints, so the 20260330130000 drops of
+ * `fiscal_periods_user_id_period_start_period_end_key` and
+ * `extension_data_user_id_extension_id_key_key` now retract their sets. The
+ * two fiscal_periods sites were fixed by fix/categorize-fiscal-period-conflict,
+ * which landed in the same batch as this guard, so the list is empty.
+ */
 const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 
 /**
@@ -241,7 +250,16 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // Payment orders over v1 and MCP (+1): lib/operations/payment-orders.ts
 // paymentOrdersList pages with the (created_at, id) keyset .or() filter the
 // supplier payment batch list already carries (a runtime or-string).
-const UNRESOLVED_CEILING = 427
+// Salary correction (+2): lib/salary/correct-run.ts copyRosterToCorrection
+// copies the original roster and line rows minus a deny-list. Its columns
+// come from the rows it just read, so none can be phantom; listing them
+// literally again would bring back the hand copy that dropped every column
+// added after it.
+// v1 invoice bulk-create on the shared builder (+1): the header insert
+// spreads buildInvoiceWriteData's invoiceFields instead of its own literal
+// copy of the invoice columns, the same spread as POST /invoices. The copy
+// is what dropped discounts and every later invoice field.
+const UNRESOLVED_CEILING = 430
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
@@ -638,6 +656,15 @@ describe('scanner behaviour (the net catches, and does not over-catch)', () => {
     expect(
       scanSourceText(code, 'probe.ts', schema).unresolved.map((u) => u.reason)
     ).toContain('unknown-builder-table')
+  })
+
+  it('retracts an unnamed unique constraint dropped by its generated name', () => {
+    // extension_data was created with an inline `unique(user_id, extension_id, key)`,
+    // which Postgres names extension_data_user_id_extension_id_key_key;
+    // 20260330130000 dropped that name and added (company_id, extension_id, key).
+    const sets = schema.tables.get('extension_data')!.uniqueSets
+    expect(sets.has('extension_id,key,user_id')).toBe(false)
+    expect(sets.has('company_id,extension_id,key')).toBe(true)
   })
 
   it('catches a phantom value on a CHECK-constrained column', () => {

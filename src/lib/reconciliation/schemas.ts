@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MAX_BANK_ROW_SPLIT, MAX_LINK_REQUEST_ENTRIES } from './limits'
 
 /**
  * Shared shapes for the account-keyed reconciliation surface.
@@ -35,13 +36,15 @@ export const ReconciliationPairSchema = z
   .object({
     // Empty or omitted only for the ledger-only shape.
     external_ids: z.array(z.string().uuid()).max(50).default([]),
-    journal_entry_ids: z.array(z.string().uuid()).min(1).max(50),
+    // Up to MAX_BANK_ROW_SPLIT for a bank 1:N split; the other shapes carry
+    // one verifikat, or are capped by their own engine (ledger-settlement.ts).
+    journal_entry_ids: z.array(z.string().uuid()).min(1).max(MAX_BANK_ROW_SPLIT),
     // Bank 1:N only: the signed slice per verifikat (transaction sign
     // convention). Omitted: each slice defaults to the voucher's bank line.
     allocations: z
       .array(z.object({ journal_entry_id: z.string().uuid(), amount: z.number() }))
       .min(2)
-      .max(50)
+      .max(MAX_BANK_ROW_SPLIT)
       .optional(),
     // Skattekonto only: link although the rows do not settle the verifikat's
     // 1630 movement (a summarised verifikat that books more events than these).
@@ -56,7 +59,14 @@ export const ReconciliationPairSchema = z
 
 /** Body fields shared by the dashboard and v1 POST .../links routes (spread into z.object). */
 export const reconciliationLinksBodyFields = {
-  pairs: z.array(ReconciliationPairSchema).max(200).optional(),
+  pairs: z
+    .array(ReconciliationPairSchema)
+    .max(200)
+    .refine(
+      (pairs) => pairs.reduce((sum, p) => sum + p.journal_entry_ids.length, 0) <= MAX_LINK_REQUEST_ENTRIES,
+      { message: `Högst ${MAX_LINK_REQUEST_ENTRIES} verifikat per anrop, sammanlagt över alla par.` },
+    )
+    .optional(),
   use_proposals: z.boolean().optional(),
   confidence_threshold: z.number().min(0).max(1).optional(),
 }

@@ -87,6 +87,8 @@ export interface SigningChallenge {
   autostartToken: string | null
   /** Animated QR: the data changes on every poll and must be re-rendered. */
   qrData: string | null
+  /** The QR as a finished image (a data: URL) when the bank hands over no data to draw it from. */
+  qrImage: string | null
   /** The bank's page, for the redirect approach. */
   redirectUrl: string | null
 }

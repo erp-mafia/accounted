@@ -151,7 +151,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
       })
     }
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Huvudbok',
         columns: [

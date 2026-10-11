@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
-import JSZip from 'jszip'
+import type JSZip from 'jszip'
 import { generateSIEExport } from './sie-export'
 import { generateTrialBalance } from './trial-balance'
 import { generateIncomeStatement } from './income-statement'
@@ -46,6 +46,13 @@ export type FullArchiveOptions =
   | { scope: 'all'; include_documents?: boolean }
 
 export type ArchiveScope = FullArchiveOptions['scope']
+
+// jszip loads when an archive is built, not with every route that reaches
+// this module through the cloud-backup extension.
+async function newZip(): Promise<JSZip> {
+  const { default: JSZipCtor } = await import('jszip')
+  return new JSZipCtor()
+}
 
 interface DocumentManifestEntry {
   document_id: string
@@ -154,7 +161,7 @@ async function buildFullArchive(
   // A retained source can have documents and company history before its first
   // fiscal year. An all-company archive must keep that material accessible too.
 
-  const zip = new JSZip()
+  const zip = await newZip()
 
   if (options.scope === 'all') {
     const sieFolder = zip.folder('sie')!
@@ -261,7 +268,7 @@ async function buildBaseDataArchive(
   const periods = await fetchAllPeriods(supabase, companyId)
   const includeDocuments = options.include_documents !== false
 
-  const zip = new JSZip()
+  const zip = await newZip()
 
   if (includeDocuments) {
     await writeDocuments(zip, supabase, companyId, periods, 'unlinked')

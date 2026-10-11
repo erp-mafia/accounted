@@ -54,6 +54,7 @@ import {
   BookTransactionSchema,
   MatchInvoiceSchema,
   MatchSupplierInvoiceSchema,
+  MatchBatchSchema,
   // Settings schemas
   UpdateSettingsSchema,
   // Fiscal period schemas
@@ -79,6 +80,7 @@ import {
   CreateEmployeeSchema,
   UpdateEmployeeSchema,
 } from '../schemas'
+import { MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
 
 // ============================================================
 // Helpers: minimal valid objects for composition
@@ -2713,6 +2715,28 @@ describe('BankLinkSchema', () => {
       journal_entry_id: 'je-456',
     })
     expect(result.success).toBe(false)
+  })
+
+  it('accepts a split over MAX_BANK_ROW_SPLIT verifikat and refuses one more', () => {
+    const slices = (n: number) =>
+      Array.from({ length: n }, () => ({ journal_entry_id: crypto.randomUUID(), amount: 100 }))
+    expect(BankLinkSchema.safeParse({ transaction_id: validUuid, allocations: slices(MAX_BANK_ROW_SPLIT) }).success).toBe(true)
+    expect(BankLinkSchema.safeParse({ transaction_id: validUuid, allocations: slices(MAX_BANK_ROW_SPLIT + 1) }).success).toBe(false)
+  })
+})
+
+describe('MatchBatchSchema', () => {
+  const allocations = (n: number) =>
+    Array.from({ length: n }, () => ({ kind: 'customer_invoice' as const, invoice_id: crypto.randomUUID(), amount: 100 }))
+
+  it('accepts a batch over MAX_BANK_ROW_SPLIT invoices (a ROT/RUT payout pays one per buyer)', () => {
+    expect(MatchBatchSchema.safeParse({ allocations: allocations(MAX_BANK_ROW_SPLIT) }).success).toBe(true)
+  })
+
+  it('refuses one allocation more, naming the cap', () => {
+    const result = MatchBatchSchema.safeParse({ allocations: allocations(MAX_BANK_ROW_SPLIT + 1) })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0].message).toBe(`At most ${MAX_BANK_ROW_SPLIT} allocations per batch`)
   })
 })
 

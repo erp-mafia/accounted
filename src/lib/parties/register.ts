@@ -254,20 +254,23 @@ export async function getRegister(
         .eq('company_id', companyId)
         .is('merged_into', null)
         .order('display_name', { ascending: true })
+        .order('id', { ascending: true })
         .range(from, to),
     ),
+    // Every paged read below orders on its unique id: paging without a total
+    // order duplicates or skips rows on a page boundary, and the counts drift.
     fetchAllRows<{ id: string; party_id: string | null }>(({ from, to }) =>
-      supabase.from('customers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).range(from, to),
+      supabase.from('customers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).order('id').range(from, to),
     ),
     fetchAllRows<{ id: string; party_id: string | null }>(({ from, to }) =>
-      supabase.from('suppliers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).range(from, to),
+      supabase.from('suppliers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).order('id').range(from, to),
     ),
     getObservedParties(supabase, companyId, { fromDate: periodStart(period), limit: 5000 }),
     fetchAllRows<{ customer_id: string }>(({ from, to }) =>
-      supabase.from('invoices').select('customer_id').eq('company_id', companyId).not('customer_id', 'is', null).range(from, to),
+      supabase.from('invoices').select('customer_id').eq('company_id', companyId).not('customer_id', 'is', null).order('id').range(from, to),
     ),
     fetchAllRows<{ supplier_id: string }>(({ from, to }) =>
-      supabase.from('supplier_invoices').select('supplier_id').eq('company_id', companyId).not('supplier_id', 'is', null).range(from, to),
+      supabase.from('supplier_invoices').select('supplier_id').eq('company_id', companyId).not('supplier_id', 'is', null).order('id').range(from, to),
     ),
     fetchAllRows<{ party_id: string; value: unknown; recorded_at: string }>(({ from, to }) =>
       supabase
@@ -277,6 +280,7 @@ export async function getRegister(
         .eq('field', 'country')
         .is('superseded_at', null)
         .order('recorded_at', { ascending: false })
+        .order('id', { ascending: true })
         .range(from, to),
     ),
   ])

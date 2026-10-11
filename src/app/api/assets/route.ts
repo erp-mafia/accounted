@@ -8,7 +8,7 @@ import {
   defaultAccountsForCategory,
   assetDeleteBlockReason,
 } from '@/lib/bokslut/assets/asset-service'
-import { CreateAssetSchema } from '@/lib/bokslut/assets/asset-api'
+import { CreateAssetSchema, loadPostedDepreciationAssetIds } from '@/lib/bokslut/assets/asset-api'
 import {
   findK2ExcludedAccount,
   k2ExcludedAccountMessages,
@@ -28,22 +28,13 @@ export const GET = withRouteContext('assets.list', async (request, ctx) => {
     // against it. The UI uses this to lock the acquisition-basis fields
     // (date/cost/category): once avskrivningar are booked a correction must
     // go through storno (the service enforces the same rule server-side).
-    const postedAssetIds = new Set<string>()
-    if (data.length > 0) {
-      const { data: posted, error } = await supabase
-        .from('depreciation_schedules')
-        .select('asset_id')
-        .eq('company_id', companyId)
-        .in(
-          'asset_id',
-          data.map((a) => a.id),
-        )
-        .not('journal_entry_id', 'is', null)
-      if (error) throw new Error(`Failed to load depreciation status: ${error.message}`)
-      for (const row of (posted ?? []) as { asset_id: string }[]) {
-        postedAssetIds.add(row.asset_id)
-      }
-    }
+    // The same read v1 and MCP use: paged, so a register past 1,000
+    // schedule rows does not unlock an asset whose rows came later.
+    const postedAssetIds = await loadPostedDepreciationAssetIds(
+      supabase,
+      companyId,
+      data.map((a) => a.id),
+    )
 
     // deletable: a row that never reached the books (no posted depreciation,
     // not disposed) may be removed with DELETE /api/assets/[id]; the UI shows

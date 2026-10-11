@@ -282,6 +282,11 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
+    // The private-marking lock check (checkPeriodLock). Without these two the
+    // constraint error below was read as the lock lookup, which used to fail
+    // open and only passed by accident.
+    enqueue({ data: { bookkeeping_locked_through: null } })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } })
     enqueue({
       data: null,
       error: {

@@ -1161,12 +1161,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (id) autoHoursRef.current.add(id)
   }
 
-  // A row whose hours were taken from its quantity keeps following it.
+  // A row whose hours were taken from its quantity keeps following it. A
+  // deduction row whose hours are still empty takes them now: the avdrag
+  // may be chosen before the unit is switched to tim.
   function followQuantity(index: number) {
     const id = fields[index]?.id
-    if (!id || !autoHoursRef.current.has(id)) return
+    if (!id) return
     const item = getValues(`items.${index}`)
     if (!item?.deduction_type) return
+    if (item.labor_hours == null) {
+      seedLaborHours(index)
+      return
+    }
+    if (!autoHoursRef.current.has(id)) return
     const hours = defaultLaborHours(item)
     if (hours !== null) setValue(`items.${index}.labor_hours`, hours, { shouldDirty: true })
   }
@@ -4963,6 +4970,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         onClose={handleLogoPromptClose}
         logoUrl={logoUrl}
         onLogoUpdate={(url) => setLogoUrl(url)}
+        documentLabel={getDocLabel(pendingData?.document_type ?? watchDocumentType).toLowerCase()}
       />
 
     </>

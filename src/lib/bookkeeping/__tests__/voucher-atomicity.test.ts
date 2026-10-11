@@ -15,7 +15,7 @@ vi.mock('@/lib/logger', () => ({
   }),
 }))
 
-import { commitEntry, getNextVoucherNumber, createJournalEntry } from '../engine'
+import { commitEntry, allocateVoucherNumber, createJournalEntry } from '../engine'
 import { runWithActor } from '../actor-context-node'
 import { BookkeepingDatabaseError } from '../errors'
 
@@ -24,7 +24,7 @@ describe('voucher number atomicity', () => {
     vi.clearAllMocks()
   })
 
-  it('getNextVoucherNumber returns incrementing numbers from RPC', async () => {
+  it('allocateVoucherNumber returns incrementing numbers from RPC', async () => {
     let callCount = 0
     const supabase = {
       rpc: vi.fn().mockImplementation(() => {
@@ -33,9 +33,9 @@ describe('voucher number atomicity', () => {
       }),
     }
 
-    const n1 = await getNextVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
-    const n2 = await getNextVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
-    const n3 = await getNextVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
+    const n1 = await allocateVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
+    const n2 = await allocateVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
+    const n3 = await allocateVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
 
     expect(n1).toBe(1)
     expect(n2).toBe(2)
@@ -43,13 +43,13 @@ describe('voucher number atomicity', () => {
     expect(supabase.rpc).toHaveBeenCalledTimes(3)
   })
 
-  it('getNextVoucherNumber throws on RPC error', async () => {
+  it('allocateVoucherNumber throws on RPC error', async () => {
     const supabase = {
       rpc: vi.fn().mockResolvedValue({ data: null, error: { message: 'connection lost' } }),
     }
 
     await expect(
-      getNextVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
+      allocateVoucherNumber(supabase as never, 'co-1', 'fp-1', 'A')
     ).rejects.toThrow(BookkeepingDatabaseError)
   })
 
@@ -181,18 +181,18 @@ describe('voucher number atomicity', () => {
   })
 
   /**
-   * getNextVoucherNumber is still used by reverseEntry and storno-service.
+   * allocateVoucherNumber is still used by reverseEntry and storno-service.
    * Those flows INSERT a new entry (not UPDATE a draft), so the atomic
    * commit_journal_entry RPC doesn't apply. Burned numbers can still occur
    * in reversal/correction flows if the INSERT fails after the counter
    * increments. This is documented and expected.
    */
-  it('getNextVoucherNumber remains available for reversal/storno flows', async () => {
+  it('allocateVoucherNumber remains available for reversal/storno flows', async () => {
     const supabase = {
       rpc: vi.fn().mockResolvedValue({ data: 7, error: null }),
     }
 
-    const num = await getNextVoucherNumber(supabase as never, 'co-1', 'fp-1', 'B')
+    const num = await allocateVoucherNumber(supabase as never, 'co-1', 'fp-1', 'B')
 
     expect(num).toBe(7)
     expect(supabase.rpc).toHaveBeenCalledWith('next_voucher_number', {

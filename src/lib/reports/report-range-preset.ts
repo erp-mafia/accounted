@@ -12,7 +12,7 @@ import { windowFitsPeriod, type DrilldownWindow } from '@/lib/reports/report-dri
  * name; a custom range only from its dates, so those are stored with it.
  */
 
-export type RangePreset = 'full_year' | 'ytd' | 'this_month' | 'last_month' | 'this_quarter' | 'custom'
+export type RangePreset = 'full_year' | 'ytd' | 'this_month' | 'last_month' | 'this_quarter' | 'last_quarter' | 'custom'
 
 export const RANGE_PRESETS: readonly RangePreset[] = [
   'full_year',
@@ -20,6 +20,7 @@ export const RANGE_PRESETS: readonly RangePreset[] = [
   'this_month',
   'last_month',
   'this_quarter',
+  'last_quarter',
   'custom',
 ]
 
@@ -87,6 +88,18 @@ export function resolvePreset(
     const y = ref.getFullYear()
     const q = Math.floor(ref.getMonth() / 3)
     const start = `${y}-${String(q * 3 + 1).padStart(2, '0')}-01`
+    const end = toLocalIso(new Date(y, q * 3 + 3, 0))
+    return {
+      fromDate: clampToPeriod(start, periodStart, periodEnd),
+      toDate: clampToPeriod(end, periodStart, periodEnd),
+    }
+  }
+  if (preset === 'last_quarter') {
+    // The calendar quarter before the reference date's; a negative month
+    // index rolls back into the previous year.
+    const y = ref.getFullYear()
+    const q = Math.floor(ref.getMonth() / 3) - 1
+    const start = toLocalIso(new Date(y, q * 3, 1))
     const end = toLocalIso(new Date(y, q * 3 + 3, 0))
     return {
       fromDate: clampToPeriod(start, periodStart, periodEnd),

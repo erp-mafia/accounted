@@ -152,7 +152,7 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
       }
     }
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       { name: 'Intäkter', columns, rows: revenueRows, mapRow },
       { name: 'Kostnader', columns, rows: expenseRows, mapRow },
       { name: 'Finansiella poster', columns, rows: financialRows, mapRow },

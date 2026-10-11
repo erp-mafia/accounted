@@ -6,6 +6,7 @@ import { getBranding } from '@/lib/branding/service'
 import { formatOrgNumber } from '@/lib/utils'
 import { createLogger } from '@/lib/logger'
 import { getOpeningBalances } from './opening-balances'
+import { excludeYearEndChain, fetchReversedYearEndEntryIds } from './trial-balance'
 import type { SIEExportOptions, JournalEntry, JournalEntryLine, BASAccount } from '@/types'
 
 const log = createLogger('reports:sie-export')
@@ -96,6 +97,15 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
   // truncated large periods (~30 vouchers). Fetch entries and lines as two
   // separate paginated queries and stitch them together in memory, mirroring
   // journal-register.ts.
+  //
+  // exclude_year_end_closing drops the year-end entries the way the trial
+  // balance's 'exclude-all-year-end' does (excludeYearEndChain): every
+  // source_type 'year_end' entry plus the storno and correction of a reversed
+  // one. Dropping the reversed bokslut alone kept its storno, so an undone
+  // bokslut read as its own negation in #VER, #UB and #RES.
+  const reversedYearEndIds = options.exclude_year_end_closing
+    ? await fetchReversedYearEndEntryIds(supabase, companyId)
+    : []
   const entries = await fetchAllRows<JournalEntry>(({ from, to }) => {
     let q = supabase
       .from('journal_entries')
@@ -105,7 +115,7 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
       .in('status', ['posted', 'reversed'])
 
     if (options.exclude_year_end_closing) {
-      q = q.neq('source_type', 'year_end')
+      q = excludeYearEndChain(q, reversedYearEndIds)
     }
 
     // Stable TOTAL order: voucher_series + voucher_number is unique per

@@ -55,6 +55,9 @@ export type CoreEvent =
   // makulerade instead and surface via the journal, not this event.
   | { type: 'invoice.draft_deleted'; payload: { invoiceId: string; userId: string; companyId: string } }
   | { type: 'invoice.sent'; payload: { invoice: Invoice; userId: string; companyId: string } }
+  // A quote or proforma makulerad (lib/invoices/cancel-quote-or-proforma.ts).
+  // The row stays with status 'cancelled'; the event log is its audit trail.
+  | { type: 'invoice.cancelled'; payload: { invoice: Invoice; userId: string; companyId: string } }
   | { type: 'invoice.paid'; payload: { invoice: Invoice; paymentAmount: number; paymentDate: string; userId: string; companyId: string } }
   | { type: 'credit_note.created'; payload: { creditNote: CreditNote; userId: string; companyId: string } }
   // Recurring invoices: emitted by the daily cron after a schedule spawns

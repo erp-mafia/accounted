@@ -67,7 +67,7 @@ export const GET = withRouteContext('report.vat_declaration.xlsx', async (reques
       }),
     )
 
-    const buffer = reportToWorkbook<RutaRow>([
+    const buffer = await reportToWorkbook<RutaRow>([
       {
         name: `Moms ${formatPeriodLabel(periodType, year, period)}`,
         columns: [

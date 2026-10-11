@@ -1,14 +1,5 @@
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import {
-  generateText,
-  jsonSchema,
-  Output,
-  stepCountIs,
-  tool,
-  type ModelMessage,
-  type ToolSet,
-  type UserContent,
-} from 'ai'
+import type { OpenAICompatibleProvider } from '@ai-sdk/openai-compatible'
+import type { ModelMessage, ToolSet, UserContent } from 'ai'
 import { capabilitiesFor, type ResolvedAiConfig } from '../config'
 import { extractJsonObject } from '../json'
 import { rasterizePdf } from '../rasterize-pdf'
@@ -45,8 +36,9 @@ function messagesWithHistory(prompt: string, history: AiChatTurn[]): ModelMessag
  * runs the loop itself (calls execute, feeds the result back) up to the
  * stopWhen bound. Returns undefined when there is nothing to attach.
  */
-function toSdkTools(defs: AiToolDef[] | undefined): ToolSet | undefined {
+async function toSdkTools(defs: AiToolDef[] | undefined): Promise<ToolSet | undefined> {
   if (!defs || defs.length === 0) return undefined
+  const { jsonSchema, tool } = await import('ai')
   const out: ToolSet = {}
   for (const def of defs) {
     out[def.name] = tool({
@@ -86,14 +78,23 @@ function toSdkTools(defs: AiToolDef[] | undefined): ToolSet | undefined {
  */
 
 export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService {
-  const provider = createOpenAICompatible({
-    name: 'accounted-byo',
-    baseURL: cfg.baseUrl ?? '',
-    // Only send a key when one is configured: a keyless local server would
-    // reject or ignore an empty Bearer, and omitting it means no auth header.
-    ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}),
-    supportsStructuredOutputs: cfg.strictJson,
-  })
+  // The AI SDK is imported on first call, not at module load: lib/ai is
+  // reached from every route, and only a deployment on this backend calls it.
+  let cachedProvider: OpenAICompatibleProvider | null = null
+  const getProvider = async (): Promise<OpenAICompatibleProvider> => {
+    if (!cachedProvider) {
+      const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible')
+      cachedProvider = createOpenAICompatible({
+        name: 'accounted-byo',
+        baseURL: cfg.baseUrl ?? '',
+        // Only send a key when one is configured: a keyless local server would
+        // reject or ignore an empty Bearer, and omitting it means no auth header.
+        ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}),
+        supportsStructuredOutputs: cfg.strictJson,
+      })
+    }
+    return cachedProvider
+  }
   const capabilities = capabilitiesFor(cfg)
   const modelFor = (tier: AiTier): string => {
     const id = cfg.models[tier]
@@ -168,9 +169,11 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
 
     async generateText(req: GenerateTextRequest): Promise<GenerateTextResult> {
       const model = modelFor(req.tier)
+      const provider = await getProvider()
+      const { generateText, stepCountIs } = await import('ai')
       // Only attach tools when the configured model advertises tool use; a
       // text-only local model still answers, just from the prompt (+ snapshot).
-      const tools = capabilities.toolUse ? toSdkTools(req.tools) : undefined
+      const tools = capabilities.toolUse ? await toSdkTools(req.tools) : undefined
       const result = await generateText({
         model: provider(model),
         ...(req.system ? { system: req.system } : {}),
@@ -188,6 +191,8 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
 
     async generateStructured(req: GenerateStructuredRequest): Promise<GenerateStructuredResult> {
       const model = modelFor(req.tier)
+      const provider = await getProvider()
+      const { generateText, jsonSchema, Output } = await import('ai')
       if (cfg.strictJson) {
         const result = await generateText({
           model: provider(model),
@@ -218,6 +223,8 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
       const model = modelFor(req.tier ?? 'extraction')
       const built = await buildUserContent(req.document, req.instruction)
       if (!built.ok) return { ok: false, skipped: built.skipped }
+      const provider = await getProvider()
+      const { generateText, jsonSchema, Output } = await import('ai')
       const messages: ModelMessage[] = [{ role: 'user', content: built.content }]
       if (cfg.strictJson && req.jsonSchema) {
         const result = await generateText({

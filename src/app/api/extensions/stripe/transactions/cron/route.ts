@@ -1,11 +1,16 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
+import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { syncStripeBalanceTransactions } from '@/extensions/general/stripe/lib/transaction-sync'
 import type { StripeConnection } from '@/extensions/general/stripe/types'
+
+// A connection revoked on Stripe's side emits stripe.disconnected (audit
+// trail); the bus must be wired before that first emit on a cold instance.
+ensureInitialized()
 
 export const maxDuration = 300
 
@@ -19,8 +24,7 @@ export const maxDuration = 300
  * unbooked (or pre-linked to entries the deterministic settle/payout flows
  * already created); booking stays a human decision. Idempotent via the
  * (company_id, external_id) unique index, so overlapping windows and re-runs
- * are no-ops. Unlike the 15-minute event sync, this does not emit events, so
- * no ensureInitialized() is needed.
+ * are no-ops. A connection Stripe reports as revoked is marked revoked here.
  */
 export const GET = withCronContext('cron.stripe_transaction_sync', async (_request, ctx) => {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL

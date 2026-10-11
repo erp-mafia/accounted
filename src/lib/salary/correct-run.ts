@@ -23,8 +23,10 @@
  *   5. Insert the correction run: same period, payment date, deviation
  *      period and voucher series, `is_correction = true`, `corrects_run_id`.
  *   6. Copy the original roster and line items onto the correction run so
- *      the operator edits a populated draft (provenance columns survive so a
- *      recalculation does not derive benefits/recurring rows a second time).
+ *      the operator edits a populated draft: every column but identity,
+ *      timestamps, the parent link, the calculation proof and the utlägg
+ *      claim link (provenance survives so a recalculation does not derive
+ *      engine rows a second time).
  *   7. Sync the vacation ledger for the affected employees (non-fatal).
  *
  * Failure states (there is no transaction around steps 2-6; the caller
@@ -51,9 +53,13 @@
  *     correction and nothing is lost. Any other DB error (`DB_ERROR`, stage
  *     `insert_correction_run`) leaves the same state; the operator creates
  *     the correction run by hand (POST /salary-runs with the same period).
- *   - Roster copy or vacation-ledger failure after step 5 is non-fatal:
- *     the correction run exists and the caller gets `ok: true` with
- *     `warnings`; the operator re-attaches missing employees.
+ *   - Roster copy failure in step 6 (`DB_ERROR`, stage `copy_roster`): the
+ *     correction run is deleted again (a fresh draft, nothing references
+ *     it), which leaves the step 5 insert-failure state; calling the verb
+ *     again resumes at step 5. Should that delete fail too, the half-copied
+ *     draft remains: delete it (it is a draft) and call again.
+ *   - Vacation-ledger failure in step 7 is non-fatal: the caller gets
+ *     `ok: true` with `warnings`.
  *
  * Every query filters by company_id (defense in depth alongside RLS: the
  * v1 surface runs on a service-role client).
@@ -135,7 +141,7 @@ export type CorrectSalaryRunLiveResult = {
   reversedEntryIds: string[]
   /** ISO timestamp taken when the original was marked `corrected`. */
   stampedAt: string
-  /** Non-fatal problems after the correction run existed (roster copy, ledger sync). */
+  /** Non-fatal problems after the correction run existed (status flip, ledger sync). */
   warnings: string[]
 }
 
@@ -170,7 +176,7 @@ export type CorrectSalaryRunFailure =
        */
       ok: false
       code: 'DB_ERROR'
-      stage: 'load_run' | 'insert_correction_run'
+      stage: 'load_run' | 'insert_correction_run' | 'copy_roster'
       error: unknown
     }
   | {
@@ -219,6 +225,89 @@ function entryIdsOf(run: CorrectableSalaryRunRow): string[] {
 
 function correctionNotes(run: CorrectableSalaryRunRow): string {
   return `Korrigering av lönekörning ${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+}
+
+/**
+ * Copies `row` without its own identity and timestamps (the database assigns
+ * fresh ones) and without the `omit` columns. Everything else is copied as
+ * it is, so a column added to the table later survives the correction
+ * without anyone remembering to list it here.
+ */
+function copyColumns(row: Record<string, unknown>, omit: string[]): Record<string, unknown> {
+  const skip = new Set(['id', 'created_at', 'updated_at', ...omit])
+  return Object.fromEntries(Object.entries(row).filter(([column]) => !skip.has(column)))
+}
+
+type RosterRow = Record<string, unknown> & { employee_id: string; line_items?: Array<Record<string, unknown>> }
+
+/**
+ * Step 6: the original roster (snapshots, overrides, AGI flags) and every
+ * line item onto the correction run, one bulk insert each, uncalculated.
+ * Line provenance (calculation_source, source_benefit_id,
+ * source_recurring_line_id) must survive: without it a recalculation treats
+ * the copied engine rows as manual pay and derives them a second time.
+ *
+ * source_expense_claim_id is the one line column not carried: a partial unique
+ * index keeps a claim on one payslip line, the original run's line keeps it,
+ * and the original salary verifikat's payout batch already settled the
+ * claim. The copied line still repays the amount on its 2820 account.
+ */
+async function copyRosterToCorrection(
+  supabase: SupabaseClient,
+  companyId: string,
+  originalRunId: string,
+  correctionRunId: string,
+): Promise<{ ok: true; roster: RosterRow[] } | { ok: false; error: unknown }> {
+  const { data: originalEmployees, error: rosterError } = await supabase
+    .from('salary_run_employees')
+    .select('*, line_items:salary_line_items(*)')
+    .eq('salary_run_id', originalRunId)
+    .eq('company_id', companyId)
+  if (rosterError) return { ok: false, error: rosterError }
+
+  const roster = (originalEmployees || []) as RosterRow[]
+  if (roster.length === 0) return { ok: true, roster }
+
+  // calculation_breakdown stays behind: it is the proof that the engine ran
+  // against this run's inputs, and approve and book refuse a row without it
+  // (calculation-state.ts). The correction has not been calculated yet.
+  const { data: copiedEmployees, error: employeeError } = await supabase
+    .from('salary_run_employees')
+    .insert(
+      roster.map((sre) => ({
+        ...copyColumns(sre, ['salary_run_id', 'line_items', 'calculation_breakdown']),
+        salary_run_id: correctionRunId,
+        company_id: companyId,
+      })),
+    )
+    .select('id, employee_id')
+  if (employeeError) return { ok: false, error: employeeError }
+
+  // UNIQUE (salary_run_id, employee_id): one copied row per employee.
+  const copiedIdByEmployee = new Map(
+    ((copiedEmployees || []) as Array<{ id: string; employee_id: string }>).map((sre) => [sre.employee_id, sre.id]),
+  )
+  const lineItems: Array<Record<string, unknown>> = []
+  for (const sre of roster) {
+    const copiedId = copiedIdByEmployee.get(sre.employee_id)
+    if (!copiedId) {
+      return { ok: false, error: new Error(`employee ${sre.employee_id} was not copied to the correction run`) }
+    }
+    for (const li of sre.line_items || []) {
+      lineItems.push({
+        ...copyColumns(li, ['salary_run_employee_id']),
+        salary_run_employee_id: copiedId,
+        company_id: companyId,
+        source_expense_claim_id: null,
+      })
+    }
+  }
+  if (lineItems.length === 0) return { ok: true, roster }
+
+  const { error: lineError } = await supabase.from('salary_line_items').insert(lineItems)
+  if (lineError) return { ok: false, error: lineError }
+
+  return { ok: true, roster }
 }
 
 export function correctSalaryRun(
@@ -418,64 +507,20 @@ export async function correctSalaryRun(
   }
   const correctionRun = correctionRow as CorrectionSalaryRunRow
 
-  // 6. Copy the roster (with the engine's snapshot columns) and line items.
-  const { data: originalEmployees, error: rosterError } = await supabase
-    .from('salary_run_employees')
-    .select('*, line_items:salary_line_items(*)')
-    .eq('salary_run_id', runId)
-    .eq('company_id', companyId)
-  if (rosterError) {
-    warnings.push(`roster copy skipped: ${rosterError.message}`)
+  // 6. Copy the roster and line items. A failure removes the correction run
+  //    again: the state is then the one an insert failure in step 5 leaves,
+  //    and calling the verb again resumes there. A correction draft missing
+  //    employees or lines would otherwise be booked as if it were complete.
+  const copy = await copyRosterToCorrection(supabase, companyId, runId, correctionRun.id)
+  if (!copy.ok) {
+    await supabase
+      .from('salary_runs')
+      .delete()
+      .eq('id', correctionRun.id)
+      .eq('company_id', companyId)
+    return { ok: false, code: 'DB_ERROR', stage: 'copy_roster', error: copy.error }
   }
-
-  const roster = (originalEmployees || []) as Array<Record<string, unknown>>
-  for (const origEmp of roster) {
-    const { data: newSre } = await supabase
-      .from('salary_run_employees')
-      .insert({
-        salary_run_id: correctionRun.id,
-        employee_id: origEmp.employee_id,
-        company_id: companyId,
-        employment_degree: origEmp.employment_degree,
-        monthly_salary: origEmp.monthly_salary,
-        salary_type: origEmp.salary_type,
-        hours_worked: origEmp.hours_worked,
-        tax_table_number: origEmp.tax_table_number,
-        tax_column: origEmp.tax_column,
-      })
-      .select()
-      .single()
-
-    if (!newSre) {
-      warnings.push(`employee ${String(origEmp.employee_id)} was not copied to the correction run`)
-      continue
-    }
-
-    const lineItems = (origEmp.line_items || []) as Array<Record<string, unknown>>
-    for (const li of lineItems) {
-      await supabase.from('salary_line_items').insert({
-        salary_run_employee_id: (newSre as { id: string }).id,
-        company_id: companyId,
-        item_type: li.item_type,
-        description: li.description,
-        quantity: li.quantity,
-        unit_price: li.unit_price,
-        amount: li.amount,
-        is_taxable: li.is_taxable,
-        is_avgift_basis: li.is_avgift_basis,
-        is_vacation_basis: li.is_vacation_basis,
-        is_gross_deduction: li.is_gross_deduction,
-        is_net_deduction: li.is_net_deduction,
-        account_number: li.account_number,
-        sort_order: li.sort_order,
-        // Provenance must survive the copy: without these back-links a
-        // recalculation of the correction run treats the copied derived
-        // rows as manual and step 8d/8d3 derives them a second time.
-        source_benefit_id: li.source_benefit_id ?? null,
-        source_recurring_line_id: li.source_recurring_line_id ?? null,
-      })
-    }
-  }
+  const roster = copy.roster
 
   // 7. Vacation ledger sync: the original flipped to 'corrected', so its
   //    vacation_days_taken drop out of the recomputed taken_days. Non-fatal:

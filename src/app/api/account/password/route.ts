@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { createLogger } from '@/lib/logger'
+import { userHasPassword } from '@/lib/auth/has-password'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const log = createLogger('api/account/password')
@@ -28,19 +29,20 @@ const SetPasswordSchema = z.object({
  * Server-routed password set/change, then flips `app_metadata.has_password =
  * true` via the service client (clients can't write app_metadata).
  *
- * Two paths depending on whether the user already has a real password:
+ * Two paths depending on whether the user already has a real password, as
+ * userHasPassword (lib/auth/has-password.ts) defines it. One definition: an
+ * email signup carries no flag and still knows its password.
  *
- *   - First-time set (`app_metadata.has_password !== true`): write via the
- *     admin API. BankID-only users (and legacy users whose `has_password`
- *     flag was set to false by the backfill) sit at AAL1 with a TOTP factor
- *     enrolled, and `updateUser` on the user session would be rejected with
- *     "AAL2 session is required to update email or password when MFA is
- *     enabled". Setting an initial password has no existing credential to
- *     protect, so bypassing AAL2 is safe.
+ *   - First-time set (no known password: `has_password: false`, or a
+ *     BankID-linked user with no flag): write via the admin API. BankID-only
+ *     users sit at AAL1 with a TOTP factor enrolled, and `updateUser` on the
+ *     user session would be rejected with "AAL2 session is required to update
+ *     email or password when MFA is enabled". Setting an initial password has
+ *     no existing credential to protect, so bypassing AAL2 is safe.
  *
- *   - Change-password (`app_metadata.has_password === true`): write via the
- *     user session so Supabase's AAL2 guard still fires. A stolen AAL1
- *     cookie must not be able to rotate a known password.
+ *   - Change-password (a known password): write via the user session so
+ *     Supabase's AAL2 guard still fires. A stolen AAL1 cookie must not be
+ *     able to rotate a known password.
  *
  * This route is the single write path for setting a password. SecuritySettings,
  * the reset-password page, and the /account/set-password page all funnel
@@ -58,7 +60,7 @@ export async function POST(request: Request) {
   if (!result.success) return result.response
   const { password } = result.data
 
-  const isFirstTimeSet = user.app_metadata?.has_password !== true
+  const isFirstTimeSet = !userHasPassword(user)
   const service = createServiceClient()
 
   let updateError:

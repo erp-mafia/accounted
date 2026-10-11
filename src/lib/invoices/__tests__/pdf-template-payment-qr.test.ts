@@ -21,6 +21,7 @@ import {
 import { resolveInvoicePaymentQr, type InvoicePdfPaymentQr } from '@/lib/invoices/payment-qr'
 import { buildInvoicePaymentQrImage } from '@/lib/invoices/render-invoice-pdf'
 import { buildInvoicePaymentRows } from '@/lib/invoices/payment-rows'
+import { createStyles } from '@/lib/invoices/pdf/styles'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import type { CompanySettings, Customer, InvoiceItem } from '@/types'
 import { styleOf, treeElements, treeTextLeaves, type AnyElement } from './pdf-tree'
@@ -201,6 +202,8 @@ describe('invoice PDF: payment rows come from the shared builder', () => {
     // The payment link prints short, and links to the full URL.
     const link = treeElements(area).find((el) => el.type === Link)
     expect(link?.props.src).toBe('https://pay.example.test/x')
+    // In the page's ink, underlined, not react-pdf's default web blue.
+    expect(styleOf(link!)).toMatchObject({ color: createStyles().page.color, textDecoration: 'underline' })
     expect(texts).toContain('pay.example.test/x')
     // The due date belongs to the amount, left of the rows.
     expect(texts.indexOf('Förfallodatum')).toBeGreaterThan(-1)
@@ -314,6 +317,18 @@ describe('invoice PDF: payment QR geometry', () => {
       }
     })
   }
+
+  it('prints the payment link text in the real PDF, not only the link box', { timeout: 30_000 }, async () => {
+    // The area is drawn by a render callback, where react-pdf painted no text
+    // for a bare string child of a Link: the tree walk and the layout above
+    // still found the string, so only the PDF's own text layer shows it.
+    const invoice = sentInvoice({ payment_link_url: 'https://pay.example.test/x' })
+    const buffer = await renderToBuffer(render(invoice, qrCompany()))
+    const { getDocumentProxy, extractText } = await import('unpdf')
+    const { text } = await extractText(await getDocumentProxy(new Uint8Array(buffer)), { mergePages: true })
+    expect(text).toContain('Betala online')
+    expect(text).toContain('pay.example.test/x')
+  })
 
   it('renders a real PDF with the bank-app code drawn as a vector path', { timeout: 30_000 }, async () => {
     const paymentQr = await qrFor(sentInvoice(), qrCompany(), makeCustomer())

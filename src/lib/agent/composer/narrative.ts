@@ -34,7 +34,7 @@ export async function writeNarrative(
   inputs: ComposerInputs,
   selection: AtomSelection,
 ): Promise<string> {
-  const anthropic = getAnthropic()
+  const anthropic = await getAnthropic()
 
   const response = await anthropic.messages.create({
     model: SONNET_MODEL,

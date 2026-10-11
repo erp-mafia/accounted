@@ -67,6 +67,8 @@ function makeMock(opts: {
   }
   /** When provided, every pending_operations .insert(payload) is recorded here. */
   inserts?: Array<Record<string, unknown>>
+  /** When provided, every suppliers .update(payload) is recorded here. */
+  supplierUpdates?: Array<Record<string, unknown>>
   /** Served by the awaited (non-maybeSingle) suppliers list query: candidate search. */
   supplierList?: Array<Record<string, unknown>>
   /** Served by the .single() defaults/tenancy fetch. Pass explicit null to simulate a supplier missing from the company. */
@@ -102,6 +104,12 @@ function makeMock(opts: {
           if (prop === 'ilike') {
             return () => {
               lastFilter = 'ilike'
+              return supplierChain()
+            }
+          }
+          if (prop === 'update') {
+            return (payload: Record<string, unknown>) => {
+              opts.supplierUpdates?.push(payload)
               return supplierChain()
             }
           }
@@ -827,6 +835,67 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     await expect(
       tool.execute({ inbox_item_id: 'inbox-5' }, 'company-1', 'user-1', supabase),
     ).rejects.toThrow(/no extracted_data/)
+  })
+})
+
+/**
+ * The scanned bankgiro, plusgiro, IBAN or BIC fills what the supplier lacks,
+ * but only once the human approves: staging is a proposal and writes nothing
+ * outside pending_operations. The details to fill are staged and shown, the
+ * executor writes them (lib/pending-operations commit tests).
+ */
+describe('gnubok_create_supplier_invoice_from_inbox: supplier payment details wait for approval', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const inboxWithBankgiro = {
+    id: 'inbox-bg',
+    status: 'received',
+    extracted_data: { ...baseExtracted, supplier: { ...baseExtracted.supplier, bankgiro: '5050-1055' } },
+    matched_supplier_id: 'supplier-1',
+    created_supplier_invoice_id: null,
+    document_id: 'doc-1',
+  }
+
+  it('stages the bankgiro the supplier lacks and writes nothing to the supplier', async () => {
+    const supplierUpdates: Array<Record<string, unknown>> = []
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: inboxWithBankgiro,
+      supplierRecord: { id: 'supplier-1', default_expense_account: '6540', bankgiro: null, plusgiro: null, iban: null, bic: null },
+      // What a direct backfill would read back before writing.
+      supplierByOrg: { bankgiro: null, plusgiro: null, iban: null, bic: null },
+      supplierUpdates,
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute({ inbox_item_id: 'inbox-bg' }, 'company-1', 'user-1', supabase)) as {
+      staged: boolean
+      preview: Record<string, unknown>
+    }
+
+    expect(result.staged).toBe(true)
+    expect(supplierUpdates).toEqual([])
+    expect(inserts).toHaveLength(1)
+    expect((inserts[0].params as Record<string, unknown>).supplier_payment_details).toEqual({ bankgiro: '5050-1055' })
+    expect(result.preview.supplier_payment_details_fill).toEqual({ bankgiro: '5050-1055' })
+  })
+
+  it('stages nothing to fill when the supplier already has a bankgiro', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: inboxWithBankgiro,
+      supplierRecord: { id: 'supplier-1', default_expense_account: '6540', bankgiro: '991-2346', plusgiro: null, iban: null, bic: null },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute({ inbox_item_id: 'inbox-bg' }, 'company-1', 'user-1', supabase)) as {
+      preview: Record<string, unknown>
+    }
+
+    expect(inserts[0].params).not.toHaveProperty('supplier_payment_details')
+    expect(result.preview).not.toHaveProperty('supplier_payment_details_fill')
   })
 })
 

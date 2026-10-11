@@ -2,7 +2,8 @@
 
 import { waitForSIEJob } from '@/lib/import/sie-job-client'
 import type { SIEJob } from '@/lib/import/sie-job-contract'
-import { useEffect, useRef } from 'react'
+import type { RefObject } from 'react'
+import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { ProviderPreviewCounts } from '@/lib/providers/preview-counts'
 
@@ -226,24 +227,18 @@ export function pointWindow(popup: Window | null, url: string) {
   else window.location.href = url
 }
 
-/** Listen for the provider popup's message. */
-export function useProviderMessage(onSuccess: (consentId: string) => void, onError: (reason: string) => void) {
-  const okRef = useRef(onSuccess)
-  const errRef = useRef(onError)
-  useEffect(() => {
-    okRef.current = onSuccess
-    errRef.current = onError
+/**
+ * Listen for the provider popup's message. Put the window openProviderWindow
+ * returned in the returned ref: only that window's messages are heard.
+ */
+export function useProviderMessage(
+  onSuccess: (consentId: string) => void,
+  onError: (reason: string) => void,
+): RefObject<Window | null> {
+  return useOAuthPopup<{ type?: string; consentId?: string; reason?: string }>((data) => {
+    if (data?.type === 'arcim-oauth-success' && data.consentId) onSuccess(data.consentId)
+    else if (data?.type === 'arcim-oauth-error') onError(typeof data.reason === 'string' && data.reason ? data.reason : 'OAuth')
   })
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      if (event.origin !== window.location.origin) return
-      const data = event.data as { type?: string; consentId?: string; reason?: string } | null
-      if (data?.type === 'arcim-oauth-success' && data.consentId) okRef.current(data.consentId)
-      else if (data?.type === 'arcim-oauth-error') errRef.current(typeof data.reason === 'string' && data.reason ? data.reason : 'OAuth')
-    }
-    window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
-  }, [])
 }
 
 /** The consentId a full-page provider return carried in the URL, stripped once read. */

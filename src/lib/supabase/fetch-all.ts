@@ -20,6 +20,14 @@ export interface FetchAllRowsOptions<T> {
    * by ordering on a unique column at the call site.
    */
   dedupeBy?: (row: T) => string | number
+  /**
+   * Stop paging once this many rows are collected, and return at most this
+   * many. The replacement for `.limit(N)` with N above one page: PostgREST's
+   * max-rows answers such a read with 1000 rows and no error, so the cap was
+   * silently 1000 instead of N. A caller that flags truncation compares the
+   * result length against the same number.
+   */
+  maxRows?: number
 }
 
 /**
@@ -89,8 +97,10 @@ export async function fetchAllRows<T>(
     allRows.push(...data)
     pages += 1
     if (data.length < PAGE_SIZE) break
+    if (options?.maxRows !== undefined && allRows.length >= options.maxRows) break
     from += PAGE_SIZE
   }
+  if (options?.maxRows !== undefined && allRows.length > options.maxRows) allRows.length = options.maxRows
 
   // Duplicates are only possible across page boundaries, so single-page results
   // never need the dedup pass.

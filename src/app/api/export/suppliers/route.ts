@@ -36,7 +36,7 @@ export const GET = withRouteContext(
           .range(from, to),
       )) as unknown as Supplier[]
 
-      const { buffer, contentType, filename } = buildRegisterExport(
+      const { buffer, contentType, filename } = await buildRegisterExport(
         [
           {
             name: 'Leverantörer',

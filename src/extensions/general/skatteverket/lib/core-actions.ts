@@ -27,7 +27,7 @@ import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './skattekonto-s
  *
  * Membership: every caller has already established a non-viewer member of
  * the company (withApiV1 / the MCP door refuse viewers; the dashboard routes
- * run requireAgiWriteRole), which is exactly the AGI write-role set
+ * run requireSkvWriteRole), which is exactly the AGI write-role set
  * (owner, admin, member), so no second role read happens here.
  */
 

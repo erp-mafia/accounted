@@ -8,7 +8,6 @@
  */
 
 import { z } from 'zod'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
@@ -21,7 +20,6 @@ import {
 } from '@/lib/api/v1/report-period'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
-import { FinancialStatementPDF } from '@/lib/reports/financial-statement-pdf-template'
 import {
   buildBalanceSheetPdfModel,
   balanceSheetImbalanceKronor,
@@ -144,6 +142,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     let pdfBuffer: Buffer
     try {
+      const [{ renderToBuffer }, { FinancialStatementPDF }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('@/lib/reports/financial-statement-pdf-template'),
+      ])
       pdfBuffer = await renderToBuffer(
         FinancialStatementPDF({
           title: 'Balansräkning',

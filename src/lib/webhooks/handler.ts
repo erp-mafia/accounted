@@ -81,24 +81,56 @@ export function registerWebhookHandler(): void {
 }
 
 /**
+ * Keys dropped from an outbound event payload at any depth. Emit sites pass
+ * whole rows with their joins (invoice.created carries `customer:customers(*)`
+ * and the items), so a top-level check misses the nested copies.
+ *   - userId / user_id: internal Supabase auth.users.id UUIDs that identify
+ *     the Accounted-side actor, not the resource. companyId stays (it is the
+ *     tenant scope, useful for multi-tenant receivers).
+ *   - personnummer in every stored form: the customer's personal_number, the
+ *     ROT/RUT claimant's ciphertext and last four digits on the invoice, and
+ *     the employee's ciphertext and last four digits.
+ */
+const STRIPPED_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
+  'userId',
+  'user_id',
+  'personal_number',
+  'personnummer',
+  'deduction_personnummer_encrypted',
+  'deduction_personnummer_last4',
+  'personnummer_encrypted',
+  'personnummer_last4',
+])
+
+/**
  * Drop fields from the in-process event payload that have no value to an
- * external webhook receiver. Currently strips:
- *   - userId: an internal Supabase auth.users.id UUID: no value to the
- *     receiver, identifies the gnubok-side actor not the resource. The
- *     companyId stays (it's the tenant scope, useful for multi-tenant
- *     receivers).
+ * external receiver (STRIPPED_PAYLOAD_KEYS), recursing into nested objects
+ * and arrays. Returns a copy: the in-process payload other bus handlers read
+ * is left untouched.
  *
- * Centralising the projection here means a future tightening (e.g.
- * stripping personnummer fields from payroll payloads) lands in one
- * place rather than per-emit-site. GDPR Art.5(1)(c) data minimisation.
+ * Every outbound surface runs this one projection (the webhook fan-out, the
+ * webhook retry and GET /api/events), so a tightening lands in one place
+ * rather than per emit site. GDPR Art.5(1)(c) data minimisation.
  */
 export function minimisePayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return minimiseValue(payload) as Record<string, unknown>
+}
+
+function minimiseValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(minimiseValue)
+  if (!isPlainObject(value)) return value
   const projected: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(payload)) {
-    if (key === 'userId') continue
-    projected[key] = value
+  for (const [key, child] of Object.entries(value)) {
+    if (STRIPPED_PAYLOAD_KEYS.has(key)) continue
+    projected[key] = minimiseValue(child)
   }
   return projected
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
 }
 
 /**

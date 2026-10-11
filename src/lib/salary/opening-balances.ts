@@ -15,6 +15,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 export type OpeningBalancesResult<T> =
   | { ok: true; data: T }
@@ -72,21 +73,26 @@ export async function getLockingRuns(
   employeeIds: string[],
 ): Promise<OpeningBalancesResult<Map<string, string>>> {
   if (employeeIds.length === 0) return { ok: true, data: new Map() }
-  const { data, error } = await supabase
-    .from('salary_run_employees')
-    .select('employee_id, salary_run:salary_runs!inner(id, status)')
-    .eq('company_id', companyId)
-    .eq('salary_run.status', 'booked')
-    .in('employee_id', employeeIds)
-
-  if (error) {
-    return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message } }
+  type LockRow = { employee_id: string; salary_run: { id: string; status: string } | null }
+  // Paged on id: past 1,000 booked payslips an employee whose rows came
+  // later read as unlocked.
+  let data: LockRow[]
+  try {
+    data = await fetchAllRows<LockRow>(({ from, to }) =>
+      supabase
+        .from('salary_run_employees')
+        .select('employee_id, salary_run:salary_runs!inner(id, status)')
+        .eq('company_id', companyId)
+        .eq('salary_run.status', 'booked')
+        .in('employee_id', employeeIds)
+        .order('id', { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: LockRow[] | null; error: { message: string } | null }>,
+    )
+  } catch (error) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: error instanceof Error ? error.message : String(error) } }
   }
   const locks = new Map<string, string>()
-  for (const row of (data ?? []) as unknown as Array<{
-    employee_id: string
-    salary_run: { id: string; status: string } | null
-  }>) {
+  for (const row of data) {
     if (row.salary_run && !locks.has(row.employee_id)) {
       locks.set(row.employee_id, row.salary_run.id)
     }

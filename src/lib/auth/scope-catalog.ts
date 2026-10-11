@@ -195,7 +195,11 @@ export function scopeKind(scope: ApiKeyScope): 'read' | 'write' {
   return scope.endsWith(':read') ? 'read' : 'write'
 }
 
-/** Map MCP tool name → required scope. Tools omitted from this map are available to any authenticated key (e.g. discovery/search/skill loading). */
+/**
+ * Map MCP tool name → required scope. Every registered tool is in exactly one
+ * of this map and UNSCOPED_TOOLS; the dispatcher refuses a tool in neither, so
+ * a new tool without a scope fails closed instead of opening to every key.
+ */
 export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Companies
   gnubok_list_companies:                  'companies:read',
@@ -245,6 +249,9 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_book_skattekonto_rows:               'transactions:write',
   // Customers
   gnubok_list_customers:                  'customers:read',
+  // Reached through a supplier, or a bare party_id, it also needs
+  // suppliers:read: see argumentScopeFor below.
+  gnubok_get_party:                       'customers:read',
   gnubok_create_customer:                 'customers:write',
   gnubok_update_customer:                 'customers:write',
   // Articles (artikelregister)
@@ -577,11 +584,36 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_arsredovisning_versions:         'reports:read',
   gnubok_get_arsredovisning_filing_status:     'reports:read',
   gnubok_preview_ef_declaration:               'reports:read',
-  // Deliberately UNSCOPED (available to any authenticated key):
-  // gnubok_search_tools, gnubok_list_skills, gnubok_load_skill,
-  // gnubok_feedback. Discovery + static skill bodies + feedback channel
-  // remain public; private bodies are gated at dispatch. This lets an agent
-  // orient itself before its key's scopes are known.
+}
+
+/**
+ * The tools that deliberately need no scope (available to any authenticated
+ * key). Discovery, static skill bodies and the feedback channel stay open so
+ * an agent can orient itself before its key's scopes are known; private skill
+ * bodies are gated at dispatch. The two bridges carry no data of their own:
+ * the dispatcher checks the scope of the tool they name.
+ */
+export const UNSCOPED_TOOLS: ReadonlySet<string> = new Set([
+  'gnubok_search_tools',
+  'gnubok_list_skills',
+  'gnubok_load_skill',
+  'gnubok_feedback',
+  'gnubok_call_tool',
+  'gnubok_stage_tool',
+])
+
+/**
+ * A scope a call needs on top of its TOOL_SCOPE_MAP entry, decided by the
+ * call's arguments. gnubok_get_party reads a customer's party under
+ * customers:read; through supplier_id, or a bare party_id that may be a
+ * supplier's, it also needs suppliers:read.
+ */
+export function argumentScopeFor(toolName: string, args: Record<string, unknown>): ApiKeyScope | null {
+  if (toolName === 'gnubok_get_party') {
+    const given = (key: string) => typeof args[key] === 'string' && (args[key] as string).trim() !== ''
+    return given('supplier_id') || given('party_id') ? 'suppliers:read' : null
+  }
+  return null
 }
 
 /**

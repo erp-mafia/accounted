@@ -1,6 +1,10 @@
 import type { McpResource } from './types'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { sumUsage, usageSince, USAGE_WINDOW_DAYS } from '@/lib/arkiv/usage'
+import { createLogger } from '@/lib/logger'
+import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
+
+const log = createLogger('mcp-company-current')
 
 /**
  * Per-company working memory for agents. Read at session start so Claude
@@ -28,7 +32,7 @@ export const companyCurrentResource: McpResource = {
       supplierCountRes,
       openInvoiceCountRes,
       openSupplierInvoiceCountRes,
-      uncategorizedTxCountRes,
+      unbookedTx,
       voucherSequencesRes,
       lastCategorizationRes,
       lastInvoiceSentRes,
@@ -93,12 +97,18 @@ export const companyCurrentResource: McpResource = {
         .eq('company_id', companyId)
         .in('status', ['registered', 'approved', 'overdue', 'partially_paid']),
 
-      // Uncategorized bank transactions awaiting a journal entry.
-      supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .is('journal_entry_id', null),
+      // Bank transactions with no verifikat: the shared count
+      // (lib/transactions/unbooked.ts) Accounted://attention, the period-lock
+      // guard and the report data_status use. journal_entry_id IS NULL alone
+      // also counted ignored, private and bulk-booked rows. A failed count is
+      // null, never a made-up zero.
+      countUnbookedBankTransactions(supabase, companyId).catch((err: unknown) => {
+        log.warn('unbooked transaction count unavailable', {
+          companyId,
+          reason: err instanceof Error ? err.message : String(err),
+        })
+        return null
+      }),
 
       // Voucher-series state across open fiscal periods. Scoped by company_id:
       // the table also carries user_id, but a multi-company user would otherwise
@@ -241,7 +251,7 @@ export const companyCurrentResource: McpResource = {
         suppliers: supplierCountRes.count ?? 0,
         open_invoices: openInvoiceCountRes.count ?? 0,
         open_supplier_invoices: openSupplierInvoiceCountRes.count ?? 0,
-        uncategorized_transactions: uncategorizedTxCountRes.count ?? 0,
+        uncategorized_transactions: unbookedTx?.total ?? null,
       },
       voucher_series: voucherSeries,
       recent: {

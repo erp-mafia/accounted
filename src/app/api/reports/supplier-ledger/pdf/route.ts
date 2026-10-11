@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
-import { ReskontraPDF } from '@/lib/reports/reskontra-pdf-template'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { slugifyCompanyName } from '@/lib/reports/xlsx-export'
 import type { CompanySettings } from '@/types'
@@ -29,6 +27,10 @@ export const GET = withRouteContext('report.supplier_ledger.pdf', async (request
   try {
     const ledger = await generateSupplierLedger(supabase, companyId, asOfDate)
 
+    const [{ renderToBuffer }, { ReskontraPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/reports/reskontra-pdf-template'),
+    ])
     const pdfBuffer = await renderToBuffer(
       ReskontraPDF({
         title: 'Leverantörsreskontra',

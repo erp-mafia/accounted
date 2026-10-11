@@ -3,6 +3,7 @@ import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { AuditLogEntry } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases'
+import { SOURCE_TYPE_LABELS_SV } from '@/lib/reports/systemdokumentation'
 import {
   reportToWorkbook,
   textColumn,
@@ -255,34 +256,6 @@ export const GLOBAL_ACTIONS = [
  */
 export const AUDIT_ROW_FILTER =
   'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
-
-const SOURCE_TYPE_LABELS: Record<string, string> = {
-  manual: 'Manuell',
-  import: 'Import',
-  bank_transaction: 'Banktransaktion',
-  storno: 'Storno',
-  correction: 'Rättelse',
-  supplier_invoice_registered: 'Leverantörsfaktura registrerad',
-  supplier_invoice_paid: 'Leverantörsfaktura betald',
-  supplier_invoice_privately_paid: 'Leverantörsfaktura privat betald',
-  supplier_invoice_cash_payment: 'Leverantörsfaktura kontant',
-  supplier_credit_note: 'Leverantörskreditnota',
-  opening_balance: 'Ingående balans',
-  system: 'System',
-  salary_payment: 'Lön',
-  inbox_item: 'Underlag från inkorg',
-  invoice_created: 'Kundfaktura',
-  invoice_paid: 'Kundfaktura betald',
-  invoice_cash_payment: 'Kontantfaktura',
-  credit_note: 'Kreditfaktura',
-  result_appropriation: 'Resultatdisposition',
-  year_end: 'Bokslut',
-  vat_settlement: 'Momsavräkning',
-  accrual: 'Periodisering',
-  currency_revaluation: 'Valutaomvärdering',
-  webshop_order: 'Webshop',
-  stripe_payout: 'Stripe-utbetalning',
-}
 
 const COMMIT_METHOD_LABELS: Record<string, string> = {
   user_accept: 'Godkänd av användare',
@@ -613,9 +586,13 @@ function num(value: unknown): number | null {
   return typeof value === 'number' ? value : null
 }
 
+/**
+ * The typed map shared with the systemdokumentation, so both documents name a
+ * source the same way and a new source type cannot compile without a label.
+ */
 function sourceTypeLabel(sourceType: string | null | undefined): string {
   if (!sourceType) return 'Okänd'
-  return SOURCE_TYPE_LABELS[sourceType] ?? sourceType
+  return (SOURCE_TYPE_LABELS_SV as Readonly<Record<string, string | undefined>>)[sourceType] ?? sourceType
 }
 
 function normaliseActorType(value: unknown): BehandlingshistorikActorType {
@@ -2325,15 +2302,15 @@ export function behandlingshistorikSheetSpecs(report: BehandlingshistorikReport)
   return [events as SheetSpec<unknown>, meta as SheetSpec<unknown>]
 }
 
-export function buildBehandlingshistorikExport(
+export async function buildBehandlingshistorikExport(
   report: BehandlingshistorikReport,
   format: 'xlsx' | 'csv',
-): { buffer: Buffer; contentType: string; filename: string } {
+): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
   const specs = behandlingshistorikSheetSpecs(report)
   const date = report.mode === 'fiscal_year' ? report.period.end : report.range.to
   if (format === 'csv') {
     // CSV carries the first sheet only; the metadata sheet is xlsx-only.
-    const buf = reportToWorkbook([specs[0]], { bookType: 'csv' })
+    const buf = await reportToWorkbook([specs[0]], { bookType: 'csv' })
     // SheetJS already emits a UTF-8 BOM for csv in current versions; only add
     // one when it is missing so Excel never sees a doubled mark in cell A1.
     const hasBom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf
@@ -2344,7 +2321,7 @@ export function buildBehandlingshistorikExport(
     }
   }
   return {
-    buffer: reportToWorkbook(specs),
+    buffer: await reportToWorkbook(specs),
     contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     filename: exportFilename('behandlingshistorik', report.company.name, date, 'xlsx'),
   }

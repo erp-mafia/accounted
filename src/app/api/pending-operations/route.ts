@@ -37,6 +37,10 @@ export const GET = withRouteContext(
       .eq('company_id', companyId)
       .in('status', statusesFor(status))
       .order(orderColumn, { ascending: order === 'asc', nullsFirst: false })
+      // Offset paging needs a total order: a bulk reject or a stuck-commit
+      // sweep stamps one resolved_at on the whole batch, and rows tied on it
+      // could repeat or vanish between the list's "Ladda fler" pages.
+      .order('id', { ascending: order === 'asc' })
       .range(offset, offset + limit - 1)
 
     // Return every tab count with the active list. The browser previously

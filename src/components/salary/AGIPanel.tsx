@@ -14,7 +14,7 @@ import {
   Send,
   Unlock,
 } from 'lucide-react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -23,13 +23,16 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
-import { isAllowedSkvPopupOrigin } from '@/lib/skatteverket/popup-origin'
+import { isSkvPopupOrigin, type SkvPopupMessage } from '@/lib/skatteverket/popup-origin'
+import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import {
   resolveRunAgiSubmission,
   type AgiSubmissionState,
 } from '@/lib/salary/agi-submission-state'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { downloadFile } from '@/lib/browser/download-file'
+import { failureDescription } from '@/lib/browser/action-failure'
 import { cn, formatDateTime } from '@/lib/utils'
 
 interface AGIPanelProps {
@@ -151,6 +154,8 @@ export function AGIPanel(props: AGIPanelProps) {
   } = props
 
   const t = useTranslations('salary_agi')
+  const tCommon = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const hasSkatteverket = useCapability(CAPABILITY.skatteverket)
 
@@ -282,9 +287,6 @@ export function AGIPanel(props: AGIPanelProps) {
     fetchStatus()
   }, [fetchStatus])
 
-  // Handle of the OAuth tab opened by handleConnect: used to verify the
-  // sender identity of incoming postMessages and to detect abandonment.
-  const popupRef = useRef<Window | null>(null)
   const watchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const delayedRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -303,49 +305,40 @@ export function AGIPanel(props: AGIPanelProps) {
     }
   }, [])
 
-  // Listen for OAuth completion from the BankID popup. When the popup posts
-  // back a success/error message we re-fetch status so the panel flips from
-  // "expired" / not-connected to "Ansluten" without a full page reload.
-  useEffect(() => {
-    function handleMessage(event: MessageEvent) {
-      // The popup runs on the pinned SKV OAuth host, which differs from the
-      // app origin after the app.accounted.se cutover.
-      if (!isAllowedSkvPopupOrigin(event.origin, window.location.origin)) return
-      // Source-identity check: only the popup this component opened can
-      // trigger the handler; a window reference cannot be forged by other
-      // same-origin scripts.
-      if (!popupRef.current || event.source !== popupRef.current) return
-      if (event.data?.type === 'skatteverket-oauth-success') {
-        stopWatchingOauthTab()
-        setError(null)
-        setSuccess(t('oauth_success'))
+  // Handle of the OAuth tab opened by handleConnect. Only messages from that
+  // tab, on the app origin or the pinned SKV OAuth host, reach the handler;
+  // the watch below uses it to detect abandonment. On success we re-fetch
+  // status so the panel flips from "expired" / not-connected to "Ansluten"
+  // without a full page reload.
+  const popupRef = useOAuthPopup<SkvPopupMessage>((data) => {
+    if (data?.type === 'skatteverket-oauth-success') {
+      stopWatchingOauthTab()
+      setError(null)
+      setSuccess(t('oauth_success'))
+      fetchStatus()
+      // Verified success: rebroadcast as an internal DOM event so passive
+      // consumers (e.g. the salary page) can react without trusting raw
+      // postMessage.
+      window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
+      // The post-connect refresh (skattekonto sync, AGI settle, token
+      // health) now runs server-side AFTER the callback responds, so the
+      // status fetched above predates it. Refetch once more when it has
+      // plausibly settled so synced data and health flags show up
+      // without a manual reload.
+      if (delayedRefetchRef.current) clearTimeout(delayedRefetchRef.current)
+      delayedRefetchRef.current = setTimeout(() => {
         fetchStatus()
-        // Verified success: rebroadcast as an internal DOM event so passive
-        // consumers (e.g. the salary page) can react without trusting raw
-        // postMessage.
         window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
-        // The post-connect refresh (skattekonto sync, AGI settle, token
-        // health) now runs server-side AFTER the callback responds, so the
-        // status fetched above predates it. Refetch once more when it has
-        // plausibly settled so synced data and health flags show up
-        // without a manual reload.
-        if (delayedRefetchRef.current) clearTimeout(delayedRefetchRef.current)
-        delayedRefetchRef.current = setTimeout(() => {
-          fetchStatus()
-          window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
-        }, 15_000)
-      } else if (event.data?.type === 'skatteverket-oauth-error') {
-        stopWatchingOauthTab()
-        const reason =
-          typeof event.data.reason === 'string' && event.data.reason
-            ? event.data.reason
-            : t('oauth_error_fallback')
-        setError(reason)
-      }
+      }, 15_000)
+    } else if (data?.type === 'skatteverket-oauth-error') {
+      stopWatchingOauthTab()
+      const reason =
+        typeof data.reason === 'string' && data.reason
+          ? data.reason
+          : t('oauth_error_fallback')
+      setError(reason)
     }
-    window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
-  }, [fetchStatus, stopWatchingOauthTab, t])
+  }, isSkvPopupOrigin)
 
   // Drop a stale "AGI-XML saknas" error once the run's AGI is (re)generated.
   // That error is set when "Skicka in underlag" runs before the XML exists; if
@@ -768,20 +761,19 @@ export function AGIPanel(props: AGIPanelProps) {
     setActionLoading('download')
     setError(null)
     try {
-      const res = await fetch(`/api/salary/runs/${salaryRunId}/agi/xml`)
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(errText(data) || t('xml_generate_failed'))
+      const result = await downloadFile({
+        url: `/api/salary/runs/${salaryRunId}/agi/xml`,
+        filename: `AGI_${period ?? 'underlag'}.xml`,
+        locale: errorLocale,
+        errorContext: 'salary',
+      })
+      if (!result.ok) {
+        setError(failureDescription(result, {
+          timeout: tCommon('download_timeout'),
+          network: tCommon('download_network'),
+        }))
+        return
       }
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `AGI_${period ?? 'underlag'}.xml`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
       onChange?.()
     } catch (e) {
       setError(e instanceof Error ? getUserErrorMessage(e) : t('xml_download_failed'))

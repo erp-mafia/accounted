@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createAssetDepreciationEntry } from '@/lib/bookkeeping/engine'
 import { AssetDepreciationRefusedError } from '@/lib/bookkeeping/errors'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type {
   Asset,
   FiscalPeriod,
@@ -320,7 +321,9 @@ export async function proposeAnnualPostings(
   // Loaded here to keep the pure depreciation calculator reusable from the
   // asset disposal service without creating a module initialization cycle.
   const { listAssets } = await import('./asset-service')
-  const [periodResult, assets, currentSchedulesResult, priorSchedulesResult] = await Promise.all([
+  // Both schedule reads are paged on id: one row per asset and year passes
+  // 1,000 soon, and the accumulated depreciation then came up short.
+  const [periodResult, assets, currentSchedules, priorSchedules] = await Promise.all([
     supabase
       .from('fiscal_periods')
       .select('id, name, period_start, period_end')
@@ -329,19 +332,27 @@ export async function proposeAnnualPostings(
       .single(),
     listAssets(supabase, companyId),
     // Schedules in the current period (proposal lookup / "already posted" badge)
-    supabase
-      .from('depreciation_schedules')
-      .select('id, asset_id, journal_entry_id')
-      .eq('company_id', companyId)
-      .eq('fiscal_period_id', fiscalPeriodId),
+    fetchAllRows<{ id: string; asset_id: string; journal_entry_id: string | null }>(({ from, to }) =>
+      supabase
+        .from('depreciation_schedules')
+        .select('id, asset_id, journal_entry_id')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
     // Prior posted schedules (excluding the current period) so we can compute
     // the true accumulated depreciation per asset for net book value.
-    supabase
-      .from('depreciation_schedules')
-      .select('asset_id, planned_depreciation, journal_entry_id, fiscal_period_id')
-      .eq('company_id', companyId)
-      .neq('fiscal_period_id', fiscalPeriodId)
-      .not('journal_entry_id', 'is', null),
+    fetchAllRows<{ asset_id: string; planned_depreciation: number | string }>(({ from, to }) =>
+      supabase
+        .from('depreciation_schedules')
+        .select('asset_id, planned_depreciation, journal_entry_id, fiscal_period_id')
+        .eq('company_id', companyId)
+        .neq('fiscal_period_id', fiscalPeriodId)
+        .not('journal_entry_id', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
   ])
 
   if (periodResult.error || !periodResult.data) {
@@ -349,22 +360,14 @@ export async function proposeAnnualPostings(
   }
   const period = periodResult.data
   const existing = new Map<string, { id: string; journal_entry_id: string | null }>(
-    (currentSchedulesResult.data ?? []).map(
-      (r: { id: string; asset_id: string; journal_entry_id: string | null }) => [
-        r.asset_id,
-        { id: r.id, journal_entry_id: r.journal_entry_id },
-      ],
-    ),
+    currentSchedules.map((r) => [r.asset_id, { id: r.id, journal_entry_id: r.journal_entry_id }]),
   )
 
   // Sum of all prior posted depreciation per asset. This is the accumulated
   // depreciation on the books before this period: does not yet count this
   // period's proposal or any unposted current-period draft.
   const priorAccumulated = new Map<string, number>()
-  for (const row of (priorSchedulesResult.data ?? []) as Array<{
-    asset_id: string
-    planned_depreciation: number | string
-  }>) {
+  for (const row of priorSchedules) {
     const v = Number(row.planned_depreciation) || 0
     priorAccumulated.set(row.asset_id, (priorAccumulated.get(row.asset_id) ?? 0) + v)
   }

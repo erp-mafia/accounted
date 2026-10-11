@@ -59,6 +59,16 @@ describe('resolveBookedJournalEntryIds', () => {
     ])
     expect(map.size).toBe(0)
   })
+
+  it('reads a long id list in slices of 200, so the uncapped inbox list never outgrows one in() filter', async () => {
+    const { supabase, findCalls } = createQueuedMockSupabase()
+    const ids = Array.from({ length: 450 }, (_, i) => `tx-${i}`)
+
+    await resolveBookedJournalEntryIds(supabase as unknown as SupabaseClient, COMPANY, ids)
+
+    const slices = findCalls('transactions', 'in').map((a) => (a[1] as string[]).length)
+    expect(slices).toEqual([200, 200, 50])
+  })
 })
 
 describe('propagateUnderlagForBookedTransaction', () => {

@@ -21,7 +21,8 @@
  * gnubok_bulk_book_transactions stages the same RPC through its own
  * hand-written preview and commit executor (through the same engine door),
  * and runs the same dimension policy (enforceBulkBookDimensionPolicy below)
- * at stage and at commit.
+ * and duplicate guard (runBulkBookDuplicateGuard below) at stage and at
+ * commit.
  *
  * Rules before the RPC: every row belongs to the company; one currency, and
  * that currency SEK (the ledger columns are kronor and nothing here carries
@@ -55,7 +56,10 @@ import {
 } from '@/lib/bookkeeping/dimension-rules'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
-import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import {
+  detectBookingDuplicate,
+  type BookedDuplicateCandidate,
+} from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { eventBus } from '@/lib/events/bus'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -151,88 +155,23 @@ export async function bulkBookTransactions(
   // single-row flows book those.
   if (currency !== 'SEK') return { ok: false, code: 'BULK_BOOK_FOREIGN_CURRENCY', details: { currency } }
 
-  // Booking-time duplicate guard, parity with /categorize and /book. The
-  // OTHER selected rows and the link-existing target are the batch's own, so
-  // they never flag. Checked in tx_ids order so the flagged row is
-  // deterministic; a detection failure never blocks.
-  const txById = new Map(txTyped.map((tx) => [tx.id, tx]))
-  const duplicateExclusions = {
-    excludeTransactionIds: body.tx_ids,
-    excludeJournalEntryIds: body.existing_journal_entry_id ? [body.existing_journal_entry_id] : [],
-  }
-  const detectForTx = (tx: SelectedTx) =>
-    detectBookingDuplicate(
-      supabase,
-      companyId,
-      {
-        id: tx.id,
-        date: tx.date,
-        amount: tx.amount,
-        currency: tx.currency ?? null,
-        amount_sek: tx.amount_sek ?? null,
-        exchange_rate: tx.exchange_rate ?? null,
-        cash_account_id: tx.cash_account_id ?? null,
-      },
-      duplicateExclusions,
-    )
-  if (body.force !== true) {
-    for (const txId of body.tx_ids) {
-      const tx = txById.get(txId)
-      if (!tx) continue
-      let candidate = null
-      try {
-        candidate = await detectForTx(tx)
-      } catch (err) {
-        opLog.warn('bulk-book duplicate detection failed (continuing)', { err, txId })
-      }
-      if (candidate) {
-        return {
-          ok: false,
-          code: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE',
-          details: { candidate, transaction_id: txId } as unknown as Record<string, unknown>,
-        }
-      }
-    }
-  } else if (!options.dryRun) {
-    // force=true bypassed the guard: every dismissed candidate gets a
-    // durable behandlingshistorik record (BFNAR 2013:2 kap 8). Best-effort.
-    for (const txId of body.tx_ids) {
-      const tx = txById.get(txId)
-      if (!tx) continue
-      try {
-        const dismissed = await detectForTx(tx)
-        if (!dismissed) continue
-        opLog.warn('bulk-book duplicate guard bypassed', {
-          reason: 'force=true',
-          txId,
-          dismissedJournalEntryId: dismissed.journal_entry_id,
-        })
-        await appendProcessingHistory({
-          companyId,
-          correlationId: txId,
-          aggregateType: 'BankTransaction',
-          aggregateId: txId,
-          eventType: 'BankTransactionDuplicateDismissed',
-          payload: {
-            transaction_id: txId,
-            dismissed_transaction_id: dismissed.transaction_id,
-            dismissed_journal_entry_id: dismissed.journal_entry_id,
-            // Null when the candidate's SEK value could not be established.
-            amount_ore: dismissed.amount != null ? Math.round(dismissed.amount * 100) : null,
-            dismissed_currency: dismissed.currency,
-            dismissed_amount_in_currency: dismissed.amount_in_currency,
-            entry_date: dismissed.entry_date,
-            amount_verified: dismissed.amount_verified,
-            unverified_reason: dismissed.unverified_reason,
-            via: options.via ?? 'bulk_book_force',
-          },
-          actor: { type: 'user', id: userId },
-          occurredAt: new Date(),
-        })
-      } catch (err) {
-        opLog.error('failed to append duplicate-dismissal behandlingshistorik', err as Error)
-      }
-    }
+  // Booking-time duplicate guard, parity with /categorize and /book.
+  const duplicate = await runBulkBookDuplicateGuard(
+    supabase,
+    companyId,
+    userId,
+    txTyped,
+    {
+      txIds: body.tx_ids,
+      existingJournalEntryId: body.existing_journal_entry_id ?? null,
+      force: body.force === true,
+      recordDismissal: !options.dryRun,
+      via: options.via ?? 'bulk_book_force',
+    },
+    opLog,
+  )
+  if (!duplicate.ok) {
+    return { ok: false, code: duplicate.code, details: duplicate.details as unknown as Record<string, unknown> }
   }
 
   let newEntryPayload: { description: string; lines: ComputedLine[] } | null = null
@@ -474,6 +413,125 @@ export async function enforceBulkBookDimensionPolicy<
   await validateEntryDimensions(supabase, companyId, ruled)
   if (rules && rules.length > 0) assertMandatoryDimensions(ruled, rules)
   return ruled
+}
+
+export type BulkBookDuplicateTx = Pick<
+  Transaction,
+  'id' | 'amount' | 'currency' | 'date' | 'amount_sek' | 'exchange_rate' | 'cash_account_id'
+>
+
+export type BulkBookDuplicateGuardResult =
+  | { ok: true }
+  | {
+      ok: false
+      code: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE'
+      details: { candidate: BookedDuplicateCandidate; transaction_id: string }
+    }
+
+/**
+ * The booking-time duplicate guard every bulk-book door runs before
+ * bulk_book_transactions: the dashboard and v1 through bulkBookTransactions
+ * above, the MCP tool at stage and its executor at commit (another verifikat
+ * may book the same bank line between the two). The RPC itself only refuses a
+ * row that already has a verifikat, so without this a door could book a bank
+ * line the ledger already books (a supplier invoice marked paid, a manual
+ * voucher, a booked sibling row) a second time.
+ *
+ * The OTHER selected rows and the link-existing target are the batch's own,
+ * so they never flag. Checked in txIds order so the flagged row is
+ * deterministic; a detection failure never blocks. force=true skips the
+ * refusal; with recordDismissal every dismissed candidate gets a durable
+ * behandlingshistorik record (BFNAR 2013:2 kap 8), best-effort.
+ */
+export async function runBulkBookDuplicateGuard(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  txs: BulkBookDuplicateTx[],
+  opts: {
+    txIds: string[]
+    existingJournalEntryId: string | null
+    force: boolean
+    recordDismissal: boolean
+    via: string
+  },
+  log: Pick<Logger, 'warn' | 'error'>,
+): Promise<BulkBookDuplicateGuardResult> {
+  const txById = new Map(txs.map((tx) => [tx.id, tx]))
+  const exclusions = {
+    excludeTransactionIds: opts.txIds,
+    excludeJournalEntryIds: opts.existingJournalEntryId ? [opts.existingJournalEntryId] : [],
+  }
+  const detectForTx = (tx: BulkBookDuplicateTx) =>
+    detectBookingDuplicate(
+      supabase,
+      companyId,
+      {
+        id: tx.id,
+        date: tx.date,
+        amount: tx.amount,
+        currency: tx.currency ?? null,
+        amount_sek: tx.amount_sek ?? null,
+        exchange_rate: tx.exchange_rate ?? null,
+        cash_account_id: tx.cash_account_id ?? null,
+      },
+      exclusions,
+    )
+  if (!opts.force) {
+    for (const txId of opts.txIds) {
+      const tx = txById.get(txId)
+      if (!tx) continue
+      let candidate = null
+      try {
+        candidate = await detectForTx(tx)
+      } catch (err) {
+        log.warn('bulk-book duplicate detection failed (continuing)', { err, txId })
+      }
+      if (candidate) {
+        return { ok: false, code: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE', details: { candidate, transaction_id: txId } }
+      }
+    }
+    return { ok: true }
+  }
+  if (!opts.recordDismissal) return { ok: true }
+  for (const txId of opts.txIds) {
+    const tx = txById.get(txId)
+    if (!tx) continue
+    try {
+      const dismissed = await detectForTx(tx)
+      if (!dismissed) continue
+      log.warn('bulk-book duplicate guard bypassed', {
+        reason: 'force=true',
+        txId,
+        dismissedJournalEntryId: dismissed.journal_entry_id,
+      })
+      await appendProcessingHistory({
+        companyId,
+        correlationId: txId,
+        aggregateType: 'BankTransaction',
+        aggregateId: txId,
+        eventType: 'BankTransactionDuplicateDismissed',
+        payload: {
+          transaction_id: txId,
+          dismissed_transaction_id: dismissed.transaction_id,
+          dismissed_journal_entry_id: dismissed.journal_entry_id,
+          // Null when the candidate's SEK value could not be established.
+          amount_ore: dismissed.amount != null ? Math.round(dismissed.amount * 100) : null,
+          dismissed_currency: dismissed.currency,
+          dismissed_amount_in_currency: dismissed.amount_in_currency,
+          entry_date: dismissed.entry_date,
+          amount_verified: dismissed.amount_verified,
+          unverified_reason: dismissed.unverified_reason,
+          via: opts.via,
+        },
+        actor: { type: 'user', id: userId },
+        occurredAt: new Date(),
+      })
+    } catch (err) {
+      log.error('failed to append duplicate-dismissal behandlingshistorik', err as Error)
+    }
+  }
+  return { ok: true }
 }
 
 /** btl_select: system templates, the company's own, and the user's teams'. */

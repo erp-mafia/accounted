@@ -196,7 +196,7 @@ describe('the operations', () => {
       providerAuthorisationId: 'auth-1',
       method: 'qr',
       state: 'pending',
-      challenge: { approach: 'decoupled', autostartToken: 'tok', qrData: 'bankid.qr', redirectUrl: null },
+      challenge: { approach: 'decoupled', autostartToken: 'tok', qrData: 'bankid.qr', qrImage: null, redirectUrl: null },
       failureCode: null,
     })
     expect(sentUrl(first)).toBe('https://connect.example.se/api/connect/payments/signings')

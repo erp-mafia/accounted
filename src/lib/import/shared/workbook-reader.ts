@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx'
+import type { WorkBook } from 'xlsx'
 import { decodeFileContent } from './encoding'
 
 /**
@@ -12,8 +12,11 @@ import { decodeFileContent } from './encoding'
  * mangles UTF-8 multi-byte sequences (e.g. Ö → Ã–). We instead detect the
  * source encoding (UTF-8 with optional BOM, or Windows-1252) and decode to
  * a string before handing it to xlsx as `type: 'string'`.
+ *
+ * xlsx is imported here, when a file is read, not at module load.
  */
-export function readWorkbookFromBuffer(buffer: ArrayBuffer, filename: string): XLSX.WorkBook {
+export async function readWorkbookFromBuffer(buffer: ArrayBuffer, filename: string): Promise<WorkBook> {
+  const XLSX = await import('xlsx')
   const ext = filename.toLowerCase().split('.').pop() ?? ''
   if (ext === 'csv') {
     const content = decodeFileContent(buffer)
@@ -29,11 +32,12 @@ export function readWorkbookFromBuffer(buffer: ArrayBuffer, filename: string): X
  * the header sheet isn't the first one). Returns rows as a 2D string array
  * with the header row included; cells default to empty string.
  */
-export function readBestSheet(
+export async function readBestSheet(
   buffer: ArrayBuffer,
   filename: string,
-): { sheetName: string; rawData: string[][] } {
-  const workbook = readWorkbookFromBuffer(buffer, filename)
+): Promise<{ sheetName: string; rawData: string[][] }> {
+  const XLSX = await import('xlsx')
+  const workbook = await readWorkbookFromBuffer(buffer, filename)
 
   let bestSheet = workbook.SheetNames[0]
   let bestRowCount = 0

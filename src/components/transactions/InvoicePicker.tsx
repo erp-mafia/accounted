@@ -22,6 +22,10 @@ import {
   expectedRotRutPayoutAmount,
   OPEN_ROT_RUT_PAYOUT_STATUSES,
 } from '@/lib/invoices/rot-rut-payout-matching'
+import { PICKER_LIMIT, searchOpenInvoices } from '@/lib/invoices/open-invoice-search'
+
+/** Pause after the last keystroke before the search goes to the database. */
+const SEARCH_DEBOUNCE_MS = 250
 
 type OpenInvoice = Invoice & { customer?: Customer }
 
@@ -55,15 +59,29 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
   const tInvoices = useTranslations('invoices')
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
+  // Rows for the applied search term (the newest open invoices without one).
   const [invoices, setInvoices] = useState<OpenInvoice[]>([])
+  // Whether the request came back full: older rows exist past the limit.
+  const [capped, setCapped] = useState(false)
+  // Whether the company has any open invoice at all (the unsearched load):
+  // decides between the empty state and the search box.
+  const [hasOpenInvoices, setHasOpenInvoices] = useState(false)
   const [rotRutRequests, setRotRutRequests] = useState<PotentialRotRutPayoutRequest[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [isSearching, setIsSearching] = useState(false)
   const [search, setSearch] = useState('')
+  // The term the database was asked for, trailing the input by a short pause.
+  const [appliedSearch, setAppliedSearch] = useState('')
   // Begäran ticked for a bundled handoff; empty until the user ticks one.
   const [pickedRequestIds, setPickedRequestIds] = useState<ReadonlySet<string>>(() => new Set())
   // Boolean, not the callback: a fresh function identity per parent render
   // must not refetch the list.
   const wantRotRutRequests = !!onSelectRotRutPayout
+
+  useEffect(() => {
+    const handle = setTimeout(() => setAppliedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(handle)
+  }, [search])
 
   useEffect(() => {
     if (!company) return
@@ -74,110 +92,111 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
     const companyId = company.id
     let cancelled = false
     async function load() {
-      setIsLoading(true)
-      // Filter out fully-settled invoices defensively: match-invoice should
-      // flip status to 'paid' on full settlement, but a stale 'sent'/'overdue'
-      // row with remaining_amount=0 would otherwise be selectable here and
-      // could be matched a second time, double-booking the income.
-      // Also exclude proformas (PF- series): proforma is not a faktura per
-      // ML 17 kap 24§, has no VAT obligation, and must never be matched
-      // against a bank receipt or trigger a verifikation.
-      const { data } = await supabase
-        .from('invoices')
-        .select('*, customer:customers(*)')
-        .eq('company_id', companyId)
-        .eq('document_type', 'invoice')
-        .is('credited_invoice_id', null)
-        .in('status', ['sent', 'overdue', 'partially_paid'])
-        .gt('remaining_amount', 0)
-        .order('invoice_date', { ascending: false })
-        .limit(200)
-      if (cancelled) return
-      const all = (data as OpenInvoice[]) || []
-
-      // Status-leak guard: if an invoice still says 'sent'/'overdue' but
-      // already has a payment voucher attached (manual or system), hide it.
-      // Partially-paid invoices intentionally pass through: they may take
-      // more payments. Mirrors the server-side filter in findMatchingInvoices.
-      const fullIds = all
-        .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
-        .map((inv) => inv.id)
-      let visible = all
-      if (fullIds.length > 0) {
-        const { data: paid } = await supabase
-          .from('invoice_payments')
-          .select('invoice_id')
-          .eq('company_id', companyId)
-          .in('invoice_id', fullIds)
-          .not('journal_entry_id', 'is', null)
+      if (appliedSearch) setIsSearching(true)
+      else setIsLoading(true)
+      try {
+        // The search runs in the database across every open invoice: the
+        // newest-first list is capped, so filtering it here could never find
+        // an older open invoice. Settled, credited and proforma rows are
+        // excluded there (lib/invoices/open-invoice-search).
+        const all = await searchOpenInvoices<OpenInvoice>(supabase, companyId, appliedSearch)
         if (cancelled) return
-        const paidSet = new Set<string>(
-          ((paid as { invoice_id: string }[] | null) ?? []).map((r) => r.invoice_id),
-        )
-        visible = all.filter((inv) => !paidSet.has(inv.id))
-      }
 
-      // Open ROT/RUT begäran: the manual fallback when the SKV payout got no
-      // auto-hint (amount differs from the request, or the row predates the
-      // hint). Non-fatal: the invoice list renders either way.
-      if (wantRotRutRequests) {
-        const { data: requests } = await supabase
-          .from('rot_rut_payout_requests')
-          .select(
-            'id, name, deduction_type, status, requested_total, decided_total, settlement_journal_entry_id, items:rot_rut_payout_request_items(requested_amount, invoice:invoices(invoice_number))',
+        // Status-leak guard: if an invoice still says 'sent'/'overdue' but
+        // already has a payment voucher attached (manual or system), hide it.
+        // Partially-paid invoices intentionally pass through: they may take
+        // more payments. Mirrors the server-side filter in findMatchingInvoices.
+        const fullIds = all
+          .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
+          .map((inv) => inv.id)
+        let visible = all
+        if (fullIds.length > 0) {
+          const { data: paid } = await supabase
+            .from('invoice_payments')
+            .select('invoice_id')
+            .eq('company_id', companyId)
+            .in('invoice_id', fullIds)
+            .not('journal_entry_id', 'is', null)
+          if (cancelled) return
+          const paidSet = new Set<string>(
+            ((paid as { invoice_id: string }[] | null) ?? []).map((r) => r.invoice_id),
           )
-          .eq('company_id', companyId)
-          .in('status', [...OPEN_ROT_RUT_PAYOUT_STATUSES])
-          .is('settlement_journal_entry_id', null)
-          .order('created_at', { ascending: false })
-        if (cancelled) return
-        setRotRutRequests(
-          ((requests as RotRutRequestRow[] | null) ?? []).map((req) => ({
-            id: req.id,
-            name: req.name,
-            deduction_type: req.deduction_type,
-            status: req.status,
-            requested_total: req.requested_total,
-            decided_total: req.decided_total,
-            settlement_journal_entry_id: req.settlement_journal_entry_id,
-            invoices: (req.items ?? []).map((item) => {
-              const inv = Array.isArray(item.invoice) ? item.invoice[0] : item.invoice
-              return { invoice_number: inv?.invoice_number ?? null, requested_amount: item.requested_amount }
-            }),
-          })),
-        )
-      }
+          visible = all.filter((inv) => !paidSet.has(inv.id))
+        }
 
-      setInvoices(visible)
-      setIsLoading(false)
+        setInvoices(visible)
+        setCapped(all.length >= PICKER_LIMIT)
+        if (!appliedSearch) setHasOpenInvoices(visible.length > 0)
+      } catch {
+        if (cancelled) return
+        setInvoices([])
+        setCapped(false)
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false)
+          setIsSearching(false)
+        }
+      }
     }
     load()
     return () => {
       cancelled = true
     }
+  }, [company, supabase, appliedSearch])
+
+  useEffect(() => {
+    // Open ROT/RUT begäran: the manual fallback when the SKV payout got no
+    // auto-hint (amount differs from the request, or the row predates the
+    // hint). Non-fatal: the invoice list renders either way.
+    if (!company || !wantRotRutRequests) return
+    const companyId = company.id
+    let cancelled = false
+    async function loadRotRutRequests() {
+      const { data: requests } = await supabase
+        .from('rot_rut_payout_requests')
+        .select(
+          'id, name, deduction_type, status, requested_total, decided_total, settlement_journal_entry_id, items:rot_rut_payout_request_items(requested_amount, invoice:invoices(invoice_number))',
+        )
+        .eq('company_id', companyId)
+        .in('status', [...OPEN_ROT_RUT_PAYOUT_STATUSES])
+        .is('settlement_journal_entry_id', null)
+        .order('created_at', { ascending: false })
+      if (cancelled) return
+      setRotRutRequests(
+        ((requests as RotRutRequestRow[] | null) ?? []).map((req) => ({
+          id: req.id,
+          name: req.name,
+          deduction_type: req.deduction_type,
+          status: req.status,
+          requested_total: req.requested_total,
+          decided_total: req.decided_total,
+          settlement_journal_entry_id: req.settlement_journal_entry_id,
+          invoices: (req.items ?? []).map((item) => {
+            const inv = Array.isArray(item.invoice) ? item.invoice[0] : item.invoice
+            return { invoice_number: inv?.invoice_number ?? null, requested_amount: item.requested_amount }
+          }),
+        })),
+      )
+    }
+    loadRotRutRequests()
+    return () => {
+      cancelled = true
+    }
   }, [company, supabase, wantRotRutRequests])
 
-  const sorted = useMemo(() => {
-    const filtered = !search
-      ? invoices
-      : invoices.filter((inv) => {
-          const q = search.toLowerCase()
-          return (
-            (inv.invoice_number ?? '').toLowerCase().includes(q) ||
-            (inv.customer?.name ?? '').toLowerCase().includes(q)
-          )
-        })
-
-    // Amount proximity is only meaningful between comparable amounts: ranking
-    // a 1 000 EUR invoice as a perfect hit for a 1 000 SEK deposit put the
-    // wrong row first. Foreign invoices stay in the list either way; see
-    // ./invoice-candidate-ranking.
-    return rankInvoicesByAmountProximity(filtered, {
-      amount: transaction.amount,
-      currency: transaction.currency,
-      amountSek: transaction.amount_sek,
-    })
-  }, [invoices, search, transaction.amount, transaction.currency, transaction.amount_sek])
+  const sorted = useMemo(
+    () =>
+      // Amount proximity is only meaningful between comparable amounts: ranking
+      // a 1 000 EUR invoice as a perfect hit for a 1 000 SEK deposit put the
+      // wrong row first. Foreign invoices stay in the list either way; see
+      // ./invoice-candidate-ranking.
+      rankInvoicesByAmountProximity(invoices, {
+        amount: transaction.amount,
+        currency: transaction.currency,
+        amountSek: transaction.amount_sek,
+      }),
+    [invoices, transaction.amount, transaction.currency, transaction.amount_sek],
+  )
 
   if (isLoading) {
     return (
@@ -297,7 +316,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
       </div>
     ) : null
 
-  if (invoices.length === 0) {
+  if (!hasOpenInvoices) {
     return (
       <div className="space-y-3">
         {rotRutSection}
@@ -312,7 +331,11 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
     <div className="space-y-3">
       {rotRutSection}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        {isSearching ? (
+          <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+        ) : (
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        )}
         <Input
           placeholder={t('search_placeholder')}
           value={search}
@@ -394,7 +417,14 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
         })}
         {sorted.length === 0 && (
           <p className="text-center text-sm text-muted-foreground py-4">
-            {t('no_search_results', { term: search })}
+            {t('no_search_results', { term: appliedSearch })}
+          </p>
+        )}
+        {capped && (
+          <p className="text-center text-xs text-muted-foreground py-2">
+            {appliedSearch
+              ? t('capped_search_hint', { limit: PICKER_LIMIT })
+              : t('capped_hint', { limit: PICKER_LIMIT })}
           </p>
         )}
       </div>

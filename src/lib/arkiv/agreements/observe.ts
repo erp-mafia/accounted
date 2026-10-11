@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { coreKey, ledgerKey } from '@/lib/parties/ledger-key'
 import { addDays, daysBetween } from './dates'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Arkiv phase 4: did the expected money arrive? Obligations are compared
@@ -163,14 +164,20 @@ async function loadParties(supabase: SupabaseClient, ids: string[]): Promise<Par
 /** Unignored transactions around the obligations' due dates; the sign is checked per obligation's direction. */
 async function loadTransactions(supabase: SupabaseClient, companyId: string, obligations: ObligationRow[]): Promise<TransactionRow[]> {
   const dates = obligations.map((o) => o.due_on).sort()
-  const { data, error } = await supabase
-    .from('transactions')
-    .select('id, date, amount, currency, description, original_description, merchant_name')
-    .eq('company_id', companyId)
-    .eq('is_ignored', false)
-    .gte('date', addDays(dates[0], -DATE_TOLERANCE_DAYS))
-    .lte('date', addDays(dates[dates.length - 1], DATE_TOLERANCE_DAYS))
-    .limit(2000)
-  if (error) throw new Error(`transactions fetch failed: ${error.message}`)
-  return (data ?? []) as TransactionRow[]
+  // Paged: a payment past the first 1000 rows of the window would read as a missed one.
+  try {
+    return await fetchAllRows<TransactionRow>((range) =>
+      supabase
+        .from('transactions')
+        .select('id, date, amount, currency, description, original_description, merchant_name')
+        .eq('company_id', companyId)
+        .eq('is_ignored', false)
+        .gte('date', addDays(dates[0], -DATE_TOLERANCE_DAYS))
+        .lte('date', addDays(dates[dates.length - 1], DATE_TOLERANCE_DAYS))
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    )
+  } catch (error) {
+    throw new Error(`transactions fetch failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }

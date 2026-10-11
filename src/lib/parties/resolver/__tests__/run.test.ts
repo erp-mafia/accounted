@@ -116,6 +116,23 @@ describe('resolveCompanyCounterparts', () => {
     expect(inserted[0]).toMatchObject({ party_id: 'p-k', display_name: 'Kontorsplatser i Stockholm AB', source: 'ledger', band: 'link' })
   })
 
+  it('reads the whole register past the 1000-row page, so the 1001st party still links', async () => {
+    mock.enqueue({ data: [{ id: 't1', original_description: 'Kontorsplatser Oktober', description: 'Kontorsplatser Oktober', amount: -12000, currency: 'SEK', merchant_name: null }] })
+    mock.enqueue({ data: [] }) // live aliases
+    mock.enqueue({ data: [] }) // document hits
+    // register parties, first page: a full page of other parties
+    mock.enqueue({ data: Array.from({ length: 1000 }, (_, i) => ({ id: `p-${i}`, display_name: `Bolag ${i}`, alias_keys: [], status: 'confirmed' })) })
+    mock.enqueue({ data: [] }) // giro numbers, read in parallel with the register
+    // register parties, second page: the one the text was booked against
+    mock.enqueue({ data: [{ id: 'p-k', display_name: 'Kontorsplatser i Stockholm AB', alias_keys: [ledgerKey('Kontorsplatser Oktober')], status: 'confirmed' }] })
+    mock.enqueue({ data: [] }) // directory table
+    mock.enqueue({ data: null }) // insert
+    await resolveCompanyCounterparts(mock.supabase as unknown as SupabaseClient, COMPANY, { useModel: false })
+    expect(mock.findCalls('parties', 'range')).toEqual([[0, 999], [1000, 1999]])
+    const inserted = mock.findCall('counterparty_aliases', 'insert')?.[0] as Array<Record<string, unknown>>
+    expect(inserted[0]).toMatchObject({ party_id: 'p-k', source: 'ledger', band: 'link' })
+  })
+
   it('returns early when every string already has a live alias', async () => {
     mock.enqueue({ data: [{ id: 't1', original_description: 'SQSP  WORKSP', description: null, amount: -92, currency: 'SEK', merchant_name: null }] })
     mock.enqueue({ data: [{ alias_key: 'sqsp worksp' }] })

@@ -1,4 +1,3 @@
-import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { contentDisposition } from '@/lib/api/content-disposition'
@@ -8,7 +7,6 @@ import {
   salaryBankListErrorResponse,
   salaryBankListFileName,
 } from '@/lib/salary/payment/bank-list'
-import { SalaryBankListPDF } from '@/lib/salary/pdf/bank-list-template'
 
 /**
  * GET /api/salary/runs/{id}/payment/bank-list/pdf?format=pain001|bg_lb
@@ -31,6 +29,10 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
     if (!result.ok) return salaryBankListErrorResponse(result, log, requestId)
 
+    const [{ renderToBuffer }, { SalaryBankListPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/salary/pdf/bank-list-template'),
+    ])
     const buffer = await renderToBuffer(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       SalaryBankListPDF({ list: result.list, generatedAt: new Date().toISOString() }) as any,

@@ -10,7 +10,9 @@ type MatchAction =
 
 /**
  * Log a payment match event to the append-only audit trail.
- * Fire-and-forget: never throws, never blocks the caller.
+ * Never throws. Always await it: an un-awaited insert races the response,
+ * and a serverless function can freeze before the row lands
+ * (__tests__/match-log-awaited.test.ts).
  */
 export async function logMatchEvent(
   supabase: SupabaseClient,

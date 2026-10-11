@@ -38,7 +38,7 @@ export const GET = withRouteContext(
         return query.order('name', { ascending: true }).range(from, to)
       })) as unknown as Article[]
 
-      const { buffer, contentType, filename } = buildRegisterExport(
+      const { buffer, contentType, filename } = await buildRegisterExport(
         [
           {
             name: 'Artiklar',

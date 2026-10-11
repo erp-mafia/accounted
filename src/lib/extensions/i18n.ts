@@ -7,73 +7,46 @@
 // For known slugs, return the translation key under the `extensions` namespace.
 // For unknown slugs, return null: callers fall back to the manifest values.
 
+/**
+ * Extensions whose name and descriptions are translated under the
+ * `extensions` namespace as ext_<slug, dashes as underscores>_name,
+ * _description and _long_description. Every enabled extension must be here
+ * (lib/extensions/__tests__/i18n.test.ts), or an English UI shows its
+ * Swedish manifest text.
+ */
+const TRANSLATED_EXTENSIONS = new Set([
+  'enable-banking',
+  'email',
+  'arcim-migration',
+  'tic',
+  'mcp-server',
+  'cloud-backup',
+  'skatteverket',
+  'invoice-inbox',
+  'calendar',
+  'document-extraction',
+  'stripe',
+  'whatsapp-inbox',
+  'woocommerce',
+  'shopify',
+  'zettle',
+  'mail',
+])
+
+function extensionKey(slug: string, field: 'name' | 'description' | 'long_description'): string | null {
+  return TRANSLATED_EXTENSIONS.has(slug) ? `ext_${slug.replace(/-/g, '_')}_${field}` : null
+}
+
 export function extensionNameKey(slug: string): string | null {
-  switch (slug) {
-    case 'enable-banking':
-      return 'ext_enable_banking_name'
-    case 'email':
-      return 'ext_email_name'
-    case 'arcim-migration':
-      return 'ext_arcim_migration_name'
-    case 'tic':
-      return 'ext_tic_name'
-    case 'mcp-server':
-      return 'ext_mcp_server_name'
-    case 'cloud-backup':
-      return 'ext_cloud_backup_name'
-    case 'skatteverket':
-      return 'ext_skatteverket_name'
-    case 'invoice-inbox':
-      return 'ext_invoice_inbox_name'
-    default:
-      return null
-  }
+  return extensionKey(slug, 'name')
 }
 
 export function extensionDescriptionKey(slug: string): string | null {
-  switch (slug) {
-    case 'enable-banking':
-      return 'ext_enable_banking_description'
-    case 'email':
-      return 'ext_email_description'
-    case 'arcim-migration':
-      return 'ext_arcim_migration_description'
-    case 'tic':
-      return 'ext_tic_description'
-    case 'mcp-server':
-      return 'ext_mcp_server_description'
-    case 'cloud-backup':
-      return 'ext_cloud_backup_description'
-    case 'skatteverket':
-      return 'ext_skatteverket_description'
-    case 'invoice-inbox':
-      return 'ext_invoice_inbox_description'
-    default:
-      return null
-  }
+  return extensionKey(slug, 'description')
 }
 
 export function extensionLongDescriptionKey(slug: string): string | null {
-  switch (slug) {
-    case 'enable-banking':
-      return 'ext_enable_banking_long_description'
-    case 'email':
-      return 'ext_email_long_description'
-    case 'arcim-migration':
-      return 'ext_arcim_migration_long_description'
-    case 'tic':
-      return 'ext_tic_long_description'
-    case 'mcp-server':
-      return 'ext_mcp_server_long_description'
-    case 'cloud-backup':
-      return 'ext_cloud_backup_long_description'
-    case 'skatteverket':
-      return 'ext_skatteverket_long_description'
-    case 'invoice-inbox':
-      return 'ext_invoice_inbox_long_description'
-    default:
-      return null
-  }
+  return extensionKey(slug, 'long_description')
 }
 
 export function sectorNameKey(slug: string): string | null {

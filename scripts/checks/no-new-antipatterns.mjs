@@ -146,6 +146,13 @@
  *      keeps lib/init out of the cold start of routes that never emit.
  *      Implementation and rationale in event-route-init.mjs. Allowlisted
  *      file-set, may only shrink.
+ *   16. limit-above-page: a PostgREST `.limit(N)` with N above 1000. max-rows
+ *      answers it with 1000 rows and no error, so the written cap is a silent
+ *      1000 (the Arkiv graph, facts and lint, the counterparty resolver and the
+ *      pärm's attachments all summed or matched over a cut list, 2026-10).
+ *      Page with fetchAllRows (its maxRows keeps a deliberate cap) or read an
+ *      aggregate. Implementation and rationale in limit-above-page.mjs.
+ *      Allowlisted file-set, may only shrink.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -179,6 +186,7 @@ import {
   findUninitializedEmittingRoutes,
   UNINITIALIZED_EMITTING_ROUTES,
 } from './event-route-init.mjs'
+import { findLimitsAbovePage, LIMIT_ABOVE_PAGE_ALLOWED } from './limit-above-page.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SOURCE_ROOT = path.join(ROOT, 'src')
@@ -1154,6 +1162,7 @@ const current = {
   literalLegalForm: findLiteralLegalForms(SOURCE_ROOT),
   uiUniformity: findUiUniformityFindings(SOURCE_ROOT),
   tableWithoutGrant: findTablesWithoutGrant(ROOT),
+  limitsAbovePage: findLimitsAbovePage(SOURCE_ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1485,6 +1494,26 @@ if (newUngatedRoutes.length) {
   )
 }
 
+// 1g2. limit-above-page: allowlist lives in limit-above-page.mjs
+// (LIMIT_ABOVE_PAGE_ALLOWED) and may only shrink. PostgREST cuts every read
+// at 1000 rows without an error, so a larger .limit() is a silent 1000.
+const newLimitsAbovePage = current.limitsAbovePage.filter((f) => !LIMIT_ABOVE_PAGE_ALLOWED.has(f.file))
+const limitAbovePageFilesNow = new Set(current.limitsAbovePage.map((f) => f.file))
+const pagedSinceBaseline = [...LIMIT_ABOVE_PAGE_ALLOWED].filter((f) => !limitAbovePageFilesNow.has(f))
+if (newLimitsAbovePage.length) {
+  failed = true
+  console.error(
+    `\n✗ limit-above-page: ${newLimitsAbovePage.length} .limit() call(s) above 1000 rows, which PostgREST ` +
+      `silently answers with 1000:`,
+  )
+  newLimitsAbovePage.forEach((f) => console.error(`    ${f.file}:${f.line}  .limit(${f.arg}) = ${f.limit}`))
+  console.error(
+    '  → page with fetchAllRows (lib/supabase/fetch-all.ts) after an .order() on a unique column; pass\n' +
+      '    { maxRows } to keep a deliberate cap. Read an aggregate for a sum or a count. A sample stays at\n' +
+      '    .limit(1000) or below, with a comment saying it is a sample.',
+  )
+}
+
 // 1h. uninitialized-event-route: allowlist lives in event-route-init.mjs
 // (UNINITIALIZED_EMITTING_ROUTES) and may only shrink. The bus drops an event
 // that has no handler, so a route that can emit must have run
@@ -1710,6 +1739,14 @@ if (gatedSinceBaseline.length) {
   gatedSinceBaseline.forEach((f) => console.log(`    ${f}`))
 }
 
+if (pagedSinceBaseline.length) {
+  console.log(
+    `\n✓ limit-above-page progress: ${pagedSinceBaseline.length} allowlisted file(s) no longer read past a page with .limit().` +
+      ' Remove them from LIMIT_ABOVE_PAGE_ALLOWED in scripts/checks/limit-above-page.mjs to lock it in:',
+  )
+  pagedSinceBaseline.forEach((f) => console.log(`    ${f}`))
+}
+
 if (initializedSinceBaseline.length) {
   console.log(
     `\n✓ uninitialized-event-route progress: ${initializedSinceBaseline.length} allowlisted route(s) now wire the bus or no longer emit.` +
@@ -1723,5 +1760,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, uninitialized-event-route: ${current.eventRouteInit.uninitialized.length}/${UNINITIALIZED_EMITTING_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, uninitialized-event-route: ${current.eventRouteInit.uninitialized.length}/${UNINITIALIZED_EMITTING_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s)).`,
 )

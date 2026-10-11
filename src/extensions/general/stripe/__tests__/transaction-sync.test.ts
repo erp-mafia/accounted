@@ -22,6 +22,7 @@ vi.mock('@/lib/import/account-sync', () => ({
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
+import { eventBus } from '@/lib/events/bus'
 import {
   STRIPE_IMPORT_SOURCE,
   STRIPE_LEDGER_ACCOUNT,
@@ -150,6 +151,7 @@ function listWindowGte(): number {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  eventBus.clear()
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-07-23T10:00:00.000Z'))
   vi.mocked(ingestTransactions).mockResolvedValue({
@@ -547,11 +549,15 @@ describe('syncStripeBalanceTransactions', () => {
     expect(vi.mocked(ingestTransactions)).not.toHaveBeenCalled()
   })
 
-  it('reports a revoked connection without throwing', async () => {
+  it('marks a connection revoked upstream as revoked and audits it', async () => {
+    // The nightly feed is the only sync that runs: if it only reported the
+    // revocation, the connection would stay "active" in settings forever.
     balanceTransactionsList.mockImplementation(() => ({
       autoPagingToArray: vi.fn().mockRejectedValue({ type: 'StripePermissionError' }),
     }))
-    const { supabase } = createCaptureSupabase({
+    const disconnected = vi.fn()
+    eventBus.on('stripe.disconnected', disconnected)
+    const { supabase, queriesFor, op } = createCaptureSupabase({
       company_settings: [{ data: null, error: null }],
     })
 
@@ -559,6 +565,62 @@ describe('syncStripeBalanceTransactions', () => {
 
     expect(summary.revoked).toBe(true)
     expect(summary.fetched).toBe(0)
+    expect(vi.mocked(ingestTransactions)).not.toHaveBeenCalled()
+
+    const updates = queriesFor('stripe_connections').filter((q) => op(q, 'update'))
+    expect(updates).toHaveLength(1)
+    expect(op(updates[0], 'update')!.args[0]).toEqual({
+      status: 'revoked',
+      disconnected_at: '2026-07-23T10:00:00.000Z',
+      error_message: 'Åtkomsten återkallades hos Stripe.',
+    })
+    expect(op(updates[0], 'eq')!.args).toEqual(['id', 'conn-1'])
+
+    expect(disconnected).toHaveBeenCalledWith({
+      connectionId: 'conn-1',
+      stripeAccountId: 'acct_1',
+      reason: 'revoked_upstream',
+      userId: 'user-1',
+      companyId: 'company-1',
+    })
+  })
+
+  it('still marks the connection revoked when the audit event fails', async () => {
+    balanceTransactionsList.mockImplementation(() => ({
+      autoPagingToArray: vi.fn().mockRejectedValue({ code: 'account_invalid' }),
+    }))
+    eventBus.on('stripe.disconnected', () => {
+      throw new Error('audit down')
+    })
+    const { supabase, queriesFor, op } = createCaptureSupabase({
+      company_settings: [{ data: null, error: null }],
+    })
+
+    const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
+
+    expect(summary.revoked).toBe(true)
+    const updates = queriesFor('stripe_connections').filter((q) => op(q, 'update'))
+    expect(updates).toHaveLength(1)
+    expect(op(updates[0], 'update')!.args[0]).toMatchObject({ status: 'revoked' })
+  })
+
+  it('leaves the connection alone on an error that is not a revocation', async () => {
+    balanceTransactionsList.mockImplementation(() => ({
+      autoPagingToArray: vi.fn().mockRejectedValue(
+        Object.assign(new Error('Invalid API Key provided'), { type: 'StripeAuthenticationError' }),
+      ),
+    }))
+    const disconnected = vi.fn()
+    eventBus.on('stripe.disconnected', disconnected)
+    const { supabase, queriesFor } = createCaptureSupabase({
+      company_settings: [{ data: null, error: null }],
+    })
+
+    await expect(syncStripeBalanceTransactions(supabase, { ...CONNECTION })).rejects.toThrow(
+      'Invalid API Key provided',
+    )
+    expect(queriesFor('stripe_connections')).toHaveLength(0)
+    expect(disconnected).not.toHaveBeenCalled()
   })
 
   it('does nothing for a non-active connection', async () => {

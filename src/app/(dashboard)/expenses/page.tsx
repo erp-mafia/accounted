@@ -49,6 +49,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { CURRENCIES, type BookingTemplateLibrary } from '@/types'
 
 interface ExpenseClaim {
@@ -128,7 +129,6 @@ const isExpenseLibraryTemplate = (tpl: BookingTemplateWithUsage) => {
   return true
 }
 
-const UPLOAD_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.heic'
 /** Deferred inbox extraction usually lands within ~20 s; stop polling after this. */
 const EXTRACTION_POLL_LIMIT_MS = 90_000
 const EXTRACTION_POLL_INTERVAL_MS = 3_000
@@ -1279,7 +1279,7 @@ export default function ExpenseClaimsPage() {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept={UPLOAD_ACCEPT}
+                      accept={INBOX_UPLOAD_ACCEPT}
                       className="hidden"
                       onChange={(e) => onFileChosen(e.target.files)}
                     />

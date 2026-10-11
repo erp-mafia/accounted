@@ -19,6 +19,7 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'invoice.created',
   'invoice.draft_deleted',
   'invoice.sent',
+  'invoice.cancelled',
   'credit_note.created',
   'transaction.synced',
   'transaction.categorized',

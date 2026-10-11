@@ -29,7 +29,7 @@ import { conflictCode, getErrorEntry, hasErrorEntry } from './structured-errors'
 import { FOREIGN_KEY_REFUSAL_CODES, foreignKeyRefusal } from './foreign-key-refusal'
 import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'
 
-type ErrorContext =
+export type ErrorContext =
   | 'invoice'
   | 'supplier_invoice'
   | 'customer'

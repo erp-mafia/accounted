@@ -107,7 +107,7 @@ export const GET = withRouteContext(
         total: report.net_total,
       })
 
-      const workbook = reportToWorkbook<FlatRow>([
+      const workbook = await reportToWorkbook<FlatRow>([
         {
           name: `Resultat per ${report.dimension.name}`.slice(0, 31),
           columns: [

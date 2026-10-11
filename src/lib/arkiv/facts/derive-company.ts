@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getCompanyGraph, markCompanyGraphStale } from '@/lib/arkiv/graph/snapshot'
 import { listLiveFacts, recordFact, revertFact } from './store'
 
@@ -213,16 +214,22 @@ export async function deriveCompanyFacts(supabase: SupabaseClient, companyId: st
       // A reversed original stays in the ledger and its storno cancels it; the reports sum both, so must the facts.
       .in('journal_entries.status', ['posted', 'reversed'])
   // Literal on purpose: the phantom-column guard can only check what it can read.
+  // Both line reads paged: revenue, salary cost and a loan balance are sums over every posting, and
+  // PostgREST cuts a single read at 1000 rows without saying so.
   const [recent, balance, employees, settings, company, banks, held] = await Promise.all([
-    base().gte('journal_entries.entry_date', from).or('and(account_number.gte.3000,account_number.lte.3799),and(account_number.gte.4000,account_number.lte.7999)').limit(20000),
-    base().or('and(account_number.gte.2310,account_number.lte.2399),and(account_number.gte.2840,account_number.lte.2849)').limit(5000),
+    fetchAllRows((range) =>
+      base().gte('journal_entries.entry_date', from).or('and(account_number.gte.3000,account_number.lte.3799),and(account_number.gte.4000,account_number.lte.7999)').order('id', { ascending: true }).range(range.from, range.to),
+    ),
+    fetchAllRows((range) =>
+      base().or('and(account_number.gte.2310,account_number.lte.2399),and(account_number.gte.2840,account_number.lte.2849)').order('id', { ascending: true }).range(range.from, range.to),
+    ),
     supabase.from('employees').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('is_active', true),
     supabase.from('company_settings').select('accounting_method, fiscal_year_start_month').eq('company_id', companyId).maybeSingle(),
     supabase.from('companies').select('tic_snapshot').eq('id', companyId).maybeSingle(),
     supabase.from('bank_connections').select('bank_name, created_at').eq('company_id', companyId).eq('status', 'active').is('superseded_by', null).limit(20),
     listLiveFacts(supabase, companyId, { kind: 'company', id: companyId }),
   ])
-  for (const r of [recent, balance, employees, settings, company, banks]) if (r.error) throw new Error(`company facts input failed: ${r.error.message}`)
+  for (const r of [employees, settings, company, banks]) if (r.error) throw new Error(`company facts input failed: ${r.error.message}`)
   const toLine = (r: { account_number: string | number; debit_amount: number | string | null; credit_amount: number | string | null; journal_entries: { entry_date: string } | Array<{ entry_date: string }> }): LedgerLine => {
     const je = Array.isArray(r.journal_entries) ? r.journal_entries[0] : r.journal_entries
     return { account_number: String(r.account_number), entry_date: je?.entry_date ?? '', debit: Number(r.debit_amount ?? 0), credit: Number(r.credit_amount ?? 0) }
@@ -233,7 +240,7 @@ export async function deriveCompanyFacts(supabase: SupabaseClient, companyId: st
   const s = (settings.data ?? null) as { accounting_method: 'accrual' | 'cash' | null; fiscal_year_start_month: number | null } | null
   const inputs: CompanyFactInputs = {
     today,
-    lines: [...((recent.data ?? []) as unknown[]), ...((balance.data ?? []) as unknown[])].map((r) => toLine(r as never)),
+    lines: [...(recent as unknown[]), ...(balance as unknown[])].map((r) => toLine(r as never)),
     accountName,
     activeEmployees: employees.count ?? null,
     accountingMethod: s?.accounting_method ?? null,

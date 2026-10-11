@@ -55,7 +55,7 @@ export const POST = withRouteContext(
 
     try {
       const buffer = await file.arrayBuffer()
-      const result = parseOpeningBalanceFile(buffer, file.name, columnOverrides)
+      const result = await parseOpeningBalanceFile(buffer, file.name, columnOverrides)
       return NextResponse.json({ data: result })
     } catch (err) {
       opLog.error('opening balance parse failed', err as Error)

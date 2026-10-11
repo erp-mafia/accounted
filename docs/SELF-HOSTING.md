@@ -78,7 +78,7 @@ cd accounted
 ./docker/setup.sh
 ```
 
-The script checks prerequisites, prompts for your Supabase credentials, auto-generates `CRON_SECRET`, and writes everything to `.env`.
+The script checks prerequisites, prompts for your Supabase credentials, auto-generates `CRON_SECRET` and `PERSONNUMMER_ENCRYPTION_KEY`, and writes everything to `.env`. Run again, it never replaces an existing `PERSONNUMMER_ENCRYPTION_KEY`, also when you let it overwrite `.env`; when you keep `.env` it only adds the key if the file has none.
 
 **Option B: Manual:**
 
@@ -97,7 +97,10 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 NEXT_PUBLIC_APP_URL=https://your-domain.com
 CRON_SECRET=<generate with: openssl rand -hex 32>
+PERSONNUMMER_ENCRYPTION_KEY=<generate with: openssl rand -hex 32>
 ```
+
+`PERSONNUMMER_ENCRYPTION_KEY` encrypts every stored personnummer (employees, customers, ROT/RUT invoices). Without it the app refuses to store one. Generate it once and never change it: personnummer encrypted with an earlier key cannot be read again. Back up `.env` together with the database.
 
 `NEXT_PUBLIC_APP_URL` must match your public-facing URL. It is used in invoice reminder emails, calendar feed links, and PSD2 callbacks. If left as a placeholder, links will be broken.
 
@@ -449,6 +452,18 @@ edits you still need into `docker-compose.override.yml`, discard the rest with
 `git checkout -- docker-compose.yml`, and run the three commands again. The
 current file no longer needs a tmpfs size for `/app/.next`.
 
+An `.env` written before setup.sh generated `PERSONNUMMER_ENCRYPTION_KEY` has
+none, and saving a personnummer then fails with "krypteringsnyckeln för
+personnummer (PERSONNUMMER_ENCRYPTION_KEY) saknas". Run
+`./docker/setup.sh` and answer `N` to the overwrite question: it adds a
+generated key to the existing `.env` and changes nothing else. Then run
+`docker compose up -d`.
+
+The image ships the booking-template catalogue (`packs/*.yaml`) that the
+nightly booking-template sync and the MCP booking-packs resource read. An image
+from before it did not, and that sync refused with "no packs found"; pulling a
+current image is all it needs.
+
 If a new release includes database migrations, apply them before restarting:
 
 ```bash
@@ -544,6 +559,7 @@ flowchart LR
    SUPABASE_SERVICE_ROLE_KEY=<SERVICE_ROLE_KEY from supabase .env>
    NEXT_PUBLIC_APP_URL=https://app.example.com
    CRON_SECRET=<openssl rand -hex 32>
+   PERSONNUMMER_ENCRYPTION_KEY=<openssl rand -hex 32, once; never change it>
    NEXT_PUBLIC_SELF_HOSTED=true
    ```
 

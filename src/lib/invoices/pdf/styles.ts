@@ -512,6 +512,12 @@ export function createStyles(branding?: InvoiceBranding) {
       fontSize: 8.5,
       textAlign: 'right',
     },
+    // The payment link reads as a value like the others, in the ink colour,
+    // underlined to show it can be clicked (not react-pdf's default web blue).
+    areaRowLink: {
+      color: INK,
+      textDecoration: 'underline',
+    },
     areaRowValueStrong: {
       flex: 1,
       fontSize: 8.5,

@@ -59,7 +59,7 @@ Stil i all text du skriver (verifieringsfrågor och notes): använd ALDRIG tanks
 Använd verktyget compose_agent_profile för att svara. Använd aldrig fritext.`
 
 export async function selectAtoms(inputs: ComposerInputs): Promise<AtomSelection> {
-  const anthropic = getAnthropic()
+  const anthropic = await getAnthropic()
 
   const userPrompt = buildUserPrompt(inputs)
 

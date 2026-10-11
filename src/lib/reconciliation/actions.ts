@@ -7,6 +7,7 @@ import { isUuid } from '@/lib/invariants/uuid'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { chunk } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   evaluateSkattekontoLink,
   linkSkattekontoRow,
@@ -413,15 +414,22 @@ async function proposalsAsPairs(
     return Array.from(pairsByEntry.values())
   }
   if (parsed.kind === 'bank') {
-    const { data } = await supabase
-      .from('transactions')
-      .select('id, potential_journal_entry_id, potential_match_confidence')
-      .eq('company_id', companyId)
-      .eq('cash_account_id', parsed.cashAccountId)
-      .is('journal_entry_id', null)
-      .eq('is_ignored', false)
-      .not('potential_journal_entry_id', 'is', null)
-    return ((data ?? []) as Array<{ id: string; potential_journal_entry_id: string; potential_match_confidence: number | string | null }>)
+    // Paged: past 1,000 open proposals the rest were silently left out.
+    const data = await fetchAllRows<{ id: string; potential_journal_entry_id: string; potential_match_confidence: number | string | null }>(
+      ({ from, to }) =>
+        supabase
+          .from('transactions')
+          .select('id, potential_journal_entry_id, potential_match_confidence')
+          .eq('company_id', companyId)
+          .eq('cash_account_id', parsed.cashAccountId)
+          .is('journal_entry_id', null)
+          .eq('is_ignored', false)
+          .not('potential_journal_entry_id', 'is', null)
+          .order('date')
+          .order('id')
+          .range(from, to),
+    )
+    return data
       .filter((r) => Number(r.potential_match_confidence ?? 0) >= threshold)
       .map((r) => ({ external_ids: [r.id], journal_entry_ids: [r.potential_journal_entry_id] }))
   }
@@ -548,14 +556,8 @@ export async function matchPairs(
         })
         continue
       }
-      if (journalEntryIds.length > 50) {
-        skipped.push({
-          pair,
-          code: 'UNSUPPORTED_PAIR_SHAPE',
-          message: 'En händelse kan delas på högst 50 verifikat.',
-        })
-        continue
-      }
+      // How many verifikat one row may split across is the engine's rule
+      // (MAX_BANK_ROW_SPLIT, refused as INVALID_SPLIT), not repeated here.
       // Explicit allocations must name exactly the pair's verifikat, once each.
       const given = pair.allocations
       if (given) {

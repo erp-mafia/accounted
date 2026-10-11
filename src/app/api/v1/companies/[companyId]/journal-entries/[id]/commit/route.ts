@@ -8,8 +8,8 @@
  * (no löpnummer gap per BFL 5 kap 7 §).
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable (the dry-run reports
- * the would-be voucher_number from `get_next_voucher_number` without
- * advancing the sequence).
+ * the would-be voucher_number read from voucher_sequences, without advancing
+ * the sequence).
  */
 
 import { z } from 'zod'
@@ -18,7 +18,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
-import { commitEntry, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
+import { commitEntry, peekNextVoucherNumber } from '@/lib/bookkeeping/engine'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -152,13 +152,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     if (ctx.dryRun) {
-      // Report the next voucher number WITHOUT advancing the sequence. The
-      // engine helper `getNextVoucherNumber` is a peek + increment; for a
-      // true dry-run we'd want a non-advancing peek. Project convention: the
-      // dry-run reports the PROJECTED number, with the caveat that a
-      // concurrent commit could advance the sequence between dry-run and
-      // commit: same caveat the dry-run.ts substrate documents.
-      const projectedNumber = await getNextVoucherNumber(
+      // Report the next voucher number WITHOUT advancing the sequence: a dry
+      // run that took a number would leave a gap in the löpnummer series. The
+      // number is a projection; a concurrent commit can take it between dry
+      // run and commit, the same caveat the dry-run.ts substrate documents.
+      const projectedNumber = await peekNextVoucherNumber(
         ctx.supabase,
         ctx.companyId!,
         typed.fiscal_period_id,

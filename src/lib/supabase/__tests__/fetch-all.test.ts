@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { fetchAllRows } from '../fetch-all'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { createPagedMockSupabase } from '@/tests/helpers'
 
 const PAGE_SIZE = 1000
 
@@ -109,5 +111,38 @@ describe('fetchAllRows', () => {
     ]
     const out = await fetchAllRows<Row>(pagedQuery({ 0: rows }), { dedupeBy: (r) => r.id })
     expect(out).toHaveLength(3)
+  })
+
+  it('maxRows stops paging once the cap is reached and returns exactly the cap', async () => {
+    const pages: Record<number, Row[]> = { 0: makeRows(0, PAGE_SIZE), [PAGE_SIZE]: makeRows(PAGE_SIZE, PAGE_SIZE), [2 * PAGE_SIZE]: makeRows(2 * PAGE_SIZE, PAGE_SIZE) }
+    const offsets: number[] = []
+    const out = await fetchAllRows<Row>(
+      (range) => {
+        offsets.push(range.from)
+        return pagedQuery(pages)(range)
+      },
+      { maxRows: 1500 },
+    )
+    expect(out).toHaveLength(1500)
+    expect(out[1499].id).toBe('1499')
+    expect(offsets).toEqual([0, PAGE_SIZE])
+  })
+
+  it('maxRows above what exists returns everything', async () => {
+    const out = await fetchAllRows<Row>(pagedQuery({ 0: makeRows(0, PAGE_SIZE), [PAGE_SIZE]: makeRows(PAGE_SIZE, 1) }), { maxRows: 5000 })
+    expect(out).toHaveLength(PAGE_SIZE + 1)
+  })
+})
+
+describe('fetchAllRows against PostgREST max-rows (createPagedMockSupabase)', () => {
+  it('returns all 1,001 rows where a bare read stops at 1,000', async () => {
+    const { supabase } = createPagedMockSupabase({ things: makeRows(0, PAGE_SIZE + 1) })
+    const db = supabase as unknown as SupabaseClient
+
+    const bare = await db.from('things').select('id')
+    const paged = await fetchAllRows<Row>(({ from, to }) => db.from('things').select('id').order('id').range(from, to))
+
+    expect(bare.data).toHaveLength(PAGE_SIZE)
+    expect(paged).toHaveLength(PAGE_SIZE + 1)
   })
 })

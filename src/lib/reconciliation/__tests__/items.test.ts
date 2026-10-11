@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createPagedMockSupabase, createQueuedMockSupabase, manyRows } from '@/tests/helpers'
 
 const skvStatusMock = vi.fn()
 const fetchUnlinkedMock = vi.fn()
@@ -346,5 +346,31 @@ describe('listAccountItems', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null })
     expect(await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`)).toBeNull()
+  })
+
+  it('lists every bank row of an account with more than 1,000, not the first 1,000', async () => {
+    const { supabase, findCalls } = createPagedMockSupabase({
+      cash_accounts: [{ id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true }],
+      transactions: manyRows(1001, (i) => ({
+        id: `tx-${String(i).padStart(4, '0')}`,
+        date: '2026-08-01',
+        description: `rad ${i}`,
+        merchant_name: null,
+        amount: -100,
+        currency: 'SEK',
+        journal_entry_id: null,
+        potential_journal_entry_id: null,
+        potential_match_method: null,
+        potential_match_confidence: null,
+        is_ignored: false,
+        reconciliation_method: null,
+      })),
+    })
+
+    const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'unmatched_external' })
+
+    expect(result?.total_count).toBe(1001)
+    // Paged on a total order: date, then the unique id.
+    expect(findCalls('transactions', 'order').map((a) => a[0])).toEqual(expect.arrayContaining(['date', 'id']))
   })
 })

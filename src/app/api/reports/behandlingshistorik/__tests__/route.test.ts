@@ -171,7 +171,7 @@ describe('GET /api/reports/behandlingshistorik', () => {
 
   it('streams CSV with an attachment filename', async () => {
     mockGenerate.mockResolvedValue(sampleReport)
-    mockExport.mockReturnValue({
+    mockExport.mockResolvedValue({
       buffer: Buffer.from('﻿Tidpunkt,Kategori\n', 'utf-8'),
       contentType: 'text/csv; charset=utf-8',
       filename: 'behandlingshistorik-testbolaget-ab-20261231.csv',

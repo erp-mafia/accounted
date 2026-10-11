@@ -400,7 +400,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
 
   // Only this step's own registers login counts: a popup left open by the
   // provider step must not start a registers migration here.
-  useProviderMessage(
+  const popupRef = useProviderMessage(
     (cId) => { if (reg !== 'connecting') return; setConsentId(cId); void runRegisters(cId) },
     (reason) => { if (reg !== 'connecting') return; setRegError(getErrorMessage(reason, { locale })); setReg('card') },
   )
@@ -409,6 +409,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     setRegError(null)
     setReg('connecting')
     const popup = openProviderWindow()
+    popupRef.current = popup
     try {
       const r = await providerConnect(providerId)
       setConsentId(r.consentId)

@@ -4,6 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateSupplierSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Supplier } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -17,15 +18,21 @@ export const GET = withRouteContext(
 
     // Archived rows (soft-deleted via the v1 API: archived_at + is_active=false)
     // stay in the table for BFL retention but are not part of the roster.
-    // Same canonical "active" filter as the v1 list route.
-    const { data, error } = await supabase
-      .from('suppliers')
-      .select('*')
-      .eq('company_id', companyId)
-      .is('archived_at', null)
-      .order('name', { ascending: true })
-
-    if (error) {
+    // Same canonical "active" filter as the v1 list route. Paged: the roster
+    // used to end at 1,000 suppliers.
+    let data: Supplier[]
+    try {
+      data = await fetchAllRows<Supplier>(({ from, to }) =>
+        supabase
+          .from('suppliers')
+          .select('*')
+          .eq('company_id', companyId)
+          .is('archived_at', null)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      )
+    } catch (error) {
       log.error('supplier list failed', error)
       return errorResponse(error, log, { requestId })
     }

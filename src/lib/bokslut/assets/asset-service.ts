@@ -370,19 +370,27 @@ async function hasManualDepreciationPosted(
 ): Promise<boolean> {
   // Engine-posted depreciation entries that belong to OTHER assets: these are
   // safely attributable and must not block a correction of this asset.
-  const { data: otherSched, error: schedError } = await supabase
-    .from('depreciation_schedules')
-    .select('journal_entry_id')
-    .eq('company_id', companyId)
-    .neq('asset_id', asset.id)
-    .not('journal_entry_id', 'is', null)
-  if (schedError) {
+  // Paged on id: past 1,000 sibling rows the rest read as manual
+  // depreciation of this asset and blocked a correction that was allowed.
+  let otherSched: { journal_entry_id: string | null }[]
+  try {
+    otherSched = await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
+      supabase
+        .from('depreciation_schedules')
+        .select('journal_entry_id')
+        .eq('company_id', companyId)
+        .neq('asset_id', asset.id)
+        .not('journal_entry_id', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (schedError) {
     throw new Error(
-      `Failed to load sibling depreciation entries for asset ${asset.id}: ${schedError.message}`,
+      `Failed to load sibling depreciation entries for asset ${asset.id}: ${schedError instanceof Error ? schedError.message : String(schedError)}`,
     )
   }
   const siblingEngineEntries = new Set(
-    ((otherSched ?? []) as { journal_entry_id: string | null }[])
+    otherSched
       .map((r) => r.journal_entry_id)
       .filter((id): id is string => id !== null),
   )

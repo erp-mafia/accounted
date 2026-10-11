@@ -111,7 +111,7 @@ export const GET = withRouteContext('report.balance_sheet.xlsx', async (request,
       isSubtotal: true,
     })
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Tillgångar',
         columns: [

@@ -15,10 +15,7 @@
  *      path for the bank-app code, each with a quiet zone of 4 modules;
  *   4. renderToBuffer(InvoicePDF(...)).
  */
-import { renderToBuffer } from '@react-pdf/renderer'
-import QRCode from 'qrcode'
-import { InvoicePDF, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
+import type { InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 import {
   resolveInvoicePaymentQr,
   type InvoicePdfPaymentQr,
@@ -80,9 +77,10 @@ export async function buildInvoicePaymentQrImage(
   if (qr.kind === null) return null
   try {
     if (qr.kind === 'bank_app') {
-      const symbol = bankPaymentQrSymbol(qr.payload)
+      const symbol = await bankPaymentQrSymbol(qr.payload)
       return symbol ? { kind: qr.kind, caption: qr.caption, vector: symbol } : null
     }
+    const { default: QRCode } = await import('qrcode')
     const imageDataUrl = await QRCode.toDataURL(qr.payload, {
       margin: BANK_PAYMENT_QR_QUIET_ZONE,
       width: PAYMENT_QR_PNG_WIDTH_PX,
@@ -100,6 +98,14 @@ export async function buildInvoicePaymentQrImage(
 
 export async function renderInvoicePdfBuffer(input: RenderInvoicePdfInput): Promise<RenderedInvoicePdf> {
   const { invoice, customer } = input
+  // react-pdf, the template and its fonts load here, when an invoice PDF is
+  // rendered, not with every route that reaches this module (pending
+  // operations, the MCP server).
+  const [{ renderToBuffer }, { InvoicePDF }, { prepareInvoicePdfRender }] = await Promise.all([
+    import('@react-pdf/renderer'),
+    import('@/lib/invoices/pdf-template'),
+    import('@/lib/invoices/pdf-render-helpers'),
+  ])
   const { branding, company } = await prepareInvoicePdfRender(input.company, invoice.currency, {
     paymentAccountRequired: input.paymentAccountRequired ?? invoiceRequiresPaymentAccount(invoice),
     payee: input.payee !== undefined ? input.payee : (invoice.payment_details ?? null),

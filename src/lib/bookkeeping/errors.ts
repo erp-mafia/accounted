@@ -424,6 +424,7 @@ export type BookkeepingOperation =
   | 'undo_sie_import_chunk'
   | 'undo_sie_duplicate_repair_chunk'
   | 'get_next_voucher_number'
+  | 'peek_next_voucher_number'
   | 'resolve_account_ids'
   | 'create_draft_entry'
   | 'create_entry_lines'

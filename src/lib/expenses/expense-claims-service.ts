@@ -35,6 +35,7 @@ import { roundOre, sumOre } from '@/lib/money'
 import { ownerSettlementAccount, parseEntityType } from '@/lib/company/entity-type'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { mergeDimensionBags } from '@/lib/bookkeeping/dimension-resolver'
 import { expenseClaimReverseChargeLines, type ExpenseClaimReverseCharge } from '@/lib/expenses/expense-claim-vat'
 
@@ -543,16 +544,20 @@ export async function listExpenseClaims(
   companyId: string,
   options: ListExpenseClaimsOptions = {},
 ): Promise<ExpenseClaimRow[]> {
-  let query = supabase
-    .from('expense_claims')
-    .select('*, document:document_attachments(id, file_name), batch:expense_payout_batches(id, payout_date, journal_entry_id)')
-    .eq('company_id', companyId)
-    .order('expense_date', { ascending: false })
-    .order('created_at', { ascending: false })
-  if (options.status) query = query.eq('status', options.status)
-  const { data, error } = await query
-  if (error) throw new Error(`Failed to list expense claims: ${error.message}`)
-  return (data ?? []) as ExpenseClaimRow[]
+  // Paged, id as the unique tiebreaker: the register used to end at 1,000.
+  return fetchAllRows<ExpenseClaimRow>(({ from, to }) => {
+    let query = supabase
+      .from('expense_claims')
+      .select('*, document:document_attachments(id, file_name), batch:expense_payout_batches(id, payout_date, journal_entry_id)')
+      .eq('company_id', companyId)
+      .order('expense_date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
+    if (options.status) query = query.eq('status', options.status)
+    return query.range(from, to)
+  }).catch((error: Error) => {
+    throw new Error(`Failed to list expense claims: ${error.message}`)
+  })
 }
 
 export type DeleteExpenseClaimResult =

@@ -19,7 +19,8 @@ export { AREAS, type Area } from './areas'
  *    tagged with any of the agent's areas are inlined when it starts (areas.ts).
  *  - Kopplingar: where the agent acts. `bank`, `skatteverket` and `peppol` are
  *    Accounted connections the page can check; `mail` and `browser` live in the
- *    customer's own AI client (Gmail connector, Claude in Chrome) and are only named.
+ *    customer's own AI client (Gmail connector, the Claude desktop app's browser or
+ *    Claude in Chrome) and are only named.
  *
  * Each workflow is named for its job (Kvittoagent, Momsagent). Its picture is a
  * folder in its colour (components/skills/Folder.tsx); its page stands it on a

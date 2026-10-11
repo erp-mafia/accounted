@@ -38,6 +38,7 @@ import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipien
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { INVOICE_VAT_TREATMENT_OVERRIDES } from '@/lib/invoices/invoice-vat-override'
+import { MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
 import {
   ARTICLE_HOUSEWORK_TYPE_VALUES,
   DEDUCTION_LINE_ERRORS,
@@ -2730,10 +2731,10 @@ export const MatchBatchSchema = z
         ]),
       )
       .min(1, 'At least one allocation is required')
-      // Cap at 100 to prevent DoS via unbounded FOR UPDATE locks in the RPC
-      // (PR #603 compliance review, OWASP V4.2). Domain-appropriate ceiling:
-      // a real samlingsverifikat rarely covers more than a few dozen invoices.
-      .max(100, 'At most 100 allocations per batch'),
+      // Capped to bound the FOR UPDATE locks the RPC takes (PR #603 compliance
+      // review, OWASP V4.2). The ceiling is the shared bank row split: a
+      // Skatteverket ROT/RUT payout pays one invoice per buyer, 100+ on one row.
+      .max(MAX_BANK_ROW_SPLIT, `At most ${MAX_BANK_ROW_SPLIT} allocations per batch`),
     // Bypass the already-explained guard (BATCH_TX_POSSIBLE_DUPLICATE): the
     // bank row is fully covered by one or more posted, unlinked vouchers on
     // its settlement account (an invoice marked paid by hand, a salary
@@ -3435,7 +3436,7 @@ export const BankLinkSchema = z
     allocations: z
       .array(z.object({ journal_entry_id: uuid, amount: z.number() }))
       .min(2)
-      .max(50)
+      .max(MAX_BANK_ROW_SPLIT)
       .optional(),
     // Settlement account being reconciled. The voucher must have a line on this
     // account and the transaction must belong to it. Defaults to '1930' in the

@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import {
+  createPagedMockSupabase,
   createQueuedMockSupabase,
+  manyRows,
   createMockRequest,
   parseJsonResponse,
   createMockRouteParams,
@@ -184,5 +186,21 @@ describe('GET /api/salary/ku/[year]', () => {
     expect(status).toBe(422)
     expect(body.error).toContain('flera förmånstyper')
     expect(generateKU10Xml).not.toHaveBeenCalled()
+  })
+
+  it('sums every booked payslip of a company with more than 1,000, not the first 1,000', async () => {
+    const { supabase, findCalls } = createPagedMockSupabase({
+      companies: [COMPANY],
+      company_settings: [SETTINGS],
+      profiles: [PROFILE],
+      salary_run_employees: manyRows(1001, () => payslip([], 0)),
+    })
+    vi.mocked(requireAuth).mockResolvedValue({ user: mockUser as never, supabase: supabase as never, error: null })
+
+    const response = await call()
+
+    expect(response.status).toBe(200)
+    expect(aggregated().totalGross).toBe(1001 * 48000)
+    expect(findCalls('salary_run_employees', 'order')[0][0]).toBe('id')
   })
 })

@@ -260,6 +260,8 @@ describe('updateAsset: acquisition-basis correction guard', () => {
           chain.eq = vi.fn(() => chain)
           chain.neq = vi.fn(() => chain)
           chain.not = vi.fn(() => chain)
+          chain.order = vi.fn(() => chain)
+          chain.range = vi.fn(() => chain)
           chain.then = (resolve: (v: unknown) => void) =>
             resolve(
               isCountQuery

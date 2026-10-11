@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSupplierSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -26,30 +27,39 @@ export const GET = withRouteContext(
       return errorResponseFromCode('SUPPLIER_NOT_FOUND', opLog, { requestId })
     }
 
-    const { data: invoices } = await supabase
-      .from('supplier_invoices')
-      .select('status, total, remaining_amount, paid_amount, currency')
-      .eq('supplier_id', id)
-      .eq('company_id', companyId)
+    // Paged: past 1,000 invoices the count and the totals came up short.
+    const invoices = await fetchAllRows<{
+      status: string
+      total: number
+      remaining_amount: number | null
+      paid_amount: number | null
+      currency: string | null
+    }>(({ from, to }) =>
+      supabase
+        .from('supplier_invoices')
+        .select('status, total, remaining_amount, paid_amount, currency')
+        .eq('supplier_id', id)
+        .eq('company_id', companyId)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
 
     // Amounts are in each invoice's own currency, so a single sum across a
     // mixed-currency supplier would be meaningless: group per currency instead
     // (nearly every supplier has exactly one).
     const perCurrency = new Map<string, { total_outstanding: number; total_paid: number }>()
-    if (invoices) {
-      for (const inv of invoices) {
-        const currency = inv.currency || 'SEK'
-        const row = perCurrency.get(currency) ?? { total_outstanding: 0, total_paid: 0 }
-        if (inv.status !== 'paid' && inv.status !== 'credited') {
-          row.total_outstanding += inv.remaining_amount || 0
-        }
-        row.total_paid += inv.paid_amount || 0
-        perCurrency.set(currency, row)
+    for (const inv of invoices) {
+      const currency = inv.currency || 'SEK'
+      const row = perCurrency.get(currency) ?? { total_outstanding: 0, total_paid: 0 }
+      if (inv.status !== 'paid' && inv.status !== 'credited') {
+        row.total_outstanding += inv.remaining_amount || 0
       }
+      row.total_paid += inv.paid_amount || 0
+      perCurrency.set(currency, row)
     }
 
     const stats = {
-      invoice_count: invoices?.length ?? 0,
+      invoice_count: invoices.length,
       by_currency: [...perCurrency.entries()]
         .map(([currency, row]) => ({
           currency,

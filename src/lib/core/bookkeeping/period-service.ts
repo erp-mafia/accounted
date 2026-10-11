@@ -945,14 +945,31 @@ function periodLookupFailed(
  * `const { data } = await ...` here; dropping the `error` is what turned this
  * shared helper into a fail-open on every write path that consults it.
  *
- * Mirrors lib/api/v1/check-period-lock.ts (used by the v1 REST surface). The
- * two helpers share the same query pattern; if either changes, update both.
+ * The v1 REST surface reads the same verdict through
+ * lib/api/v1/check-period-lock.ts (resolvePeriodLockForDate below).
  */
 export async function resolvePeriodStatusForDate(
   supabase: SupabaseClient,
   companyId: string,
   date: string,
 ): Promise<PeriodStatusForDate> {
+  return (await resolvePeriodLockForDate(supabase, companyId, date)).status
+}
+
+/** The layer that decided a `locked` verdict. */
+export type PeriodLockLayer = 'company_lock_date' | 'fiscal_period'
+
+/**
+ * resolvePeriodStatusForDate's verdict plus the layer that locked it, for a
+ * caller that reports the reason (v1 PERIOD_LOCKED details). Kept off the
+ * period_status envelope so MCP responses do not grow. `layer` is null when
+ * the date is open or the lookup failed.
+ */
+export async function resolvePeriodLockForDate(
+  supabase: SupabaseClient,
+  companyId: string,
+  date: string,
+): Promise<{ status: PeriodStatusForDate; layer: PeriodLockLayer | null }> {
   // Layer 1: company-wide lock date.
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
@@ -961,7 +978,7 @@ export async function resolvePeriodStatusForDate(
     .maybeSingle()
   if (settingsError) {
     // Unknown company lock date: the date could be behind it. Fail closed.
-    return periodLookupFailed(companyId, date, 'company_settings', settingsError)
+    return { status: periodLookupFailed(companyId, date, 'company_settings', settingsError), layer: null }
   }
   const lockThrough = settings?.bookkeeping_locked_through ?? null
   if (lockThrough && date <= lockThrough) {
@@ -976,7 +993,10 @@ export async function resolvePeriodStatusForDate(
       .lte('period_start', date)
       .gte('period_end', date)
       .maybeSingle()
-    return { period_id: period?.id ?? null, status: 'locked', lock_date: lockThrough }
+    return {
+      status: { period_id: period?.id ?? null, status: 'locked', lock_date: lockThrough },
+      layer: 'company_lock_date',
+    }
   }
 
   // Layer 2: fiscal period status.
@@ -991,19 +1011,19 @@ export async function resolvePeriodStatusForDate(
   if (periodError) {
     // Distinct from `!period` below: that is "verified, no covering period
     // exists"; this is "we do not know what period covers this date".
-    return periodLookupFailed(companyId, date, 'fiscal_periods', periodError)
+    return { status: periodLookupFailed(companyId, date, 'fiscal_periods', periodError), layer: null }
   }
 
   if (!period) {
     // No covering period: treated as open at this layer; the engine's own
     // ensure-period helper will create one. Agents should still warn the user.
-    return { period_id: null, status: 'open', lock_date: null }
+    return { status: { period_id: null, status: 'open', lock_date: null }, layer: null }
   }
   if (period.is_closed) {
-    return { period_id: period.id, status: 'closed', lock_date: null }
+    return { status: { period_id: period.id, status: 'closed', lock_date: null }, layer: 'fiscal_period' }
   }
   if (period.locked_at) {
-    return { period_id: period.id, status: 'locked', lock_date: period.locked_at }
+    return { status: { period_id: period.id, status: 'locked', lock_date: period.locked_at }, layer: 'fiscal_period' }
   }
-  return { period_id: period.id, status: 'open', lock_date: null }
+  return { status: { period_id: period.id, status: 'open', lock_date: null }, layer: null }
 }

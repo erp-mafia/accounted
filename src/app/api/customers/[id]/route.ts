@@ -5,6 +5,7 @@ import { validateVatNumber, vatValidationColumns } from '@/lib/vat/vies-client'
 import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
 import { checkCustomerDeletable } from '@/lib/customers/delete-guard'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
 import {
@@ -43,14 +44,19 @@ export const GET = withRouteContext(
       })
     }
 
-    const { data: invoices } = await supabase
-      .from('invoices')
-      .select('id, invoice_number, invoice_date, due_date, status, total, currency')
-      .eq('customer_id', id)
-      .eq('company_id', companyId)
-      .order('invoice_date', { ascending: false })
+    // Paged: past 1,000 invoices the customer page lost its oldest ones.
+    const invoices = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
+      supabase
+        .from('invoices')
+        .select('id, invoice_number, invoice_date, due_date, status, total, currency')
+        .eq('customer_id', id)
+        .eq('company_id', companyId)
+        .order('invoice_date', { ascending: false })
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
 
-    return NextResponse.json({ data: { ...maskCustomerRow(data), invoices: invoices || [] } })
+    return NextResponse.json({ data: { ...maskCustomerRow(data), invoices } })
   },
 )
 

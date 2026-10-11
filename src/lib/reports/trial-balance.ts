@@ -180,10 +180,11 @@ export async function fetchReversedYearEndEntryIds(
  * source_type 'year_end' entry, and every entry that reverses or corrects
  * one of `reversedYearEndIds` (fetchReversedYearEndEntryIds). It is the JS
  * twin of the RPC's 'exclude-all-year-end' branch (get_trial_balance_
- * aggregates, migration 20260924202408). The entry-lines path below and the
- * dimension P&L's tagged-line pass (dimension-pnl.ts) both apply it from
- * here, so the rule has exactly two definitions, this one and the RPC's,
- * and they change together.
+ * aggregates, migration 20260924202408). The entry-lines path below, the
+ * dimension P&L's tagged-line pass (dimension-pnl.ts) and the SIE export's
+ * exclude_year_end_closing (sie-export.ts) all apply it from here, so the
+ * rule has exactly two definitions, this one and the RPC's, and they change
+ * together.
  */
 export function excludeYearEndChain(
   query: EntryLinesQuery,

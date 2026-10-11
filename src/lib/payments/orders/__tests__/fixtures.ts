@@ -117,7 +117,7 @@ export function fakeProvider(overrides: Partial<PaymentInitiationProvider> = {})
       providerAuthorisationId: 'auth-1',
       method: 'qr',
       state: 'pending',
-      challenge: { approach: 'decoupled', autostartToken: null, qrData: 'bankid.qr.1', redirectUrl: null },
+      challenge: { approach: 'decoupled', autostartToken: null, qrData: 'bankid.qr.1', qrImage: null, redirectUrl: null },
       failureCode: null,
     }),
     pollSigning: vi.fn(),

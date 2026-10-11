@@ -11,6 +11,7 @@ import {
 } from '@/components/reports/DeclarationRutaRow'
 import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
 import { parseApiError } from './api-error'
+import { downloadFile, RENDERED_DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
 
 export function NEDeclarationView({ periodId }: { periodId: string }) {
   // Fetch outcome tagged with the key it was requested under: switching
@@ -60,16 +61,15 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
     setDownloading(true)
     setDownloadError(null)
     try {
-      const res = await fetch(`/api/reports/ne-bilaga?period_id=${periodId}&format=sru`)
-      if (!res.ok) throw new Error('Download failed')
-      const blob = await res.blob()
-      const filename = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] || 'NE_SRU.zip'
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename
-      a.click()
-      URL.revokeObjectURL(url)
+      const result = await downloadFile({
+        url: `/api/reports/ne-bilaga?period_id=${periodId}&format=sru`,
+        filename: 'NE_SRU.zip',
+        preferServerFilename: true,
+        timeoutMs: RENDERED_DOWNLOAD_TIMEOUT_MS,
+      })
+      if (!result.ok) {
+        setDownloadError(result.reason === 'server' ? result.message : 'Kunde inte ladda ner SRU-filer')
+      }
     } catch {
       setDownloadError('Kunde inte ladda ner SRU-filer')
     } finally {

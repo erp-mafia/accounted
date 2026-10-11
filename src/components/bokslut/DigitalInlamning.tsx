@@ -159,8 +159,12 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const [validating, setValidating] = useState(false)
   const [validation, setValidation] = useState<ValidateResponse | null>(null)
 
-  // Extension availability: probe the status route; 404 = not enabled.
-  const [extensionActive, setExtensionActive] = useState<boolean | null>(null)
+  // Extension availability: probe the status route; 404 = not enabled. While
+  // filing is "Kommer snart" nothing is probed (the section is inert), so the
+  // state starts settled instead of on a spinner nobody can act on.
+  const [extensionActive, setExtensionActive] = useState<boolean | null>(
+    INLAMNING_COMING_SOON ? false : null,
+  )
   const [filingEnabled, setFilingEnabled] = useState(false)
   const [environment, setEnvironment] = useState<string>('test')
 
@@ -244,6 +248,11 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   }, [periodId])
 
   useEffect(() => {
+    void loadVersions()
+    // Coming soon: no Bolagsverket call at all. The extension is not enabled
+    // on hosted, so every visit to the ÅR page used to cost a 404 on the
+    // status route, for a section the user cannot reach.
+    if (INLAMNING_COMING_SOON) return
     let cancelled = false
     fetch('/api/extensions/ext/bolagsverket/status')
       .then(async (res) => {
@@ -276,7 +285,6 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       .catch(() => {
         if (!cancelled) setExtensionActive(false)
       })
-    void loadVersions()
     return () => {
       cancelled = true
     }

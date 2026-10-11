@@ -112,6 +112,11 @@ RUN addgroup --system --gid 1001 nodejs && \
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/server.js ./server.js
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/package.json ./package.json
+# The booking-template packs (packs/*.yaml) are read off disk at runtime,
+# relative to the working directory (lib/packs/load.ts), by the nightly
+# booking-template sync and the MCP booking-packs resource. The lines above
+# copy only the standalone server, so the catalogue ships on its own.
+COPY --from=builder --chown=nextjs:nodejs /app/packs ./packs
 
 # Baked-in templates for runtime population of the writable mounts.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/.next /opt/gnubok-template/.next

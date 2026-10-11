@@ -112,6 +112,26 @@ describe('GET /api/pending-operations', () => {
     expect(bad.status).toBe(400)
   })
 
+  it('pages by offset over a total order, so a bulk resolution sharing one resolved_at neither repeats nor drops rows', async () => {
+    enqueue({ data: [], count: 120 })
+    enqueue({ count: 0 })
+    enqueue({ count: 0 })
+
+    const response = await GET(
+      createMockRequest('/api/pending-operations', {
+        searchParams: { status: 'committed', limit: '50', offset: '50' },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(200)
+    expect(findCalls('pending_operations', 'order')).toEqual([
+      ['resolved_at', { ascending: false, nullsFirst: false }],
+      ['id', { ascending: false }],
+    ])
+    expect(findCalls('pending_operations', 'range')).toEqual([[50, 99]])
+  })
+
   it('returns 500 when the list query fails', async () => {
     enqueue({ error: { message: 'database unavailable' } })
     enqueue({ count: 0 })

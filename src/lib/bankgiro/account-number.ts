@@ -84,6 +84,16 @@ function digitsOnly(s: string | null | undefined): string {
 }
 
 /**
+ * Whether the clearing's bank has a check-digit rule in the table above. Tells
+ * apart the two 'unknown' results of validateSwedishAccountChecksum: a bank we
+ * have no rule for, and an account whose length does not fit its bank's rule.
+ */
+export function hasSwedishAccountChecksumRule(clearingRaw: string | null | undefined): boolean {
+  const clearing = digitsOnly(clearingRaw)
+  return clearing.length >= 4 && resolveClearingRule(Number(clearing.slice(0, 4))) !== null
+}
+
+/**
  * Validate the check digit(s) of a Swedish clearing/account pair.
  *  - 'valid'   the check digit is consistent with the bank's rule
  *  - 'invalid' the clearing is recognised but the check digit does not match

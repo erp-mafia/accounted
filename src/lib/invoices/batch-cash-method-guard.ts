@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { chunk } from '@/lib/utils'
 
 /**
  * Kontantmetoden guard for the samlingsbetalning / batch allocation
@@ -74,11 +76,13 @@ export async function findCashMethodUnbookedAllocations(
 
   const unbooked: CashMethodUnbookedInvoice[] = []
 
-  if (customerIds.length > 0) {
+  // Read in slices: a full batch of ids in one `.in()` overruns the gateway's
+  // URL limit (lib/reconciliation/limits.ts).
+  for (const part of chunk(customerIds, ID_READ_CHUNK)) {
     const { data, error } = await supabase
       .from('invoices')
       .select('id, invoice_number, journal_entry_id')
-      .in('id', customerIds)
+      .in('id', part)
       .eq('company_id', companyId)
     if (error) return { ok: false, error }
     for (const row of (data ?? []) as {
@@ -92,11 +96,11 @@ export async function findCashMethodUnbookedAllocations(
     }
   }
 
-  if (supplierIds.length > 0) {
+  for (const part of chunk(supplierIds, ID_READ_CHUNK)) {
     const { data, error } = await supabase
       .from('supplier_invoices')
       .select('id, supplier_invoice_number, registration_journal_entry_id')
-      .in('id', supplierIds)
+      .in('id', part)
       .eq('company_id', companyId)
     if (error) return { ok: false, error }
     for (const row of (data ?? []) as {

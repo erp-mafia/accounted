@@ -22,8 +22,6 @@
  */
 
 import { z } from 'zod'
-import { renderToBuffer } from '@react-pdf/renderer'
-import { PayslipPDF } from '@/lib/salary/pdf/payslip-template'
 import {
   buildPayslipData,
   payslipFileName,
@@ -197,6 +195,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string; 
         audience,
       })
       fileName = payslipFileName(run, emp)
+      const [{ renderToBuffer }, { PayslipPDF }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('@/lib/salary/pdf/payslip-template'),
+      ])
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pdfBuffer = await renderToBuffer(PayslipPDF({ data }) as any)
     } catch (err) {

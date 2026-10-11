@@ -10,9 +10,9 @@ vi.mock('@/lib/parties/resolver/run', () => ({
   resolverMode: () => (process.env.COUNTERPARTY_RESOLVER_MODE === 'off' ? 'off' : 'act'),
 }))
 
-const limit = vi.fn()
+const range = vi.fn()
 vi.mock('@/lib/supabase/server', () => ({
-  createServiceClient: () => ({ from: () => ({ select: () => ({ gte: () => ({ limit }) }) }) }),
+  createServiceClient: () => ({ from: () => ({ select: () => ({ gte: () => ({ order: () => ({ range }) }) }) }) }),
 }))
 
 import { GET } from '../route'
@@ -39,7 +39,7 @@ describe('GET /api/parties/resolver/cron', () => {
   })
 
   it('runs once per company with recent transactions and sums the results', async () => {
-    limit.mockResolvedValueOnce({ data: [{ company_id: 'a' }, { company_id: 'a' }, { company_id: 'b' }], error: null })
+    range.mockResolvedValueOnce({ data: [{ company_id: 'a' }, { company_id: 'a' }, { company_id: 'b' }], error: null })
     resolveCompanyCounterparts.mockImplementation(async (_s: unknown, companyId: string) => ({
       companyId, strings: 3, alreadyResolved: 1, planned: 2, byBand: { link: 1, tentative: 0, nil: 1 }, bySource: {}, modelLines: 1, verified: 0, promoted: 0, written: 2,
     }))
@@ -49,8 +49,22 @@ describe('GET /api/parties/resolver/cron', () => {
     expect(body).toMatchObject({ total: 2, written: 4, strings: 6 })
   })
 
+  it('pages past the 1000-row cap, so a company first seen on the second page still runs', async () => {
+    range
+      .mockResolvedValueOnce({ data: Array.from({ length: 1000 }, () => ({ company_id: 'a' })), error: null })
+      .mockResolvedValueOnce({ data: [{ company_id: 'b' }], error: null })
+    resolveCompanyCounterparts.mockImplementation(async (_s: unknown, companyId: string) => ({
+      companyId, strings: 0, alreadyResolved: 0, planned: 0, byBand: { link: 0, tentative: 0, nil: 0 }, bySource: {}, modelLines: 0, verified: 0, promoted: 0, written: 0,
+    }))
+    const { body } = await parseJsonResponse<{ total: number }>(await GET(createMockRequest('http://localhost/api/parties/resolver/cron')))
+    expect(range).toHaveBeenNthCalledWith(1, 0, 999)
+    expect(range).toHaveBeenNthCalledWith(2, 1000, 1999)
+    expect(resolveCompanyCounterparts.mock.calls.map((c) => c[1])).toEqual(['a', 'b'])
+    expect(body.total).toBe(2)
+  })
+
   it('reports a failed company listing without leaking the error text', async () => {
-    limit.mockResolvedValueOnce({ data: null, error: { message: 'relation missing' } })
+    range.mockResolvedValueOnce({ data: null, error: { message: 'relation missing' } })
     const { status, body } = await parseJsonResponse<{ failed: boolean }>(await GET(createMockRequest('http://localhost/api/parties/resolver/cron')))
     expect(status).toBe(500)
     expect(body.failed).toBe(true)

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { InboxPipeline, type InboxPipeStage } from '@/components/extensions/general/InboxPipeline'
 import { useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
@@ -97,6 +97,7 @@ import {
 } from '@/lib/documents/upload-size'
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 
 /**
  * A failure whose message is already the sentence to show the user, resolved
@@ -424,6 +425,11 @@ function deriveInboxStatus(item: InboxItem): InboxStatus {
   return 'needs_action'
 }
 
+// The routed line names what went to Arkiv only while the names fit in the
+// sentence. Past this many kinds it was a wall of twelve types that told
+// nobody anything, so the line keeps the count and the link.
+const ROUTED_TYPES_NAMED_MAX = 3
+
 // ── Skeleton ─────────────────────────────────────────────────
 // Shared with app/(dashboard)/e/[sector]/[slug]/loading.tsx so the route
 // fallback and this client-fetch shell are one silhouette with no reflow.
@@ -437,7 +443,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const t = useTranslations('inbox_workspace')
   const tArkiv = useTranslations('arkiv')
   const tStart = useTranslations('start_cards')
-  const dismissKeyCompanyId = useCompanyOptional()?.company?.id ?? null
+  const locale = useLocale()
+  const companyId = useCompanyOptional()?.company?.id ?? null
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // Its own input: sharing the header's would upload without the purchase.
   const purchaseFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -547,7 +554,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   const fetchItems = useCallback(async () => {
     try {
-      const res = await fetch('/api/extensions/ext/invoice-inbox/items?limit=500')
+      const res = await fetch('/api/extensions/ext/invoice-inbox/items')
       const json = await res.json()
       if (!res.ok) {
         // No list came back, so we cannot say anything about the inbox: the
@@ -612,17 +619,24 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // operation, the /pending page approves one, or another tab books it, and
   // none of those paths call this component's fetchItems(). Without this, a
   // booked underlag stayed in "Att göra" until a manual reload (issue #600).
-  // RLS scopes the channel to the user's company, so we never receive other
-  // tenants' events; we refetch the whole list (rather than patch in place) so
+  // The company filter is required: realtime applies the SELECT policy, which
+  // is membership-wide, so without it a user in two companies got the other
+  // company's events too. We refetch the whole list (rather than patch in place) so
   // the derived status, count pills, and ordering stay authoritative. Mirrors
   // the /pending page subscription (app/(dashboard)/pending/page.tsx).
   useEffect(() => {
+    if (!companyId) return
     const supabase = createClient()
     const channel = supabase
-      .channel('invoice_inbox_items:list')
+      .channel(`invoice_inbox_items:list:${companyId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'invoice_inbox_items' },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'invoice_inbox_items',
+          filter: `company_id=eq.${companyId}`,
+        },
         () => {
           fetchItems()
         }
@@ -631,7 +645,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     return () => {
       void supabase.removeChannel(channel)
     }
-  }, [fetchItems])
+  }, [companyId, fetchItems])
 
   // Read the onboarding-dismissed flag from localStorage after mount
   // (SSR-safe: no window access during initial render). Scoped per company:
@@ -642,20 +656,20 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     if (typeof window === 'undefined') return
     try {
       const legacy = window.localStorage.getItem('gnubok.inbox.onboarding.dismissed') === '1'
-      const scoped = dismissKeyCompanyId
-        ? window.localStorage.getItem(`gnubok.inbox.onboarding.dismissed:${dismissKeyCompanyId}`) === '1'
+      const scoped = companyId
+        ? window.localStorage.getItem(`gnubok.inbox.onboarding.dismissed:${companyId}`) === '1'
         : false
       setOnboardingDismissed(legacy || scoped)
     } catch {
       // private browsing: keep default (show card)
     }
-  }, [dismissKeyCompanyId])
+  }, [companyId])
 
   const handleDismissOnboarding = useCallback(() => {
     try {
       window.localStorage.setItem(
-        dismissKeyCompanyId
-          ? `gnubok.inbox.onboarding.dismissed:${dismissKeyCompanyId}`
+        companyId
+          ? `gnubok.inbox.onboarding.dismissed:${companyId}`
           : 'gnubok.inbox.onboarding.dismissed',
         '1',
       )
@@ -663,7 +677,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       // ignore; in-memory state is enough for this session
     }
     setOnboardingDismissed(true)
-  }, [dismissKeyCompanyId])
+  }, [companyId])
 
   // Onboarding card visibility: derived from real progress so a user who
   // already has a working inbox flow never sees the guide. Once they finish
@@ -830,6 +844,25 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }),
     [items, statusCounts, portalPurchases.length, otherPurchases.length],
   )
+  // Type names are capitalised nouns ("Beslut från Skatteverket"). Only the
+  // first letter folds into the sentence: lowercasing the whole name took the
+  // capital off Skatteverket and Bolagsverket too.
+  const routedTypeNames = useMemo(
+    () =>
+      [...new Set(routedToArkiv.map((it) => it.routed_doc_type).filter((x): x is string => !!x))].map((type) => {
+        const name: string = isDocType(type) ? tArkiv(`types.${type}` as never) : type
+        return name.charAt(0).toLocaleLowerCase(locale) + name.slice(1)
+      }),
+    [routedToArkiv, tArkiv, locale],
+  )
+  const routedLine =
+    routedTypeNames.length > 0 && routedTypeNames.length <= ROUTED_TYPES_NAMED_MAX
+      ? tArkiv('underlag_routed_line', {
+          count: routedToArkiv.length,
+          types: new Intl.ListFormat(locale, { style: 'long', type: 'conjunction' }).format(routedTypeNames),
+        })
+      : tArkiv('underlag_routed_line_mixed', { count: routedToArkiv.length })
+
   const pipeActive: InboxPipeStage | null =
     filter === 'missing' || filter === 'portal'
       ? 'missing'
@@ -1442,15 +1475,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {/* No image/heic or image/heif here on purpose: when HEIC is absent
-              from accept, iOS Safari transcodes photo-library picks to JPEG,
-              which AI extraction can read. The server allowlist still accepts
-              HEIC for drag-drop and the email/WhatsApp channels. */}
+          {/* The inbox route's own list (lib/documents/upload-types): no
+              office files, which the route refuses, and no HEIC, so iOS
+              Safari transcodes photo-library picks to JPEG. */}
           <input
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".pdf,.jpg,.jpeg,.png,.webp,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.odt,.ods,.odp,.rtf,.csv"
+            accept={INBOX_UPLOAD_ACCEPT}
             className="hidden"
             onChange={handleFileInputChange}
           />
@@ -1476,12 +1508,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       {routedToArkiv.length > 0 && (
         <div className="mx-4 mt-3">
           <AttnLine action={arkivSection ? { label: tArkiv('underlag_routed_open'), href: '/arkiv' } : undefined}>
-            {tArkiv('underlag_routed_line', {
-              count: routedToArkiv.length,
-              types: [...new Set(routedToArkiv.map((it) => it.routed_doc_type).filter((x): x is string => !!x))]
-                .map((type) => (isDocType(type) ? tArkiv(`types.${type}` as never) : type).toLowerCase())
-                .join(', '),
-            })}
+            {routedLine}
           </AttnLine>
         </div>
       )}
@@ -1814,13 +1841,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   </Button>
                 )}
 
-                {/* Same accept list as the header input: HEIC left out so iOS
-                    delivers JPEG from the photo library. */}
+                {/* Same accept list as the header input. */}
                 <input
                   ref={purchaseFileInputRef}
                   type="file"
                   className="hidden"
-                  accept=".pdf,.jpg,.jpeg,.png,.webp,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.odt,.ods,.odp,.rtf,.csv"
+                  accept={INBOX_UPLOAD_ACCEPT}
                   onChange={async (e) => {
                     const files = Array.from(e.target.files ?? [])
                     if (files.length > 0) await uploadForPurchase(files, selectedPurchase.id)

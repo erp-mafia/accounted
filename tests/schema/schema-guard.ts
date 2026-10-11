@@ -275,13 +275,32 @@ function parseClosedCheck(
   return { column: m[1], values }
 }
 
-function recordUnique(table: TableModel, columns: string[], constraintName?: string | null): void {
+/**
+ * The name Postgres gives a UNIQUE or PRIMARY KEY constraint declared without
+ * one (ChooseConstraintName + makeObjectName): `<table>_<col>_<col>_key` or
+ * `<table>_pkey`, cut to 63 bytes by shortening the longer part first. A later
+ * `DROP CONSTRAINT IF EXISTS <that name>` drops it, so the replay must know it.
+ */
+export function defaultConstraintName(table: string, columns: string[], label: 'key' | 'pkey'): string {
+  const name2 = label === 'pkey' ? '' : columns.join('_')
+  const avail = 63 - (label.length + 1) - (name2 ? 1 : 0)
+  let n1 = table.length
+  let n2 = name2.length
+  while (n1 + n2 > avail) {
+    if (n1 > n2) n1--
+    else n2--
+  }
+  const head = table.slice(0, n1)
+  return name2 ? `${head}_${name2.slice(0, n2)}_${label}` : `${head}_${label}`
+}
+
+function recordUnique(table: TableModel, columns: string[], constraintName: string): void {
   if (columns.length === 0) return
   const key = [...columns].sort().join(',')
   table.uniqueSets.add(key)
   // Remember the name so `ALTER TABLE ... DROP CONSTRAINT <name>` can retract
-  // the set again. Unnamed (column-level) uniques have nothing to key on.
-  if (constraintName) table.uniqueConstraintKeys.set(constraintName, key)
+  // the set again.
+  table.uniqueConstraintKeys.set(constraintName, key)
 }
 
 function parseColumnList(body: string): string[] {
@@ -320,7 +339,11 @@ function applyTableItem(
     }
     if (/^UNIQUE\s*\(/i.test(rest) || /^PRIMARY\s+KEY\s*\(/i.test(rest)) {
       const group = balancedParens(rest, 0)
-      if (group) recordUnique(table, parseColumnList(group.body), name)
+      if (group) {
+        const columns = parseColumnList(group.body)
+        const label = /^PRIMARY/i.test(rest) ? 'pkey' : 'key'
+        recordUnique(table, columns, name ?? defaultConstraintName(table.name, columns, label))
+      }
       return
     }
     if (/^FOREIGN\s+KEY\s*\(/i.test(rest)) {
@@ -370,8 +393,10 @@ function applyTableItem(
 
   // Column-level UNIQUE / PRIMARY KEY, but not the word inside a CHECK body.
   const withoutChecks = checkAt === -1 ? rest : rest.slice(0, checkAt)
-  if (/\bUNIQUE\b/i.test(withoutChecks) || /\bPRIMARY\s+KEY\b/i.test(withoutChecks)) {
-    recordUnique(table, [column])
+  if (/\bPRIMARY\s+KEY\b/i.test(withoutChecks)) {
+    recordUnique(table, [column], defaultConstraintName(table.name, [column], 'pkey'))
+  } else if (/\bUNIQUE\b/i.test(withoutChecks)) {
+    recordUnique(table, [column], defaultConstraintName(table.name, [column], 'key'))
   }
 }
 
@@ -687,11 +712,11 @@ function applyAlterAction(
   if (dropConstraint) {
     const name = dropConstraint[1]
     table.checks.delete(name)
-    // Retract the unique set a NAMED UNIQUE/PK constraint carried, so an
+    // Retract the unique set the dropped UNIQUE/PK constraint carried, so an
     // `onConflict` naming the dropped constraint's columns fails here instead
     // of 42P10-ing at runtime. The set survives when another constraint or a
-    // unique index still provides the same column key. A column-level bare
-    // `UNIQUE` (parsed by applyTableItem) has no name and is untouched.
+    // unique index still provides the same column key. An unnamed UNIQUE/PK is
+    // keyed under the name Postgres generated for it (defaultConstraintName).
     const key = table.uniqueConstraintKeys.get(name)
     if (key !== undefined) {
       table.uniqueConstraintKeys.delete(name)

@@ -892,6 +892,105 @@ export function createTableMockSupabase(
   return { supabase, setTable, reset, calls, findCall, findCalls }
 }
 
+// ============================================================
+// Paging Supabase mock
+// ============================================================
+
+/** PostgREST's max-rows: what one request returns without a smaller window. */
+export const POSTGREST_MAX_ROWS = 1000
+
+/**
+ * A Supabase mock that pages like PostgREST, for "more than 1,000 rows"
+ * tests: a read returns at most POSTGREST_MAX_ROWS rows, `.range(from, to)`
+ * picks the window and `.limit(n)` shortens it. A read that neither pages nor
+ * aggregates therefore sees only the first 1,000 rows, as in production.
+ *
+ * Each table (or 'rpc:<name>') holds its full row set; filters are recorded
+ * but not applied, so a test seeds only the rows the filters would return.
+ * `.single()` / `.maybeSingle()` answer the first row, a `head: true` select
+ * answers the count, and writes resolve with no data. A table with nothing
+ * seeded reads as empty.
+ */
+export function createPagedMockSupabase(tables: Record<string, unknown[]> = {}) {
+  const calls: { table: string; method: string; args: unknown[] }[] = []
+
+  const buildChain = (key: string): unknown => {
+    let from = 0
+    let to: number | null = null
+    let limit: number | null = null
+    let single: 'single' | 'maybeSingle' | null = null
+    let head = false
+    let write = false
+
+    const resolve = () => {
+      const rows = tables[key] ?? []
+      if (write) return { data: null, error: null, count: null }
+      if (head) return { data: null, error: null, count: rows.length }
+      if (single) {
+        const row = rows[0] ?? null
+        if (!row && single === 'single') return { data: null, error: { code: 'PGRST116', message: 'no rows' }, count: null }
+        return { data: row, error: null, count: null }
+      }
+      let end = to === null ? from + POSTGREST_MAX_ROWS : to + 1
+      if (limit !== null) end = Math.min(end, from + limit)
+      end = Math.min(end, from + POSTGREST_MAX_ROWS)
+      return { data: rows.slice(from, end), error: null, count: rows.length }
+    }
+
+    const chain: unknown = new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          if (prop === 'then') {
+            return (onFulfilled: (v: unknown) => unknown) => Promise.resolve(resolve()).then(onFulfilled)
+          }
+          return (...args: unknown[]) => {
+            const method = String(prop)
+            calls.push({ table: key, method, args })
+            if (method === 'range') {
+              from = Number(args[0])
+              to = Number(args[1])
+            } else if (method === 'limit') {
+              limit = Number(args[0])
+            } else if (method === 'single' || method === 'maybeSingle') {
+              single = method
+            } else if (method === 'select') {
+              head = (args[1] as { head?: boolean } | undefined)?.head === true
+            } else if (['insert', 'update', 'upsert', 'delete'].includes(method)) {
+              write = true
+            }
+            return chain
+          }
+        },
+      },
+    )
+    return chain
+  }
+
+  /** Args of every `method` call made against `table`. */
+  const findCalls = (table: string, method: string): unknown[][] =>
+    calls.filter((c) => c.table === table && c.method === method).map((c) => c.args)
+
+  const supabase = {
+    from: vi.fn((table: string) => buildChain(table)),
+    rpc: vi.fn((name: string, args?: unknown) => {
+      calls.push({ table: `rpc:${name}`, method: 'rpc', args: [args] })
+      return buildChain(`rpc:${name}`)
+    }),
+    auth: {
+      getUser: vi.fn().mockResolvedValue({ data: { user: null }, error: null }),
+      mfa: { listFactors: vi.fn().mockResolvedValue(NO_VERIFIED_FACTORS) },
+    },
+  }
+
+  return { supabase, calls, findCalls }
+}
+
+/** `count` rows built by `make(i)`: seed data for createPagedMockSupabase. */
+export function manyRows<T>(count: number, make: (i: number) => T): T[] {
+  return Array.from({ length: count }, (_, i) => make(i))
+}
+
 export function makeCategorizationTemplate(
   overrides: Partial<CategorizationTemplate> = {}
 ): CategorizationTemplate {

@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Landmark } from 'lucide-react'
@@ -66,12 +66,15 @@ export function PaymentSummary({
   }
 
   // Parts are joined with " · "; the other ways to pay ride on the first with a comma.
-  const pieces: string[] = []
+  // Each of the app's own phrases keeps to one line, so the line wraps
+  // between them and never inside "QR-kod" or an account number; the bank
+  // name (free text the company typed) and the list of others may wrap.
+  const pieces: Array<{ sep: string; text: string; keep: boolean }> = []
   for (const part of parts) {
-    if (part.kind === 'text') pieces.push(part.text)
-    else if (part.kind === 'key') pieces.push(t(part.key, part.values ?? {}))
+    if (part.kind === 'text') pieces.push({ sep: ' · ', text: part.text, keep: false })
+    else if (part.kind === 'key') pieces.push({ sep: ' · ', text: t(part.key, part.values ?? {}), keep: true })
     else if (pieces.length > 0) {
-      pieces[pieces.length - 1] = `${pieces[pieces.length - 1]}, ${part.methods.map((m) => t(`name_${m}`)).join(', ')}`
+      pieces.push({ sep: ', ', text: part.methods.map((m) => t(`name_${m}`)).join(', '), keep: false })
     }
   }
 
@@ -93,7 +96,14 @@ export function PaymentSummary({
         <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <p className="leading-5" data-ph-mask="">
-            {pieces.length > 0 ? pieces.join(' · ') : t('nothing_printed')}
+            {pieces.length > 0
+              ? pieces.map((piece, i) => (
+                  <Fragment key={i}>
+                    {i > 0 && piece.sep}
+                    <span className={piece.keep ? 'whitespace-nowrap' : undefined}>{piece.text}</span>
+                  </Fragment>
+                ))
+              : t('nothing_printed')}
           </p>
           {reason && (
             <p className="mt-1 text-[12.5px] leading-5 text-muted-foreground">

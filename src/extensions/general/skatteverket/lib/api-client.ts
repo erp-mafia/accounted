@@ -723,6 +723,9 @@ async function sendSkvRequest(
     headers,
     body: serializedBody,
     signal: AbortSignal.timeout(15_000),
+    // A 307/308 would resend the bearer and the gateway Client_Secret (or the
+    // connector key) to the redirect target.
+    redirect: 'error',
   })
   trace.status = response.status
 

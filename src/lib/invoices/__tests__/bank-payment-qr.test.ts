@@ -285,8 +285,8 @@ describe('buildBankPaymentQrPayload: bank account (pt BBAN, chapter 4.1)', () =>
     expect(parsed(build({ company: bankOnly(), lang: 'en' })).iref).toBe('10234')
   })
 
-  it('stays a small symbol', () => {
-    const symbol = bankPaymentQrSymbol(build({ company: bankOnly({ clearing_number: '81695', account_number: '9139876057' }) }) as string)
+  it('stays a small symbol', async () => {
+    const symbol = await bankPaymentQrSymbol(build({ company: bankOnly({ clearing_number: '81695', account_number: '9139876057' }) }) as string)
     expect(symbol!.size).toBeLessThanOrEqual(57 + 2 * BANK_PAYMENT_QR_QUIET_ZONE)
   })
 })
@@ -307,6 +307,19 @@ describe('bankPaymentQrPayee', () => {
     expect(bankPaymentQrPayee({ clearing_number: '9020', account_number: '1234567' })).toEqual({
       ok: false,
       reason: 'unverified_bank_account',
+    })
+  })
+
+  it('calls an account too long for a bank with a known rule wrong, not unverifiable', () => {
+    // SEB accounts have 7 digits, Handelsbanken 9: the validator says 'unknown'
+    // for the length, but the bank is known, so the number is what is wrong.
+    expect(bankPaymentQrPayee({ clearing_number: '5000', account_number: '12345678' })).toEqual({
+      ok: false,
+      reason: 'invalid_bank_account',
+    })
+    expect(bankPaymentQrPayee({ clearing_number: '6000', account_number: '6581597120' })).toEqual({
+      ok: false,
+      reason: 'invalid_bank_account',
     })
   })
 
@@ -402,8 +415,8 @@ describe('bankPaymentQrSymbol', () => {
     return grid
   }
 
-  it('draws exactly the modules of a byte-mode, level M QR code of the payload', () => {
-    const symbol = bankPaymentQrSymbol(payload)
+  it('draws exactly the modules of a byte-mode, level M QR code of the payload', async () => {
+    const symbol = await bankPaymentQrSymbol(payload)
     expect(symbol).not.toBeNull()
     const reference = QRCode.create([{ mode: 'byte', data: new TextEncoder().encode(payload) }], {
       errorCorrectionLevel: 'M',
@@ -427,13 +440,13 @@ describe('bankPaymentQrSymbol', () => {
     expect(BANK_PAYMENT_QR_QUIET_ZONE).toBeGreaterThanOrEqual(4)
   })
 
-  it('stays a small symbol for an ordinary invoice, so it scans from print', () => {
-    const symbol = bankPaymentQrSymbol(payload)
+  it('stays a small symbol for an ordinary invoice, so it scans from print', async () => {
+    const symbol = await bankPaymentQrSymbol(payload)
     // Version 10 is 57 modules; plus the quiet zone.
     expect(symbol!.size).toBeLessThanOrEqual(57 + 2 * BANK_PAYMENT_QR_QUIET_ZONE)
   })
 
-  it('returns null when the payload cannot fit a QR code', () => {
-    expect(bankPaymentQrSymbol('x'.repeat(5000))).toBeNull()
+  it('returns null when the payload cannot fit a QR code', async () => {
+    expect(await bankPaymentQrSymbol('x'.repeat(5000))).toBeNull()
   })
 })

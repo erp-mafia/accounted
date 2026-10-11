@@ -116,6 +116,7 @@ function toChallenge(challenge: {
   approach: 'decoupled' | 'redirect'
   autostartToken: string | null
   qrData: string | null
+  qrImage?: string | null
   redirectUrl: string | null
 } | null): SigningChallenge | null {
   if (!challenge) return null
@@ -123,6 +124,7 @@ function toChallenge(challenge: {
     approach: challenge.approach,
     autostartToken: challenge.autostartToken,
     qrData: challenge.qrData,
+    qrImage: challenge.qrImage ?? null,
     redirectUrl: challenge.redirectUrl,
   }
 }

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EntityType } from '@/types'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { simplifiedYearEndRegelverk } from '@/lib/company/entity-type'
 import { parseInvoiceDateRange } from './date-range-parser'
 
@@ -259,49 +260,62 @@ export async function detectPeriodisering(
   // suggested again at year-end: that would periodisera the same belopp
   // twice. Cancelled schedules don't exclude: their invoice was credited and
   // the status filters below drop it anyway.
-  const { data: scheduleRows } = await supabase
-    .from('accrual_schedules')
-    .select('supplier_invoice_id, invoice_id')
-    .eq('company_id', companyId)
-    .neq('status', 'cancelled')
+  // All three reads are paged: past 1,000 rows a schedule went missing (its
+  // invoice was suggested a second time) or an invoice was never looked at.
+  const scheduleRows = await fetchAllRows<{ supplier_invoice_id: string | null; invoice_id: string | null }>(
+    ({ from, to }) =>
+      supabase
+        .from('accrual_schedules')
+        .select('supplier_invoice_id, invoice_id')
+        .eq('company_id', companyId)
+        .neq('status', 'cancelled')
+        .order('id', { ascending: true })
+        .range(from, to),
+  )
   const coveredSupplierInvoices = new Set(
-    ((scheduleRows ?? []) as Array<{ supplier_invoice_id: string | null }>)
-      .map((row) => row.supplier_invoice_id)
-      .filter(Boolean),
+    scheduleRows.map((row) => row.supplier_invoice_id).filter(Boolean),
   )
   const coveredInvoices = new Set(
-    ((scheduleRows ?? []) as Array<{ invoice_id: string | null }>)
-      .map((row) => row.invoice_id)
-      .filter(Boolean),
+    scheduleRows.map((row) => row.invoice_id).filter(Boolean),
   )
 
   // Customer invoices: only "real" ones (sent/paid). Drafts and overdue
   // get skipped: drafts haven't moved through the engine, overdue is just a
   // status label that overlaps with sent here. Proformas, delivery notes and
   // quotes are never booked, so there is no revenue to periodise.
-  const { data: invoiceRows } = await supabase
-    .from('invoices')
-    .select('id, invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, customers(name), invoice_items(description)')
-    .eq('company_id', companyId)
-    .eq('document_type', 'invoice')
-    .gte('invoice_date', periodStart)
-    .lte('invoice_date', periodEnd)
-    .in('status', ['sent', 'partially_paid', 'paid', 'overdue'])
+  const invoiceRows = await fetchAllRows<InvoiceRow>(({ from, to }) =>
+    supabase
+      .from('invoices')
+      .select('id, invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, customers(name), invoice_items(description)')
+      .eq('company_id', companyId)
+      .eq('document_type', 'invoice')
+      .gte('invoice_date', periodStart)
+      .lte('invoice_date', periodEnd)
+      .in('status', ['sent', 'partially_paid', 'paid', 'overdue'])
+      .order('invoice_date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: InvoiceRow[] | null; error: { message: string } | null }>,
+  )
 
   // Supplier invoices: approved or paid (registration journal entry exists).
-  const { data: supplierRows } = await supabase
-    .from('supplier_invoices')
-    .select(
-      'id, supplier_invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, suppliers(name), supplier_invoice_items(description, account_number)',
-    )
-    .eq('company_id', companyId)
-    .gte('invoice_date', periodStart)
-    .lte('invoice_date', periodEnd)
-    .in('status', ['approved', 'partially_paid', 'paid'])
+  const supplierRows = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
+    supabase
+      .from('supplier_invoices')
+      .select(
+        'id, supplier_invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, suppliers(name), supplier_invoice_items(description, account_number)',
+      )
+      .eq('company_id', companyId)
+      .gte('invoice_date', periodStart)
+      .lte('invoice_date', periodEnd)
+      .in('status', ['approved', 'partially_paid', 'paid'])
+      .order('invoice_date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: SupplierInvoiceRow[] | null; error: { message: string } | null }>,
+  )
 
   const suggestions: PeriodiseringSuggestion[] = []
 
-  for (const row of (invoiceRows ?? []) as unknown as InvoiceRow[]) {
+  for (const row of invoiceRows) {
     if (coveredInvoices.has(row.id)) continue
     const itemDescs = (row.invoice_items ?? []).map((i) => i.description).filter(Boolean)
     const customerName = row.customers?.name ?? 'Okänd kund'
@@ -324,7 +338,7 @@ export async function detectPeriodisering(
     if (s) suggestions.push(s)
   }
 
-  for (const row of (supplierRows ?? []) as unknown as SupplierInvoiceRow[]) {
+  for (const row of supplierRows) {
     if (coveredSupplierInvoices.has(row.id)) continue
     const itemDescs = (row.supplier_invoice_items ?? []).map((i) => i.description).filter(Boolean)
     const itemAccounts = (row.supplier_invoice_items ?? [])

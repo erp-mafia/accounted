@@ -97,9 +97,9 @@ describe('provider resolution with an OpenAI-compatible endpoint', () => {
 
   // The chat loop and the other direct SDK callers cannot run here: fail
   // loudly at construction rather than with an opaque error at call time.
-  it('refuses to build an Anthropic client for it', () => {
+  it('refuses to build an Anthropic client for it', async () => {
     byo()
-    expect(() => createAiClient()).toThrow(AiProviderUnsupportedError)
+    await expect(createAiClient()).rejects.toThrow(AiProviderUnsupportedError)
   })
 })
 

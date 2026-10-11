@@ -695,7 +695,9 @@ function correctionFailure(salaryRunId: string, result: CorrectSalaryRunFailure)
     case 'SALARY_RUN_ALREADY_CORRECTED':
       return { ok: false, code: result.code, details: result.details }
     case 'DB_ERROR':
-      if (result.stage === 'insert_correction_run') {
+      // A failed roster copy removes the half-copied draft again, so both
+      // stages leave the same state: entries reversed, no correction run.
+      if (result.stage === 'insert_correction_run' || result.stage === 'copy_roster') {
         return {
           ok: false,
           code: 'UNKNOWN_ERROR',

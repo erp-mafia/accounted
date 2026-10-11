@@ -44,6 +44,8 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { commitMatchBatchAllocation } from '@/lib/bookkeeping/engine'
 import { roundOre } from '@/lib/money'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { chunk } from '@/lib/utils'
 
 export type MatchBatchAllocation =
   | { kind: 'customer_invoice'; invoice_id: string; amount: number }
@@ -108,18 +110,22 @@ export async function matchTransactionBatch(
     new Set(allocations.flatMap((a) => (a.kind === 'customer_invoice' && a.invoice_id ? [a.invoice_id] : []))),
   )
   if (customerInvoiceIds.length > 0) {
-    const { data: docRows, error: docError } = await supabase
-      .from('invoices')
-      .select('id, document_type')
-      .in('id', customerInvoiceIds)
-      .eq('company_id', companyId)
-    if (docError) {
-      txLog.error('match-batch: document lookup failed', docError)
-      return failed(docError)
+    // Read in slices: a full batch of ids in one `.in()` overruns the
+    // gateway's URL limit (lib/reconciliation/limits.ts).
+    const docRows: { id: string; document_type: string | null }[] = []
+    for (const part of chunk(customerInvoiceIds, ID_READ_CHUNK)) {
+      const { data, error: docError } = await supabase
+        .from('invoices')
+        .select('id, document_type')
+        .in('id', part)
+        .eq('company_id', companyId)
+      if (docError) {
+        txLog.error('match-batch: document lookup failed', docError)
+        return failed(docError)
+      }
+      docRows.push(...((data ?? []) as typeof docRows))
     }
-    const offender = ((docRows ?? []) as { id: string; document_type: string | null }[]).find(
-      (r) => r.document_type && r.document_type !== 'invoice',
-    )
+    const offender = docRows.find((r) => r.document_type && r.document_type !== 'invoice')
     if (offender) {
       return {
         ok: false,
@@ -267,19 +273,11 @@ async function previewMatchBatch(
     new Set(allocations.map((a) => (a.kind === 'customer_invoice' ? a.invoice_id : a.supplier_invoice_id))),
   )
   const invoices = new Map<string, BatchAllocationPreviewInvoice>()
-  if (isCustomer) {
+  for (const part of chunk(ids, ID_READ_CHUNK)) {
     const { data, error } = await supabase
-      .from('invoices')
+      .from(isCustomer ? 'invoices' : 'supplier_invoices')
       .select('id, currency, exchange_rate, remaining_amount, total')
-      .in('id', ids)
-      .eq('company_id', companyId)
-    if (error) return failed(error)
-    for (const row of (data ?? []) as ({ id: string } & BatchAllocationPreviewInvoice)[]) invoices.set(row.id, row)
-  } else {
-    const { data, error } = await supabase
-      .from('supplier_invoices')
-      .select('id, currency, exchange_rate, remaining_amount, total')
-      .in('id', ids)
+      .in('id', part)
       .eq('company_id', companyId)
     if (error) return failed(error)
     for (const row of (data ?? []) as ({ id: string } & BatchAllocationPreviewInvoice)[]) invoices.set(row.id, row)

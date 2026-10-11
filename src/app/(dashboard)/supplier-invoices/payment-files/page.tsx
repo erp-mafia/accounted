@@ -31,6 +31,7 @@ import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { collectPages } from '@/lib/lists/collect-pages'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
 type BatchListRow = SupplierPaymentBatch & { settled_count: number }
@@ -50,6 +51,11 @@ type BatchDetail = SupplierPaymentBatch & { items: BatchItemWithInvoice[] }
 /** Mirrors the öre epsilon the server derives settled_count with. */
 const SETTLED_EPSILON = 0.005
 
+// Files per page, and the most the list API returns per request
+// (SupplierPaymentBatchListQuerySchema).
+const LIST_PAGE_SIZE = 50
+const BATCH_API_MAX_LIMIT = 100
+
 function batchFilename(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at'>): string {
   const datePart = batch.created_at.slice(0, 10).replace(/-/g, '')
   return `betalfil_${datePart}_${batch.id.replace(/-/g, '').slice(0, 8)}.xml`
@@ -57,6 +63,7 @@ function batchFilename(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at'>): 
 
 export default function PaymentFilesPage() {
   const t = useTranslations('supplier_payment_files')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -70,16 +77,38 @@ export default function PaymentFilesPage() {
   const [cancelling, setCancelling] = useState(false)
   const [markingAll, setMarkingAll] = useState(false)
 
+  // Files loaded so far. "Ladda fler" grows it; a refetch after a cancel or
+  // a mark-paid reloads the whole grown window in chunks so the list never
+  // collapses back to the newest page.
+  const [windowSize, setWindowSize] = useState(LIST_PAGE_SIZE)
+  const [hasMore, setHasMore] = useState(false)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+
   const fetchBatches = useCallback(async () => {
-    setIsLoading(true)
+    // A grown window refreshes in place: the skeleton would hide the rows
+    // the user paged to.
+    if (windowSize === LIST_PAGE_SIZE) setIsLoading(true)
     try {
-      const res = await fetch('/api/supplier-invoices/payment-batches?status=all')
-      const body = await res.json()
-      setBatches((body.data as BatchListRow[]) ?? [])
+      const { data, count } = await collectPages<BatchListRow>(
+        async (offset, limit) => {
+          const res = await fetch(
+            `/api/supplier-invoices/payment-batches?status=all&limit=${limit}&offset=${offset}`,
+          )
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const body = await res.json()
+          return { data: (body.data as BatchListRow[]) ?? [], count: body.count ?? null }
+        },
+        { want: windowSize, chunkSize: BATCH_API_MAX_LIMIT },
+      )
+      setBatches(data)
+      setHasMore(count !== null && count > data.length)
+    } catch {
+      toast({ title: tCommon('load_error'), variant: 'destructive' })
     } finally {
       setIsLoading(false)
+      setIsLoadingMore(false)
     }
-  }, [])
+  }, [windowSize, tCommon, toast])
 
   useEffect(() => {
     fetchBatches()
@@ -304,6 +333,22 @@ export default function PaymentFilesPage() {
               ))}
             </tbody>
           </table>
+          {/* The list is paged: keep the way to older files reachable
+              whenever the server holds more than the loaded window. */}
+          {hasMore && (
+            <div className="flex justify-center pt-3">
+              <Button
+                variant="outline"
+                loading={isLoadingMore}
+                onClick={() => {
+                  setIsLoadingMore(true)
+                  setWindowSize((size) => size + LIST_PAGE_SIZE)
+                }}
+              >
+                {tCommon('load_more')}
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

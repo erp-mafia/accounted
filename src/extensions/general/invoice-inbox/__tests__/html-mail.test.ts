@@ -6,6 +6,7 @@ import {
 } from '@/extensions/general/invoice-inbox/lib/upload-and-extract'
 import { htmlToText } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { validateDocumentMagicBytes } from '@/lib/core/documents/document-service'
+import { INBOX_UPLOAD_ACCEPT, INBOX_UPLOAD_TYPES, declaredDocumentType } from '@/lib/documents/upload-types'
 
 const decode = (buf: ArrayBuffer) => new TextDecoder().decode(new Uint8Array(buf))
 
@@ -17,6 +18,15 @@ describe('EMAIL_ALLOWED_MIME_TYPES', () => {
     expect(EMAIL_ALLOWED_MIME_TYPES.has('text/html')).toBe(true)
     // The manual upload surface must stay strict.
     expect(UPLOAD_ALLOWED_MIME_TYPES.has('text/html')).toBe(false)
+  })
+})
+
+describe('UPLOAD_ALLOWED_MIME_TYPES', () => {
+  it('is the list the inbox pickers offer from, so a picker never offers what this route refuses', () => {
+    expect([...UPLOAD_ALLOWED_MIME_TYPES].sort()).toEqual([...INBOX_UPLOAD_TYPES].sort())
+    for (const ext of INBOX_UPLOAD_ACCEPT.split(',')) {
+      expect(UPLOAD_ALLOWED_MIME_TYPES.has(declaredDocumentType({ name: `f${ext}`, type: '' }))).toBe(true)
+    }
   })
 })
 

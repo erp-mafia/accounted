@@ -1,5 +1,5 @@
 import type { McpResource } from './types'
-import { fetchJunctionLinkedTxIds } from '@/lib/reconciliation/bank-reconciliation'
+import { fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
 
 export const recentActivityResource: McpResource = {
   uri: 'Accounted://recent-activity',
@@ -24,7 +24,7 @@ export const recentActivityResource: McpResource = {
         .limit(limit),
       supabase
         .from('transactions')
-        .select('id, date, description, amount, currency, journal_entry_id, category, merchant_name')
+        .select('id, date, description, amount, currency, journal_entry_id, category, merchant_name, is_business, is_ignored')
         .eq('company_id', companyId)
         .order('date', { ascending: false })
         .limit(limit),
@@ -42,14 +42,16 @@ export const recentActivityResource: McpResource = {
       throw new Error(`Failed to read recent transactions: ${transactions.error.message}`)
     }
 
-    // A NULL pointer is not "unbooked" on its own: rows bulk-booked into a
-    // samlingsverifikat or split over several verifikat (1:N) are anchored
-    // through transaction_voucher_links (lib/transactions/is-booked.ts).
+    // Unbooked as lib/transactions/unbooked.ts defines it, the count every
+    // other MCP surface reports: not ignored, not triaged as private, and no
+    // verifikat. A NULL pointer is not enough on its own: rows bulk-booked
+    // into a samlingsverifikat, split over several verifikat (1:N) or settled
+    // through an invoice allocation are anchored elsewhere.
     const recentTx = transactions.data ?? []
-    const pointerUnbooked = recentTx.filter((t) => !t.journal_entry_id)
-    const junctionLinked =
+    const pointerUnbooked = recentTx.filter((t) => !t.journal_entry_id && !t.is_ignored && t.is_business !== false)
+    const anchored =
       pointerUnbooked.length > 0
-        ? await fetchJunctionLinkedTxIds(
+        ? await fetchAnchoredTransactionIds(
             supabase,
             companyId,
             pointerUnbooked.map((t) => t.id as string),
@@ -61,8 +63,7 @@ export const recentActivityResource: McpResource = {
       journal_entries: journalEntries.data ?? [],
       invoices: invoices.data ?? [],
       transactions: recentTx,
-      uncategorized_transaction_count: pointerUnbooked.filter((t) => !junctionLinked.has(t.id as string))
-        .length,
+      uncategorized_transaction_count: pointerUnbooked.filter((t) => !anchored.has(t.id as string)).length,
     }
   },
 }

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveCompanyCounterparts, resolverMode, type RunSummary } from '@/lib/parties/resolver/run'
 
 ensureInitialized()
@@ -24,12 +25,18 @@ export const GET = withCronContext('cron.counterparty_resolver', async (_request
 
   const supabase = createServiceClient()
   const since = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 86400e3).toISOString().slice(0, 10)
-  const { data, error } = await supabase.from('transactions').select('company_id').gte('date', since).limit(50000)
-  if (error) {
-    ctx.log.error('counterparty resolver could not list active companies', new Error(error.message))
+  // Paged: PostgREST cuts a single read at 1000 rows without saying so, which
+  // left every company outside the first 1000 recent transactions unresolved.
+  let data: Array<{ company_id: string | null }>
+  try {
+    data = await fetchAllRows<{ company_id: string | null }>((range) =>
+      supabase.from('transactions').select('company_id').gte('date', since).order('id', { ascending: true }).range(range.from, range.to),
+    )
+  } catch (error) {
+    ctx.log.error('counterparty resolver could not list active companies', error as Error)
     return NextResponse.json({ success: false, failed: true, total: 0 }, { status: 500 })
   }
-  const companyIds = [...new Set((data ?? []).map((r) => (r as { company_id: string | null }).company_id).filter((id): id is string => !!id))]
+  const companyIds = [...new Set(data.map((r) => r.company_id).filter((id): id is string => !!id))]
 
   const results: RunSummary[] = []
   const summary = await ctx.forEach('company', companyIds, async (companyId, itemCtx) => {

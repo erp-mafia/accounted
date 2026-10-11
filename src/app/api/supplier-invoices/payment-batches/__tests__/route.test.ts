@@ -5,7 +5,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, enqueueMany, reset, findCall } =
+const { supabase: mockSupabase, enqueue, enqueueMany, reset, findCall, findCalls } =
   createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
@@ -322,6 +322,26 @@ describe('GET /api/supplier-invoices/payment-batches', () => {
       }),
     )
     expect(response.status).toBe(400)
+  })
+
+  it('reports the total and pages over a total order, so the list can offer older files', async () => {
+    enqueueMany([{ data: [batchRow()], count: 57 }, { data: [] }])
+    const response = await listBatches(
+      createMockRequest('/api/supplier-invoices/payment-batches', {
+        searchParams: { status: 'all', limit: '50', offset: '50' },
+      }),
+      { params: Promise.resolve({}) },
+    )
+    const { status, body } = await parseJsonResponse<{ data: unknown[]; count: number }>(response)
+
+    expect(status).toBe(200)
+    expect(body.count).toBe(57)
+    expect(findCalls('supplier_payment_batches', 'select')).toEqual([['*', { count: 'exact' }]])
+    expect(findCalls('supplier_payment_batches', 'order')).toEqual([
+      ['created_at', { ascending: false }],
+      ['id', { ascending: false }],
+    ])
+    expect(findCalls('supplier_payment_batches', 'range')).toEqual([[50, 99]])
   })
 })
 

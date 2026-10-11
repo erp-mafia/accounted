@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { ExternalLink } from 'lucide-react'
@@ -35,6 +36,7 @@ export function DimensionsToggle() {
   const { settings, updateSettings } = useSettings()
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
+  const router = useRouter()
   const [isSaving, setIsSaving] = useState(false)
 
   const enabled = settings?.dimensions_enabled ?? false
@@ -57,6 +59,9 @@ export function DimensionsToggle() {
         return
       }
       updateSettings({ dimensions_enabled: next })
+      // The nav row is gated by the server-rendered dashboard layout, so the
+      // SWR patch alone leaves the Dimensioner row as it was until a reload.
+      router.refresh()
 
       // The save registered the codes already on lines when it turned
       // dimensions on, and says how many.

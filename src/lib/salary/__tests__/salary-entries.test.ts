@@ -17,11 +17,19 @@ const fake = vi.hoisted(() => ({
   failDraft: null as ((input: CreateJournalEntryInput) => boolean) | null,
   seq: 0,
   voucherSeq: 0,
+  // The company's chart: numbers switched off (is_active false) and numbers
+  // not in it at all. Everything else exists and is active.
+  inactive: new Set<string>(),
+  absent: new Set<string>(),
+  inserted: [] as string[],
 }))
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createDraftEntry: vi.fn(async (_s: unknown, _c: string, _u: string, input: CreateJournalEntryInput) => {
     if (fake.failDraft?.(input)) throw new Error(`draft refused: ${input.description}`)
+    // The engine resolves only active accounts: a deactivated one is refused.
+    const off = input.lines.map((l) => l.account_number).filter((a) => fake.inactive.has(a))
+    if (off.length > 0) throw new Error(`Accounts not enabled in chart of accounts: ${off.join(', ')}`)
     const id = `je-${++fake.seq}`
     fake.drafts.set(id, input)
     return { id, status: 'draft', voucher_number: 0, ...input }
@@ -69,8 +77,10 @@ const PRIMARY_1930: CashAccountFixture = { ledger_account: '1930', enabled: true
  * Supabase mock for the reads createSalaryRunEntries makes:
  *   - cash_accounts (resolvePrimaryBankAccount): the primary row, then, when
  *     the primary cannot carry the payment, the enabled SEK candidates;
- *   - chart_of_accounts (ensureSalaryAccountsExist): every account exists,
- *     and the account numbers asked for are recorded in `ensured`;
+ *   - chart_of_accounts (activateSalaryAccounts via activateAccounts): every
+ *     account exists and is active unless listed in fake.inactive or
+ *     fake.absent; the numbers asked for are recorded in `ensured`, a
+ *     reactivation clears fake.inactive and an insert lands in fake.inserted;
  *   - journal_entries (the resume lookup): the fake ledger's posted rows for
  *     the asked source_id, or a read error when `ledgerError` is set.
  * The default is a company whose bank account IS 1930, so every test written
@@ -122,9 +132,33 @@ function makeSupabase(
           eq: vi.fn(() => ({
             in: vi.fn(async (_col: string, accounts: string[]) => {
               ensured.push(...accounts)
-              return { data: accounts.map((account_number) => ({ account_number })), error: null }
+              return {
+                data: accounts
+                  .filter((account_number) => !fake.absent.has(account_number))
+                  .map((account_number) => ({ account_number, is_active: !fake.inactive.has(account_number) })),
+                error: null,
+              }
             }),
           })),
+        })),
+        update: vi.fn((patch: { is_active: boolean }) => ({
+          eq: vi.fn(() => ({
+            in: vi.fn((_col: string, accounts: string[]) => ({
+              select: vi.fn(async () => {
+                if (patch.is_active) for (const a of accounts) fake.inactive.delete(a)
+                return { data: accounts.map((account_number) => ({ account_number })), error: null }
+              }),
+            })),
+          })),
+        })),
+        insert: vi.fn((rows: Array<{ account_number: string }>) => ({
+          select: vi.fn(async () => {
+            for (const r of rows) {
+              fake.absent.delete(r.account_number)
+              fake.inserted.push(r.account_number)
+            }
+            return { data: rows.map((r) => ({ account_number: r.account_number })), error: null }
+          }),
         })),
       }
     }),
@@ -217,6 +251,9 @@ beforeEach(() => {
   fake.failDraft = null
   fake.seq = 0
   fake.voucherSeq = 0
+  fake.inactive.clear()
+  fake.absent.clear()
+  fake.inserted.length = 0
 })
 
 describe('salary entries: net deductions', () => {
@@ -1041,6 +1078,54 @@ describe('salary entries: one line builder for booking and preview (feedback seq
 // Issue #3097: the net pay left the company's real bank account (1931, the
 // primary) while the verifikat credited 1930, so the bank row could never be
 // matched and the voucher needed a storno.
+describe('salary entries: accounts the run posts to are activated first', () => {
+  const bonusOn = (account: string) =>
+    makeRun([
+      makeEmployee({
+        gross_salary: 35000,
+        tax_withheld: 8000,
+        net_salary: 27000,
+        line_items: [
+          { item_type: 'bonus', amount: 5000, account_number: account, is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+
+  it('reactivates a deactivated 7010 and 7210 and posts the run', async () => {
+    fake.inactive.add('7010')
+    fake.inactive.add('7210')
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', bonusOn('7010'))
+
+    expect(fake.inactive.size).toBe(0)
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7010')[0].debit_amount).toBe(5000)
+    expect(linesOn(salary, '7210')).toHaveLength(1)
+    assertBalanced(salary)
+    expect(fake.ledger.map((row) => row.description)).toContain('Lön 2026-06')
+  })
+
+  it('creates a standard BAS account the chart lacks', async () => {
+    fake.absent.add('2940')
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', makeRun([makeEmployee()]))
+
+    expect(fake.inserted).toEqual(['2940'])
+  })
+
+  it('refuses a line account that is neither in the chart nor in BAS, drafting nothing', async () => {
+    fake.absent.add('7777')
+
+    await expect(
+      createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', bonusOn('7777')),
+    ).rejects.toMatchObject({ code: 'ACCOUNTS_NOT_IN_CHART', accountNumbers: ['7777'] })
+
+    expect(fake.inserted).not.toContain('7777')
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+    expect(fake.ledger).toHaveLength(0)
+  })
+})
+
 describe("salary entries: net pay on the company's own bank account", () => {
   const run = () => makeRun([makeEmployee()])
 

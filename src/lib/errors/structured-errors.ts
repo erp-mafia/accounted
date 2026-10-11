@@ -2071,6 +2071,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan ändrades samtidigt och kunde inte makuleras. Ladda om och försök igen.',
     message_en: 'Invoice was modified concurrently and could not be cancelled. Reload and retry.',
   },
+  INVOICE_CANCEL_NOT_QUOTE_OR_PROFORMA: {
+    httpStatus: 400,
+    message_sv: 'Bara offerter och proformafakturor kan makuleras. Ta bort ett utkast eller kreditera en skickad faktura.',
+    message_en: 'Only quotes and proforma invoices can be cancelled. Delete a draft or credit an issued invoice.',
+  },
   INVOICE_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Fakturan kunde inte hittas.',

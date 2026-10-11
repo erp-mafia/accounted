@@ -62,7 +62,7 @@ export const POST = withRouteContext(
 
     try {
       const buffer = await file.arrayBuffer()
-      const parsed = parseCustomersFile(buffer, file.name, columnOverrides)
+      const parsed = await parseCustomersFile(buffer, file.name, columnOverrides)
 
       // Fetch existing customers for duplicate detection.
       const existing = await fetchAllRows(({ from, to }) =>

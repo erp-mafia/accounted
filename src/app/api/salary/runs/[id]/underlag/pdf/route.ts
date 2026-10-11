@@ -1,8 +1,6 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildSalaryRunUnderlag, salaryRunUnderlagFileName } from '@/lib/salary/run-underlag'
-import { SalaryRunUnderlagPDF } from '@/lib/salary/pdf/run-underlag-template'
 import { contentDisposition } from '@/lib/api/content-disposition'
 
 /**
@@ -18,6 +16,10 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const result = await buildSalaryRunUnderlag(supabase, companyId, id)
     if (!result.ok) return errorResponseFromCode(result.code, log, { requestId })
 
+    const [{ renderToBuffer }, { SalaryRunUnderlagPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/salary/pdf/run-underlag-template'),
+    ])
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const buffer = await renderToBuffer(SalaryRunUnderlagPDF({ data: result.data }) as any)
 

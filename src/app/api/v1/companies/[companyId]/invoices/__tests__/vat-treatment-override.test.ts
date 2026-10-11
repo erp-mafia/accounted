@@ -348,10 +348,18 @@ describe('POST /invoices with vat_treatment reverse_charge_domestic (constructio
   })
 })
 
-describe('POST /invoices/bulk-create refuses a per-invoice VAT treatment it cannot apply', () => {
-  it('fails that item with VALIDATION_ERROR instead of silently invoicing the customer default', async () => {
+describe('POST /invoices/bulk-create applies a per-invoice VAT treatment like POST /invoices', () => {
+  it('creates the item as an export of goods: 0 %, ruta 36, the statement stored', async () => {
     const captures: Capture[] = []
-    mockServiceClient.mockReturnValue(makeSupabase(baseTables(), captures))
+    mockServiceClient.mockReturnValue(
+      makeSupabase(
+        baseTables({
+          invoices: { data: { id: INVOICE_ID, customer_id: CUSTOMER_ID, status: 'draft', total: 10000 }, error: null },
+          invoice_items: { data: null, error: null },
+        }),
+        captures,
+      ),
+    )
 
     const res = await bulkCreateInvoices(
       post({ invoices: [{ ...BODY, vat_treatment: 'export', delivery_country: 'NO' }] }, { path: '/bulk-create' }),
@@ -359,9 +367,33 @@ describe('POST /invoices/bulk-create refuses a per-invoice VAT treatment it cann
     )
 
     const body = await res.json()
+    expect(body.data.results[0].ok).toBe(true)
+    expect(captures.find((c) => c.table === 'invoices' && c.op === 'insert')?.payload).toMatchObject({
+      vat_treatment: 'export',
+      moms_ruta: '36',
+      vat_amount: 0,
+      total: 10000,
+      vat_treatment_override: 'export',
+      delivery_country: 'NO',
+    })
+  })
+
+  it('fails only that item with the code POST /invoices answers when the facts do not support it', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(makeSupabase(baseTables(), captures))
+
+    const res = await bulkCreateInvoices(
+      post({ invoices: [{ ...BODY, vat_treatment: 'export', delivery_country: 'DK' }] }, { path: '/bulk-create' }),
+      params,
+    )
+
+    const body = await res.json()
     const item = body.data.results[0]
     expect(item.ok).toBe(false)
-    expect(item.error).toMatchObject({ code: 'VALIDATION_ERROR', details: { field: 'vat_treatment' } })
+    expect(item.error).toMatchObject({
+      code: 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH',
+      details: { delivery_country: 'DK', required: 'outside_eu' },
+    })
     expect(captures.filter((c) => c.table === 'invoices')).toEqual([])
   })
 })

@@ -70,7 +70,7 @@ export const POST = withRouteContext(
 
     try {
       const buffer = await file.arrayBuffer()
-      const parsed = parseArticlesFile(buffer, file.name, columnOverrides)
+      const parsed = await parseArticlesFile(buffer, file.name, columnOverrides)
 
       // Fetch existing articles for duplicate detection.
       const existing = await fetchAllRows(({ from, to }) =>

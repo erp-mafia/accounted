@@ -17,6 +17,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { GENERIC_WORDS } from '@/lib/parties/classify'
 import { ledgerKey } from '@/lib/parties/ledger-key'
 import { preclean, type Precleaned } from './preclean'
@@ -168,15 +169,21 @@ async function loadDocumentHits(supabase: SupabaseClient, companyId: string, txI
 }
 
 async function loadParties(supabase: SupabaseClient, companyId: string): Promise<PartyRow[]> {
-  const { data, error } = await supabase
-    .from('parties')
-    .select('id, display_name, alias_keys, status')
-    .eq('company_id', companyId)
-    .is('archived_at', null)
-    .is('merged_into', null)
-    .limit(5000)
-  if (error) throw new Error(`parties: ${error.message}`)
-  return (data ?? []) as PartyRow[]
+  // Paged: a party missing from the register is a missed match, and PostgREST cuts a single read at 1000 rows.
+  try {
+    return await fetchAllRows<PartyRow>((range) =>
+      supabase
+        .from('parties')
+        .select('id, display_name, alias_keys, status')
+        .eq('company_id', companyId)
+        .is('archived_at', null)
+        .is('merged_into', null)
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    )
+  } catch (error) {
+    throw new Error(`parties: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 // Words that name a kind of thing, not a company: a candidate offered on
@@ -220,17 +227,22 @@ interface IdentityRow {
 /** Giro numbers the register already knows, by digits only. */
 async function loadPartyGiros(supabase: SupabaseClient, companyId: string): Promise<Map<string, string>> {
   const out = new Map<string, string>()
-  const { data, error } = await supabase
-    .from('party_identities')
-    .select('party_id, scheme, value')
-    .eq('company_id', companyId)
-    .in('scheme', ['bankgiro', 'plusgiro'])
-    .limit(5000)
-  if (error) {
-    log.info('party_identities not readable, skipping giro anchors', { message: error.message })
+  let data: IdentityRow[]
+  try {
+    data = await fetchAllRows<IdentityRow>((range) =>
+      supabase
+        .from('party_identities')
+        .select('party_id, scheme, value')
+        .eq('company_id', companyId)
+        .in('scheme', ['bankgiro', 'plusgiro'])
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    )
+  } catch (error) {
+    log.info('party_identities not readable, skipping giro anchors', { message: error instanceof Error ? error.message : String(error) })
     return out
   }
-  for (const r of (data ?? []) as IdentityRow[]) {
+  for (const r of data) {
     const digits = r.value.replace(/\D/g, '').replace(/^0+/, '')
     if (digits) out.set(`${r.scheme === 'plusgiro' ? 'pg' : 'bg'}:${digits}`, r.party_id)
   }

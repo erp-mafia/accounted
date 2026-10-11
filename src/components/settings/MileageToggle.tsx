@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { ExternalLink } from 'lucide-react'
@@ -29,6 +30,7 @@ export function MileageToggle() {
   const { settings, updateSettings } = useSettings()
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
+  const router = useRouter()
   const [isSaving, setIsSaving] = useState(false)
 
   const enabled = settings?.mileage_enabled ?? false
@@ -51,6 +53,9 @@ export function MileageToggle() {
         return
       }
       updateSettings({ mileage_enabled: next })
+      // The nav row is gated by the server-rendered dashboard layout, so the
+      // SWR patch alone leaves the Körjournal row as it was until a reload.
+      router.refresh()
     } catch (err) {
       // A rejected fetch (offline, DNS failure, aborted request) never reaches
       // the !res.ok arm above, and the switch is controlled by the settings

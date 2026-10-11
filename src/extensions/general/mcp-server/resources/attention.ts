@@ -4,7 +4,12 @@ import {
   fetchUnlinkedDocuments,
   UNLINKED_DOCUMENT_SCAN_CAP,
 } from '@/lib/documents/unlinked-documents'
-import { countReconciliationDue, listExpensePayoutsDue } from '@/lib/worklist/categories'
+import {
+  countPendingOperations,
+  countReconciliationDue,
+  countSupplierInvoicesAwaitingApproval,
+  listExpensePayoutsDue,
+} from '@/lib/worklist/categories'
 import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
 import { createLogger } from '@/lib/logger'
 
@@ -53,9 +58,9 @@ export const attentionResource: McpResource = {
       unbooked,
       unbookedSamples,
       overdueRows,
-      pendingSupplierHead,
+      pendingSupplierCount,
       pendingSupplierSamples,
-      pendingOpsHead,
+      pendingOpsCount,
       pendingOpsSamples,
       unmatchedReceiptsHead,
       unmatchedReceiptsSamples,
@@ -96,23 +101,18 @@ export const attentionResource: McpResource = {
         .lt('due_date', today)
         .order('due_date', { ascending: true })
         .limit(100),
-      supabase
-        .from('supplier_invoices')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .eq('status', 'registered'),
+      // The Att göra counts (lib/worklist/categories.ts): the same number the
+      // dashboard badge shows, so the agent and the user see one queue.
+      countSupplierInvoicesAwaitingApproval(supabase, companyId),
       supabase
         .from('supplier_invoices')
         .select('id, supplier_invoice_number, supplier_id, total, currency, due_date')
         .eq('company_id', companyId)
         .eq('status', 'registered')
+        .eq('is_credit_note', false)
         .order('due_date', { ascending: true })
         .limit(SAMPLE_LIMIT),
-      supabase
-        .from('pending_operations')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .eq('status', 'pending'),
+      countPendingOperations(supabase, companyId),
       supabase
         .from('pending_operations')
         .select('id, operation_type, title, risk_level, actor_label, created_at')
@@ -228,7 +228,6 @@ export const attentionResource: McpResource = {
     }
 
     // ── Pending supplier invoices (status='registered') ─────────────
-    const pendingSupplierCount = pendingSupplierHead.count ?? 0
     if (pendingSupplierCount > 0) {
       const oldestRegistered = pendingSupplierSamples.data?.[0]
       categories.push({
@@ -246,7 +245,6 @@ export const attentionResource: McpResource = {
     }
 
     // ── Pending operations awaiting approval ────────────────────────
-    const pendingOpsCount = pendingOpsHead.count ?? 0
     if (pendingOpsCount > 0) {
       const ops = pendingOpsSamples.data ?? []
       const hasHighRisk = ops.some((o) => o.risk_level === 'high')

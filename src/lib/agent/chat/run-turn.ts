@@ -308,7 +308,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     label: 'In-app chat',
   }
 
-  const anthropic = getAnthropic()
+  const anthropic = await getAnthropic()
   const model = intent.model || SONNET_MODEL
 
   let assistantText = ''

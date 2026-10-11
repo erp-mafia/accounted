@@ -20,7 +20,11 @@ import { commitArkivProposeFact } from '@/lib/arkiv/facts/propose'
 import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
-import { enforceBulkBookDimensionPolicy } from '@/lib/transactions/bulk-book'
+import {
+  enforceBulkBookDimensionPolicy,
+  runBulkBookDuplicateGuard,
+  type BulkBookDuplicateTx,
+} from '@/lib/transactions/bulk-book'
 import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
@@ -280,6 +284,7 @@ import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
 import { rejectSupersededInboxConversions } from './supersede'
+import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import type { AnyOperation } from '@/lib/operations/types'
 import type {
   Transaction,
@@ -5196,6 +5201,14 @@ async function commitCreateSupplierInvoiceFromInbox(
   // still-pending twins are rejected (crm#1074).
   await rejectSupersededInboxConversions(supabase, companyId, inboxItemId, invoice.id as string)
 
+  // The supplier's giro, IBAN or BIC the scan read and staging showed the
+  // approver: written now, after approval and once the invoice exists, and
+  // only into columns the supplier still lacks. Never throws.
+  const paymentDetails = params.supplier_payment_details as SupplierPaymentDetails | undefined
+  if (paymentDetails) {
+    await backfillSupplierPaymentDetails(supabase, companyId, supplierId, paymentDetails)
+  }
+
   try {
     await eventBus.emit({
       type: 'supplier_invoice.registered',
@@ -7118,9 +7131,11 @@ async function commitBulkBookTransactions(
   //   - `auth.uid()` resolves the caller; membership checked against
   //     `company_members.company_id = p_company_id`.
   // The MCP execute() handler additionally pre-checks tx ownership +
-  // JE ownership at stage time to surface clean errors. The one rule this
-  // handler runs itself is the dimension policy, which the RPC does not:
-  // rules may have changed and a value may have been archived since staging.
+  // JE ownership at stage time to surface clean errors. The two rules this
+  // handler runs itself are the dimension policy and the booking-time
+  // duplicate guard, which the RPC does not: rules may have changed, a value
+  // may have been archived, and another verifikat may have booked the same
+  // bank line since staging.
   const txIds = params.tx_ids
   const existingJeId = (params.existing_journal_entry_id as string | null | undefined) ?? null
   let newEntry = (params.new_entry as Record<string, unknown> | null | undefined) ?? null
@@ -7143,6 +7158,46 @@ async function commitBulkBookTransactions(
       log,
     )
     newEntry = { ...newEntry, lines }
+  }
+  // Booking-time duplicate guard, the one every bulk-book door runs
+  // (runBulkBookDuplicateGuard). allow_duplicate is the reviewed override
+  // staged with the operation; honouring it records each dismissal in
+  // behandlingshistorik. A failed row fetch skips the guard (fail-open, like
+  // a failed detection): the RPC still refuses a row that is not the
+  // company's or already booked.
+  const allowDuplicate = params.allow_duplicate === true
+  const { data: dupTxs, error: dupTxError } = await supabase
+    .from('transactions')
+    .select('id, amount, currency, date, amount_sek, exchange_rate, cash_account_id')
+    .in('id', txIds as string[])
+    .eq('company_id', companyId)
+  if (dupTxError) {
+    log.warn('bulk_book_transactions: duplicate guard skipped, row fetch failed', { code: dupTxError.code })
+  } else {
+    const duplicate = await runBulkBookDuplicateGuard(
+      supabase,
+      companyId,
+      userId,
+      (dupTxs ?? []) as BulkBookDuplicateTx[],
+      {
+        txIds: txIds as string[],
+        existingJournalEntryId: existingJeId,
+        force: allowDuplicate,
+        recordDismissal: true,
+        via: 'allow_duplicate',
+      },
+      log,
+    )
+    if (!duplicate.ok) {
+      const entry = getErrorEntry('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+      const dup = duplicate.details.candidate
+      return {
+        error: `${entry?.message_sv ?? 'Den här affärshändelsen ser redan ut att vara bokförd.'} (verifikat ${dup.voucher_label}, ${dup.entry_date})`,
+        errorCode: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE',
+        status: 409,
+        data: duplicate.details as unknown as Record<string, unknown>,
+      }
+    }
   }
   // Through the engine door, which also emits journal_entry.committed for a
   // new samlingsverifikat. This path runs on the cookieless service client

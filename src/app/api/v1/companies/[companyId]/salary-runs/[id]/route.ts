@@ -18,6 +18,7 @@ import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/reg
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
+import { deleteDraftSalaryRun } from '@/lib/salary/delete-run'
 
 // Inline; the project's shared isoDate is not exported from lib/api/schemas.
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD date format')
@@ -333,65 +334,29 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       })
     }
 
-    const { data: existing, error: fetchErr } = await ctx.supabase
-      .from('salary_runs')
-      .select('id, status')
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .maybeSingle()
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!existing) {
-      return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-    if ((existing as { status: string }).status !== 'draft') {
-      return v1ErrorResponseFromCode('SALARY_RUN_DELETE_NOT_DRAFT', ctx.log, {
-        requestId: ctx.requestId,
-        details: { current_status: (existing as { status: string }).status },
-      })
+    const result = await deleteDraftSalaryRun(ctx.supabase, {
+      companyId: ctx.companyId!,
+      salaryRunId: idParse.data,
+      dryRun: ctx.dryRun,
+    })
+    if (!result.ok) {
+      switch (result.code) {
+        case 'DB_ERROR':
+          return v1ErrorResponse(result.error, ctx.log, { requestId: ctx.requestId })
+        case 'SALARY_RUN_NOT_FOUND':
+          return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+        default:
+          // SALARY_RUN_DELETE_NOT_DRAFT, or SALARY_RUN_DELETE_HAS_JOURNAL_ENTRY
+          // when the locked write matched no row (lib/salary/delete-run.ts).
+          return v1ErrorResponseFromCode(result.code, ctx.log, {
+            requestId: ctx.requestId,
+            details: result.details,
+          })
+      }
     }
 
     if (ctx.dryRun) {
-      return dryRunPreview(
-        { id: idParse.data, deleted: true },
-        { requestId: ctx.requestId, log: ctx.log },
-      )
-    }
-
-    // BFL 5 kap räkenskapsinformation defense: in addition to optimistic-
-    // locking on status='draft', require all journal-entry foreign keys to
-    // be null. status='draft' is the primary gate (the lifecycle never
-    // populates salary_entry_id / avgifter_entry_id / vacation_entry_id
-    // before advancing past draft), but if a partial PR-2 failure ever
-    // leaves the run in a status='draft' state with a posted JE attached,
-    // a hard delete would orphan räkenskapsinformation. The null guards
-    // turn that hypothetical into a clean 400 instead.
-    const { error, count } = await ctx.supabase
-      .from('salary_runs')
-      .delete({ count: 'exact' })
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .eq('status', 'draft')
-      .is('salary_entry_id', null)
-      .is('avgifter_entry_id', null)
-      .is('vacation_entry_id', null)
-
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-    if (count === 0) {
-      // Pre-flight saw status='draft', so a status race is one explanation,
-      // but the more concerning interpretation is that the FK-null guards
-      // tripped (a journal entry has somehow attached to a draft row,
-      // which would be a partial-failure path in PR-2's lifecycle code).
-      // Surface the distinct BFL 5 kap code so an operator seeing this in
-      // logs can immediately look for a misrouted verifikation rather
-      // than chalking it up to concurrency.
-      return v1ErrorResponseFromCode('SALARY_RUN_DELETE_HAS_JOURNAL_ENTRY', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: 'fk_non_null_or_status_race' },
-      })
+      return dryRunPreview(result.data, { requestId: ctx.requestId, log: ctx.log })
     }
 
     return noContent({ requestId: ctx.requestId })

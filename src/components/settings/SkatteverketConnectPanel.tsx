@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { useCapability } from '@/contexts/CompanyContext'
-import { isAllowedSkvPopupOrigin } from '@/lib/skatteverket/popup-origin'
+import { isSkvPopupOrigin, type SkvPopupMessage } from '@/lib/skatteverket/popup-origin'
+import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { isSelfHosted } from '@/lib/env/public-flags'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
@@ -70,9 +71,6 @@ function SkatteverketPersonalConnectionCard() {
   // /authorize call overwrites the stored oauth_state + PKCE verifier, so a
   // parallel flow guarantees a CSRF failure for whichever tab finishes last.
   const [connecting, setConnecting] = useState(false)
-  // Handle of the OAuth tab opened by startConnect: used to verify the
-  // sender identity of incoming postMessages and to detect abandonment.
-  const popupRef = useRef<Window | null>(null)
   const watchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const delayedRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -146,54 +144,46 @@ function SkatteverketPersonalConnectionCard() {
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [loadStatus])
 
-  // Listen for OAuth completion from the BankID popup (same pattern as
-  // AGIPanel): the callback page posts success/error and closes itself, so
-  // the settings page never navigates and we just re-fetch the status.
-  useEffect(() => {
-    function handleMessage(event: MessageEvent) {
-      // The popup runs on the pinned SKV OAuth host, which differs from the
-      // app origin after the app.accounted.se cutover.
-      if (!isAllowedSkvPopupOrigin(event.origin, window.location.origin)) return
-      // Source-identity check: only the popup this component opened can
-      // trigger the handler; a window reference cannot be forged by other
-      // same-origin scripts.
-      if (!popupRef.current || event.source !== popupRef.current) return
-      if (event.data?.type === 'skatteverket-oauth-success') {
-        stopWatchingOauthTab()
-        toast({
-          title: tOauth('connected_title'),
-          description: tOauth('connected_description'),
-        })
+  // Handle of the OAuth tab opened by startConnect (same pattern as
+  // AGIPanel). Only messages from that tab, on the app origin or the pinned
+  // SKV OAuth host, reach the handler; the watch in startConnect uses it to
+  // detect abandonment. The callback page posts success/error and closes
+  // itself, so the settings page never navigates and we just re-fetch the
+  // status.
+  const popupRef = useOAuthPopup<SkvPopupMessage>((data) => {
+    if (data?.type === 'skatteverket-oauth-success') {
+      stopWatchingOauthTab()
+      toast({
+        title: tOauth('connected_title'),
+        description: tOauth('connected_description'),
+      })
+      loadStatus()
+      // Verified success: rebroadcast as an internal DOM event so passive
+      // consumers (e.g. the salary page) can react without trusting raw
+      // postMessage.
+      window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
+      // The post-connect refresh (skattekonto sync, AGI settle, token
+      // health) now runs server-side AFTER the callback responds, so the
+      // status fetched above predates it. Refetch once more when it has
+      // plausibly settled so synced data and health flags (e.g.
+      // MISSING_SCOPE) show up without a manual reload.
+      if (delayedRefetchRef.current) clearTimeout(delayedRefetchRef.current)
+      delayedRefetchRef.current = setTimeout(() => {
         loadStatus()
-        // Verified success: rebroadcast as an internal DOM event so passive
-        // consumers (e.g. the salary page) can react without trusting raw
-        // postMessage.
         window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
-        // The post-connect refresh (skattekonto sync, AGI settle, token
-        // health) now runs server-side AFTER the callback responds, so the
-        // status fetched above predates it. Refetch once more when it has
-        // plausibly settled so synced data and health flags (e.g.
-        // MISSING_SCOPE) show up without a manual reload.
-        if (delayedRefetchRef.current) clearTimeout(delayedRefetchRef.current)
-        delayedRefetchRef.current = setTimeout(() => {
-          loadStatus()
-          window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
-        }, 15_000)
-      } else if (event.data?.type === 'skatteverket-oauth-error') {
-        stopWatchingOauthTab()
-        toast({
-          title: tOauth('connect_failed_title'),
-          description:
-            typeof event.data.reason === 'string' && event.data.reason
-              ? event.data.reason
-              : undefined,
-          variant: 'destructive',
-        })
-      }
+      }, 15_000)
+    } else if (data?.type === 'skatteverket-oauth-error') {
+      stopWatchingOauthTab()
+      toast({
+        title: tOauth('connect_failed_title'),
+        description:
+          typeof data.reason === 'string' && data.reason
+            ? data.reason
+            : undefined,
+        variant: 'destructive',
+      })
     }
-    window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
-  }, [loadStatus, stopWatchingOauthTab, toast, tOauth])
+  }, isSkvPopupOrigin)
 
   function startConnect() {
     // Open the BankID OAuth flow in a NEW TAB, not a popup. The old 600x750

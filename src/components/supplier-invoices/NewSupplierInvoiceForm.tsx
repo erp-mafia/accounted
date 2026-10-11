@@ -32,6 +32,7 @@ import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { INBOX_UPLOAD_ACCEPT, isAllowedInboxFile } from '@/lib/documents/upload-types'
 import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
@@ -114,8 +115,6 @@ const CELL_INPUT_CLASS =
 const ROW_ICON_BTN_CLASS =
   'inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground'
 
-const UNDERLAG_ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
-const UNDERLAG_ACCEPT_ATTR = '.pdf,.jpg,.jpeg,.png,.webp'
 const UNDERLAG_MAX_SIZE = 10 * 1024 * 1024
 
 // A deferred web upload returns an empty extraction skeleton (confidence 0)
@@ -1236,7 +1235,7 @@ export default function NewSupplierInvoiceForm({
       fileSize: file.size,
       uploadKey,
     }
-    if (!UNDERLAG_ACCEPTED_TYPES.includes(file.type)) {
+    if (!isAllowedInboxFile(file)) {
       setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_unsupported_type') }])
       return
     }
@@ -1615,7 +1614,7 @@ export default function NewSupplierInvoiceForm({
                 <input
                   ref={underlagInputRef}
                   type="file"
-                  accept={UNDERLAG_ACCEPT_ATTR}
+                  accept={INBOX_UPLOAD_ACCEPT}
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0]

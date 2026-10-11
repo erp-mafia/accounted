@@ -143,7 +143,7 @@ async function companyOrgnr(ctx: ExtensionContext): Promise<string> {
  * Defense-in-depth RBAC for write endpoints. The extension dispatcher only
  * authenticates and resolves a company; it does NOT check the member's role.
  * Filing an årsredovisning is a write operation: viewer members are blocked.
- * Mirrors requireAgiWriteRole in the skatteverket extension.
+ * Mirrors requireSkvWriteRole in the skatteverket extension.
  *
  * Returns null on success, a 403/500 NextResponse on failure.
  */

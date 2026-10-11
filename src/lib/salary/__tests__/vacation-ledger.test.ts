@@ -3,7 +3,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createPagedMockSupabase, createQueuedMockSupabase, manyRows } from '@/tests/helpers'
 import {
   getClosableYearStart,
   getVacationYearBounds,
@@ -488,5 +488,30 @@ describe('syncVacationLedgerForEmployees', () => {
 
     const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-07-13')
     expect(result.ok).toBe(false)
+  })
+})
+
+describe('syncVacationLedgerForEmployees past 1,000 booked payslips', () => {
+  const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+
+  it('counts the vacation days of every booked payslip, not the first 1,000', async () => {
+    const run = { period_year: 2026, period_month: 6, status: 'booked' }
+    const { supabase, findCalls } = createPagedMockSupabase({
+      company_settings: [{ salary_vacation_year_basis: 'calendar' }],
+      employees: [
+        { id: EMPLOYEE_ID, vacation_days_per_year: 25, vacation_days_saved: 0, vacation_rule: 'procentregeln', employment_start: '2015-01-01' },
+      ],
+      salary_run_employees: [
+        ...manyRows(1000, () => ({ employee_id: EMPLOYEE_ID, vacation_days_taken: 0, salary_run: run })),
+        { employee_id: EMPLOYEE_ID, vacation_days_taken: 3, salary_run: run },
+      ],
+    })
+
+    const result = await syncVacationLedgerForEmployees(supabase as unknown as SupabaseClient, COMPANY_ID, [EMPLOYEE_ID], '2026-07-13')
+
+    expect(result.ok).toBe(true)
+    const [rows] = findCalls('employee_vacation_balances', 'upsert')[0] as [Array<Record<string, unknown>>]
+    expect(rows[0].taken_days).toBe(3)
   })
 })

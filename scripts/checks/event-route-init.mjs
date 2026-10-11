@@ -58,7 +58,6 @@ export const UNINITIALIZED_EMITTING_ROUTES = new Set([
   'app/api/extensions/invoice-inbox/underlag-reconcile/cron/route.ts',
   'app/api/extensions/push-notifications/cron/route.ts',
   'app/api/extensions/shopify/orders/cron/route.ts',
-  'app/api/extensions/stripe/transactions/cron/route.ts',
   'app/api/extensions/whatsapp-inbox/retention/cron/route.ts',
   'app/api/extensions/whatsapp-inbox/sweep/cron/route.ts',
   'app/api/extensions/woocommerce/orders/cron/route.ts',

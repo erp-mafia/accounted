@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import {
   roundOre,
+  parseAmountInput,
   truncateToWholeKronor,
   ORE_TOLERANCE,
   ORE_ROUNDING_ACCOUNT,
@@ -181,5 +184,98 @@ describe('ORE_ROUNDING_ACCOUNT', () => {
     expect(ORE_ROUNDING_ACCOUNT).toBe('3740')
     expect(reference?.account_name).toBe('Öres- och kronutjämning')
     expect(reference?.account_class).toBe(3)
+  })
+})
+
+describe('parseAmountInput', () => {
+  it('reads the Swedish form a person types or pastes: space groups, decimal comma', () => {
+    expect(parseAmountInput('12 345,67')).toBe(12345.67)
+    expect(parseAmountInput('1 234 567,89')).toBe(1234567.89)
+    expect(parseAmountInput('12345,67')).toBe(12345.67)
+  })
+
+  it('accepts non-breaking and narrow no-break spaces as group separators', () => {
+    // sv-SE Intl formatting and copied bank statements use U+00A0 / U+202F.
+    expect(parseAmountInput('12\u00a0345,67')).toBe(12345.67)
+    expect(parseAmountInput('12\u202f345,67')).toBe(12345.67)
+    expect(parseAmountInput('1\u2009000')).toBe(1000)
+  })
+
+  it('accepts a dot as decimal separator', () => {
+    expect(parseAmountInput('12345.67')).toBe(12345.67)
+    expect(parseAmountInput('12 345.67')).toBe(12345.67)
+  })
+
+  it('reads dot or comma thousands when the other mark is the decimal', () => {
+    expect(parseAmountInput('1.234,56')).toBe(1234.56)
+    expect(parseAmountInput('1,234.56')).toBe(1234.56)
+    expect(parseAmountInput('1.234.567,89')).toBe(1234567.89)
+    expect(parseAmountInput('1,234,567.89')).toBe(1234567.89)
+  })
+
+  it('accepts an ASCII hyphen or a Unicode minus sign', () => {
+    expect(parseAmountInput('-500')).toBe(-500)
+    expect(parseAmountInput('\u2212500')).toBe(-500)
+    expect(parseAmountInput('\u221212 345,67')).toBe(-12345.67)
+  })
+
+  it('trims surrounding whitespace and tolerates a half-typed decimal', () => {
+    expect(parseAmountInput('  100  ')).toBe(100)
+    expect(parseAmountInput('12,')).toBe(12)
+    expect(parseAmountInput(',5')).toBe(0.5)
+  })
+
+  it('rounds to the öre with roundOre', () => {
+    expect(parseAmountInput('1,005')).toBe(roundOre(1.005))
+    expect(parseAmountInput('10,075')).toBe(10.08)
+    expect(parseAmountInput('0,001')).toBe(0)
+  })
+
+  it('never returns negative zero', () => {
+    expect(Object.is(parseAmountInput('-0'), 0)).toBe(true)
+    expect(Object.is(parseAmountInput('-0,001'), 0)).toBe(true)
+  })
+
+  it('returns null for empty or non-amount input instead of guessing', () => {
+    for (const input of [
+      '',
+      '   ',
+      '-',
+      ',',
+      'abc',
+      '12 kr',
+      '1e5',
+      'Infinity',
+      '0x10',
+      '12,3,4',
+      '1.234.567',
+      '1,23.45',
+      '12-3',
+      '--5',
+      null,
+      undefined,
+    ]) {
+      expect(parseAmountInput(input as string | null | undefined), String(input)).toBeNull()
+    }
+  })
+})
+
+describe('parseAmountInput call sites', () => {
+  const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '../../', rel), 'utf8')
+
+  it('"Betalt i SEK" on a supplier invoice reads 12 345,67 into the preview', () => {
+    // The page parsed with Number(s.replace(',', '.')): "12 345,67" became
+    // NaN, then 0, so the typed SEK figure never reached the mark-paid
+    // preview or the booking, and the default SEK amount was booked instead.
+    const src = read('app/(dashboard)/supplier-invoices/[id]/page.tsx')
+    expect(src).toContain("from '@/lib/money'")
+    expect(src).toMatch(/paySekNum = isForeignInvoice \? parseAmountInput\(paySek\)/)
+    expect(src).not.toContain(".replace(',', '.')")
+    expect(parseAmountInput('12 345,67')).toBe(12345.67)
+  })
+
+  it('the invoice-match dialog reads edited line amounts with parseAmountInput', () => {
+    const src = read('components/transactions/InvoiceMatchDialog.tsx')
+    expect(src).toMatch(/function parseAmount\(s: string\): number \{\s*return parseAmountInput\(s\) \?\? 0/)
   })
 })

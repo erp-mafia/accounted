@@ -413,6 +413,9 @@ export const arcimMigrationExtension: Extension = {
               suppliers: supplierCount ?? 0,
               invoices: invoiceCount ?? 0,
             },
+            // The providers this deployment can connect, so the wizard offers
+            // no card the /connect gate refuses (WINT ships dark).
+            enabledProviders: enabledProviders().map(p => p.id),
           })
         } catch (error) {
           moduleLog.error('arcim status failed', error as Error, { companyId })

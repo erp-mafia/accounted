@@ -131,6 +131,8 @@ export interface SigningChallenge {
   approach: 'decoupled' | 'redirect'
   autostartToken: string | null
   qrData: string | null
+  /** The QR as a finished image (data: URL) when the bank sends no data to draw it from. */
+  qrImage: string | null
   redirectUrl: string | null
 }
 

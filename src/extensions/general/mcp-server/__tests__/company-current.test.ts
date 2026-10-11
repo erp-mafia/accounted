@@ -108,6 +108,9 @@ const EXPECTED_QUERIES: { table: string; columns: string[] }[] = [
   { table: 'deadlines', columns: ['id', 'title', 'due_date', 'deadline_type', 'priority', 'status'] },
   { table: 'company_inboxes', columns: ['local_part'] },
   { table: 'arkiv_usage_daily', columns: ['activity', 'units'] },
+  // countUnbookedBankTransactions' business leg, issued after its untriaged
+  // head count (the `transactions` entry above) resolves.
+  { table: 'transactions', columns: ['id'] },
 ]
 
 /** One empty result per query, so the resource can run end to end. */
@@ -196,6 +199,37 @@ describe('Accounted://company/current query shape', () => {
     const [invoices] = findCall(calls, 'invoices')
     expect(invoices).toBeDefined()
     expect(argsOf(invoices, 'eq')).toContainEqual(['document_type', 'invoice'])
+  })
+})
+
+describe('Accounted://company/current unbooked count', () => {
+  it('counts unbooked transactions with the shared definition, not journal_entry_id IS NULL alone', async () => {
+    const results = emptyResults()
+    results[8] = { count: 3 } // untriaged head count
+    results[16] = { data: [{ id: 't-business' }] } // business rows without a pointer
+    const { supabase, calls } = createRecordingSupabase(results)
+
+    const result = (await companyCurrentResource.read(ctx(supabase))) as {
+      counts: { uncategorized_transactions: number | null }
+    }
+
+    const [untriaged] = findCall(calls, 'transactions')
+    expect(argsOf(untriaged, 'is')).toContainEqual(['is_business', null])
+    expect(argsOf(untriaged, 'eq')).toContainEqual(['is_ignored', false])
+    // 3 untriaged + 1 business row anchored nowhere (the anchor reads find nothing).
+    expect(result.counts.uncategorized_transactions).toBe(4)
+  })
+
+  it('reports null, not zero, when the count fails', async () => {
+    const results = emptyResults()
+    results[8] = { error: { message: 'statement timeout' } }
+    const { supabase } = createRecordingSupabase(results)
+
+    const result = (await companyCurrentResource.read(ctx(supabase))) as {
+      counts: { uncategorized_transactions: number | null }
+    }
+
+    expect(result.counts.uncategorized_transactions).toBeNull()
   })
 })
 

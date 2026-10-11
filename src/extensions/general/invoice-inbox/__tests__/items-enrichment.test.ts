@@ -8,8 +8,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import {
+  createPagedMockSupabase,
   createQueuedMockSupabase,
   createMockRequest,
+  manyRows,
   parseJsonResponse,
   makeInvoiceInboxItem,
 } from '@/tests/helpers'
@@ -155,6 +157,33 @@ describe('GET /items', () => {
       matched_transaction_journal_entry_id: JE1,
       underlag_status: 'unknown',
     })
+  })
+
+  it('returns every item past 1,000 without a limit: the old cap of 500 hid open underlag behind booked items', async () => {
+    const { supabase, findCalls } = createPagedMockSupabase({
+      invoice_inbox_items: manyRows(1001, (i) => makeInvoiceInboxItem({ id: `item-${i}`, extracted_data: {} as never })),
+    })
+
+    const { status, body } = await parseJsonResponse<{ data: { items: EnrichedItem[]; count: number } }>(
+      await route.handler(req(), buildCtx(supabase)),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.count).toBe(1001)
+    expect(findCalls('invoice_inbox_items', 'order').map((a) => a[0]).slice(0, 2)).toEqual(['created_at', 'id'])
+  })
+
+  it('still answers a small explicit limit with the newest items only', async () => {
+    const { supabase } = createPagedMockSupabase({
+      invoice_inbox_items: manyRows(300, (i) => makeInvoiceInboxItem({ id: `item-${i}`, extracted_data: {} as never })),
+    })
+
+    const { body } = await parseJsonResponse<{ data: { items: EnrichedItem[] } }>(
+      await route.handler(createMockRequest('/items?limit=100', { method: 'GET' }), buildCtx(supabase)),
+    )
+
+    expect(body.data.items).toHaveLength(100)
+    expect(body.data.items[0].id).toBe('item-0')
   })
 })
 

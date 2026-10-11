@@ -26,6 +26,15 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { skatteverketExtension } from '../index'
 
+/** The write-role gate reads company_members; this caller is a member. */
+function memberSupabase() {
+  const membership = {
+    eq: () => membership,
+    maybeSingle: async () => ({ data: { role: 'member' }, error: null }),
+  }
+  return { from: () => ({ select: () => membership }) }
+}
+
 function makeContext(): ExtensionContext {
   return {
     userId: 'user-1',
@@ -33,7 +42,7 @@ function makeContext(): ExtensionContext {
     extensionId: 'skatteverket',
     requestId: 'req-lock-audit',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    supabase: {} as any,
+    supabase: memberSupabase() as any,
     emit: vi.fn().mockResolvedValue(undefined),
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     settings: {

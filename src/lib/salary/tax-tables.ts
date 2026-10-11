@@ -18,7 +18,6 @@
  */
 
 import { createLogger } from '@/lib/logger'
-import { FALLBACK_TAX_TABLES, FALLBACK_TAX_TABLE_YEARS } from './tax-tables-fallback'
 
 const log = createLogger('tax-tables')
 
@@ -173,12 +172,16 @@ function taxForRate(rate: TaxTableRate, roundedIncome: number): number {
 /**
  * Build TaxTableRate[] for a given year/table/column from the bundled fallback data.
  * Returns null when the requested year/table is not present in the fallback module.
+ *
+ * The fallback module (~470 KB of table rows) is imported here, when the API
+ * has failed, rather than at load of every module that reaches tax-tables.ts.
  */
-function getFallbackRates(
+async function getFallbackRates(
   year: number,
   tableNumber: number,
   column: number
-): TaxTableRate[] | null {
+): Promise<TaxTableRate[] | null> {
+  const { FALLBACK_TAX_TABLES } = await import('./tax-tables-fallback')
   const yearTables = FALLBACK_TAX_TABLES[year]
   if (!yearTables) return null
   const rows = yearTables[tableNumber]
@@ -374,7 +377,7 @@ export async function fetchTaxTableRates(
     return { rates, source: 'api' }
   } catch (err) {
     const apiErr = err instanceof Error ? err.message : 'unknown'
-    const fallbackRates = getFallbackRates(year, tableNumber, column)
+    const fallbackRates = await getFallbackRates(year, tableNumber, column)
 
     if (fallbackRates) {
       log.warn(
@@ -388,6 +391,7 @@ export async function fetchTaxTableRates(
       return { rates: fallbackRates, source: 'fallback' }
     }
 
+    const { FALLBACK_TAX_TABLE_YEARS } = await import('./tax-tables-fallback')
     const supportedYears = Array.from(FALLBACK_TAX_TABLE_YEARS).join(', ') || 'none'
     throw new TaxTableUnavailableError(
       `Kunde inte hämta skattetabell ${tableNumber} kolumn ${column} för ${year} från Skatteverket ` +

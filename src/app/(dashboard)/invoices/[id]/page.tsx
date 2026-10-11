@@ -6,7 +6,6 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
-import { guardBrowserWrite } from '@/lib/company/tab-guard'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -51,7 +50,8 @@ import {
   type InvoicePdfSource,
 } from '@/lib/invoices/invoice-pdf-source'
 import { isPaymentConfirmationEligible } from '@/lib/invoices/payment-confirmation'
-import { contentDispositionFilename } from '@/lib/api/content-disposition'
+import { downloadFile, RENDERED_DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
+import { failureDescription } from '@/lib/browser/action-failure'
 import {
   Loader2,
   Send,
@@ -192,6 +192,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const tInvoices = useTranslations('invoices')
   const tCommon = useTranslations('common')
   const locale = useLocale()
+  const downloadLocale: ErrorLocale = locale.startsWith('sv') ? 'sv' : 'en'
+  const downloadFailureCopy = {
+    timeout: tCommon('download_timeout'),
+    network: tCommon('download_network'),
+  }
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
   const [reminders, setReminders] = useState<ReminderHistoryRow[]>([])
@@ -753,14 +758,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
-  async function updateStatus(status: InvoiceStatus) {
+  async function updateStatus(status: 'sent' | 'cancelled') {
     if (!invoice) return
-    // Cross-tab guard (WL-09): the direct Supabase branches below bypass the
-    // patched window.fetch, so consult the tab guard explicitly. On a
-    // mismatch the blocking dialog raised by guardBrowserWrite is the user
-    // feedback; nothing is written.
-    if (!guardBrowserWrite()) return
-
     setIsUpdating(true)
 
     try {
@@ -773,26 +772,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           const data = await response.json()
           throw new Error(data.error || t('mark_sent_failed_fallback'))
         }
-      } else if (status === 'cancelled') {
-        // Only drafts, proformas and quotes can be cancelled directly: sent/overdue/paid
-        // invoices have committed journal entries and require a credit note instead
-        if (invoice.status !== 'draft') {
-          const docType = ((invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice') as InvoiceDocumentType
-          if (docType !== 'proforma' && docType !== 'quote') {
-            throw new Error(t('cancel_posted_error'))
-          }
-        }
-        const { error } = await supabase
-          .from('invoices')
-          .update({ status })
-          .eq('id', invoice.id)
-        if (error) throw new Error(error.message)
       } else {
-        const { error } = await supabase
-          .from('invoices')
-          .update({ status })
-          .eq('id', invoice.id)
-        if (error) throw new Error(error.message)
+        // Only a quote or a proforma is cancelled here (the menu offers
+        // nothing else); the route refuses the rest and records who did it.
+        const response = await fetch(`/api/invoices/${invoice.id}/cancel`, {
+          method: 'POST',
+        })
+        if (!response.ok) {
+          const data = await response.json().catch(() => null)
+          throw new Error(
+            getUserErrorMessage(data, { context: 'invoice', statusCode: response.status }) ||
+              t('fallback_try_again'),
+          )
+        }
       }
 
       toast({
@@ -1008,34 +1000,30 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsDownloading(true)
 
     try {
-      const response = await fetch(source.url)
+      const result = await downloadFile({
+        url: source.url,
+        filename: `faktura-${invoice.invoice_number ?? `utkast-${invoice.id.slice(0, 8)}`}.pdf`,
+        preferServerFilename: true,
+        locale: downloadLocale,
+        errorContext: 'invoice',
+        timeoutMs: RENDERED_DOWNLOAD_TIMEOUT_MS,
+      })
 
-      if (!response.ok) {
+      if (!result.ok) {
         // A missing archive is not a generation failure and must not offer a
         // silent substitute: hand the choice back to the user.
-        if (source.kind === 'archived') {
+        if (result.reason === 'server' && source.kind === 'archived') {
           setPdfIntent('download')
           setPdfArchiveIssue('document')
           return
         }
         toast({
           title: t('pdf_download_failed_title'),
-          description: await describePdfRouteFailure(response),
+          description: failureDescription(result, downloadFailureCopy),
           variant: 'destructive',
         })
         return
       }
-
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
-        ?? `faktura-${invoice.invoice_number ?? `utkast-${invoice.id.slice(0, 8)}`}.pdf`
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
 
       const caveat = invoiceDocumentCaveat(source)
       if (caveat) {
@@ -1110,24 +1098,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsDownloadingConfirmation(true)
 
     try {
-      const response = await fetch(source.url)
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as {
-          error?: { code?: string; message?: string; message_en?: string }
-        } | null
-        throw body?.error ?? new Error(t('pdf_generate_failed'))
+      const result = await downloadFile({
+        url: source.url,
+        filename: `Betalningsbekraftelse-${invoice.invoice_number ?? invoice.id.slice(0, 8)}.pdf`,
+        preferServerFilename: true,
+        locale: downloadLocale,
+        errorContext: 'invoice',
+        timeoutMs: RENDERED_DOWNLOAD_TIMEOUT_MS,
+      })
+      if (!result.ok) {
+        toast({
+          title: t('pdf_download_failed_title'),
+          description: failureDescription(result, downloadFailureCopy),
+          variant: 'destructive',
+        })
+        return
       }
-
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
-        ?? `Betalningsbekraftelse-${invoice.invoice_number ?? invoice.id.slice(0, 8)}.pdf`
-      document.body.appendChild(anchor)
-      anchor.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(anchor)
 
       toast({
         title: t('payment_confirmation_downloaded_title'),
@@ -1184,24 +1170,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsDownloadingPeppol(true)
 
     try {
-      const response = await fetch(`/api/invoices/${invoice.id}/peppol`)
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as {
-          error?: { code?: string; message?: string; message_en?: string }
-        } | null
-        throw body?.error ?? new Error(t('peppol_download_failed_description'))
+      const result = await downloadFile({
+        url: `/api/invoices/${invoice.id}/peppol`,
+        filename: `peppol-invoice-${invoice.invoice_number ?? invoice.id}.xml`,
+        preferServerFilename: true,
+        locale: downloadLocale,
+        errorContext: 'invoice',
+        timeoutMs: RENDERED_DOWNLOAD_TIMEOUT_MS,
+      })
+      if (!result.ok) {
+        toast({
+          title: t('peppol_download_failed_title'),
+          description: failureDescription(result, downloadFailureCopy),
+          variant: 'destructive',
+        })
+        return
       }
-
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
-        ?? `peppol-invoice-${invoice.invoice_number ?? invoice.id}.xml`
-      document.body.appendChild(anchor)
-      anchor.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(anchor)
 
       toast({
         title: t('peppol_downloaded_title'),

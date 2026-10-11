@@ -27,7 +27,7 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 vi.mock('@/lib/bookkeeping/engine', () => ({
   commitEntry: vi.fn().mockResolvedValue({ id: 'entry-1', status: 'posted' }),
-  getNextVoucherNumber: vi.fn().mockResolvedValue(143),
+  peekNextVoucherNumber: vi.fn().mockResolvedValue(143),
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'

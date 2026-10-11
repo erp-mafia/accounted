@@ -24,6 +24,8 @@ export {
   scopeKind,
   TOOL_SCOPE_MAP,
   TOOL_COUNT_BY_SCOPE,
+  UNSCOPED_TOOLS,
+  argumentScopeFor,
 } from './scope-catalog'
 export type { ApiKeyScope } from './scope-catalog'
 import { API_KEY_SCOPES, DEFAULT_SCOPES, type ApiKeyScope } from './scope-catalog'

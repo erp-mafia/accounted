@@ -476,7 +476,7 @@ export async function linkTransactionToJournalEntry(
   // leave the active inbox. Best-effort, logged inside.
   await propagateUnderlagForBookedTransaction(supabase, companyId, transactionId, journalEntryId)
 
-  logMatchEvent(supabase, userId, transactionId, 'linked_to_existing_voucher', {
+  await logMatchEvent(supabase, userId, transactionId, 'linked_to_existing_voucher', {
     invoiceId,
     newState: {
       journal_entry_id: journalEntryId,

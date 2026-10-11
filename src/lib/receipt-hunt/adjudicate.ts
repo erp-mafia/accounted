@@ -135,7 +135,7 @@ kan väga.
 
 reason: en kort mening på svenska om varför paret hör ihop eller inte.`
 
-function client(): AiClient {
+function client(): Promise<AiClient> {
   return createAiClient()
 }
 
@@ -174,7 +174,7 @@ export async function adjudicate(pairs: readonly UncertainPair[]): Promise<Verdi
   }
 
   try {
-    const response = await client().messages.create({
+    const response = await (await client()).messages.create({
       model: MODEL,
       max_tokens: 4096,
       system: SYSTEM,

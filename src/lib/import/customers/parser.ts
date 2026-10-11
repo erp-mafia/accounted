@@ -57,11 +57,11 @@ function normalizeCustomerType(value: string | null): CustomerType | null {
  * @param filename - Original filename
  * @param columnOverrides - Optional manual column mapping
  */
-export function parseCustomersFile(
+export async function parseCustomersFile(
   buffer: ArrayBuffer,
   filename: string,
   columnOverrides?: DetectedCustomerColumns,
-): {
+): Promise<{
   filename: string
   sheet_name: string
   total_rows: number
@@ -70,8 +70,8 @@ export function parseCustomersFile(
   preview_rows: string[][]
   rows: ParsedCustomerRow[]
   warnings: string[]
-} {
-  const { sheetName, rawData } = readBestSheet(buffer, filename)
+}> {
+  const { sheetName, rawData } = await readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     const fallbackColumns: DetectedCustomerColumns = columnOverrides ?? {

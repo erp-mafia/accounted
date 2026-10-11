@@ -1,5 +1,5 @@
 import { fetchInExecutionBudget } from '@/lib/http/execution-budget';
-import { TokenBucketRateLimiter } from '../rate-limiter';
+import { TokenBucketRateLimiter, connectionRateKey } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { FORTNOX_BASE_URL, FORTNOX_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
@@ -92,7 +92,7 @@ export class FortnoxClient {
   async get<T>(accessToken: string, path: string): Promise<T> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: {
@@ -139,7 +139,7 @@ export class FortnoxClient {
   async getText(accessToken: string, path: string): Promise<string> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: {
@@ -190,7 +190,7 @@ export class FortnoxClient {
   async getBytes(accessToken: string, path: string): Promise<ArrayBuffer> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: {
@@ -242,7 +242,7 @@ export class FortnoxClient {
   ): Promise<{ bytes: ArrayBuffer; contentType: string | null }> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: {

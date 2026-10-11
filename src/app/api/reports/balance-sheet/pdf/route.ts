@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
-import { FinancialStatementPDF } from '@/lib/reports/financial-statement-pdf-template'
 import { buildBalanceSheetPdfModel, balanceSheetImbalanceKronor } from '@/lib/reports/financial-statement-pdf'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
@@ -64,6 +62,10 @@ export const GET = withRouteContext('report.balance_sheet.pdf', async (request, 
       )
     }
 
+    const [{ renderToBuffer }, { FinancialStatementPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/reports/financial-statement-pdf-template'),
+    ])
     const pdfBuffer = await renderToBuffer(
       FinancialStatementPDF({
         title: 'Balansräkning',

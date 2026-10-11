@@ -3,7 +3,6 @@ import type { Logger } from '@/lib/logger'
 import { createDraftEntry, commitEntry } from '@/lib/bookkeeping/engine'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { ensureWebshopPrefillAccounts } from '@/lib/webshop-orders/ensure-accounts'
-import { archiveWebshopOrderUnderlag } from '@/lib/webshop-orders/order-underlag'
 import { roundOre } from '@/lib/money'
 import type {
   CreateJournalEntryLineInput,
@@ -303,6 +302,8 @@ export async function bookOrderThroughEngine(
   // "saknar underlag" worklist (webshop_order is a needs-doc source type),
   // where the user can attach a document by hand. Living here, not in a
   // route, so the single-order and bulk paths can never diverge on it.
+  // Imported here so react-pdf loads only when an order is booked.
+  const { archiveWebshopOrderUnderlag } = await import('@/lib/webshop-orders/order-underlag')
   const underlag = await archiveWebshopOrderUnderlag({
     supabase,
     companyId,

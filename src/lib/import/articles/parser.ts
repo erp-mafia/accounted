@@ -79,11 +79,11 @@ const INCL_VAT_HEADER_RE = /brutto|inkl|incl|gross/i
  * @param filename - Original filename
  * @param columnOverrides - Optional manual column mapping
  */
-export function parseArticlesFile(
+export async function parseArticlesFile(
   buffer: ArrayBuffer,
   filename: string,
   columnOverrides?: DetectedArticleColumns,
-): {
+): Promise<{
   filename: string
   sheet_name: string
   total_rows: number
@@ -93,8 +93,8 @@ export function parseArticlesFile(
   rows: ParsedArticleRow[]
   warnings: string[]
   notices: ImportNotice[]
-} {
-  const { sheetName, rawData } = readBestSheet(buffer, filename)
+}> {
+  const { sheetName, rawData } = await readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     const fallbackColumns: DetectedArticleColumns = columnOverrides ?? {

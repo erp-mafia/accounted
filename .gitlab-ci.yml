@@ -40,12 +40,15 @@ stages:
 
 # npm's download cache, kept on the runner between pipelines and keyed on the
 # lockfile.
+.npm-cache: &npm-cache
+  key:
+    prefix: npm-node20
+    files: [package-lock.json]
+  paths: [.npm/]
+
 .npm:
   cache:
-    key:
-      prefix: npm-node20
-      files: [package-lock.json]
-    paths: [.npm/]
+    - *npm-cache
 
 # The prologue every core job needs: dependencies
 # and a zero-extension registry, because CI builds core with no extensions.
@@ -84,11 +87,27 @@ checks:
   stage: checks
   extends: [.setup-core, .mr-only]
   needs: []
+  # tsc's incremental state and ESLint's result cache, kept on the runner
+  # between pipelines like the npm cache and shared by every merge request: a
+  # cold tsc takes nine minutes on the shared box, a warm one rechecks only the
+  # files the merge request touched (and still reports every stored error).
+  # The lockfile is in the key, so a TypeScript or ESLint upgrade starts clean.
+  cache:
+    - *npm-cache
+    - key:
+        prefix: checks-state
+        files: [package-lock.json]
+      paths: [.ci-cache/]
+  variables:
+    CHECKS_CACHE_DIR: .ci-cache
   script:
     - npm run skills:check
     - npm run taxonomy:check
     - npm run apiskill:check
-    - npm run check:lint
+    # ESLint's result cache sits beside tsc's state. Keyed on content, not
+    # mtime: a checkout rewrites every mtime.
+    - mkdir -p "$CHECKS_CACHE_DIR"
+    - npm run check:lint -- --cache --cache-location "$CHECKS_CACHE_DIR/eslint" --cache-strategy content
     - npm run check:types
     - npm run check:guards
     - npm run validate:packs
@@ -225,26 +244,15 @@ tool-pg:
         sleep 2
       done
     - psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
-    # Without these PostgREST answers every request with 42501: the grants have
-    # to exist before the migrations create the tables.
-    - |
-      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "
-        GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres, anon, authenticated, service_role;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO postgres, anon, authenticated, service_role;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres, anon, authenticated, service_role;
-      "
+    # Same replay as pg-real, and no bulk GRANT after it: the database then
+    # carries the grants production has, so a tool that needs a grant prod
+    # lacks fails here with 42501 instead of in production.
+    - psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
     - |
       set -euo pipefail
       for f in supabase/migrations/*.sql; do
         psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null || { echo "Failed applying $f"; exit 1; }
       done
-    - |
-      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "
-        GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
-        GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
-        GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
-      "
     # PostgREST started before the schema existed: make it reload, then wait.
     - psql "$DATABASE_URL" -q -c "NOTIFY pgrst, 'reload schema'"
     - |

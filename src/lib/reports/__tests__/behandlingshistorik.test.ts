@@ -20,6 +20,8 @@ import {
   sortEvents,
   type RawBehandlingshistorikEvent,
 } from '../behandlingshistorik'
+import { SOURCE_TYPE_LABELS_SV } from '../systemdokumentation'
+import { JournalEntrySourceTypeSchema } from '@/lib/api/schemas'
 
 // ============================================================
 // Fixtures
@@ -142,7 +144,7 @@ describe('commitEventFromEntry', () => {
     expect(ev.details).toEqual([
       'Datum: 2026-03-09',
       'Text: Hyra mars',
-      'Källa: Manuell',
+      'Källa: Manuell verifikation',
       'Bokföringssätt: Godkänd av användare',
     ])
   })
@@ -167,6 +169,17 @@ describe('commitEventFromEntry', () => {
     expect(storno.details).toContain('Vändningsverifikation (storno)')
     const corr = commitEventFromEntry({ ...baseEntry, correction_of_id: 'x', source_type: 'correction' })!
     expect(corr.details).toContain('Rättelseverifikation')
+  })
+
+  // Iterates the runtime allowlist that the DB CHECK is pinned to
+  // (source-type-constraint.pg.test.ts), so a new source type without a
+  // Swedish label fails here instead of printing its raw code in the PDF.
+  it.each(JournalEntrySourceTypeSchema.options)('labels source_type %s in Swedish, never the raw code', (sourceType) => {
+    const label = SOURCE_TYPE_LABELS_SV[sourceType]
+    expect(label).toBeTruthy()
+    expect(label).not.toBe(sourceType)
+    const ev = commitEventFromEntry({ ...baseEntry, source_type: sourceType })!
+    expect(ev.details).toContain(`Källa: ${label}`)
   })
 })
 
@@ -800,8 +813,8 @@ describe('buildBehandlingshistorikExport', () => {
     ],
   }
 
-  it('csv carries a BOM, the header row and Swedish local time', () => {
-    const out = buildBehandlingshistorikExport(report, 'csv')
+  it('csv carries a BOM, the header row and Swedish local time', async () => {
+    const out = await buildBehandlingshistorikExport(report, 'csv')
     expect(out.contentType).toBe('text/csv; charset=utf-8')
     expect(out.filename).toBe('behandlingshistorik-testbolaget-ab-20261231.csv')
     const text = out.buffer.toString('utf-8')
@@ -813,8 +826,8 @@ describe('buildBehandlingshistorikExport', () => {
     expect(text).toContain('Datum: 2026-03-09 | Källa: Manuell')
   })
 
-  it('xlsx is a non-empty workbook with the xlsx mime type', () => {
-    const out = buildBehandlingshistorikExport(report, 'xlsx')
+  it('xlsx is a non-empty workbook with the xlsx mime type', async () => {
+    const out = await buildBehandlingshistorikExport(report, 'xlsx')
     expect(out.contentType).toContain('spreadsheetml')
     expect(out.filename.endsWith('.xlsx')).toBe(true)
     expect(out.buffer.length).toBeGreaterThan(100)

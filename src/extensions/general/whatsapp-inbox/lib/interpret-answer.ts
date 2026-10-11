@@ -96,7 +96,7 @@ export async function interpretChatAnswer(args: {
   questionType: Extract<QuestionType, 'representation' | 'context'>
 }): Promise<InterpretResult> {
   try {
-    const anthropic = getAnthropic()
+    const anthropic = await getAnthropic()
     const response = await anthropic.messages.create({
       model: SONNET_MODEL,
       max_tokens: MAX_TOKENS,

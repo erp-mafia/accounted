@@ -99,6 +99,19 @@ describe('Accounted://attention', () => {
     expect(result.categories).toEqual([])
   })
 
+  it('counts supplier approvals with the Att göra definition: a credit note is never one', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+
+    await attentionResource.read(ctx(supabase))
+
+    // Both the count (countSupplierInvoicesAwaitingApproval) and the samples.
+    expect(findCalls('supplier_invoices', 'eq').filter(([column]) => column === 'is_credit_note')).toEqual([
+      ['is_credit_note', false],
+      ['is_credit_note', false],
+    ])
+  })
+
   it('only lists overdue fakturor: proformas, delivery notes and quotes are never receivables', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueueEmpty(enqueue)

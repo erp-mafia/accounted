@@ -13,6 +13,7 @@ import {
   resolveMissingUnderlagEntries,
   type MissingUnderlagEntry,
 } from '@/lib/bookkeeping/missing-underlag'
+import { MAX_ROWS_PER_REQUEST } from '@/lib/lists/collect-pages'
 
 ensureInitialized()
 
@@ -32,9 +33,11 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // with no correction stays visible (#3149). The full chain stays reachable.
   const collapseCorrections = searchParams.get('collapse_corrections') === 'true'
   // Clamp pagination to bound DB work against oversized/pathological inputs
-  // (compliance A.8.28 / ASVS V1.2.5). The UI page-size selector offers
-  // 20/50/100/Alla; "Alla" sends a large limit which is capped at MAX_LIMIT.
-  const MAX_LIMIT = 100000
+  // (compliance A.8.28 / ASVS V1.2.5). The ceiling is what one PostgREST
+  // response can carry: a larger limit came back cut at 1,000 rows under a
+  // count that claimed more, so "Alla" showed 1,000 of 3,000 verifikat as all.
+  // The list UI collects "Alla" in chunks of this size (lib/lists/collect-pages).
+  const MAX_LIMIT = MAX_ROWS_PER_REQUEST
   const rawLimit = parseInt(searchParams.get('limit') || '50', 10)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), MAX_LIMIT) : 50
   const rawOffset = parseInt(searchParams.get('offset') || '0', 10)
@@ -183,8 +186,8 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       return NextResponse.json({ data: [], count: total })
     }
 
-    // Fetch the page's full rows in id chunks: "Alla" as page size can put
-    // thousands of ids on this page, and a single .in() with that many ids
+    // Fetch the page's full rows in id chunks: an "Alla" chunk puts up to
+    // MAX_LIMIT ids on this page, and a single .in() with that many ids
     // would blow PostgREST's URL length limit.
     const ROW_CHUNK = 100
     const rowsById = new Map<string, unknown>()

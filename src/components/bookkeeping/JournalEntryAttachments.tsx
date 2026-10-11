@@ -33,6 +33,7 @@ import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import { useBranding } from '@/lib/branding/brand-context'
+import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 
 interface DocumentRecord {
   id: string
@@ -308,7 +309,7 @@ export default function JournalEntryAttachments({
       <input
         ref={replaceFileInputRef}
         type="file"
-        accept="application/pdf,image/jpeg,image/png,image/webp"
+        accept={DOCUMENT_UPLOAD_ACCEPT}
         className="hidden"
         onChange={(e) => handleReplaceFileSelected(e.target.files?.[0] ?? null)}
       />

@@ -52,6 +52,7 @@ describe('commitPendingOperation: authorization refusal is recoverable', () => {
     const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
     enqueueMany([
       { data: { id: 'op-bulk-1' }, error: null }, // atomic claim pending -> committing
+      { data: [], error: null }, // duplicate guard: row fetch (nothing to compare)
       { data: { ok: false, code: 'BULK_BOOK_UNAUTHORIZED' }, error: null }, // RPC refusal
       { data: null, error: null }, // release claim back to pending
     ])
@@ -78,6 +79,7 @@ describe('commitPendingOperation: authorization refusal is recoverable', () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
       { data: { id: 'op-bulk-1' }, error: null },
+      { data: [], error: null }, // duplicate guard: row fetch (nothing to compare)
       { data: { ok: true, journal_entry_id: 'je-1', mode: 'create_new', linked_tx_count: 3 }, error: null },
       { data: null, error: null }, // finalize committed
     ])
@@ -102,6 +104,7 @@ describe('commitPendingOperation: authorization refusal is recoverable', () => {
     const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
     enqueueMany([
       { data: { id: 'op-bulk-1' }, error: null },
+      { data: [], error: null }, // duplicate guard: row fetch (nothing to compare)
       { data: { ok: false, code: 'BULK_BOOK_INVALID_PAYLOAD' }, error: null },
       { data: null, error: null }, // rejected update
     ])

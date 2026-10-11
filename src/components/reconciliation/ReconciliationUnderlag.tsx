@@ -9,6 +9,7 @@ import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { exceedsHostedUploadLimit, isShrinkableImage, tooLargeMessage } from '@/lib/documents/upload-size'
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
+import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import type { ReconciliationAttachment } from '@/lib/reconciliation/schemas'
 
 /**
@@ -26,7 +27,6 @@ interface ReconciliationUnderlagProps {
   canWrite?: boolean
 }
 
-const ACCEPT = 'application/pdf,image/jpeg,image/png,image/webp'
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -125,7 +125,7 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
             <input
               ref={inputRef}
               type="file"
-              accept={ACCEPT}
+              accept={DOCUMENT_UPLOAD_ACCEPT}
               multiple
               className="hidden"
               onChange={(e) => void upload(e.target.files)}

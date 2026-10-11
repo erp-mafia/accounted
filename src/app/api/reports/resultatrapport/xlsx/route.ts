@@ -116,7 +116,7 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
       })
     }
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Resultatrapport',
         columns: [

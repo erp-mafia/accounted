@@ -154,3 +154,45 @@ export function isZeroOre(n: number): boolean {
 export function sumOre(values: readonly number[]): number {
   return roundOre(values.reduce((acc, v) => acc + v, 0))
 }
+
+/**
+ * Parse an amount a person typed or pasted into a form field, rounded to the
+ * öre with `roundOre`. Returns null when the text is not one unambiguous
+ * amount, so a caller can tell "nothing usable typed" from zero.
+ *
+ * Accepts what Swedish users actually enter: space-grouped thousands
+ * ("12 345,67"), including the non-breaking and narrow no-break spaces that
+ * sv-SE formatting and copied bank statements carry (\s covers U+00A0 and
+ * U+202F), a decimal comma or dot, and a Unicode minus (U+2212) as well as a
+ * hyphen. When both a comma and a dot appear, the last one is the decimal and
+ * the other must group whole thousands ("1.234,56", "1,234.56"); anything
+ * else ambiguous ("1.234.567", "12,3,4") is refused rather than guessed, since
+ * a wrong guess moves the amount by a factor of a thousand.
+ *
+ * `Number(s.replace(',', '.'))` is the bug this replaces: it turns
+ * "12 345,67" into NaN, which call sites then read as 0.
+ */
+export function parseAmountInput(input: string | null | undefined): number | null {
+  if (input == null) return null
+  const compact = input.replace(/\s/g, '').replace(/−/g, '-')
+  const lastSep = Math.max(compact.lastIndexOf(','), compact.lastIndexOf('.'))
+  let whole = lastSep === -1 ? compact : compact.slice(0, lastSep)
+  const fraction = lastSep === -1 ? '' : compact.slice(lastSep + 1)
+
+  if (lastSep !== -1) {
+    const groupSep = compact[lastSep] === ',' ? '.' : ','
+    if (whole.includes(groupSep)) {
+      const grouped = groupSep === '.' ? /^-?\d{1,3}(\.\d{3})+$/ : /^-?\d{1,3}(,\d{3})+$/
+      if (!grouped.test(whole)) return null
+      whole = whole.split(groupSep).join('')
+    }
+  }
+
+  if (!/^-?\d*$/.test(whole) || !/^\d*$/.test(fraction)) return null
+  if (whole.replace('-', '') === '' && fraction === '') return null
+
+  const n = Number(fraction ? `${whole}.${fraction}` : whole)
+  if (!Number.isFinite(n)) return null
+  const rounded = roundOre(n)
+  return rounded === 0 ? 0 : rounded
+}

@@ -49,6 +49,7 @@ import {
   openAmountByEntry,
 } from '../bank-reconciliation'
 import type { UnlinkedGLLine } from '../bank-reconciliation'
+import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from '../limits'
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 
@@ -1805,6 +1806,65 @@ describe('linkTransactionToVouchers', () => {
       code: 'INVALID_SPLIT',
     })
     expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('refuses a split over more than MAX_BANK_ROW_SPLIT verifikat before reading anything', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const tooMany = Array.from({ length: MAX_BANK_ROW_SPLIT + 1 }, (_, i) => ({ journal_entry_id: `je-${i}` }))
+
+    const result = await linkTransactionToVouchers(supabase as never, 'company-1', 'tx-1', tooMany, 'user-1')
+
+    expect(result).toEqual({
+      success: false,
+      error: `En delning kan omfatta högst ${MAX_BANK_ROW_SPLIT} verifikat.`,
+      code: 'INVALID_SPLIT',
+    })
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('links a ROT/RUT payout of 138 verifikat, reading them in slices that keep each URL short (crm#1144)', async () => {
+    // One Skatteverket payout row, one payment verifikat per invoice: 138 x 500 kr.
+    const ids = Array.from({ length: 138 }, (_, i) => `je-rut-${i}`)
+    const entries = ids.map((id, i) => ({ id, status: 'posted', voucher_series: 'A', voucher_number: 100 + i }))
+    const lines = ids.map((id) => ({
+      journal_entry_id: id,
+      debit_amount: 500,
+      credit_amount: 0,
+      currency: null,
+      amount_in_currency: null,
+    }))
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: freeTx({ amount: 69000 }) })
+    enqueue({ data: [] }) // invoice_payments
+    enqueue({ data: [] }) // supplier_invoice_payments
+    enqueue({ data: entries.slice(0, ID_READ_CHUNK) })
+    enqueue({ data: entries.slice(ID_READ_CHUNK) })
+    enqueue({ data: lines.slice(0, ID_READ_CHUNK) })
+    enqueue({ data: lines.slice(ID_READ_CHUNK) })
+    enqueue({ data: [] }) // bank_line slices held by other rows, first slice
+    enqueue({ data: [] }) // and second slice
+    enqueue({ data: [{ id: 'tx-1' }] }) // lock UPDATE
+    enqueue({ data: null }) // junction insert
+    enqueue({ data: null }) // payment_match_log
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      ids.map((id) => ({ journal_entry_id: id })),
+      'user-1',
+      '1930',
+    )
+
+    expect(result.success).toBe(true)
+    expect(result.allocations).toHaveLength(138)
+    expect(result.allocations?.every((a) => a.amount === 500)).toBe(true)
+    for (const table of ['journal_entries', 'journal_entry_lines', 'transaction_voucher_links']) {
+      expect(findCalls(table, 'in').map(([, part]) => (part as string[]).length)).toEqual([ID_READ_CHUNK, 38])
+    }
+    const inserts = findCalls('transaction_voucher_links', 'insert')
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0][0]).toHaveLength(138)
   })
 
   it('refuses a transaction that is already booked: junction row, live pointer, payment row, or ignored', async () => {

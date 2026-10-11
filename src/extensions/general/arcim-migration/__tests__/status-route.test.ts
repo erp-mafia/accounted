@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -314,5 +314,43 @@ describe('GET /status: unfinished connect', () => {
 
     expect(res.status).toBe(200)
     expect(body.unfinishedConnect).toBeNull()
+  })
+})
+
+/**
+ * GET /status `enabledProviders`: the wizard showed a WINT card from its own
+ * hard-coded list while WINT_MIGRATION_ENABLED was off, and the card's
+ * connect was then refused by the /connect gate. The status names the
+ * providers this deployment can connect.
+ */
+describe('GET /status: enabled providers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(listConsents as Mock).mockResolvedValue([])
+    ;(createServiceClient as Mock).mockReturnValue(buildService({}))
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  async function enabledProviders(): Promise<string[]> {
+    const { supabase } = buildSupabase({ history: [], latestCompleted: null })
+    const res = await handler(statusRequest(), buildCtx(supabase))
+    const { body } = await parseJsonResponse<{ enabledProviders: string[] }>(res)
+    expect(res.status).toBe(200)
+    return body.enabledProviders
+  }
+
+  it('leaves WINT out while the launch switch is off', async () => {
+    vi.stubEnv('WINT_MIGRATION_ENABLED', '')
+    const providers = await enabledProviders()
+    expect(providers).not.toContain('wint')
+    expect(providers).toEqual(expect.arrayContaining(['fortnox', 'visma', 'bokio', 'bjornlunden', 'briox']))
+  })
+
+  it('names WINT once the switch is on', async () => {
+    vi.stubEnv('WINT_MIGRATION_ENABLED', 'true')
+    expect(await enabledProviders()).toContain('wint')
   })
 })

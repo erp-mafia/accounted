@@ -4,7 +4,7 @@ import { use, useEffect, useRef, useState } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { usePathname, useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -33,7 +33,9 @@ import {
   payslipEmployeeLabel,
   type PayslipZipAttempt,
 } from '@/lib/salary/payslip-zip-report'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { downloadFile, saveBlobToDisk } from '@/lib/browser/download-file'
+import { failureDescription } from '@/lib/browser/action-failure'
 import { AGIPanel } from '@/components/salary/AGIPanel'
 import { PaymentFilePanel } from '@/components/salary/PaymentFilePanel'
 import { TaxPaymentPanel } from '@/components/salary/TaxPaymentPanel'
@@ -67,6 +69,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('salary_run')
+  const tCommon = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
   const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
   const [run, setRun] = useState<RunDetail | null>(null)
@@ -772,14 +776,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       }
 
       const archive = await zip.generateAsync({ type: 'blob' })
-      const url = URL.createObjectURL(archive)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `Lonespec_${periodLabel}.zip`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      saveBlobToDisk(archive, `Lonespec_${periodLabel}.zip`)
 
       // The toaster holds one toast at a time: a warning emitted next to a
       // success toast is evicted and never rendered. So a partial archive gets
@@ -824,26 +821,24 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     if (!run) return
     setActionLoading('agi-download')
     try {
-      const res = await fetch(`/api/salary/runs/${id}/agi/xml`)
-      if (!res.ok) {
-        const result = await res.json().catch(() => ({ error: t('toast_agi_failed') }))
+      const compactPeriod = formatAgiPeriodCompact(agiReportingPeriod(run))
+      const result = await downloadFile({
+        url: `/api/salary/runs/${id}/agi/xml`,
+        filename: `AGI_${compactPeriod}.xml`,
+        locale: errorLocale,
+        errorContext: 'salary',
+      })
+      if (!result.ok) {
         toast({
           title: t('toast_agi_failed'),
-          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          description: failureDescription(result, {
+            timeout: tCommon('download_timeout'),
+            network: tCommon('download_network'),
+          }),
           variant: 'destructive',
         })
         return
       }
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const compactPeriod = formatAgiPeriodCompact(agiReportingPeriod(run))
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `AGI_${compactPeriod}.xml`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
       await loadRun()
       toast({ title: t('toast_agi_downloaded') })
     } catch (err) {

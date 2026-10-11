@@ -27,7 +27,7 @@ export const GET = withRouteContext('report.salary_journal.xlsx', async (request
   try {
     const report = await generateSalaryJournal(supabase, companyId, year, monthFrom, monthTo)
 
-    const buffer = reportToWorkbook([
+    const buffer = await reportToWorkbook([
       {
         name: 'Lönejournal',
         columns: [

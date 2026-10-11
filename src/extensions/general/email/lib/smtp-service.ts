@@ -30,7 +30,7 @@
  * whichever provider the operator picked.
  */
 
-import nodemailer, { type Transporter } from 'nodemailer'
+import type { Transporter } from 'nodemailer'
 import { createLogger } from '@/lib/logger'
 import { getBranding } from '@/lib/branding/service'
 import type { EmailService, SendEmailOptions, SendEmailResult } from '@/lib/email/service'
@@ -153,9 +153,12 @@ export function isSmtpConfigured(): boolean {
 
 let cachedTransport: { key: string; transport: Transporter } | null = null
 
-function getTransport(settings: SmtpSettings): Transporter {
+async function getTransport(settings: SmtpSettings): Promise<Transporter> {
   const key = JSON.stringify({ ...settings, pass: settings.pass ? 'set' : 'unset' })
   if (cachedTransport && cachedTransport.key === key) return cachedTransport.transport
+  // nodemailer loads on the first SMTP send, not with every route that
+  // reaches the email extension.
+  const { default: nodemailer } = await import('nodemailer')
   const transport = nodemailer.createTransport({
     host: settings.host,
     port: settings.port,
@@ -207,7 +210,7 @@ export class SmtpEmailService implements EmailService {
     }
 
     try {
-      const transport = getTransport(settings)
+      const transport = await getTransport(settings)
       let info: { messageId?: string }
       try {
         info = await transport.sendMail({ from, ...mail })
