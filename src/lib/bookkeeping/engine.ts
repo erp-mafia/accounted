@@ -43,7 +43,7 @@ import { creditNatural } from '@/lib/bookkeeping/line-side'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { syncRotRutReclaimAfterReversal } from '@/lib/invoices/rot-rut-reclaim-reversal'
-import { getActor } from '@/lib/bookkeeping/actor-context'
+import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import type {
   AssetDisposalType,
   AssetJamkningDirection,
@@ -785,11 +785,12 @@ export async function cancelDraftEntry(
  * and status update happen in one transaction. If the balance trigger rejects
  * the entry, the sequence increment rolls back: no burned numbers.
  *
- * Actor attribution: the surrounding runWithActor() scope (set by the
- * approval entry points: commitPendingOperation, web approve routes) is
+ * Actor attribution: the surrounding runWithActor() scope (every cookie-session
+ * route through withRouteContext, v1, and the approval entry points) is
  * forwarded to the RPC, which stamps journal_entries.committed_actor_* and
- * the audit_log COMMIT row (migration 20260619120000). No scope → NULLs,
- * identical to pre-attribution behaviour.
+ * the audit_log COMMIT row (migration 20260619120000). No scope → NULLs.
+ * A caller that passes no commitMethod records the one its actor implies
+ * (defaultCommitMethod), so WHO and HOW are stamped together.
  */
 export async function commitEntry(
   supabase: SupabaseClient,
@@ -800,6 +801,7 @@ export async function commitEntry(
   rubricVersion?: string
 ): Promise<JournalEntry> {
   const actor = getActor()
+  const method = commitMethod ?? defaultCommitMethod(actor)
 
   // Mandatory dimension rules (dimensions PR10): 'required' rules bite when
   // the verifikat is about to become immutable — drafts may be incomplete,
@@ -864,7 +866,7 @@ export async function commitEntry(
   const { data: rpcResult, error: commitError } = await supabase.rpc('commit_journal_entry', {
     p_company_id: companyId,
     p_entry_id: entryId,
-    p_commit_method: commitMethod ?? null,
+    p_commit_method: method,
     p_rubric_version: rubricVersion ?? null,
     p_actor_type: actor?.type ?? null,
     p_actor_label: actor?.label ?? null,
@@ -877,7 +879,7 @@ export async function commitEntry(
       userId,
       entityType: 'journal_entry',
       entityId: entryId,
-      commitMethod: commitMethod ?? null,
+      commitMethod: method,
       pgCode: (commitError as { code?: string }).code,
       pgDetails: (commitError as { details?: string }).details,
       pgHint: (commitError as { hint?: string }).hint,
@@ -1390,6 +1392,8 @@ export interface BulkBookingInput {
   existingJournalEntryId: string | null
   /** create_new: the samlingsverifikat's description and balanced lines. */
   newEntry: Record<string, unknown> | null
+  /** commit_method for a new verifikat; omitted, the actor's default. */
+  commitMethod?: 'bulk_accept'
 }
 
 /**
@@ -1402,6 +1406,10 @@ export interface BulkBookingInput {
  * link_existing posts nothing and emits nothing: that voucher was announced
  * when it was committed.
  *
+ * Attribution: the RPC hands commit method and actor on to
+ * commit_journal_entry (migration 20261011140000), resolved here exactly as
+ * commitEntry resolves them.
+ *
  * Returns the RPC's answer unchanged. Its structured refusals
  * ({ ok: false, code }) and transport errors stay the callers' to translate.
  */
@@ -1411,6 +1419,7 @@ export async function commitBulkBooking(
   userId: string,
   input: BulkBookingInput,
 ): Promise<PostingRpcAnswer> {
+  const actor = getActor()
   const { data, error } = await supabase.rpc('bulk_book_transactions', {
     p_tx_ids: input.txIds,
     p_existing_journal_entry_id: input.existingJournalEntryId,
@@ -1420,6 +1429,9 @@ export async function commitBulkBooking(
     // doors); a session caller resolves from its own auth.uid()
     // (migration 20260824170000).
     p_user_id: userId,
+    p_commit_method: input.commitMethod ?? defaultCommitMethod(actor),
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
   })
   if (error) return { data, error }
 
@@ -1603,21 +1615,37 @@ export async function commitInvoiceVoucherLink(
  * is announced with journal_entry.committed. This is the RPC's one
  * application door.
  *
+ * `amount` is the share of the verifikat that is this invoice's, when the
+ * verifikat pays several debts. `p_amount` is sent only when a share is
+ * stated: a link without one then reads the same against a database that
+ * does not have migration 20261011153000 yet (the deploy and the migration
+ * land separately), where the five-argument function is the only one.
+ *
  * Returns the RPC's answer unchanged: callers translate its refusals.
  */
 export async function commitSupplierInvoiceVoucherLink(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  input: VoucherLinkInput & { supplierInvoiceId: string },
+  input: VoucherLinkInput & { supplierInvoiceId: string; amount?: number | null },
 ): Promise<PostingRpcAnswer> {
-  const { data, error } = await supabase.rpc('link_supplier_invoice_to_voucher', {
-    p_supplier_invoice_id: input.supplierInvoiceId,
-    p_journal_entry_id: input.journalEntryId,
-    p_user_id: userId,
-    p_company_id: companyId,
-    p_notes: input.notes,
-  })
+  const { data, error } =
+    input.amount == null
+      ? await supabase.rpc('link_supplier_invoice_to_voucher', {
+          p_supplier_invoice_id: input.supplierInvoiceId,
+          p_journal_entry_id: input.journalEntryId,
+          p_user_id: userId,
+          p_company_id: companyId,
+          p_notes: input.notes,
+        })
+      : await supabase.rpc('link_supplier_invoice_to_voucher', {
+          p_supplier_invoice_id: input.supplierInvoiceId,
+          p_journal_entry_id: input.journalEntryId,
+          p_user_id: userId,
+          p_company_id: companyId,
+          p_notes: input.notes,
+          p_amount: input.amount,
+        })
   if (error) return { data, error }
 
   const result = data as { ok?: boolean; fx_journal_entry_id?: string | null } | null

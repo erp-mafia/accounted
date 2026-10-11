@@ -10,6 +10,7 @@ import { detectFileFormat, parseBankFile, generateExternalId, generateFileHash, 
 import type { ParsedBankTransaction, BankFileFormatId } from '../types'
 import { parseGenericCSV, normalizeMinusSign } from '../formats/generic-csv'
 import { parseCSVLine } from '../formats/nordea'
+import { CAMT053_PRETTY_WITH_REFS } from '@/tests/fixtures/camt053'
 
 // ---------------------------------------------------------------------------
 // Test data: realistic CSV/XML content for each Swedish bank format
@@ -1503,6 +1504,37 @@ describe('parseBankFile: camt.053 XML format', () => {
 
     expect(result.transactions).toHaveLength(1)
     expect(result.transactions[0].reference).toBe('OCR123456789')
+  })
+
+  it('reads the OCR from <CdtrRefInf> in a pretty-printed file, past <Refs>', () => {
+    const result = parseBankFile(CAMT053_PRETTY_WITH_REFS, 'statement.xml')
+
+    expect(result.transactions[0].reference).toBe('1001000000017')
+    expect(result.transactions[1].reference).toBeNull()
+  })
+
+  it('keeps the value date, bank id, end-to-end id, counterparty IBAN and transaction code', () => {
+    const [incoming, outgoing] = parseBankFile(CAMT053_PRETTY_WITH_REFS, 'statement.xml').transactions
+
+    expect(incoming).toMatchObject({
+      date: '2025-03-10',
+      value_date: '2025-03-11',
+      provider_transaction_id: 'ACSR-1',
+      end_to_end_id: 'E2E-INCOMING-1',
+      counterparty: 'Kund AB',
+      counterparty_iban: 'SE4550000000058398257466',
+      bank_transaction_code: 'PMNT-RCDT-DMCT',
+      // The external_id input is unchanged: NtryRef first.
+      raw_line: 'NTRY-1',
+    })
+    expect(outgoing).toMatchObject({
+      counterparty: 'Leverantör AB',
+      // NOTPROVIDED is the ISO placeholder, not an id.
+      end_to_end_id: null,
+      counterparty_iban: null,
+      bank_transaction_code: null,
+      provider_transaction_id: 'ACSR-2',
+    })
   })
 
   it('uses unstructured remittance info as description', () => {

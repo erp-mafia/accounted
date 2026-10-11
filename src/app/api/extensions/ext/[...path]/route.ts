@@ -7,6 +7,7 @@ import { requireCompanyId } from '@/lib/company/context'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { createLogger } from '@/lib/logger'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { ApiRouteDefinition } from '@/lib/extensions/types'
 
 const dispatcherLog = createLogger('extension-dispatcher')
@@ -300,9 +301,11 @@ async function handleRequest(
     }
   }
 
-  // Build context and dispatch
+  // Build context and dispatch. The second cookie-session door besides
+  // withRouteContext: commits an extension makes (inbox booking, supplier
+  // invoices) record the signed-in user as their actor, as there.
   const ctx = createExtensionContext(supabase, user.id, companyId, extensionId, requestId)
-  const response = await matchedRoute.handler(handlerRequest, ctx)
+  const response = await runWithActor({ type: 'user' }, () => matchedRoute.handler(handlerRequest, ctx))
   log.info('extension call completed', {
     durationMs: Date.now() - start,
     status: response.status,

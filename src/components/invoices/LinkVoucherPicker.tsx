@@ -27,6 +27,9 @@ interface VoucherCandidate {
   period_locked: boolean
   confidence: number
   match_reason: string
+  /** Supplier side: the voucher has more left than the invoice needs (it pays
+   *  several debts), and this is the share the link states for this invoice. */
+  link_amount?: number
 }
 
 /**
@@ -180,7 +183,13 @@ export default function LinkVoucherPicker({
       const response = await fetch(`${apiBase}/link-to-voucher`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ journal_entry_id: selected.journal_entry_id }),
+        // A voucher that pays several debts is linked with this invoice's
+        // share; without it the server refuses rather than split on a guess.
+        body: JSON.stringify(
+          selected.link_amount != null
+            ? { journal_entry_id: selected.journal_entry_id, amount: selected.link_amount }
+            : { journal_entry_id: selected.journal_entry_id },
+        ),
       })
       if (!response.ok) {
         const body = await response.json().catch(() => null)
@@ -290,10 +299,16 @@ export default function LinkVoucherPicker({
       {selected && (
         <div className="rounded-lg border bg-secondary/40 p-3">
           <p className="text-sm">
-            {t('confirmation', {
-              voucher: voucherLabel(selected),
-              amount: formatCurrency(candidateAmount(selected), invoiceCurrency),
-            })}
+            {selected.link_amount != null
+              ? t('confirmation_share', {
+                  voucher: voucherLabel(selected),
+                  amount: formatCurrency(selected.link_amount, invoiceCurrency),
+                  available: formatCurrency(candidateAmount(selected), invoiceCurrency),
+                })
+              : t('confirmation', {
+                  voucher: voucherLabel(selected),
+                  amount: formatCurrency(candidateAmount(selected), invoiceCurrency),
+                })}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">{t('no_new_je_note')}</p>
         </div>

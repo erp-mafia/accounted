@@ -709,6 +709,7 @@ describe('link_supplier_invoice_to_voucher: the 244x debit side is unchanged', (
       journal_entry_id: voucherId,
       currency: 'SEK',
       settlement_side: 'ap_debit',
+      voucher_remaining: 0,
       fx_settled_sek: null,
       fx_residual_sek: null,
       fx_journal_entry_id: null,
@@ -754,16 +755,23 @@ describe('link_supplier_invoice_to_voucher: the 244x debit side is unchanged', (
     })
   })
 
-  // Deliberately pinned, not endorsed: the capacity rule is 19xx-only in this
-  // migration so that no existing 244x answer moves. Extending it to the 244x
-  // side is a follow-up (bulk reconcile already enforces it for unattended links).
-  it('faktureringsmetoden: a second invoice can still link the same 244x verifikat', async () => {
+  // The one 244x answer that did move, in 20261011153000 (the follow-up this
+  // test used to name): the capacity rule now holds on the 244x side too. Up
+  // to then a second invoice could link the same verifikat at its full debit
+  // and be marked paid by money that had already paid the first one. The rest
+  // of that rule is in link-supplier-invoice-voucher-share.pg.test.ts.
+  it('faktureringsmetoden: a 244x verifikat one invoice has used in full cannot pay a second one', async () => {
     const company = await seedCompanyWithMethod('accrual')
     const a = await seedSupplierInvoice({ company, total: 1250 })
     const b = await seedSupplierInvoice({ company, total: 1250 })
     const voucherId = await seedVoucher({ company, lines: accrualPaymentLines(1250) })
 
     expect((await link({ company, invoiceId: a, voucherId })).ok).toBe(true)
-    expect((await link({ company, invoiceId: b, voucherId })).ok).toBe(true)
+    expect(await link({ company, invoiceId: b, voucherId })).toEqual({
+      ok: false,
+      code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED',
+      details: { ap_debit: 1250, already_linked: 1250 },
+    })
+    expect((await invoiceState(b)).status).toBe('registered')
   })
 })

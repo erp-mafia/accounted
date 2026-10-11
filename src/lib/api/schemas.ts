@@ -2597,10 +2597,15 @@ export const LinkInvoiceToVoucherSchema = z.object({
  * Supplier-invoice mirror: link an existing posted verifikat as payment for a
  * supplier invoice. No new JE: only a supplier_invoice_payments row pointing
  * at the supplied journal_entry_id, plus the invoice's paid/remaining advance.
+ *
+ * `amount` is the share of the verifikat that is this invoice's, in the
+ * invoice's currency, for a verifikat that pays several debts. Omitted, what
+ * the verifikat has left must fit inside the invoice's remainder.
  */
 export const LinkSupplierInvoiceToVoucherSchema = z.object({
   journal_entry_id: uuid,
   notes: z.string().max(2000).optional(),
+  amount: z.number().finite().positive().optional(),
 })
 
 /**

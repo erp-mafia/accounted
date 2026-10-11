@@ -1163,6 +1163,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // payments they imply, as derived and as a person or the bank confirmed.
   { name: 'document_links', file: 'document_links.json', orderBy: 'created_at' },
   { name: 'agreements', file: 'agreements.json', orderBy: 'created_at' },
+  // Every decision on a bank line or inbox item: the suggestions on offer,
+  // the one acted on, what was booked and who decided, oldest first.
+  { name: 'suggestion_log', file: 'suggestion_log.json', orderBy: 'created_at' },
   { name: 'agreement_obligations', file: 'agreement_obligations.json', orderBy: 'due_on' },
   // Arkiv: the dated, sourced facts about the company and its agreements,
   // every reading kept (superseded and deprecated rows included).

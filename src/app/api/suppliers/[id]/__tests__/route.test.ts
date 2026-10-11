@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   parseJsonResponse,
+  createMockRequest,
   createMockRouteParams,
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -15,7 +16,11 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
-import { GET } from '../route'
+vi.mock('@/lib/auth/require-write', () => ({
+  requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+}))
+
+import { GET, PUT } from '../route'
 
 const SUPPLIER = {
   id: 'sup-1',
@@ -100,5 +105,71 @@ describe('GET /api/suppliers/[id]', () => {
     expect(body.data.stats.by_currency).toEqual([
       { currency: 'SEK', total_outstanding: 100.01, total_paid: 0 },
     ])
+  })
+})
+
+describe('PUT /api/suppliers/[id]', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const SUPPLIER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const STORED = {
+    id: SUPPLIER_ID,
+    name: 'Elnät AB',
+    supplier_type: 'swedish_business',
+    city: null,
+    clearing_number: null,
+    account_number: null,
+    archived_at: null,
+  }
+  const put = (body: unknown) =>
+    PUT(
+      createMockRequest(`/api/suppliers/${SUPPLIER_ID}`, { method: 'PUT', body }),
+      createMockRouteParams({ id: SUPPLIER_ID }),
+    )
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  })
+
+  it('returns 401 when not authenticated', async () => {
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    const { status } = await parseJsonResponse(await put({ city: 'Lund' }))
+    expect(status).toBe(401)
+  })
+
+  it('returns 400 for an invalid email', async () => {
+    const { status } = await parseJsonResponse(await put({ email: 'not-an-email' }))
+    expect(status).toBe(400)
+  })
+
+  it('returns 404 when the supplier does not exist', async () => {
+    enqueue({ data: null })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await put({ city: 'Lund' }))
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('SUPPLIER_NOT_FOUND')
+  })
+
+  it('saves through the shared service, clearing and account number included', async () => {
+    enqueue({ data: STORED })
+    enqueue({ data: { ...STORED, city: 'Lund', clearing_number: '8327', account_number: '1234567' } })
+
+    const { status, body } = await parseJsonResponse<{ data: { city: string } }>(
+      await put({ name: 'Elnät AB', city: 'Lund', clearing_number: '8327', account_number: '1234567' }),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.city).toBe('Lund')
+    expect(findCall('suppliers', 'update')).toEqual([
+      { name: 'Elnät AB', city: 'Lund', clearing_number: '8327', account_number: '1234567' },
+    ])
+  })
+
+  it('refuses to rename an archived supplier', async () => {
+    enqueue({ data: { ...STORED, archived_at: '2026-05-01T00:00:00Z' } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await put({ name: 'Nytt namn AB' }))
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(findCall('suppliers', 'update')).toBeUndefined()
   })
 })

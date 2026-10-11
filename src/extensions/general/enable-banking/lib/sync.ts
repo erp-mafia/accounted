@@ -76,12 +76,32 @@ interface BookedTransactionFields {
   counterparty_name?: string
   counterparty_account?: string
   reference?: string
+  value_date?: string
+  provider_transaction_id?: string
   merchant_category_code?: string
   bank_transaction_code?: string
   proprietary_bank_transaction_code?: string
 }
 
 const CONNECTOR_SYNC_TIMEOUT_MS = 120_000
+
+/**
+ * The raw page each fetched row arrived in, rebuilt from the pages themselves:
+ * page p holds the next `transactions.length` rows, in order. Null when the
+ * counts do not add up to the fetched rows, so no row links to a wrong page.
+ */
+function pageOfEachRow(rawPages: string[], rowCount: number): number[] | null {
+  const pages: number[] = []
+  try {
+    rawPages.forEach((page, index) => {
+      const rows = (JSON.parse(page) as { transactions?: unknown[] }).transactions
+      for (let i = 0; i < (Array.isArray(rows) ? rows.length : 0); i++) pages.push(index)
+    })
+  } catch {
+    return null
+  }
+  return pages.length === rowCount ? pages : null
+}
 
 /**
  * Booked transactions through the hosted connector. The session id is the
@@ -224,7 +244,9 @@ export async function syncAccountTransactions(
   // the connector produces byte-identical stored keys.
   const connector = bankConnectorMode(companyId)
   let rawPages: string[]
-  let bookedEntries: Array<{ tx: BookedTransactionFields; bookingDate: string }>
+  // page: index into rawPages, when known (the direct path; the connector does
+  // not report it yet).
+  let bookedEntries: Array<{ tx: BookedTransactionFields; bookingDate: string; page?: number }>
   let totalFetched: number
   let effectiveFromDate: string | undefined
   let historyNarrowed = false
@@ -286,6 +308,7 @@ export async function syncAccountTransactions(
       })
     }
     const bankTransactions = fetched.transactions.map(tx => convertTransaction(tx, account.currency))
+    const rowPages = pageOfEachRow(rawPages, fetched.transactions.length)
     // Only ingest BOOKED transactions: those the ASPSP returned with a real
     // booking_date. Pending entries are intentionally skipped: a pending row is
     // unstable across syncs (a later "synka nu" returns the same transaction
@@ -301,7 +324,7 @@ export async function syncAccountTransactions(
     bookedEntries = bankTransactions.flatMap((tx, i) => {
       const bookingDate = fetched.transactions[i]?.booking_date
       return typeof bookingDate === 'string' && bookingDate.trim() !== ''
-        ? [{ tx, bookingDate: bookingDate.trim() }]
+        ? [{ tx, bookingDate: bookingDate.trim(), page: rowPages?.[i] }]
         : []
     })
   }
@@ -367,11 +390,30 @@ export async function syncAccountTransactions(
     bookedEntries.map(({ tx, bookingDate }) => ({ date: bookingDate, amount: tx.amount }))
   )
 
+  // Archive raw PSD2 API responses as räkenskapsinformation (BFL 7 kap). The
+  // id of each archived page is kept, so every row links to the page it came in.
+  const archivedPageIds: Array<string | null> = []
+  for (let i = 0; i < rawPages.length; i++) {
+    archivedPageIds.push(null)
+    try {
+      const fileName = `psd2-response_${connectionId}_${account.uid}_${new Date().toISOString().replace(/[:.]/g, '-')}_p${i + 1}.json`
+      const buffer = new TextEncoder().encode(rawPages[i]).buffer as ArrayBuffer
+      const archived = await uploadDocument(supabase, userId, companyId,
+        { name: fileName, buffer, type: 'application/json' },
+        { upload_source: 'api' }
+      )
+      archivedPageIds[i] = archived.id
+    } catch (archiveError) {
+      console.error(`[enable-banking] Failed to archive raw response page ${i + 1}:`, archiveError)
+      // Archival failure must not fail the sync
+    }
+  }
+
   // Convert Enable Banking format to generic RawTransaction. counterparty
   // identification: prefer IBAN (international, normalized) over BBAN/BG
   // numbers: the own-account detector matches on IBAN first, falling back
   // to counterparty_account for Swedish domestic transfers.
-  const rawTransactions: RawTransaction[] = bookedEntries.map(({ tx, bookingDate }, i) => {
+  const rawTransactions: RawTransaction[] = bookedEntries.map(({ tx, bookingDate, page }, i) => {
     const cpAccount = tx.counterparty_account ?? null
     const looksLikeIban = cpAccount && /^[A-Z]{2}\d/.test(cpAccount.replace(/\s+/g, ''))
     return {
@@ -388,6 +430,9 @@ export async function syncAccountTransactions(
       mcc_code: tx.merchant_category_code ? parseInt(tx.merchant_category_code, 10) : null,
       merchant_name: tx.counterparty_name || null,
       reference: tx.reference || null,
+      value_date: tx.value_date || null,
+      provider_transaction_id: tx.provider_transaction_id || null,
+      raw_document_id: page === undefined ? null : archivedPageIds[page] ?? null,
       bank_connection_id: connectionId,
       import_source: 'enable_banking',
       counterparty_iban: looksLikeIban ? cpAccount!.replace(/\s+/g, '') : null,
@@ -404,20 +449,6 @@ export async function syncAccountTransactions(
   if (syncOptions?.rawInsertOnly) ingestOptions.rawInsertOnly = true
   // Per-account ledger routing: the mapping engine consumes settlementAccount
   // for the bank-side leg. The verified route also guards the database insert.
-  // Archive raw PSD2 API responses as räkenskapsinformation (BFL 7 kap)
-  for (let i = 0; i < rawPages.length; i++) {
-    try {
-      const fileName = `psd2-response_${connectionId}_${account.uid}_${new Date().toISOString().replace(/[:.]/g, '-')}_p${i + 1}.json`
-      const buffer = new TextEncoder().encode(rawPages[i]).buffer as ArrayBuffer
-      await uploadDocument(supabase, userId, companyId,
-        { name: fileName, buffer, type: 'application/json' },
-        { upload_source: 'api' }
-      )
-    } catch (archiveError) {
-      console.error(`[enable-banking] Failed to archive raw response page ${i + 1}:`, archiveError)
-      // Archival failure must not fail the sync
-    }
-  }
 
   const ingestResult = await ingest(supabase, companyId, userId, rawTransactions, ingestOptions)
 

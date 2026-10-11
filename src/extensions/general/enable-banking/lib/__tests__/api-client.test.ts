@@ -813,6 +813,57 @@ describe('convertTransaction', () => {
     }
   }
 
+  // Required<Transaction>: a field added to the type must be added here, and
+  // the toEqual below then says whether convertTransaction keeps it.
+  it('keeps every field of a full transaction that the ledger stores', () => {
+    const tx: Required<Transaction> = {
+      entry_reference: 'ENTRY-1',
+      transaction_id: 'TX-DETAILS-1',
+      booking_date: '2025-03-10',
+      value_date: '2025-03-11',
+      transaction_amount: { amount: '12500.00', currency: 'SEK' },
+      credit_debit_indicator: 'CRDT',
+      creditor_name: 'Vårt Bolag AB',
+      creditor_account: { iban: 'SE3550000000054910000003' },
+      creditor_account_additional_identification: [],
+      creditor: { name: 'Vårt Bolag AB' },
+      debtor_name: 'Kund AB',
+      debtor_account: { iban: 'SE4550000000058398257466' },
+      debtor_account_additional_identification: [],
+      debtor: { name: 'Kund AB' },
+      remittance_information: ['Faktura 1001'],
+      reference_number: ' 1001000000017 ',
+      reference_number_schema: 'SEBG',
+      merchant_category_code: '5411',
+      bank_transaction_code: { description: 'Incoming', code: 'PMNT', sub_code: 'RCDT' },
+      proprietary_bank_transaction_code: 'BG',
+    }
+
+    expect(convertTransaction(tx, 'SEK')).toEqual({
+      id: 'ENTRY-1',
+      date: '2025-03-11',
+      booking_date: '2025-03-10',
+      value_date: '2025-03-11',
+      provider_transaction_id: 'ENTRY-1',
+      amount: 12500,
+      currency: 'SEK',
+      description: 'Faktura 1001',
+      counterparty_name: 'Kund AB',
+      counterparty_account: 'SE4550000000058398257466',
+      reference: '1001000000017',
+      merchant_category_code: '5411',
+      bank_transaction_code: 'PMNT/RCDT',
+      proprietary_bank_transaction_code: 'BG',
+    })
+  })
+
+  it('falls back to transaction_id for the bank id and leaves absent fields unset', () => {
+    const out = convertTransaction(makeTx({ transaction_id: 'TX-ONLY' }), 'SEK')
+    expect(out.provider_transaction_id).toBe('TX-ONLY')
+    expect(out.reference).toBeUndefined()
+    expect(out.value_date).toBeUndefined()
+  })
+
   it('uses remittance_information when present', () => {
     const tx = makeTx({ remittance_information: ['Faktura 123', ' '] })
     expect(convertTransaction(tx, 'SEK').description).toBe('Faktura 123')

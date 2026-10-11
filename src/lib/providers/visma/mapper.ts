@@ -102,8 +102,10 @@ function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
   if (ps === CUSTOMER_PS_OVERDUE) return 'overdue';
   if (ps == null && remaining === 0 && total !== 0) return 'paid';
   if (raw['IsBooked'] === true) return 'booked';
-  if (raw['IsSent'] === true || raw['SendType'] != null) return 'sent';
-  return 'draft';
+  // Never 'draft': /customerinvoices lists issued invoices only, drafts live
+  // under /customerinvoicedrafts. A draft fallback imported issued, booked
+  // invoices as drafts, and Skicka then booked the sale a second time.
+  return 'sent';
 }
 
 /**

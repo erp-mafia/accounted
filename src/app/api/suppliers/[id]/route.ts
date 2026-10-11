@@ -3,6 +3,8 @@ import { roundOre } from '@/lib/money'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSupplierSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { updateSupplier } from '@/lib/suppliers/update-supplier'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -61,11 +63,14 @@ export const GET = withRouteContext(
   },
 )
 
+// The same service as the v1 PATCH and gnubok_update_supplier
+// (lib/suppliers/update-supplier.ts), so the three doors take the same
+// fields and keep the same rules.
 export const PUT = withRouteContext(
   'supplier.update',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
     const opLog = log.child({ supplierId: id })
 
     const result = await validateBody(request, UpdateSupplierSchema, {
@@ -73,54 +78,12 @@ export const PUT = withRouteContext(
       operation: 'supplier.update',
     })
     if (!result.success) return result.response
-    const body = result.data
 
-    const { data, error } = await supabase
-      .from('suppliers')
-      .update({
-        name: body.name,
-        supplier_type: body.supplier_type,
-        email: body.email,
-        phone: body.phone,
-        address_line1: body.address_line1,
-        address_line2: body.address_line2,
-        postal_code: body.postal_code,
-        city: body.city,
-        country: body.country,
-        org_number: body.org_number,
-        vat_number: body.vat_number,
-        bankgiro: body.bankgiro,
-        plusgiro: body.plusgiro,
-        bank_account: body.bank_account,
-        iban: body.iban,
-        bic: body.bic,
-        clearing_number: body.clearing_number,
-        account_number: body.account_number,
-        default_expense_account: body.default_expense_account,
-        default_payment_terms: body.default_payment_terms,
-        default_currency: body.default_currency,
-        notes: body.notes,
-      })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .select()
-      .single()
+    const outcome = await updateSupplier({ supabase, companyId, userId: user.id, log: opLog }, id, result.data)
+    if (!outcome.ok) return sessionFailureResponse(outcome, opLog, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
 
-    if (error) {
-      if (error.code === '23505') {
-        return errorResponseFromCode('SUPPLIER_DUPLICATE_ORG_NUMBER', opLog, {
-          requestId,
-          details: { orgNumber: body.org_number },
-        })
-      }
-      opLog.error('supplier update failed', error)
-      return errorResponseFromCode('SUPPLIER_UPDATE_FAILED', opLog, {
-        requestId,
-        details: { reason: getUserErrorMessage(error) },
-      })
-    }
-
-    return NextResponse.json({ data })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

@@ -1401,6 +1401,10 @@ export async function ingestTransactions(
         bank_file_import_id: options?.bankFileImportId ?? null,
         counterparty_iban: raw.counterparty_iban || null,
         counterparty_account: raw.counterparty_account || null,
+        value_date: raw.value_date || null,
+        end_to_end_id: raw.end_to_end_id || null,
+        provider_transaction_id: raw.provider_transaction_id || null,
+        raw_document_id: raw.raw_document_id || null,
     }
     const route = options?.bankRoute
     const { data: newTransaction, error: insertError } = route

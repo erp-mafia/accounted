@@ -335,7 +335,7 @@ POST /companies/{companyId}/supplier-payment-batches/preview : Check which suppl
 GET /companies/{companyId}/suppliers : List suppliers for a company [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/suppliers : Create a supplier [scope:suppliers:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/suppliers/{id} : Retrieve a single supplier by id [scope:suppliers:read risk:low idempotent]
-PATCH /companies/{companyId}/suppliers/{id} : Partially update a supplier [scope:suppliers:write risk:low idempotent dry-run reversible]
+PATCH /companies/{companyId}/suppliers/{id} : Partially update a supplier [scope:suppliers:write risk:medium idempotent dry-run reversible]
 DELETE /companies/{companyId}/suppliers/{id} : Archive a supplier (soft-delete) [scope:suppliers:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/suppliers/bulk-create : Create up to 50 suppliers in one call (partial-success) [scope:suppliers:write risk:low idempotent dry-run reversible]
 ```

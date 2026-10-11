@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { OAUTH_MCP_KEY_NAME, TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
 const commitSpy = vi.fn()
 
@@ -140,9 +140,9 @@ describe('gnubok_approve_pending_operation', () => {
     expect(result.data?.invoice_id).toBe('inv-1')
   })
 
-  // No 'mcp_oauth' row: handleMcpRequest hardcodes actor.type='api_key' for
-  // ALL MCP traffic (the OAuth connector's access_token is a minted API key),
-  // so 'api_key' is the only agent-credential value a live request produces.
+  // handleMcpRequest sets actor.type='api_key' for ALL MCP traffic (the OAuth
+  // connector's access_token is a minted API key); the OAuth case is told
+  // apart by the key's reserved name, in the test below.
   it.each([
     { actorType: 'api_key', expected: 'api_key' },
     { actorType: 'user', expected: 'user_accept' },
@@ -168,6 +168,49 @@ describe('gnubok_approve_pending_operation', () => {
       })
     }
   )
+
+  // Who decided: a key minted by the OAuth sign-in is named
+  // OAUTH_MCP_KEY_NAME, so its commits say mcp_oauth, not api_key. The key's
+  // ceiling travels with it: the label must not lift the unattended limit.
+  it('labels an OAuth connector approval mcp_oauth and keeps its ceiling', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const op = { id: 'op-1', operation_type: 'create_invoice', company_id: 'company-1', status: 'pending', risk_level: 'medium', params: {} }
+    enqueue({ data: op, error: null }) // fetch
+    commitSpy.mockResolvedValue({ status: 'committed' })
+
+    await approveTool.execute(
+      { operation_id: 'op-1' },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key', label: OAUTH_MCP_KEY_NAME, unattendedCommitLimit: 500 }
+    )
+
+    expect(commitSpy.mock.calls[0][4]).toMatchObject({
+      commitMethod: 'api_key',
+      actor: { type: 'mcp_oauth', label: OAUTH_MCP_KEY_NAME, unattendedCommitLimit: 500 },
+    })
+  })
+
+  it('keeps a hand-made API key as api_key', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const op = { id: 'op-1', operation_type: 'create_invoice', company_id: 'company-1', status: 'pending', risk_level: 'medium', params: {} }
+    enqueue({ data: op, error: null }) // fetch
+    commitSpy.mockResolvedValue({ status: 'committed' })
+
+    await approveTool.execute(
+      { operation_id: 'op-1' },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key', label: 'Bokföringsrobot' }
+    )
+
+    expect(commitSpy.mock.calls[0][4]).toMatchObject({
+      commitMethod: 'api_key',
+      actor: { type: 'api_key', label: 'Bokföringsrobot' },
+    })
+  })
 
   it('refuses to approve a risk_level=high op without confirmed=true', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()

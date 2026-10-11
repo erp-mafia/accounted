@@ -208,6 +208,12 @@ export interface Transaction {
     name?: string
   }
   remittance_information?: string[]
+  /**
+   * Structured creditor reference: a Bankgiro OCR when reference_number_schema
+   * is 'SEBG', otherwise e.g. an RF reference ('INTL') or a Norwegian KID.
+   */
+  reference_number?: string
+  reference_number_schema?: string
   merchant_category_code?: string
   /**
    * Enable Banking sends this as an object ({ description, code, sub_code });
@@ -249,6 +255,9 @@ export interface BankTransaction {
   counterparty_name?: string
   counterparty_account?: string
   reference?: string
+  value_date?: string
+  /** The bank's own id for the row (entry_reference, else transaction_id). Never a dedupe key. */
+  provider_transaction_id?: string
   merchant_category_code?: string
   // ISO 20022 / proprietary transaction codes: carried through so the
   // description fallback can derive a meaningful Swedish label when remittance
@@ -1518,6 +1527,9 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
                  }) ||
                  FALLBACK_DESCRIPTION,
     counterparty_name: isCredit ? debtorName : creditorName,
+    reference: tx.reference_number?.trim() || undefined,
+    value_date: tx.value_date || undefined,
+    provider_transaction_id: tx.entry_reference || tx.transaction_id || undefined,
     counterparty_account: isCredit
       ? pickAccountIdentifier(tx.debtor_account, tx.debtor_account_additional_identification)
       : pickAccountIdentifier(tx.creditor_account, tx.creditor_account_additional_identification),

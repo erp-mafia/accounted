@@ -94,6 +94,7 @@ import {
   peppolRegister,
   peppolRequestAccess,
 } from './peppol'
+import { suppliersUpdate } from './suppliers'
 import {
   supplierInvoicesDelete,
   supplierInvoicesMarkBankEntered,
@@ -294,6 +295,8 @@ export const OPERATIONS: readonly AnyOperation[] = [
   peppolGetRegistration,
   peppolRegister,
   peppolRequestAccess,
+  // suppliers (update only: create, list, get and archive are hand-written doors)
+  suppliersUpdate,
   // supplier-invoice-actions
   supplierInvoicesDelete,
   supplierInvoicesUncredit,

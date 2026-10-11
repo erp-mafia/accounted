@@ -17,6 +17,18 @@
  *
  * A voucher without the settlement side is rejected with
  * LINK_SI_VOUCHER_NO_AP_DEBIT / LINK_SI_VOUCHER_NO_BANK_CREDIT.
+ *
+ * ONE VERIFIKAT MAY PAY SEVERAL DEBTS (GitHub issue 3490). A bank payment that
+ * covers several leverantörsskulder is one verifikat, and some of those debts
+ * may have no invoice here at all (a company that came in by SIE carries them
+ * as part of the 2440 opening balance). What a voucher can settle is therefore
+ * its settlement side less the payment rows that already point at it for other
+ * invoices, on both sides, and a link may state `amount`: this invoice's share
+ * of it, in the invoice's currency. The share is bounded by the invoice's
+ * remainder and by what the voucher has left; the rest stays available.
+ * Without a stated share nothing is split on a guess: what the voucher has
+ * left must fit inside the invoice's remainder
+ * (LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING otherwise).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
@@ -60,8 +72,9 @@ const log = createLogger('supplier-voucher-matching')
 const PAYMENT_ROW_CHUNK = 100
 
 /** Payment rows that already point at a voucher for ANOTHER invoice have used
- *  part of its 19xx credit. Only read on the bank_credit side; mirrors the
- *  capacity block of link_supplier_invoice_to_voucher (20260921190300). */
+ *  part of its settlement side, the 244x debit as much as the 19xx credit.
+ *  Mirrors the capacity block of link_supplier_invoice_to_voucher
+ *  (20261011153000; 19xx only before that). */
 interface VoucherPaymentRow {
   journal_entry_id: string | null
   supplier_invoice_id: string
@@ -76,7 +89,7 @@ export interface SupplierVoucherCandidate {
   entry_date: string
   description: string
   /** What this voucher can settle, always positive: the 244x debit
-   *  (`ap_debit`), or on `bank_credit` the 19xx credit less what payment rows
+   *  (`ap_debit`) or the 19xx credit (`bank_credit`), less what payment rows
    *  for other invoices have already used of it. Expressed in `currency` below
    *  (the INVOICE's currency), never in the raw SEK ledger column: see
    *  ledgerLineSideAmountIn. Kept under this name for API/UI back-compat
@@ -96,11 +109,46 @@ export interface SupplierVoucherCandidate {
   confidence: number
   /** Localized reason in Swedish. */
   match_reason: string
+  /** Set when the voucher has MORE left than the invoice needs: the share to
+   *  state as `amount` on the link (the invoice's remainder). Such a voucher
+   *  is refused without a stated share, since it pays other debts too. */
+  link_amount?: number
 }
 
 interface CandidateContext {
   invoice: SupplierInvoice & { supplier?: Supplier }
   remainingAmount: number
+  /** Offer a voucher that has more left than the invoice needs although
+   *  nothing else ties it to the invoice (see `includeShared`). */
+  includeShared: boolean
+  /** Half-width of the search window in days, around the due date. */
+  windowDays: number
+}
+
+/**
+ * Confidence of a voucher offered only because it has more left than the
+ * invoice needs (a payment of several debts). The amount says nothing about
+ * WHICH debts, so it ranks under every amount match and far under the
+ * unattended auto-link bar; the supplier's name in the voucher text lifts it
+ * one step, still a "weak match" to the picker.
+ *
+ * Within the class the date is the only thing that tells the vouchers apart,
+ * and a company that pays its suppliers every week has a dozen larger payment
+ * runs inside the window. So the closer to the due date, the higher: up to
+ * SHARED_VOUCHER_PROXIMITY_SPAN at the due date, nothing at the window's edge.
+ * Without it the list would show the OLDEST runs first (the general tie-break
+ * is the entry date) and cut the one that paid the invoice. The ceiling, with
+ * the name and the 7-day bump, is 0.64: still under "likely match" (0.7).
+ */
+const SHARED_VOUCHER_CONFIDENCE = 0.4
+const SHARED_VOUCHER_SUPPLIER_CONFIDENCE = 0.5
+const SHARED_VOUCHER_PROXIMITY_SPAN = 0.09
+
+/** 1 at the due date, 0 at the edge of the window or when a date is unreadable. */
+function dueDateCloseness(entryDate: string, dueDate: string, windowDays: number): number {
+  const days = Math.abs(new Date(entryDate).getTime() - new Date(dueDate).getTime()) / (24 * 3600 * 1000)
+  if (!Number.isFinite(days) || windowDays <= 0) return 0
+  return Math.max(0, 1 - days / windowDays)
 }
 
 /**
@@ -112,6 +160,11 @@ interface CandidateContext {
  *
  * `options.settlementSide` lets a caller that already resolved the side (to
  * show it) pass it in instead of paying for a second lookup.
+ *
+ * `options.includeShared` also offers vouchers that have MORE left than the
+ * invoice needs and that nothing else ties to it: a payment of several debts,
+ * linkable with a stated share (`link_amount`). Only the surfaces where a
+ * person picks set it; the unattended reconcile pass keeps the amount matches.
  */
 export async function findMatchingVouchersForSupplierInvoice(
   supabase: SupabaseClient,
@@ -121,6 +174,7 @@ export async function findMatchingVouchersForSupplierInvoice(
     limit?: number
     dateWindowDays?: number
     settlementSide?: SupplierSettlementSide
+    includeShared?: boolean
   } = {},
 ): Promise<SupplierVoucherCandidate[]> {
   const limit = options.limit ?? 10
@@ -278,39 +332,25 @@ export async function findMatchingVouchersForSupplierInvoice(
 
   if (byEntry.size === 0) return []
 
-  // Drop entries already fully linked to *this* supplier invoice.
+  // Every payment row on a voucher counts, whichever invoice it belongs to,
+  // and the candidate is scored on what the voucher has LEFT, as the RPC
+  // settles it. On the 19xx side that is what keeps last month's payment of a
+  // recurring invoice off this month's (a 19xx credit says "money left the
+  // bank", not "this supplier was paid"); on the 244x side it is what lets one
+  // verifikat pay several invoices without paying any of them twice. A voucher
+  // already linked to this invoice, or with nothing left, is not a candidate.
   const candidateEntryIds = Array.from(byEntry.keys())
-  if (onBankCredit) {
-    // A 19xx credit says "money left the bank", not "this supplier was paid":
-    // last month's payment of a recurring invoice is a perfect amount match
-    // for this month's. So every payment row on the voucher counts, whichever
-    // invoice it belongs to, and the candidate is scored on what the credit
-    // has LEFT, as the RPC settles it.
-    const rows = await fetchVoucherPaymentRows(supabase, companyId, candidateEntryIds)
-    for (const [entryId, candidate] of byEntry) {
-      const capacity = bankCreditCapacity(
-        candidate.apDebitTotal,
-        rows.filter((r) => r.journal_entry_id === entryId),
-        invoice.id,
-        invoiceCurrency,
-      )
-      if (capacity === null) byEntry.delete(entryId)
-      else candidate.apDebitTotal = capacity
-    }
-  } else {
-    const { data: existingLinks } = await supabase
-      .from('supplier_invoice_payments')
-      .select('journal_entry_id')
-      .eq('company_id', companyId)
-      .eq('supplier_invoice_id', invoice.id)
-      .in('journal_entry_id', candidateEntryIds)
-
-    const alreadyLinked = new Set(
-      (existingLinks ?? [])
-        .map((row) => (row as { journal_entry_id: string | null }).journal_entry_id)
-        .filter((id): id is string => !!id),
-    )
-    for (const id of alreadyLinked) byEntry.delete(id)
+  const rows = await fetchVoucherPaymentRows(supabase, companyId, candidateEntryIds)
+  for (const [entryId, candidate] of byEntry) {
+    const voucherRows = rows.filter((r) => r.journal_entry_id === entryId)
+    // The SEK-booked fallback reads the kronor voucher as the payment of this
+    // invoice's whole remainder: it cannot also carry another invoice's row.
+    const capacity =
+      candidate.sekBooked && voucherRows.some((r) => r.supplier_invoice_id !== invoice.id)
+        ? null
+        : voucherCapacity(candidate.apDebitTotal, voucherRows, invoice.id, invoiceCurrency)
+    if (capacity === null) byEntry.delete(entryId)
+    else candidate.apDebitTotal = capacity
   }
   if (byEntry.size === 0) return []
 
@@ -344,11 +384,19 @@ export async function findMatchingVouchersForSupplierInvoice(
           .map((p) => p.id),
   )
 
-  const ctx: CandidateContext = { invoice, remainingAmount }
+  const ctx: CandidateContext = {
+    invoice,
+    remainingAmount,
+    includeShared: options.includeShared === true,
+    windowDays,
+  }
   const candidates: SupplierVoucherCandidate[] = []
   for (const { entry, apDebitTotal, lineCurrency, sekBooked } of byEntry.values()) {
-    const scored = scoreCandidate(entry, apDebitTotal, lineCurrency, ctx)
+    // A share is not on offer through the SEK-booked fallback: the validator
+    // and the RPC refuse one there (the kursdifferens would be a guess).
+    const scored = scoreCandidate(entry, apDebitTotal, lineCurrency, ctx, !sekBooked)
     if (!scored) continue
+    const hasMoreThanNeeded = !sekBooked && apDebitTotal > remainingAmount + AMOUNT_TOLERANCE
     candidates.push({
       journal_entry_id: entry.id,
       voucher_series: entry.voucher_series,
@@ -364,6 +412,7 @@ export async function findMatchingVouchersForSupplierInvoice(
       match_reason: sekBooked
         ? `${scored.match_reason}; betalningen är bokförd i SEK (${formatNumber(sekBooked.sekTotal)} kr) och omräknad med fakturans kurs`
         : scored.match_reason,
+      ...(hasMoreThanNeeded ? { link_amount: round2(remainingAmount) } : {}),
     })
   }
 
@@ -378,6 +427,8 @@ function scoreCandidate(
   apDebitTotal: number,
   lineCurrency: string | null,
   ctx: CandidateContext,
+  /** False where the voucher cannot take a share (SEK-booked fallback). */
+  shareable = true,
 ): { confidence: number; match_reason: string } | null {
   // Reference in the voucher text: the supplier's invoice number, or our own
   // ankomstnummer, as a whole number (descriptionMentionsReference). A
@@ -468,6 +519,18 @@ function scoreCandidate(
   } else if (fuzzyRemaining) {
     confidence = CONFIDENCE.FUZZY_AMOUNT_ONLY
     reason = `Belopp nära (±1%)`
+  } else if (
+    ctx.includeShared &&
+    shareable &&
+    apDebitTotal > ctx.remainingAmount + AMOUNT_TOLERANCE
+  ) {
+    // A payment of several debts: the voucher has more left than this invoice
+    // needs. Nothing but the person picking says it is this invoice's payment,
+    // so it ranks under every amount match (see SHARED_VOUCHER_CONFIDENCE).
+    const base = supplierMatch ? SHARED_VOUCHER_SUPPLIER_CONFIDENCE : SHARED_VOUCHER_CONFIDENCE
+    const closeness = dueDateCloseness(entry.entry_date, ctx.invoice.due_date, ctx.windowDays)
+    confidence = Math.round((base + SHARED_VOUCHER_PROXIMITY_SPAN * closeness) * 1000) / 1000
+    reason = `Verifikationen har ${formatNumber(apDebitTotal)} ${ctx.invoice.currency} kvar, mer än fakturans belopp: betalar den flera skulder länkas fakturans del${supplierMatch ? '; leverantörsnamn matchar' : ''}`
   } else {
     return null
   }
@@ -489,6 +552,8 @@ export type SupplierVoucherLinkErrorCode =
   | 'LINK_SI_VOUCHER_CUTOFF_ALREADY_POSTED'
   | 'LINK_SI_VOUCHER_ALREADY_LINKED'
   | 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING'
+  | 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_VOUCHER'
+  | 'LINK_SI_VOUCHER_AMOUNT_INVALID'
   | 'LINK_SI_VOUCHER_CURRENCY_MISMATCH'
   | 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID'
   | 'LINK_SI_VOUCHER_DB_ERROR'
@@ -505,6 +570,9 @@ export type ValidateSupplierVoucherResult =
       remainingAfter: number
       isFullyPaid: boolean
       paymentAmount: number
+      /** What the voucher has left after this link, in the invoice's
+       *  currency: for other invoices, or for a debt with no invoice here. */
+      voucherRemainingAfter: number
     }
   | {
       ok: false
@@ -518,13 +586,24 @@ export type ValidateSupplierVoucherResult =
  * judged before approval the way the commit will judge it. The RPC stays the
  * authority: one guard is NOT mirrored here, the posted kontantmetod cut-off
  * (LINK_SI_VOUCHER_CUTOFF_ALREADY_POSTED), which surfaces at commit.
+ *
+ * `amount` is the stated share of the voucher that is this invoice's, in the
+ * invoice's currency (see the module header); omitted, what the voucher has
+ * left must fit inside the invoice's remainder.
  */
 export async function validateVoucherForSupplierInvoiceLink(
   supabase: SupabaseClient,
   companyId: string,
   invoice: SupplierInvoice & { supplier?: Supplier },
   journalEntryId: string,
+  amount?: number | null,
 ): Promise<ValidateSupplierVoucherResult> {
+  // A stated share is a positive amount to the öre, judged first as in the RPC.
+  const statedAmount = amount == null ? null : round2(amount)
+  if (statedAmount !== null && !(Number.isFinite(statedAmount) && statedAmount > 0)) {
+    return { ok: false, code: 'LINK_SI_VOUCHER_AMOUNT_INVALID', details: { amount } }
+  }
+
   const remainingAmount = computeRemaining(invoice)
   if (remainingAmount <= AMOUNT_TOLERANCE) {
     return { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID' }
@@ -612,6 +691,22 @@ export async function validateVoucherForSupplierInvoiceLink(
   }
   apDebitTotal = round2(apDebitTotal)
 
+  if (unconvertibleLineCurrency !== undefined && statedAmount !== null) {
+    // A stated share needs the voucher's side in the invoice's currency. The
+    // fallback below reads a kronor voucher as the payment of the invoice's
+    // WHOLE remainder and the RPC books the kursdifferens from that; the
+    // kronor behind a part of it are not in the books, so a share would book
+    // a kursdifferens on a guess. Answered before the fallback, as in the RPC.
+    return {
+      ok: false,
+      code: 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
+      details: {
+        invoice_currency: invoice.currency,
+        line_currency: unconvertibleLineCurrency,
+        reason: 'amount_needs_invoice_currency',
+      },
+    }
+  }
   if (unconvertibleLineCurrency !== undefined) {
     // SEK-booked settlement fallback, mirroring the RPC gate byte-for-byte
     // (sekBookedSettlement). The RPC settles the FULL remaining; on ap_debit
@@ -664,47 +759,73 @@ export async function validateVoucherForSupplierInvoiceLink(
     }
   }
 
-  if (onBankCredit) {
-    // Capacity of the 19xx credit, as in the RPC: rows for OTHER invoices have
-    // used part of it; this invoice's own row is the already-linked guard's.
-    const rows = (await fetchVoucherPaymentRows(supabase, companyId, [journalEntryId])).filter(
-      (r) => r.supplier_invoice_id !== invoice.id,
-    )
-    if (sekFallback && rows.length > 0) {
-      return {
-        ok: false,
-        code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED',
-        details: { linked_rows: rows.length },
-      }
-    }
-    if (rows.some((r) => (r.currency ?? 'SEK') !== invoiceCurrency)) {
-      return {
-        ok: false,
-        code: 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
-        details: {
-          invoice_currency: invoice.currency,
-          reason: 'voucher_settles_other_currency',
-        },
-      }
-    }
-    const used = round2(rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
-    if (apDebitTotal - used <= AMOUNT_TOLERANCE) {
-      return {
-        ok: false,
-        code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED',
-        details: { bank_credit: apDebitTotal, already_linked: used },
-      }
-    }
-    apDebitTotal = round2(apDebitTotal - used)
-  }
-
-  if (apDebitTotal > remainingAmount + AMOUNT_TOLERANCE) {
+  // Capacity of the settlement side, on both sides as in the RPC: rows for
+  // OTHER invoices have used part of it; this invoice's own row is the
+  // already-linked guard's.
+  const sideKey = onBankCredit ? 'bank_credit' : 'ap_debit'
+  const rows = (await fetchVoucherPaymentRows(supabase, companyId, [journalEntryId])).filter(
+    (r) => r.supplier_invoice_id !== invoice.id,
+  )
+  if (sekFallback && rows.length > 0) {
     return {
       ok: false,
-      code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
-      details: onBankCredit
-        ? { bank_credit: apDebitTotal, remaining: round2(remainingAmount) }
-        : { ap_debit: apDebitTotal, remaining: round2(remainingAmount) },
+      code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED',
+      details: { linked_rows: rows.length },
+    }
+  }
+  if (rows.some((r) => (r.currency ?? 'SEK') !== invoiceCurrency)) {
+    return {
+      ok: false,
+      code: 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
+      details: {
+        invoice_currency: invoice.currency,
+        reason: 'voucher_settles_other_currency',
+      },
+    }
+  }
+  const used = round2(rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
+  const sideTotal = apDebitTotal
+  if (apDebitTotal - used <= AMOUNT_TOLERANCE) {
+    return {
+      ok: false,
+      code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED',
+      details: { [sideKey]: sideTotal, already_linked: used },
+    }
+  }
+  // From here on apDebitTotal is what the voucher has LEFT.
+  apDebitTotal = round2(apDebitTotal - used)
+
+  if (statedAmount === null) {
+    // No stated share: nothing is split on a guess. What the voucher has left
+    // must fit inside the invoice's remainder.
+    if (apDebitTotal > remainingAmount + AMOUNT_TOLERANCE) {
+      return {
+        ok: false,
+        code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
+        details: { [sideKey]: apDebitTotal, remaining: round2(remainingAmount) },
+      }
+    }
+  } else {
+    // A stated share: bounded by the invoice's remainder and by what the
+    // voucher has left. The rest of the voucher stays available.
+    if (statedAmount > remainingAmount + AMOUNT_TOLERANCE) {
+      return {
+        ok: false,
+        code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
+        details: { amount: statedAmount, remaining: round2(remainingAmount) },
+      }
+    }
+    if (statedAmount > apDebitTotal + AMOUNT_TOLERANCE) {
+      return {
+        ok: false,
+        code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_VOUCHER',
+        details: {
+          amount: statedAmount,
+          available: apDebitTotal,
+          [sideKey]: sideTotal,
+          already_linked: used,
+        },
+      }
     }
   }
 
@@ -719,7 +840,7 @@ export async function validateVoucherForSupplierInvoiceLink(
     return { ok: false, code: 'LINK_SI_VOUCHER_ALREADY_LINKED' }
   }
 
-  const paymentAmount = Math.min(apDebitTotal, round2(remainingAmount))
+  const paymentAmount = Math.min(statedAmount ?? apDebitTotal, apDebitTotal, round2(remainingAmount))
   const remainingAfter = Math.max(0, round2(remainingAmount - paymentAmount))
   const isFullyPaid = remainingAfter <= AMOUNT_TOLERANCE
 
@@ -732,6 +853,7 @@ export async function validateVoucherForSupplierInvoiceLink(
     remainingAfter,
     isFullyPaid,
     paymentAmount,
+    voucherRemainingAfter: round2(apDebitTotal - paymentAmount),
   }
 }
 
@@ -739,6 +861,10 @@ export interface LinkSupplierInvoiceToVoucherParams {
   supplierInvoiceId: string
   journalEntryId: string
   notes?: string
+  /** The share of the voucher that is this invoice's, in the invoice's
+   *  currency. Omitted: what the voucher has left must fit inside the
+   *  invoice's remainder (see the module header). */
+  amount?: number
 }
 
 export interface LinkSupplierInvoiceToVoucherResult {
@@ -748,6 +874,9 @@ export interface LinkSupplierInvoiceToVoucherResult {
   remainingAmount: number
   paymentAmount: number
   journalEntryId: string
+  /** What the voucher has left after this link, in the invoice's currency;
+   *  null from a database that predates migration 20261011153000. */
+  voucherRemaining: number | null
   /** Bank transaction auto-reconciled to the linked voucher, if exactly one
    *  unbooked line matched it; null when nothing was safely linkable. */
   reconciledTransactionId: string | null
@@ -770,6 +899,7 @@ interface RpcLinkOk {
   payment_amount: number
   journal_entry_id: string
   currency: string
+  voucher_remaining?: number | null
 }
 
 interface RpcLinkErr {
@@ -799,6 +929,7 @@ export async function linkSupplierInvoiceToVoucher(
     supplierInvoiceId: params.supplierInvoiceId,
     journalEntryId: params.journalEntryId,
     notes: params.notes ?? null,
+    amount: params.amount ?? null,
   })
 
   if (error) {
@@ -906,6 +1037,7 @@ export async function linkSupplierInvoiceToVoucher(
       remainingAmount: result.remaining_amount,
       paymentAmount: result.payment_amount,
       journalEntryId: result.journal_entry_id,
+      voucherRemaining: result.voucher_remaining ?? null,
       reconciledTransactionId,
     },
   }
@@ -933,12 +1065,13 @@ async function fetchVoucherPaymentRows(
 }
 
 /**
- * What a voucher's 19xx credit can still settle for `invoiceId`, or null when
- * it is not a candidate at all: already linked to this invoice, carrying rows
- * in another currency (the used part is unreadable), or nothing left.
+ * What a voucher's settlement side (244x debit or 19xx credit) can still
+ * settle for `invoiceId`, or null when it is not a candidate at all: already
+ * linked to this invoice, carrying rows in another currency (the used part is
+ * unreadable), or nothing left.
  */
-function bankCreditCapacity(
-  bankCredit: number,
+function voucherCapacity(
+  sideTotal: number,
   voucherRows: VoucherPaymentRow[],
   invoiceId: string,
   invoiceCurrency: string,
@@ -946,7 +1079,7 @@ function bankCreditCapacity(
   if (voucherRows.some((r) => r.supplier_invoice_id === invoiceId)) return null
   if (voucherRows.some((r) => (r.currency ?? 'SEK') !== invoiceCurrency)) return null
   const used = round2(voucherRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
-  const left = round2(bankCredit - used)
+  const left = round2(sideTotal - used)
   return left > AMOUNT_TOLERANCE ? left : null
 }
 

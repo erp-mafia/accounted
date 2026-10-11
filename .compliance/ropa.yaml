@@ -901,6 +901,52 @@ processing_activities:
       - actor_recorded_as_pseudonymous_user_or_api_key_id
       - written_only_after_the_booking_succeeded
 
+  - id: bookkeeping.suggestion_log
+    name: Beslutslogg för bokföringsförslag
+    purpose: >-
+      Spara, per företag, ett beslut i taget när en banktransaktion eller ett
+      inkorgsunderlag bokförs eller avfärdas: vilka förslag som fanns
+      (AI-tolkning, regel, mall, tidigare bokföring, dokumenttolkning), vilket
+      förslag som användes, vad som till slut bokfördes och vem som beslutade.
+      Gör de automatiska förslagen spårbara och mätbara för företaget och
+      följer med i företagets fullständiga arkivexport. Lämnas aldrig ut
+      utanför företaget.
+    lawful_basis: art_6_1_b   # contract (bookkeeping service)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - company_member            # who decided
+      - counterparty              # names and amounts on the bank line or underlag the suggestions describe
+    data_categories:
+      - user.activity_timestamp
+      - user.financial.transaction
+      - user.document             # extracted fields of an inbox underlag
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor.
+    retention:
+      duration: retained_with_the_company_books
+      basis: contract_and_bfl_7_kap_traceability
+      note: >-
+        No automatic purge: a row goes only with its company, bank line,
+        inbox item or document (ON DELETE CASCADE). Booked bank lines,
+        converted inbox items and documents on posted vouchers cannot be
+        deleted, so the cascade reaches only decisions that never became
+        bookkeeping.
+      stored_in:
+        - suggestion_log
+    security_measures:
+      - rls_company_scoped
+      - insert_only_for_the_deciding_writer_no_update_or_delete_grant
+      - append_only_trigger_update_refused_delete_only_by_cascade_or_operator_override
+      - viewer_write_gate_and_migration_reset_freeze
+
   - id: documents.own_company_supplier_guard
     name: Egenbolagskontroll vid dokumentextraktion
     purpose: >-

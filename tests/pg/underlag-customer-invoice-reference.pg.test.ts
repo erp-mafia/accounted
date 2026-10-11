@@ -111,7 +111,7 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
   let jeManualRegistered: string // manual booking the invoice register links directly → covered
   let jeBankLinked: string // bank-driven entry, invoice matched to it → covered on BOTH surfaces
   let jeImportForeignLink: string // linked only from ANOTHER company's invoice → still missing
-  let jeManualDraftLink: string // a DRAFT invoice points at it: no document yet → still missing
+  let jeManualCancelledLink: string // a CANCELLED invoice points at it: no document → still missing
   let jeImportCancelledPayment: string // payment row of a CANCELLED invoice → still missing
 
   beforeAll(async () => {
@@ -147,7 +147,7 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
     jeManualRegistered = await mkJe(3, 'manual')
     jeBankLinked = await mkJe(4, 'bank_transaction')
     jeImportForeignLink = await mkJe(5, 'import')
-    jeManualDraftLink = await mkJe(6, 'manual')
+    jeManualCancelledLink = await mkJe(6, 'manual')
     jeImportCancelledPayment = await mkJe(7, 'import')
 
     const linkedInvoice = await insertCustomerInvoice({ userId, companyId })
@@ -156,8 +156,10 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
     await insertCustomerInvoice({ userId, companyId, journalEntryId: jeManualRegistered })
 
     // Non-issued invoices: the link row exists but no document does, the
-    // counterpart of an unanchored supplier document.
-    await insertCustomerInvoice({ userId, companyId, journalEntryId: jeManualDraftLink, status: 'draft' })
+    // counterpart of an unanchored supplier document. A draft never holds a
+    // verifikat (invoices_draft_has_no_verifikat), so the direct link is a
+    // cancelled invoice's.
+    await insertCustomerInvoice({ userId, companyId, journalEntryId: jeManualCancelledLink, status: 'cancelled' })
     const cancelledInvoice = await insertCustomerInvoice({ userId, companyId, status: 'cancelled' })
     await linkAsPayment({
       userId,
@@ -208,9 +210,9 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
     for (const id of tx) expect(ver).toContain(id)
   })
 
-  it('a DRAFT invoice pointing at the entry is no underlag: still missing', async () => {
+  it('a CANCELLED invoice pointing at the entry is no underlag: still missing', async () => {
     const ids = await verifikatSurface(companyId)
-    expect(ids).toContain(jeManualDraftLink)
+    expect(ids).toContain(jeManualCancelledLink)
   })
 
   it('a payment row of a CANCELLED invoice is no underlag: still missing', async () => {
@@ -221,7 +223,7 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
   it('the full verdict: exactly the unlinked, foreign-linked and non-issued-linked entries remain', async () => {
     const ids = await verifikatSurface(companyId)
     expect(ids.sort()).toEqual(
-      [jeImportLoose, jeImportForeignLink, jeManualDraftLink, jeImportCancelledPayment].sort(),
+      [jeImportLoose, jeImportForeignLink, jeManualCancelledLink, jeImportCancelledPayment].sort(),
     )
   })
 })

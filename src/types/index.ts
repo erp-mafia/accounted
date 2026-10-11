@@ -935,6 +935,14 @@ export interface Transaction {
   counterparty_iban: string | null
   counterparty_account: string | null
 
+  // What the bank reported beyond the booking date (20261010090100,
+  // 20261011135800). Optional like the other late-added columns.
+  value_date?: string | null
+  end_to_end_id?: string | null
+  provider_transaction_id?: string | null
+  // The archived raw bank response this row arrived in; document_id is the receipt.
+  raw_document_id?: string | null
+
   // Notes
   notes: string | null
 
@@ -2867,6 +2875,9 @@ export type PendingOperationType =
   // AGI filed outside Accounted (gnubok_mark_agi_period_filed,
   // lib/operations/agi-filings.ts): completes the month's AGI deadline.
   | 'mark_agi_period_filed'
+  // Supplier register edit (gnubok_update_supplier, lib/operations/suppliers.ts):
+  // contact, address and payment details of an existing supplier.
+  | 'update_supplier'
   // Payroll over MCP, run structure (lib/operations/salary-run-structure.ts):
   // who is on a draft run, its payslip lines, the paid mark, and the
   // rättelsekörning of a booked run (storno + a new draft for the period).
@@ -4204,6 +4215,14 @@ export interface RawTransaction {
   bank_transaction_code?: string | null
   /** ASPSP-proprietary transaction code from PSD2, verbatim. */
   proprietary_bank_transaction_code?: string | null
+  /** Value date as the bank reports it; `date` stays the booking date. */
+  value_date?: string | null
+  /** End-to-end id the paying side sent (settles a bank payment order). */
+  end_to_end_id?: string | null
+  /** The bank's or aggregator's own id for the row. Traceability only, never a dedupe key. */
+  provider_transaction_id?: string | null
+  /** The archived raw bank response (document_attachments) this row arrived in. */
+  raw_document_id?: string | null
 }
 
 /** Internal bank-fetch context. Its token is revalidated within each database write. */

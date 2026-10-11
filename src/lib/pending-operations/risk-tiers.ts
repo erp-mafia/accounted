@@ -222,6 +222,9 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // (silently rerouting payment), so always require explicit human approval
   // rather than auto-commit.
   create_supplier: 'medium',
+  // Same fields on an existing supplier: rerouting a known supplier's
+  // payments is the more likely fraud, so the update is no lower.
+  update_supplier: 'medium',
   // Company payment settings control where customers send money on future
   // invoices. Treat changes like supplier payment-routing data: reversible,
   // but never eligible for silent low-risk auto-commit.

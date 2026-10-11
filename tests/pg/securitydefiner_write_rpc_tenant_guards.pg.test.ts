@@ -18,12 +18,18 @@
  * What each case asserts:
  *   - cross-tenant (userA's session, companyB's id) → RAISE with SQLSTATE 42501.
  *   - own company (userA's session, companyA's id) → the guard does NOT fire;
- *     the call either succeeds or fails with a NON-42501 domain error. For the
- *     two RPCs with no other gate (reserve/release_voucher_range) and for
+ *     the call either succeeds or fails with a NON-42501 domain error. For
  *     rotate_company_inbox the own-company call fully succeeds; for the others a
  *     non-guard outcome is sufficient and is documented inline.
  *   - no-claims bare-pool cross-tenant → guard bypassed (no 42501), proving the
  *     MCP / service-role paths are unaffected.
+ *
+ * reserve/release_voucher_range lost EXECUTE for `authenticated` in
+ * 20261011125200_revoke_voucher_range_rpcs_from_authenticated.sql: nothing in
+ * the app has called them since the atomic SIE import (#860), and a session
+ * could otherwise push its own voucher sequence forward and burn numbers. Their
+ * cases below assert that refusal, own company included; the in-function guards
+ * still apply to the service-role paths that keep EXECUTE.
  *
  * The role-claim simulation technique (set request.jwt.claims + SET LOCAL ROLE)
  * follows tests/pg/gl_lines_rpc_tenant_guard.pg.test.ts.
@@ -141,19 +147,24 @@ describe('SECURITY DEFINER write RPCs: tenant-isolation guard', () => {
     expect(bare?.code).not.toBe('42501')
   })
 
-  it('reserve_voucher_range: blocks cross-company, passes own, bypasses for no-claims', async () => {
+  it('reserve_voucher_range: authenticated cannot execute it, not even for its own company', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
 
-    const cross = await callAsUser(a.userId, RESERVE, [b.companyId, b.fiscalPeriodId, 'A', 10])
-    expect(cross?.code).toBe('42501')
+    const { rows } = await getPool().query(
+      `SELECT has_function_privilege('authenticated', 'public.reserve_voucher_range(uuid, uuid, text, integer)', 'EXECUTE') AS authenticated,
+              has_function_privilege('service_role', 'public.reserve_voucher_range(uuid, uuid, text, integer)', 'EXECUTE') AS service_role`,
+    )
+    expect(rows[0]).toEqual({ authenticated: false, service_role: true })
 
-    // Own company → succeeds (void). No other gate exists on this RPC, so this
-    // is the cleanest proof the guard does not break the legitimate path.
     const own = await callAsUser(a.userId, RESERVE, [a.companyId, a.fiscalPeriodId, 'A', 10])
-    expect(own).toBeNull()
+    expect(own?.code).toBe('42501')
+    expect(own?.message).toMatch(/permission denied for function reserve_voucher_range/i)
 
-    // No-claims bare pool cross-tenant → the new tenant guard is bypassed. (The
+    const cross = await callAsUser(a.userId, RESERVE, [b.companyId, b.fiscalPeriodId, 'A', 10])
+    expect(cross?.message).toMatch(/permission denied for function reserve_voucher_range/i)
+
+    // No-claims bare pool cross-tenant → the tenant guard is bypassed. (The
     // INSERT then writes auth.uid()=NULL into voucher_sequences.user_id, which is
     // NOT NULL, so a 23502 surfaces: pre-existing behaviour for a true no-session
     // caller; the point here is only that it is NOT the 42501 tenant guard.)
@@ -161,16 +172,22 @@ describe('SECURITY DEFINER write RPCs: tenant-isolation guard', () => {
     expect(bare?.code).not.toBe('42501')
   })
 
-  it('release_voucher_range: blocks cross-company, passes own, bypasses for no-claims', async () => {
+  it('release_voucher_range: authenticated cannot execute it, not even for its own company', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
 
-    const cross = await callAsUser(a.userId, RELEASE, [b.companyId, b.fiscalPeriodId, 'A', 5, 10])
-    expect(cross?.code).toBe('42501')
+    const { rows } = await getPool().query(
+      `SELECT has_function_privilege('authenticated', 'public.release_voucher_range(uuid, uuid, text, integer, integer)', 'EXECUTE') AS authenticated,
+              has_function_privilege('service_role', 'public.release_voucher_range(uuid, uuid, text, integer, integer)', 'EXECUTE') AS service_role`,
+    )
+    expect(rows[0]).toEqual({ authenticated: false, service_role: true })
 
-    // Own company → succeeds (void no-op against an empty sequence).
     const own = await callAsUser(a.userId, RELEASE, [a.companyId, a.fiscalPeriodId, 'A', 5, 10])
-    expect(own).toBeNull()
+    expect(own?.code).toBe('42501')
+    expect(own?.message).toMatch(/permission denied for function release_voucher_range/i)
+
+    const cross = await callAsUser(a.userId, RELEASE, [b.companyId, b.fiscalPeriodId, 'A', 5, 10])
+    expect(cross?.message).toMatch(/permission denied for function release_voucher_range/i)
 
     const bare = await callBare(RELEASE, [b.companyId, b.fiscalPeriodId, 'A', 5, 10])
     expect(bare).toBeNull()

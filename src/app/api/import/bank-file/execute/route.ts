@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { ingestTransactions } from '@/lib/transactions/ingest'
-import type { RawTransaction } from '@/types'
-import { generateExternalId } from '@/lib/import/bank-file/parser'
+import { toRawTransaction } from '@/lib/import/bank-file/parser'
 import type { IngestOptions } from '@/types'
 import { getCompanyRole } from '@/lib/auth/require-write'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
@@ -177,15 +176,7 @@ export const POST = withRouteContext(
         })
       }
 
-      const rawTransactions: RawTransaction[] = transactions.map((tx, index) => ({
-        date: tx.date,
-        description: tx.description,
-        amount: tx.amount,
-        currency: tx.currency || 'SEK',
-        external_id: generateExternalId(tx, format, index),
-        reference: tx.reference || null,
-        import_source: format === 'camt053' ? 'camt053' : `csv_${format}`,
-      }))
+      const rawTransactions = transactions.map((tx, index) => toRawTransaction(tx, format, index))
 
       // Detect SIE overlap, mirroring the enable-banking sync paths: a bank
       // file covering a period a completed SIE import already booked must be

@@ -2940,6 +2940,8 @@ Response `200`:
     bankgiro: string | null,
     plusgiro: string | null,
     bank_account: string | null,
+    clearing_number: string | null,
+    account_number: string | null,
     iban: string | null,
     bic: string | null,
     default_expense_account: string | null,
@@ -2947,10 +2949,10 @@ Response `200`:
     default_currency: string,
     notes: string | null,
     party_id: string | null,
-    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null,
     archived_at: string | null,
     created_at: string,
-    updated_at: string
+    updated_at: string,
+    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null
   },
   meta: {
     request_id: string,
@@ -2993,17 +2995,20 @@ Example response `200`:
 ### `PATCH /api/v1/companies/{companyId}/suppliers/{id}`
 
 **Partially update a supplier.**
-`scope:suppliers:write · risk:low · idempotent · dry-run · reversible`
+`scope:suppliers:write · risk:medium · idempotent · dry-run · reversible`
 
-Patches the supplier with the supplied fields. All fields optional. Idempotent (mandatory Idempotency-Key). Dry-runnable.
+Patches the supplier with the fields sent; every field is optional and the rest stay as they are. An empty string clears a text field (null for email and default_expense_account). archived_at: null un-archives a supplier archived with DELETE. An archived supplier's identifying fields (name, type, org and VAT number, address, bank details) are räkenskapsinformation and cannot change until it is un-archived. The dry run answers the would-be supplier with `changes` (each changed field, from and to) and `payment_details_changed`. Idempotent (mandatory Idempotency-Key). Dry-runnable.
 
-**Use when:** You need to change a supplier's contact details, payment terms, banking info, default expense account, or VAT number. Use dry-run first to confirm the merged record before committing.
-**Do not use for:** Archiving a supplier (use DELETE: sets archived_at). Replacing the entire record (no PUT verb is exposed; PATCH is partial).
+**Use when:** A supplier needs other contact details, address, payment details (bankgiro, plusgiro, clearing and account number, IBAN, BIC), VAT number, default expense account, payment terms or notes, e.g. a supplier imported from SIE with only a name and a bankgiro. Dry-run first to confirm the change.
+**Do not use for:** Archiving a supplier (DELETE sets archived_at). Creating one (POST /suppliers). Merging duplicates: there is no merge; archive the duplicate once its invoices are closed.
 
 **Pitfalls:**
 - Idempotency-Key is mandatory; calls without it return 400.
-- org_number uniqueness is enforced at DB level: 23505 → 409 SUPPLIER_DUPLICATE_ORG_NUMBER.
-- Changing default_expense_account does not retroactively rebook prior supplier invoices: only future bookings pick up the new default.
+- An empty body returns 400 VALIDATION_ERROR.
+- org_number uniqueness is enforced at DB level: 409 SUPPLIER_DUPLICATE_ORG_NUMBER.
+- An archived supplier refuses a change to an identifying field with 400 VALIDATION_ERROR (details.field archived_at, details.offending_fields); send archived_at: null first.
+- Changing default_expense_account does not rebook earlier supplier invoices: only future bookings pick up the new default.
+- A Swedish bank account payee is clearing_number + account_number; bank_account is free text that payment files only read with an explicit clearing number.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -3035,7 +3040,8 @@ Request body:
   default_expense_account?: string | null,
   default_payment_terms?: number,
   default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null,
-  notes?: string
+  notes?: string,
+  archived_at?: unknown
 }
 ```
 
@@ -3066,6 +3072,8 @@ Response `200`:
     bankgiro: string | null,
     plusgiro: string | null,
     bank_account: string | null,
+    clearing_number: string | null,
+    account_number: string | null,
     iban: string | null,
     bic: string | null,
     default_expense_account: string | null,
@@ -3073,7 +3081,6 @@ Response `200`:
     default_currency: string,
     notes: string | null,
     party_id: string | null,
-    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null,
     archived_at: string | null,
     created_at: string,
     updated_at: string
@@ -3096,8 +3103,31 @@ Example response `200`:
   "data": {
     "id": "0e9c…",
     "name": "Office Depot AB",
+    "supplier_type": "swedish_business",
+    "email": "invoices@officedepot.example",
+    "phone": null,
+    "address_line1": "Box 123",
+    "address_line2": null,
+    "postal_code": "111 22",
+    "city": "Stockholm",
+    "country": "SE",
+    "org_number": "5566778899",
+    "vat_number": "SE556677889901",
+    "bankgiro": "123-4567",
+    "plusgiro": null,
+    "bank_account": null,
+    "clearing_number": null,
+    "account_number": null,
+    "iban": null,
+    "bic": null,
+    "default_expense_account": "5410",
     "default_payment_terms": 14,
-    "notes": "New payment terms agreed 2026-05-12."
+    "default_currency": "SEK",
+    "notes": "New payment terms agreed 2026-05-12.",
+    "party_id": null,
+    "archived_at": null,
+    "created_at": "2026-04-12T08:30:00Z",
+    "updated_at": "2026-05-12T09:00:00Z"
   },
   "meta": {
     "request_id": "req_…",

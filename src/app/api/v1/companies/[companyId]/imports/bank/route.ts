@@ -34,10 +34,9 @@ import {
   parseBankFile,
   detectFileFormat,
   generateFileHash,
-  generateExternalId,
+  toRawTransaction,
 } from '@/lib/import/bank-file/parser'
 import { ingestTransactions } from '@/lib/transactions/ingest'
-import type { RawTransaction } from '@/types'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -274,45 +273,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         })
       }
 
-      // Convert parsed transactions to the RawTransaction shape that
-      // ingestTransactions expects. external_id stays stable so re-imports
-      // are deduplicated server-side.
-      //
-      // The callback return type is annotated ON PURPOSE. Without it, the
-      // `RawTransaction[]` annotation on the const alone does NOT make an
-      // excess or misspelled property an error: `Array.prototype.map` infers
-      // its own element type from the literal, the object loses freshness, and
-      // only a plain assignability check runs. That is how this call site used
-      // to ship `source: 'bank_file'` (no such key: the real one is
-      // `import_source`) and `counterparty` (no such key at all) with a clean
-      // type-check, landing every v1-imported row with NULL provenance.
-      //
-      // `import_source` must match the dashboard path
-      // (app/api/import/bank-file/execute/route.ts): 'camt053' or
-      // `csv_<format>`. It is load-bearing, not cosmetic:
-      //   - isImportedTransaction() (lib/transactions/origin.ts) reads it to
-      //     keep imported rows ignore-only instead of user-deletable.
-      //   - ingestTransactions' cross-channel and hand-entered dedup mirrors
-      //     are gated on the batch being an import feed, so a NULL source
-      //     disables them and a later PSD2 / Enable Banking sync re-inserts the
-      //     whole batch as duplicate affärshändelser.
-      //
-      // ParsedBankTransaction.counterparty is deliberately NOT forwarded:
-      // RawTransaction has no such field and the ingest pipeline never reads
-      // one, so passing it only looked like provenance. The dashboard path
-      // drops it too. If counterparty ever needs persisting it belongs in the
-      // shared ingest contract, not in this route alone.
-      const raw: RawTransaction[] = parseResult.transactions.map(
-        (t, idx): RawTransaction => ({
-          external_id: generateExternalId(t, effectiveFormat, idx),
-          date: t.date,
-          amount: t.amount,
-          currency: t.currency || 'SEK',
-          description: t.description,
-          reference: t.reference ?? null,
-          import_source: effectiveFormat === 'camt053' ? 'camt053' : `csv_${effectiveFormat}`,
-        }),
-      )
+      // One mapping with the dashboard path (toRawTransaction). external_id
+      // stays stable so re-imports are deduplicated server-side.
+      const raw = parseResult.transactions.map((t, idx) => toRawTransaction(t, effectiveFormat, idx))
 
       const ingestResult = await ingestTransactions(
         ctx.supabase,

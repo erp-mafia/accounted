@@ -744,6 +744,7 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // "At least one field" tools: the schema requires only the id.
   gnubok_update_asset: { args: { name: 'Bandsåg' } },
   gnubok_update_dimension: { args: { name: 'Avdelning' }, rows: { dimensions: { is_system: false, name: 'Avd' } } },
+  gnubok_update_supplier: { args: { city: 'Göteborg' }, rows: { suppliers: { name: 'Leverantören AB', city: null, archived_at: null } } },
   // Account dimension rules: the account has no rule for the dimension yet;
   // the update pauses a required rule, which carries no value.
   gnubok_create_dimension_rule: { empty: ['account_dimension_rules'] },

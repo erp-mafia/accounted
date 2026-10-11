@@ -108,6 +108,7 @@ const RETAINED = new Set([
   'sie_import_chunks.user_id', // Import provenance and resumable accounting work.
   'sie_duplicate_repair_items.user_id', // Reviewed corrections and their immutable receipts.
   'skattekonto_file_imports.user_id',
+  'suggestion_log.resolved_by', // Who decided on a booking suggestion.
   'transaction_voucher_links.user_id',
   'transactions.user_id',
   'voucher_gap_explanations.user_id',

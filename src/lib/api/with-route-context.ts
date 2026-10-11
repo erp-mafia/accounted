@@ -3,6 +3,8 @@
  *
  *   - generates a request id (`req_<uuid>`) and threads it through the logger
  *   - resolves auth via requireAuth() and (by default) the active companyId
+ *   - runs the handler in the commit-actor scope as the signed-in user, so
+ *     every verifikat it posts records who committed it and how
  *   - emits one structured `info` log on completion with duration
  *   - converts any thrown value into the canonical error envelope via
  *     errorResponse(); the request id appears in the response body and the
@@ -36,6 +38,7 @@ import { createLogger, type Logger } from '@/lib/logger'
 import { shouldExposeTimingHeaders } from '@/lib/observability/timing-headers'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 
 export interface RouteContext {
   /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id header. */
@@ -186,9 +189,14 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       const handlerStart = Date.now()
       const requireCompleteLedger = typeof options.requireCompleteLedger === 'function'
         ? options.requireCompleteLedger(request) : options.requireCompleteLedger
-      const response = requireCompleteLedger
-        ? await withSIEPeriodRead(supabase, companyId, 'report_export', () => handler(request, ctx, params))
-        : await handler(request, ctx, params)
+      // Every commit the handler makes, however many frames down, is stamped
+      // with the signed-in user as its actor (and, through commitEntry, the
+      // commit method that implies). A route that relays someone else, such
+      // as an approval, opens its own runWithActor scope inside this one.
+      const response = await runWithActor({ type: 'user' }, () =>
+        requireCompleteLedger
+          ? withSIEPeriodRead(supabase, companyId, 'report_export', () => handler(request, ctx, params))
+          : handler(request, ctx, params))
       const handlerMs = Date.now() - handlerStart
 
       if (response instanceof Response && !response.headers.get('X-Request-Id')) {

@@ -94,8 +94,14 @@ describe('exceedsUnattendedLimit', () => {
     expect(result.exceeded).toBe(false)
   })
 
+  it('blocks an OAuth connector key above its ceiling the same way', () => {
+    // The OAuth access token is a minted API key; its commits are labelled
+    // mcp_oauth, and the label must not lift the key's ceiling.
+    expect(exceedsUnattendedLimit({ ...over, actorType: 'mcp_oauth' }).exceeded).toBe(true)
+  })
+
   it('never fires for a human, cron or unattributed commit', () => {
-    for (const actorType of ['user', 'cron', 'mcp_oauth', 'system', undefined]) {
+    for (const actorType of ['user', 'cron', 'agent_chat', 'system', undefined]) {
       expect(
         exceedsUnattendedLimit({ ...over, actorType: actorType as string | undefined }).exceeded,
       ).toBe(false)

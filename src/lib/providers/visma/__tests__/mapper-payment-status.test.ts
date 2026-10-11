@@ -190,4 +190,13 @@ describe('mapVismaToSalesInvoice payment status', () => {
     const dto = mapVismaToSalesInvoice(salesRaw({ PaymentStatus: 1, SendType: 1 }))
     expect(dto.status).toBe('sent')
   })
+
+  it('an unpaid invoice with no send or booking flag is sent, never a draft', () => {
+    // /customerinvoices lists issued invoices only; Visma keeps drafts under
+    // /customerinvoicedrafts. A draft here imported with its booking voucher
+    // linked, and Skicka then booked the sale a second time.
+    expect(mapVismaToSalesInvoice(salesRaw({ PaymentStatus: 1 })).status).toBe('sent')
+    expect(mapVismaToSalesInvoice(salesRaw()).status).toBe('sent')
+    expect(mapVismaToSalesInvoice(salesRaw({ IsSent: false, RemainingAmount: 75000 })).status).toBe('sent')
+  })
 })

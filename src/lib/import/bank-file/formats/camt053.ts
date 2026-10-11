@@ -15,6 +15,7 @@
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
+import { ISO_DATE_RE } from '@/lib/invariants'
 
 export const camt053Format: BankFileFormat = {
   id: 'camt053',
@@ -102,11 +103,13 @@ export const camt053Format: BankFileFormat = {
         const unstructuredRemittance = extractTextContent(entry, 'Ustrd')
         const description = additionalInfo || unstructuredRemittance || 'Unknown'
 
-        // Reference: Try structured remittance info first, then entry reference
-        const structuredRef = extractTextContent(entry, 'Ref') // Inside <CdtrRefInf><Ref>
+        // OCR / structured creditor reference: only <Ref> inside <CdtrRefInf>.
+        // A bare <Ref> search also hits <Refs>, which comes first in the entry.
+        const reference = extractNestedText(entry, 'CdtrRefInf', 'Ref')
         const entryRef = extractTextContent(entry, 'NtryRef')
         const acctSvcrRef = extractTextContent(entry, 'AcctSvcrRef')
-        const reference = structuredRef || null
+        // NOTPROVIDED is the ISO 20022 placeholder for "no id", not an id.
+        const endToEndId = extractTextContent(entry, 'EndToEndId')
 
         // Counterparty
         const creditorName = extractTextContent(entry, 'CdtrNm') ||
@@ -114,6 +117,16 @@ export const camt053Format: BankFileFormat = {
         const debtorName = extractTextContent(entry, 'DbtrNm') ||
           extractNestedText(entry, 'Dbtr', 'Nm')
         const counterparty = cdtDbtInd === 'DBIT' ? creditorName : debtorName
+        const counterpartyIban = cdtDbtInd === 'DBIT'
+          ? extractNestedText(entry, 'CdtrAcct', 'IBAN')
+          : extractNestedText(entry, 'DbtrAcct', 'IBAN')
+
+        // Bank transaction code, in the PSD2 form ingest classifies (PMNT-RCDT-ESCT)
+        const bankTransactionCode = [
+          extractNestedText(entry, 'Domn', 'Cd'),
+          extractNestedText(entry, 'Fmly', 'Cd'),
+          extractTextContent(entry, 'SubFmlyCd'),
+        ].filter(Boolean).join('-') || null
 
         // Balance after entry
         const balanceStr = extractTextContent(entry, 'ClsgAvlblAmt') ||
@@ -129,6 +142,11 @@ export const camt053Format: BankFileFormat = {
           reference,
           counterparty: counterparty?.trim() || null,
           raw_line: entryRef || acctSvcrRef || `camt053_entry_${i}`,
+          value_date: valueDate && ISO_DATE_RE.test(valueDate) ? valueDate : null,
+          end_to_end_id: endToEndId && endToEndId.toUpperCase() !== 'NOTPROVIDED' ? endToEndId : null,
+          provider_transaction_id: acctSvcrRef || entryRef || null,
+          counterparty_iban: counterpartyIban ? counterpartyIban.replace(/\s+/g, '').toUpperCase() : null,
+          bank_transaction_code: bankTransactionCode,
         })
       } catch (err) {
         issues.push({

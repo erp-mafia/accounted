@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { BankIngestRoute } from '@/types'
 import { getClient, getPool } from './setup'
 import { seedCompany, insertPostedJournalEntry } from './fixtures'
+import { fullRawTransaction } from '../fixtures/full-raw-transaction'
 
 let owner: Awaited<ReturnType<typeof seedCompany>>
 let client: PoolClient
@@ -41,6 +42,13 @@ async function insert(snapshot: BankIngestRoute, extra: Record<string, unknown> 
     owner.companyId, owner.userId, connectionId, uid, 'SEK', snapshot.token,
     JSON.stringify({ external_id: randomUUID(), date: '2026-01-02', amount: -25, currency: 'SEK', description: 'PG bank route test', ...extra }),
   ])).rows[0].transaction
+}
+async function rawDocument(companyId: string, userId = owner.userId) {
+  const id = randomUUID()
+  await client.query(`INSERT INTO document_attachments(id,user_id,company_id,file_name,mime_type,file_size_bytes,storage_path,sha256_hash,upload_source)
+    VALUES ($1,$2,$3,'psd2-response.json','application/json',2,$4,$5,'api')`,
+  [id, userId, companyId, `documents/${companyId}/${id}.json`, randomUUID().replace(/-/g, '').padEnd(64, '0')])
+  return id
 }
 async function changeLedger(db = client) {
   await db.query(`UPDATE bank_connections SET accounts_data = jsonb_set(accounts_data, '{0,ledger_account}', '"1931"') WHERE id = $1`, [connectionId])
@@ -125,6 +133,20 @@ describe('bank ingest route boundary', () => {
     })
     expect(tx).toMatchObject({ company_id: owner.companyId, user_id: owner.userId, cash_account_id: cashId,
       bank_connection_id: connectionId, journal_entry_id: null, invoice_id: null, is_ignored: false, import_source: 'enable_banking' })
+  })
+
+  // Root-cause guard, second half: the payload ingest builds from a full bank
+  // row (first half in ingest.test.ts) comes back from the database whole.
+  it('stores every source field of a full bank row', async () => {
+    const sent = fullRawTransaction({ bank_connection_id: connectionId, raw_document_id: await rawDocument(owner.companyId) })
+    const tx = await insert(await route(), sent)
+    expect(tx).toMatchObject(sent)
+  })
+
+  it('refuses a raw document of another company', async () => {
+    const other = await seedCompany()
+    const foreign = await rawDocument(other.companyId, other.userId)
+    await expect(insert(await route(), { raw_document_id: foreign })).rejects.toMatchObject({ code: '22023' })
   })
 
   it('rejects a routing change after fetch without inserting an unbound row', async () => {

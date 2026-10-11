@@ -120,6 +120,52 @@ describe('syncAccountTransactions', () => {
     expect(secondCall[3].name).toMatch(/^psd2-response_conn-1_acc-uid-1_.*_p2\.json$/)
   })
 
+  it('links every row to the archived page it came in and keeps the bank fields', async () => {
+    const page1 = [
+      { entry_reference: 'E1', booking_date: '2024-06-15', transaction_amount: { amount: '100', currency: 'SEK' } },
+      { booking_date: null, transaction_amount: { amount: '150', currency: 'SEK' } }, // pending, skipped
+    ]
+    const page2 = [
+      { entry_reference: 'E3', booking_date: '2024-06-16', transaction_amount: { amount: '200', currency: 'SEK' } },
+    ]
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [...page1, ...page2],
+      rawPages: [JSON.stringify({ transactions: page1 }), JSON.stringify({ transactions: page2 })],
+    })
+    mockConvertTransaction.mockImplementation((tx: { entry_reference?: string; transaction_amount: { amount: string } }) => ({
+      id: tx.entry_reference ?? 'x',
+      date: '2024-06-15',
+      booking_date: '2024-06-15',
+      amount: parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: 'Test',
+      reference: `OCR-${tx.entry_reference}`,
+      value_date: '2024-06-17',
+      provider_transaction_id: tx.entry_reference,
+    }))
+    mockUploadDocument.mockResolvedValueOnce({ id: 'doc-p1' }).mockResolvedValueOnce({ id: 'doc-p2' })
+
+    await syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount(), '2024-01-01', '2024-12-31', mockIngest)
+
+    const rows = mockIngest.mock.calls[0][3]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ raw_document_id: 'doc-p1', provider_transaction_id: 'E1', value_date: '2024-06-17', reference: 'OCR-E1' })
+    expect(rows[1]).toMatchObject({ raw_document_id: 'doc-p2', provider_transaction_id: 'E3' })
+  })
+
+  it('links no row to a page whose archive failed', async () => {
+    const page = [{ booking_date: '2024-06-15', transaction_amount: { amount: '100', currency: 'SEK' } }]
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: page, rawPages: [JSON.stringify({ transactions: page })] })
+    mockConvertTransaction.mockReturnValue({ id: 'x', date: '2024-06-15', booking_date: '2024-06-15', amount: 100, currency: 'SEK', description: 'Test' })
+    mockUploadDocument.mockRejectedValue(new Error('storage down'))
+
+    await syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount(), '2024-01-01', '2024-12-31', mockIngest)
+
+    expect(mockIngest.mock.calls[0][3][0].raw_document_id).toBeNull()
+  })
+
   it('completes sync even if uploadDocument throws', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' } }],

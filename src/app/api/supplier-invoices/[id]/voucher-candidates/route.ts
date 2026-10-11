@@ -19,6 +19,10 @@ ensureInitialized()
  * (244x debit) or `bank_credit` (19xx credit, a kontantmetod company's invoice
  * with no registration verifikat). The dialog words its intro and empty state
  * from it, so the screen never decides the side on its own.
+ *
+ * A person picks here, so vouchers that have more left than the invoice needs
+ * are offered too (a payment of several debts): such a candidate carries
+ * `link_amount`, the share the dialog states when it links it.
  */
 export const GET = withRouteContext(
   'supplier_invoice.voucher_candidates',
@@ -60,7 +64,7 @@ export const GET = withRouteContext(
       // from the join shorthand. The matcher only reads `supplier?.name`, so
       // cast through unknown to the runtime shape it expects.
       invoice as unknown as SupplierInvoice & { supplier?: Supplier },
-      { settlementSide },
+      { settlementSide, includeShared: true },
     )
 
     return NextResponse.json({ data: { candidates, settlement_side: settlementSide.side } })

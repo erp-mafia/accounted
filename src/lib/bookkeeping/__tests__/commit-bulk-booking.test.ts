@@ -99,6 +99,10 @@ describe('commitBulkBooking', () => {
       p_new_entry: NEW_ENTRY,
       p_company_id: 'co',
       p_user_id: 'user-1',
+      // No actor scope in this test: nothing to attribute.
+      p_commit_method: null,
+      p_actor_type: null,
+      p_actor_label: null,
     })
     // The reload is scoped to the entry AND the company.
     const reload = calls.filter((c) => c.table === 'journal_entries')

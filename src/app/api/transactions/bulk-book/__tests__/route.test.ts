@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   createMockRequest,
+  createMockRouteParams,
   parseJsonResponse,
   createQueuedMockSupabase,
 } from '@/tests/helpers'
@@ -163,6 +164,40 @@ describe('POST /api/transactions/bulk-book', () => {
       'company-1',
       TX2,
       JE,
+    )
+  })
+
+  // Who decided: the RPC hands these to commit_journal_entry, so the
+  // samlingsverifikat records the signed-in user and bulk_accept
+  // (migration 20261011140000). Before, it recorded neither.
+  it('hands bulk_accept and the signed-in user to the RPC', async () => {
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' },
+        { id: TX2, amount: 200, currency: 'SEK', description: 'Swish 2', date: '2026-06-05' },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: { ok: true, mode: 'link_existing', journal_entry_id: JE, linked_tx_count: 2, tx_sum: 300 },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+
+    expect(response.status).toBe(200)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'bulk_book_transactions',
+      expect.objectContaining({
+        p_commit_method: 'bulk_accept',
+        p_actor_type: 'user',
+        p_actor_label: null,
+      }),
     )
   })
 

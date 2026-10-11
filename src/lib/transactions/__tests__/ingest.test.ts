@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ingestTransactions } from '../ingest'
 import type { RawTransaction } from '@/types'
 import { makeJournalEntry, makeTransaction } from '@/tests/helpers'
+import { fullRawTransaction } from '@/tests/fixtures/full-raw-transaction'
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -2521,6 +2522,30 @@ describe('ingestTransactions', () => {
     expect(result).toMatchObject({ imported: error ? 0 : 1, errors: error ? 1 : 0 })
     if (error) expect(result.first_error).toMatchObject(error)
   })
+
+  // Root-cause guard, first half: every RawTransaction field reaches the
+  // insert payload under its column name (the pg test follows the payload into
+  // insert_bank_transaction). See tests/fixtures/full-raw-transaction.ts.
+  it.each([['the checked bank RPC', true], ['a plain insert', false]] as const)(
+    'puts every RawTransaction field in the insert payload (%s)',
+    async (_path, viaBankRoute) => {
+      const { supabase, enqueue, inserts } = createQueueMockSupabase()
+      const raw = fullRawTransaction()
+      const bankRoute = { connectionId: 'connection', sessionId: 'session', accountUid: 'uid', currency: 'SEK',
+        cashAccountId: 'cash', ledgerAccount: '1930', token: 'checked-route' }
+      enqueue({ data: [] }, { data: [] }, { data: [] })
+      if (viaBankRoute) enqueue({ data: cashAccountRows('cash', '1930') })
+      enqueue({ data: makeTransaction({ id: 'tx-full' }) })
+      await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw],
+        viaBankRoute ? { rawInsertOnly: true, settlementAccount: '1930', bankRoute } : { rawInsertOnly: true })
+
+      const payload = (viaBankRoute
+        ? supabase.rpc.mock.calls[0][1].p_transaction
+        : inserts.transactions[0]) as Record<string, unknown>
+      const { description, ...columns } = raw
+      expect(payload).toMatchObject({ ...columns, original_description: description })
+    },
+  )
 
   // crm#188: two syncs of one feed overlapping (a backfill that outlived its
   // response, and the cron) insert the same stable external_ids. The loser's

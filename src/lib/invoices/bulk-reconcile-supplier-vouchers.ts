@@ -195,8 +195,9 @@ export async function reconcileSupplierInvoiceVouchers(
   }
 
   // 2. Pre-load every voucher already consumed as a supplier payment (for ANY
-  //    invoice in the company). Neither the matcher nor the RPC stop the SAME
-  //    voucher being linked to a SECOND invoice, so we enforce exclusivity here.
+  //    invoice in the company). The matcher and the RPC let one voucher pay
+  //    several invoices up to what it holds (20261011153000); an UNATTENDED
+  //    link never shares a voucher, so exclusivity is enforced here.
   const existingPayments = opts.invoiceIds ? [] : await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
     supabase
       .from('supplier_invoice_payments')

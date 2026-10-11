@@ -36,10 +36,27 @@ const supabaseRef = vi.hoisted(() => ({ supabase: null as unknown }))
 
 import { withRouteContext } from '../with-route-context'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { getActor } from '@/lib/bookkeeping/actor-context'
 
 const EMPTY_PARAMS = { params: Promise.resolve({}) }
 
 describe('withRouteContext', () => {
+  // Every commit a handler makes, however deep, reads this scope: the
+  // verifikat records the signed-in user as its actor.
+  it('runs the handler as the signed-in user, and only the handler', async () => {
+    let seen: ReturnType<typeof getActor>
+    const route = withRouteContext('test.actor', async () => {
+      await Promise.resolve()
+      seen = getActor()
+      return NextResponse.json({ ok: true })
+    })
+
+    await route(new Request('http://localhost/api/test', { method: 'POST' }), EMPTY_PARAMS)
+
+    expect(seen).toEqual({ type: 'user' })
+    expect(getActor()).toBeUndefined()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     authState.user = { id: 'user-1' }

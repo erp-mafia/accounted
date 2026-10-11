@@ -500,6 +500,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_generate_rot_rut_file:           'invoices:write',
   // Supplier CRUD
   gnubok_create_supplier:                 'suppliers:write',
+  gnubok_update_supplier:                 'suppliers:write',
   // Supplier invoice lifecycle
   gnubok_approve_supplier_invoice:        'suppliers:write',
   gnubok_credit_supplier_invoice:         'suppliers:write',

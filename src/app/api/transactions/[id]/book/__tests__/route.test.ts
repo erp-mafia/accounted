@@ -11,6 +11,7 @@ import {
 import { eventBus } from '@/lib/events'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { defaultCommitMethod, getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
@@ -314,6 +315,28 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(status).toBe(409)
     expect(body.error.code).toBe('BANK_BOOKING_SOURCE_CHANGED')
     expect(getErrorMessage(body)).toBe('Transaktionen har ändrats sedan du öppnade den. Ladda om sidan och bokför igen.')
+  })
+
+  // Who decided: the engine stamps the actor in scope on the verifikat and,
+  // with no method passed, the method it implies (user_accept). The scope is
+  // the one withRouteContext opens for the signed-in user.
+  it('books inside the signed-in user\'s commit-actor scope', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+    let seen: CommitActor | undefined
+    mockCreateJournalEntry.mockImplementation(async () => {
+      seen = getActor()
+      return makeJournalEntry({ id: 'je-new' })
+    })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(seen).toEqual({ type: 'user' })
+    expect(defaultCommitMethod(seen)).toBe('user_accept')
+    // No method passed: the engine derives it, so the route cannot forget it.
+    expect(mockCreateJournalEntry.mock.calls[0]).toHaveLength(4)
   })
 
   it('creates journal entry and links to transaction (happy path)', async () => {

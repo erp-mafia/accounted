@@ -3852,11 +3852,19 @@ async function commitLinkSupplierInvoiceVoucher(
   if (!supplierInvoiceId || !journalEntryId) {
     return { error: 'supplier_invoice_id and journal_entry_id are required', status: 400 }
   }
+  // The staged share of the verifikat. A value that is not a number is refused
+  // here: read as "no share stated" it would settle another amount than the
+  // one the approver was shown.
+  if (params.amount != null && typeof params.amount !== 'number') {
+    return { error: 'amount must be a number', status: 400 }
+  }
+  const amount = (params.amount as number | null | undefined) ?? undefined
 
   const outcome = await linkSupplierInvoiceToVoucher(supabase, userId, companyId, {
     supplierInvoiceId,
     journalEntryId,
     notes,
+    amount,
   })
 
   return voucherLinkOutcomeToResult(outcome)

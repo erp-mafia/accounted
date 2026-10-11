@@ -15,6 +15,12 @@ export interface ParsedBankTransaction {
   reference?: string | null // OCR number, Bankgiro reference
   counterparty?: string | null
   raw_line?: string // Original CSV line for debugging
+  // What the file says beyond the booking date; camt.053 carries these.
+  value_date?: string | null // YYYY-MM-DD
+  end_to_end_id?: string | null
+  provider_transaction_id?: string | null // The bank's own id for the entry
+  counterparty_iban?: string | null
+  bank_transaction_code?: string | null // ISO 20022 domain-family-subfamily, e.g. PMNT-RCDT-ESCT
 }
 
 /** Result from parsing a bank file */

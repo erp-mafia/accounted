@@ -9,6 +9,7 @@ import {
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { eventBus } from '@/lib/events'
 import { BookkeepingDatabaseError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
+import { defaultCommitMethod, getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
@@ -339,6 +340,34 @@ describe('POST /api/transactions/[id]/categorize', () => {
       )
     },
   )
+
+  // Who decided: createTransactionJournalEntry commits through the engine
+  // with no method, so the verifikat records the actor in scope and the
+  // method it implies (user_accept). The scope is the one withRouteContext
+  // opens for the signed-in user.
+  it('books inside the signed-in user\'s commit-actor scope', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null }), error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    let seen: CommitActor | undefined
+    mockCreateTransactionJournalEntry.mockImplementation(async () => {
+      seen = getActor()
+      return { id: 'je-1' }
+    })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(seen).toEqual({ type: 'user' })
+    expect(defaultCommitMethod(seen)).toBe('user_accept')
+  })
 
   it('creates journal entry for business expense', async () => {
     const tx = makeTransaction({

@@ -158,6 +158,53 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+// The supplier link's stated share (GitHub issue 3490). The five-argument
+// call above is the one a link without a share makes, so it reads the same
+// against a database that does not have the six-argument function yet.
+describe('commitSupplierInvoiceVoucherLink: the stated share', () => {
+  it('sends p_amount when a share is stated', async () => {
+    const { supabase, rpc } = makeSupabase({ data: { ok: true, journal_entry_id: 'je-pay', voucher_remaining: 4000 } })
+
+    await commitSupplierInvoiceVoucherLink(supabase, 'co', 'user-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-pay',
+      notes: null,
+      amount: 1250,
+    })
+
+    expect(rpc).toHaveBeenCalledTimes(1)
+    expect(rpc).toHaveBeenCalledWith('link_supplier_invoice_to_voucher', {
+      p_supplier_invoice_id: 'si-1',
+      p_journal_entry_id: 'je-pay',
+      p_user_id: 'user-1',
+      p_company_id: 'co',
+      p_notes: null,
+      p_amount: 1250,
+    })
+  })
+
+  it('leaves p_amount out when the share is null or absent', async () => {
+    for (const amount of [null, undefined]) {
+      const { supabase, rpc } = makeSupabase({ data: { ok: true, journal_entry_id: 'je-pay' } })
+
+      await commitSupplierInvoiceVoucherLink(supabase, 'co', 'user-1', {
+        supplierInvoiceId: 'si-1',
+        journalEntryId: 'je-pay',
+        notes: null,
+        amount,
+      })
+
+      expect(rpc).toHaveBeenCalledWith('link_supplier_invoice_to_voucher', {
+        p_supplier_invoice_id: 'si-1',
+        p_journal_entry_id: 'je-pay',
+        p_user_id: 'user-1',
+        p_company_id: 'co',
+        p_notes: null,
+      })
+    }
+  })
+})
+
 describe.each(DOORS)('$name', (door) => {
   it('announces the verifikat the RPC posted with journal_entry.committed, as commitEntry does', async () => {
     const { supabase, rpc, calls } = makeSupabase({ data: door.posted })

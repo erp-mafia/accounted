@@ -27,6 +27,7 @@ import {
   validateApiKey,
   createServiceClientNoCookies,
   hasScope,
+  OAUTH_MCP_KEY_NAME,
   RATE_LIMIT_RETRY_AFTER_SECONDS,
   TOOL_SCOPE_MAP,
   type ApiKeyMode,
@@ -3703,10 +3704,9 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 /**
  * Gross floor for the missing-underlag blocker. ML 17 kap 26-28 § (förenklad
  * faktura) expresses 4 000 kr inclusive of moms, so the comparison is against
- * the gross (sum of debits, equal to sum of credits in a balanced entry). For
- * EU acquisitions and domestic reverse-charge buyer entries the calculated VAT
- * lines inflate that sum, which can pull a sub-threshold purchase above 4 000:
- * a false positive in favour of asking for the underlag, the safe direction.
+ * the RPC's gross_amount: the debit total less self-assessed reverse-charge
+ * and import moms, which no seller charges, so a reverse-charge purchase is
+ * measured by its invoice amount (migration 20261011125000).
  */
 const MISSING_UNDERLAG_MIN_GROSS_SEK = 4000
 
@@ -4987,15 +4987,21 @@ async function commitStagedOperation(params: {
   // journal_entries.committed_actor_* and the audit_log COMMIT row.
   const commitMethod =
     actor?.type === 'api_key' ? ('api_key' as const) : ('user_accept' as const)
+  // WHO, for the immutable layer: a key minted by the OAuth sign-in carries
+  // OAUTH_MCP_KEY_NAME, its only marker, so its commits say mcp_oauth. Named
+  // here, on the commit actor, and not on the connection's ActorContext,
+  // whose type 'api_key' decides company access and limits.
+  const commitActorType =
+    actor?.type !== 'api_key' ? 'user' : actor.label === OAUTH_MCP_KEY_NAME ? 'mcp_oauth' : 'api_key'
 
   const result = await commitPendingOperation(supabase, userId, companyId, operation, {
     commitMethod,
     actor: {
-      type: actor?.type === 'api_key' ? 'api_key' : 'user',
+      type: commitActorType,
       ...(actor?.label ? { label: actor.label } : {}),
-      // Only an api_key actor can carry a ceiling; the ternary above already
-      // collapsed everything else to 'user', for which exceedsUnattendedLimit
-      // returns false regardless.
+      // Only a key credential can carry a ceiling; everything else collapsed
+      // to 'user' above, for which exceedsUnattendedLimit returns false
+      // regardless.
       ...(actor?.type === 'api_key'
         ? { unattendedCommitLimit: actor.unattendedCommitLimit ?? null }
         : {}),
@@ -7981,7 +7987,7 @@ export const tools: McpTool[] = [
         limit: { type: 'number', description: 'Max results to return, 1-100 (default 20)' },
         offset: { type: 'number', description: 'Number of results to skip for pagination (default 0)' },
         since: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return entries on or after this date.' },
-        min_amount: { type: 'number', description: 'Optional minimum gross amount (sum of debits) to filter low-value entries. Default 0.' },
+        min_amount: { type: 'number', description: 'Optional minimum gross_amount to filter low-value entries. Default 0.' },
       },
     },
     outputSchema: paginatedSchema('verifikat', {
@@ -7993,7 +7999,7 @@ export const tools: McpTool[] = [
         entry_date: { type: 'string' },
         description: { type: 'string' },
         source_type: { type: 'string' },
-        gross_amount: { type: 'number' },
+        gross_amount: { type: 'number', description: 'Amount in SEK: the debit total less self-assessed reverse-charge/import moms (2614/2624/2634, 2615/2625/2635), which is on neither the underlag nor the bank row. 0 when the verifikat only books that moms.' },
       },
     }, {
       waiver_tool: { type: 'string', description: 'Stages "Inget underlag krävs" for a verifikat with no external underlag by nature. Never for a missing receipt.' },
@@ -14798,11 +14804,14 @@ export const tools: McpTool[] = [
       }
 
       const settlementSide = await resolveSupplierSettlementSide(supabase, companyId, supplierInvoiceId)
+      // includeShared: a voucher that has more left than the invoice needs (a
+      // payment of several debts) is offered with link_amount, the share to
+      // pass as amount on gnubok_link_supplier_invoice_to_voucher.
       const candidates = await findMatchingVouchersForSupplierInvoice(
         supabase,
         companyId,
         invoice as never,
-        { limit, settlementSide },
+        { limit, settlementSide, includeShared: true },
       )
       return {
         supplier_invoice_id: supplierInvoiceId,
@@ -14825,6 +14834,7 @@ export const tools: McpTool[] = [
         supplier_invoice_id: { type: 'string', description: 'UUID of the supplier invoice to mark paid' },
         journal_entry_id: { type: 'string', description: 'UUID of the existing posted verifikat to link' },
         notes: { type: 'string', description: 'Optional note stored on the supplier_invoice_payments row' },
+        amount: { type: 'number', description: 'This invoice\'s share when the verifikat pays several debts (invoice currency, max its remainder)' },
       },
       required: ['supplier_invoice_id', 'journal_entry_id'],
     },
@@ -14837,6 +14847,12 @@ export const tools: McpTool[] = [
       if (!supplierInvoiceId || !journalEntryId) {
         throw new Error('supplier_invoice_id and journal_entry_id are required')
       }
+      // No host validates inputSchema at runtime: a share that is not a number
+      // must not reach the validator as "no share stated".
+      if (args.amount != null && typeof args.amount !== 'number') {
+        throw codedError('VALIDATION_ERROR', 'amount must be a number (the share of the verifikat that is this invoice\'s)')
+      }
+      const amount = (args.amount as number | null | undefined) ?? undefined
 
       const { data: invoice, error: invErr } = await supabase
         .from('supplier_invoices')
@@ -14856,20 +14872,26 @@ export const tools: McpTool[] = [
         companyId,
         invoice as never,
         journalEntryId,
+        amount,
       )
       if (!validation.ok) throw voucherLinkRefusal(validation)
 
       const voucherLabel = validation.voucher.voucher_series && validation.voucher.voucher_number != null
         ? `${validation.voucher.voucher_series}-${validation.voucher.voucher_number}`
         : journalEntryId.slice(0, 8)
+      // A stated share is named in the title: the approver is settling part
+      // of a verifikat, not the whole of it.
+      const shareNote = amount != null ? ` (${validation.paymentAmount} ${invoice.currency} av verifikatet)` : ''
 
       return stagePendingOperation(
         supabase,
         companyId,
         userId,
         'link_supplier_invoice_voucher',
-        `Länka verifikat ${voucherLabel} → leverantörsfaktura ${invoice.supplier_invoice_number ?? supplierInvoiceId.slice(0, 8)}`,
-        { supplier_invoice_id: supplierInvoiceId, journal_entry_id: journalEntryId, notes },
+        `Länka verifikat ${voucherLabel} → leverantörsfaktura ${invoice.supplier_invoice_number ?? supplierInvoiceId.slice(0, 8)}${shareNote}`,
+        amount != null
+          ? { supplier_invoice_id: supplierInvoiceId, journal_entry_id: journalEntryId, notes, amount }
+          : { supplier_invoice_id: supplierInvoiceId, journal_entry_id: journalEntryId, notes },
         {
           supplier_invoice_number: invoice.supplier_invoice_number,
           invoice_currency: invoice.currency,
@@ -14882,6 +14904,11 @@ export const tools: McpTool[] = [
           payment_amount: validation.paymentAmount,
           will_be_fully_paid: validation.isFullyPaid,
           remaining_after: validation.remainingAfter,
+          // What the verifikat keeps for other debts; left out when the link
+          // uses all of it, which is the ordinary case.
+          ...(validation.voucherRemainingAfter > 0
+            ? { voucher_remaining_after: validation.voucherRemainingAfter }
+            : {}),
           supplier_name: (invoice.supplier as unknown as { name?: string } | null)?.name ?? null,
         },
         actor,

@@ -382,6 +382,7 @@ export async function bulkBookTransactions(
     txIds: body.tx_ids,
     existingJournalEntryId: body.existing_journal_entry_id ?? null,
     newEntry: newEntryPayload,
+    commitMethod: 'bulk_accept',
   })
   if (error) {
     opLog.error('bulk_book_transactions RPC error', error)

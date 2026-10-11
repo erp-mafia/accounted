@@ -30,6 +30,11 @@
  * 151x/244x and a later payment clears them exactly. Further apart it is a
  * different receivable or skuld and stays amountMismatch. The band never
  * picks between several candidates for a series-less ref: that stays exact.
+ *
+ * A customer invoice that arrived as a draft but has a booking voucher at the
+ * source was issued there: the link marks it sent in the same write. An
+ * invoice with a verifikat is never a draft (invoices_draft_has_no_verifikat);
+ * a draft with one booked the sale a second time on Skicka.
  */
 
 import { chunk } from '@/lib/utils'
@@ -328,6 +333,7 @@ async function writeSourceRateLink(
   entryId: string,
   values: SourceRateValues,
   replaces: string | undefined,
+  issuesDraft: boolean,
 ) {
   // Every chain is spelled out from `.from()`: tests/schema/no-phantom-columns
   // checks the columns of literal chains only.
@@ -379,6 +385,25 @@ async function writeSourceRateLink(
       .eq('id', input.invoiceId)
       .eq('company_id', companyId)
       .eq('journal_entry_id', replaces)
+      .eq('total', values.total)
+      .select('id')
+  }
+  if (issuesDraft) {
+    return supabase
+      .from('invoices')
+      .update({
+        journal_entry_id: entryId,
+        status: 'sent',
+        exchange_rate: values.exchangeRate,
+        exchange_rate_date: values.exchangeRateDate,
+        total_sek: values.totalSek,
+        subtotal_sek: values.subtotalSek,
+        vat_amount_sek: values.vatAmountSek,
+      })
+      .eq('id', input.invoiceId)
+      .eq('company_id', companyId)
+      .is('journal_entry_id', null)
+      .eq('status', 'draft')
       .eq('total', values.total)
       .select('id')
   }
@@ -719,6 +744,24 @@ export async function linkMigratedRegistrationVouchers(
     if (ids.length === 0) continue
     for (const row of await fetchForeignInvoiceRows(supabase, companyId, kind, ids)) foreignRows.set(row.id, row)
   }
+
+  // 3d. The customer invoices that are still drafts: their link issues them
+  //     (see the module header).
+  const draftIds = new Set<string>()
+  const customerIds = [...new Set(resolved.flatMap(({ input }) => input.kind === 'customer' ? [input.invoiceId] : []))]
+  for (const ids of chunk(customerIds, ID_CHUNK)) {
+    const rows = await fetchAllRows<{ id: string }>(({ from, to }) =>
+      supabase
+        .from('invoices')
+        .select('id')
+        .eq('company_id', companyId)
+        .in('id', ids)
+        .eq('status', 'draft')
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    for (const row of rows) draftIds.add(row.id)
+  }
   let sourceRated = 0
   let movedFromCopy = 0
 
@@ -822,6 +865,8 @@ export async function linkMigratedRegistrationVouchers(
     }
 
     const atRate = sourceRate ? ' at the source rate' : ''
+    const issuesDraft = input.kind === 'customer' && !replaces && draftIds.has(input.invoiceId)
+    const issued = issuesDraft ? '; the draft is marked sent' : ''
     const noteLink = () => {
       const linked = reports[reports.length - 1]
       if (sourceRate) {
@@ -835,16 +880,17 @@ export async function linkMigratedRegistrationVouchers(
     }
 
     if (dryRun) {
-      report(input, 'linked', `${replaces ? 'would move the link from its reversed copy' : 'would link'}${atRate} (dry run)`, entryId)
+      report(input, 'linked', `${replaces ? 'would move the link from its reversed copy' : 'would link'}${atRate}${issued} (dry run)`, entryId)
       noteLink()
       continue
     }
 
     // `.is(null)`, or `.eq()` on the reversed copy the link moves from, makes
-    // the write a no-op when the row's link changed since it was read;
+    // the write a no-op when the row's link changed since it was read (and
+    // `.eq('status', 'draft')` when a draft stopped being one);
     // `.select('id')` is how that no-op becomes visible.
     const { data, error } = sourceRate
-      ? await writeSourceRateLink(supabase, companyId, input, entryId, sourceRate, replaces)
+      ? await writeSourceRateLink(supabase, companyId, input, entryId, sourceRate, replaces, issuesDraft)
       : input.kind === 'supplier'
       ? replaces
         ? await supabase
@@ -869,6 +915,15 @@ export async function linkMigratedRegistrationVouchers(
           .eq('company_id', companyId)
           .eq('journal_entry_id', replaces)
           .select('id')
+      : issuesDraft
+      ? await supabase
+          .from('invoices')
+          .update({ journal_entry_id: entryId, status: 'sent' })
+          .eq('id', input.invoiceId)
+          .eq('company_id', companyId)
+          .is('journal_entry_id', null)
+          .eq('status', 'draft')
+          .select('id')
       : await supabase
           .from('invoices')
           .update({ journal_entry_id: entryId })
@@ -881,11 +936,13 @@ export async function linkMigratedRegistrationVouchers(
       throw new Error(`Failed to link ${input.kind} invoice ${input.invoiceId} to verifikat ${entryId}: ${error.message}`)
     }
     if (!data || data.length === 0) {
-      const changed = replaces ? 'invoice no longer points at the reversed copy' : 'invoice already carried a registration link'
+      const changed = replaces ? 'invoice no longer points at the reversed copy'
+        : issuesDraft ? 'invoice already carried a registration link, or is no longer a draft'
+        : 'invoice already carried a registration link'
       report(input, 'alreadyLinked', sourceRate ? `${changed}, or its total changed since it was read` : changed, entryId)
       continue
     }
-    report(input, 'linked', `${replaces ? 'registration voucher linked in place of its reversed copy' : 'registration voucher linked'}${atRate}`, entryId)
+    report(input, 'linked', `${replaces ? 'registration voucher linked in place of its reversed copy' : 'registration voucher linked'}${atRate}${issued}`, entryId)
     noteLink()
   }
 

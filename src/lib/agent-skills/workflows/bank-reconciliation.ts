@@ -25,6 +25,7 @@ you already have in hand. Decide along two axes (**what you're connecting** and
 | One bank tx whose affärshändelse you already posted manually | already booked | \`gnubok_link_transaction_to_journal_entry\` |
 | A customer invoice you know is paid, payment already in a verifikat | already booked | \`gnubok_find_voucher_candidates_for_invoice\` → \`gnubok_link_invoice_to_voucher\` |
 | A supplier invoice paid, payment already in a verifikat | already booked | \`gnubok_find_voucher_candidates_for_supplier_invoice\` → \`gnubok_link_supplier_invoice_to_voucher\` |
+| One supplier payment that covered several debts, booked as ONE verifikat | already booked | \`gnubok_link_supplier_invoice_to_voucher\` once per invoice, with \`amount\` = that invoice's share (the candidate's \`link_amount\`). The rest stays on the verifikat; a debt with no invoice here (e.g. part of an SIE opening balance on 2440) is left unlinked. Never storno a correct verifikat to split it |
 | A receipt/document to file against a tx (no new bokföring) | n/a | \`gnubok_attach_document_to_transaction\` |
 | Income you're sure is paid but with no bank line to point at | not yet booked | \`gnubok_mark_invoice_as_paid\` |
 

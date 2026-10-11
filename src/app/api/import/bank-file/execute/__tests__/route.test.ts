@@ -371,3 +371,40 @@ describe('POST /api/import/bank-file/execute (settlement account)', () => {
     expect(ingestMock).not.toHaveBeenCalled()
   })
 })
+
+describe('POST /api/import/bank-file/execute (row fields)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
+    ingestMock.mockResolvedValue(emptyIngestResult({ imported: 1, transaction_ids: ['t-1'] }))
+  })
+
+  it('hands ingest every field the parser read, the counterparty as merchant_name', async () => {
+    enqueue({ data: { id: 'import-1' } }) // upsert
+    enqueue({ data: null }) // sie_imports overlap: none
+    enqueue({ data: null }) // status update
+    enqueue({ data: [{ id: 't-1' }] }) // imported tx for event
+
+    const row = {
+      date: '2025-03-10', description: 'Faktura 1001', amount: 12500, currency: 'SEK',
+      reference: '1001000000017', counterparty: 'Kund AB', raw_line: 'ACSR-1',
+      value_date: '2025-03-11', end_to_end_id: 'E2E-1', provider_transaction_id: 'ACSR-1',
+      counterparty_iban: 'SE4550000000058398257466', bank_transaction_code: 'PMNT-RCDT-DMCT',
+    }
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ transactions: [row], format: 'camt053' }),
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    expect(ingestMock.mock.calls[0][3]).toEqual([{
+      external_id: 'camt053_ACSR-1', date: '2025-03-10', description: 'Faktura 1001', amount: 12500,
+      currency: 'SEK', reference: '1001000000017', merchant_name: 'Kund AB', import_source: 'camt053',
+      value_date: '2025-03-11', end_to_end_id: 'E2E-1', provider_transaction_id: 'ACSR-1',
+      counterparty_iban: 'SE4550000000058398257466', bank_transaction_code: 'PMNT-RCDT-DMCT',
+    }])
+  })
+})

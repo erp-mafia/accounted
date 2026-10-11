@@ -2,7 +2,8 @@
  * /api/v1/companies/{companyId}/suppliers/{id}: supplier detail + writes.
  *
  * GET   : full record. ?expand=supplier_invoices embeds open supplier invoices.
- * PATCH : partial update. Idempotent (mandatory Idempotency-Key). Dry-runnable.
+ * PATCH : partial update (operation suppliers.update, also served as the MCP
+ *          gnubok_update_supplier; rules in lib/suppliers/update-supplier.ts).
  *          Setting archived_at: null un-archives the supplier.
  * DELETE: soft-delete (sets archived_at). Idempotent. Dry-runnable. 204 on
  *          success. REFUSES to archive when the supplier has any open
@@ -19,46 +20,14 @@ import { parseExpand, expandQueryShape } from '@/lib/api/v1/expand'
 import { PartyForApiSchema, expandParty } from '@/lib/parties/party-api'
 import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-import { readV1JsonBody } from '@/lib/api/v1/body'
-import { UpdateSupplierSchema } from '@/lib/api/schemas'
+import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { suppliersUpdate } from '@/lib/operations/suppliers'
+import { SUPPLIER_COLUMNS, SupplierRecordSchema } from '@/lib/suppliers/update-supplier'
 
-// v1-only extension: allow PATCH to set archived_at back to null to
-// un-archive a supplier. Restricted to literal `null` so the caller can't
-// fake an archive timestamp.
-const V1PatchSupplierSchema = UpdateSupplierSchema.extend({
-  archived_at: z.null().optional(),
-})
-
-const SupplierDetail = z.object({
-  id: z.string().uuid(),
-  name: z.string(),
-  supplier_type: z.string(),
-  email: z.string().nullable(),
-  phone: z.string().nullable(),
-  address_line1: z.string().nullable(),
-  address_line2: z.string().nullable(),
-  postal_code: z.string().nullable(),
-  city: z.string().nullable(),
-  country: z.string(),
-  org_number: z.string().nullable(),
-  vat_number: z.string().nullable(),
-  bankgiro: z.string().nullable(),
-  plusgiro: z.string().nullable(),
-  bank_account: z.string().nullable(),
-  iban: z.string().nullable(),
-  bic: z.string().nullable(),
-  default_expense_account: z.string().nullable(),
-  default_payment_terms: z.number(),
-  default_currency: z.string(),
-  notes: z.string().nullable(),
-  /** The party (motpart) behind the supplier: one per counterpart, shared with the customer side and the ledger. */
-  party_id: z.string().uuid().nullable(),
+const SupplierDetail = SupplierRecordSchema.extend({
   /** Present with ?expand=party: identity, the SCB register summary and what the ledger has seen. */
   party: PartyForApiSchema.nullable().optional(),
-  archived_at: z.string().nullable(),
-  created_at: z.string(),
-  updated_at: z.string(),
 })
 
 const ALLOWED_EXPAND = ['supplier_invoices', 'party'] as const
@@ -72,9 +41,6 @@ const OPEN_SUPPLIER_INVOICE_STATUSES = [
   'overdue',
   'disputed',
 ]
-
-const SUPPLIER_DETAIL_COLUMNS =
-  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, iban, bic, default_expense_account, default_payment_terms, default_currency, notes, party_id, archived_at, created_at, updated_at'
 
 const OPEN_SUPPLIER_INVOICE_COLUMNS =
   'id, supplier_invoice_number, arrival_number, invoice_date, due_date, status, currency, total, remaining_amount'
@@ -153,7 +119,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     const { data: supplier, error } = await ctx.supabase
       .from('suppliers')
-      .select(SUPPLIER_DETAIL_COLUMNS)
+      .select(SUPPLIER_COLUMNS)
       .eq('company_id', ctx.companyId!)
       .eq('id', supplierId)
       .maybeSingle()
@@ -214,208 +180,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 )
 
 // ──────────────────────────────────────────────────────────────────
-// PATCH: partial update
+// PATCH: partial update (operation suppliers.update)
 // ──────────────────────────────────────────────────────────────────
 
-registerEndpoint({
-  operation: 'suppliers.update',
-  method: 'PATCH',
-  path: '/api/v1/companies/:companyId/suppliers/:id',
-  summary: 'Partially update a supplier.',
-  description:
-    'Patches the supplier with the supplied fields. All fields optional. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
-  useWhen:
-    'You need to change a supplier\'s contact details, payment terms, banking info, default expense account, or VAT number. Use dry-run first to confirm the merged record before committing.',
-  doNotUseFor:
-    'Archiving a supplier (use DELETE: sets archived_at). Replacing the entire record (no PUT verb is exposed; PATCH is partial).',
-  pitfalls: [
-    'Idempotency-Key is mandatory; calls without it return 400.',
-    'org_number uniqueness is enforced at DB level: 23505 → 409 SUPPLIER_DUPLICATE_ORG_NUMBER.',
-    'Changing default_expense_account does not retroactively rebook prior supplier invoices: only future bookings pick up the new default.',
-  ],
-  example: {
-    request: { default_payment_terms: 14, notes: 'New payment terms agreed 2026-05-12.' },
-    response: {
-      data: {
-        id: '0e9c…',
-        name: 'Office Depot AB',
-        default_payment_terms: 14,
-        notes: 'New payment terms agreed 2026-05-12.',
-      },
-      meta: { request_id: 'req_…', api_version: '2026-05-12' },
-    },
-  },
-  scope: 'suppliers:write',
-  risk: 'low',
-  idempotent: true,
-  reversible: true,
-  dryRunSupported: true,
-  request: { body: UpdateSupplierSchema },
-  response: { success: dataEnvelope(SupplierDetail) },
-})
-
-export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
-  'suppliers.update',
-  async (request, ctx, params) => {
-    const { id } = await params.params
-
-    const idParse = z.string().uuid().safeParse(id)
-    if (!idParse.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'id', message: 'Supplier id must be a UUID.' },
-      })
-    }
-    const supplierId = idParse.data
-
-    const rawBodyResult = await readV1JsonBody(request, ctx)
-    if (!rawBodyResult.ok) return rawBodyResult.response
-    const rawBody = rawBodyResult.body
-
-    const parsed = V1PatchSupplierSchema.safeParse(rawBody)
-    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
-    const body = parsed.data
-
-    const updateData: Record<string, unknown> = {}
-    for (const key of [
-      'name',
-      'supplier_type',
-      'email',
-      'phone',
-      'address_line1',
-      'address_line2',
-      'postal_code',
-      'city',
-      'country',
-      'org_number',
-      'vat_number',
-      'bankgiro',
-      'plusgiro',
-      'bank_account',
-      'iban',
-      'bic',
-      'default_expense_account',
-      'default_payment_terms',
-      'default_currency',
-      'notes',
-      'archived_at',
-    ] as const) {
-      if (body[key] !== undefined) updateData[key] = body[key]
-    }
-
-    if (Object.keys(updateData).length === 0) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'At least one field must be supplied for update.' },
-      })
-    }
-
-    // Mirror is_active (legacy boolean) when archived_at changes. Keeps the
-    // dashboard's "show only active suppliers" filters working without
-    // backfill: every v1 archive/un-archive flows through here and the
-    // bulk-create.
-    if (Object.prototype.hasOwnProperty.call(updateData, 'archived_at')) {
-      updateData.is_active = updateData.archived_at === null
-    }
-
-    // Fetch the current row up front. Needed for the BFL 7 kap immutability
-    // check below: a supplier with `archived_at IS NOT NULL` is part of the
-    // räkenskapsinformation backing historical verifikationer and must not
-    // have its name / address / banking fields mutated. The single exception
-    // is un-archiving (PATCH archived_at: null).
-    const { data: current, error: currentFetchErr } = await ctx.supabase
-      .from('suppliers')
-      .select(SUPPLIER_DETAIL_COLUMNS)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', supplierId)
-      .maybeSingle()
-
-    if (currentFetchErr) {
-      return v1ErrorResponse(currentFetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!current) {
-      ctx.log.warn('suppliers.update: not found', { supplierId, companyId: ctx.companyId })
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-        details: { resource: 'supplier' },
-      })
-    }
-
-    const currentArchivedAt = (current as { archived_at: string | null }).archived_at
-    const isUnArchiving = updateData.archived_at === null
-    if (currentArchivedAt && !isUnArchiving) {
-      // BFL 7 kap 1 § protects räkenskapsinformation: the identifying
-      // fields that historical verifikationer reference through their join
-      // to this row. Internal notes / payment-config don't qualify, so we
-      // only refuse the PATCH when an identifying field is in the update.
-      // The dashboard equivalent allows the same narrow exception.
-      const PROTECTED_FIELDS = new Set([
-        'name',
-        'supplier_type',
-        'org_number',
-        'vat_number',
-        'address_line1',
-        'address_line2',
-        'postal_code',
-        'city',
-        'country',
-        'bankgiro',
-        'plusgiro',
-        'bank_account',
-        'iban',
-        'bic',
-      ])
-      const offendingFields = Object.keys(updateData).filter((k) => PROTECTED_FIELDS.has(k))
-      if (offendingFields.length > 0) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            field: 'archived_at',
-            message:
-              'Supplier is archived; identifying fields (name, address, banking, org/vat number) are räkenskapsinformation under BFL 7 kap 1 § and cannot be edited. Un-archive (PATCH archived_at: null) first if a correction is needed.',
-            archived_at: currentArchivedAt,
-            offending_fields: offendingFields,
-          },
-        })
-      }
-      // Non-identifying fields (notes, default_payment_terms,
-      // default_expense_account, default_currency, email, phone) are not
-      // räkenskapsinformation: fall through and allow the update.
-    }
-
-    if (ctx.dryRun) {
-      return dryRunPreview({ ...current, ...updateData }, { requestId: ctx.requestId, log: ctx.log })
-    }
-
-    const { data, error } = await ctx.supabase
-      .from('suppliers')
-      .update(updateData)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', supplierId)
-      .select(SUPPLIER_DETAIL_COLUMNS)
-      .maybeSingle()
-
-    if (error) {
-      if (error.code === '23505') {
-        return v1ErrorResponseFromCode('SUPPLIER_DUPLICATE_ORG_NUMBER', ctx.log, {
-          requestId: ctx.requestId,
-          details: { field: 'org_number' },
-        })
-      }
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!data) {
-      ctx.log.warn('suppliers.update: not found', { supplierId, companyId: ctx.companyId })
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-        details: { resource: 'supplier' },
-      })
-    }
-
-    return ok(data, { requestId: ctx.requestId })
-  },
-  { requireIdempotencyKey: true },
-)
+export const PATCH = v1OperationHandler(suppliersUpdate)
 
 // ──────────────────────────────────────────────────────────────────
 // DELETE: soft-delete (sets archived_at)
@@ -482,7 +250,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
     if (ctx.dryRun) {
       const { data: current, error: fetchErr } = await ctx.supabase
         .from('suppliers')
-        .select(SUPPLIER_DETAIL_COLUMNS)
+        .select(SUPPLIER_COLUMNS)
         .eq('company_id', ctx.companyId!)
         .eq('id', supplierId)
         .maybeSingle()

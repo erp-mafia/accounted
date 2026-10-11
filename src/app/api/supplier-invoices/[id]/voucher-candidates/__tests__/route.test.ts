@@ -77,8 +77,9 @@ describe('GET /api/supplier-invoices/[id]/voucher-candidates', () => {
     expect(body.data.candidates).toHaveLength(1)
     expect(mockResolveSide).toHaveBeenCalledTimes(1)
     expect(mockResolveSide).toHaveBeenCalledWith(mockSupabase, 'company-1', VALID_UUID)
-    // The matcher gets the resolved side instead of looking it up again.
-    expect(mockFind.mock.calls[0][3]).toEqual({ settlementSide: BANK_CREDIT })
+    // The matcher gets the resolved side instead of looking it up again, and
+    // is asked for vouchers that pay several debts too: a person picks here.
+    expect(mockFind.mock.calls[0][3]).toEqual({ settlementSide: BANK_CREDIT, includeShared: true })
   })
 
   it('answers a settled invoice with no candidates and never runs the matcher', async () => {

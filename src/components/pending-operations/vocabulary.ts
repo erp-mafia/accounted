@@ -30,6 +30,7 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   match_transaction_invoice: 'type_match_transaction_invoice',
   // Master data
   create_supplier: 'type_create_supplier',
+  update_supplier: 'type_update_supplier',
   create_article: 'type_create_article',
   update_article: 'type_update_article',
   create_account: 'type_create_account',
@@ -210,6 +211,7 @@ export const singleActionWarnings: Record<string, string> = {
   // Low/medium risk: light verifikation work
   create_transaction: 'Genom att klicka godkänn så skapar du en transaktion.',
   create_customer: 'Genom att klicka godkänn så skapar du en kund.',
+  update_supplier: 'Genom att klicka godkänn så ändras leverantörens uppgifter. Ändrade bankuppgifter gäller för nästa betalning till leverantören.',
   update_cash_account: 'Genom att klicka godkänn så ändras bankkontot. Ändrade betaluppgifter skrivs ut på nya fakturor.',
   set_primary_cash_account: 'Genom att klicka godkänn så blir kontot företagets primära bankkonto. Endast bokningar efter ändringen följer det nya kontot.',
   set_invoice_payee_default: 'Genom att klicka godkänn så betalar kunder nya fakturor i valutan till det valda bankkontot.',

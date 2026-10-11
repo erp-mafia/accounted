@@ -28,8 +28,9 @@ export interface CommitActor {
    * verifies which credential is acting, so the value is bound to a verified
    * key rather than asserted by the caller.
    *
-   * Only ever set for `type: 'api_key'`. Human approvals, cron and the
-   * cookie-session routes cannot reach the check that reads it.
+   * Only ever set for a key credential: `type: 'api_key'`, or `'mcp_oauth'`,
+   * whose OAuth access token is itself a minted key. Human approvals, cron
+   * and the cookie-session routes cannot reach the check that reads it.
    */
   unattendedCommitLimit?: number | null
 }
@@ -48,4 +49,27 @@ export function bindActorStore(s: ActorStore): void {
 /** The actor for the current async execution scope, if any. */
 export function getActor(): CommitActor | undefined {
   return store?.getStore()
+}
+
+/**
+ * The commit_method a commit records when its caller names none, read off
+ * WHO is committing. Derived at the commit doors, so a new booking path
+ * cannot leave HOW blank by forgetting to pass it. cron and system stay NULL:
+ * no journal_entries_commit_method_check value describes them, and
+ * committed_actor_type already says what they are.
+ */
+export function defaultCommitMethod(
+  actor: CommitActor | undefined
+): 'user_accept' | 'api_key' | 'agent' | null {
+  switch (actor?.type) {
+    case 'user':
+      return 'user_accept'
+    case 'api_key':
+    case 'mcp_oauth':
+      return 'api_key'
+    case 'agent_chat':
+      return 'agent'
+    default:
+      return null
+  }
 }

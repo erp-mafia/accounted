@@ -6,6 +6,7 @@
  */
 
 import * as crypto from 'crypto'
+import type { RawTransaction } from '@/types'
 import type { BankFileFormat, BankFileFormatId, BankFileParseResult, ParsedBankTransaction } from './types'
 
 // The format registry and detection live in ./formats (no Node imports) so
@@ -133,6 +134,36 @@ export function generateExternalId(
   const composite = `${formatId}|${tx.date}|${tx.description}|${tx.amount}|${rowIndex}`
   const hash = crypto.createHash('sha256').update(composite).digest('hex').substring(0, 16)
   return `${formatId}_${hash}`
+}
+
+/**
+ * A parsed file row as the ingest contract takes it. The one mapping for the
+ * dashboard import and v1, so neither drops a field the parser read.
+ *
+ * `import_source` is load-bearing, not cosmetic: isImportedTransaction()
+ * reads it to keep imported rows ignore-only, and ingest's cross-channel and
+ * hand-entered dedup mirrors are gated on the batch being an import feed.
+ */
+export function toRawTransaction(
+  tx: ParsedBankTransaction,
+  formatId: BankFileFormatId,
+  rowIndex: number
+): RawTransaction {
+  return {
+    external_id: generateExternalId(tx, formatId, rowIndex),
+    date: tx.date,
+    description: tx.description,
+    amount: tx.amount,
+    currency: tx.currency || 'SEK',
+    reference: tx.reference || null,
+    merchant_name: tx.counterparty || null,
+    import_source: formatId === 'camt053' ? 'camt053' : `csv_${formatId}`,
+    value_date: tx.value_date || null,
+    end_to_end_id: tx.end_to_end_id || null,
+    provider_transaction_id: tx.provider_transaction_id || null,
+    counterparty_iban: tx.counterparty_iban || null,
+    bank_transaction_code: tx.bank_transaction_code || null,
+  }
 }
 
 /**

@@ -17,7 +17,8 @@ import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
  *
  * Read order (one queued result per `.from()`): source-ref vouchers, fiscal
  * periods, entry status, entry lines, supplier_invoices referencing the
- * entries, invoices referencing the entries, then one update per link.
+ * entries, invoices referencing the entries, the source-rate invoice rows,
+ * the customer invoices still in draft, then one update per link.
  */
 
 vi.mock('../attach-settlement-voucher', () => ({ attachSupplierInvoiceSettlementVoucher: vi.fn() }))
@@ -80,6 +81,8 @@ interface Queue {
   customerRefs?: unknown[]
   /** The invoice rows a source-rate link reads: the customer read first, then the supplier read. */
   foreignRows?: unknown[][]
+  /** The customer invoices among the resolved ones that are still drafts. */
+  drafts?: unknown[]
   updates?: { data?: unknown; error?: unknown }[]
 }
 
@@ -93,6 +96,7 @@ function queue(q: Queue) {
   if (q.supplierRefs !== undefined) mock.enqueue({ data: q.supplierRefs })
   if (q.customerRefs !== undefined) mock.enqueue({ data: q.customerRefs })
   for (const rows of q.foreignRows ?? []) mock.enqueue({ data: rows })
+  if (q.drafts !== undefined) mock.enqueue({ data: q.drafts })
   for (const u of q.updates ?? []) mock.enqueue(u)
 }
 
@@ -193,6 +197,7 @@ describe('linkMigratedRegistrationVouchers', () => {
       lines: customerLines('je-2', 2500),
       supplierRefs: [],
       customerRefs: [],
+      drafts: [],
       updates: [{ data: [{ id: 'inv-1' }] }],
     })
 
@@ -210,6 +215,72 @@ describe('linkMigratedRegistrationVouchers', () => {
       ['select', ['id']],
     ]))
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
+  })
+
+  it('marks a draft customer invoice sent in the write that links its verifikat', async () => {
+    // The source booked it, so it was issued there; a draft holding the
+    // verifikat booked the sale a second time on Skicka.
+    queue({
+      vouchers: [voucher({ id: 'je-2', number: 12 })],
+      entries: [{ id: 'je-2', status: 'posted' }],
+      lines: customerLines('je-2', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      drafts: [{ id: 'inv-1' }],
+      updates: [{ data: [{ id: 'inv-1' }] }],
+    })
+
+    const result = await run([
+      input({ invoiceId: 'inv-1', kind: 'customer', sourceVoucher: { series: 'A', number: 12 }, totalSek: 2500 }),
+    ])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', reason: 'registration voucher linked; the draft is marked sent' })
+    const [update] = updateCalls('invoices')
+    expect(update.args[0]).toEqual({ journal_entry_id: 'je-2', status: 'sent' })
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([
+      ['eq', ['id', 'inv-1']],
+      ['eq', ['company_id', COMPANY]],
+      ['is', ['journal_entry_id', null]],
+      ['eq', ['status', 'draft']],
+      ['select', ['id']],
+    ]))
+  })
+
+  it('reports a draft that stopped being one before the write as alreadyLinked', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-2', number: 12 })],
+      entries: [{ id: 'je-2', status: 'posted' }],
+      lines: customerLines('je-2', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      drafts: [{ id: 'inv-1' }],
+      updates: [{ data: [] }],
+    })
+
+    const result = await run([
+      input({ invoiceId: 'inv-1', kind: 'customer', sourceVoucher: { series: 'A', number: 12 }, totalSek: 2500 }),
+    ])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'alreadyLinked',
+      reason: 'invoice already carried a registration link, or is no longer a draft' })
+  })
+
+  it('says a dry run would mark the draft sent, and writes nothing', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-2', number: 12 })],
+      entries: [{ id: 'je-2', status: 'posted' }],
+      lines: customerLines('je-2', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      drafts: [{ id: 'inv-1' }],
+    })
+
+    const result = await run([
+      input({ invoiceId: 'inv-1', kind: 'customer', sourceVoucher: { series: 'A', number: 12 }, totalSek: 2500 }),
+    ], true)
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', reason: 'would link; the draft is marked sent (dry run)' })
+    expect(mock.calls.filter((c) => c.method === 'update')).toHaveLength(0)
   })
 
   it('resolves a series-less ref when exactly one verifikat carries the number in that year', async () => {
@@ -381,6 +452,7 @@ describe('linkMigratedRegistrationVouchers', () => {
       lines: customerLines('je-k', 4156),
       supplierRefs: [],
       customerRefs: [],
+      drafts: [],
       updates: [{ data: [{ id: 'inv-1' }] }],
     })
 
@@ -403,6 +475,7 @@ describe('linkMigratedRegistrationVouchers', () => {
       lines: [...customerLines('je-k', 4156), line('je-i', '1930', 4156, 0), line('je-i', '1510', 0, 4156)],
       supplierRefs: [],
       customerRefs: [],
+      drafts: [],
       updates: [{ data: [{ id: 'inv-1' }] }],
     })
 
@@ -759,6 +832,7 @@ describe('foreign-currency invoices at the source rate (crm#1039)', () => {
       supplierRefs: [],
       customerRefs: [],
       foreignRows: [[eurCustomerRow]],
+      drafts: [],
       updates,
     })
   }
@@ -798,6 +872,30 @@ describe('foreign-currency invoices at the source rate (crm#1039)', () => {
       ['is', ['journal_entry_id', null]],
       ['eq', ['total', 1000]],
       ['select', ['id']],
+    ]))
+  })
+
+  it('marks a draft sent in the same write that takes the source rate', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-eur', series: 'B', number: 501 })],
+      entries: [{ id: 'je-eur', status: 'posted' }],
+      lines: [line('je-eur', '1510', 11234.5, 0), line('je-eur', '3105', 0, 11234.5)],
+      supplierRefs: [],
+      customerRefs: [],
+      foreignRows: [[eurCustomerRow]],
+      drafts: [{ id: 'inv-eur' }],
+      updates: [{ data: [{ id: 'inv-eur' }] }],
+    })
+
+    const result = await run([eurCustomerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked',
+      reason: 'registration voucher linked at the source rate; the draft is marked sent' })
+    expect(updateCalls('invoices')[0].args[0]).toMatchObject({ journal_entry_id: 'je-eur', status: 'sent', exchange_rate: 11.2345 })
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([
+      ['is', ['journal_entry_id', null]],
+      ['eq', ['status', 'draft']],
+      ['eq', ['total', 1000]],
     ]))
   })
 
@@ -918,6 +1016,7 @@ describe('a fiscal year an SIE re-sync replaced', () => {
       lines: customerLines('je-live', 2500),
       supplierRefs: [],
       customerRefs: [],
+      drafts: [],
       updates: [{ data: [{ id: 'inv-1' }] }],
     })
 
@@ -939,6 +1038,7 @@ describe('a fiscal year an SIE re-sync replaced', () => {
       lines: customerLines('je-live', 2500),
       supplierRefs: [],
       customerRefs: [{ id: 'inv-1', journal_entry_id: 'je-copy' }],
+      drafts: [],
       updates: [{ data: [{ id: 'inv-1' }] }],
     })
 
@@ -986,6 +1086,7 @@ describe('a fiscal year an SIE re-sync replaced', () => {
       lines: customerLines('je-live', 2500),
       supplierRefs: [],
       customerRefs: [{ id: 'inv-1', journal_entry_id: 'je-copy' }],
+      drafts: [],
       updates: [{ data: [] }],
     })
 
@@ -1037,6 +1138,7 @@ describe('a fiscal year an SIE re-sync replaced', () => {
       lines: customerLines('je-live', 2500),
       supplierRefs: [],
       customerRefs: [],
+      drafts: [],
       updates: [{ data: [] }],
     })
 
@@ -1044,7 +1146,7 @@ describe('a fiscal year an SIE re-sync replaced', () => {
 
     expect(result.reports[0]).toMatchObject({ outcome: 'alreadyLinked', reason: 'invoice already carried a registration link' })
     expect(updateChain('invoices')).toEqual(expect.arrayContaining([['is', ['journal_entry_id', null]]]))
-    expect(mock.findCalls('invoices', 'in')).toEqual([['journal_entry_id', ['je-live']]])
+    expect(mock.findCalls('invoices', 'in')).toEqual([['journal_entry_id', ['je-live']], ['id', ['inv-1']]])
   })
 
   it('moves the link at the source rate for a foreign-currency invoice', async () => {
@@ -1055,6 +1157,7 @@ describe('a fiscal year an SIE re-sync replaced', () => {
       supplierRefs: [],
       customerRefs: [{ id: 'inv-eur', journal_entry_id: 'je-copy' }],
       foreignRows: [[{ id: 'inv-eur', currency: 'EUR', total: 400, subtotal: 400, vat_amount: 0, total_sek: 4398, exchange_rate: 10.995 }]],
+      drafts: [],
       updates: [{ data: [{ id: 'inv-eur' }] }],
     })
 
@@ -1086,6 +1189,7 @@ describe('a fiscal year an SIE re-sync replaced', () => {
       lines: customerLines('je-live', 2500),
       supplierRefs: [],
       customerRefs: [],
+      drafts: [],
       updates: [{ data: [{ id: 'inv-1' }] }],
     })
     const resolved = await run([customerInput({ sourceVoucher: { series: null, number: 57 } })])

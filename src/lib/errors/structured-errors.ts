@@ -6038,8 +6038,9 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_correct_entry',
     },
   },
-  // The three below only arise on the kontantmetod side (19xx credit): see
-  // supplier_invoice_settlement_side, migration 20260921190300.
+  // NO_BANK_CREDIT and CUTOFF_ALREADY_POSTED only arise on the kontantmetod
+  // side (19xx credit): see supplier_invoice_settlement_side, migration
+  // 20260921190300. FULLY_ALLOCATED arises on both sides since 20261011153000.
   LINK_SI_VOUCHER_NO_BANK_CREDIT: {
     httpStatus: 400,
     message_sv:
@@ -6050,9 +6051,9 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
   LINK_SI_VOUCHER_FULLY_ALLOCATED: {
     httpStatus: 409,
     message_sv:
-      'Verifikationens utbetalning är redan kopplad till andra leverantörsfakturor och har inget belopp kvar. Välj en annan verifikation.',
+      'Verifikationens belopp är redan kopplat till andra leverantörsfakturor och har inget kvar. Välj en annan verifikation.',
     message_en:
-      'The voucher\'s bank credit is already used by payment rows for other supplier invoices; nothing is left to settle this one. Pick a different voucher.',
+      'The voucher\'s settlement amount (the 244x debit, or the 19xx credit on kontantmetoden) is already used by payment rows for other supplier invoices; nothing is left to settle this one. Pick a different voucher.',
   },
   LINK_SI_VOUCHER_CUTOFF_ALREADY_POSTED: {
     httpStatus: 409,
@@ -6066,12 +6067,34 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
     message_sv: 'Verifikationen är redan länkad till den här leverantörsfakturan.',
     message_en: 'This journal entry is already linked to this supplier invoice.',
   },
+  // Two shapes, told apart by details: without a stated share the voucher has
+  // more left than the invoice needs (details.ap_debit / details.bank_credit);
+  // with one, the share itself is more than the invoice has left
+  // (details.amount). A correct verifikat is never split with a storno for
+  // this: the share is stated on the link (GitHub issue 3490).
   LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING: {
     httpStatus: 400,
     message_sv:
-      'Verifikationens belopp är större än leverantörsfakturans återstående belopp. Verifikationen täcker fler fakturor: välj en annan verifikation eller rätta beloppet först.',
+      'Beloppet är större än leverantörsfakturans återstående belopp. Betalar verifikationen flera skulder: länka bara den här fakturans del, högst det återstående beloppet. Resten av verifikationen ligger kvar.',
     message_en:
-      'The voucher\'s settlement amount (details.ap_debit: the 244x debit, or details.bank_credit: the 19xx credit on kontantmetoden) exceeds the supplier invoice\'s remaining balance. Split the voucher across multiple supplier invoices via gnubok_correct_entry first, or pick a different voucher.',
+      'More than the supplier invoice has left (details.remaining). Without amount, details.ap_debit (244x debit) or details.bank_credit (19xx credit, kontantmetoden) is what the voucher has left. If the voucher pays several debts, call again with amount = this invoice\'s share, at most details.remaining: the rest stays on the voucher for other invoices or for a debt with no invoice here. Do not storno a correct voucher to split it.',
+    remediation: {
+      description:
+        'When the voucher pays several debts, link again with amount set to this invoice\'s share (at most details.remaining).',
+      tool: 'gnubok_link_supplier_invoice_to_voucher',
+    },
+  },
+  LINK_SI_VOUCHER_AMOUNT_EXCEEDS_VOUCHER: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppet är större än vad verifikationen har kvar. Andra leverantörsfakturor är redan kopplade till den. Ange ett lägre belopp eller välj en annan verifikation.',
+    message_en:
+      'amount is more than the voucher has left (details.available): details.already_linked of its settlement side (details.ap_debit, or details.bank_credit on kontantmetoden) is used by payment rows for other supplier invoices. Lower amount to at most details.available, or pick a different voucher.',
+  },
+  LINK_SI_VOUCHER_AMOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Beloppet måste vara större än noll.',
+    message_en: 'amount must be a positive amount in the invoice\'s currency, at least 0.01.',
   },
   LINK_SI_VOUCHER_CURRENCY_MISMATCH: {
     httpStatus: 400,

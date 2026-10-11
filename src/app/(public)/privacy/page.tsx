@@ -20,7 +20,7 @@ export default function PrivacyPolicyPage() {
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-09-11
+            Senast uppdaterad: 2026-10-11
           </p>
         </div>
 
@@ -241,6 +241,15 @@ export default function PrivacyPolicyPage() {
               varken företags-ID, belopp eller fritext: den består av BAS-kontonummer
               och ett mått mellan 0 och 1. Den går alltså inte att knyta till er
               eller till någon person, och den lämnas aldrig ut.
+            </p>
+            <p className="mt-4">
+              <strong>Inom ert eget företag.</strong> När en banktransaktion
+              eller ett underlag bokförs eller avfärdas sparar vi också, bara
+              inom ert företag, vilka förslag som fanns, vilket som användes,
+              vad som bokfördes och vem som beslutade. Den loggen är inte
+              statistik utan en del av er bokföring: den följer med när ni
+              exporterar ert arkiv, raderas bara tillsammans med transaktionen
+              eller underlaget den gäller och lämnas aldrig ut.
             </p>
             <p className="mt-4">
               <strong>Sammanslagna mönster.</strong> Vi kan räkna fram generella

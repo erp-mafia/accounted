@@ -52,6 +52,7 @@ vi.mock('@/lib/api/v1/operations', () => ({
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import type { RawTransaction } from '@/types'
+import { CAMT053_PRETTY_WITH_REFS } from '@/tests/fixtures/camt053'
 import { POST } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -325,6 +326,25 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
       expect(row).not.toHaveProperty('source')
       expect(row).not.toHaveProperty('counterparty')
     }
+  })
+
+  it('carries what a camt file says beyond the booking date, the counterparty as merchant_name', async () => {
+    const res = await callRoute({ fileContent: CAMT053_PRETTY_WITH_REFS, filename: 'statement.xml' })
+    expect(res.status).toBe(202)
+
+    const [incoming, outgoing] = ingestedRows()
+    expect(incoming).toMatchObject({
+      external_id: 'camt053_NTRY-1',
+      import_source: 'camt053',
+      reference: '1001000000017',
+      merchant_name: 'Kund AB',
+      value_date: '2025-03-11',
+      end_to_end_id: 'E2E-INCOMING-1',
+      provider_transaction_id: 'ACSR-1',
+      counterparty_iban: 'SE4550000000058398257466',
+      bank_transaction_code: 'PMNT-RCDT-DMCT',
+    })
+    expect(outgoing).toMatchObject({ merchant_name: 'Leverantör AB', end_to_end_id: null })
   })
 
   it('carries external_id, date, amount, currency and description through', async () => {
