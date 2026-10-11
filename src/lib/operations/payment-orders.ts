@@ -24,6 +24,7 @@ import {
 } from '@/lib/payments/orders/availability'
 import { approvePaymentOrders, cancelPaymentOrder, unapprovePaymentOrders } from '@/lib/payments/orders/lifecycle'
 import { preparePaymentOrders } from '@/lib/payments/orders/prepare'
+import { BANK_ACCOUNTS_INCLUDED_PER_MONTH, BANK_PAYMENTS_INCLUDED_PER_MONTH, getBankPaymentsUsage } from '@/lib/payments/usage'
 import { PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 import type { PaymentOrderRow } from '@/lib/payments/orders/types'
 import { formatPayeeLabel } from '@/lib/payments/supplier-payee'
@@ -845,6 +846,56 @@ export const paymentsAvailability = defineOperation({
       },
     }
   },
+})
+
+export const paymentsUsage = defineOperation({
+  id: 'payments.usage',
+  kind: 'read',
+  scope: 'suppliers:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'Bank payments sent and accounts used in a month, against what the plan includes.',
+    description:
+      'Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, ' +
+      'in one month in Stockholm time, and answers what the plan includes per month and what lies beyond it. Payment files ' +
+      'are not counted. The month defaults to the current one.',
+    useWhen: 'Before a batch of bank payments, to see whether it passes the included number for the month.',
+    doNotUseFor: 'Payment files (pain.001): they are not bank payments and are not counted.',
+    pitfalls: ['extra_payments and extra_accounts are what the company is charged for beyond the plan; the counter is read from the orders, never edited.'],
+    example: {
+      response: {
+        data: {
+          period: '2026-10',
+          payments_sent: 4,
+          accounts_used: 1,
+          included_payments: BANK_PAYMENTS_INCLUDED_PER_MONTH,
+          included_accounts: BANK_ACCOUNTS_INCLUDED_PER_MONTH,
+          extra_payments: 0,
+          extra_accounts: 0,
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object({
+    period: z
+      .string()
+      .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+      .optional()
+      .describe('YYYY-MM in Stockholm time. Default: the current month.'),
+  }),
+  output: z.object({
+    period: z.string(),
+    payments_sent: z.number().int(),
+    accounts_used: z.number().int(),
+    included_payments: z.number().int(),
+    included_accounts: z.number().int(),
+    extra_payments: z.number().int(),
+    extra_accounts: z.number().int(),
+  }),
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/payment-orders/usage' },
+  run: async (ctx, input) => ({ ok: true, data: await getBankPaymentsUsage(ctx.supabase, ctx.companyId, input.period) }),
 })
 
 const Verification = z.object({

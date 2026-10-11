@@ -412,6 +412,7 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/payment-orders/unapprove': 'suppliers:write',
   'POST /api/v1/companies/:companyId/payment-orders/:id/cancel': 'suppliers:write',
   'GET /api/v1/companies/:companyId/payment-orders/availability': 'suppliers:read',
+  'GET /api/v1/companies/:companyId/payment-orders/usage': 'suppliers:read',
   'GET /api/v1/companies/:companyId/payment-orders/verification': 'suppliers:read',
   'POST /api/v1/companies/:companyId/payment-orders/verification/start': 'suppliers:write',
   'GET /api/v1/companies/:companyId/payment-orders/signing-link': 'suppliers:read',

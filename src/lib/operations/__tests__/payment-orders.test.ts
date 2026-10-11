@@ -28,6 +28,7 @@ import {
   paymentOrdersUnapprove,
   paymentsAvailability,
   paymentsSigningLink,
+  paymentsUsage,
   paymentsPageUrl,
   toOrderOut,
 } from '../payment-orders'
@@ -325,6 +326,23 @@ describe('payments.availability', () => {
     expect(result.data).toMatchObject({ available: true, provider: 'open_payments', signer_known: false })
     expect(result.data.accounts[0]).toMatchObject({ cash_account_id: ACCOUNT, iban: 'SE35 **** 0003', payable: true, reason: null })
     expect(result.data.accounts[0]).not.toHaveProperty('id')
+  })
+})
+
+describe('payments.usage', () => {
+  it('counts the month and names what lies beyond the plan', async () => {
+    db.setTable('payment_orders', { data: [{ cash_account_id: ACCOUNT }, { cash_account_id: ACCOUNT }] })
+    const result = await run(paymentsUsage, { period: '2026-10' })
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(result.data).toEqual({
+      period: '2026-10',
+      payments_sent: 2,
+      accounts_used: 1,
+      included_payments: 30,
+      included_accounts: 2,
+      extra_payments: 0,
+      extra_accounts: 0,
+    })
   })
 })
 

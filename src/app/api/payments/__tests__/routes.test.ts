@@ -28,6 +28,7 @@ import {
   type PaymentInitiationProvider,
 } from '@/lib/payments/initiation/provider'
 import { GET as availability } from '../availability/route'
+import { GET as usage } from '../usage/route'
 import { GET as listOrders, POST as prepareOrders } from '../orders/route'
 import { POST as approveOrders } from '../orders/approve/route'
 import { POST as unapproveOrders } from '../orders/unapprove/route'
@@ -395,6 +396,18 @@ describe('a person resolving what the bank cannot', () => {
     expect(paid.status).toBe(200)
     expect(paid.body.data).toEqual({ status: 'executed' })
     expect(mockSupabase.rpc).toHaveBeenLastCalledWith('resolve_payment_order', expect.objectContaining({ p_resolution: 'paid', p_supplier_invoice_payment_id: PAYMENT }))
+  })
+})
+
+describe('GET /api/payments/usage', () => {
+  it('answers the month\'s payments and accounts against the plan', async () => {
+    enqueue({ data: [{ cash_account_id: ACCOUNT }, { cash_account_id: ACCOUNT }, { cash_account_id: 'acct-2' }] })
+    const { status, body } = await parseJsonResponse<{ data: { period: string; payments_sent: number; accounts_used: number; extra_payments: number } }>(
+      await usage(createMockRequest('/api/payments/usage?period=2026-10'), { params: Promise.resolve({}) }),
+    )
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ period: '2026-10', payments_sent: 3, accounts_used: 2, extra_payments: 0 })
+    expect(findCall('payment_orders', 'gte')).toEqual(['created_at', '2026-09-30T22:00:00.000Z'])
   })
 })
 

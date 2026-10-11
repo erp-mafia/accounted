@@ -206,6 +206,21 @@ async function send<T>(input: string, init?: RequestInit): Promise<T> {
   return (body as { data: T }).data
 }
 
+/** Bank payments sent and accounts used in a month, against what the plan includes (GET /api/payments/usage). */
+export interface BankPaymentsUsage {
+  period: string
+  payments_sent: number
+  accounts_used: number
+  included_payments: number
+  included_accounts: number
+  extra_payments: number
+  extra_accounts: number
+}
+
+export function fetchBankPaymentsUsage(period?: string): Promise<BankPaymentsUsage> {
+  return send<BankPaymentsUsage>(period ? `/api/payments/usage?period=${encodeURIComponent(period)}` : '/api/payments/usage')
+}
+
 export function fetchPaymentsAvailability(): Promise<PaymentsAvailability> {
   return send<PaymentsAvailability>('/api/payments/availability')
 }

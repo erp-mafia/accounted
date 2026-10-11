@@ -19,8 +19,10 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useFormat } from '@/lib/hooks/use-format'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
+  fetchBankPaymentsUsage,
   fetchCompanyVerification,
   fetchPaymentsAvailability,
+  type BankPaymentsUsage,
   PaymentsClientError,
   startCompanyVerification,
   type CompanyVerification,
@@ -45,6 +47,7 @@ export function BankPaymentsSettingsContent() {
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
   const [verification, setVerification] = useState<CompanyVerification | null | 'failed'>(null)
   const [checkedAt, setCheckedAt] = useState<Date | null>(null)
+  const [usage, setUsage] = useState<BankPaymentsUsage | null>(null)
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -75,7 +78,16 @@ export function BankPaymentsSettingsContent() {
       .then((data) => {
         if (cancelled) return
         setAvailability(data)
-        if (data.available) void loadVerification()
+        if (data.available) {
+          void loadVerification()
+          fetchBankPaymentsUsage()
+            .then((u) => {
+              if (!cancelled) setUsage(u)
+            })
+            .catch(() => {
+              // The counter is informational: the page stands without it.
+            })
+        }
       })
       .catch(() => {
         if (!cancelled) setAvailability({ available: false, reason: null, provider: null, accounts: [], signer_known: false })
@@ -108,6 +120,7 @@ export function BankPaymentsSettingsContent() {
     return verification.status === 'invalid' ? t('verification_invalid') : t('verification_unknown')
   })()
   const verified = verification !== null && verification !== 'failed' && verification.status === 'valid'
+  const usageMonth = usage ? new Date(`${usage.period}-15T12:00:00Z`).toLocaleDateString(locale, { month: 'long' }) : ''
   const checkedAtText = checkedAt
     ? t('checked_at', { time: checkedAt.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) })
     : null
@@ -152,6 +165,23 @@ export function BankPaymentsSettingsContent() {
               </SettingsRowEnd>
             </SettingsRow>
           </SettingsGroup>
+
+          {usage && (
+            <SettingsGroup label={t('group_usage')} help={t('usage_help')}>
+              <SettingsRow label={t('usage_payments_label', { month: usageMonth })}>
+                <SettingsRowNote className={usage.extra_payments > 0 ? 'text-attn' : 'text-foreground'}>
+                  {t('usage_of', { used: usage.payments_sent, included: usage.included_payments })}
+                  {usage.extra_payments > 0 ? `, ${t('usage_over', { count: usage.extra_payments })}` : ''}
+                </SettingsRowNote>
+              </SettingsRow>
+              <SettingsRow label={t('usage_accounts_label', { month: usageMonth })}>
+                <SettingsRowNote className={usage.extra_accounts > 0 ? 'text-attn' : 'text-foreground'}>
+                  {t('usage_of', { used: usage.accounts_used, included: usage.included_accounts })}
+                  {usage.extra_accounts > 0 ? `, ${t('usage_over', { count: usage.extra_accounts })}` : ''}
+                </SettingsRowNote>
+              </SettingsRow>
+            </SettingsGroup>
+          )}
 
           <SettingsGroup label={t('group_accounts')} help={t('accounts_help')}>
             {availability.accounts.length === 0 ? (

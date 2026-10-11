@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 305 endpoints.
+  pagination, scopes), and all 306 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -152,7 +152,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 305 operations. Paths are shown without
+API version `2026-05-12`, 306 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (12)
@@ -293,7 +293,7 @@ DELETE /companies/{companyId}/customers/{id} : Archive a customer (soft-delete) 
 POST /companies/{companyId}/customers/bulk-create : Create up to 50 customers in one call (partial-success) [scope:customers:write risk:low idempotent dry-run reversible]
 ```
 
-### Suppliers (AP) (39)
+### Suppliers (AP) (40)
 
 Full detail: [references/suppliers.md](references/suppliers.md)
 
@@ -311,6 +311,7 @@ POST /companies/{companyId}/payment-orders/approve : Approve (attest) draft bank
 GET /companies/{companyId}/payment-orders/availability : Whether the company can pay through its bank from Accounted, and from which accounts [scope:suppliers:read risk:low idempotent]
 GET /companies/{companyId}/payment-orders/signing-link : The Betalningar page link where a person approves and signs bank payments, with what is waiting there [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/payment-orders/unapprove : Take approved bank payments back to draft [scope:suppliers:write risk:low idempotent dry-run reversible]
+GET /companies/{companyId}/payment-orders/usage : Bank payments sent and accounts used in a month, against what the plan includes [scope:suppliers:read risk:low idempotent]
 GET /companies/{companyId}/payment-orders/verification : The company's verification (know your customer) at the payment provider [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/payment-orders/verification/start : Start the company's verification at the payment provider and get the form link [scope:suppliers:write risk:low dry-run reversible]
 GET /companies/{companyId}/supplier-invoices : List supplier invoices for a company [scope:suppliers:read risk:low idempotent]

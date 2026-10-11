@@ -125,6 +125,7 @@ import {
   paymentOrdersUnapprove,
   paymentsAvailability,
   paymentsSigningLink,
+  paymentsUsage,
   paymentsVerification,
   paymentsVerificationStart,
 } from './payment-orders'
@@ -320,6 +321,7 @@ export const OPERATIONS: readonly AnyOperation[] = [
   paymentOrdersUnapprove,
   paymentOrdersCancel,
   paymentsAvailability,
+  paymentsUsage,
   paymentsVerification,
   paymentsVerificationStart,
   paymentsSigningLink,

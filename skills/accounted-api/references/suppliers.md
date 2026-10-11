@@ -1069,6 +1069,69 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/payment-orders/usage`
+
+**Bank payments sent and accounts used in a month, against what the plan includes.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, in one month in Stockholm time, and answers what the plan includes per month and what lies beyond it. Payment files are not counted. The month defaults to the current one.
+
+**Use when:** Before a batch of bank payments, to see whether it passes the included number for the month.
+**Do not use for:** Payment files (pain.001): they are not bank payments and are not counted.
+
+**Pitfalls:**
+- extra_payments and extra_accounts are what the company is charged for beyond the plan; the counter is read from the orders, never edited.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `period` | query | `string` | no | YYYY-MM in Stockholm time. Default: the current month. |
+
+Response `200`:
+```ts
+{
+  data: {
+    period: string,
+    payments_sent: number,
+    accounts_used: number,
+    included_payments: number,
+    included_accounts: number,
+    extra_payments: number,
+    extra_accounts: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "period": "2026-10",
+    "payments_sent": 4,
+    "accounts_used": 1,
+    "included_payments": 30,
+    "included_accounts": 2,
+    "extra_payments": 0,
+    "extra_accounts": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/payment-orders/verification`
 
 **The company's verification (know your customer) at the payment provider.**
