@@ -128,6 +128,37 @@ describe('preparePaymentOrders', () => {
     expect(db.findCall('rpc:create_payment_orders', 'rpc')).toBeUndefined()
   })
 
+  it('replaces a draft nobody approved instead of refusing the invoice', async () => {
+    db.setTable('supplier_invoices', { data: [invoice('a')] })
+    db.setTable('payment_orders', { data: [{ id: 'old-draft', supplier_invoice_id: 'a', status: 'draft', supplier_invoice_payment_id: null }] })
+    db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-a', supplier_invoice_id: 'a', payee_check: 'ok' }] } })
+
+    const preview = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30', dryRun: true })
+    if (!preview.ok || !preview.dryRun) throw new Error('unexpected')
+    expect(preview.preview).toMatchObject({ replaces_drafts: 1 })
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
+
+    const result = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30' })
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(result.data.replaced_draft_ids).toEqual(['old-draft'])
+    expect(result.data.orders.map((o) => o.id)).toEqual(['order-a'])
+    const [patch] = db.findCall('payment_orders', 'update') as [Record<string, unknown>]
+    expect(patch).toMatchObject({ status: 'cancelled', cancelled_by: ctx.userId })
+    expect(db.findCall('payment_order_events', 'insert')).toBeDefined()
+    expect(db.findCall('rpc:create_payment_orders', 'rpc')).toBeDefined()
+  })
+
+  it('still skips an invoice whose order a person approved or the bank may hold', async () => {
+    db.setTable('supplier_invoices', { data: [invoice('a')] })
+    db.setTable('payment_orders', { data: [{ id: 'live', supplier_invoice_id: 'a', status: 'approved', supplier_invoice_payment_id: null }] })
+    expect(await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30' })).toMatchObject({
+      ok: false,
+      code: 'PAYMENT_ORDERS_INELIGIBLE',
+      details: { skipped: [{ supplier_invoice_id: 'a', reason: 'already_in_payment' }] },
+    })
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
+  })
+
   it('refuses an account that cannot pay and a company without a provider', async () => {
     db.setTable('cash_accounts', { data: { ...ACCOUNT, currency: 'EUR' } })
     expect(await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30' })).toMatchObject({

@@ -43,15 +43,30 @@ export function BankPaymentsSettingsContent() {
 
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
   const [verification, setVerification] = useState<CompanyVerification | null | 'failed'>(null)
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null)
   const [busy, setBusy] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
 
   const loadVerification = useCallback(async () => {
     try {
       setVerification(await fetchCompanyVerification())
+      setCheckedAt(new Date())
     } catch {
       setVerification('failed')
     }
   }, [])
+
+  // The provider's answer rarely changes (a verification is valid about a
+  // year), so a refresh needs visible feedback or it looks like nothing happened.
+  async function refreshVerification() {
+    setRefreshing(true)
+    try {
+      await loadVerification()
+      toast({ title: t('refreshed_title'), description: t('refreshed') })
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -92,6 +107,9 @@ export function BankPaymentsSettingsContent() {
     return verification.status === 'invalid' ? t('verification_invalid') : t('verification_unknown')
   })()
   const verified = verification !== null && verification !== 'failed' && verification.status === 'valid'
+  const checkedAtText = checkedAt
+    ? t('checked_at', { time: checkedAt.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) })
+    : null
 
   return (
     <div>
@@ -114,15 +132,18 @@ export function BankPaymentsSettingsContent() {
           <SettingsGroup label={t('group_verification')} help={t('verification_help')}>
             <SettingsRow label={t('verification_label')}>
               {verificationText ? (
-                <SettingsRowNote className={verified ? 'text-foreground' : 'text-attn'}>{verificationText}</SettingsRowNote>
+                <SettingsRowNote className={verified ? 'text-foreground' : 'text-attn'}>
+                  {verificationText}
+                  {checkedAtText ? <span className="text-muted-foreground">, {checkedAtText}</span> : null}
+                </SettingsRowNote>
               ) : (
                 <Skeleton className="h-4 w-40" />
               )}
               <SettingsRowEnd>
-                <Button variant="outline" size="sm" onClick={() => void loadVerification()} disabled={busy}>
+                <Button variant="outline" size="sm" onClick={() => void refreshVerification()} loading={refreshing} disabled={busy}>
                   {t('refresh')}
                 </Button>
-                {canWrite && !verified && (
+                {canWrite && verification !== null && !verified && (
                   <Button size="sm" onClick={startVerification} loading={busy}>
                     {t('start_verification')}
                   </Button>

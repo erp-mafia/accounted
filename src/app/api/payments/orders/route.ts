@@ -15,6 +15,8 @@ const PrepareSchema = z.object({
   cash_account_id: z.uuid(),
   execution_date: z.iso.date().nullish(),
   use_stated_payee_for: z.array(z.uuid()).max(100).optional(),
+  /** Every rule runs and the lines that would be created are answered; nothing is written. The dialog's preview. */
+  dry_run: z.boolean().optional(),
 })
 
 /**
@@ -66,6 +68,7 @@ export const POST = withRouteContext(
         executionDate: body.execution_date ?? null,
         useStatedPayeeFor: body.use_stated_payee_for,
         today: todayIsoStockholm(),
+        dryRun: body.dry_run === true,
       },
     )
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)

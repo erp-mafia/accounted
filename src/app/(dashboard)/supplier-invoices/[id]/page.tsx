@@ -23,7 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Pencil, Plus, CalendarClock, MoreHorizontal } from 'lucide-react'
+import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Pencil, Plus, CalendarClock, MoreHorizontal, Landmark } from 'lucide-react'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
@@ -33,6 +33,8 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import dynamic from 'next/dynamic'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 const PaymentFileDialog = dynamic(() => import('@/components/supplier-invoices/PaymentFileDialog'), { ssr: false })
+const PayViaBankDialog = dynamic(() => import('@/components/payments/PayViaBankDialog'), { ssr: false })
+import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
 import { AccountChip } from '@/components/ui/account-chip'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
@@ -241,6 +243,23 @@ export default function SupplierInvoiceDetailPage() {
     }> | null
   >(null)
   const [isFileDialogOpen, setIsFileDialogOpen] = useState(false)
+  const [isBankDialogOpen, setIsBankDialogOpen] = useState(false)
+  // Betala via banken is offered where bank payments are switched on for the
+  // company (GET /api/payments/availability), beside the payment file.
+  const [bankPaymentsAvailable, setBankPaymentsAvailable] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    fetchPaymentsAvailability()
+      .then((data) => {
+        if (!cancelled) setBankPaymentsAvailable(data.available)
+      })
+      .catch(() => {
+        if (!cancelled) setBankPaymentsAvailable(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const [markPaidPreview, setMarkPaidPreview] = useState<MarkPaidPreview | null>(null)
   const [markPaidPreviewFailed, setMarkPaidPreviewFailed] = useState(false)
   // The refusal the preview returned (its Swedish message and code), shown in
@@ -822,6 +841,9 @@ export default function SupplierInvoiceDetailPage() {
     !!invoice.approved_at &&
     !lifecycle?.batch &&
     !lifecycle?.payment_order
+  // With bank payments on, Betala via banken is the primary and the betalfil
+  // steps back to a secondary (same order as the list's bulk bar).
+  const canPayViaBank = canAddToFile && bankPaymentsAvailable
   // "Inlagd i banken" (#2220) sits on the same rows as Markera som betald:
   // it is the step right before it. Viewers see the bock only when it is set.
   const showBankEntered =
@@ -915,8 +937,14 @@ export default function SupplierInvoiceDetailPage() {
               {t('approve')}
             </Button>
           )}
+          {canPayViaBank && (
+            <Button size="sm" onClick={() => setIsBankDialogOpen(true)} disabled={isProcessing || !canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
+              {canWrite ? <Landmark className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {tList('bulk_pay_via_bank')}
+            </Button>
+          )}
           {canAddToFile && (
-            <Button size="sm" onClick={() => setIsFileDialogOpen(true)} disabled={isProcessing || !canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
+            <Button size="sm" variant={canPayViaBank ? 'outline' : 'default'} onClick={() => setIsFileDialogOpen(true)} disabled={isProcessing || !canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
               {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
               {t('add_to_payment_file')}
             </Button>
@@ -1240,6 +1268,20 @@ export default function SupplierInvoiceDetailPage() {
         </DetailSection>
       )}
 
+      {isBankDialogOpen && (
+        <PayViaBankDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setIsBankDialogOpen(false)
+          }}
+          invoiceIds={[invoice.id]}
+          invoiceLabelById={new Map([[invoice.id, title]])}
+          onDone={() => {
+            setIsBankDialogOpen(false)
+            void mutateLifecycle()
+          }}
+        />
+      )}
       {isFileDialogOpen && (
         <PaymentFileDialog
           open

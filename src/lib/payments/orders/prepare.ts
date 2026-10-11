@@ -24,7 +24,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { resolveDebtor } from './debtor'
 import { resolveOrderPayee } from './payee'
 import { isOpenPaymentOrder } from './status'
-import type { PaymentOrderRow } from './types'
+import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
 
 export interface PreparePaymentOrdersInput {
   supplierInvoiceIds: string[]
@@ -55,6 +55,8 @@ export interface PreparePaymentOrdersResult {
   orders: PaymentOrderRow[]
   skipped: Array<{ supplier_invoice_id: string; reason: PrepareSkipReason }>
   warnings: PreparedOrderWarning[]
+  /** Drafts of the same invoices that nobody approved, cancelled here so the person's latest choice wins. */
+  replaced_draft_ids: string[]
 }
 
 interface InvoiceRow {
@@ -176,14 +178,19 @@ export async function preparePaymentOrders(
   )
   const { data: openOrders } = await supabase
     .from('payment_orders')
-    .select('supplier_invoice_id, status, supplier_invoice_payment_id')
+    .select('id, supplier_invoice_id, status, supplier_invoice_payment_id')
     .eq('company_id', companyId)
     .in('supplier_invoice_id', ids)
-  const inOpenOrder = new Set(
-    ((openOrders ?? []) as Array<{ supplier_invoice_id: string; status: string; supplier_invoice_payment_id: string | null }>)
-      .filter((o) => isOpenPaymentOrder(o))
-      .map((o) => o.supplier_invoice_id),
-  )
+  const openRows = (openOrders ?? []) as Array<{ id: string; supplier_invoice_id: string; status: string; supplier_invoice_payment_id: string | null }>
+  // An order the bank may have, or a person already approved, blocks the
+  // invoice. A draft nobody approved does not: it is replaced below, so a
+  // second Betala via banken never fails on the first one's leftovers.
+  const inOpenOrder = new Set(openRows.filter((o) => o.status !== 'draft' && isOpenPaymentOrder(o)).map((o) => o.supplier_invoice_id))
+  const staleDrafts = new Map<string, string[]>()
+  for (const o of openRows) {
+    if (o.status !== 'draft') continue
+    staleDrafts.set(o.supplier_invoice_id, [...(staleDrafts.get(o.supplier_invoice_id) ?? []), o.id])
+  }
 
   const useStated = new Set(input.useStatedPayeeFor ?? [])
   const skipped: PreparePaymentOrdersResult['skipped'] = []
@@ -256,12 +263,14 @@ export async function preparePaymentOrders(
       payee: { type: payee.payee.type, label: formatPayeeLabel(payee.payee), source: payee.source },
       reference: { type: reference.type === 'ocr' ? 'ocr' : 'message', value: reference.value },
       warnings: evaluation.warnings.filter((w) => w === 'unattested' || w === 'ocr_invalid'),
+      alternative_payee: payee.alternative ? formatPayeeLabel(payee.alternative) : null,
     })
   }
 
   if (payloads.length === 0) {
     return { ok: false, code: 'PAYMENT_ORDERS_INELIGIBLE', details: { skipped } }
   }
+  const draftIdsToReplace = payloads.flatMap((p) => staleDrafts.get(p.supplier_invoice_id as string) ?? [])
 
   if (input.dryRun) {
     // Every rule above ran; only the database's payee_check (decided inside
@@ -276,12 +285,46 @@ export async function preparePaymentOrders(
         skipped,
         total_amount: Math.round(previewLines.reduce((sum, line) => sum + Number(line.amount), 0) * 100) / 100,
         currency: previewLines.length ? String(previewLines[0].currency) : 'SEK',
+        replaces_drafts: draftIdsToReplace.length,
         payee_check: 'decided by the database at creation; a new or changed account is confirmed by a person at approval',
       },
     }
   }
 
-  const { data: rpc, error: rpcError } = await createServiceClient().rpc('create_payment_orders', {
+  const writer = createServiceClient()
+  if (draftIdsToReplace.length > 0) {
+    // The database refuses a second open order per invoice, so the stale
+    // drafts go first. Only drafts: the status filter keeps anything a person
+    // approved meanwhile out of reach.
+    const now = new Date().toISOString()
+    const { data: cancelled, error: cancelError } = await writer
+      .from('payment_orders')
+      .update({ status: 'cancelled', cancelled_by: userId, cancelled_at: now })
+      .in('id', draftIdsToReplace)
+      .eq('company_id', companyId)
+      .eq('status', 'draft')
+      .select('id, supplier_invoice_id')
+    if (cancelError) throw cancelError
+    const replaced = (cancelled ?? []) as Array<{ id: string; supplier_invoice_id: string | null }>
+    if (replaced.length > 0) {
+      await logPaymentOrderEvents(
+        writer,
+        replaced.map((o) => ({
+          company_id: companyId,
+          payment_order_id: o.id,
+          event_type: 'cancelled',
+          from_status: 'draft',
+          to_status: 'cancelled',
+          provider_status: null,
+          actor_user_id: userId,
+          detail: { replaced_by_new_draft: true },
+        })),
+        log,
+      )
+    }
+  }
+
+  const { data: rpc, error: rpcError } = await writer.rpc('create_payment_orders', {
     p_company_id: companyId,
     p_orders: payloads,
     p_user_id: userId,
@@ -306,5 +349,5 @@ export async function preparePaymentOrders(
       warnings.push({ supplier_invoice_id: order.supplier_invoice_id, code: 'payee_new' })
     }
   }
-  return { ok: true, data: { orders, skipped, warnings } }
+  return { ok: true, data: { orders, skipped, warnings, replaced_draft_ids: draftIdsToReplace } }
 }

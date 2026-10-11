@@ -48,6 +48,8 @@ interface BankIdSigningFlowProps {
   onSentToBank?: () => void
   /** Called with every stage change, so a parent can keep its title in step. */
   onStageChange?: (stage: SigningFlowStage) => void
+  /** Start the QR signing at once when the person has a BankID login on file: no method step to click through. */
+  autoStart?: boolean
 }
 
 /** The signing is over, one way or the other: show where each payment stands. */
@@ -69,7 +71,7 @@ export function signingFinished(view: SigningView): boolean {
  * The flow never approves anything: it only signs orders that are already
  * approved (Godkänn and Signera are never one button).
  */
-export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBank, onStageChange }: BankIdSigningFlowProps) {
+export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBank, onStageChange, autoStart = false }: BankIdSigningFlowProps) {
   const t = useTranslations('bank_payments')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
@@ -142,6 +144,16 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
       setBusy(false)
     }
   }
+
+  // One automatic start per mount; a failed start lands on the method stage
+  // where the person chooses again.
+  const autoStarted = useRef(false)
+  useEffect(() => {
+    if (!autoStart || !signerKnown || autoStarted.current || orders.length === 0) return
+    autoStarted.current = true
+    void begin('qr')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart, signerKnown])
 
   async function openVerification() {
     setBusy(true)

@@ -69,7 +69,6 @@ interface Status {
   /** Null when the mailboxes could not be read (the row then shows no state). */
   mail: MailboxSummary | null
   /** Bank payments are switched on for this company (the pilot list); the row shows only then. */
-  bankPayments: boolean
 }
 
 /**
@@ -124,8 +123,7 @@ export function ConnectionsSettingsContent() {
       skvCount,
       fetch('/api/settings/peppol').then((res) => (res.ok ? res.json() : null)),
       hasMail ? fetchMailConnections() : Promise.resolve(null),
-      fetchPaymentsAvailability(),
-    ]).then(([bank, skv, peppol, mail, payments]) => {
+    ]).then(([bank, skv, peppol, mail]) => {
       if (cancelled) return
       const banks = bank.status === 'fulfilled' ? ((bank.value.data ?? []) as Array<{ bank_name: string | null }>) : []
       const registration =
@@ -138,13 +136,30 @@ export function ConnectionsSettingsContent() {
         skvConnected: skv.status === 'fulfilled' && skv.value > 0,
         peppolOn: registration?.status === 'registered' || registration?.status === 'pending',
         mail: mail.status === 'fulfilled' && mail.value ? summarizeMailboxes(mail.value) : null,
-        bankPayments: payments.status === 'fulfilled' && payments.value.available,
       })
     })
     return () => {
       cancelled = true
     }
   }, [companyId, hasMail])
+
+  // Bank payments answer in well under a second; the row must not wait for
+  // the slowest of the other readouts (mail, Peppol) to appear.
+  const [bankPayments, setBankPayments] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    fetchPaymentsAvailability()
+      .then((data) => {
+        if (!cancelled) setBankPayments(data.available)
+      })
+      .catch(() => {
+        if (!cancelled) setBankPayments(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyId])
 
   const bankFile = bankLogo(status?.bankName ?? null)
 
@@ -230,7 +245,7 @@ export function ConnectionsSettingsContent() {
               href: '/settings/skatteverket',
               connected: status?.skvConnected ?? false,
             })}
-          {status?.bankPayments &&
+          {bankPayments &&
             row({
               logo: <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />,
               name: t('bank_payments'),

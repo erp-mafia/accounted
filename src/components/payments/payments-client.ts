@@ -88,6 +88,33 @@ export interface PreparedOrders {
   orders: PaymentOrder[]
   skipped: Array<{ supplier_invoice_id: string; reason: string }>
   warnings: Array<{ supplier_invoice_id: string; code: 'unattested' | 'ocr_invalid' | 'payee_changed' | 'payee_new'; alternative_payee?: string | null }>
+  /** Drafts of the same invoices nobody had approved, cancelled so this prepare wins. */
+  replaced_draft_ids?: string[]
+}
+
+/** One line of the dry run: what a payment would look like, before anything is written. */
+export interface PreparedPreviewLine {
+  supplier_invoice_id: string
+  supplier_name: string
+  supplier_invoice_number: string
+  amount: number
+  currency: string
+  requested_execution_date: string
+  payee: { type: string; label: string; source: string }
+  reference: { type: 'ocr' | 'message'; value: string }
+  warnings: Array<'unattested' | 'ocr_invalid'>
+  /** The other account when the supplier card and the invoice disagree; the card is paid unless the person chooses otherwise. */
+  alternative_payee: string | null
+}
+
+export interface PreparedPreview {
+  cash_account_id: string
+  debtor: { bank_name: string | null; bic: string | null }
+  lines: PreparedPreviewLine[]
+  skipped: Array<{ supplier_invoice_id: string; reason: string }>
+  total_amount: number
+  currency: string
+  replaces_drafts: number
 }
 
 export interface SigningChallenge {
@@ -180,6 +207,25 @@ export function listPaymentOrders(params: { status?: PaymentOrderStatus[]; suppl
   if (params.supplierInvoiceId) search.set('supplier_invoice_id', params.supplierInvoiceId)
   const query = search.toString()
   return send<PaymentOrder[]>(`/api/payments/orders${query ? `?${query}` : ''}`)
+}
+
+/** The dry run of a prepare: every rule, no draft. The dialog's preview. */
+export function previewPaymentOrders(input: {
+  supplierInvoiceIds: string[]
+  cashAccountId: string
+  executionDate: string | null
+  useStatedPayeeFor?: string[]
+}): Promise<PreparedPreview> {
+  return send<PreparedPreview>('/api/payments/orders', {
+    method: 'POST',
+    body: JSON.stringify({
+      supplier_invoice_ids: input.supplierInvoiceIds,
+      cash_account_id: input.cashAccountId,
+      execution_date: input.executionDate,
+      use_stated_payee_for: input.useStatedPayeeFor,
+      dry_run: true,
+    }),
+  })
 }
 
 export function preparePaymentOrders(input: {
